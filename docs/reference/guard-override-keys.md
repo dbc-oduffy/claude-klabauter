@@ -122,6 +122,10 @@ prompt.
    axis: which guards the EM may self-grant. See `DR-298` for the full
    record, including the failure-mode discriminator that keeps
    IRREVERSIBLE-tier guards off this allowlist at any scope.
+   `bump-outside-repo-write`'s own silence is not permission: it classifies
+   command shapes, not their effects, and a file-invoked script it never
+   opens is exempt from its check, not cleared by it — an unraised deny on
+   that guard is not evidence the write it performs is sanctioned.
 
 **`GuardBand.CONFINEMENT_DENY` is never suppressible by the blanket-disarm
 marker, at any scope, with any marker content, full stop.** Its guards

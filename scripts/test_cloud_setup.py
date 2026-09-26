@@ -512,3 +512,100 @@ def test_a_container_with_no_mirror_checkout_records_why_and_does_not_fail(
     cloud_mod.register_publish_mirror_keys(report)
 
     assert "skipped" in report.machine_local_keys["publish.mirrors.claude_klabauter.path"]
+
+
+# --- IBMFR item 29 re-confirm regressions: node22 PATH pin, LSP-plugin record
+# path, uv cache reclaim. All three symbols already existed at HEAD when this
+# row ran; these pin them against silent regression rather than building new
+# behaviour. ---
+
+
+def test_image_toolchain_dirs_lead_the_search_path(cloud_mod, monkeypatch):
+    """The node22 PATH pin: `_IMAGE_TOOLCHAIN_DIRS` must win over both the
+    image default and this process' own inherited PATH, since a login-shell-only
+    `/etc/profile.d` toolchain is otherwise invisible to `shutil.which` here."""
+    monkeypatch.setenv("PATH", "/usr/bin:/usr/local/bin")
+    result = cloud_mod._image_search_path(["/opt/other/bin"])
+    entries = result.split(":")
+    assert entries[0] == "/opt/node22/bin"
+    assert entries.index("/opt/node22/bin") < entries.index("/opt/other/bin")
+    assert entries.index("/opt/other/bin") < entries.index("/usr/bin")
+
+
+def test_image_toolchain_dirs_not_duplicated_if_already_present(cloud_mod, monkeypatch):
+    """A candidate already present earlier in the composed order is not
+    repeated -- `_IMAGE_TOOLCHAIN_DIRS` entries are literal, so a caller-supplied
+    default carrying the same path must not double it."""
+    monkeypatch.setenv("PATH", "")
+    result = cloud_mod._image_search_path(["/opt/node22/bin", "/opt/other/bin"])
+    assert result.split(":").count("/opt/node22/bin") == 1
+
+
+def test_plugin_record_rel_names_installed_plugins_json(cloud_mod):
+    """The LSP-plugin record path: `PLUGIN_RECORD_REL` must resolve under
+    `plugins/installed_plugins.json` relative to the Claude home, the file the
+    platform actually writes an installed-plugin record into. A drifted value
+    here makes every read of it a silent, permanent miss."""
+    assert cloud_mod.PLUGIN_RECORD_REL == ("plugins", "installed_plugins.json")
+
+
+def test_reclaim_uv_cache_skips_when_retrieval_install_did_not_run(cloud_mod):
+    """Keyed on the install having run, not on cache presence: a cache this run
+    did not fill is an operator's, and is not this step's to clear."""
+    report = cloud_mod.Report()
+    assert report.rag_install is None
+    cloud_mod.reclaim_uv_cache(report)
+    assert report.uv_cache_reclaim["skipped"] == "retrieval install did not run"
+
+
+def test_reclaim_uv_cache_clears_via_uv_cache_clean(cloud_mod, monkeypatch, tmp_path):
+    """Reclaims through `uv cache clean`, not an rmtree -- uv owns its cache's
+    layout and holds a lock on it. The retrieval install's uv resolve otherwise
+    leaves several GB behind on a volume the lazy engine-corpus extraction
+    later needs (example-retrieval-repo-ue-addon#48 B3)."""
+    cache_dir = tmp_path / "uv-cache"
+    cache_dir.mkdir()
+    (cache_dir / "leftover.bin").write_bytes(b"x" * 1024)
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(cloud_mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+
+    calls = []
+
+    class _Ok:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        # Simulate uv actually clearing the cache directory's contents.
+        for entry in cache_dir.iterdir():
+            entry.unlink()
+        return _Ok()
+
+    monkeypatch.setattr(cloud_mod.subprocess, "run", _run)
+
+    report = cloud_mod.Report()
+    report.rag_install = {"exit_code": 0}
+    cloud_mod.reclaim_uv_cache(report)
+
+    assert calls == [["/usr/bin/uv", "cache", "clean"]]
+    verdict = report.uv_cache_reclaim
+    assert verdict["bytes_before"] > 0
+    assert verdict["bytes_after"] == 0
+    assert "error" not in verdict
+
+
+def test_reclaim_uv_cache_skips_when_uv_not_on_path(cloud_mod, monkeypatch, tmp_path):
+    """No `uv` on PATH is a recorded miss, never a raise -- the pipeline's
+    exit-zero contract holds even when the cache cannot be reclaimed."""
+    cache_dir = tmp_path / "uv-cache"
+    cache_dir.mkdir()
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(cloud_mod.shutil, "which", lambda name: None)
+
+    report = cloud_mod.Report()
+    report.rag_install = {"exit_code": 0}
+    cloud_mod.reclaim_uv_cache(report)
+
+    assert report.uv_cache_reclaim["skipped"] == "uv not on PATH"
