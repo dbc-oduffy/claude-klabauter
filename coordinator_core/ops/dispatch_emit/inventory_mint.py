@@ -33,13 +33,16 @@ Column mapping, applied per live Chunk-table row:
                      list).
     deps          -> row `depends_on`, one `{chunk, gate_kind:
                      "output-consumption-runtime"}` edge per comma-split
-                     id, MINUS any edge whose target row's own `writes`
-                     set intersects this row's `writes` set -- a
-                     write-overlap edge is already implied structurally
-                     by `pathspec`'s collision-based sequencing (the same
-                     shape `wave_map.py`'s predecessor derivation already
-                     keys on), so carrying it a second time as an explicit
-                     `depends_on` edge is redundant, not informative.
+                     id (minus any edge whose target row is
+                     closed-satisfied -- see `_resolve_dep_kinds`), PLUS
+                     one such edge, added on top, to every earlier LIVE
+                     row (table order) whose `writes` set intersects this
+                     row's `writes` set and that isn't already named by
+                     `deps` -- every write-overlap edge is kept, never
+                     dropped: `pathspec`/`wave_map.py`'s own collision-
+                     based sequencing is a separate mechanism from the
+                     `depends_on` edges this spine carries, and a reader
+                     of `depends_on` alone must see the edge too.
     summary       -> row `title` verbatim, and the body's second line.
     spec path     -> the body's `Spec: <path> (<id>)` first line.
     verification  -> the body's `Verification (this row is DONE only when
@@ -96,8 +99,9 @@ Negative-spec:
     closed enums), and `dispatch.emit`'s existing `run_checks` pass over
     the composed script is the fleet's one verification surface for a
     spine, minted or hand-authored alike.
-  - Does NOT infer `depends_on` edges the Chunk table's `deps` column
-    doesn't name -- no transitive closure, no same-spec-path grouping.
+  - Does NOT infer a `depends_on` edge beyond the Chunk table's `deps`
+    column and the one write-overlap edge documented in the `deps` column
+    mapping above -- no transitive closure, no same-spec-path grouping.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § S1-C4
 (coordinator-claude#47).
@@ -653,6 +657,7 @@ def mint_rows(
 
     plan_cache: Dict[Path, Dict[str, dict]] = {}
     minted: List[dict] = []
+    preceding_ids: set = set()
     for row_id, row, writes in live:
         spec_path = _strip_backtick(row["spec path"])
         summary = row["summary"].strip()
@@ -660,14 +665,32 @@ def mint_rows(
         complexity = row["complexity"].strip()
 
         depends_on = []
+        explicit_dep_ids: set = set()
         for dep_id in _split_id_list(row["deps"]):
             dep_kind = dep_kinds.get(dep_id, _DEP_KIND_UNKNOWN)
             if dep_kind == _DEP_KIND_CLOSED_SATISFIED:
                 continue  # satisfied -- the dependency is already discharged
-            dep_writes = writes_by_id.get(dep_id)
-            if dep_writes and writes_by_id[row_id] & dep_writes:
-                continue  # write-overlap edge dropped -- see module docstring
             depends_on.append({"chunk": dep_id, "gate_kind": "output-consumption-runtime"})
+            explicit_dep_ids.add(dep_id)
+
+        # Write-overlap edge, added on top where none exists: an EARLIER
+        # live row (table order) whose writes intersect this row's writes
+        # is a real scheduling dependency, not one already implied
+        # "structurally" -- pathspec/wave_map sequencing is a separate
+        # mechanism from the depends_on edges this spine carries, and
+        # dropping the edge here left it invisible to any consumer that
+        # reads depends_on directly (module docstring's `deps` section, as
+        # amended). Every edge named by `deps`, plus this one, is kept --
+        # none is dropped for overlap.
+        for earlier_id, earlier_writes in writes_by_id.items():
+            if earlier_id == row_id or earlier_id in explicit_dep_ids:
+                continue
+            if earlier_id not in preceding_ids:
+                continue
+            if writes_by_id[row_id] & earlier_writes:
+                depends_on.append(
+                    {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
+                )
 
         entry: dict = {
             "id": row_id,
@@ -685,6 +708,7 @@ def mint_rows(
         if depends_on:
             entry["depends_on"] = depends_on
         minted.append(entry)
+        preceding_ids.add(row_id)
 
     return minted
 

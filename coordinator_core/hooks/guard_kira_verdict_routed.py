@@ -35,6 +35,13 @@ to read a fact), `no_advisory()` otherwise.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C14
 DoE source: coordinator/hooks/scripts/guard-kira-verdict-routed.py
+
+Routing repoint (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md
+row M4): a Kira verdict routes by a verified `findings_ledger` stamp on the
+Kira sidecar itself (`_kira_has_verified_ledger`), or by a rebuild-route
+executor's run-report `integrated_from` naming the Kira stem
+(`_kira_find_answers`) -- never by the retired `## Integrator Dispositions`
+heading or a fan-out-integrator receipt.
 """
 
 from __future__ import annotations
@@ -182,6 +189,18 @@ def _kira_block_condition_1(in_scope: list) -> bool:
     )
 
 
+def _kira_has_verified_ledger(meta: dict) -> bool:
+    """True when the Kira sidecar's OWN frontmatter carries a non-empty
+    `findings_ledger:` stamp (written by `review_findings_ledger.verify`,
+    DoE-claude docs/plans/2026-09-26-retire-review-integrator.md row M4).
+    A verified ledger on Kira's own sidecar satisfies routing directly --
+    it never needs a separate integrator sidecar to name it."""
+    value = meta.get("findings_ledger")
+    if isinstance(value, list):
+        return bool(value)
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _kira_find_answers(kira_filename: str, in_scope: list) -> list:
     stem = _kira_stem(kira_filename)
     answers: list = []
@@ -317,27 +336,34 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
     kira_entries = [(f, m) for f, m in in_scope if _kira_is_kira(f, m)]
     for kira_file, kira_meta in kira_entries:
         findings_count = _kira_to_int(kira_meta.get("findings_count"))
-        answers = _kira_find_answers(kira_file, in_scope)
+        if findings_count is None or findings_count <= 0:
+            continue
+        if _kira_has_verified_ledger(kira_meta):
+            continue
 
-        if findings_count is not None and findings_count > 0 and not answers:
-            unstamped_count = len(
-                _kira_unstamped_integrators(in_scope, plan=kira_meta.get("plan"))
-            )
-            unstamped_note = (
-                f" ({unstamped_count} integrator sidecar(s) in this session "
-                "carry a spawn-time integrator_receipt with no integrated_from "
-                "naming this verdict — spawned is not evidence of routed; do "
-                "not treat them as already handling it.)"
-                if unstamped_count
-                else ""
-            )
-            reasons.append(
-                f"- {kira_file} stamps findings_count={findings_count} with no "
-                f"sibling sidecar's integrated_from naming it. No integrator "
-                f"has claimed this verdict.{unstamped_note} Owed route: "
-                f"review-integrator, or a refactor executor if the verdict "
-                f"recommended a rebuild."
-            )
+        answers = _kira_find_answers(kira_file, in_scope)
+        if answers:
+            continue
+
+        unstamped_count = len(
+            _kira_unstamped_integrators(in_scope, plan=kira_meta.get("plan"))
+        )
+        unstamped_note = (
+            f" ({unstamped_count} integrator sidecar(s) in this session "
+            "carry a spawn-time integrator_receipt with no integrated_from "
+            "naming this verdict — spawned is not evidence of routed; do "
+            "not treat them as already handling it.)"
+            if unstamped_count
+            else ""
+        )
+        reasons.append(
+            f"- {kira_file} stamps findings_count={findings_count} with no "
+            f"verified findings_ledger of its own and no sibling sidecar's "
+            f"integrated_from naming it.{unstamped_note} Owed route: apply "
+            f"every finding and run `review-findings-ledger verify` on this "
+            f"sidecar, or a refactor executor stamping `integrated_from` if "
+            f"the verdict recommended a rebuild."
+        )
 
     if not reasons:
         return no_advisory()

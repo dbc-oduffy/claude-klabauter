@@ -1112,6 +1112,12 @@ def main(argv: list) -> int:
         return 1
 
     mode = argv[0]
+    if mode in ("--help", "-h"):
+        print(
+            "usage: coordinator_resolve_validation_cmd.py --fast|--full [repo_root] | "
+            "--read-key <repo_root> <key>"
+        )
+        return 0
     if mode == "--fast":
         repo_root = argv[1] if len(argv) > 1 else None
         result = resolve_fast_test_cmd(repo_root)

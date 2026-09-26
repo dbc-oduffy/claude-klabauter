@@ -911,29 +911,21 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
 
 
 def probe_p12(sibling_bin_dir: Optional[Path], claude_home: Path) -> List[ProbeNote]:
-    if sibling_bin_dir is None:
-        return []
-    try:
-        # Deferred import + broad except: an ImportError (corrupted/partial
-        # install), manifest-not-locatable, or any other failure maps to the
-        # existing graceful-absent [] path -- this probe must never raise
-        # (AC D2 -- native dry-run replaces the bash-script-absent check).
-        from coordinator_core.install.scaffold_structure import scaffold_canonical_structure
-
-        result = scaffold_canonical_structure(claude_home, sibling_bin_dir.parent, dry_run=True)
-    except Exception:  # noqa: BLE001 — advisory probe: never raise (graceful-absent, AC D2)
-        return []
-    if result.would_create_count() >= 1:
-        return [
-            ProbeNote(
-                "P-12",
-                "amber",
-                f"canonical structure incomplete at {claude_home} — run "
-                "python3 -c \"from coordinator_core.install.scaffold_structure import "
-                f"scaffold_canonical_structure; scaffold_canonical_structure('{claude_home}', "
-                "'<coordinator-root>')\" to restore; or re-run /coordinator:install",
-            )
-        ]
+    """RETIRED (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md
+    chunk C2, item 27). The Claude home carries no project canonical
+    structure and never authored one (DR-072's NO-PLACEMENT-CLAIM axis,
+    disposition sweep-never-relocate) -- so an incomplete canonical
+    structure AT the Claude home is the correct, permanent state, not a
+    deficiency. Flagging its absence amber re-triggered the exact
+    eviction/re-scaffold loop DR-072 exists to close (Step 7's own
+    `_scaffold_root_is_claude_home` refusal is the other half of that
+    close). Retired outright rather than repointed at residue-detection:
+    Step 7 no longer writes here, so there is no residue of ITS authorship
+    left to detect, and this probe was never the store of record for
+    anything else at this path. Parameters kept for call-site
+    compatibility; always returns `[]`.
+    """
+    del sibling_bin_dir, claude_home
     return []
 
 

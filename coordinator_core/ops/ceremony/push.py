@@ -171,19 +171,36 @@ _PUSH_MAX_RETRIES = 3
 #:     git ls-remote origin HEAD        p50 669.5ms  (min 610.3, max 701.3)
 #:     git push --dry-run origin HEAD   p50 753.9ms  (min 610.1, max 796.4)
 #: The full ladder is 3 pushes + 2 fetches = 5 network legs ~= 3.8s, plus a local
-#: rebase and the ladder's own `rev-parse`/`rev-list` spawns. 12.0s is ~3x that
-#: network cost, leaving room for the per-spawn scheduling tax the 50-70-session
-#: load norm imposes -- a real cost, but NOT a term plugged into this number:
-#: 12.0 is a flat literal chosen as ~3x the network estimate, not
-#: `network + headroom`. Cited as why the multiplier is 3x rather than 1.5x.
+#: rebase and the ladder's own `rev-parse`/`rev-list` spawns. The original 12.0s
+#: was ~3x that network cost -- but DR-401 (2026-09-01, see the sibling
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS` docstring below) refutes the `git push
+#: --dry-run` proxy this sizing rests on as underpriced by an order of
+#: magnitude: it never opens a real pack-negotiation/transfer round trip.
+#: Measured directly (DR-401), a genuine no-op `git push` on this box under
+#: its documented 50-70-session load norm ranged 2.07s-15.31s (n=6) --
+#: 12.0s sat BELOW that measured floor, exactly the shortfall DR-401 already
+#: corrected for the cadence sibling. R26 (2026-09-26,
+#: docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md) applies the
+#: same correction here: raised to 18.0 to clear the measured 15.31s worst
+#: case with headroom for THIS ladder's own retry legs (unlike the cadence
+#: sibling's single-attempt shape, this budget spans up to
+#: `_PUSH_MAX_RETRIES` fetch+rebase+re-push cycles) -- deliberately a
+#: DIFFERENT literal from `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) rather
+#: than the same one, so the two remain independently tunable per their own
+#: distinct callers. This constant's own end-to-end guard (`ipc.py`'s 30.0s
+#: dispatch timeout, see below) has ample headroom to absorb the raise, per
+#: `state/audits/2026-09-26-inbox-blitz-fyi-rest-reconfirm.md` (`26-rationale`).
 #:
 #: A CEILING, NEVER A TARGET, and deliberately well under the 30s dispatch guard
 #: so THIS is what stops the ladder and the guard stays a backstop whose breach
 #: means a real defect -- the same shape `ipc.py`'s `_OP_TIMEOUT_OVERRIDES` block
 #: records for `percolate.build_token_index`. Ratchets DOWN only: the remedy for a
 #: ladder that does not fit is a cheaper ladder, never a wider number here. The
-#: network floor above is the one term nothing in this repo can shrink.
-PUSH_RETRY_BUDGET_SECS: float = 12.0
+#: measured floor above is the one term nothing in this repo can shrink -- see
+#: the guard test asserting `PUSH_RETRY_BUDGET_SECS >= <this floor>`
+#: (`test_push_retry_budget_vs_p90.py`), mirroring `CADENCE_PUSH_RETRY_BUDGET_SECS`'s
+#: own guard.
+PUSH_RETRY_BUDGET_SECS: float = 18.0
 
 #: C5 (2026-08-30, docs/plans/2026-08-30-the-cockpit-publish-rejoins-the-
 #: push-that-survived.md) sized this at 6.0 from `git ls-remote`/`git push

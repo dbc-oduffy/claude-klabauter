@@ -29,6 +29,21 @@ a Write-only, deny-unconditionally shape in the first place. The correct
 contract is containment, not tool-selective denial: a confined agent may
 write-shaped-mutate ONLY inside its own sandbox, on every matcher.
 
+Re-scoped 2026-09-26 (docs/plans/2026-09-26-retire-review-integrator.md,
+row M1) for the reviewer-applies-own-findings contract: a confined agent may
+ALSO write to a path in the invoking EM session's own registered review-target
+set, so a reviewer can apply its findings in place in the reviewed artifact.
+The set is read from ``<git_root>/.git/coordinator-sessions/<session_id>/
+review-targets.txt`` — one repo-relative forward-slash path per non-blank
+line, written by ``review-findings-ledger targets --add`` (claude-klabauter
+``coordinator_core/ops/review_findings_ledger.py``). A candidate write is
+admitted when it equals a listed path exactly (after resolving both against
+``git_root`` and casefolding), never by directory containment — a target is
+one file, not a tree. A missing, unreadable, or empty targets file admits
+nothing extra: the guard then behaves exactly as it did before this
+re-scope, sandbox-only. This is additive: the sandbox roots, the confined
+set, and every fail-open identity leg below are unchanged.
+
 Fires on any of ``MATCHERS`` when:
   (1) a raw ``agent_id`` is present (a top-level EM write carries none —
       see the module docstring precedent in every sibling guard in this
@@ -65,8 +80,17 @@ Allow conditions (pass through):
       ``coordinator:enricher``, ``coordinator:review-integrator``, and
       every other roster member) — allow.
   (6) Override env ``COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE=1`` — allow.
+  (7) The resolved target path equals a registered review target for the
+      firing payload's own ``session_id`` — see the module docstring's
+      2026-09-26 re-scope note above.
 
 Negative-spec:
+  - Does NOT admit a review target by containment — the equality check in
+    ``_is_registered_review_target`` matches one file, never a directory a
+    target happens to sit under.
+  - Does NOT widen the registered-target set itself from inside this guard
+    — it only reads ``review-targets.txt``; only ``review-findings-ledger
+    targets --add`` (EM-only, per the M3 bash guard) writes it.
   - Does NOT match ``Write`` only — MATCHERS is the engine's full
     ``_VALID_MATCHERS`` set (``Write``, ``Edit``, ``MultiEdit``,
     ``NotebookEdit``). Matching ``Write`` alone was the defect this
@@ -173,6 +197,32 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
     )
 
 
+def _review_targets_file(git_root: str, session_id: str) -> Path:
+    return Path(git_root) / ".git" / "coordinator-sessions" / session_id / "review-targets.txt"
+
+
+def _is_registered_review_target(git_root: str, session_id: str, candidate: Path) -> bool:
+    """A candidate write is admitted when it equals a listed path exactly
+    (after resolving both against ``git_root`` and casefolding) — a target
+    is one file, not a tree, so this is equality, not containment. A
+    missing, unreadable, or empty targets file admits nothing extra."""
+    targets_path = _review_targets_file(git_root, session_id)
+    try:
+        raw = targets_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    for line in raw.splitlines():
+        rel = line.strip()
+        if not rel:
+            continue
+        target_raw = str(Path(git_root, rel))
+        target = Path(casefold_path(target_raw))
+        if candidate == target:
+            return True
+    return False
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
@@ -212,6 +262,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     candidate_raw = file_path if Path(file_path).is_absolute() else str(Path(git_root, file_path))
     candidate = Path(casefold_path(candidate_raw))
     if contained_path(candidate, sandbox_roots) is not None:
+        return None
+
+    if _is_registered_review_target(git_root, session_id, candidate):
         return None
 
     return {

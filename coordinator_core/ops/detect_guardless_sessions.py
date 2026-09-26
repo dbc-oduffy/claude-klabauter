@@ -78,11 +78,24 @@ import os
 import platform
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 _PLUGIN_DIR_VALUE_RE = re.compile(
     r'--plugin-dir(?:=|\s+)("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\S+)'
+)
+
+#: Item 38.2 -- a short-lived helper `claude.exe` (e.g. a brief non-interactive
+#: tool invocation) is not a guardless SESSION and must not be flagged as one.
+#: One named constant, read against `ProcessObservation.age_seconds`.
+_MIN_AGE_SECONDS = 5.0
+
+#: Parent-process names that indicate a direct, interactive launch (a shell
+#: or the desktop shell), as opposed to a helper spawned as another
+#: program's subprocess. Lower-cased comparison.
+_INTERACTIVE_PARENT_NAMES = frozenset(
+    {"cmd.exe", "powershell.exe", "pwsh.exe", "explorer.exe", "windowsterminal.exe"}
 )
 
 
@@ -91,6 +104,13 @@ class ProcessObservation:
     pid: int
     command_line: str
     guarded: bool
+    #: Seconds since the process started, or `None` when unknown (e.g. a
+    #: fixture/older caller that never populated it). `None` never
+    #: suppresses the guardless flag -- see `_counts_as_guardless`.
+    age_seconds: Optional[float] = None
+    #: Whether the process's parent is a known interactive shell, `None`
+    #: when unresolvable. `None` never suppresses the guardless flag.
+    has_interactive_parent: Optional[bool] = None
 
 
 @dataclass
@@ -178,11 +198,28 @@ class _CommandLineUnavailable(Exception):
         super().__init__(f"cmdline for claude.exe pid {pid} could not be read")
 
 
+def _parent_is_interactive(ppid: Optional[int]) -> Optional[bool]:
+    """`True`/`False` when the parent's process name resolves, `None`
+    (unknown) otherwise -- e.g. no `ppid` in hand, the parent already
+    exited, or its name can't be read. Never raises; `None` is the
+    fail-open case a caller must not collapse into "not interactive".
+    """
+    if not ppid:
+        return None
+    try:
+        import psutil
+
+        return psutil.Process(int(ppid)).name().lower() in _INTERACTIVE_PARENT_NAMES
+    except Exception:
+        return None
+
+
 def _run_process_probe() -> List[ProcessObservation]:
     import psutil
 
     observations: List[ProcessObservation] = []
-    for proc in psutil.process_iter(["pid", "name"]):
+    now = time.time()
+    for proc in psutil.process_iter(["pid", "name", "create_time", "ppid"]):
         name = (proc.info.get("name") or "").lower()
         if name != "claude.exe":
             continue
@@ -193,14 +230,36 @@ def _run_process_probe() -> List[ProcessObservation]:
         except psutil.NoSuchProcess:
             continue
         command_line = " ".join(cmdline_list)
+        create_time = proc.info.get("create_time")
+        age_seconds = (
+            now - create_time if isinstance(create_time, (int, float)) else None
+        )
         observations.append(
             ProcessObservation(
                 pid=proc.pid,
                 command_line=command_line,
                 guarded=_is_guarded(command_line),
+                age_seconds=age_seconds,
+                has_interactive_parent=_parent_is_interactive(proc.info.get("ppid")),
             )
         )
     return observations
+
+
+def _counts_as_guardless(obs: ProcessObservation) -> bool:
+    """True iff *obs* is an unguarded top-level session -- never a
+    short-lived helper subprocess (item 38.2). A helper is either younger
+    than `_MIN_AGE_SECONDS` or not launched directly from an interactive
+    shell. `age_seconds`/`has_interactive_parent` of `None` (unknown)
+    never suppresses the flag -- this module's Negative-spec never
+    collapses "cannot determine" into "clean"."""
+    if obs.guarded:
+        return False
+    if obs.age_seconds is not None and obs.age_seconds < _MIN_AGE_SECONDS:
+        return False
+    if obs.has_interactive_parent is False:
+        return False
+    return True
 
 
 def detect(platform_system: Optional[str] = None) -> DetectionResult:
@@ -235,7 +294,7 @@ def detect(platform_system: Optional[str] = None) -> DetectionResult:
             ),
         )
 
-    guardless = [o for o in observations if not o.guarded]
+    guardless = [o for o in observations if _counts_as_guardless(o)]
     return DetectionResult(
         cannot_determine=False,
         reason=None,

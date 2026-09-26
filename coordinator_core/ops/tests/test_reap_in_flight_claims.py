@@ -322,6 +322,7 @@ def test_survey_governed_plan_skips_release(tmp_path, monkeypatch):
     assert result.would_release == 0
     assert result.would_reclaim == 0
     assert result.dispositions[0].verdict == mod._VERDICT_SKIP_GOVERNED_PLAN
+    assert "ship-handoff" in result.dispositions[0].detail
 
 
 def test_survey_spinoff_kind_is_exempt_from_governed_plan_precheck(tmp_path, monkeypatch):

@@ -176,7 +176,6 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.guard_test_tree_git_fixture_spawn",
     "coordinator_core.hooks.guard_handoff_summary_cap_on_write",
     "coordinator_core.hooks.guard_repo_setup_claude_home_refusal",
-    "coordinator_core.hooks.guard_review_integrator_sidecar_intake",
     "coordinator_core.hooks.nudge_plan_test_surface_tier",
     "coordinator_core.hooks.preuse_agent_dispatch",
     "coordinator_core.hooks.preuse_skill_dispatch",
@@ -224,6 +223,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.group_em_park_spool",
     "coordinator_core.hooks.guard_kira_verdict_routed",
     "coordinator_core.hooks.guard_manufactured_blocker",
+    "coordinator_core.hooks.guard_terminal_review",
 ]
 
 

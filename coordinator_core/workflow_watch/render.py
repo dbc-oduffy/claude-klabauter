@@ -100,7 +100,19 @@ def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
 
     meta = _load_meta(run_dir, agent_id, cache)
     agent_type = meta.get("agentType")
-    agent_type = agent_type if isinstance(agent_type, str) else "unknown-agent"
+    if not isinstance(agent_type, str) or not agent_type:
+        # Pre-meta `started` lines (agent-<id>.meta.json hasn't landed yet) are
+        # the common miss case (see module docstring). Fall back to whatever
+        # the event itself names before giving up to the flat placeholder:
+        # the dispatch label, if the journal event carries one, else the
+        # agentId already validated as a non-empty str by the caller.
+        label = event.get("label")
+        if isinstance(label, str) and label:
+            agent_type = label
+        elif agent_id:
+            agent_type = agent_id
+        else:
+            agent_type = "unknown-agent"
     model = meta.get("model")
     model = model if isinstance(model, str) else "unknown-model"
 

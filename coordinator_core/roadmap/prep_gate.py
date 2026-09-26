@@ -48,6 +48,12 @@ depends on which one ran is not a bar. Where a predicate is restated here it is
 restated to the letter; where it necessarily differs (see ``fleet_siblings``) the
 difference is named.
 
+Four legs (``_created_roots``, the STALE-PREFIX candidate, the archive-write
+SPINE check, and refusal collapsing) are ported from that script at DoE-claude
+sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``; see
+``coordinator_core/roadmap/tests/test_prep_gate_four_legs.py`` for one fixture
+per leg.
+
 Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
                DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
                .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md
@@ -217,6 +223,40 @@ def repo_root_names(repo_root: Path) -> frozenset:
         return frozenset(entry.name for entry in repo_root.iterdir())
     except OSError:
         return frozenset()
+
+
+def repo_nested_names(repo_root: Path, root_names: frozenset) -> Dict[str, tuple]:
+    """Second-level directory names in ``repo_root``, mapped to the root entries
+    holding them — the STALE-PREFIX candidate for the ROOT-EXISTENCE leg.
+
+    Ported from DoE-claude ``coordinator/bin/mise-prep-gate.py``
+    (``_repo_nested_names``) at sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``.
+
+    A value like ``cross-repo/inbox/x`` names a first segment this repo does
+    not have at its root, but ``cross-repo`` exists one level down under
+    ``state/``. That is a path written against a remembered layout, not a
+    write into another team's tree, and the two take opposite repairs — one
+    moves the prefix, the other declares an ``external_gate``. Reported as an
+    undeclared cross-repo dependency, the author goes looking for a gate to
+    add and the stale path survives the fix.
+
+    One ``iterdir`` per root entry, read once per scan on the same reasoning
+    ``repo_root_names`` gives: the depth is bounded by the root listing, and
+    doing it per row would turn a corpus sweep into a stat storm. A name under
+    more than one root entry is ambiguous and carries every parent, so the
+    detail line offers candidates rather than asserting one.
+    """
+    nested: Dict[str, list] = {}
+    for name in root_names:
+        if name.startswith("."):
+            continue
+        try:
+            children = [entry.name for entry in (repo_root / name).iterdir() if entry.is_dir()]
+        except OSError:
+            continue
+        for child in children:
+            nested.setdefault(child, []).append(name)
+    return {child: tuple(sorted(parents)) for child, parents in nested.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +533,7 @@ def _path_leaves_repo(
     root_names: frozenset,
     siblings: Sequence[str],
     created_roots: frozenset = frozenset(),
+    nested_names: Optional[Dict[str, tuple]] = None,
 ) -> Optional[str]:
     """Why ``value`` names something outside this repo, or None.
 
@@ -584,6 +625,21 @@ def _path_leaves_repo(
     if first and first in created_roots:
         return None
     if first and first not in root_names:
+        # STALE-PREFIX candidate (ported from DoE-claude ``mise-prep-gate.py``
+        # ``_repo_nested_names`` at sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``):
+        # a first segment absent from the root but present one level down is a
+        # path written against a remembered layout, and its repair is to move
+        # the prefix — not to declare an ``external_gate``, which is what a
+        # bare "leaves the repo" verdict sends the author to do. The candidate
+        # is named, never substituted: a value that does not resolve is
+        # defective either way and only the author knows which repair it meant.
+        parents = (nested_names or {}).get(first) or ()
+        if parents:
+            candidates = " or ".join(f"{parent}/{first}/" for parent in parents)
+            return (
+                f"first path segment {first!r} does not exist at this repo's root, but "
+                f"{candidates} does — a stale path prefix, not a cross-repo write"
+            )
         return f"first path segment {first!r} does not exist in this repo"
     return None
 
@@ -785,7 +841,10 @@ def _matched_sibling(value: str, siblings: Sequence[str]) -> Optional[str]:
 
 
 def _external_deps(
-    rows: List[Dict[str, Any]], root_names: frozenset, siblings: Sequence[str]
+    rows: List[Dict[str, Any]],
+    root_names: frozenset,
+    siblings: Sequence[str],
+    nested_names: Optional[Dict[str, tuple]] = None,
 ) -> Dict[str, Any]:
     """The three-way split, at the granularity each leg earns.
 
@@ -857,7 +916,7 @@ def _external_deps(
                 )
                 continue
             reason = _path_leaves_repo(
-                field, value, root_names, siblings, created_roots
+                field, value, root_names, siblings, created_roots, nested_names
             )
             # external_reads_ungated clears a reads: hit only — never writes:/surface: —
             # per the APM ruling this field exists to serve. Keyed on (path,
@@ -1143,6 +1202,7 @@ def evaluate_plan(
     root_names: frozenset,
     siblings: Sequence[str],
     repo_root: Optional[Path] = None,
+    nested_names: Optional[Dict[str, tuple]] = None,
 ) -> Dict[str, Any]:
     """The whole bar over one plan. Returns a report; writes nothing.
 
@@ -1163,7 +1223,7 @@ def evaluate_plan(
     classes = {
         "SPINE": _spine(plan_path, text, repo_root),
         "CENSUS": _census(fm),
-        "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings),
+        "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings, nested_names),
         "PRIME_EXIT": prime_exit,
         "SCHEMA": _schema(fm, prime_exit),
     }
@@ -1302,12 +1362,14 @@ def gate_plan(worktree_root: Path, plan_path: Path, *, text: Optional[str] = Non
     ``coordinator_core/roadmap/tests/test_prep_gate.py::test_every_real_plan_holds_the_brightline``;
     do not raise the number.
     """
+    root_names = repo_root_names(worktree_root)
     return evaluate_plan(
         plan_path,
         text=text,
-        root_names=repo_root_names(worktree_root),
+        root_names=root_names,
         siblings=fleet_siblings(worktree_root),
         repo_root=worktree_root,
+        nested_names=repo_nested_names(worktree_root, root_names),
     )
 
 

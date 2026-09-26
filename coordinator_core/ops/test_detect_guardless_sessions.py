@@ -281,6 +281,133 @@ def test_main_returns_1_when_guardless_present(monkeypatch, capsys):
     assert payload["guardless_count"] == 1
 
 
+def test_detect_ignores_short_lived_helper_under_min_age(monkeypatch):
+    observed = [
+        ProcessObservation(
+            pid=2,
+            command_line="claude --dangerously-skip-permissions",
+            guarded=False,
+            age_seconds=2.0,
+            has_interactive_parent=True,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
+    )
+    result = detect(platform_system="Windows")
+    assert result.cannot_determine is False
+    assert result.guardless == []
+
+
+def test_detect_flags_old_process_with_interactive_parent(monkeypatch):
+    observed = [
+        ProcessObservation(
+            pid=3,
+            command_line="claude --dangerously-skip-permissions",
+            guarded=False,
+            age_seconds=30.0,
+            has_interactive_parent=True,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
+    )
+    result = detect(platform_system="Windows")
+    assert result.cannot_determine is False
+    assert [o.pid for o in result.guardless] == [3]
+
+
+def test_detect_ignores_old_process_with_non_interactive_parent(monkeypatch):
+    observed = [
+        ProcessObservation(
+            pid=4,
+            command_line="claude --dangerously-skip-permissions",
+            guarded=False,
+            age_seconds=30.0,
+            has_interactive_parent=False,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
+    )
+    result = detect(platform_system="Windows")
+    assert result.cannot_determine is False
+    assert result.guardless == []
+
+
+def test_detect_flags_unknown_age_and_parent_same_as_before(monkeypatch):
+    # Back-compat: observations that never populate age/parent (e.g. an
+    # older caller) are not silently exempted -- unknown never suppresses.
+    observed = [
+        ProcessObservation(pid=5, command_line="claude --dangerously-skip-permissions", guarded=False),
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
+    )
+    result = detect(platform_system="Windows")
+    assert [o.pid for o in result.guardless] == [5]
+
+
+def test_run_process_probe_computes_age_and_interactive_parent(monkeypatch):
+    class _FakeProc:
+        def __init__(self, pid, name, cmdline, create_time, ppid):
+            self.info = {
+                "pid": pid,
+                "name": name,
+                "create_time": create_time,
+                "ppid": ppid,
+            }
+            self.pid = pid
+            self._cmdline = cmdline
+
+        def cmdline(self):
+            return self._cmdline
+
+    import time as _time
+
+    fake_procs = [
+        _FakeProc(
+            1,
+            "claude.exe",
+            ["claude.exe", "--dangerously-skip-permissions"],
+            create_time=_time.time() - 30,
+            ppid=999,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
+        lambda: None,
+    )
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs: iter(fake_procs))
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._parent_is_interactive",
+        lambda ppid: ppid == 999,
+    )
+
+    from coordinator_core.ops.detect_guardless_sessions import _run_process_probe
+
+    observed = _run_process_probe()
+    assert len(observed) == 1
+    assert observed[0].age_seconds >= 29
+    assert observed[0].has_interactive_parent is True
+
+
+def test_parent_is_interactive_none_when_no_ppid():
+    from coordinator_core.ops.detect_guardless_sessions import _parent_is_interactive
+
+    assert _parent_is_interactive(None) is None
+    assert _parent_is_interactive(0) is None
+
+
 def test_main_returns_2_when_cannot_determine(monkeypatch, capsys):
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions.platform.system", lambda: "Darwin"

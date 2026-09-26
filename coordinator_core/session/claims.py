@@ -719,14 +719,39 @@ BRIEF_CLAIM_LEASE_MINUTES = int(
 )
 
 
-def _write_claim_meta(claim_dir: Path, sid: str, stage: str = CLAIM_STAGE_APPLY) -> None:
+def _write_claim_meta(
+    claim_dir: Path,
+    sid: str,
+    stage: str = CLAIM_STAGE_APPLY,
+    takeover: Optional[dict] = None,
+) -> None:
     """Write the ``pid`` / ``session_id`` / ``claimed_at`` / ``stage`` metadata
     files into a freshly-mkdir'd claim dir. ``pid`` is ``os.getpid()`` — the
-    CALLER's pid, which MUST be long-lived (see module negative-spec)."""
+    CALLER's pid, which MUST be long-lived (see module negative-spec).
+
+    ``takeover`` (C3, DR-205 (c)): when ``None`` (the default), writes exactly
+    the four files above, byte-for-byte, so the byte-parity ``shape.py``'s
+    lock writer cites is untouched. When set (a dict with
+    ``taken_from_session_id``, ``takeover_evidence``, ``justification``),
+    also writes three more one-field-per-file entries in the claim dir's
+    existing plain-text layout, each readable through ``_read_claim_field``.
+    The taking session and its claim time are already covered by
+    ``session_id``/``claimed_at`` above and are not duplicated here.
+    """
     (claim_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
     (claim_dir / "session_id").write_text(f"{sid}\n", encoding="utf-8", newline="\n")
     (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8", newline="\n")
     (claim_dir / "stage").write_text(f"{stage}\n", encoding="utf-8", newline="\n")
+    if takeover is not None:
+        (claim_dir / "taken_from_session_id").write_text(
+            f"{takeover.get('taken_from_session_id', '')}\n", encoding="utf-8", newline="\n"
+        )
+        (claim_dir / "takeover_evidence").write_text(
+            f"{takeover.get('takeover_evidence', '')}\n", encoding="utf-8", newline="\n"
+        )
+        (claim_dir / "justification").write_text(
+            f"{takeover.get('justification', '')}\n", encoding="utf-8", newline="\n"
+        )
 
 
 def claim_stage(claim_dir: Union[str, Path]) -> str:
@@ -989,6 +1014,15 @@ def claim_artifact(
       - Legacy pid-only claim dir (no session_id file) -> ``liveness.
         claim_holder_live`` falls back to the ephemeral-pid test.
 
+    Four takeability inputs feed this ladder, only three of them ACTED ON
+    inside it: liveness (``liveness.claim_holder_live``); ``brief_lease_
+    expired``; staleness past ``pickup_assemble.CLAIM_STALE_AFTER_MINUTES``
+    (folded into the dead/idle-holder takeover branch above). The fourth,
+    relinquishment, is evidence a holder is done even though it may still be
+    live — this ladder never acts on it; a live-holder refusal instead names
+    ``take_over_claim`` (module docstring, DR-205) as the separate, fail-loud
+    route a caller with relinquishment evidence takes.
+
     ``stage`` selects what is being taken. ``apply`` (the default, and what
     every pre-existing caller gets) is the durable claim backed by a landed
     frontmatter stamp. ``brief`` is ``pickup_assemble.brief``'s pre-work
@@ -1161,10 +1195,17 @@ def claim_artifact(
             pid_clause = f"live PID {held_pid or '?'} (confirmed via legacy pid-liveness check, no session registry entry)"
         else:
             pid_clause = f"recorded-at-claim-time PID {held_pid or '?'} (not confirmed live)"
+        takeover_clause = (
+            f", or, if that session has handed this off, session-claim-cli "
+            f"take-over-claim plan {basename} --justification <why>"
+            if class_ == "plan"
+            else ""
+        )
         print(
             f"cs_claim_{class_}: {basename} held by session {held_sid or '?'} "
             f"— {pid_clause} — concurrent /pickup detected; reconcile with that "
-            f"session, or run clear-claim-if-dead once it exits",
+            f"session, or run clear-claim-if-dead once it exits"
+            f"{takeover_clause}",
             file=sys.stderr,
         )
         return False
@@ -2467,6 +2508,98 @@ def release_artifact(
     return True
 
 
+def release_or_relinquish_artifact(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+    my_sid: Optional[str] = None,
+) -> bool:
+    """d5's release verb (DR-205, docs/plans/2026-09-26-claim-relinquishment-
+    is-not-liveness-cla.md § C2): ``release_artifact`` plus a narrow
+    relinquishment-marker write, for the one case D1 (that plan's own
+    design-decisions section) names.
+
+    1. Call ``release_artifact`` unchanged, with the same arguments. Its
+       return value is this function's return value.
+    2. If the claim dir still exists, ``class_ == "plan"``, and the claim
+       dir's OWN recorded ``session_id`` is in ``{my_sid} | core.
+       session_env_candidates()``, atomically write ``<claim_dir>/
+       relinquished.json`` (tmp file + ``os.replace``): ``{"session_id":
+       <recorded sid>, "at": <UTC now, core.now_iso()>}``. This is the
+       env-precedence mismatch D1 names -- ``release_artifact`` left the
+       claim in place because the recorded holder did not match the
+       identity ``liveness.claim_held_by_me`` checked, but it matches one of
+       this process's OTHER identity tiers, so it is still "us" by a wider
+       reading of our own identity than the resolved holder-check sid.
+    3. Refuse the write (write nothing, still return the step-1 result, one
+       stderr line) when ``core.in_warm_served_request() and not core.
+       carried_session_id()`` -- the same predicate ``_report_warm_
+       uncarried_resolve`` reads, reused rather than re-derived (D1): a
+       warm-served request that carried no identity must not assert whose
+       claim this is, the same fail-closed rule ``claim_held_by_me`` follows.
+
+    No post-write re-read or unlink step: a takeover racing the write leaves
+    a marker naming the OLD sid in the new holder's claim dir, and
+    ``liveness.claim_holder_relinquished``'s stale-sid ignore rule (its own
+    docstring) makes that marker inert by construction (D1) -- there is
+    nothing here for a cleanup step to do.
+
+    Any failure resolving or writing the marker is swallowed and never
+    changes the return value: the marker is a narrow, additive signal (the
+    derived fallback in ``liveness.py`` carries most of the incident's
+    weight), and a failed write must never turn a successful release into a
+    reported failure.
+
+    ``class_`` / ``basename`` REQUIRED -- ``release_artifact`` raises
+    ``ValueError`` first, before this function's own logic runs.
+    """
+    released = release_artifact(class_, basename, baton_repo_root, cwd, my_sid)
+
+    if class_ != "plan":
+        return released
+
+    claim_dir = claim_dir_for(class_, basename, baton_repo_root, cwd)
+    if claim_dir is None or not claim_dir.is_dir():
+        return released
+
+    try:
+        recorded_sid = (claim_dir / "session_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return released
+    if not recorded_sid:
+        return released
+
+    try:
+        candidates = set(core.session_env_candidates())
+    except Exception:  # noqa: BLE001 - identity resolution is best-effort here
+        candidates = set()
+    if my_sid:
+        candidates.add(my_sid)
+    if recorded_sid not in candidates:
+        return released
+
+    if core.in_warm_served_request() and not core.carried_session_id():
+        print(
+            "claims.release_or_relinquish_artifact: warm-served request "
+            "carried no session identity -- refusing to write a "
+            "relinquishment marker",
+            file=sys.stderr,
+        )
+        return released
+
+    try:
+        marker_path = claim_dir / "relinquished.json"
+        tmp_path = claim_dir / f".relinquished.json.tmp.{os.getpid()}"
+        payload = {"session_id": recorded_sid, "at": core.now_iso()}
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp_path, marker_path)
+    except OSError:
+        return released
+
+    return released
+
+
 def _clear_shape_plan_pointer(
     slug: str,
     sid: Optional[str],
@@ -2613,9 +2746,15 @@ def clear_claim_if_dead(
     # Liveness gate — read 1: refuse if the holder is still live.
     if liveness.claim_holder_live(str(claim_dir), cwd):
         holder = _read_holder(claim_dir)
+        takeover_clause = (
+            f", or, if that session has handed this off, session-claim-cli "
+            f"take-over-claim plan {basename} --justification <why>"
+            if class_ == "plan"
+            else ""
+        )
         print(
             f"cs_clear_claim_if_dead: refusing to clear claim '{basename}' — "
-            f"holder is live (session: {holder})",
+            f"holder is live (session: {holder}){takeover_clause}",
             file=sys.stderr,
         )
         return False
@@ -2653,6 +2792,202 @@ def clear_claim_if_dead(
         reconcile_dead_handoff_claim_frontmatter(basename, claim_dir.parent.parent)
 
     shutil.rmtree(claim_dir, ignore_errors=True)
+    return True
+
+
+def _evidence_still_holds(
+    claim_dir: Path, evidence: "liveness.RelinquishmentEvidence", holder_sid: str
+) -> bool:
+    """C3's Read-2 re-verification (D3): re-checks ONLY the evidence object
+    Read 1 returned, never a corpus rescan and never a second git spawn.
+
+    Marker evidence: ``relinquished.json`` is still present and still names
+    ``holder_sid``. Derived evidence: the handoff file it pointed at still
+    exists, on disk, with the same ``authoring_session`` and
+    ``governing_plan`` -- no ``git cat-file`` re-spawn (the file being on disk
+    at all, uncommitted or not, is not re-checked here; a takeover racing a
+    commit revert is an accepted, vanishingly narrow window, not one this
+    bracket is asked to close a second time).
+    """
+    if evidence.kind == "marker":
+        try:
+            raw = (claim_dir / "relinquished.json").read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return data.get("session_id") == holder_sid
+    if evidence.kind == "derived":
+        if not evidence.handoff:
+            return False
+        try:
+            from coordinator_core.ops.fleet._common import main_worktree_root
+            from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+
+            sessions_dir_path = claim_dir.parent.parent
+            common_dir = sessions_dir_path.parent
+            worktree = main_worktree_root(common_dir)
+            if not worktree:
+                return False
+            handoff_path = Path(worktree) / evidence.handoff
+            if not handoff_path.is_file():
+                return False
+            authoring_session = read_frontmatter_field(str(handoff_path), "authoring_session")
+            if authoring_session != holder_sid:
+                return False
+            governing_plan = read_frontmatter_field(str(handoff_path), "governing_plan")
+            plan_path = f"docs/plans/{claim_dir.name}.md"
+            return governing_plan.replace("\\", "/") == plan_path
+        except Exception:  # noqa: BLE001 - fails closed, see module negative-spec
+            return False
+    return False
+
+
+def take_over_claim(
+    basename: str,
+    justification: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """DR-205 (c)'s fail-loud takeover verb (docs/plans/2026-09-26-claim-
+    relinquishment-is-not-liveness-cla.md § C3). Hard-scoped to the ``plan``
+    class only, with no class parameter (D2) -- the CLI keeps the literal
+    ``plan`` positional for shape consistency with its sibling subcommands,
+    but this function never branches on a class.
+
+    Refuses, with a named reason (False + stderr), when:
+      - ``justification`` is empty (or whitespace-only);
+      - the calling session id cannot be resolved
+        (``core.resolve_session_id``);
+      - the claim is absent (nothing to take over -- claim it normally);
+      - the caller already holds the claim (a no-op; True, not a refusal).
+
+    Read 1: ``liveness.claim_holder_relinquished``. No evidence -> refuse.
+    The refusal message branches on ``liveness.claim_holder_live`` for its
+    WORDING ONLY -- liveness is never itself grounds for a grant (DR-205's
+    pid-only inversion: a not-live verdict is never evidence).
+
+    Read 2, immediately before the mutation (the TOCTOU bracket): the claim
+    dir's recorded ``session_id`` is unchanged AND the SAME evidence object
+    Read 1 found still verifies (``_evidence_still_holds``, D3) -- no corpus
+    rescan, no second git spawn. Either half false -> abort, claim nothing.
+
+    Mutation: ``rmtree`` then ``os.mkdir``. A ``FileExistsError`` on the
+    ``mkdir`` means a racer won the dir first -- fail loud, claim nothing.
+    ``_write_claim_meta`` then records the taking session and its
+    justification into the new claim dir (DR-205 (c)), and
+    ``_report_claim_neighbours`` fires the same post-claim hook
+    ``claim_artifact`` fires on a grant.
+    """
+    if not basename:
+        raise ValueError("basename required")
+    if not justification or not justification.strip():
+        print(
+            "claims.take_over_claim: --justification is required and must be "
+            "non-empty -- a takeover with no stated reason is not fail-loud, "
+            "it is silent",
+            file=sys.stderr,
+        )
+        return False
+
+    sid = core.resolve_session_id(cwd)
+    if not sid:
+        print(
+            "claims.take_over_claim: session id unresolvable under "
+            "concurrency — run: export CLAUDE_SESSION_ID=<harness-id>",
+            file=sys.stderr,
+        )
+        return False
+
+    claim_dir = claim_dir_for("plan", basename, baton_repo_root, cwd)
+    if claim_dir is None or not claim_dir.is_dir():
+        print(
+            f"claims.take_over_claim: no claim on plan {basename!r} — "
+            "nothing to take over; claim it normally with claim-plan",
+            file=sys.stderr,
+        )
+        return False
+
+    if liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+        print(
+            f"claims.take_over_claim: plan {basename!r} is already held by "
+            "this session — no-op",
+            file=sys.stderr,
+        )
+        return True
+
+    held_sid = _read_claim_field(claim_dir, "session_id")
+
+    # ---- Read 1: relinquishment evidence ----
+    evidence = liveness.claim_holder_relinquished(str(claim_dir), cwd)
+    if evidence is None:
+        if liveness.claim_holder_live(str(claim_dir), cwd):
+            print(
+                f"claims.take_over_claim: plan {basename!r} held by live "
+                f"session {held_sid or '?'} with no relinquishment evidence "
+                "— reconcile with that session",
+                file=sys.stderr,
+            )
+        elif held_sid:
+            print(
+                f"claims.take_over_claim: plan {basename!r} held by session "
+                f"{held_sid} which is not live — run clear-claim-if-dead",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"claims.take_over_claim: plan {basename!r} is a pid-only "
+                "claim — not-live is not relinquishment evidence (DR-205 "
+                "pid-only inversion); run clear-claim-if-dead",
+                file=sys.stderr,
+            )
+        return False
+
+    # ---- Read 2: the TOCTOU bracket, immediately before mutation ----
+    if not claim_dir.is_dir():
+        print(
+            f"claims.take_over_claim: aborting — claim on plan {basename!r} "
+            "vanished before the takeover could complete",
+            file=sys.stderr,
+        )
+        return False
+    held_sid_now = _read_claim_field(claim_dir, "session_id")
+    if held_sid_now != held_sid:
+        print(
+            f"claims.take_over_claim: aborting — the holder of plan "
+            f"{basename!r} changed between reads",
+            file=sys.stderr,
+        )
+        return False
+    if not _evidence_still_holds(claim_dir, evidence, held_sid):
+        print(
+            f"claims.take_over_claim: aborting — the relinquishment evidence "
+            f"for plan {basename!r} no longer verifies",
+            file=sys.stderr,
+        )
+        return False
+
+    # ---- Mutation ----
+    shutil.rmtree(claim_dir, ignore_errors=True)
+    try:
+        os.mkdir(claim_dir)
+    except FileExistsError:
+        print(
+            f"claims.take_over_claim: a racer claimed plan {basename!r} "
+            "first — fail loud, nothing was taken over",
+            file=sys.stderr,
+        )
+        return False
+
+    evidence_path = evidence.handoff if evidence.kind == "derived" else "relinquished.json"
+    takeover_meta = {
+        "taken_from_session_id": held_sid,
+        "takeover_evidence": f"{evidence.kind} {evidence_path}",
+        "justification": justification,
+    }
+    _write_claim_meta(claim_dir, sid, CLAIM_STAGE_APPLY, takeover=takeover_meta)
+    _report_claim_neighbours("plan", basename, cwd)
     return True
 
 
@@ -2723,16 +3058,49 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     explicitly ruled out: a crash after rmtree reproduces exactly the bug
     this function exists to close.
 
-    PRECONDITION (verified at handoff_transition.py:731,809-813): unconsume
-    fails loud (``MutateAbort``) unless ``deployment_state`` is currently
-    ``in_flight`` or ``ready_to_fire``. A dead-claimed handoff is normally
-    ``in_flight``, but a claim could in principle be sitting on some other
-    ``deployment_state``. Rather than let that raised ``MutateAbort``
-    propagate uncaught into the caller's clear/reap path, this function
-    checks ``deployment_state`` itself FIRST and SKIPS (logs + returns) on
-    anything outside ``{in_flight, ready_to_fire}`` — the lock dir still
-    gets cleared by the caller; only the frontmatter step is skipped. Also
-    skips silently when the handoff file no longer exists (nothing to
+    NO deployment_state PRECONDITION HERE (IBMFR-R04). This used to
+    pre-check ``deployment_state`` and SKIP the reconcile entirely for
+    anything outside ``{in_flight, ready_to_fire}`` — ``awaiting_gate``
+    included — permanently stranding a dead session's ``claimed_by`` on
+    that shape (state/cross-repo/archive/2026-09-12-example-market-data-repo-em-
+    unclaim-refuses-awaiting-gate-and-created-paths-have-no-claimant.md,
+    Gap 1: the lock cleared but no sanctioned verb could ever correct the
+    frontmatter). Clearing a DEAD claimant is a different, strictly safer
+    act than a LIVE session's own unclaim: the holder is gone, so nothing
+    is transitioning the baton's lifecycle on its behalf, and the only
+    remaining question is whether the frontmatter should keep naming a
+    corpse.
+
+    Two routes now, chosen by ``deployment_state``, matching ``_unclaim``'s
+    OWN three-way split (handoff_transition.py's C1-Q1 ruling, which this
+    function does not, and must not, relax — a terminal record reached its
+    end state through a different, deliberate verb, and reopening it here
+    would discard that verb's own evidence exactly as it would for a live
+    caller):
+
+      - ``in_flight`` / ``ready_to_fire`` — unchanged: calls ``_unclaim``,
+        which flips ``status``/``deployment_state`` back to
+        open/ready_to_fire as before.
+      - a TERMINAL state (``lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT``
+        — shipped/continued/closed) — skipped, exactly as ``_unclaim``
+        itself would refuse: a terminal record's claim evidence is not
+        this function's to erase.
+      - anything else (``awaiting_gate`` is the observed case) —
+        ``_clear_dead_claimant_only`` (below): strips the claimant fields
+        (claimed_at/claimed_by/consumed_at/consumed_by/claimed_by_name),
+        stamps ``reaped_from_session``/``release_evidence``, and leaves
+        ``status``/``deployment_state`` untouched — the market-
+        intelligence-em memo's own suggested shape ("a distinct reconcile
+        that writes reaped_from_session without touching deployment_state
+        ... exactly what the [in_flight] ones did, minus the state
+        change"). This is NOT a call into ``_unclaim`` (whose own
+        precondition — handoff_transition.py, deliberately, per its
+        C1-Q1 docstring — still refuses any state outside {in_flight,
+        ready_to_fire} and is out of this chunk's writes scope) — it is a
+        second, narrower frontmatter mutation living entirely in this
+        module.
+
+    Skips silently when the handoff file no longer exists (nothing to
     reconcile) — never raises.
 
     SUCCEEDED-BATON CARVE-OUT (2026-07-30, break-class fix). A handoff that
@@ -2776,6 +3144,7 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     # Local imports: avoids a claims.py <-> handoff_transition.py import-time
     # cycle (handoff_transition registers an IPC op at import time; claims.py
     # is a pure in-process library imported far earlier in the boot chain).
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
     from coordinator_core.ops.fleet._common import main_worktree_root
     from coordinator_core.ops.handoff_transition import _unclaim
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
@@ -2786,16 +3155,6 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
 
     if not handoff_path.is_file():
         return  # claim referenced a handoff that's already gone — nothing to reconcile
-
-    deployment = read_frontmatter_field(str(handoff_path), "deployment_state")
-    if deployment not in ("in_flight", "ready_to_fire"):
-        print(
-            f"note: skipping frontmatter reconcile for dead handoff claim "
-            f"'{basename}' — deployment_state '{deployment}' outside "
-            f"unconsume's accepted set (in_flight, ready_to_fire); lock still cleared",
-            file=sys.stderr,
-        )
-        return
 
     has_successor = _handoff_has_named_successor(handoff_path, worktree)
     if has_successor is not False:
@@ -2833,13 +3192,140 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     claim_dir = sessions_dir / "handoff-claims" / basename
     holder = _read_holder(claim_dir)
     reaped_from_sid = "" if holder == "unknown" or holder.isdigit() else holder
-    result = _unclaim(str(handoff_path), "", worktree, common_dir, reaped_from=reaped_from_sid)
+
+    deployment = read_frontmatter_field(str(handoff_path), "deployment_state")
+    deployment_norm = (deployment or "").strip().lower()
+
+    if deployment_norm in HANDOFF_TERMINAL_DEPLOYMENT:
+        print(
+            f"note: skipping frontmatter reconcile for dead handoff claim "
+            f"'{basename}' — deployment_state '{deployment}' is terminal; "
+            f"a terminal record's claim evidence is not this reconcile's to "
+            f"erase; lock still cleared",
+            file=sys.stderr,
+        )
+        return
+
+    if deployment in ("in_flight", "ready_to_fire"):
+        result = _unclaim(
+            str(handoff_path), "", worktree, common_dir, reaped_from=reaped_from_sid
+        )
+    else:
+        # Non-terminal, but outside _unclaim's own accepted set (the
+        # observed case: awaiting_gate). Clear the DEAD claimant only —
+        # never route this through _unclaim, whose own precondition
+        # (handoff_transition.py, deliberate C1-Q1 ruling) would refuse it
+        # anyway; see this function's docstring.
+        result = _clear_dead_claimant_only(
+            str(handoff_path), worktree, common_dir, reaped_from=reaped_from_sid
+        )
     if result.get("exit_code") != 0:
         print(
             f"note: frontmatter reconcile for dead handoff claim '{basename}' "
             f"failed — {result.get('error', 'unknown error')}; lock still cleared",
             file=sys.stderr,
         )
+
+
+def _clear_dead_claimant_only(
+    handoff_path: str,
+    worktree: Path,
+    repo_root: Path,
+    reaped_from: str = "",
+) -> dict:
+    """Strip a DEAD session's claimant fields from *handoff_path* without
+    touching ``status``/``deployment_state`` — the narrower sibling of
+    ``_unclaim`` for a ``deployment_state`` outside its accepted
+    ``{in_flight, ready_to_fire}`` set (and not terminal — callers filter
+    that first). See ``reconcile_dead_handoff_claim_frontmatter``'s
+    docstring for why this exists as a SEPARATE mutation rather than a call
+    into ``_unclaim``.
+
+    Mirrors ``_unclaim``'s own claimant-clearing sub-steps byte-for-byte
+    (strip claimed_at/claimed_by/consumed_at/consumed_by/claimed_by_name;
+    stamp reaped_from_session — resolved from frontmatter claimed_by, then
+    consumed_by, then the caller-supplied ``reaped_from``, each candidate
+    required to be session-id-shaped; stamp release_evidence) — deliberately
+    NOT re-derived, since drifting from that shape would let the two claim-
+    release paths disagree on what "released" writes. Does not strip
+    ``gate_dependency``/``gate_evidence`` and does not run
+    ``_apply_derived_readiness``: those are ``_unclaim``'s own transition-
+    target normalizers, and this function makes no transition.
+
+    Returns the same ``{"exit_code", "message"}`` / ``{"exit_code",
+    "error"}`` envelope shape ``_unclaim`` returns, via the same
+    ``locked_rmw`` + ``LockTimeout``/``MutateAbort`` handling, so this
+    function's caller needs no second result-shape branch.
+    """
+    from coordinator_core.frontmatter.primitives import (
+        insert_fm_field,
+        read_fm_field_unquoted,
+        rebuild,
+        remove_fm_field,
+        replace_fm_field,
+        split_frontmatter,
+    )
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops.handoff_transition import _is_session_id_shaped
+
+    _state: dict = {"applied": False, "message": ""}
+
+    def mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(
+                f"reconcile: no parseable YAML frontmatter in {handoff_path}"
+            )
+        fm = split.fm_text
+
+        claimed_by_val = read_fm_field_unquoted(fm, "claimed_by")
+        consumed_by_val = read_fm_field_unquoted(fm, "consumed_by")
+        resolved_sid = None
+        for candidate in (claimed_by_val, consumed_by_val, reaped_from):
+            candidate_stripped = candidate.strip() if isinstance(candidate, str) else None
+            if _is_session_id_shaped(candidate_stripped):
+                resolved_sid = candidate_stripped
+                break
+        if resolved_sid:
+            if read_fm_field_unquoted(fm, "reaped_from_session") is not None:
+                fm = replace_fm_field(fm, "reaped_from_session", resolved_sid)
+            else:
+                fm = insert_fm_field(
+                    fm, "reaped_from_session", resolved_sid, "deployment_state"
+                )
+
+        fm = remove_fm_field(fm, "claimed_at")
+        fm = remove_fm_field(fm, "claimed_by")
+        fm = remove_fm_field(fm, "consumed_at")
+        fm = remove_fm_field(fm, "consumed_by")
+        fm = remove_fm_field(fm, "claimed_by_name")
+
+        release_ts = core.now_iso()
+        if read_fm_field_unquoted(fm, "release_evidence") is not None:
+            fm = replace_fm_field(fm, "release_evidence", release_ts)
+        else:
+            fm = insert_fm_field(fm, "release_evidence", release_ts, "deployment_state")
+
+        _state["applied"] = True
+        _state["message"] = f"{handoff_path}: dead claimant cleared (deployment_state untouched)"
+        return rebuild(split, fm)
+
+    try:
+        locked_rmw(Path(handoff_path), mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return {"exit_code": 1, "error": f"reconcile: handoff not found: {handoff_path}"}
+    except LockTimeout as exc:
+        return {
+            "exit_code": 1,
+            "error": f"reconcile: timed out waiting for file lock on {handoff_path}: {exc}",
+        }
+    except MutateAbort as exc:
+        return {
+            "exit_code": 1,
+            "error": exc.args[0] if exc.args else "reconcile: mutation aborted",
+        }
+
+    return {"exit_code": 0, "message": _state["message"]}
 
 
 # Anchored on the FULL sentence ``reconcile_dead_handoff_claim_frontmatter``'s

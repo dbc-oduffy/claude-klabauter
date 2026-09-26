@@ -1,5 +1,5 @@
 """
-coordinator_core.hooks.stop_dispatch — Stop-event fan-in, eight legs (not six).
+coordinator_core.hooks.stop_dispatch — Stop-event fan-in, nine legs (not six).
 
 Purpose: warm-engine composition for DoE-claude's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
@@ -8,12 +8,16 @@ its fan-in of folded scripts every Stop, fleet-wide. This module is the
 engine-side op that registration can eventually point at (per this plan's
 own exit criterion — the `type`/`url` edit itself is DoE's, not ours).
 
-THE COUNT IS EIGHT, NOT SIX. `stop-dispatch.py`'s own `REGISTRY` (read at
+THE COUNT IS NINE, NOT SIX. `stop-dispatch.py`'s own `REGISTRY` (read at
 DoE-claude HEAD `3331187b9cd5b806942e6dba290e5985c7dbfc4c`, unchanged at
 current HEAD `7b9b78f4b211023e34a9d53f2feaacd45ed98154` — same 478 lines)
 carries eight `StopGuard` entries, not the six the classification table's
 prose names — the "six" there is inherited docstring prose this plan's own
-Anti-scope forbids re-deriving from. Disposition per leg:
+Anti-scope forbids re-deriving from. A ninth leg, `guard_terminal_review`, is
+composed here ahead of DoE's own registration
+(docs/plans/2026-09-26-terminal-review-gate-mechanical.md, chunk C2) — its
+DoE-side `StopGuard` row lands separately (that plan's chunk C3). Disposition
+per leg:
 
   1. `runtime_tripwire_em_check` — CONSUMED, not re-derived. C6 already
      built `hooks.runtime_tripwire_em_check` (`coordinator_core/hooks/
@@ -80,6 +84,16 @@ Anti-scope forbids re-deriving from. Disposition per leg:
      fan-in's aggregate verdict — composed for its write side-effect only,
      its return value is not folded into the aggregate.
 
+  9. `guard_terminal_review` — COMPOSED, its own registered op
+     (`hooks.guard_terminal_review`, `coordinator_core/hooks/
+     guard_terminal_review.py`). Refuses the EM's own Stop when this
+     session's code-diff commits are not covered by a reviewer receipt, a
+     reviewer window, or a valid `Inline-Review:` trailer — see that
+     module's own docstring for the three credit arms. Its handler already
+     matches the `_guard_kira_verdict_routed_handler` shape (`deny()` /
+     `post_advisory()` / `no_advisory()`), so it composes into the fold
+     below exactly like the Kira leg, placed immediately after it.
+
 AGGREGATION CONTRACT: mirrors `stop-dispatch.py`'s own CONCATENATE-ALL
 (never first-fires-wins) — every composable leg above (all but #3, #8) runs
 regardless of whether an earlier leg already produced a block/advisory; one
@@ -119,6 +133,9 @@ from coordinator_core.hooks.em_report_altitude import op as _em_report_altitude_
 from coordinator_core.hooks.guard_kira_verdict_routed import (
     _guard_kira_verdict_routed,
     _guard_kira_verdict_routed_handler,
+)
+from coordinator_core.hooks.guard_terminal_review import (
+    _guard_terminal_review_handler,
 )
 from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     op as _nudge_harness_directive_dispatch_op,
@@ -190,7 +207,7 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
 
 @register_op("hooks.stop_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop fan-in: compose the seven composable legs (all but the excluded
+    """Stop fan-in: compose the eight composable legs (all but the excluded
     BLOCKING-class `guard_manufactured_blocker`) and aggregate CONCATENATE-
     ALL, per module docstring.
 
@@ -210,6 +227,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         lambda: _runtime_tripwire_em_check_handler(leg_params),
         lambda: _watchdog_undischarged_next_move_handler(leg_params),
         lambda: _guard_kira_verdict_routed_handler(leg_params),
+        lambda: _guard_terminal_review_handler(leg_params),
         lambda: _stop_em_report_altitude_handler(leg_params),
         lambda: _nudge_harness_directive_dispatch_handler(leg_params),
         lambda: _nudge_unrouted_sizing_handler(leg_params),

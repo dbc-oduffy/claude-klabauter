@@ -17,14 +17,14 @@ def _v3_fragment() -> dict:
             "coordinator:docs-checker": None,
             "coordinator:code-reviewer": "BLOCKED",
             "coordinator:staff-eng": "REJECTED",
-            "coordinator:review-integrator": "BLOCKED",
+            "coordinator:code-reviewer-weekly": "BLOCKED",
             "coordinator:eng-director": "REJECTED",
         },
         "tiers": {
             "lightweight": {
                 "stages": [
                     {"agents": ["coordinator:code-reviewer"]},
-                    {"agents": ["coordinator:review-integrator"]},
+                    {"agents": ["coordinator:code-reviewer-weekly"]},
                 ]
             },
             "standard": {
@@ -39,7 +39,7 @@ def _v3_fragment() -> dict:
                             "coordinator:staff-eng",
                         ]
                     },
-                    {"agents": ["coordinator:review-integrator"]},
+                    {"agents": ["coordinator:code-reviewer-weekly"]},
                 ]
             },
             "full": {
@@ -57,7 +57,7 @@ def _v3_fragment() -> dict:
                             "coordinator:staff-eng",
                         ]
                     },
-                    {"agents": ["coordinator:review-integrator"]},
+                    {"agents": ["coordinator:code-reviewer-weekly"]},
                     {"agents": ["coordinator:eng-director"]},
                 ]
             },
@@ -69,7 +69,7 @@ def test_v3_lightweight_two_non_gated_stages_in_order():
     stages = parse_stages(_v3_fragment(), "lightweight")
     assert stages == [
         Stage(agents=["coordinator:code-reviewer"], gate=False),
-        Stage(agents=["coordinator:review-integrator"], gate=False),
+        Stage(agents=["coordinator:code-reviewer-weekly"], gate=False),
     ]
 
 
@@ -81,7 +81,7 @@ def test_v3_standard_gate_stage_flagged_and_ordered():
         "coordinator:code-reviewer",
         "coordinator:staff-eng",
     ]
-    assert stages[2].agents == ["coordinator:review-integrator"]
+    assert stages[2].agents == ["coordinator:code-reviewer-weekly"]
 
 
 def test_v3_full_gate_stage_mixes_blocking_and_non_blocking_agent():
@@ -100,7 +100,7 @@ def test_v1_flat_list_reads_as_single_non_gated_stage():
         "tiers": {
             "standard": [
                 "coordinator:code-reviewer",
-                "coordinator:review-integrator",
+                "coordinator:overengineering-reviewer",
             ]
         },
     }
@@ -109,7 +109,7 @@ def test_v1_flat_list_reads_as_single_non_gated_stage():
         Stage(
             agents=[
                 "coordinator:code-reviewer",
-                "coordinator:review-integrator",
+                "coordinator:overengineering-reviewer",
             ],
             gate=False,
         )

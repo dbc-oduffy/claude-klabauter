@@ -80,7 +80,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "sweep-terminal-sizings",
         "review-brightline-gate",
         "freeze-review-diff",
-        "fan-out-integrator",
         "classify-dispatch-shape",
         # `workstream_complete.apply._PLUGIN_LOCAL_CLIS` and of
         # `workstream_complete.CONSUMES_MANIFEST` (T1b), never derived from

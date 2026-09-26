@@ -121,11 +121,19 @@ def _local_day(ctx: EmitContext) -> str:
     needed, not that reading the machine's wall clock is licensed. Every other field in this
     emission is anchored to ``ctx.observed_at``; a re-emitted historical snapshot must stamp
     the day of the instant it is ABOUT, not the day it happens to run on.
+
+    Item 12 confirmation (2026-09-26): this is the "ISO-week grouping" site named by that
+    item, checked and left unchanged. ``ctx.observed_at`` is an INSTANT timestamp (always
+    UTC, per ``daily_day.py``'s own contract) — this function never reads the wall clock, so
+    ``ceremony_day_anchor`` has nothing to act on here and this site does not take the anchor.
+    Only ``coordinator_core.daily_day.local_day()`` (a wall-clock read) does.
     """
     return _observed_date(ctx).isoformat()
 
 
 def _iso_week(ctx: EmitContext) -> str:
+    """ISO week of ``ctx.observed_at`` — see the anchor note on ``_local_day`` above; this
+    grouping is UTC-instant-derived and anchor-independent for the same reason."""
     y, w, _ = _observed_date(ctx).isocalendar()
     return f"{y}-W{w:02d}"
 

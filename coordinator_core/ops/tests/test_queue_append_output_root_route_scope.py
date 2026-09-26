@@ -82,6 +82,47 @@ def test_live_temp_root_is_still_honoured(monkeypatch, tmp_path):
     assert queue_append._output_root_override() == str(tmp_path)
 
 
+# the memo's failure mode: an in-process caller inherits `QUEUE_APPEND_OUTPUT_ROOT`
+# from a DIFFERENT, concurrent session's shell environment while that other
+# session's temp root is still live (not swept). `_output_root_override` must
+# now refuse the latch instead of honouring it unconditionally.
+
+
+def test_foreign_session_live_root_is_refused(monkeypatch, tmp_path):
+    monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
+    monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
+
+    monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: "session-A")
+    assert queue_append._output_root_override() == str(tmp_path)
+
+    monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: "session-B")
+    with pytest.raises(queue_append._ForeignIsolationRoot):
+        queue_append._output_root_override()
+
+
+def test_same_session_reclaiming_its_own_root_is_still_honoured(monkeypatch, tmp_path):
+    monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
+    monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
+    monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: "session-A")
+
+    assert queue_append._output_root_override() == str(tmp_path)
+    # a second, later CLI invocation (fresh process, same session) reuses the
+    # same override root without tripping the foreign-session refusal.
+    assert queue_append._output_root_override() == str(tmp_path)
+
+
+def test_unresolvable_session_id_leaves_ownership_unverified(monkeypatch, tmp_path):
+    monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
+    monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
+    monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: None)
+
+    # no marker is written and no refusal happens -- unverifiable, not foreign.
+    assert queue_append._output_root_override() == str(tmp_path)
+    assert not os.path.exists(
+        os.path.join(str(tmp_path), queue_append._SESSION_OWNER_MARKER_NAME)
+    )
+
+
 def test_is_swept_tmp_root_predicate(tmp_path):
     live = tmp_path / "still-here"
     live.mkdir()

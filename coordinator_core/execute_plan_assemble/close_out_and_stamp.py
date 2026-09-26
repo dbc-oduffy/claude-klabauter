@@ -136,6 +136,7 @@ from typing import Any, Iterable, Optional, Sequence
 import yaml
 
 import coordinator_core.archive_stamp as archive_stamp
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.execute_plan_assemble.row_spans import (  # noqa: F401 -- re-exported
     _CODED,
@@ -195,6 +196,23 @@ from coordinator_core.wire_paths import rel_id
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
+
+#: `coordinator/bin/lib/plan_completeness.py::compute_contradiction` --
+#: loaded in-process via the same two-step bin/lib bootstrap `coordinator/
+#: bin/plan-completeness.py`'s own trampoline uses (`import lib` first --
+#: `lib/__init__.py` puts itself on `sys.path` as a side effect of being
+#: imported -- then `import plan_completeness as _pc`), so this reuses the
+#: module's real import route rather than a fresh `importlib.util.spec_
+#: from_file_location` load. `ensure_bin_lib_bound` puts `coordinator/bin`
+#: (this engine's own, so the bind is durable, never transient) ahead of
+#: site-packages on `sys.path`, which is what makes the first `import lib`
+#: resolve to `coordinator/bin/lib` rather than some other `lib` (see that
+#: function's own docstring for the win32-namespace-package trap this
+#: dodges).
+_BIN_DIR = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin")
+ensure_bin_lib_bound(_BIN_DIR)
+import lib  # noqa: F401,E402 -- bootstraps coordinator/bin/lib onto sys.path
+import plan_completeness as _plan_completeness  # noqa: E402 -- bind-then-import
 
 #: Corpus-mutator declaration (generator-provenance sweep): this module
 #: stamps whichever plan doc it is given (plan_path/live_path, and its
@@ -2822,6 +2840,43 @@ def close_out_and_stamp(
         if goal_gate is not None and goal_gate.get("refused"):
             status_target = None
 
+    # Item 29 (2026-09-26): a computed CONTRADICTION refuses the stamp too --
+    # evaluated ONLY on the branch that would otherwise ship `implemented`,
+    # same posture as the goal-falsifier gate immediately above (a halted
+    # plan has no stamp to lose, so this never fires for one). The existing
+    # `rows_resolved < rows_total` gate (`fully_resolved`/`open_blocking`
+    # above) is UNCHANGED and still the sole source of that half of the
+    # predicate table; this call adds the `rows_coded == 0` leg
+    # `compute_contradiction`'s own `"implemented"` branch also checks,
+    # which nothing here previously read. `chunks_total`/`chunks_reported`
+    # are irrelevant to that branch (they gate `compute_contradiction`'s
+    # `"landed"` leg only) and are passed as the reader's own UNKNOWN
+    # values rather than re-derived -- this call never claims to have
+    # discovered an emitted workflow.
+    contradiction_gate: Optional[dict[str, Any]] = None
+    if status_target == "implemented" and rows:
+        # `rows` is `[]` on the pre-spine Dispatch Ledger fallback (no
+        # `## Tasks` spine to consult at all -- see `_determine_shipped`'s
+        # own ABSENT branch) -- `compute_contradiction`'s own reader
+        # (`plan_completeness.build_ledger`) never runs this predicate for
+        # such a plan either (it requires a LOCATED spine), so an empty
+        # `rows` must not manufacture a spurious `rows_coded == 0` firing
+        # against a plan that has no rows to be coded at all.
+        rows_total = len(rows)
+        rows_coded = sum(1 for row in rows if _row_disposition(row) == _CODED)
+        contradiction_gate = _plan_completeness.compute_contradiction(
+            "implemented",
+            {
+                "rows_total": rows_total,
+                "rows_resolved": rows_total - len(open_blocking),
+                "rows_coded": rows_coded,
+                "chunks_total": None,
+                "chunks_reported": 0,
+            },
+        )
+        if contradiction_gate is not None:
+            status_target = None
+
     # Delivery proof for `_reach_post_commit_tail_stub_close` (PM ruling --
     # let a positive, complete delivery proof close the origin stub
     # directly). Built ONLY on the full-shipped path (`status_target ==
@@ -3251,6 +3306,11 @@ def close_out_and_stamp(
             f"observation refused ({goal_gate['reason']}): {goal_gate['detail']}. "
             f"{_next_move}"
         )
+    elif contradiction_gate is not None:
+        message = (
+            f"{plan_path_rel}: not stamped -- computed CONTRADICTION on "
+            f"claim '{contradiction_gate['claim']}' ({contradiction_gate['reason']})"
+        )
     else:
         message = (
             f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
@@ -3315,6 +3375,12 @@ def close_out_and_stamp(
     # ABSENT, not merely `None`-valued, for the grandfathered corpus.
     if goal_gate is not None:
         result["goal_gate"] = goal_gate
+    # `contradiction_gate` follows the same "key absent, not merely `None`"
+    # posture as `goal_gate` just above -- present only on a plan that
+    # reached the check (would otherwise have shipped `implemented`) AND
+    # tripped it.
+    if contradiction_gate is not None:
+        result["contradiction_gate"] = contradiction_gate
     return EXIT_OK, result
 
 

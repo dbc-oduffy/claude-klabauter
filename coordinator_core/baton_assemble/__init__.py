@@ -99,8 +99,9 @@ successor a prior attempt already recorded on the predecessor, and
 `_build_directives`'s d1 block marks the scaffold satisfied when that path is
 already a file. Everything else in the envelope converges through predicates that
 ALREADY EXIST and stays `already_satisfied: False` on purpose -- d2's lint is
-read-only, d5's `release-artifact` is holder-identity-checked and no-ops to
-success, and d6's supersede converges through `_supersede_continued`'s OWN
+read-only, d5's `release-or-relinquish` calls `release_artifact` unchanged,
+which is holder-identity-checked and no-ops to success, and d6's supersede
+converges through `_supersede_continued`'s OWN
 byte-identical no-op branch. Deriving a second "has this landed?" predicate
 beside any of those is the named anti-pattern here; see each directive's own
 comment for its single definition.
@@ -3733,13 +3734,15 @@ def _build_plan_no_ledger_claim_judgment_point(
     corrected 2026-08-03; the plan's own C4 body and this docstring's prior
     revision both asserted a "d5 already released it on replay" mechanism
     that does not exist and was verified NOT to hold). d5 is
-    `["release-artifact", "plan", <slug>]` -- it releases a `plan-claims`
-    entry. `_resolve_held_handoff_for_session` raises its "ZERO handoff
-    claims" error by filtering strictly on `class_ == "handoff-claims"`, an
-    orthogonal claim class. Nothing in `apply.py` or `session/claims.py`'s
-    documented claim-record lifecycle releases a `handoff-claims` entry
-    except an explicit `pickup_assemble.apply.drop()`; d5's own
-    `release_artifact` call is `class_="plan"` only. So a replay after THIS
+    `["release-or-relinquish", "plan", <slug>]` -- it releases a
+    `plan-claims` entry (via `release_artifact`, called unchanged inside
+    `release_or_relinquish_artifact`). `_resolve_held_handoff_for_session`
+    raises its "ZERO handoff claims" error by filtering strictly on
+    `class_ == "handoff-claims"`, an orthogonal claim class. Nothing in
+    `apply.py` or `session/claims.py`'s documented claim-record lifecycle
+    releases a `handoff-claims` entry except an explicit
+    `pickup_assemble.apply.drop()`; d5's own `release_artifact` call is
+    `class_="plan"` only. So a replay after THIS
     run's own d5 cannot be why the handoff-claims ledger read comes back
     empty. The genuine replay-shaped explanations are: this session resumed
     under a DIFFERENT `CLAUDE_SESSION_ID` than the one that originally
@@ -4184,18 +4187,23 @@ def _build_directives(
         # the substrate is `state/workstreams/`, queried directly.
         # session-claim-cli is a multi-subcommand CLI (`<subcommand>
         # <args...>`, see coordinator_core.session.claims's
-        # `release_artifact` docstring) -- the first arg MUST be the
-        # subcommand name, and `release-artifact` takes `<class> <basename>`,
-        # `basename` a bare SLUG, never a path. `lineage["artifact_path"]` is
-        # a full path (e.g. ".../docs/plans/2026-07-26-some-plan.md");
-        # `.stem` strips the directory and the `.md` suffix down to the slug
-        # the CLI expects.
+        # `release_or_relinquish_artifact` docstring) -- the first arg MUST
+        # be the subcommand name, and `release-or-relinquish` takes `<class>
+        # <basename>`, `basename` a bare SLUG, never a path.
+        # `lineage["artifact_path"]` is a full path (e.g.
+        # ".../docs/plans/2026-07-26-some-plan.md"); `.stem` strips the
+        # directory and the `.md` suffix down to the slug the CLI expects.
         #
         # Authoring a HANDOFF is a RELINQUISHMENT of the plan claim -- the
         # successor session that picks up the baton and runs /execute-plan
         # must find the plan unclaimed, so this directive fires on the
-        # handoff path. `release_artifact` is holder-identity-checked and
-        # no-ops to success when this session is not the current holder.
+        # handoff path. `release_or_relinquish_artifact` calls
+        # `release_artifact` unchanged first (holder-identity-checked,
+        # no-ops to success when this session is not the current holder),
+        # then additionally writes a DR-205 relinquishment marker when the
+        # claim dir's recorded holder is still one of this process's own
+        # identity tiers (2026-09-26 plan § C2, D1) -- the env-precedence
+        # case where a plain release leaves the claim in place.
         #
         # It deliberately does NOT fire for a SPINOFF (kind=="spinoff" never
         # reaches this branch) -- a fork is neither a claim nor a release: the
@@ -4210,7 +4218,9 @@ def _build_directives(
         # `standalone_no_predecessor_reason` handling) has no plan claim to
         # relinquish in the first place. Emitting d5 anyway sent
         # `release-artifact plan ""` (`Path("").stem == ""`) at
-        # `session-claim-cli`, which correctly rejects the empty basename
+        # `session-claim-cli` (release-or-relinquish inherits the same
+        # required-basename guard via `release_artifact`), which correctly
+        # rejects the empty basename
         # ("basename required", rc=1) and aborted the whole mint over a
         # directive whose own premise ("authoring a handoff relinquishes
         # THE plan claim") does not hold when there is no plan. Gating the
@@ -4227,7 +4237,7 @@ def _build_directives(
                     "id": "d5",
                     "cli": "session-claim-cli",
                     "args": [
-                        "release-artifact",
+                        "release-or-relinquish",
                         "plan",
                         plan_release_slug,
                     ],

@@ -74,8 +74,8 @@ subagent, `CLAUDE_CODE_SESSION_ID` resolves to the LEAD session's id, not the
 subagent's own — verified with `CLAUDE_CODE_CHILD_SESSION=1` set and the first two
 precedence-chain vars (`COORDINATOR_SESSION_ID`, `CLAUDE_SESSION_ID`) empty. This is
 why a dispatched review-integrator (not just the EM by hand) can pass this gate —
-consistent with `block_em_hand_edit_pending_review_integration`'s premise that the
-review-integrator, not the EM by hand, applies review findings.
+consistent with the review-integrator, not the EM by hand, applying review
+findings.
 
 The authorship-equality predicate mirrors the ONE already implemented in
 `coordinator_core.baton_assemble._adopt_prior_attempt_scaffold_path` ("does a
@@ -481,7 +481,7 @@ def _heading_present(text: str, heading: str) -> bool:
     reviewers, integrators, and docs quote in running prose while explaining
     the mechanism they drive, and a bare ``heading in text`` cannot tell the
     heading from a mention of it. Both failure directions are silent — see
-    ``ops/append_integrator_dispositions._find_heading`` for the live 2026-08-10
+    ``ops/review_findings_ledger._find_heading`` for the live 2026-08-10
     case that motivated line-anchoring every consumer of these markers.
     """
     return re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text) is not None

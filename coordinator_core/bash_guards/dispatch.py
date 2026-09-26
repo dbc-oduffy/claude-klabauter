@@ -143,6 +143,17 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      directly adjacent to `check-test-suite-invocation`, at the tail of the
      hard-deny run -- same `offer-git-c` short-circuit ordering requirement
      as every entry in this CONFINEMENT_DENY run.
+ 5j. block_subagent_findings_reject         (hard, fail-closed) -- NO legacy
+     bash predecessor; added 2026-09-26 (DoE-claude docs/plans/2026-09-26-
+     retire-review-integrator.md, row M3) to make EM-only the `reject`/
+     `targets` subcommands of the reviewer-applies-own-findings ledger op
+     (`coordinator_core.ops.review_findings_ledger`, M2). Same identity-gate
+     posture as `block-subagent-grant-acquisition` (5i) -- raw `agent_id`
+     presence alone is the discriminator, fail CLOSED on unresolvable.
+     `verify` is deliberately not gated: a reviewer's own self-check before
+     returning is the encouraged path. Registered directly adjacent to 5i --
+     same `offer-git-c` short-circuit ordering requirement as every entry
+     in this CONFINEMENT_DENY run.
 
 Because each of the (now 5, post-2026-07-24 retirement of the former #6
 advisory nudge) legacy-shaped processes only ever emits EITHER nothing
@@ -258,8 +269,8 @@ from coordinator_core.warm.caller_context import (
 from coordinator_core.bash_guards._advisory_dedupe import (
     advisory_dedupe_key as _advisory_dedupe_key,
     already_advised as _already_advised,
-    degrade_advisory_envelope as _degrade_advisory_envelope,
     mark_advised as _mark_advised,
+    silence_repeat_advisory as _silence_repeat_advisory,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     resolve_gitdir as _resolve_gitdir_for_dedupe,
@@ -1757,12 +1768,23 @@ def _evaluate_payload_json_budgeted(
                 not _is_hard_deny_envelope
                 and _session_advisory_already_fired(name, out, session_id, cwd)
             ):
-                degraded = _degrade_advisory_envelope(out)
-                if degraded is not None:
-                    out = degraded
-                # silence (module docstring, "FAIL OPEN, UNCONDITIONALLY").
+                # R6 (2026-09-26): a repeat firing of the same (guard, shape)
+                # this session puts NO TEXT in context on an allowed call --
+                # `silence_repeat_advisory` strips `additionalContext` for an
+                # absent/"allow" `permissionDecision` (keeping any
+                # `updatedInput` rewrite), leaves "ask" untouched, and
+                # collapses to `{}` (no-advisory-equivalent) when nothing but
+                # `hookEventName` remains. Still RETURNED below, never
+                # `continue`d -- see `degrade_advisory_envelope`'s retired
+                # docstring for why a `continue` here would let a
+                # lower-precedence guard win the slot a higher-precedence one
+                # already claimed. Fail-open, unconditionally (module
+                # docstring, "FAIL OPEN, UNCONDITIONALLY"): any error here
+                # falls back to the full envelope, never to silence.
+                out = _silence_repeat_advisory(out)
             if collect_advisories and not _is_hard_deny_envelope:
-                _collected.append(out)
+                if out:
+                    _collected.append(out)
                 continue
             return out
 
@@ -1878,6 +1900,10 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
         check as _check_subagent_grant_acquisition,
         MATCHERS as _matchers_subagent_grant_acquisition,
+    )
+    from coordinator_core.bash_guards.block_subagent_findings_reject import (
+        check as _check_subagent_findings_reject,
+        MATCHERS as _matchers_subagent_findings_reject,
     )
     from coordinator_core.bash_guards.block_subagent_guard_grant import (
         check as _check_subagent_guard_grant,
@@ -2106,6 +2132,9 @@ def _build_guard_chain(
         GuardEntry("check-test-suite-invocation", lambda: _check_test_suite_invocation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_test_suite_invocation)),
         # entry in this CONFINEMENT_DENY run.
         GuardEntry("block-subagent-grant-acquisition", lambda: _check_subagent_grant_acquisition(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_grant_acquisition)),
+        # sibling of block-subagent-grant-acquisition: EM-only surface of the
+        # M3, retire-review-integrator: reviewer-applies-own-findings ledger.
+        GuardEntry("block-subagent-findings-reject", lambda: _check_subagent_findings_reject(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_findings_reject)),
         # CONFINEMENT_DENY run.
         GuardEntry("block-subagent-guard-grant", lambda: _check_subagent_guard_grant(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_guard_grant)),
         # CONFINEMENT_DENY entries is a convenience, not a behaviour

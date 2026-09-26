@@ -424,6 +424,10 @@ REF_ALLOWLIST: Set[str] = {
     # bare-name occurrence flagged here is inside prose DOCUMENTING a failure
     "example-retrieval-repo-context-builder",
     "str",
+    # RETIRED-agent: doctrine fixtures quote these two retired agent ids by
+    # name (post-mortem/history context) without a live agent artifact.
+    "coordinator:sid",
+    "coordinator:the Data Science Reviewer",
 }
 
 

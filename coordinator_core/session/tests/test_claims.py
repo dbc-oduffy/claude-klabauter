@@ -633,6 +633,33 @@ class TestClaimArtifact:
             _claim_dir(repo, "handoff", "h-dead") / "session_id"
         ).read_text().strip() == "me-sid"
 
+    def test_live_holder_refusal_plan_class_names_takeover_verb(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """DR-205 (e): the plan-class live-holder refusal offers the fail-loud
+        takeover route (session-claim-cli take-over-claim), never a silent
+        auto-takeover."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-live", session_id="other-sid")
+        _write_session(repo, "other-sid", _fresh())
+        assert claims.claim_artifact("plan", "p-live", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "take-over-claim" in err
+
+    def test_live_holder_refusal_non_plan_class_omits_takeover_verb(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """D2: take_over_claim is plan-class only — a handoff/memo refusal
+        must not offer a route that would refuse."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "handoff", "h-live", session_id="other-sid")
+        _write_session(repo, "other-sid", _fresh())
+        assert claims.claim_artifact("handoff", "h-live", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "take-over-claim" not in err
+
     # ---- PLAN-CLASS-ONLY re-entrancy: the T16a/T18c regression matrix ----
 
     def test_plan_class_reentrant_same_session_accepted(self, tmp_path, monkeypatch):
@@ -1383,6 +1410,47 @@ class TestClearClaimIfDead:
         _write_session(repo, "11111111-1111-4111-8111-111111111111", _stale())
         assert claims.clear_claim_if_dead("handoff", "c-dead", cwd=str(repo)) is True
         assert not _claim_dir(repo, "handoff", "c-dead").exists()
+
+    def test_live_holder_refused_plan_class_names_takeover_verb(self, tmp_path, capsys):
+        """DR-205 (e): clear_claim_if_dead's live-holder refusal gains the
+        same next move as claim_artifact's, for the plan class only."""
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "plan", "p-live", session_id="11111111-1111-4111-8111-111111111111")
+        _write_session(repo, "11111111-1111-4111-8111-111111111111", _fresh())
+        assert claims.clear_claim_if_dead("plan", "p-live", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "take-over-claim" in err
+
+    def test_live_holder_refused_non_plan_class_omits_takeover_verb(self, tmp_path, capsys):
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "handoff", "c-live2", session_id="11111111-1111-4111-8111-111111111111")
+        _write_session(repo, "11111111-1111-4111-8111-111111111111", _fresh())
+        assert claims.clear_claim_if_dead("handoff", "c-live2", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "take-over-claim" not in err
+
+    def test_toctou_abort_message_unchanged(self, tmp_path, monkeypatch, capsys):
+        """The TOCTOU-abort message (read 2) is unchanged by this row — it
+        never offers the takeover verb, plan class or not."""
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "plan", "p-toctou", session_id="11111111-1111-4111-8111-111111111111")
+        _write_session(repo, "11111111-1111-4111-8111-111111111111", _stale())
+
+        calls = {"n": 0}
+        real_live = claims.liveness.claim_holder_live
+
+        def _flip_to_live_on_second_read(claim_dir, cwd=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return False
+            return True
+
+        monkeypatch.setattr(claims.liveness, "claim_holder_live", _flip_to_live_on_second_read)
+        assert claims.clear_claim_if_dead("plan", "p-toctou", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "aborting clear" in err
+        assert "take-over-claim" not in err
+        monkeypatch.setattr(claims.liveness, "claim_holder_live", real_live)
 
     def test_dead_handoff_claim_reconciles_frontmatter(self, tmp_path):
         # Reap/ship bug fix 1: clear_claim_if_dead must ALSO flip the handoff's

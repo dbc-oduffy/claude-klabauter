@@ -69,6 +69,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--follow",
+        action="store_true",
+        help=(
+            "Render each journal event line as it arrives, in addition to "
+            "the terminal line. Default is silent-until-terminal: exactly "
+            "one `terminal: <status>` line on stdout, and the exit-code "
+            "contract is unchanged either way."
+        ),
+    )
+    parser.add_argument(
         "--poll-interval",
         type=float,
         default=DEFAULT_POLL_INTERVAL_SECONDS,
@@ -89,9 +99,16 @@ def _watch(
     task_id: str,
     poll_interval: float,
     cap_seconds: float,
+    follow: bool = False,
 ) -> int:
     watcher = TerminalWatcher(transcript_path, task_id)
-    renderer = _make_renderer(journal_path)
+    # No per-event Monitor invitation left to serve here (see the module's
+    # own history: docs/plans/2026-09-26-coordinator-remedies-engine-items.md
+    # C3, R2) -- the renderer is built ONLY under --follow. Left unbuilt in
+    # the default case, not merely un-polled, so a caller reading `renderer`
+    # after this line can tell "opted out" apart from "polled and had
+    # nothing to say" without a follow flag threaded through every site.
+    renderer = _make_renderer(journal_path) if follow else None
     deadline = time.monotonic() + cap_seconds
 
     while True:
@@ -140,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         task_id=args.task_id,
         poll_interval=args.poll_interval,
         cap_seconds=args.cap,
+        follow=args.follow,
     )
 
 

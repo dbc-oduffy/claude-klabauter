@@ -590,3 +590,100 @@ def test_format_oneline_row_abbreviates_session_id_leading_six():
         "did a thing",
     )
     assert row == "2026-08-14 | a0df95 | S | 3d / 1o | did a thing"
+
+
+# B15b regression fixture — vendored inline from DoE-claude
+# `coordinator/tests/fixtures/session-ledger-two-ceremony.md` (DoE-claude
+# @a037746a, read at authoring for @b4e1b034 per the plan's
+# `external_reads_ungated` entry). Copied here as literal row text rather
+# than read from that sibling tree at run time, per the plan's anti-scope
+# ("do not make a test read DoE-claude's tree at run time").
+_TWO_CEREMONY_ROWS = (
+    "2026-05-21 | 7bffa2 | XS | 0d / 0o | Reconciled the pending list "
+    "(pickup-reconciliation close)\n"
+    "2026-05-21 | 7bffa2 | L | 26d / 4o | Executed plan + mandatory "
+    "four-slice partitioned review (workstream-complete close)\n"
+)
+
+
+def test_two_ceremony_session_aggregates_both_rows_not_just_the_first(monkeypatch, tmp_path):
+    """The defect this row fixes: the old sid-only dedup collapsed a
+    same-session two-ceremony chain to its FIRST row (the XS 0d/0o pickup
+    close), losing the second row's L 26d/4o `/workstream-complete` close
+    entirely. The row-identity fix (session_id, summary) counts both."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import aggregate
+
+    repo_root = _init_repo(tmp_path)
+    handoffs = repo_root / "state" / "handoffs"
+    term = handoffs / "term.md"
+    term.write_text(
+        f"""---
+created: 2026-05-21
+predecessor: null
+---
+
+## Session Ledger
+
+{_TWO_CEREMONY_ROWS}""",
+        encoding="utf-8",
+    )
+
+    result = aggregate(
+        terminal_handoff=str(term),
+        repo_root=repo_root,
+        handoffs_dir=handoffs,
+        archive_dir=repo_root / "archive" / "handoffs",
+    )
+
+    assert result["exit_code"] == 0
+    assert result["agent_dispatches"] == 26
+    assert result["opus_dispatches"] == 4
+    assert result["tshirt"] is not None
+
+
+def test_two_ceremony_row_repeated_across_chain_batons_counts_once(monkeypatch, tmp_path):
+    """A byte-identical row (same session_id, same summary) copied onto a
+    second baton in the chain must still count once — the row-identity fix
+    dedups on (session_id, summary), not merely "any row seen for this sid"."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import aggregate
+
+    repo_root = _init_repo(tmp_path)
+    handoffs = repo_root / "state" / "handoffs"
+    root = handoffs / "root.md"
+    term = handoffs / "term.md"
+    root.write_text(
+        f"""---
+created: 2026-05-21
+predecessor: null
+---
+
+## Session Ledger
+
+{_TWO_CEREMONY_ROWS}""",
+        encoding="utf-8",
+    )
+    term.write_text(
+        f"""---
+created: 2026-05-21
+predecessor: root.md
+---
+
+## Session Ledger
+
+{_TWO_CEREMONY_ROWS}""",
+        encoding="utf-8",
+    )
+
+    result = aggregate(
+        terminal_handoff=str(term),
+        repo_root=repo_root,
+        handoffs_dir=handoffs,
+        archive_dir=repo_root / "archive" / "handoffs",
+    )
+
+    assert result["exit_code"] == 0
+    assert result["chain_total"] == 2
+    # Both ceremony rows counted once each, not twice (root and term carry
+    # byte-identical copies of the same two rows).
+    assert result["agent_dispatches"] == 26
+    assert result["opus_dispatches"] == 4

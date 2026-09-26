@@ -91,7 +91,7 @@ def _act(worktree: Path, candidate_ids, *, mover=None, status_result: GitResult 
     dirty `GitResult` to exercise AC5's own retention path.
     """
     with patched_disposition_seam(archive_sizings, worktree=worktree, mover=mover) as m, \
-            patch.object(git_native, "status_porcelain", lambda cwd, paths=None: status_result):
+            patch.object(git_native, "status_porcelain", lambda cwd, paths=None, **_kw: status_result):
         result = run(archive_sizings._archive_terminal_sizings(
             {"mode": "already-terminal", "dry_run": False, "candidate_ids": candidate_ids},
             repo_root=str(worktree),

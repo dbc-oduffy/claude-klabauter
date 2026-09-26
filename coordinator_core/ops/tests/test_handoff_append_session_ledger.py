@@ -412,5 +412,69 @@ class BackfillCountsTest(unittest.TestCase):
                     self.assertIn(fragment, result["error"])
 
 
+# ---------------------------------------------------------------------------
+# (h) Unknown param allowlist (B14a)
+# ---------------------------------------------------------------------------
+
+
+class UnknownParamAllowlistTest(unittest.TestCase):
+    def test_dry_run_is_refused_with_nothing_written(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+            before = hpath.read_text(encoding="utf-8")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "s",
+                    "dry_run": True,
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 1, result)
+            self.assertFalse(result["applied"])
+            self.assertIn("dry_run", result["error"])
+            self.assertEqual(hpath.read_text(encoding="utf-8"), before)
+
+    def test_tshirt_is_refused_with_nothing_written(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+            before = hpath.read_text(encoding="utf-8")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "s",
+                    "tshirt": "XS",
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 1, result)
+            self.assertFalse(result["applied"])
+            self.assertIn("tshirt", result["error"])
+            self.assertEqual(hpath.read_text(encoding="utf-8"), before)
+
+    def test_underscore_prefixed_key_passes(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            _seed(repo, "2026-08-21-test.md")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "s",
+                    "_trace_id": "abc123",
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertTrue(result["applied"])
+
+
 if __name__ == "__main__":
     unittest.main()

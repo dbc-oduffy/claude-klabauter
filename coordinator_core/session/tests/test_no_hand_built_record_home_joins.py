@@ -210,7 +210,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "install/uninstall_legs.py",
     "invoke/tests/test_repo_scope_refusal.py",
     "op_budget_suspension.py",
-    "ops/append_integrator_dispositions.py",
     "ops/backfill_deliverable_spine.py",
     "ops/backfill_reference_edges.py",
     "ops/baton_drift_sweep.py",

@@ -106,7 +106,7 @@ authz/classification.py — no registration action needed.
 
 from __future__ import annotations
 
-MUTATES = ["state/review-trail/*.json"]  # session-keyed shard state/review-trail/.weekly-reviewer-scopes-<TIMESTAMP>-<SID_SHORT>.json per invocation; state/review-trail/.weekly-reviewer-scopes.json and other state/review-trail/*.json files are tracked
+MUTATES = ["<resolved review-trail root>/*.json"]  # session-keyed shard <root>/.weekly-reviewer-scopes-<TIMESTAMP>-<SID_SHORT>.json per invocation, where <root> is resolved via coordinator_core.review_trail.records' state-root resolver (falling back to the cwd-relative state/review-trail/ when unresolved); other <root>/*.json files are tracked
 
 import json
 import os
@@ -121,6 +121,9 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_coverage_core import (
     _FatalError as _CoverageFatalError,
     collect_segments,
+)
+from coordinator_core.review_trail.records import (
+    _resolve_state_root as _resolve_review_trail_state_root,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -138,13 +141,18 @@ _USAGE = """Usage: workweek-trail-scope [--help]
 
 Step 7 prelude for /workweek-complete — computes staff_eng_scope (unreviewed
 week SHAs union cross-segment-seam SHAs) and writes a session-keyed shard to
-state/review-trail/.weekly-reviewer-scopes-<TIMESTAMP>-<SID_SHORT>.json.
+<review-trail root>/.weekly-reviewer-scopes-<TIMESTAMP>-<SID_SHORT>.json.
 
-Must be run with cwd = repo root (all paths are cwd-relative, matching the
-bash oracle).
+The review-trail root is resolved through
+coordinator_core.review_trail.records' state-root resolver (COORDINATOR_ROOT
+env var), falling back to the cwd-relative state/review-trail/ only when
+that is unset — so cwd = repo root still works with no env var, and a cwd in
+a subdirectory works when COORDINATOR_ROOT is set. HEADER_FILE stays
+cwd-relative by default (see below).
 
 Env:
   HEADER_FILE — path to state/week-changelog/HEADER.md (default: that path)
+  COORDINATOR_ROOT — resolves the review-trail root; see above
 
 Exit codes:
   0 - success
@@ -168,10 +176,19 @@ def _resolve_session_id() -> str:
 
 
 def _today_local() -> str:
-    """Local calendar day, YYYY-MM-DD — Python-native equivalent of the bash
-    oracle's coordinator_local_day() (`date -I` / `date +%Y-%m-%d` fallback;
-    both just render the local calendar day)."""
-    return datetime.now().strftime("%Y-%m-%d")
+    """Calendar day, YYYY-MM-DD, under the repo's `ceremony_day_anchor`.
+
+    Item 12 (2026-09-26): this used to reimplement the local-day computation
+    directly (`datetime.now().strftime(...)`), pre-dating the anchor and so
+    permanently pinned to the local calendar day regardless of
+    `ceremony_day_anchor: utc`. It now delegates to
+    `coordinator_core.daily_day.local_day()`, the single anchor-aware seam,
+    so a `utc` anchor reaches this op's week-scope computation the same way
+    it reaches every other `local_day()` caller.
+    """
+    from coordinator_core.daily_day import local_day
+
+    return local_day()
 
 
 def _parse_week_start(header_file: Path) -> Optional[str]:
@@ -187,8 +204,23 @@ def _parse_week_start(header_file: Path) -> Optional[str]:
     return None
 
 
+def _review_trail_dir() -> Path:
+    """The review-trail directory, resolved through
+    ``coordinator_core.review_trail.records``' own state-root resolver
+    (explicit-override / ``COORDINATOR_ROOT`` env rungs) rather than a
+    cwd-relative literal. Falls back to the cwd-relative ``state/review-trail``
+    only when that resolver has nothing to go on (no override, no
+    ``COORDINATOR_ROOT``) — preserving the existing cwd=repo-root default
+    invocation while letting a caller running from a subdirectory (or a
+    warm-served request) supply ``COORDINATOR_ROOT`` to be found correctly."""
+    state_root = _resolve_review_trail_state_root()
+    if state_root:
+        return Path(state_root) / "review-trail"
+    return Path("state/review-trail")
+
+
 def _trail_files() -> List[str]:
-    d = Path("state/review-trail")
+    d = _review_trail_dir()
     if not d.is_dir():
         return []
     return sorted(str(p) for p in d.glob("*.json") if p.is_file())
@@ -300,8 +332,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y-%m-%d-%H%M%S-%f")
 
-    scope_path = Path(
-        f"state/review-trail/.weekly-reviewer-scopes-{timestamp}-{session_short}.json"
+    scope_path = _review_trail_dir() / (
+        f".weekly-reviewer-scopes-{timestamp}-{session_short}.json"
     )
     scope_obj = {
         "staff_eng": staff_eng_shas,

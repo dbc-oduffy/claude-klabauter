@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -13,12 +14,12 @@ from coordinator_core.bash_guards._alternative_liveness import _BACKTICK_RE
 SENTINEL = ".coordinator-doctrine-edit-approved"
 
 
-def _payload(command, agent_id=None, agent_type=None):
+def _payload(command, agent_id=None, agent_type=None, cwd="/repo"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
         "session_id": "sess1",
-        "cwd": "/repo",
+        "cwd": cwd,
     }
     if agent_id is not None:
         p["agent_id"] = agent_id
@@ -770,3 +771,132 @@ class TestPowerShellDialect:
 
         ps_out = guard.check(self._ps_payload("git status"))
         assert ps_out is None
+
+
+class TestItem33ReadableScriptOverride:
+    """Item 33 (bounded, 2026-09-26): a bare `bash|sh|python3 <path>`
+    invocation reads the script and applies the guard's own mention/taint
+    scan instead of denying unconditionally. `machine-local` (the reported
+    false positive) is the motivating clean case; every adversarial shape
+    the row's brief names must still deny."""
+
+    def _write(self, tmp_path, name, content):
+        path = tmp_path / name
+        path.write_text(content)
+        return path
+
+    def test_clean_script_allows(self, tmp_path):
+        self._write(tmp_path, "forwarder.sh", "#!/bin/bash\nexec python3 \"$@\"\n")
+        out = guard.check(_payload("bash forwarder.sh", cwd=str(tmp_path)))
+        assert out is None
+
+    def test_clean_script_allows_for_sh(self, tmp_path):
+        self._write(tmp_path, "forwarder.sh", "echo hello\n")
+        out = guard.check(_payload("sh forwarder.sh", cwd=str(tmp_path)))
+        assert out is None
+
+    def test_clean_script_allows_for_python3(self, tmp_path):
+        self._write(tmp_path, "forwarder.py", "print('hello world')\n")
+        out = guard.check(_payload("python3 forwarder.py", cwd=str(tmp_path)))
+        assert out is None
+
+    def test_script_mentioning_basename_denies(self, tmp_path):
+        self._write(tmp_path, "evil.sh", "touch %s\n" % SENTINEL)
+        out = guard.check(_payload("bash evil.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_script_mentioning_basename_via_python3_denies(self, tmp_path):
+        self._write(tmp_path, "evil.py", "open('%s', 'w').close()\n" % SENTINEL)
+        out = guard.check(_payload("python3 evil.py", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_chained_script_mentioning_basename_denies(self, tmp_path):
+        self._write(
+            tmp_path,
+            "chain.sh",
+            "bash other.sh\ntouch %s\n" % SENTINEL,
+        )
+        out = guard.check(_payload("bash chain.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_script_written_earlier_in_same_command_still_denies(self, tmp_path):
+        # Content itself is clean, but it was just written by an EARLIER
+        # segment of the SAME command -- the guard cannot trust that
+        # content is what actually runs (class docstring "ITEM 33
+        # NARROWING").
+        cmd = "printf 'echo hello\\n' > w.sh; bash w.sh"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_redirect_written_script_still_denies(self, tmp_path):
+        cmd = "echo 'echo hello' > w.sh && bash w.sh"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_backgrounded_earlier_segment_still_denies(self, tmp_path):
+        self._write(tmp_path, "writer.sh", "echo write\n")
+        self._write(tmp_path, "s.sh", "echo clean\n")
+        cmd = "bash writer.sh & bash s.sh"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_symlink_to_clean_script_still_denies(self, tmp_path):
+        target = self._write(tmp_path, "real.sh", "echo clean\n")
+        link = tmp_path / "link.sh"
+        os.symlink(target, link)
+        out = guard.check(_payload("bash link.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_oversize_script_still_denies(self, tmp_path):
+        self._write(
+            tmp_path,
+            "big.sh",
+            "echo clean\n" + ("#" * (guard._MAX_SCRIPT_READ_BYTES + 1)),
+        )
+        out = guard.check(_payload("bash big.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_missing_script_still_denies(self, tmp_path):
+        out = guard.check(_payload("bash nowhere.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_heredoc_fed_bash_still_denies(self, tmp_path):
+        cmd = "bash <<'EOF'\necho hello\nEOF"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_nested_dash_c_script_file_not_read_stays_denied(self, tmp_path):
+        # ONE level deep only: a `bash <path>` nested inside a `-c` payload
+        # is a different depth and keeps the inherited unconditional deny
+        # (class docstring "ITEM 33 NARROWING": "ONE level deep").
+        self._write(tmp_path, "clean.sh", "echo hello\n")
+        cmd = "sh -c 'bash clean.sh'"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_zsh_bare_file_stays_denied_regardless_of_content(self, tmp_path):
+        # zsh is intentionally excluded from `_READABLE_SCRIPT_INTERPRETERS`
+        # -- item 33 names only `bash|sh|python3`.
+        self._write(tmp_path, "clean.sh", "echo hello\n")
+        out = guard.check(_payload("zsh clean.sh", cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_python_dash_m_still_allows_with_readable_script_override_present(
+        self, tmp_path
+    ):
+        # Regression pin alongside the pre-existing
+        # `test_python_dash_m_allows` -- `-m <module>` must never be
+        # misread as a script PATH by the new override.
+        out = guard.check(_payload("python3 -m pytest", cwd=str(tmp_path)))
+        assert out is None
+
+    def test_guard_level_clean_script_allows_regardless_of_cwd_spelling(
+        self, tmp_path
+    ):
+        # Same clean-script case as `test_clean_script_allows`, pinned at
+        # this guard's own `check()` (not the full dispatch chain, which
+        # has its own, unrelated sibling guards over the same bare-file
+        # shape -- out of scope for this row).
+        self._write(tmp_path, "forwarder.sh", "exec python3 \"$@\"\n")
+        out = guard.check(_payload("bash forwarder.sh", cwd=str(tmp_path)))
+        assert out is None

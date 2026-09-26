@@ -1165,7 +1165,9 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
         else:
             if status != "in_progress":
                 raise MutateAbort(
-                    f'unexpected current status "{status or "(missing)"}" for action — expected in_progress'
+                    f'unexpected current status "{status or "(missing)"}" for action — expected in_progress\n'
+                    "  (claim it first with archive-stamp-cli claim-memo-stamp, or use "
+                    "archive-stamp-cli resolve-memo to claim and action in one step, then retry)"
                 )
 
             # PRESERVE picked_up_by and picked_up_at — claim-of-record for the archived memo.

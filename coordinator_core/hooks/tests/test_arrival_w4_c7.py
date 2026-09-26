@@ -11,7 +11,6 @@ from coordinator_core.hooks import (
     guard_posix_invocation_doctrine_write,
     guard_python_syntax_on_write,
     guard_repo_setup_claude_home_refusal,
-    guard_review_integrator_sidecar_intake,
     guard_test_tree_git_fixture_spawn,
     nudge_plan_test_surface_tier,
     phantom_staged_deletion,
@@ -27,7 +26,6 @@ _OP_MODULES = {
     "guard_test_tree_git_fixture_spawn": guard_test_tree_git_fixture_spawn,
     "guard_handoff_summary_cap_on_write": guard_handoff_summary_cap_on_write,
     "guard_repo_setup_claude_home_refusal": guard_repo_setup_claude_home_refusal,
-    "guard_review_integrator_sidecar_intake": guard_review_integrator_sidecar_intake,
     "nudge_plan_test_surface_tier": nudge_plan_test_surface_tier,
 }
 
@@ -165,64 +163,6 @@ def test_posix_doctrine_write_guard_advises_on_hit(tmp_path):
 def test_test_tree_git_fixture_guard_allows_wrong_tool():
     result = guard_test_tree_git_fixture_spawn._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
-
-
-def test_review_integrator_sidecar_guard_allows_wrong_tool():
-    result = guard_review_integrator_sidecar_intake._handler({"tool_name": "Read", "tool_input": {}})
-    assert result == {}
-
-
-def _integrator_dispatch(prompt, cwd):
-    return {
-        "tool_name": "Agent",
-        "cwd": str(cwd),
-        "tool_input": {"subagent_type": "coordinator:review-integrator", "prompt": prompt},
-    }
-
-
-def test_review_integrator_sidecar_guard_resolves_absolute_citation_outside_cwd(tmp_path):
-    sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
-    sidecar.parent.mkdir(parents=True)
-    sidecar.write_text("findings\n", encoding="utf-8")
-    elsewhere = tmp_path / "parent-of-checkouts"
-    elsewhere.mkdir()
-    result = guard_review_integrator_sidecar_intake._handler(
-        _integrator_dispatch(f"Apply the findings in {sidecar}.", elsewhere)
-    )
-    assert result == {}
-
-
-def test_review_integrator_sidecar_guard_resolves_windows_drive_backslash_citation(tmp_path):
-    sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
-    sidecar.parent.mkdir(parents=True)
-    sidecar.write_text("findings\n", encoding="utf-8")
-    backslash_citation = "C:\\" + str(sidecar.relative_to(sidecar.anchor)).replace("/", "\\")
-    result = guard_review_integrator_sidecar_intake._handler(
-        _integrator_dispatch(f"Apply the findings in {backslash_citation}.", tmp_path)
-    )
-    assert result != {}
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "C:" in reason
-
-
-def test_review_integrator_sidecar_guard_resolves_relative_backslash_citation(tmp_path):
-    sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sid"
-    sidecar_dir.mkdir(parents=True)
-    sidecar = sidecar_dir / "f.md"
-    sidecar.write_text("findings\n", encoding="utf-8")
-    backslash_citation = ".coordinator-local\\subagent-share\\sid\\f.md"
-    result = guard_review_integrator_sidecar_intake._handler(
-        _integrator_dispatch(f"Apply the findings in {backslash_citation}.", tmp_path)
-    )
-    assert result == {}
-
-
-def test_review_integrator_sidecar_guard_denies_absolute_citation_not_on_disk(tmp_path):
-    missing = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "gone.md"
-    result = guard_review_integrator_sidecar_intake._handler(
-        _integrator_dispatch(f"Apply the findings in {missing}.", tmp_path)
-    )
-    assert result != {}
 
 
 def test_handoff_summary_cap_guard_allows_short_summary(tmp_path):

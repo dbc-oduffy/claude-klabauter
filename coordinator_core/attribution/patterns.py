@@ -6,8 +6,13 @@ _PERSONA_ALT = "|".join(re.escape(p) for p in PERSONA_NAMES)
 _AGENT_ALT = "|".join(re.escape(a) for a in AGENT_IDENTIFIERS)
 
 PATTERNS: dict[str, re.Pattern] = {
+    # Live source carries a namespaced form (`Review: coordinator:code-reviewer`)
+    # and several trailer shapes (`(Finding 3)`, `(F1)`, `(F1, F2)`,
+    # `(2026-09-25 F3)`) -- the namespace prefix and each trailer are optional,
+    # so the pattern matches on the bare `Review: <roster-token>` alone too.
     "review_colon": re.compile(
-        rf"\bReview:\s*(?:{_AGENT_ALT}|{_PERSONA_ALT})\b(?:\s*\(Finding\s*\d+\))?",
+        rf"\bReview:\s*(?:[A-Za-z][\w-]*:)?(?:{_AGENT_ALT}|{_PERSONA_ALT})\b"
+        rf"(?:\s*\((?:Finding\s*\d+|F\d+(?:\s*,\s*F\d+)*|\d{{4}}-\d{{2}}-\d{{2}}\s+F\d+)\))?",
         re.IGNORECASE,
     ),
     "finding_ref": re.compile(r"\bFinding\s*\d+(?:\s*/\s*\d+)?\b", re.IGNORECASE),

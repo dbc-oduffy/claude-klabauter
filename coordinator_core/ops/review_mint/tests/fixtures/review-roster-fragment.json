@@ -4,7 +4,7 @@
   "blocking_verdicts": {
     "coordinator:prior-art-checker": "BLOCKED-SURFACE-TO-PM",
     "coordinator:code-reviewer": "BLOCKED",
-    "coordinator:review-integrator": "BLOCKED",
+    "coordinator:code-reviewer-weekly": "BLOCKED",
     "coordinator:docs-checker": null,
     "coordinator:apm": null,
     "coordinator:staff-eng": "REJECTED",
@@ -17,14 +17,14 @@
     "lightweight": {
       "stages": [
         { "agents": ["coordinator:code-reviewer"], "accepts_signals": "named" },
-        { "agents": ["coordinator:review-integrator"] }
+        { "agents": ["coordinator:code-reviewer-weekly"] }
       ]
     },
     "standard": {
       "stages": [
         { "gate": true, "agents": ["coordinator:prior-art-checker"], "accepts_signals": "preflight" },
         { "agents": ["coordinator:code-reviewer", "coordinator:staff-eng"], "accepts_signals": "named" },
-        { "agents": ["coordinator:review-integrator"] },
+        { "agents": ["coordinator:code-reviewer-weekly"] },
         { "agents": ["coordinator:apm"] }
       ]
     },
@@ -32,7 +32,7 @@
       "stages": [
         { "gate": true, "agents": ["coordinator:prior-art-checker"], "accepts_signals": "preflight" },
         { "agents": ["coordinator:code-reviewer", "coordinator:staff-eng"], "accepts_signals": "named" },
-        { "agents": ["coordinator:review-integrator"] },
+        { "agents": ["coordinator:code-reviewer-weekly"] },
         { "agents": ["coordinator:eng-director"] },
         { "agents": ["coordinator:apm"] }
       ]

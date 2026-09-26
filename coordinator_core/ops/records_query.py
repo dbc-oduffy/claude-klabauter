@@ -206,6 +206,7 @@ from coordinator_core.lifecycle_constants import (
     HANDOFF_TERMINAL_DEPLOYMENT,
     HANDOFF_TERMINAL_STATUS,
 )
+from coordinator_core.loe_thresholds import _TIER_ORDER
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.text.query_record_display import (
@@ -1007,7 +1008,16 @@ def _js_number(s: str) -> float:
 
 
 def _compare_values(a: str, b: str) -> float:
-    """Port of query-records.js's ``compareValues`` — numeric-first, string fallback.
+    """Port of query-records.js's ``compareValues`` — numeric-first, string fallback,
+    with a tier-rank probe ahead of both for the shared t-shirt LoE vocabulary
+    (``loe.tshirt``/``chain_loe.tshirt``).
+
+    When both sides are members of ``loe_thresholds._TIER_ORDER`` (closed
+    vocabulary, XXL-to-XS descending — that table's own SSOT, imported rather
+    than copied or reversed into a second one), rank by ``-index`` so XS —
+    last in that descending table — ranks first, i.e. ascending sort order.
+    Any value outside the vocabulary on either side (numeric, ISO-date,
+    unknown string, or a mix) falls through unchanged to the comparator below.
 
     Tries ``Number(a) - Number(b)`` first when BOTH sides parse as numbers
     (this is the trap for a naive port: a string-only comparator would put
@@ -1015,6 +1025,8 @@ def _compare_values(a: str, b: str) -> float:
     comparison (works for ISO date strings, which sort correctly
     lexicographically) when either side is non-numeric.
     """
+    if a in _TIER_ORDER and b in _TIER_ORDER:
+        return -_TIER_ORDER.index(a) - -_TIER_ORDER.index(b)
     na = _js_number(a)
     nb = _js_number(b)
     if na == na and nb == nb:  # not-NaN check (NaN != NaN)

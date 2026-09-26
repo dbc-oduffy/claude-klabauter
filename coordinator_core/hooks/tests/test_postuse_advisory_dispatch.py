@@ -306,7 +306,7 @@ def test_sentinel_is_not_written_when_composition_never_completes(
     assert not os.path.isfile(sentinel)
 
 
-def test_handler_six_way_merge_all_legs_fire_in_fixed_order(tmp_path):
+def test_handler_five_way_merge_all_legs_fire_in_fixed_order(tmp_path):
     with mock.patch.object(pad, "_check_context_pressure_sync", return_value="cp text"):
         with mock.patch.object(pad, "_check_runtime_tripwire_sync", return_value="rt text"):
             with mock.patch.object(
@@ -318,25 +318,26 @@ def test_handler_six_way_merge_all_legs_fire_in_fixed_order(tmp_path):
                     mock.AsyncMock(return_value="[nudge] text"),
                 ):
                     with mock.patch.object(
-                        pad, "_check_workflow_monitor_arm_sync", return_value="wf text"
+                        pad,
+                        "_check_group_em_watch_arm_sync",
+                        return_value="ge text",
                     ):
-                        with mock.patch.object(
-                            pad,
-                            "_check_group_em_watch_arm_sync",
-                            return_value="ge text",
-                        ):
-                            result = asyncio.run(
-                                pad._handler(
-                                    {"session_id": SESSION, "tool_name": "Bash"}
-                                )
+                        # The silent Workflow-run capture leg is folded into the same
+                        # gather but must never contribute to the merged text — left
+                        # un-mocked here (its default early-exit on a non-Workflow
+                        # tool_name returns None) so this test also proves it stays
+                        # silent by construction, not merely by omission.
+                        result = asyncio.run(
+                            pad._handler(
+                                {"session_id": SESSION, "tool_name": "Bash"}
                             )
+                        )
 
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "cp text" in context
     assert "rt text" in context
     assert "agent text" in context
     assert "[nudge] text" in context
-    assert "wf text" in context
     assert "ge text" in context
 
     assert (
@@ -344,7 +345,6 @@ def test_handler_six_way_merge_all_legs_fire_in_fixed_order(tmp_path):
         < context.index("rt text")
         < context.index("agent text")
         < context.index("[nudge] text")
-        < context.index("wf text")
         < context.index("ge text")
     )
 
@@ -389,7 +389,15 @@ def test_handler_group_em_watch_alone_still_post_advisory(tmp_path):
 
 
 class _ExplodingOnUnexpectedKey(dict):
-    _ALLOWED = {"session_id", "transcript_path", "agent_id", "tool_name", "file_path", "content"}
+    _ALLOWED = {
+        "session_id",
+        "transcript_path",
+        "agent_id",
+        "tool_name",
+        "file_path",
+        "content",
+        "command",
+    }
 
     def get(self, key, default=None):
         if key not in self._ALLOWED:
@@ -402,7 +410,7 @@ class _ExplodingOnUnexpectedKey(dict):
         return super().__getitem__(key)
 
 
-def test_handler_reads_no_params_field_beyond_the_six_mapped_fields(
+def test_handler_reads_no_params_field_beyond_the_seven_mapped_fields(
     tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
@@ -414,6 +422,7 @@ def test_handler_reads_no_params_field_beyond_the_six_mapped_fields(
             "tool_name": "Bash",
             "file_path": "",
             "content": "",
+            "command": "",
         }
     )
 

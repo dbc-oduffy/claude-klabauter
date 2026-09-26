@@ -141,6 +141,19 @@ read pipelines"):
       a file object bound to a name, a redirect, ``tee``, ``sed -i`` -- is
       unreadable here and still declines.
 
+  12. ASSIGNMENT-CAPTURED-SUBSTITUTION READ-SHAPE -- port of DoE-claude's
+      Item-4 EM-stage-governed-doctrine-edit allowance
+      (``coordinator/hooks/scripts/guard-doctrine-surface-bash-write.py``,
+      sha ``5f7f50067004e15ab50592ef4c38cf836d29d928``,
+      ``_is_assignment_captured_substitution_read_shape``). A segment that
+      is nothing but ``NAME=$(...)``/``NAME="$(...)"`` -- e.g.
+      ``f=$(ls ~/snippets/em-operating-doctrine.md)`` -- does not deny
+      under point 3 merely for the bare ``$(...)`` indirection marker: the
+      substitution's own inner command is scanned for its own write/
+      indirection markers instead, and a segment carrying anything beyond
+      the bare assignment (a trailing redirect, a second statement) is not
+      this shape at all and falls through to the existing checks unchanged.
+
 NEGATIVE-SPEC (accepted over-denial, preserved from the original): a segment
 mentioning a governed surface AND an unrelated write marker in the SAME
 segment (``git diff CLAUDE.md > /tmp/out.txt``) still denies -- this guard
@@ -284,9 +297,18 @@ def _redirect_target_token(segment: str) -> Optional[str]:
     return rest[:end]
 
 
-def _has_write_marker(text: str) -> bool:
-    if _has_redirect_marker(text):
-        return True
+def _has_non_redirect_write_marker(text: str) -> bool:
+    """DoE-parity helper (``guard-doctrine-surface-bash-write.py``, DoE-claude
+    sha ``5f7f50067004e15ab50592ef4c38cf836d29d928``): every write-marker
+    family that is NOT a bare ``>``/``>>`` redirect -- ``tee``, an in-place
+    editor, ``cp``/``mv``/``install``/``dd``/``truncate``, a write-mode
+    ``open()``, a ``.write(``/``.write_text(``/``.write_bytes(`` call,
+    ``ex``/``ed``, ``patch``/``rsync``, ``curl -o``, ``wget -O``, a ``sed``
+    write script, or a write-shaped PowerShell cmdlet. Split out from
+    ``_has_write_marker`` so a caller that has already resolved the redirect
+    question on its own (``_has_write_marker_for_point3``'s quoted-redirect
+    fallback below) can ask this half alone, without re-triggering the
+    redirect check it just finished."""
     folded = _fold_literal_joins(text)
     for pattern in (
         _TEE_RE,
@@ -305,6 +327,12 @@ def _has_write_marker(text: str) -> bool:
         if pattern.search(text) or pattern.search(folded):
             return True
     return False
+
+
+def _has_write_marker(text: str) -> bool:
+    if _has_redirect_marker(text):
+        return True
+    return _has_non_redirect_write_marker(text)
 
 
 _INTERPRETER_RE = re.compile(r"\b(python3?|perl|ruby|node)\b")
@@ -407,8 +435,22 @@ def _has_write_marker_for_point3(
         return _has_write_marker(segment)
     target = _redirect_target_token(segment)
     target_mentions = bool(target) and _mentions_governed_identifier(target, identifiers_lower)
-    bare_mention = _mentions_governed_identifier(_strip_quoted_spans(segment), identifiers_lower)
-    if target_mentions or bare_mention:
+    if target_mentions:
+        return True
+    stripped = _strip_quoted_spans(segment)
+    if not _has_redirect_marker(stripped):
+        # DoE-parity fallback (sha 5f7f50067004e15ab50592ef4c38cf836d29d928):
+        # the only `>`/`>>` in the raw segment lived inside a quoted span --
+        # QUOTED SCRIPT SYNTAX (an awk/sed one-liner's own `>` operator), not
+        # a real redirect. Asking `_has_write_marker(without_redirect)` here
+        # would re-run the (now-irrelevant) redirect check against a blindly
+        # regex-substituted string; asking `_has_non_redirect_write_marker`
+        # directly on the original segment is the DoE original's own move
+        # and keeps this leg answering only "is there a write marker that
+        # ISN'T the quoted-script `>` we just ruled out".
+        return _has_non_redirect_write_marker(segment)
+    bare_mention = _mentions_governed_identifier(stripped, identifiers_lower)
+    if bare_mention:
         return True
     without_redirect = _BARE_REDIRECT_RE.sub(" ", _SAFE_REDIRECT_RE.sub(" ", segment))
     return _has_write_marker(without_redirect)
@@ -1139,6 +1181,88 @@ def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...])
     return not _mentions_governed_identifier(_strip_quoted_spans(segment), identifiers_lower)
 
 
+_ASSIGN_CAPTURE_LHS_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _assignment_capture_inner_command(segment: str) -> "Optional[str]":
+    """DoE-parity port (sha 5f7f50067004e15ab50592ef4c38cf836d29d928): if
+    ``segment`` IS, in its entirety (modulo surrounding whitespace), a shell
+    assignment whose RHS is a single command substitution --
+    ``NAME=$(...)`` or ``NAME="$(...)"`` -- return the substitution's inner
+    command text. Returns ``None`` for anything else, including a segment
+    that merely STARTS that way but carries more after the substitution
+    closes (``f=$(cat x) > CLAUDE.md`` keeps its trailing redirect live and
+    must not be read-shaped), and for a substitution whose closing paren is
+    never found (fails closed by returning ``None``).
+
+    Uses ``_copy_command_substitution`` (the same nested-paren/backtick
+    walker ``_strip_quoted_spans`` already relies on) rather than a regex,
+    so a substitution containing its own parens or quotes is matched
+    correctly."""
+    match = _ASSIGN_CAPTURE_LHS_RE.match(segment)
+    if not match:
+        return None
+    rest = segment[match.end() :]
+    quote = None
+    if rest[:1] in ("'", '"'):
+        quote = rest[0]
+        rest = rest[1:]
+    if not rest.startswith("$("):
+        return None
+    span, consumed = _copy_command_substitution(rest, 0)
+    if not span.endswith(")"):
+        return None
+    remainder = rest[consumed:]
+    if quote is not None:
+        if not remainder.startswith(quote):
+            return None
+        remainder = remainder[1:]
+    if remainder.strip():
+        return None
+    return span[2:-1]
+
+
+def _is_assignment_captured_substitution_read_shape(
+    segment: str, identifiers_lower: Tuple[str, ...]
+) -> bool:
+    """DoE-parity port -- the EM-stage governed-doctrine-edit allowance:
+    ``f=$(ls ~/snippets/em-operating-doctrine.md)`` (and the same shape over
+    any other governed surface) was denied by point 3's per-segment loop
+    purely because ``_has_indirection_marker`` treats a bare ``$(...)`` as
+    an indirection marker with no regard for WHAT it sits inside of -- a
+    ``$(...)`` that is the whole RHS of an assignment does not write
+    anything by itself, it captures the inner command's stdout into a
+    variable. Point 4 already reasons about this shape for its own
+    (broader) purpose; this is that same move applied to point 3's
+    per-segment indirection check.
+
+    Still fails closed: this is a read-shape carve-out ONLY when the
+    substitution's own inner command has no write marker and no further
+    indirection this guard cannot resolve (``eval``/``xargs``/a nested
+    ``sh -c`` subshell/another interpreter) -- so
+    ``f=$(tee ~/snippets/em-operating-doctrine.md)`` and
+    ``f=$(cat x | tee ~/snippets/em-operating-doctrine.md)`` both keep
+    denying: the substitution captures a write, not a read. A segment that
+    carries MORE than the bare assignment (a trailing redirect, a second
+    statement) is not this shape at all -- ``_assignment_capture_inner_
+    command`` returns ``None`` for it and this function declines, leaving
+    it to the existing write-marker/indirection checks unchanged."""
+    inner = _assignment_capture_inner_command(segment)
+    if inner is None:
+        return False
+    if _has_write_marker(inner):
+        return False
+    if (
+        _EVAL_RE.search(inner)
+        or _XARGS_RE.search(inner)
+        or _SHELL_DASH_C_RE.search(inner)
+        or _INTERPRETER_RE.search(inner)
+        or _CMD_SUBST_RE.search(inner)
+    ):
+        return False
+    return True
+
+
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """The whole predicate, isolated from payload plumbing so it is directly
     unit-testable. ``identifiers_lower`` is the per-call resolved governed-
@@ -1155,8 +1279,9 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
           by ``_assignment_indirection_reaches_a_write``).
 
     ...EXCEPT a segment satisfying the point-7 git carve-out, the point-7
-    wrapper-family mirror, the point-9 grant-CLI carve-out, or the point-11
-    interpreter-read-shape carve-out."""
+    wrapper-family mirror, the point-9 grant-CLI carve-out, the point-11
+    interpreter-read-shape carve-out, or the point-12
+    assignment-captured-substitution carve-out."""
     if not identifiers_lower:
         return False
     if not _mentions_governed_identifier(cmd, identifiers_lower):
@@ -1197,6 +1322,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_commit_wrapper_read_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
+            or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)
         ):
             continue
         if _has_write_marker_for_point3(segment, identifiers_lower):

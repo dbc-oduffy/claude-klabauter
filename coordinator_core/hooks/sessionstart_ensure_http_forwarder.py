@@ -170,31 +170,37 @@ def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
     return bool(_FORWARDER_ARGV_RE.search(argv_text))
 
 
+def _windows_process_cmdline(pid: int) -> "Optional[List[str]]":
+    """Best-effort argv list for a Windows pid, as a seam a test can
+    monkeypatch -- mirrors `_pid_is_a_forwarder_posix`'s `/proc/<pid>/
+    cmdline` read. Item 38.3: the prior implementation asked Windows for
+    the process's *image path* (`QueryFullProcessImageNameW`) and searched
+    THAT for `http_hook_forwarder.py` -- but an interpreter's image path is
+    `.../python.exe`, never the script argument passed to it, so the
+    regex could never match and the identity check was permanently blind
+    on Windows. This reads the actual command line instead, the same
+    signal the POSIX and macOS branches already match against. Raises
+    `psutil.NoSuchProcess` for a pid that has already exited, so the
+    caller can tell "gone" apart from "unreadable".
+    """
+    import psutil
+
+    return psutil.Process(pid).cmdline()
+
+
 def _pid_is_a_forwarder_windows(pid: int) -> "Optional[bool]":
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
-        )
-        if not handle:
-            return False
-        try:
-            buf = ctypes.create_unicode_buffer(32768)
-            size = wintypes.DWORD(len(buf))
-            ok = kernel32.QueryFullProcessImageNameW(
-                handle, 0, buf, ctypes.byref(size)
-            )
-            if not ok:
-                return None
-            return bool(_FORWARDER_ARGV_RE.search(buf.value))
-        finally:
-            kernel32.CloseHandle(handle)
+        import psutil
     except Exception:
         return None
+    try:
+        cmdline = _windows_process_cmdline(pid)
+    except psutil.NoSuchProcess:
+        return False
+    except Exception:
+        return None
+    argv_text = " ".join(cmdline)
+    return bool(_FORWARDER_ARGV_RE.search(argv_text))
 
 
 _BIND_CONFIRM_ATTEMPTS = 10

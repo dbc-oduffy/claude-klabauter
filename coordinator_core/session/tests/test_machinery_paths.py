@@ -80,9 +80,6 @@ def test_relocated_bucket_accessors_join_onto_machinery_root():
     )
     assert machinery_paths.plan_sidecars_dir(REPO_ROOT) == os.path.join(root, "plan-sidecars")
     assert machinery_paths.cache_dir(REPO_ROOT) == os.path.join(root, "cache")
-    assert machinery_paths.orientation_cache_path(REPO_ROOT) == os.path.join(
-        root, "orientation_cache.md"
-    )
     assert machinery_paths.cockpit_emission_path(REPO_ROOT) == os.path.join(
         root, "cockpit-emission.json"
     )

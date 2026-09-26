@@ -1742,13 +1742,39 @@ def _unclaim(
         ):
             governing_plan = _find_implemented_governing_plan(worktree, deliverable_id.strip())
             if governing_plan is not None:
+                # Determinate cascade statement, not a hedge (docs/plans/2026-09-26-
+                # plan-implemented-does-not-close-its-handoff.md § C2). The writer
+                # exists and fires exactly once, from the plan's non-no-op flip to
+                # implemented; a repeat stamp-implemented is a no-op, so nothing
+                # re-fires it here. It skips a handoff claimed by a live session,
+                # which at flip time is usually the stamping session itself. Read
+                # the holder's current liveness — function-local imports, this
+                # raise path only, per the plan's circular-import constraint.
+                from coordinator_core.claim_state import resolve_claim_state
+                from coordinator_core.liveness import resolve_live_session_ids
+
+                try:
+                    holder = resolve_claim_state(path, repo_root=worktree).holder
+                    if holder is None:
+                        holder_state = "unknown"
+                    elif holder in resolve_live_session_ids():
+                        holder_state = "live"
+                    else:
+                        holder_state = "dead"
+                except Exception:
+                    holder_state = "unknown"
+
                 raise MutateAbort(
                     f"unclaim refused — {handoff_path}'s governing plan "
                     f"{governing_plan['title']!r} ({governing_plan['path']}) is already "
                     "stamped status: implemented; dropping it would strand an implemented "
-                    "plan's handoff back to open+ready_to_fire. If this handoff's work is "
-                    "genuinely still outstanding, correct the plan's status instead of "
-                    "unclaiming — a cascade may not have fired."
+                    "plan's handoff back to open+ready_to_fire. The plan-to-handoff cascade "
+                    "exists and fired once, at the flip to implemented; it will not re-fire "
+                    "(a repeat stamp-implemented is a no-op). It skips a handoff claimed by "
+                    "a live session — at flip time, usually the stamping session itself. "
+                    f"This handoff's claim holder is currently {holder_state}. If the work "
+                    f"landed, run: archive-stamp-cli ship-handoff {handoff_path}. If it is "
+                    "genuinely still outstanding, correct the plan's status instead."
                 )
 
         # Idempotency: no-op ONLY at the FULL target state (status==open AND
@@ -2745,6 +2771,14 @@ def _gate_recheck(
     key, not blank it — matches DoE wire semantics and the schema's
     ready_to_fire→gate_dependency-forbidden if/then rule).
 
+    Item 9: on the `cleared` branch ONLY, `pickup_ready` is NOT preserved
+    untouched — `_apply_derived_readiness` re-derives it from the POST-
+    MUTATION frontmatter (same unconditional wiring claim/unclaim/repark
+    already use), so a stale `pickup_ready:false` left over from the
+    awaiting_gate period does not survive a successful clear. A bare
+    (non-cleared) recheck makes no lifecycle claim and never calls it —
+    `pickup_ready` stays exactly as authored on that path.
+
     Fail-loud (exit_code=1, no write) when deployment_state is not currently
     awaiting_gate — gate-recheck is defined ONLY as the awaiting_gate
     re-check/clear transition (mirror DoE handoff-transition.js:432-500).
@@ -2885,6 +2919,15 @@ def _gate_recheck(
             # below then refused the whole write. Neither verb could discharge
             # such a gate, and each pointed at the other.
             fm = _retire_blocked_by(fm, fm_dict)
+
+            # Item 9: re-derive pickup_ready on the POST-MUTATION frontmatter
+            # (C6's _apply_derived_readiness, same call site claim/unclaim/
+            # repark already wire unconditionally) so a --cleared call's own
+            # readiness flip is not left standing on a stale pickup_ready.
+            # Scoped to the cleared branch ONLY — a bare recheck makes no
+            # lifecycle claim (see this function's own docstring) and must
+            # not have pickup_ready re-derived out from under it.
+            fm = _apply_derived_readiness(fm, worktree)
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)

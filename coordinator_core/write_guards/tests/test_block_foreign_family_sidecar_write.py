@@ -159,14 +159,14 @@ class TestDeny:
 
 
 class TestCarveOut1LabelMismatch:
-    """An integrator writing a REVIEWER's sidecar -- different family, allow."""
+    """An executor writing a REVIEWER's sidecar -- different family, allow."""
 
-    def test_integrator_writing_reviewer_sidecar_allowed(self, tmp_path):
+    def test_executor_writing_reviewer_sidecar_allowed(self, tmp_path):
         _write_backpointer(
             tmp_path,
             _AGENT_A,
             _EM_SESSION_ID,
-            dispatched_rows=[(_AGENT_A, "x", "coordinator:review-integrator")],
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:executor")],
         )
         payload = _payload(
             tmp_path,

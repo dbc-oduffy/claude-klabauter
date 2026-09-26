@@ -83,7 +83,6 @@ from coordinator_core.bash_guards.tests.test_deny_text_reachable_override import
 )
 from coordinator_core.write_guards import (
     block_completion_monolith_write,
-    block_em_hand_edit_pending_review_integration as block_review_pending,
     block_illegal_filename,
     block_priority_ledger_edit,
     block_subagent_archive_write,
@@ -105,21 +104,12 @@ def _no_override_env_leaks(monkeypatch):
         block_subagent_archive_write._OVERRIDE_ENV_VAR,
         block_subagent_plan_body_write._OVERRIDE_ENV_VAR,
         block_unauthorized_claude_md_write._OVERRIDE_ENV_VAR,
-        block_review_pending._OVERRIDE_ENV_VAR,
         block_illegal_filename._OVERRIDE_ENV,
         "COORDINATOR_OVERRIDE_OWN_INBOX",
         nudge_improvement_queue_write._ESCAPE_HATCH_ENV_VAR,
         nudge_baton_body_bar._ESCAPE_HATCH_ENV_VAR,
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-def test_block_em_hand_edit_pending_review_integration_deny_reason():
-    rendered = block_review_pending._deny_reason(
-        "docs/plans/2026-07-01-example.md", "state/subagent-share/x/y.md"
-    )
-    assert_render_carries_reachability_constraint(rendered, context="block_em_hand_edit_pending_review_integration._deny_reason")
-    assert operator_override_note(block_review_pending._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_illegal_filename_make_deny_msg():

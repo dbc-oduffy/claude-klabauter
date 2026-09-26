@@ -902,3 +902,188 @@ def test_apply_missing_trailers_forwards_deliverable_id_override(tmp_path, monke
     )
 
     assert "Deliverable-Id: dlv-exec-555555" in result
+
+
+# ---------------------------------------------------------------------------
+# B2 (F2): pickup-tier ambiguity gate -- multiple held handoff pickups omit.
+# ---------------------------------------------------------------------------
+
+
+def _write_handoff_claim(repo: Path, handoff_relpath: str, sid: str) -> None:
+    """Write a LIVE handoff-claims claim-dir for `handoff_relpath`, held by
+    `sid` -- the shape `claim_state.handoff_claim_dir` resolves and
+    `liveness.cs_claim_holder_live` reads. `sid` must be a real, live
+    session for `cs_claim_holder_live` to answer True; tests use the
+    running pytest process's own session registry entry (see `_SID`
+    fixture setup in each test below)."""
+    claim_dir = (
+        repo
+        / ".git"
+        / "coordinator-sessions"
+        / "handoff-claims"
+        / Path(handoff_relpath).name
+    )
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(sid, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text("2026-09-26T00:00:00Z", encoding="utf-8")
+
+
+def _write_pickup_history(
+    repo: Path, sid: str, entries: list, *, flat_deliverable_id: str = ""
+) -> None:
+    """Write `session-shape.json` carrying `pickup_history` (each entry a
+    `{"handoff": ..., "deliverable_id": ...}` dict, `record_pickup`'s own
+    shape) alongside the flat `pickup.deliverable_id` key the pre-B2 tier
+    reads -- `record_pickup` sets the flat key to whichever pickup happened
+    LAST, so tests pass it explicitly to reproduce that "last pickup wins"
+    shape."""
+    shape = {"pickup_history": entries}
+    if flat_deliverable_id:
+        shape["pickup"] = {"deliverable_id": flat_deliverable_id}
+    _write_shape(repo, sid, shape)
+
+
+@pytest.fixture
+def _live_session(monkeypatch):
+    """A session id `cs_claim_holder_live` will answer True for, faked via
+    the same registry-liveness seam other `claim_state`/`liveness` tests in
+    this fleet fake through -- `session.liveness.claim_holder_live`
+    resolves via the session registry, so a monkeypatch at that seam avoids
+    standing up a real registry entry per test."""
+    sid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    monkeypatch.setattr(
+        "coordinator_core.liveness.cs_claim_holder_live", lambda claim_path: True
+    )
+    return sid
+
+
+def test_two_held_pickups_code_only_commit_omits_deliverable_id(
+    tmp_path, monkeypatch, _live_session
+):
+    repo = _init_repo(tmp_path)
+    sid = _live_session
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    _write_pickup_history(
+        repo,
+        sid,
+        [
+            {"handoff": "state/handoffs/a.md", "deliverable_id": "dlv-a"},
+            {"handoff": "state/handoffs/b.md", "deliverable_id": "dlv-b"},
+        ],
+        flat_deliverable_id="dlv-b",
+    )
+    _write_handoff_claim(repo, "state/handoffs/a.md", sid)
+    _write_handoff_claim(repo, "state/handoffs/b.md", sid)
+
+    (repo / "some_code.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["some_code.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {sid}" in joined
+
+
+def test_two_held_pickups_plus_one_plan_claim_uses_claimed_plan_id(
+    tmp_path, monkeypatch, _live_session
+):
+    repo = _init_repo(tmp_path)
+    sid = _live_session
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    _write_pickup_history(
+        repo,
+        sid,
+        [
+            {"handoff": "state/handoffs/a.md", "deliverable_id": "dlv-a"},
+            {"handoff": "state/handoffs/b.md", "deliverable_id": "dlv-b"},
+        ],
+        flat_deliverable_id="dlv-b",
+    )
+    _write_handoff_claim(repo, "state/handoffs/a.md", sid)
+    _write_handoff_claim(repo, "state/handoffs/b.md", sid)
+    _write_plan(repo, "docs/plans/example.md", 'deliverable_id: "dlv-plan-value"\n')
+    _write_plan_claim(repo, sid, "example", "2026-08-13T10:00:00Z")
+
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-plan-value" in joined
+
+
+def test_one_pickup_released_one_held_uses_the_held_ones_id(
+    tmp_path, monkeypatch, _live_session
+):
+    repo = _init_repo(tmp_path)
+    sid = _live_session
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    _write_pickup_history(
+        repo,
+        sid,
+        [
+            {"handoff": "state/handoffs/a.md", "deliverable_id": "dlv-a"},
+            {"handoff": "state/handoffs/b.md", "deliverable_id": "dlv-b"},
+        ],
+        flat_deliverable_id="dlv-b",
+    )
+    # Only b's claim dir exists -- a's pickup was released (no claim dir at
+    # all is the same "not held" case a dead-holder claim would degrade to).
+    _write_handoff_claim(repo, "state/handoffs/b.md", sid)
+
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-b" in joined
+
+
+def test_tier0_artifact_wins_over_multiple_held_pickups(
+    tmp_path, monkeypatch, _live_session
+):
+    repo = _init_repo(tmp_path)
+    sid = _live_session
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    _write_pickup_history(
+        repo,
+        sid,
+        [
+            {"handoff": "state/handoffs/a.md", "deliverable_id": "dlv-a"},
+            {"handoff": "state/handoffs/b.md", "deliverable_id": "dlv-b"},
+        ],
+        flat_deliverable_id="dlv-b",
+    )
+    _write_handoff_claim(repo, "state/handoffs/a.md", sid)
+    _write_handoff_claim(repo, "state/handoffs/b.md", sid)
+    _write_plan(repo, "docs/plans/carries-its-own-id.md", 'deliverable_id: "dlv-artifact"\n')
+
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["docs/plans/carries-its-own-id.md"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-artifact" in joined
+
+
+def test_single_held_pickup_unchanged(tmp_path, monkeypatch, _live_session):
+    repo = _init_repo(tmp_path)
+    sid = _live_session
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    _write_pickup_history(
+        repo,
+        sid,
+        [{"handoff": "state/handoffs/a.md", "deliverable_id": "dlv-a"}],
+        flat_deliverable_id="dlv-a",
+    )
+    _write_handoff_claim(repo, "state/handoffs/a.md", sid)
+
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-a" in joined

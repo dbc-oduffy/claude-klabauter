@@ -262,11 +262,11 @@ class TestKindResolutionFailureIsMeasuredNotConfined:
     """2026-07-30: an EARLIER dispatch confined an unresolvable kind here
     exactly like block_subagent_commit/block_subagent_destructive_action do
     -- REVERTED same day. This guard is per-kind policy, not uniform-deny:
-    coordinator:enricher and coordinator:review-integrator are legitimate
-    plan-body editors by design, so an unresolvable kind cannot be assumed
-    to be executor without reproducing the exact harm the 2026-06-09
-    PM ruling ("don't punish legitimate integrator/enricher work on infra
-    noise") was written to prevent. The VERDICT is reverted to that ruling's
+    coordinator:enricher is a legitimate plan-body editor by design, so an
+    unresolvable kind cannot be assumed to be executor without reproducing
+    the exact harm the 2026-06-09 PM ruling ("don't punish legitimate
+    enricher work on infra noise") was written to prevent. The VERDICT is
+    reverted to that ruling's
     original lookup-fail-is-allow default; the measurement-only stderr
     signal is kept so a future, properly-scoped PM conversation about that
     ruling has real frequency data.

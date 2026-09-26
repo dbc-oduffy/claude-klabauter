@@ -31,8 +31,8 @@ PLUGIN_ROOT resolution: `CLAUDE_PLUGIN_ROOT` env var is rung 1 (matches the orac
 own rung 1); past that, resolution delegates to the shared native port of
 `resolve-coordinator-clone.sh --content-root` —
 `coordinator_core.resolve_coordinator_clone.resolve_content_root` (C11 resolver
-centralization; `coordinator_core.ops.fan_out_integrator._resolve_plugin_root`
-consumes the same shared resolver rather than a second independent ladder). On any
+centralization; every other plugin-root-resolving op consumes the same shared
+resolver rather than a second independent ladder). On any
 resolution failure, `_resolve_plugin_root` returns "" — the caller treats this as the
 oracle's own fail-loud ERROR path.
 

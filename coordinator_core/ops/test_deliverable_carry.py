@@ -284,6 +284,107 @@ def test_predecessor_is_plan_input_flag_unset_mints_from_slug_unchanged(tmp_path
     assert dlvr_id.startswith(f"dlv-{today}-handoff-")
 
 
+def test_sizing_only_carries_the_sizing_id(tmp_path):
+    dlvr_id, initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        None,
+        None,
+        sizing=("state/sizings/2026-09-26-example.yaml", "dlv-sizing-only-abc123"),
+    )
+
+    assert dlvr_id == "dlv-sizing-only-abc123"
+    assert initiative_id == ""
+
+
+def test_sizing_agreeing_with_plan_carries_it(tmp_path):
+    plan = tmp_path / "plan.md"
+    _write_frontmatter(plan, deliverable_id="dlv-sizing-agree-xyz789", initiative="init-plan")
+
+    dlvr_id, initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        str(plan),
+        None,
+        sizing=("state/sizings/2026-09-26-example.yaml", "dlv-sizing-agree-xyz789"),
+    )
+
+    assert dlvr_id == "dlv-sizing-agree-xyz789"
+    assert initiative_id == "init-plan"
+
+
+def test_sizing_disagreeing_with_plan_raises_and_names_the_sizing_path(tmp_path):
+    plan = tmp_path / "plan.md"
+    _write_frontmatter(plan, deliverable_id="dlv-plan-side-333")
+    sizing_path = "state/sizings/2026-09-26-disagreeing.yaml"
+
+    with pytest.raises(DivergentDeliverableIdError) as excinfo:
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            str(plan),
+            None,
+            sizing=(sizing_path, "dlv-sizing-side-444"),
+        )
+
+    message = str(excinfo.value)
+    assert "dlv-plan-side-333" in message
+    assert "dlv-sizing-side-444" in message
+    assert sizing_path in message
+    assert str(plan) in message
+
+
+def test_sizing_disagreeing_with_predecessor_raises_and_names_the_sizing_path(tmp_path):
+    predecessor = tmp_path / "predecessor.md"
+    _write_frontmatter(predecessor, deliverable_id="dlv-predecessor-side-555")
+    sizing_path = "state/sizings/2026-09-26-disagreeing-pred.yaml"
+
+    with pytest.raises(DivergentDeliverableIdError) as excinfo:
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            None,
+            str(predecessor),
+            sizing=(sizing_path, "dlv-sizing-side-666"),
+        )
+
+    message = str(excinfo.value)
+    assert "dlv-predecessor-side-555" in message
+    assert "dlv-sizing-side-666" in message
+    assert sizing_path in message
+    assert str(predecessor) in message
+
+
+def test_sizing_with_no_id_plus_plan_with_no_id_still_raises_dropped_join(tmp_path):
+    plan = tmp_path / "plan.md"
+    _write_frontmatter(plan)
+
+    with pytest.raises(DroppedDeliverableJoinError):
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            str(plan),
+            None,
+            sizing=("state/sizings/2026-09-26-no-id.yaml", None),
+        )
+
+
+def test_sizing_absent_is_byte_identical_to_today(tmp_path):
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    _write_frontmatter(plan, deliverable_id="dlv-no-sizing-arg-abc123", initiative="init-foo")
+    _write_frontmatter(predecessor, deliverable_id="dlv-no-sizing-arg-abc123", initiative="init-bar")
+
+    without_kw = resolve_deliverable_and_initiative(
+        read_frontmatter_field, mint, str(plan), str(predecessor)
+    )
+    with_explicit_none = resolve_deliverable_and_initiative(
+        read_frontmatter_field, mint, str(plan), str(predecessor), sizing=None
+    )
+
+    assert without_kw == with_explicit_none == ("dlv-no-sizing-arg-abc123", "init-foo")
+
+
 def test_ac6_unreadable_additional_predecessor_leg_degrades_silently(tmp_path):
     plan = tmp_path / "plan.md"
     predecessor = tmp_path / "predecessor.md"

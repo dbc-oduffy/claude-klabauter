@@ -1717,3 +1717,42 @@ def test_sed_inplace_on_outside_repo_file_still_bumps(env, monkeypatch):
     result = guard.check_bump_outside_repo_write(cmd, "sess-sed-outside", str(env["anchor"]), {})
 
     assert result is not None
+
+
+# B1 (docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md): the
+# outside-repo deny says it classifies command shapes, not their effects,
+# and that a script that writes here is not checked -- while the sibling
+# FOREIGN-repo branch's copy is unchanged.
+
+
+def test_ac3_outside_repo_mkdir_deny_names_command_shapes_not_effects(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-b1-shapes")
+    new_dir = env["outside"] / "brand-new-b1-dir"
+    cmd = f"mkdir -p {_posix(new_dir)}"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-b1-shapes", str(env["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "classifies command shapes, not their effects" in reason
+    assert "script that writes here is not checked" in reason
+
+
+def test_foreign_repo_branch_does_not_carry_the_shapes_not_effects_clause():
+    """Unit-level control: `outside_repo` defaults to `False`, the value
+    `bump_foreign_repo_write.py` (C4) passes implicitly by never setting the
+    keyword -- so its rendered copy must stay byte-identical to before B1,
+    with none of the new clause."""
+    from coordinator_core.bash_guards import _write_bump_message as message
+
+    foreign_em = message.render_em_message("target-repo", "session-repo", Path("/tmp/g"), "sess")
+    foreign_subagent = message.render_subagent_message(
+        "target-repo", "session-repo", Path("/tmp/g"), "sess", "/sandbox"
+    )
+    foreign_unknown = message.render_unknown_message(
+        "target-repo", "session-repo", Path("/tmp/g"), "sess"
+    )
+
+    for rendered in (foreign_em, foreign_subagent, foreign_unknown):
+        assert "classifies command shapes, not their effects" not in rendered
+        assert "script that writes here is not checked" not in rendered

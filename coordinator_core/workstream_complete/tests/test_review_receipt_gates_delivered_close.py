@@ -538,30 +538,37 @@ def test_prime_exit_criterion_falsifier_end_to_end(monkeypatch, tmp_path, integr
     assert stamp is not None
     assert "jp-review-receipt-block-stamp" in (stamp.get("depends_on") or [])
 
-    # --- dispatch a reviewer and an integrator, mechanically
-    for agent_type, agent_id, findings in (
-        ("coordinator:code-reviewer", "aaaa111122223333", "\n## Findings\n\nA real finding.\n"),
-        (_INTEGRATOR_TYPE, "bbbb444455556666", "\n## Applied\n\nThe finding was applied.\n"),
-    ):
-        rel = _provision(
-            {"agent_id": agent_id, "agent_type": agent_type, "session_id": _SID},
-            str(policy),
-            str(tmp_path),
-        )
-        assert rel, f"_provision declined to provision {agent_type}"
-        sidecar = tmp_path / rel
-        # The receipt must already be there, stamped at DISPATCH, before the
-        # agent has written a single word of findings -- that is what makes
-        # blank-vs-filled meaningful rather than a proxy for "did it finish".
-        assert "receipt:" in sidecar.read_text(encoding="utf-8")
-        sidecar.write_text(sidecar.read_text(encoding="utf-8") + findings, encoding="utf-8")
+    # --- dispatch a reviewer, mechanically -- RRI-M4: the review-integrator
+    # is retired, so "findings were applied" is read directly off the
+    # reviewer's own sidecar's verified `findings_ledger` stamp, never a
+    # separate integrator dispatch.
+    from coordinator_core.ops.review_findings_ledger import _stamp_frontmatter_key
 
-    # --- attempt 2: must SUCCEED, and both receipts must be separately legible
+    rel = _provision(
+        {"agent_id": "aaaa111122223333", "agent_type": "coordinator:code-reviewer", "session_id": _SID},
+        str(policy),
+        str(tmp_path),
+    )
+    assert rel, "_provision declined to provision coordinator:code-reviewer"
+    sidecar = tmp_path / rel
+    # The receipt must already be there, stamped at DISPATCH, before the
+    # agent has written a single word of findings -- that is what makes
+    # blank-vs-filled meaningful rather than a proxy for "did it finish".
+    assert "receipt:" in sidecar.read_text(encoding="utf-8")
+    doc = sidecar.read_text(encoding="utf-8") + "\n## Findings\n\nA real finding.\n"
+    doc = _stamp_frontmatter_key(
+        doc,
+        "findings_ledger",
+        "{rows: 1, applied: 1, em_rejected: 0, suspended: 0, verified_at: 2026-08-27T13:05:00Z}",
+    )
+    sidecar.write_text(doc, encoding="utf-8")
+
+    # --- attempt 2: must SUCCEED, and the verified ledger must be legible
     second = _brief()
     gate_2 = second["gates"]["review_receipt"]
     assert gate_2["blocks"] is False
     assert "review receipt found" in gate_2["detail"]
-    assert "integrator receipt" in gate_2["detail"]
+    assert "findings ledger verified" in gate_2["detail"]
     assert "jp-review-receipt-block-stamp" not in {jp["id"] for jp in second["judgment_points"]}
 
 
@@ -588,44 +595,52 @@ def test_stale_same_session_receipt_with_no_consumed_handoff_still_counts(monkey
     assert review_receipt_gate["blocks"] is False
 
 
-def test_integrator_receipt_is_reported_but_never_required(monkeypatch, tmp_path):
-    """AC2 at the READING end: "findings were applied" stays separately
-    legible without becoming a second gate.
+def test_verified_findings_ledger_is_reported_but_never_required(monkeypatch, tmp_path):
+    """AC2 at the READING end, RRI-M4 repoint: "findings were applied" stays
+    separately legible without becoming a second gate.
 
     Two halves, because either alone would let a defect through:
-      (a) a reviewer receipt with no integrator receipt UNBLOCKS, and the
-          detail says the integrator receipt is absent -- requiring one would
-          block every close whose review found nothing to apply, which the
-          plan never asked for;
-      (b) an integrator receipt ALONE does not unblock -- it is not a
-          substitute for review having happened (constraint 4: ambiguity
-          resolves toward requiring review).
+      (a) a reviewer receipt with no verified findings_ledger UNBLOCKS, and
+          the detail says the ledger is absent -- requiring one would block
+          every close whose review found nothing to apply, which the plan
+          never asked for;
+      (b) a verified findings_ledger stamp ALONE (no review_receipt) does
+          not unblock -- it is not a substitute for review having happened
+          (constraint 4: ambiguity resolves toward requiring review).
     """
+    from coordinator_core.ops.review_findings_ledger import _stamp_frontmatter_key
+
     consumed_handoff = _write_consumed_handoff(tmp_path, claimed_at="2026-08-27T12:00:00+00:00")
     _patch_gate(monkeypatch, _gate(consumed_handoff=consumed_handoff))
 
-    # (a) reviewer receipt only
+    # (a) reviewer receipt only, no findings_ledger stamp
     _write_clean_plan(tmp_path, "reviewer-only-plan")
     _write_sidecar(tmp_path, _SID, stamped_at="2026-08-27T13:00:00+00:00")
     gate_a = wsc.brief(
         decisions={"governing_plan_slug": "reviewer-only-plan", "subject": "x"}, repo_root=tmp_path
     )["gates"]["review_receipt"]
     assert gate_a["blocks"] is False
-    assert "no integrator receipt" in gate_a["detail"]
+    assert "no verified findings ledger" in gate_a["detail"]
 
-    # (b) integrator receipt only -- wipe the reviewer sidecar first
+    # (b) a verified findings_ledger stamp with no review_receipt -- wipe the
+    # reviewer sidecar first
     for stale in (tmp_path / "state" / "subagent-share" / _SID).glob("*.md"):
         stale.unlink()
-    _write_clean_plan(tmp_path, "integrator-only-plan")
-    _write_sidecar(
+    _write_clean_plan(tmp_path, "ledger-only-plan")
+    sidecar = _write_sidecar(
         tmp_path,
         _SID,
-        agent_type=_INTEGRATOR_TYPE,
         stamped_at="2026-08-27T13:00:00+00:00",
-        receipt_key="integrator_receipt",
+        with_receipt=False,
     )
+    doc = _stamp_frontmatter_key(
+        sidecar.read_text(encoding="utf-8"),
+        "findings_ledger",
+        "{rows: 1, applied: 1, em_rejected: 0, suspended: 0, verified_at: 2026-08-27T13:05:00Z}",
+    )
+    sidecar.write_text(doc, encoding="utf-8")
     gate_b = wsc.brief(
-        decisions={"governing_plan_slug": "integrator-only-plan", "subject": "x"},
+        decisions={"governing_plan_slug": "ledger-only-plan", "subject": "x"},
         repo_root=tmp_path,
     )["gates"]["review_receipt"]
     assert gate_b["blocks"] is True

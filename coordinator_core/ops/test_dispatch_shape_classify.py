@@ -222,7 +222,7 @@ def test_f3_reviewer_agents_excluded_from_executor_count(capsys, tmp_path):
         sid,
         [
             "agent-exec-001\tsonnet\tgeneral-purpose\t1782100000",
-            "agent-rev-001\tunknown\tcoordinator:review-integrator\t1782100100",
+            "agent-rev-001\tunknown\tcoordinator:code-reviewer\t1782100100",
             "agent-scout-001\tunknown\tcoordinator:staff-eng\t1782100200",
         ],
     )
@@ -247,7 +247,7 @@ def test_f3b_three_executors_plus_reviewers_no_offer(capsys, tmp_path):
             "agent-exec-001\tsonnet\tgeneral-purpose\t1782100000",
             "agent-exec-002\tsonnet\tgeneral-purpose\t1782100050",
             "agent-exec-003\tsonnet\tgeneral-purpose\t1782100090",
-            "agent-rev-001\tunknown\tcoordinator:review-integrator\t1782100100",
+            "agent-rev-001\tunknown\tcoordinator:code-reviewer\t1782100100",
             "agent-scout-001\tunknown\tcoordinator:staff-eng\t1782100200",
         ],
     )
@@ -269,8 +269,8 @@ def test_f7_zero_executor_agents_no_offer(capsys, tmp_path):
         tmp_path,
         sid,
         [
-            "agent-rev-001\tunknown\tcoordinator:review-integrator\t1782100000",
-            "agent-rev-002\tunknown\tcoordinator:review-integrator\t1782100100",
+            "agent-rev-001\tunknown\tcoordinator:code-reviewer\t1782100000",
+            "agent-rev-002\tunknown\tcoordinator:code-reviewer\t1782100100",
             "agent-scout-001\tunknown\tcoordinator:staff-eng\t1782100200",
         ],
     )
@@ -378,5 +378,5 @@ def test_executor_class_filter_feature_dev_prefix():
     assert _is_executor_class("coordinator:executor") is True
     assert _is_executor_class("feature-dev:code-explorer") is True
     assert _is_executor_class("coordinator:staff-eng") is False
-    assert _is_executor_class("coordinator:review-integrator") is False
+    assert _is_executor_class("coordinator:code-reviewer") is False
     assert _is_executor_class("the Staff Engineer") is False

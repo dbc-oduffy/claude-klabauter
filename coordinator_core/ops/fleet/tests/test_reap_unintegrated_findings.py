@@ -45,6 +45,23 @@ def test_marker_present_is_kept_however_old(tmp_path):
     assert reaper.classify_unintegrated(integrated) is None
 
 
+def test_verified_ledger_stamp_is_kept_however_old(tmp_path):
+    """RRI-M4: a post-retirement sidecar carries no marker heading — its
+    verified `findings_ledger` frontmatter stamp is what marks it integrated."""
+    findings = tmp_path / ".coordinator-local" / "review-trail" / "findings"
+    findings.mkdir(parents=True, exist_ok=True)
+    path = findings / f"{_dated(_AGE * 4)}-ledgered.md"
+    path.write_text(
+        "---\n"
+        "agent_type: coordinator:code-reviewer\n"
+        "findings_ledger: {rows: 1, applied: 1, em_rejected: 0, suspended: 0, verified_at: 2026-09-26T00:00:00Z}\n"
+        "---\n\n# Findings\n\nsomething a reviewer said\n",
+        encoding="utf-8",
+    )
+    assert reaper.classify_unintegrated(path) is None
+    assert _findings_reap.is_integrated(path.read_text(encoding="utf-8"))
+
+
 def test_unparseable_filename_fails_closed_to_keep(tmp_path):
     findings = tmp_path / "state" / "review-trail" / "findings"
     findings.mkdir(parents=True, exist_ok=True)

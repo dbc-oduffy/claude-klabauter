@@ -47,8 +47,7 @@ same-session plan-execute-without-a-handoff door named as a residual in
 handoff.md`'s execution note and closed here per DR-207 DD#1). The
 2026-08-04 artifact-first tier (`compute_missing_trailer_args(..., paths=
 ...)` -> `_resolve_deliverable_id_from_paths()`, tier 0, checked BEFORE
-every session-keyed tier) is this module's own addition, NOT yet mirrored
-into the hook script -- closes a cross-repo-reported defect (market-
+every session-keyed tier) closes a cross-repo-reported defect (market-
 intelligence-em -> claude-klabauter-em, 2026-08-04 memo, defect 2): every
 tier below tier 0 is keyed on the SESSION, which is wrong the moment a
 session holds more than one deliverable at once (`/pickup a AND b AND c`,
@@ -57,10 +56,13 @@ session's commits all resolved to whichever deliverable's session-shape
 tier happened to answer last, mis-attributing every commit but one. Tier 0
 resolves from the COMMITTED ARTIFACT's own `deliverable_id` frontmatter
 first, falling through to the untouched session ladder only when the
-artifact carries none. The hook script has no `paths` argument to receive
-(it is not called from Python), so mirroring tier 0 there needs a hook-side
-`git diff --cached --name-only` leg instead -- tracked as a known residual
-of the existing hand-mirroring gap, not silently reintroduced as a NEW one.
+artifact carries none. IS NOW MIRRORED into the hook script (corrected
+2026-09-26, CEPEF-B2 -- the prior "NOT yet mirrored" text here described a
+state this file no longer matches): the hook derives its own staged
+pathspec via a hook-side `git diff --cached --name-only` leg
+(`_resolve_staged_paths`), spawned only when a Deliverable-Id trailer is
+missing, and then IMPORTS (never re-derives) tier 0, the scope-match tier
+and the plan-claim ambiguity gate straight off this module.
 
 `Session-Id` names the COMMITTER, and that is all it claims. The
 `Absorbed-From` authorship qualifier that once ran beside it was killed
@@ -485,6 +487,99 @@ def session_holds_multiple_plan_claims(claims: Sequence[tuple]) -> bool:
     return len(claims) > 1
 
 
+def _held_pickup_deliverable_ids(git_dir: str, session_id: str) -> List[str]:
+    """DD1 (B2): the distinct non-blank `deliverable_id`s recorded in
+    `<git_dir>/coordinator-sessions/<session_id>/session-shape.json`'s
+    `pickup_history[]` whose HANDOFF this session still holds a LIVE claim
+    on -- the per-entry liveness read the ambiguity predicate below needs.
+
+    Liveness is read per entry through `claim_state.handoff_claim_dir`
+    (`<common_dir>/coordinator-sessions/handoff-claims/<handoff>.name`) plus
+    `liveness.cs_claim_holder_live`, the same pairing
+    `handoff_archive_transition._live_claim_holder_or_none` already uses --
+    a file read, no new subprocess. The resolved claim-dir holder is then
+    compared against `session_id` itself: `cs_claim_holder_live` answers
+    "is *some* holder live", not "is *this session* the live holder", so a
+    claim a PEER session has since taken over must not count as this
+    session's own held pickup.
+
+    Plan-claim files never answer this: they live in the separate
+    `plan-claims` dir (`claim_state`'s own header), not `handoff-claims`, so
+    `_list_held_plan_claims`'s enumeration cannot be reused here.
+
+    Never raises: a missing/unreadable `session-shape.json`, a
+    `pickup_history` that is absent or not a list, a malformed entry, a
+    missing claim dir, or any exception from the liveness read all degrade
+    to omitting that entry -- omit-rather-than-guess, same posture as every
+    other tier in this ladder."""
+    if not git_dir or not session_id:
+        return []
+    shape_path = os.path.join(
+        git_dir, "coordinator-sessions", session_id, "session-shape.json"
+    )
+    try:
+        with open(shape_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    history = data.get("pickup_history")
+    if not isinstance(history, list):
+        return []
+
+    from coordinator_core.claim_state import handoff_claim_dir
+    from coordinator_core.liveness import cs_claim_holder_live
+
+    common_dir = Path(git_dir)
+    held_ids: List[str] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        handoff_relpath = entry.get("handoff")
+        deliverable_id = entry.get("deliverable_id")
+        if not isinstance(handoff_relpath, str) or not handoff_relpath.strip():
+            continue
+        if not isinstance(deliverable_id, str) or not deliverable_id.strip():
+            continue
+        try:
+            claim_dir = handoff_claim_dir(common_dir, Path(handoff_relpath))
+            if not claim_dir.is_dir():
+                continue
+            if not cs_claim_holder_live(str(claim_dir)):
+                continue
+            holder = (claim_dir / "session_id").read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if holder != session_id:
+            continue
+        held_ids.append(deliverable_id.strip())
+    return held_ids
+
+
+def session_holds_multiple_held_pickups(git_dir: str, session_id: str) -> bool:
+    """DD1 (B2, F2): the pickup-tier ambiguity-gate predicate -- does this
+    session's `pickup_history` at `git_dir` hold LIVE claims on two-or-more
+    HANDOFFS carrying DISTINCT `deliverable_id`s (see
+    `_held_pickup_deliverable_ids`). True means "omit, do not guess": a
+    multi-baton session's held pickups are a legitimate, documented shape
+    (`/pickup a AND b`, the pickup skill's Multi-Artifact Grab), and
+    "last pickup wins" -- `_resolve_deliverable_id_at`'s plain read of the
+    flat `pickup.deliverable_id` key, which `record_pickup` overwrites on
+    every pickup -- is exactly the confident-wrong edge `commit_anchors`'
+    negative spec forbids.
+
+    Evaluated separately per `git_dir` by `_resolve_deliverable_id` below:
+    once for the local git-dir's own pickup tier, and again for DoE-claude's
+    git-dir before its own cross-repo pickup tier runs -- each reads that
+    SAME git-dir's own `session-shape.json`, since `/pickup` may have run in
+    either tree.
+
+    A single held pickup (or zero) is unchanged: this returns False, and the
+    pickup tier answers exactly as it did before this gate existed."""
+    return len(set(_held_pickup_deliverable_ids(git_dir, session_id))) > 1
+
+
 def _resolve_deliverable_id_from_claimed_plan(cwd: Union[str, Path]) -> str:
     """Tier-3 fallback: the same-session plan-execute path (no handoff).
 
@@ -673,14 +768,20 @@ def _resolve_deliverable_id(
     case (see that tier's own docstring). Tiers 1/1a stay verbatim parity with the hook's
     `_resolve_deliverable_id()` (2026-07-27 cross-repo-fallback mirror);
     tier 3 is shared with both mirrors; tier 0, the scope-match tier, and
-    the ambiguity gate are new to this engine module only -- `paths` is an
-    addition to this module's own signature (not the hook script's), so
-    mirroring tier 0 (and the scope-match tier, which also needs `paths`)
-    into the hook requires the hook to gain its own path-discovery leg
-    (e.g. `git diff --cached --name-only`, safe there because the hook
-    always runs with the correct index already in its own env) before it
-    can carry the same tiers -- see this module's header docstring on the
-    mirrored-pair maintenance convention."""
+    the plan-claim ambiguity gate are IMPORTED by the hook (its own
+    `git diff --cached --name-only` leg supplies `paths`) rather than
+    re-derived -- see this module's header docstring on the mirrored-pair
+    maintenance convention.
+
+    The PICKUP ambiguity gate (DD1, B2, F2 -- `session_holds_multiple_held_
+    pickups`) is checked separately, immediately before each of the two
+    pickup-derived tiers below (the local `git_dir` tier and the
+    cross-repo DoE-git-dir tier) -- never once for both, since each reads
+    that tier's OWN `git_dir`'s `session-shape.json`, and a session's held
+    pickups can differ between the two trees. When it fires for a given
+    `git_dir`, ONLY that `git_dir`'s pickup tier is skipped; the claimed-plan
+    tier (tier 3) below still runs unconditionally on the pickup gate (it is
+    gated only by the plan-claim ambiguity gate above, unchanged)."""
     deliverable_id = _resolve_deliverable_id_from_paths(paths, cwd)
     if deliverable_id:
         return deliverable_id
@@ -698,13 +799,20 @@ def _resolve_deliverable_id(
     if session_holds_multiple_plan_claims(claims):
         return ""
 
-    deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
-    if deliverable_id:
-        return deliverable_id
+    # DD1 (B2, F2): omit, don't guess -- a session holding live claims on
+    # two-or-more pickups with different deliverable_ids has no single
+    # "last pickup" answer. Checked per git_dir (see this function's own
+    # docstring): a gate firing here skips only THIS git_dir's pickup tier.
+    if not session_holds_multiple_held_pickups(git_dir, session_id):
+        deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
+        if deliverable_id:
+            return deliverable_id
     doe_root = _resolve_doe_root()
     if doe_root:
         doe_git_dir = os.path.join(doe_root, ".git")
-        if os.path.normpath(doe_git_dir) != os.path.normpath(git_dir):
+        if os.path.normpath(doe_git_dir) != os.path.normpath(
+            git_dir
+        ) and not session_holds_multiple_held_pickups(doe_git_dir, session_id):
             deliverable_id = _resolve_deliverable_id_at(doe_git_dir, session_id)
             if deliverable_id:
                 return deliverable_id

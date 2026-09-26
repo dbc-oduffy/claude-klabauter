@@ -74,16 +74,23 @@ carve-out's blast radius to its one deliberate caller; it does not reverse or ga
 commit behaviour for that caller, which remains unconditional and prompt-free.
 
 Negative-spec:
-    - Do NOT add a mutating code path here, beyond the ONE narrow carve-out C5
-      (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md § C5)
-      already introduced: `_run_close_commit`'s in-process call to
+    - Do NOT add a mutating code path here, beyond the TWO narrow carve-outs already
+      introduced. C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
+      wrote.md § C5): `_run_close_commit`'s in-process call to
       `coordinator_core.ops.session.safe_commit_offer.commit_session_offer_async`,
       replacing the former `safe-commit-offer` directive by explicit PM ruling (being
-      asked whether to commit was itself the defect). That carve-out is closed — do not
-      widen it into a general precedent for "the assembler should just do X" for any
-      other X that writes to disk; every other mutating finding still belongs in a
-      `directives[]` entry. Quick-wrap's own anti-scope forbids deletes, force-pushes, and
-      history rewrites; this producer must not be the seam that reintroduces one.
+      asked whether to commit was itself the defect). C1
+      (docs/plans/2026-09-26-silent-engine-bookkeeping.md § C1): `_ship_landed_dispatch_sizings`,
+      reachable only under `commit=True` and after `_run_close_commit` has returned, which
+      writes only `status: shipped` on the `state/sizings/` paths the candidate rule
+      selects, via the existing `sizing.ship` applier (`ops.sizing_ship._handler`), and
+      commits that write in one scoped `git.commit.commit_paths` call. The PM ruled that an
+      EM hand-stamping a plan-less dispatch sizing is a failing, and a `directives[]` entry
+      cannot reach a committed state before `d5` classifies it. Neither carve-out is a
+      precedent for "the assembler should just do X" for any other X that writes to disk;
+      every other mutating finding still belongs in a `directives[]` entry. Quick-wrap's own
+      anti-scope forbids deletes, force-pushes, and history rewrites; this producer must not
+      be the seam that reintroduces one.
     - Do NOT decide entry-test condition 4 ("work is finished"). It is genuine EM
       discretion — the carve-out the doctrine page explicitly preserves — and is emitted
       as a `judgment_points[]` entry, never as a computed verdict. Conditions 1-3 are
@@ -116,6 +123,10 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_untrusted_gate_judgment_point,
 )
+from coordinator_core.coverage import _is_bookkeeping_path, _is_planning_artifact_path
+from coordinator_core.git.commit import CommitRefused, commit_paths
+from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.ops.sizing_ship import _handler as _sizing_ship_handler
 
 #: Re-exported for the pre-lift characterization pin (`test_quick_wrap_assemble.py`
 #: § "C1(d) — pre-lift characterization pin (fl-core-02)"), which references
@@ -460,6 +471,18 @@ def _degraded_probe_judgment_point(id_: str, label: str, evidence: str) -> dict[
 # ---------------------------------------------------------------------------
 
 
+#: `handoff.schema.json`'s `kind` enum member whose `predecessor` is, by convention,
+#: a crashed session's commit SHA rather than an ancestor baton
+#: ("recovery: requires predecessor: <crashed-sha> or null (no cross-field rule
+#: enforced, convention only)"). A commit SHA is never null/none/empty, so
+#: `_is_ancestry_null` correctly reads it as ancestry-bearing — that reading is right
+#: for every OTHER kind, and wrong only for `recovery`, whose `predecessor` names the
+#: crash it reconstructs, not a baton this session inherited scope from. `_c3_ancestry`
+#: special-cases this one kind so a recovery baton with a SHA `predecessor` still
+#: classifies as chain-root.
+_RECOVERY_KIND = "recovery"
+
+
 def _is_ancestry_null(raw: Any) -> bool:
     """True for the on-disk spellings DoE-claude `coordinator/skills/quick-wrap/
     SKILL.md`'s `‡` footnote treats as "no ancestor here" for a chain-root
@@ -507,6 +530,7 @@ def _read_ancestry_fields(worktree_root: Path, artifact_path: str) -> dict[str, 
     if read_fm_field_unquoted(fm_text, "additional_predecessors"):
         return None
     return {
+        "kind": read_fm_field_unquoted(fm_text, "kind"),
         "predecessor": read_fm_field_unquoted(fm_text, "predecessor"),
         "forked_from": read_fm_field_unquoted(fm_text, "forked_from"),
         "additional_predecessors": _extract_scope_paths(
@@ -558,9 +582,15 @@ def _c3_ancestry(pickup_kind: dict[str, Any], worktree_root: Path) -> tuple[bool
       future edit to `_closed_pickup_kind` could silently open the gate.
     - An artifact_path resolved but the file cannot be read at close time
       (archived mid-session) — fails CLOSED, never guessed.
-    - Read succeeds — passes iff the artifact is a chain root: `predecessor`
-      and `forked_from` both null/absent/`"none"`, `additional_predecessors`
-      empty. Any ancestor fails.
+    - Read succeeds and `kind == "recovery"` — passes unconditionally. A
+      recovery baton's `predecessor` is, by schema convention, the crashed
+      session's own commit SHA, not an ancestor baton this session inherited
+      scope from; reading a SHA as ancestry (as `_is_ancestry_null` correctly
+      would for every other kind) misroutes a recovery baton to
+      `/workstream-complete` instead of chain-root.
+    - Read succeeds (any other kind) — passes iff the artifact is a chain
+      root: `predecessor` and `forked_from` both null/absent/`"none"`,
+      `additional_predecessors` empty. Any ancestor fails.
     """
     classification = pickup_kind.get("classification")
     artifact_path = pickup_kind.get("artifact_path")
@@ -606,6 +636,13 @@ def _c3_ancestry(pickup_kind: dict[str, Any], worktree_root: Path) -> tuple[bool
         return False, (
             f"claimed artifact {artifact_path!r} could not be read (absent or archived "
             "mid-session) — failing closed"
+        )
+
+    if ancestry["kind"] == _RECOVERY_KIND:
+        return True, (
+            f"claimed artifact {artifact_path!r} is kind='recovery' — its predecessor "
+            f"({ancestry['predecessor']!r}) is a crashed session's commit SHA by "
+            "convention, not an ancestor baton, so it classifies as chain-root"
         )
 
     is_root = (
@@ -1066,6 +1103,175 @@ def _close_ledger(close_gate: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+#: `state/sizings/` is itself under `_is_bookkeeping_path`'s `"state/"` prefix, so a
+#: session that only touches its own sizing object never satisfies clause 5 on its own —
+#: clause 5 needs a DIFFERENT path that is neither bookkeeping nor a planning artifact.
+_SIZING_PATH_PREFIX = "state/sizings/"
+
+#: Statuses `sizing.ship._handler` accepts as a shippable predecessor — mirrored here only
+#: to pre-filter `draft` (clause 3's explicit exclusion: a `draft` sizing has no route
+#: chosen yet, so nothing could have shipped off it, and it must never reach the handler
+#: at all — reaching it would produce the same `MutateAbort` shape as a genuine refusal
+#: like `declined`, which this step DOES want surfaced as a judgment point). Every other
+#: status (`sized`, `routed`, `shipped`, `declined`, `superseded`, or an unrecognised
+#: scalar) is handed to the handler, which is the single place that already knows how to
+#: tell an idempotent no-op from a genuine refusal — duplicating that judgment here would
+#: fork a second, divergent copy of `_handler`'s own predecessor-status table.
+_SIZING_DRAFT_STATUS = "draft"
+
+_SIZING_SHIP_FAILED_JP_ID = "j-dispatch-sizing-ship-failed"
+
+
+def _sizing_ship_candidates(root: Path, session_paths: list[str]) -> list[str]:
+    """Candidate rule clauses 1, 2, 4 (§ Design) — paths this close MAY attempt to ship.
+
+    Clause 1 (repo-relative path under `state/sizings/`, in the session's committed-path
+    set) is the caller's `session_paths` argument, already unioned from
+    `close_gate.diff.value.touched_paths` and the close commit's `outcome.committed_paths`.
+    Clause 2 (`route: dispatch`) and clause 4 (no `plan:` FK, or `plan: null`) are read
+    directly off each candidate file — both are whole-document YAML (same shape
+    `sizing_ship._validate_sizing_fm` already assumes), so `read_fm_field_unquoted` reads
+    the raw file text unmodified, exactly as `sizing_ship.mutate` does for `status`.
+
+    Clause 3 (`sized`/`routed`, `draft` excluded) is deliberately NOT filtered here — see
+    `_SIZING_DRAFT_STATUS`'s comment above for why `draft` alone is pre-filtered inside
+    this function while every other status is left to the handler itself.
+
+    An unreadable candidate (removed between the commit and this read, or not valid
+    UTF-8) is silently excluded — this function only proposes paths it could itself
+    confirm are eligible; the handler is never asked to fail on a file this step already
+    could not read.
+    """
+    candidates: list[str] = []
+    for rel_path in sorted(set(p for p in session_paths if p.startswith(_SIZING_PATH_PREFIX))):
+        abs_path = root / rel_path
+        try:
+            text = abs_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if read_fm_field_unquoted(text, "route") != "dispatch":
+            continue
+        status = read_fm_field_unquoted(text, "status")
+        if status == _SIZING_DRAFT_STATUS:
+            continue
+        plan = read_fm_field_unquoted(text, "plan")
+        if plan is not None and str(plan).strip().lower() not in ("", "null", "none"):
+            continue
+        candidates.append(rel_path)
+    return candidates
+
+
+def _ship_landed_dispatch_sizings(
+    root: Path,
+    session_paths: list[str],
+    commit_outcome: dict[str, Any],
+    *,
+    sid: str | None = None,
+) -> list[dict[str, Any]]:
+    """§ Design's C1 step: ship this session's landed, plan-less, `dispatch`-routed
+    sizing(s) at close, silent on success. Returns zero or one judgment point — never
+    raises (see this module's Negative-spec C1 carve-out and `brief()`'s own fail-open
+    wrapper around this call).
+
+    Runs only when the close commit itself reports a non-`error` status with no
+    `conflicted_paths` (if the close commit could not land the session's work, nothing
+    is stamped) and only when at least one path in the session's committed-path set is
+    neither a bookkeeping path nor a planning-artifact path (clause 5 — "work landed,
+    not just ceremony exhaust or a plan/research doc"). Reuses `_is_bookkeeping_path`/
+    `_is_planning_artifact_path` unchanged from `coverage.py`, the same pairing
+    `ops.memo.surface_advisory._all_paper` already applies to a touched-path set.
+
+    Every path the handler reports `applied: True` for is committed in ONE scoped
+    `git.commit.commit_paths` call, trailer-applied via
+    `git.commit_trailers.apply_missing_trailers` so the commit carries this session's
+    Session-Id — the same in-process commit shape `ops.session.safe_commit_offer`
+    already uses for C5's own carve-out. A handler refusal (declined/superseded), a
+    handler exception, or a commit that fails for an already-applied candidate each
+    append that path to the single `j-dispatch-sizing-ship-failed` judgment point
+    this function ever emits — never more than one point, regardless of how many
+    candidates failed.
+    """
+    if commit_outcome.get("status") == "error":
+        return []
+    if commit_outcome.get("conflicted_paths"):
+        return []
+
+    unique_paths = sorted(set(session_paths))
+    if not unique_paths:
+        return []
+
+    has_landed_work = any(
+        not _is_bookkeeping_path(p) and not _is_planning_artifact_path(p)
+        for p in unique_paths
+    )
+    if not has_landed_work:
+        return []
+
+    candidates = _sizing_ship_candidates(root, unique_paths)
+    if not candidates:
+        return []
+
+    shipped: list[str] = []
+    failure_notes: list[str] = []
+
+    for rel_path in candidates:
+        try:
+            result = _sizing_ship_handler({"sizing_path": rel_path}, repo_root=root)
+        except Exception as exc:  # noqa: BLE001 — a handler crash must not raise into brief()
+            failure_notes.append(f"{rel_path}: handler raised {type(exc).__name__}: {exc}")
+            continue
+        if result.get("exit_code") != 0:
+            failure_notes.append(f"{rel_path}: {result.get('error')}")
+        elif result.get("applied"):
+            shipped.append(rel_path)
+        # applied False, exit_code 0 — already shipped; idempotent no-op, no note.
+
+    if shipped:
+        message = apply_missing_trailers(
+            "quick-wrap: ship dispatch-routed sizing(s)",
+            root,
+            shipped,
+            session_id_override=sid,
+        )
+        try:
+            commit_paths(root, shipped, message)
+        except CommitRefused as exc:
+            failure_notes.append(
+                f"commit refused for {', '.join(shipped)}: {exc}"
+            )
+        except Exception as exc:  # noqa: BLE001 — must never raise into brief()
+            failure_notes.append(
+                f"commit failed for {', '.join(shipped)}: {type(exc).__name__}: {exc}"
+            )
+
+    if not failure_notes:
+        return []
+
+    return [
+        build_untrusted_gate_judgment_point(
+            id=_SIZING_SHIP_FAILED_JP_ID,
+            question=(
+                "A plan-less dispatch sizing could not be shipped at close — resolve by hand?"
+            ),
+            dispositions=[
+                build_disposition(
+                    "resolved",
+                    guidance="Stamp or reconcile the named sizing(s) by hand, then re-close.",
+                ),
+                build_disposition(
+                    "leave",
+                    guidance="Leave the sizing at its current status for now.",
+                ),
+            ],
+            evidence="; ".join(failure_notes),
+            reason=(
+                "sizing.ship refused, raised, or its commit failed for at least one "
+                "candidate this close could otherwise have shipped silently."
+            ),
+        )
+    ]
+
+
 def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
     """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
     wrote.md § C5): call C4's hardened `commit_session_offer_async` in-process
@@ -1264,6 +1470,40 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
     commit_report = _run_close_commit(root, sid) if commit else _skipped_commit_report(sid)
     commit_outcome = dict(commit_report.get("outcome") or {})
     commit_outcome["residue"] = commit_report.get("residue") or {}
+
+    if commit:
+        session_paths = sorted(
+            set(diff.get("touched_paths") or [])
+            | set(commit_outcome.get("committed_paths") or [])
+        )
+        try:
+            judgment_points.extend(
+                _ship_landed_dispatch_sizings(
+                    root, session_paths, commit_outcome, sid=sid
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — must never block brief()'s own computation
+            judgment_points.append(
+                build_untrusted_gate_judgment_point(
+                    id=_SIZING_SHIP_FAILED_JP_ID,
+                    question=(
+                        "A plan-less dispatch sizing could not be shipped at close — "
+                        "resolve by hand?"
+                    ),
+                    dispositions=[
+                        build_disposition(
+                            "resolved",
+                            guidance="Stamp or reconcile the affected sizing(s) by hand, then re-close.",
+                        ),
+                        build_disposition(
+                            "leave",
+                            guidance="Leave the sizing(s) at their current status for now.",
+                        ),
+                    ],
+                    evidence=f"_ship_landed_dispatch_sizings raised {type(exc).__name__}: {exc}",
+                    reason="The sizing-ship step itself raised rather than returning cleanly.",
+                )
+            )
 
     envelope = build_envelope(
         artifact={"session_id": sid, "worktree_root": str(root), "ceremony": "quick-wrap"},

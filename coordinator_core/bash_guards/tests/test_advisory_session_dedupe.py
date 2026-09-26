@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
 
@@ -76,12 +75,13 @@ class TestFirstFiringDeliversFullText:
 
 
 class TestSecondIdenticalFiringSuppressed:
-    def test_same_session_same_shape_second_call_falls_open_no_cue_text(self, tmp_path, monkeypatch):
-        """`_ADVISORY_ENVELOPE` carries no cue word (no "Use instead"/
-        "Example:"/bare "instead"), so its terse alternative cannot be
-        isolated -- degradation fails open to the FULL envelope rather than
-        silence (module docstring, "FAIL OPEN, UNCONDITIONALLY"). See
-        `TestDegradeNotSilence` for the case where a cue word IS present.
+    def test_same_session_same_shape_second_call_is_silent(self, tmp_path, monkeypatch):
+        """R6 (2026-09-26): a repeat firing of an "allow" advisory puts NO
+        TEXT in context at all -- `_ADVISORY_ENVELOPE`'s `permissionDecision`
+        is `"allow"`, so the second call strips `additionalContext` entirely
+        while `permissionDecision` (and any other non-text field) survives.
+        See `TestDegradeNotSilence` for the case where `updatedInput`
+        survives, and the fully-empty-`{}` collapse case.
         """
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE)
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
@@ -93,7 +93,8 @@ class TestSecondIdenticalFiringSuppressed:
         second = dispatch.evaluate_payload_json(raw)
 
         assert first == _ADVISORY_ENVELOPE
-        assert second == _ADVISORY_ENVELOPE
+        assert "additionalContext" not in second["hookSpecificOutput"]
+        assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 class TestDifferentShapeStillFires:
@@ -205,25 +206,28 @@ class TestFailOpenPaths:
         assert first == _ADVISORY_ENVELOPE
         assert second == _ADVISORY_ENVELOPE
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
     def test_unwritable_dedupe_dir_never_suppresses(self, tmp_path, monkeypatch):
+        """Simulates an unwritable dedupe dir via a monkeypatched `mark_advised`
+        rather than POSIX permission bits (`os.chmod(..., 0o000)`) -- running
+        as root (or, historically, on Windows) bypasses DAC permission bits
+        entirely, so a chmod-based simulation silently stops testing anything
+        under root: `mark_advised` succeeds despite the chmod, the marker is
+        written, and the SECOND call is genuinely deduped rather than falling
+        open. Patching the write call itself is fail-open-correct on every
+        platform and every caller uid."""
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE)
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: tmp_path)
+        monkeypatch.setattr(dispatch, "_mark_advised", lambda *a, **k: None)
 
-        (tmp_path / "advisory-dedupe").mkdir()
-        os.chmod(tmp_path / "advisory-dedupe", 0o000)
-        try:
-            import json
+        import json
 
-            raw = json.dumps(_payload(cwd=str(tmp_path)))
-            first = dispatch.evaluate_payload_json(raw)
-            second = dispatch.evaluate_payload_json(raw)
+        raw = json.dumps(_payload(cwd=str(tmp_path)))
+        first = dispatch.evaluate_payload_json(raw)
+        second = dispatch.evaluate_payload_json(raw)
 
-            assert first == _ADVISORY_ENVELOPE
-            assert second == _ADVISORY_ENVELOPE
-        finally:
-            os.chmod(tmp_path / "advisory-dedupe", 0o755)
+        assert first == _ADVISORY_ENVELOPE
+        assert second == _ADVISORY_ENVELOPE
 
 
 class TestAdvisoryDedupeKeyUnit:
@@ -485,9 +489,43 @@ _ADVISORY_ENVELOPE_WITH_ALT = {
 }
 
 
+_ADVISORY_ENVELOPE_ASK = {
+    "hookSpecificOutput": {
+        "permissionDecision": "ask",
+        "additionalContext": "BASH-SPAWN ADVISORY (ask): shape X.",
+    }
+}
+
+_ADVISORY_ENVELOPE_CONTEXT_ONLY = {
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "BASH-SPAWN ADVISORY (non-blocking): shape X.",
+    }
+}
+
+_ADVISORY_ENVELOPE_WITH_REWRITE = {
+    "hookSpecificOutput": {
+        "permissionDecision": "allow",
+        "updatedInput": {"command": "rewritten command"},
+        "additionalContext": (
+            "BASH-SPAWN ADVISORY (non-blocking): shape X spawns a "
+            "subprocess per iteration.\n\n"
+            "Use instead: a single in-process pass\n"
+        ),
+    }
+}
+
+
 class TestDegradeNotSilence:
+    """R6 (2026-09-26): a repeat non-blocking advisory on an allowed call
+    puts NO TEXT in context -- `additionalContext` is stripped rather than
+    shortened to a terse alternative. Class name kept (not renamed to avoid
+    perturbing an unrelated node-id a peer chunk might cite), but every test
+    body now asserts silence, not degrade-to-terse."""
 
     def test_repeat_firing_returns_alternative_not_prose(self, tmp_path, monkeypatch):
+        """Rewritten (R6) to assert SILENCE, not a shortened alternative:
+        the repeat firing carries no `additionalContext` at all."""
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE_WITH_ALT)
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: tmp_path)
@@ -498,13 +536,9 @@ class TestDegradeNotSilence:
         second = dispatch.evaluate_payload_json(raw)
 
         first_ctx = first["hookSpecificOutput"]["additionalContext"]
-        second_ctx = second["hookSpecificOutput"]["additionalContext"]
-
         assert "spawns a subprocess" in first_ctx
-        assert second is not None
-        assert "spawns a subprocess" not in second_ctx
-        assert "Use instead" in second_ctx
-        assert len(second_ctx) < len(first_ctx)
+        assert "additionalContext" not in second["hookSpecificOutput"]
+        assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
 
     def test_two_guard_chain_deduped_first_still_wins_slot(self, tmp_path, monkeypatch):
         entry_a = _advisory_entry("guard-a-higher-precedence", _ADVISORY_ENVELOPE_WITH_ALT)
@@ -518,11 +552,71 @@ class TestDegradeNotSilence:
         second = dispatch.evaluate_payload_json(raw)
 
         first_ctx = first["hookSpecificOutput"]["additionalContext"]
-        second_ctx = second["hookSpecificOutput"]["additionalContext"]
 
         assert "Use instead" in first_ctx
-        assert "shape Y" not in second_ctx
-        assert "Use instead" in second_ctx
+        # The higher-precedence guard's slot is still won on the repeat --
+        # guard-b's ("shape Y") text never appears, even though guard-b
+        # never fired before this session.
+        assert "additionalContext" not in second["hookSpecificOutput"]
+        assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    def test_ask_decision_repeat_keeps_full_text(self, tmp_path, monkeypatch):
+        """`"ask"` is exempt from silencing -- a repeat `ask` still needs its
+        full text to make sense of the prompt."""
+        entry = _advisory_entry("fake-guard-ask", _ADVISORY_ENVELOPE_ASK)
+        monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
+        monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: tmp_path)
+
+        payload = _payload(cwd=str(tmp_path))
+        raw = __import__("json").dumps(payload)
+        first = dispatch.evaluate_payload_json(raw)
+        second = dispatch.evaluate_payload_json(raw)
+
+        assert first == _ADVISORY_ENVELOPE_ASK
+        assert second == _ADVISORY_ENVELOPE_ASK
+
+    def test_repeat_with_nothing_left_but_hookeventname_collapses_to_no_advisory(
+        self, tmp_path, monkeypatch
+    ):
+        """A `context_only`-shaped envelope (no `permissionDecision`, no
+        `updatedInput`) carries nothing besides `hookEventName` once
+        `additionalContext` is stripped, so the repeat collapses all the way
+        to `{}` (`no_advisory()`'s own shape) -- still RETURNED, never
+        `continue`d."""
+        entry = _advisory_entry("fake-guard-context-only", _ADVISORY_ENVELOPE_CONTEXT_ONLY)
+        monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
+        monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: tmp_path)
+
+        payload = _payload(cwd=str(tmp_path))
+        raw = __import__("json").dumps(payload)
+        first = dispatch.evaluate_payload_json(raw)
+        second = dispatch.evaluate_payload_json(raw)
+
+        assert first == _ADVISORY_ENVELOPE_CONTEXT_ONLY
+        assert second == {}
+
+    def test_repeat_with_rewrite_and_context_keeps_rewrite_drops_context(
+        self, tmp_path, monkeypatch
+    ):
+        """A repeat carrying both `updatedInput` and `additionalContext`
+        returns the envelope, with `additionalContext` stripped and
+        `updatedInput` intact -- never collapsed to `no_advisory()`."""
+        entry = _advisory_entry("fake-guard-rewrite", _ADVISORY_ENVELOPE_WITH_REWRITE)
+        monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
+        monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: tmp_path)
+
+        payload = _payload(cwd=str(tmp_path))
+        raw = __import__("json").dumps(payload)
+        first = dispatch.evaluate_payload_json(raw)
+        second = dispatch.evaluate_payload_json(raw)
+
+        assert first == _ADVISORY_ENVELOPE_WITH_REWRITE
+        assert second != {}
+        assert "additionalContext" not in second["hookSpecificOutput"]
+        assert second["hookSpecificOutput"]["updatedInput"] == {
+            "command": "rewritten command"
+        }
+        assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 class TestSessionIdValidation:

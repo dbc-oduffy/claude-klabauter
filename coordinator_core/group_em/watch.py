@@ -465,12 +465,17 @@ def _parked_line(
     carrying only the uuid asks the Group-EM to go resolve one, and the resolve
     is a second read of a registry this tick already held. The name goes on.
 
-    What the line must NOT do is tell the reader to re-resolve from the
-    printed sid, which reads like a check and performs like a ritual: in the
-    case that matters -- the peer has re-pointed or gone -- that sid is
-    precisely the one that no longer resolves, so the instruction is
-    guaranteed to fail exactly when it is needed, and its failure looks
-    identical to the peer simply being gone. `verify before sending` is the
+    IDENTIFY-BY-SID, ADDRESS-BY-RESOLVED-NAME (the same convention
+    `coordinator-safe-commit.py`'s holder refusal states, per DoE ruling 6 on
+    `2026-09-11-doe-claude-em-rulings-owed-bundle.md`): the sid is the stable
+    identifier this line is ABOUT, and the name is the address resolved from
+    the registry at the moment this line was composed, not a permanently
+    stable claim either way -- a session can be renamed, and a sid this line
+    printed can stop resolving by the time it is read. So the line must NOT
+    tell the reader to re-resolve from the printed sid as though that were a
+    check that always succeeds: by the time it would matter -- the peer has
+    gone or been re-pointed -- the sid is exactly as likely to have stopped
+    resolving as the name is to be stale. `verify before sending` is the
     honest qualifier; `re-resolve from this id` is not
     (`DoE-claude docs/wiki/session-facade.md`, amended 2b6df17e6c, via
     claude-klabauter-a9).

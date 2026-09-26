@@ -19,6 +19,7 @@ from coordinator_core.resolve_validation_cmd import (
     cs_read_local_md_key,
     cs_resolve_fast_test_cmd,
     cs_resolve_full_test_cmd,
+    main,
     metachar_warn,
     normalize_python_token,
     redact_for_diag,
@@ -465,3 +466,24 @@ def test_full_local_md_key_wins_over_fast_fallback(tmp_path):
     )
     result = cs_resolve_full_test_cmd(str(tmp_path))
     assert result == ResolvedCommand("pytest full", 0)
+
+
+def test_main_help_prints_real_usage_and_returns_0(capsys):
+    # B13: --help/-h used to fall through to the unknown-mode branch (no
+    # help branch existed), so the launcher's `_usage_lines` synthesized an
+    # empty usage instead of surfacing this real one.
+    rc = main(["--help"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "--fast" in out
+    assert "--full" in out
+    assert "--read-key" in out
+
+
+def test_main_dash_h_prints_real_usage_and_returns_0(capsys):
+    rc = main(["-h"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "--fast" in out
+    assert "--full" in out
+    assert "--read-key" in out

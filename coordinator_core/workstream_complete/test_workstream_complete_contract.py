@@ -161,7 +161,6 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
         "review_partition": {
             "range": "aaaaaaa..bbbbbbb",
             "slices": [{"slice_id": "s1", "paths": ["coordinator/tests/contract-test.py"]}],
-            "integrator_spec_tsv": "state/review-trail/contract-test-spec.tsv",
         },
         "ubt_check": {"applies": True, "since_sha": "aaaaaaa"},
         "classify_dispatch_plan_file": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",

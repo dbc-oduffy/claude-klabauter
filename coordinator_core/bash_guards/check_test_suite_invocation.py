@@ -1186,6 +1186,40 @@ _PACKAGE_SCRIPT_OFFER = (
     "  npx jest src/thing.test.js"
 )
 
+#: Item 5.1 (cross-repo/archive/2026-09-11-doe-claude-em-suite-guard-and-
+#: emit-preamble-frictions.md): a BARE bash `$VAR`/`${VAR}` or PowerShell
+#: `$env:VAR` token, anchored to the WHOLE token -- a variable reference
+#: embedded inside a larger literal (`tests/$SUITE/`) is a different,
+#: unaddressed shape this narrow fix does not claim to name.
+_VARIABLE_PATH_OPERAND_RE = re.compile(
+    r"^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|env:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)$",
+    re.IGNORECASE,
+)
+
+
+def _has_variable_path_operand(argv: Sequence[str]) -> bool:
+    """Does this argv carry a bare shell-variable reference as one of its
+    own tokens (``python -m pytest $FILES``, ``python -m pytest
+    "$env:FILES"``)?
+
+    The classification is UNCHANGED either way -- this guard cannot see
+    inside a variable, and ``_is_real_scope`` already, correctly, treats
+    such a token as no scope (neither a node id nor a path that exists on
+    disk), so the command still classifies Tier U. This predicate exists
+    ONLY so ``_remediation_text`` can name WHY: without it, the remediation
+    read as "scope this to what was actually touched", which is exactly
+    what a caller passing `$FILES` believed it had done -- the friction was
+    never told apart from ordinary unscoped breadth. See the memo above for
+    the two live repro shapes this matches.
+    """
+    return any(_VARIABLE_PATH_OPERAND_RE.match(tok) for tok in argv)
+
+
+_VARIABLE_PATH_OPERAND_NOTE = (
+    "\n\nA path list held in a variable reads as no path list at all -- "
+    "this guard cannot see inside it. Name the paths literally."
+)
+
 
 def _cargo_test_shape(args: Sequence[str]) -> Optional[Sequence[str]]:
     if not args:
@@ -2880,7 +2914,9 @@ class SuiteMatch:
         }
 
 
-def _remediation_text(tier: str, detected: str) -> str:
+def _remediation_text(
+    tier: str, detected: str, variable_path_operand: bool = False
+) -> str:
     if tier == "F":
         return (
             "This reproduces the repo's configured fast_test_cmd verbatim. "
@@ -2893,6 +2929,7 @@ def _remediation_text(tier: str, detected: str) -> str:
     package_script_note = (
         _PACKAGE_SCRIPT_OFFER if _is_package_script_label(detected) else ""
     )
+    variable_note = _VARIABLE_PATH_OPERAND_NOTE if variable_path_operand else ""
     return (
         "Scope this to what was actually touched instead of the whole "
         "suite:\n"
@@ -2902,8 +2939,8 @@ def _remediation_text(tier: str, detected: str) -> str:
         "Unscoped/full-suite runs require a Tier-U grant and are reserved "
         "for the top-level EM -- never a dispatched subagent or a bare "
         "dispatch-brief instruction."
-        "%s\n\n"
-        "Detected: %s" % (package_script_note, detected)
+        "%s%s\n\n"
+        "Detected: %s" % (package_script_note, variable_note, detected)
     )
 
 
@@ -3171,7 +3208,9 @@ def _classify_command_core(
             matched_text=_sanitize(stripped),
             span=(seg_start, seg_end),
             position="imperative",
-            remediation=_remediation_text(tier, detected),
+            remediation=_remediation_text(
+                tier, detected, variable_path_operand=_has_variable_path_operand(argv)
+            ),
         ))
     return out
 

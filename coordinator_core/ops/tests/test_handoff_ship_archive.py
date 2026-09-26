@@ -201,3 +201,39 @@ def test_ship_and_archive_is_inoperative_since_c1b_subsumption(repo):
 
     # The handoff must still be sitting, un-archived, in state/handoffs/.
     assert (repo.root / "state" / "handoffs" / name).is_file()
+
+    # Steps 1-2 landed (ship transition succeeded, no sha supplied so no
+    # shipped_in stamp) BEFORE step 3's dead archive leg fails — the
+    # envelope must report that true per-step state, not a hardcoded False
+    # that would deny the ship stamp this call actually made.
+    assert result["shipped"] is True, result
+    assert result["shipped_in_stamped"] is False, result
+    assert result["archived"] is False, result
+
+
+def test_ship_and_archive_reports_shipped_in_stamped_true_on_dead_archive_leg(repo):
+    """Same dead-archive-leg failure as above, but with a `sha` supplied: Step 1
+    (`handoff.stamp`) writes a fresh `shipped_in`, Step 2 ships, and only then
+    does Step 3's inoperative archive leg fail. The envelope must carry
+    `shipped_in_stamped: True` — the value `_err`'s hardcoded False previously
+    denied even though this call's Step 1 freshly applied the stamp.
+    """
+    name = "2026-08-14-graceful-partial-with-sha.md"
+    repo.seed_handoff(name, deployment_state="ready_to_fire")
+    rel = f"state/handoffs/{name}"
+    sha = repo.head_sha
+
+    result = _run(
+        _ship_archive_handler({"handoff_path": rel, "sha": sha}, repo.common_dir)
+    )
+
+    assert result["exit_code"] == 1, result
+    assert "inoperative" in result["error"], result
+
+    fm = repo.fm(name)
+    assert read_fm_field(fm, "deployment_state") == "shipped"
+    assert read_fm_field(fm, "shipped_in") is not None
+
+    assert result["shipped"] is True, result
+    assert result["shipped_in_stamped"] is True, result
+    assert result["archived"] is False, result

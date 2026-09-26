@@ -323,6 +323,89 @@ class TestToolNameDefenseInDepth:
         assert result is None
 
 
+class TestRegisteredReviewTargets:
+    """M1 re-scope: a candidate matching the session's registered
+    review-targets.txt is admitted; a missing/unreadable file, or a
+    non-listed candidate, still falls back to sandbox-only."""
+
+    def _write_targets(self, repo_root: Path, session_id: str, *rel_paths: str) -> None:
+        targets_dir = repo_root / ".git" / "coordinator-sessions" / session_id
+        targets_dir.mkdir(parents=True, exist_ok=True)
+        (targets_dir / "review-targets.txt").write_text(
+            "\n".join(rel_paths) + "\n", encoding="utf-8"
+        )
+
+    def test_allowed_target_edit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        session_id = "sess-12345678"
+        rel = "coordinator/docs/wiki/reviewer-pipeline/review-integration-doctrine.md"
+        self._write_targets(tmp_path, session_id, rel)
+        target = str(tmp_path / rel)
+        payload = _payload(tmp_path, target, tool_name="Edit", session_id=session_id)
+        assert guard.check(payload) is None
+
+    def test_denied_non_target_edit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        session_id = "sess-12345678"
+        self._write_targets(tmp_path, session_id, "some/other/file.md")
+        target = str(
+            tmp_path
+            / "coordinator_core"
+            / "bash_guards"
+            / "block_reviewer_bash_outside_allowlist.py"
+        )
+        payload = _payload(tmp_path, target, tool_name="Edit", session_id=session_id)
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_missing_targets_file_gives_sandbox_only(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        session_id = "sess-12345678"
+        target = str(tmp_path / "some" / "reviewed" / "file.md")
+        payload = _payload(tmp_path, target, tool_name="Edit", session_id=session_id)
+        result = guard.check(payload)
+        assert result is not None
+
+        target_in_sandbox = _sandbox_path(tmp_path, session_id, "sidecar.md")
+        payload_sandbox = _payload(
+            tmp_path, target_in_sandbox, tool_name="Write", session_id=session_id
+        )
+        assert guard.check(payload_sandbox) is None
+
+    def test_case_varied_target_path_allowed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        session_id = "sess-12345678"
+        rel = "coordinator/docs/wiki/reviewer-pipeline/review-integration-doctrine.md"
+        self._write_targets(tmp_path, session_id, rel)
+        target = str(
+            tmp_path / "COORDINATOR" / "Docs" / "WIKI" / "reviewer-pipeline"
+            / "REVIEW-integration-doctrine.md"
+        )
+        payload = _payload(tmp_path, target, tool_name="Edit", session_id=session_id)
+        assert guard.check(payload) is None
+
+
 class TestBothSandboxRootsAreHonoured:
 
     SID = "sess-12345678"

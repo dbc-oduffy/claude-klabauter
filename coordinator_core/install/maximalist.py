@@ -244,6 +244,34 @@ already-idempotent sub-script; nothing here clobbers live registry/config files.
 """
 
 
+def _resolve_effective_claude_home(env: Dict[str, str]) -> Optional[str]:
+    """Canonical `<home>/.claude` using `require_home()`'s OWN precedence
+    (`CLAUDE_HOME` -> `HOME` -> `USERPROFILE`), or `None` if none resolves.
+
+    `guard_repo_setup_claude_home_refusal._resolve_claude_home` (below)
+    checks `CLAUDE_CONFIG_DIR` first and never consults `CLAUDE_HOME` at
+    all -- correct for its own Bash-guard callers, but a mismatch here:
+    Step 7's `_scaffold_root` is built from `claude_home_dir`, itself
+    `require_home()`'s return value. Whenever `CLAUDE_HOME` is set and
+    differs from `HOME` (routine on a sandboxed/cloud box), the two
+    resolvers disagree and the guard-reused check below misses the exact
+    target it exists to refuse (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-
+    fixes-doe-thread.md chunk C2, item 27 -- this is the residual gap left
+    after state/bug-backlog/2026-08-28-step-7-scaffolds-claude-home-
+    around-a-guard-that-would-refuse-it.yaml). Mirrors
+    `coordinator_core.plugin_health.sentinel._resolve_claude_home`, which
+    already gets this precedence right for P-12.
+    """
+    for key in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
+        val = env.get(key)
+        if val:
+            try:
+                return os.path.realpath(os.path.join(val, ".claude"))
+            except OSError:
+                return None
+    return None
+
+
 def _scaffold_root_is_claude_home(scaffold_root: str, env: Dict[str, str]) -> bool:
     """True iff `scaffold_root` (Step 7's canonical-structure scaffold
     target) resolves to Claude Home.
@@ -254,13 +282,24 @@ def _scaffold_root_is_claude_home(scaffold_root: str, env: Dict[str, str]) -> bo
     guard never runs on this path (state/bug-backlog/2026-08-28-step-7-
     scaffolds-claude-home-around-a-guard-that-would-refuse-it.yaml). This
     reuses that guard's own primitives so both refusals stay one
-    definition rather than two that can drift.
+    definition rather than two that can drift -- and additionally checks
+    `_resolve_effective_claude_home` above, since the guard's own
+    resolver misses a `CLAUDE_HOME`-vs-`HOME` divergence the guard was
+    never exercised against (item 27's residual gap).
     """
     from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
         resolves_to_claude_home,
     )
 
-    return resolves_to_claude_home(scaffold_root, env)
+    if resolves_to_claude_home(scaffold_root, env):
+        return True
+    effective = _resolve_effective_claude_home(env)
+    if effective is None:
+        return False
+    try:
+        return os.path.realpath(scaffold_root) == effective
+    except OSError:
+        return False
 
 
 class _UsageError(Exception):

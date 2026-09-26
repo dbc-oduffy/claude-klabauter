@@ -1369,7 +1369,7 @@ def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
 # ---------------------------------------------------------------------------
 
 
-def _miss_payload(tmp_path, agent_id, agent_type="coordinator:review-integrator"):
+def _miss_payload(tmp_path, agent_id, agent_type="coordinator:executor"):
     return {
         "session_id": "f5dc95eb-e5ef-4e36-aff7-afd769f5e709",
         "agent_id": agent_id,
@@ -1398,69 +1398,6 @@ def _force_sidecar_eligible(monkeypatch, mod, *types):
     monkeypatch.setattr(mod, "load_policy", lambda *a, **k: _Policy())
 
 
-def test_unnamed_integrator_miss_writes_a_sentinel_carrying_the_receipt(tmp_path, monkeypatch):
-    """The receipt is the whole point: without it the guard scans the file past
-    and a dispatch that ran reads as one that never happened."""
-    import subprocess
-
-    from coordinator_core.hooks import cater_subagent_start as mod
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
-    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
-    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
-
-    path, text = mod._resolve_sidecar_leg(
-        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
-        str(tmp_path),
-        "aa57aa79ac1fd7c00",
-        "coordinator:review-integrator",
-        "coordinator:review-integrator",
-    )
-
-    assert path, "an unnamed integrator whose provisioning missed got no sentinel"
-    written = _sentinels(tmp_path)
-    assert len(written) == 1
-    doc = written[0].read_text(encoding="utf-8")
-    assert "provisioning: missed" in doc
-    assert "integrator_receipt:" in doc
-    assert "aa57aa79ac1fd7c00" in doc
-    assert mod.SIDECAR_PATH_MARKER_PREFIX in text
-
-
-def test_the_sentinel_puts_the_stop_guard_on_the_do_not_redispatch_branch(tmp_path, monkeypatch):
-    """End-to-end on the decision that matters. `_kira_unstamped_integrators`
-    selects sidecars carrying a receipt and no `integrated_from`; that set is
-    what separates the guard's two messages."""
-    import subprocess
-
-    from coordinator_core.hooks import cater_subagent_start as mod
-    from coordinator_core.hooks import guard_kira_verdict_routed as kira
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
-    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
-    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
-
-    mod._resolve_sidecar_leg(
-        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
-        str(tmp_path),
-        "aa57aa79ac1fd7c00",
-        "coordinator:review-integrator",
-        "coordinator:review-integrator",
-    )
-    sentinel = _sentinels(tmp_path)[0]
-
-    in_scope = [
-        (
-            sentinel.name,
-            {
-                "agent_type": "coordinator:review-integrator",
-                "integrator_receipt": {"agent_id": "aa57aa79ac1fd7c00"},
-            },
-        )
-    ]
-    assert kira._kira_unstamped_integrators(in_scope) == [sentinel.name]
-
-
 def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
     """The existing gate stays intact. A named dispatch's raw
     `a<name>-<16hex>` id carries hex no EM can derive, and its consumer IS the
@@ -1471,14 +1408,14 @@ def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
-    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:executor")
 
     mod._resolve_sidecar_leg(
         _miss_payload(tmp_path, "areview-agent-0123456789abcdef"),
         str(tmp_path),
         "areview-agent-0123456789abcdef",
-        "coordinator:review-integrator",
-        "coordinator:review-integrator",
+        "coordinator:executor",
+        "coordinator:executor",
     )
 
     assert _sentinels(tmp_path) == []
@@ -1491,21 +1428,21 @@ def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypat
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
-    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:executor")
 
     first, _ = mod._resolve_sidecar_leg(
         _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
         str(tmp_path),
         "aa57aa79ac1fd7c00",
-        "coordinator:review-integrator",
-        "coordinator:review-integrator",
+        "coordinator:executor",
+        "coordinator:executor",
     )
     second, _ = mod._resolve_sidecar_leg(
         _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
         str(tmp_path),
         "aa57aa79ac1fd7c00",
-        "coordinator:review-integrator",
-        "coordinator:review-integrator",
+        "coordinator:executor",
+        "coordinator:executor",
     )
 
     assert first == second
@@ -1547,24 +1484,6 @@ def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, mo
 # provisioned-sidecar.yaml` § RECURRENCE.
 # ---------------------------------------------------------------------------
 
-INTEGRATOR_TYPE = "coordinator:review-integrator"
-
-
-@pytest.fixture
-def integrator_policy_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Widen the synthetic policy to the integrator type. The autouse
-    `_policy_env` fixture's roster is code-reviewer only, and the guard
-    branch under test keys on an `integrator_receipt`, which is spliced
-    only for a type the roster admits."""
-    policy = tmp_path / "integrator-policy.yaml"
-    policy.write_text(
-        "report_sidecar:\n"
-        f"  - {ELIGIBLE_TYPE}\n"
-        f"  - {INTEGRATOR_TYPE}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
-
 
 def _force_provisioning_miss(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the miss leg without disturbing the payload.
@@ -1605,60 +1524,6 @@ def test_dispatch_with_no_agent_id_gets_a_miss_sentinel_on_disk(
     text = sentinel.read_text(encoding="utf-8")
     assert "\nprovisioning: missed\n" in text
     assert f"\nagent_type: {ELIGIBLE_TYPE}\n" in text
-
-
-def test_no_agent_id_sentinel_is_legible_but_does_not_suppress_the_owed_route(
-    git_repo: Path, monkeypatch: pytest.MonkeyPatch, integrator_policy_env: None
-) -> None:
-    """The branch, end to end -- not the file's existence.
-
-    `stop_dispatch :: _guard_kira_verdict_routed` counts a sibling's
-    spawn-time `integrator_receipt` as an FYI only, never as routing
-    evidence for THIS verdict (`_kira_unstamped_integrators`'s own
-    docstring; ratified at
-    `docs/plans/2026-09-11-review-receipt-records-completion-not-dispatch.md`
-    Anti-scope: "claude-klabauter's `hooks/stop_dispatch.py` reads it as 'dispatched'
-    together with `integrated_from`, which is correct") -- a receipt with no
-    `integrated_from` naming this verdict is spawn evidence, not routed
-    evidence; treating it otherwise is exactly klabauter#47's false
-    "already handled" verdict from a misfiled sidecar. An integrator
-    dispatched with no `agent_id` and a provisioning miss still gets a
-    sentinel whose `integrator_receipt` the guard can see and surfaces as a
-    count -- but the guard still denies and still names `Owed route:
-    review-integrator`, because nothing ties that receipt to THIS Kira
-    verdict."""
-    from coordinator_core.hooks import stop_dispatch
-
-    session_id = "session-no-agent-id-guard-1"
-    share_dir = Path(machinery_paths.share_dir(str(git_repo), session_id))
-    share_dir.mkdir(parents=True, exist_ok=True)
-    (share_dir / "coordinator-overengineering-reviewer-kira.md").write_text(
-        "---\n"
-        "agent_type: coordinator:overengineering-reviewer\n"
-        "spawned_at: 2026-09-17T15:37:21.868241+00:00\n"
-        "findings_count: 6\n"
-        "---\n\n## Verdict\n",
-        encoding="utf-8",
-    )
-
-    _force_provisioning_miss(monkeypatch)
-    compose_catering(
-        _payload(INTEGRATOR_TYPE, session_id, str(git_repo)), cwd=str(git_repo)
-    )
-
-    verdict = stop_dispatch._guard_kira_verdict_routed(
-        {"session_id": session_id, "cwd": str(git_repo)}
-    )
-
-    rendered = repr(verdict)
-    assert "Owed route: review-integrator" in rendered, (
-        "a spawn-time integrator_receipt with no integrated_from naming this "
-        f"verdict must not suppress the owed-route remedy -- got {rendered}"
-    )
-    assert "spawn-time integrator_receipt" in rendered, (
-        "the miss-sentinel's own integrator_receipt must still be legible to "
-        f"the guard as a counted FYI -- got {rendered}"
-    )
 
 
 def test_no_agent_id_sentinels_never_collide_across_same_type_dispatches(

@@ -1037,7 +1037,11 @@ def test_sizing_object_schema_version_and_bump_class():
     # nowhere to go — `superseded_ruling` is rejected as an additional
     # property, so the supersession ended up in a trailing comment (reported by
     # example-retrieval-repo, 2026-09-11, from a live plan-blitz run).
-    assert schema["x-schema-version"] == "1.21.0"
+    # Moved 1.21.0 -> 1.22.0 (R7, C2): `route.enum` gains `first-person`
+    # (appended), and one new optional top-level property, `repo_span`,
+    # joins. `nested-field-additive`, per this note's own instruction to say
+    # what the bump added -- see the vendored schema's own x-bump-note.
+    assert schema["x-schema-version"] == "1.22.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1102,6 +1106,9 @@ def test_vendored_schema_widened_enums_order_exact():
         "roadmap",
         "pm-decision",
         "goal-setting",
+        # Appended by R7 (C2). Order-exact and append-at-end, same discipline
+        # as every widen above -- never re-sort.
+        "first-person",
     ]
     assert sizing_schema["properties"]["detents"]["items"]["enum"] == [
         "appetite_conform",
@@ -1891,3 +1898,89 @@ def test_disposition_registry_totality_rejects_neither_and_both():
         mp.setattr(sa, "DISPOSITION_REGISTRY", (both,))
         with pytest.raises(AssertionError):
             sa._assert_disposition_registry_total()
+
+
+# ---------------------------------------------------------------------------
+# R7 (C2) -- repo_span input, appended first-person route arm ----------------
+# ---------------------------------------------------------------------------
+
+
+def test_m_and_single_repo_span_routes_first_person():
+    decision = sa.route(estimate={"tshirt": "M"}, repo_span="single")
+    assert decision["route"] == "first-person"
+
+
+def test_m_and_absent_repo_span_still_routes_plan():
+    decision = sa.route(estimate={"tshirt": "M"})
+    assert decision["route"] == "plan"
+
+
+@pytest.mark.parametrize("tshirt", ["S", "L", "XL"])
+def test_non_m_tshirts_with_single_repo_span_keep_base_route(tshirt):
+    with_span = sa.route(estimate={"tshirt": tshirt}, repo_span="single")
+    without_span = sa.route(estimate={"tshirt": tshirt})
+    assert with_span["route"] == without_span["route"]
+    assert with_span["route"] == sa._BASE_ROUTE_BY_TSHIRT[tshirt]
+
+
+def test_m_single_repo_span_with_jtbd_unclear_matches_todays_route():
+    # jtbd_unclear does not gate the shape arm at "M" (_LARGE_TSHIRTS
+    # excludes M), so it must ALSO suppress the new first-person arm rather
+    # than let repo_span alone decide -- an unclear JTBD is evidence against
+    # the first-person shortcut regardless of whether it crosses the
+    # shape-route size threshold.
+    with_span = sa.route(
+        estimate={"tshirt": "M"}, repo_span="single", jtbd_unclear=True
+    )
+    without_span = sa.route(estimate={"tshirt": "M"}, jtbd_unclear=True)
+    assert with_span["route"] == without_span["route"] == "plan"
+
+
+def test_probe_signal_resize_to_m_with_single_repo_span_routes_first_person():
+    decision = sa.route(
+        estimate={"tshirt": "S"}, probe_signal="raise", repo_span="single"
+    )
+    assert decision["resolved_estimate"]["tshirt"] == "M"
+    assert decision["route"] == "first-person"
+
+
+def test_probe_signal_resize_away_from_m_with_single_repo_span_does_not_first_person():
+    decision = sa.route(
+        estimate={"tshirt": "M"}, probe_signal="raise", repo_span="single"
+    )
+    assert decision["resolved_estimate"]["tshirt"] == "L"
+    assert decision["route"] != "first-person"
+
+
+@pytest.mark.parametrize("bad_span", ["multi", "bogus", ""])
+def test_invalid_repo_span_raises(bad_span):
+    with pytest.raises(sa.SizingAssembleError):
+        sa.route(estimate={"tshirt": "M"}, repo_span=bad_span)
+
+
+def test_invalid_repo_span_raises_even_under_express_lane():
+    with pytest.raises(sa.SizingAssembleError):
+        sa.route(
+            estimate={"tshirt": "XL"}, express_lane=True, repo_span="bogus"
+        )
+
+
+def test_cli_round_trips_repo_span(capsys):
+    exit_code = sa.main(["--tshirt", "M", "--repo-span", "single"])
+    assert exit_code == sa.EXIT_OK
+    out = capsys.readouterr().out
+    assert '"route": "first-person"' in out
+
+
+def test_cli_invalid_repo_span_usage_error(capsys):
+    exit_code = sa.main(["--tshirt", "M", "--repo-span", "multi"])
+    assert exit_code == sa.EXIT_USAGE
+
+
+def test_first_person_in_route_enum_and_schema_vendored():
+    assert "first-person" in sa.ROUTE_ENUM
+    assert sa.ROUTE_ENUM[-1] == "first-person"
+
+
+def test_repo_span_enum_value():
+    assert sa.REPO_SPAN_ENUM == ("single",)

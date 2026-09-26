@@ -1,28 +1,23 @@
-"""The premise check's sidecar is a dispositionable reviewer sidecar.
+"""The premise check's sidecar is a verifiable reviewer sidecar.
 
-`_FINDINGS_HEADING` was pinned to the exact line `## Findings`, so the
-premise-check pass's `## Findings table (plan order)` matched neither supported
-shape and was refused. That pass is a first-class producer in plan-blitz: the
-wave translates its rows onto REVIEW_SCHEMA and they reach the same integrator
-every reviewer's findings do. Refusing its sidecar meant those findings were
-applied to the plan and never stamped on the sidecar they came from — the loss
-`A-SIDECAR-THE-DISPOSITION-OP-REFUSES-LOSES-ONLY-THE-RECORD` names, where the
-deliverable is fine and only the record is gone.
-
-Measured 2026-09-10, plan-blitz run 20260910T000000Z: two separate fires
-reported the refusal independently, each classing it a tooling defect rather
-than a plan defect.
+`_FINDINGS_HEADING` detection must tolerate a qualifier after the word
+(`## Findings (3 blocking)`, `## Findings table (plan order)`) — ported
+from the retired `append_integrator_dispositions` module (DoE-claude
+docs/plans/2026-09-26-retire-review-integrator.md, row M2): the premise-check
+pass's own heading wording is `## Findings table (plan order)`, and a strict
+match refused it, silently under-counting its declared findings against the
+new `## Findings Ledger` block.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops import append_integrator_dispositions as m
+from coordinator_core.ops import review_findings_ledger as m
 
 
 def _doc(heading: str) -> str:
-    return f"# Review\n\n{heading}\n\n| # | class |\n|---|---|\n| 1 | REFS |\n"
+    return f"# Review\n\n{heading}\n\n### Finding 1\nSomething.\n"
 
 
 @pytest.mark.parametrize(
@@ -30,16 +25,15 @@ def _doc(heading: str) -> str:
     ["## Findings", "## Findings table (plan order)", "## Findings (3 blocking)"],
 )
 def test_a_qualified_findings_heading_is_still_a_findings_section(heading):
-    shape, is_empty = m._detect_findings_shape(_doc(heading))
-    assert shape == m._SHAPE_REVIEW_FINDINGS
-    assert is_empty is False
+    section = m._extract_findings_section(_doc(heading))
+    assert section is not None
+    assert "### Finding 1" in section
 
 
 def test_the_qualifier_is_not_left_in_the_body():
     body = m._extract_findings_section(_doc("## Findings table (plan order)"))
     assert body is not None
     assert "table (plan order)" not in body
-    assert body.lstrip().startswith("| # | class |")
 
 
 def test_a_prose_mention_is_still_not_a_heading():
@@ -50,9 +44,7 @@ def test_a_different_word_is_not_a_findings_heading():
     assert m._extract_findings_section(_doc("## Findingsomething")) is None
 
 
-@pytest.mark.parametrize(
-    "boundary", ["## Integrator Dispositions", "## Exit interview"]
-)
+@pytest.mark.parametrize("boundary", ["## Findings Ledger", "## Exit interview"])
 def test_boundaries_stay_exact(boundary):
     assert m._find_heading(f"{boundary} (partial)\n", boundary) is None
     assert m._find_heading(f"{boundary}\n", boundary) is not None

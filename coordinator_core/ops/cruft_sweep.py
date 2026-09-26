@@ -12,7 +12,9 @@ Four phase functions, each taking fully-resolved config and returning
 global-accumulator contract byte-for-byte in behavior:
 
     sweep_harness(projects_root, file_history_root, days, blocklist, *,
-                  apply, json_mode, quiet, log_path=None) -> (bytes, items)
+                  apply, json_mode, quiet, log_path=None,
+                  size_cap_bytes=_PROJECTS_SIZE_CAP_BYTES_DEFAULT,
+                  size_cap_mtime_floor_secs=_SIZE_CAP_MTIME_FLOOR_SECS_DEFAULT) -> (bytes, items)
     sweep_scratch(repo_root, scratch_age_days, *,
                   apply, json_mode, quiet, log_path=None) -> (bytes, items)
     sweep_subagent_sandbox_files(repo_root, *,
@@ -206,6 +208,37 @@ _ORPHAN_HARD_EXCLUDE_NAMES = {
 # 24h hard mtime floor — RD-2 consolidated age gate and the subagent-sandbox
 # file-level reap's sole gate (spec: docs/plans/2026-06-14-deep-research-workdir-out-of-killzone.md RD-2).
 _MTIME_FLOOR_SECS = 86400
+
+# ---------------------------------------------------------------------------
+# BCHST-C3 — sub-tier retention: per-artifact-class age windows + the
+# projects/ size cap. Spec: docs/plans/2026-09-26-bound-the-claude-home-
+# sub-tier-retention.md (Design). Data, not branching: a new sub-artifact
+# class that should age out is a new row here, never a code change to
+# _sweep_subtier_age.
+# ---------------------------------------------------------------------------
+
+_SUBTIER_AGE_WINDOWS: dict = {
+    "subagents": 3 * 86400,
+    # "tool-results" is deliberately ABSENT, not mapped to None-as-a-value:
+    # `.get(cls) is not None` is the gate, so an absent key and an explicit
+    # None both read as "no window" identically. It stays cap-only until a
+    # >24h resume-read probe (DoE-owned, unresolved) settles whether an aged
+    # tool-results blob can still be needed — see plan Anti-scope.
+    # Every other artifact_class ("transcript", "workflows", "other") is
+    # likewise absent: cap-only, no age window.
+}
+
+# 2 GiB — the projects/ size cap's default. Resolved from
+# `cruft_sweep.projects_size_cap_gib` at the driver seam
+# (coordinator/bin/cruft-sweep.py::_apply_machine_local_days_override);
+# this module never reads machine-local itself.
+_PROJECTS_SIZE_CAP_BYTES_DEFAULT = 2 * 1024**3
+
+# Same 24h floor as the whole-dir/jsonl passes' `_MTIME_FLOOR_SECS`, reused
+# rather than duplicated: the size-cap pass's floor is stated as "default
+# 24h, equal to the existing `_MTIME_FLOOR_SECS`" (Design). Resolved from
+# `cruft_sweep.size_cap_mtime_floor_hours` at the same driver seam.
+_SIZE_CAP_MTIME_FLOOR_SECS_DEFAULT = _MTIME_FLOOR_SECS
 
 # ---------------------------------------------------------------------------
 # Toolchain-cache tool table — Phase G ("toolchain-caches" class), net-new,
@@ -1132,6 +1165,310 @@ def _is_blocked(uuid: str, blocklist: Iterable[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# BCHST-C3 — sub-tier artifact walk + sub-tier age pass + size-cap pass.
+# Spec: docs/plans/2026-09-26-bound-the-claude-home-sub-tier-retention.md
+# ---------------------------------------------------------------------------
+
+_UuidArtifactTuple = Tuple[Path, str, str, int, int]  # path, uuid, artifact_class, size, mtime
+
+
+def _walk_uuid_artifacts(
+    projects_root: Path,
+    blocklist: Iterable[str],
+    watchdog: "_Watchdog",
+) -> List[_UuidArtifactTuple]:
+    """One `os.scandir` recursion over `projects_root`, yielding
+    `(path, uuid, artifact_class, size, mtime)` for every UUID-gated
+    artifact — the single collection pass both the sub-tier age pass and
+    the size-cap pass consume, so neither re-walks the tree.
+
+    The UUID gate is an ALLOWLIST, re-derived here rather than inherited
+    from `sweep_harness`'s own uuid-dir loop: a candidate is admitted only
+    if its first component under `<repo>/` matches `_UUID_RE` as a
+    directory, or it is a `<uuid>.jsonl` whose stem matches. `memory/`, and
+    every other non-UUID name, is never descended into and never counted —
+    this allowlist is what keeps `memory/` unswept, with no second,
+    redundant deny-list check (Anti-scope). A blocklisted UUID's whole
+    subtree, and its `.jsonl`, are skipped AT THE GATE: neither yielded nor
+    walked.
+
+    Depth-1 files directly inside `<uuid>/` (e.g. `ccr-tip.json`) are never
+    yielded — see Design § mtime invariance: unlinking one would reset
+    `<uuid>/`'s own mtime and blind the whole-dir 14-day pass for another
+    14 days. Only files nested one level deeper, inside a class
+    subdirectory (`subagents/`, `tool-results/`, `workflows/`, or any
+    other name — folded into `"other"`), are ever candidates; removing
+    those touches only that subdirectory's mtime, never `<uuid>/`'s own.
+
+    `artifact_class` is one of `"transcript"` (the top-level `<uuid>.jsonl`),
+    `"subagents"` / `"tool-results"` / `"workflows"` (first path component
+    inside `<uuid>/`), or `"other"`.
+
+    Symlinks are never followed and never yielded — every `is_dir`/`is_file`
+    check below passes `follow_symlinks=False`, and every stat is taken the
+    same way.
+    """
+    blocklist = set(blocklist)
+    out: List[_UuidArtifactTuple] = []
+
+    if not projects_root.is_dir():
+        return out
+
+    try:
+        repo_entries = list(os.scandir(projects_root))
+    except OSError:
+        return out
+
+    for repo_entry in repo_entries:
+        if not watchdog.check():
+            return out
+        if not repo_entry.is_dir(follow_symlinks=False):
+            continue
+        repo_path = Path(repo_entry.path)
+        try:
+            child_entries = list(os.scandir(repo_path))
+        except OSError:
+            continue
+        for child in child_entries:
+            if not watchdog.check():
+                return out
+            name = child.name
+            if child.is_dir(follow_symlinks=False):
+                if not _UUID_RE.match(name):
+                    continue  # memory/, or any other non-uuid dir: never descended
+                session_uuid = name
+                if _is_blocked(session_uuid, blocklist):
+                    continue  # whole subtree skipped at the gate
+                _walk_session_dir(Path(child.path), session_uuid, watchdog, out)
+            elif child.is_file(follow_symlinks=False):
+                if not name.endswith(".jsonl"):
+                    continue
+                stem = name[: -len(".jsonl")]
+                if not _UUID_RE.match(stem):
+                    continue
+                if _is_blocked(stem, blocklist):
+                    continue
+                try:
+                    st = child.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                out.append((Path(child.path), stem, "transcript", st.st_size, int(st.st_mtime)))
+            # A symlink is neither `is_dir` nor `is_file` under
+            # `follow_symlinks=False` when it points at a dir/file target —
+            # both checks above evaluate the LINK itself, so it falls
+            # through here, unyielded, un-walked.
+
+    return out
+
+
+def _walk_session_dir(
+    uuid_dir: Path,
+    session_uuid: str,
+    watchdog: "_Watchdog",
+    out: List[_UuidArtifactTuple],
+) -> None:
+    """Depth-1 entries of `<uuid>/`: files are never candidates (mtime
+    invariance); dirs are classified by name and walked."""
+    try:
+        entries = list(os.scandir(uuid_dir))
+    except OSError:
+        return
+    for entry in entries:
+        if entry.is_file(follow_symlinks=False):
+            continue  # depth-1 file: never a candidate
+        if not entry.is_dir(follow_symlinks=False):
+            continue  # depth-1 symlink: never a candidate
+        artifact_class = entry.name if entry.name in ("subagents", "tool-results", "workflows") else "other"
+        _walk_subtree(Path(entry.path), session_uuid, artifact_class, watchdog, out)
+
+
+def _walk_subtree(
+    path: Path,
+    session_uuid: str,
+    artifact_class: str,
+    watchdog: "_Watchdog",
+    out: List[_UuidArtifactTuple],
+) -> None:
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return
+    for entry in entries:
+        if not watchdog.check():
+            return
+        if entry.is_dir(follow_symlinks=False):
+            _walk_subtree(Path(entry.path), session_uuid, artifact_class, watchdog, out)
+        elif entry.is_file(follow_symlinks=False):
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            out.append((Path(entry.path), session_uuid, artifact_class, st.st_size, int(st.st_mtime)))
+
+
+def _sweep_subtier_age(
+    tuples: List[_UuidArtifactTuple],
+    *,
+    now: int,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    emit_fn: Optional[EmitFn],
+    watchdog: "_Watchdog",
+) -> Tuple[int, int]:
+    """Answers: which sub-artifact class ages out, and when.
+
+    Evicts every tuple whose `artifact_class` has a window in
+    `_SUBTIER_AGE_WINDOWS` and whose age exceeds it, oldest-first
+    (unbounded by a byte budget — only the watchdog can stop it early).
+    `tool-results` (and every class absent from the table) is never a
+    candidate here.
+
+    In-process `_delete_file` per candidate — zero spawns, mirroring the
+    existing jsonl-transcript arm of `sweep_harness`.
+    """
+    candidates = [
+        t for t in tuples
+        if _SUBTIER_AGE_WINDOWS.get(t[2]) is not None
+        and (now - t[4]) > _SUBTIER_AGE_WINDOWS[t[2]]
+    ]
+    candidates.sort(key=lambda t: (t[4], str(t[0])))  # oldest first, tie-break by path
+
+    total_bytes = 0
+    total_items = 0
+
+    for path, _uuid, artifact_class, size, mtime in candidates:
+        if not watchdog.check():
+            _banner(
+                f"[cruft-sweep] wall-clock ceiling bail on subtier age sweep "
+                f"after {total_items} candidates evicted; will finish next run",
+                quiet=quiet,
+            )
+            break
+
+        age_sec = now - mtime
+        threshold_sec = _SUBTIER_AGE_WINDOWS[artifact_class]
+        evidence = f"subtier {artifact_class} mtime {age_sec}s > threshold {threshold_sec}s"
+
+        if apply:
+            if not _delete_file(path):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {path}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("harness", str(path), path.name, size, mtime,
+                               "prune-failed", evidence + "; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
+
+        total_bytes += size
+        total_items += 1
+
+        if json_mode:
+            emit_jsonl("harness", str(path), path.name, size, mtime, "auto-prune", evidence, emit_fn=emit_fn)
+
+    if not json_mode and not quiet and total_items > 0:
+        mode_label = "APPLY" if apply else "DRY-RUN"
+        _banner(f"[cruft-sweep] subtier ({mode_label}): {total_items} items reclaimed", quiet=False)
+
+    return total_bytes, total_items
+
+
+def _sweep_projects_size_cap(
+    tuples: List[_UuidArtifactTuple],
+    *,
+    projects_root: Path,
+    size_cap_bytes: int,
+    size_cap_mtime_floor_secs: int,
+    now: int,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    emit_fn: Optional[EmitFn],
+    watchdog: "_Watchdog",
+) -> Tuple[int, int]:
+    """Answers: which oldest eligible files take the tree under budget.
+
+    `tuples` must already have the whole-dir pass's and the sub-tier
+    pass's own CANDIDATE sets excluded (virtually — not only what apply
+    actually deleted), so dry-run and apply compute the identical eviction
+    set on the identical fixture (Design § Size-cap pass; T6/T6b).
+    `memory/` and blocklisted sessions are never in `tuples` at all (the
+    walk's own gate), so they can never be evicted and are never counted
+    in the total either.
+
+    The mtime floor is absolute: no amount of size pressure lowers it. When
+    the eligible list is exhausted with the total still over cap because
+    every remaining candidate is younger than the floor, this emits one
+    skip record per floor-protected candidate plus exactly one
+    `size-cap-residue` record carrying the unreachable overage in
+    `size_bytes` (Design § Cap semantics). A watchdog bail emits its own
+    banner instead, with no residue row — the remaining overage is then
+    unmeasured, not protected.
+    """
+    total = sum(t[3] for t in tuples)
+    if total <= size_cap_bytes:
+        return 0, 0
+
+    ordered = sorted(tuples, key=lambda t: (t[4], str(t[0])))  # oldest first, tie-break by path
+
+    total_bytes = 0
+    total_items = 0
+    floor_skipped: List[_UuidArtifactTuple] = []
+    bailed = False
+
+    for path, _uuid, _artifact_class, size, mtime in ordered:
+        if total <= size_cap_bytes:
+            break
+        if not watchdog.check():
+            _banner(
+                f"[cruft-sweep] wall-clock ceiling bail on size-cap sweep "
+                f"after {total_items} candidates evicted; will finish next run",
+                quiet=quiet,
+            )
+            bailed = True
+            break
+
+        age_sec = now - mtime
+        if age_sec <= size_cap_mtime_floor_secs:
+            floor_skipped.append((path, _uuid, _artifact_class, size, mtime))
+            continue
+
+        evidence = f"size-cap oldest-first mtime {age_sec}s, total {total} > cap {size_cap_bytes}"
+
+        if apply:
+            if not _delete_file(path):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {path}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("harness", str(path), path.name, size, mtime,
+                               "prune-failed", evidence + "; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
+
+        total -= size
+        total_bytes += size
+        total_items += 1
+
+        if json_mode:
+            emit_jsonl("harness", str(path), path.name, size, mtime, "auto-prune", evidence, emit_fn=emit_fn)
+
+    if not bailed and total > size_cap_bytes and floor_skipped:
+        if json_mode:
+            for path, _uuid, _artifact_class, size, mtime in floor_skipped:
+                emit_jsonl("harness", str(path), path.name, size, mtime,
+                           "skip", "size-cap mtime floor", emit_fn=emit_fn)
+            residue_bytes = total - size_cap_bytes
+            emit_jsonl("harness", str(projects_root), "size-cap-residue", residue_bytes, now,
+                       "skip", "size-cap residue protected-by-floor", emit_fn=emit_fn)
+        else:
+            residue_bytes = total - size_cap_bytes
+        if not quiet:
+            _banner(f"[cruft-sweep] size-cap residue: {residue_bytes} bytes protected by mtime floor", quiet=False)
+    elif not bailed and total_items > 0 and not quiet:
+        _banner(f"[cruft-sweep] size-cap: {total_items} items reclaimed, tree now at/under cap", quiet=False)
+
+    return total_bytes, total_items
+
+
+# ---------------------------------------------------------------------------
 # Phase A: harness retention sweep
 # ---------------------------------------------------------------------------
 
@@ -1148,10 +1485,15 @@ def sweep_harness(
     log_path: Optional[Path] = None,
     watchdog_ceiling_secs: Optional[float] = None,
     emit_fn: Optional[EmitFn] = None,
+    size_cap_bytes: int = _PROJECTS_SIZE_CAP_BYTES_DEFAULT,
+    size_cap_mtime_floor_secs: int = _SIZE_CAP_MTIME_FLOOR_SECS_DEFAULT,
 ) -> Tuple[int, int]:
     """Sweep projects/<repo>/<uuid>/ dirs, projects/<repo>/<uuid>.jsonl files,
     and file-history/<uuid>/ dirs older than `days`, skipping any UUID present
-    in `blocklist`. Returns (total_bytes, total_items)."""
+    in `blocklist`. Also runs the sub-tier age pass (`_SUBTIER_AGE_WINDOWS`)
+    and the `projects_root` size-cap pass (`_sweep_projects_size_cap`) after
+    the uuid/jsonl pass and before the file-history pass (BCHST-C3; Design §
+    Sub-tier age pass / Size-cap pass). Returns (total_bytes, total_items)."""
     blocklist = set(blocklist)
     now = int(time.time())
     threshold_sec = days * 86400
@@ -1161,6 +1503,21 @@ def sweep_harness(
     pruned_fh_dirs = 0
     total_bytes = 0
     skipped_blocked = 0
+
+    # One walk, taken up front against the pre-mutation tree, feeding both
+    # new passes below — neither re-walks projects_root. Its own watchdog is
+    # separate from `wd`/`wd2` (the existing uuid/jsonl and fh passes), and
+    # from `wd_subtier_cap` (shared by the two new passes, per Design §
+    # Watchdog: "The two new passes share one new _Watchdog(...), the same
+    # shape as wd2").
+    subtier_tuples = _walk_uuid_artifacts(projects_root, blocklist, _Watchdog(watchdog_ceiling_secs))
+
+    # jsonl transcripts that are themselves aging-pass candidates (tracked
+    # here, at the point the existing jsonl loop below decides candidacy),
+    # so the size-cap pass can exclude their "transcript"-class tuple from
+    # its total the same way in dry-run and apply — virtually, not only
+    # what apply actually deleted (Design § Size-cap pass).
+    jsonl_candidate_uuids: set = set()
 
     wd = _Watchdog(watchdog_ceiling_secs)
     wd_uuid_bail = False
@@ -1229,6 +1586,12 @@ def sweep_harness(
                                        "skip", "predecessor uuid in active handoff", emit_fn=emit_fn)
                         continue
 
+                    # Candidate regardless of apply/delete outcome, so the
+                    # size-cap pass can virtually exclude this uuid's
+                    # "transcript" tuple from its total the same way in
+                    # dry-run and apply (Design § Size-cap pass).
+                    jsonl_candidate_uuids.add(file_name)
+
                     fsize = _file_size(jsonl_file)
 
                     if apply:
@@ -1272,6 +1635,56 @@ def sweep_harness(
             emit_jsonl("harness", str(uuid_dir), dir_name, size_bytes, mtime,
                        "auto-prune", f"projects dir mtime {age_sec}s > threshold {threshold_sec}s",
                        emit_fn=emit_fn)
+
+    # ------------------------------------------------------------------
+    # BCHST-C3 — sub-tier age pass + size-cap pass. Runs after the
+    # existing uuid/jsonl pass and before the fh-dir pass (Design §
+    # Sub-tier age pass / Size-cap pass), against the one walk taken at
+    # the top of this function.
+    # ------------------------------------------------------------------
+    whole_dir_candidate_uuids = {name for (_d, name, _m, _a, _s) in uuid_candidates}
+
+    wd_subtier_cap = _Watchdog(watchdog_ceiling_secs)
+    # Attribution note: a trip of `wd_subtier_cap` during the sub-tier-age
+    # pass silently caps how much budget the size-cap pass below gets, since
+    # both passes share this one instance — a "size-cap pass never runs" bug
+    # report should look at the sub-tier-age pass's own runtime first.
+
+    subtier_bytes, subtier_items = _sweep_subtier_age(
+        subtier_tuples,
+        now=now, apply=apply, json_mode=json_mode, quiet=quiet,
+        emit_fn=emit_fn, watchdog=wd_subtier_cap,
+    )
+    total_bytes += subtier_bytes
+
+    # Exclude, virtually (candidate sets, not only what apply actually
+    # deleted — Design § Size-cap pass), everything the whole-dir pass and
+    # the sub-tier pass would already have reaped, so dry-run and apply
+    # compute the identical size-cap eviction set (T6/T6b):
+    #   - a non-transcript tuple whose uuid is a whole-dir candidate: the
+    #     entire <uuid>/ subtree is going away regardless of this pass.
+    #   - a transcript tuple whose uuid's <uuid>.jsonl is itself a jsonl
+    #     candidate: that sibling file is going away regardless.
+    #   - any tuple the sub-tier age pass's own window already claims.
+    cap_eligible_tuples = [
+        t for t in subtier_tuples
+        if not (t[2] != "transcript" and t[1] in whole_dir_candidate_uuids)
+        and not (t[2] == "transcript" and t[1] in jsonl_candidate_uuids)
+        and not (
+            _SUBTIER_AGE_WINDOWS.get(t[2]) is not None
+            and (now - t[4]) > _SUBTIER_AGE_WINDOWS[t[2]]
+        )
+    ]
+
+    cap_bytes_reclaimed, cap_items = _sweep_projects_size_cap(
+        cap_eligible_tuples,
+        projects_root=projects_root,
+        size_cap_bytes=size_cap_bytes,
+        size_cap_mtime_floor_secs=size_cap_mtime_floor_secs,
+        now=now, apply=apply, json_mode=json_mode, quiet=quiet,
+        emit_fn=emit_fn, watchdog=wd_subtier_cap,
+    )
+    total_bytes += cap_bytes_reclaimed
 
     # fh_dir deletion likewise deferred into one batched call below --
     # fh_dirs are direct, non-nested children of file_history_root.
@@ -1330,14 +1743,21 @@ def sweep_harness(
                        "auto-prune", f"file-history dir mtime {age_sec}s > threshold {threshold_sec}s",
                        emit_fn=emit_fn)
 
-    total_items = pruned_dirs + pruned_jsonl + pruned_fh_dirs
+    # The pre-existing banner below is computed from the pre-existing
+    # (dirs + jsonl + fh-dirs) breakdown ONLY, and stays byte-identical
+    # whenever the two new passes act on nothing (Design § Emission): the
+    # new passes emit their own summary banner lines instead of editing
+    # this one. `total_items` (the function's return value) is the grand
+    # total across all five passes.
+    harness_items = pruned_dirs + pruned_jsonl + pruned_fh_dirs
+    total_items = harness_items + subtier_items + cap_items
     total_mb = total_bytes // 1048576
 
     if not json_mode and not quiet:
         mode_label = "APPLY" if apply else "DRY-RUN"
         skip_suffix = f", {skipped_blocked} skipped (active handoff)" if skipped_blocked else ""
         _banner(
-            f"[cruft-sweep] harness ({mode_label}, >{days}d): {total_items} items "
+            f"[cruft-sweep] harness ({mode_label}, >{days}d): {harness_items} items "
             f"({pruned_dirs} dirs + {pruned_jsonl} jsonl + {pruned_fh_dirs} fh-dirs), "
             f"~{total_mb} MB reclaimable{skip_suffix}",
             quiet=False,
@@ -2300,8 +2720,16 @@ def _run_all_phases(
     whitelist: Iterable[str],
     settings_home: Optional[Path],
     emit_fn: Optional[EmitFn],
+    projects_size_cap_gib: float = 2.0,
+    size_cap_mtime_floor_hours: float = 24.0,
 ) -> dict:
     """Run every requested sweep phase (blocking) and return the totals dict.
+
+    `projects_size_cap_gib`/`size_cap_mtime_floor_hours` are BCHST-C3's new
+    tunables, resolved by the DoE driver from machine-local and passed
+    through unconverted; only `sweep_harness` (the "harness" branch below)
+    consumes them, converted to bytes/seconds there — this function never
+    reads machine-local itself.
 
     Module-level (not a nested closure of `_run_handler`) precisely so
     `_run_handler` invokes it through exactly one `asyncio.to_thread` hop
@@ -2334,6 +2762,8 @@ def _run_all_phases(
             projects_root, file_history_root, days, blocklist,
             apply=apply, json_mode=json_mode, quiet=quiet,
             log_path=log_path, emit_fn=emit_fn,
+            size_cap_bytes=int(projects_size_cap_gib * 1024**3),
+            size_cap_mtime_floor_secs=int(size_cap_mtime_floor_hours * 3600),
         )
     if class_ in ("scratch", "all"):
         scratch_bytes, scratch_items = sweep_scratch(
@@ -2439,6 +2869,11 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         parent_roots (list[str], default [])
         whitelist (list[str], default [])
         settings_home (str, optional)
+        projects_size_cap_gib (float, default 2) — harness size-cap tunable
+            (BCHST-C3); resolved by the DoE driver from machine-local, never
+            read from machine-local here.
+        size_cap_mtime_floor_hours (float, default 24) — harness size-cap
+            mtime floor tunable (BCHST-C3), same resolution contract.
     """
     class_ = params.get("class_", params.get("class", "all"))
     apply = bool(params.get("apply", False))
@@ -2446,6 +2881,8 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     quiet = bool(params.get("quiet", False))
     days = int(params.get("days", 14))
     scratch_age_days = int(params.get("scratch_age_days", 7))
+    projects_size_cap_gib = float(params.get("projects_size_cap_gib", 2))
+    size_cap_mtime_floor_hours = float(params.get("size_cap_mtime_floor_hours", 24))
 
     home = Path.home()
     projects_root = Path(params.get("projects_root", str(home / ".claude" / "projects")))
@@ -2498,7 +2935,7 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             class_, apply, json_mode, quiet, days, scratch_age_days,
             projects_root, file_history_root, handoffs_dir, log_path,
             repo_root_override, parent_roots, whitelist, settings_home,
-            emit_fn,
+            emit_fn, projects_size_cap_gib, size_cap_mtime_floor_hours,
         )
     finally:
         release_lock(lock_dir)

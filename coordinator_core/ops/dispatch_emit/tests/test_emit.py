@@ -456,7 +456,7 @@ def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path)
         "  surface: docs/plans/2026-08-13-example.md\n"
         "  writes:\n"
         "    - docs/plans/2026-08-13-example.md\n"
-        "  agent_type: coordinator:review-integrator\n"
+        "  agent_type: coordinator:code-reviewer\n"
         "  agent_model: sonnet\n",
     )
 

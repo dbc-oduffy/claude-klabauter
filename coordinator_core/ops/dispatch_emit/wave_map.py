@@ -75,6 +75,22 @@ graph entirely, transitively (a row that itself depends on a held row
 cannot run against a predecessor that did not run), and reports every held
 row by id via ``logging.warning`` before deriving waves from what remains.
 
+## BLOCKED-predecessor holdout (2026-09-26, IBMFR-R01)
+
+A depends_on edge gated ``output-consumption-runtime`` OR ``epistemic-premise``
+whose target chunk is absent from this pass's row set — because that
+predecessor's disposition or run state is BLOCKED, however that absence
+reached this pure function — withholds the dependent row, together with its
+transitive dependents, exactly like the epistemic-premise holdout below:
+see ``_blocked_predecessor_gates`` / ``_compute_held_out`` route 2. Without
+this, ``_predecessors``'s ``chunk in row_ids`` guard silently drops the
+edge (nothing present to order against) and the dependent schedules as if
+unblocked — the bug this holdout closes. This module has no channel of its
+own for a BLOCKED *run-time* verdict beyond a predecessor's simple absence
+from ``rows``; a dedicated runtime-BLOCKED signal, if one is needed beyond
+that, is emit.py's to carry in (tracked as a follow-up edge onto R22, not
+done here).
+
 This is a scheduling decision, not a disposition mutation — a held row
 carries no changed ``disposition``/``deferred``/``writes``/anything; it
 simply does not appear in this call's wave output, and re-appears once a
@@ -99,11 +115,11 @@ no mutation of its inputs.
 Negative-spec:
   - Does NOT re-derive the UNDECLARED-vs-empty distinction; it trusts
     ``spine_read``'s sentinel via identity check.
-  - Does NOT reuse ``fan_out_integrator._check_overlap`` as-is — that helper
-    validates a caller-supplied partition (raises on overlap); this module
-    DERIVES a partition from scratch, which is a different problem shape.
-    Its exact-string-equality comparison is also insufficient here (see
-    point 1 above) and is not carried over.
+  - Does NOT reuse the retired ``fan_out_integrator`` op's overlap helper as-is —
+    that helper validated a caller-supplied partition (raises on overlap);
+    this module DERIVES a partition from scratch, which is a different
+    problem shape. Its exact-string-equality comparison is also insufficient
+    here (see point 1 above) and is not carried over.
   - Does NOT special-case ``gate_kind`` beyond carrying it through and the
     one named epistemic-premise holdout above — every other gate kind
     orders identically (see module docstring above).
@@ -335,6 +351,42 @@ def _epistemic_premise_predecessors(row: EmitterRow) -> list[str]:
     ]
 
 
+_RUNTIME_ORDER_GATE_KINDS = frozenset({"output-consumption-runtime", _EPISTEMIC_PREMISE})
+
+
+def _blocked_predecessor_gates(
+    row: EmitterRow, row_ids: set[str]
+) -> list[tuple[str, str]]:
+    """``(chunk, gate_kind)`` pairs for this row's ``depends_on`` edges that
+    name ``output-consumption-runtime`` or ``epistemic-premise`` and target a
+    chunk absent from ``row_ids`` — this pass's dispatchable-row set.
+
+    A predecessor can be absent from ``rows`` for any reason ``read_spine``
+    excludes a row (closed disposition, ``deferred: true``, an uncleared
+    execution gate, ...), or because a caller-supplied BLOCKED run-time
+    verdict withheld it upstream — from this pure function's vantage every
+    one of those reads identically as "the predecessor did not make it into
+    this pass", which is exactly the row-body's "disposition or run state is
+    BLOCKED" signal. ``_predecessors``'s ``chunk in row_ids`` guard silently
+    DROPS such an edge (nothing to order against); this helper is what turns
+    that drop into a hold instead of a silent, unblocked schedule — a
+    depends_on gate onto a missing/BLOCKED predecessor must withhold the
+    dependent, never wave it through because the predecessor happens not to
+    be here to object.
+
+    Every other ``gate_kind`` (or an edge with none declared) orders no
+    differently than before this row existed — only these two runtime-order
+    kinds carry this hold; see module docstring point 2.
+    """
+    return [
+        (edge.get("chunk"), edge.get("gate_kind"))
+        for edge in row.depends_on
+        if isinstance(edge, dict)
+        and edge.get("gate_kind") in _RUNTIME_ORDER_GATE_KINDS
+        and edge.get("chunk") not in row_ids
+    ]
+
+
 def _compute_held_out(
     rows: list[EmitterRow], preds: dict[str, set[str]]
 ) -> dict[str, str]:
@@ -342,21 +394,28 @@ def _compute_held_out(
     from the wave graph (§ Epistemic-premise holdout in the module
     docstring).
 
-    Two membership routes, both computed here rather than trusted from a
+    Three membership routes, all computed here rather than trusted from a
     caller:
 
-      1. Direct — the row carries an ``epistemic-premise`` depends_on edge
-         AND its own ``writes`` is UNDECLARED (both halves required; see
-         module docstring predicate).
-      2. Transitive — the row (transitively, via ``preds``, which already
+      1. Direct (epistemic-premise, undeclared writes) — the row carries an
+         ``epistemic-premise`` depends_on edge AND its own ``writes`` is
+         UNDECLARED (both halves required; see module docstring predicate).
+      2. Direct (BLOCKED predecessor) — the row carries a depends_on edge
+         gated ``output-consumption-runtime`` or ``epistemic-premise`` whose
+         target chunk is absent from this pass's row set (see
+         ``_blocked_predecessor_gates``) — the predecessor is BLOCKED (by
+         disposition or run state), so the edge's ordering cannot be
+         honoured and the dependent is withheld rather than let through.
+      3. Transitive — the row (transitively, via ``preds``, which already
          combines depends_on and read-after-write edges) depends on a row
-         already held for either reason. A row cannot run against a
-         predecessor that did not run.
+         already held for any of the above reasons. A row cannot run against
+         a predecessor that did not run.
 
     ``preds`` must be derived from the FULL ``rows`` list (before any
     holdout filtering) — the transitive walk needs every edge, including
-    ones pointing at rows route 1 is about to hold.
+    ones pointing at rows route 1 or 2 is about to hold.
     """
+    row_ids = {row.id for row in rows}
     reasons: dict[str, str] = {}
     for row in rows:
         gates = _epistemic_premise_predecessors(row)
@@ -365,6 +424,19 @@ def _compute_held_out(
                 "epistemic-premise gate on "
                 + ", ".join(gates)
                 + ", surface not yet declared"
+            )
+
+    for row in rows:
+        if row.id in reasons:
+            continue
+        blocked_gates = _blocked_predecessor_gates(row, row_ids)
+        if blocked_gates:
+            names = ", ".join(
+                f"{chunk} (gate_kind={gate_kind})" for chunk, gate_kind in blocked_gates
+            )
+            reasons[row.id] = (
+                "depends_on predecessor BLOCKED (not present in this pass): "
+                + names
             )
 
     changed = True

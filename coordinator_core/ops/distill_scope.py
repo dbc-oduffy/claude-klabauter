@@ -428,7 +428,9 @@ def compute_scope(
         wiki_path = worktree_root / wiki_dir
         if not wiki_path.is_dir():
             continue
-        for md_file in sorted(wiki_path.glob("*.md")):
+        for md_file in sorted(wiki_path.rglob("*.md")):
+            if md_file.name == "_index.md" or md_file.name.startswith("."):
+                continue
             slug = slugify_stem(md_file.stem)
             wiki_slugs_map.setdefault(slug, rel_id(md_file, worktree_root))
     # C9's manifest_schema.make_scope_manifest types wiki_slugs as list[str] (its

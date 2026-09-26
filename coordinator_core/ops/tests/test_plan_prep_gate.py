@@ -195,6 +195,16 @@ def test_the_report_names_the_build_that_computed_it(tmp_path):
     assert set(report["engine_build"]) == {"engine_sha", "engine_dirty"}
 
 
+def test_the_engine_sha_field_is_present_and_non_empty(tmp_path):
+    """R10: the provenance field names the engine source commit the verdict
+    was computed at — present AND non-empty, not merely a key that could
+    carry `None` on a mirror outside any git repo."""
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path)
+    report = _gate({"plan": rel}, common)
+    assert report["engine_build"]["engine_sha"]
+
+
 def test_the_build_is_the_engines_own_not_the_gated_repos(tmp_path):
     from coordinator_core import engine_version
 

@@ -237,7 +237,7 @@ def test_archive_dir_is_loud_tier_not_quiet(repo_root: Path) -> None:
 
 
 def test_subagent_share_sidecar_quoting_its_own_finding_is_allowed(repo_root: Path) -> None:
-    target = repo_root / "state" / "subagent-share" / "some-session" / "coordinatorreview-integrator-abc.md"
+    target = repo_root / "state" / "subagent-share" / "some-session" / "coordinatorcode-reviewer-abc.md"
     target.parent.mkdir(parents=True)
     offending = "Finding: drive-letter citation -- `" + "X:" + r"\Users\realperson\notes.txt`"
     out = check(_write_payload(str(target), offending))

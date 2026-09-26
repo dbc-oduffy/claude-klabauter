@@ -49,6 +49,13 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
        `<claude-klabauter-live-root>/coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`?
        Detect-only (P105-C5): a content-stale shim is reported, never
        silently overwritten — see `_check_shim_freshness`'s own docstring.
+    7. Hook-command interpreter resolvability — for each DISTINCT interpreter
+       named across every registered hook command (hooks.json + the
+       settings.json hooks block), does it resolve via `shutil.which` against
+       this process's PATH? An unresolvable interpreter means every hook
+       command using it fails open, so the guards it was meant to run
+       silently never run. Detect-only, no spawn — see
+       `_check_hook_interpreter_resolvability`'s own docstring.
 
 REPAIR POSTURE — what this command fixes vs. only reports, and why
     Exactly one layer is auto-repairable, and only when `--fix` is passed
@@ -78,6 +85,7 @@ import re
 import json
 import os
 import shlex
+import shutil
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -984,6 +992,90 @@ def _check_shim_freshness() -> Layer:
     return Layer(name, status, findings)
 
 
+def _check_hook_interpreter_resolvability() -> Layer:
+    """Layer 7 — item 7.1: does each DISTINCT hook-command interpreter
+    resolve on this process's PATH?
+
+    A registered script existing on disk (layer 2's check) says nothing
+    about whether the interpreter that would run it is reachable at all —
+    an interpreter absent from PATH fails the same way `fail_open_launcher`
+    is built to tolerate: silently, with the guard simply never running.
+    That is the consequence this layer's Finding names, not merely "this
+    binary is missing".
+
+    Reads the same two hooks docs `_check_hook_registration` reads
+    (hooks.json under the resolved DoE-claude content root, and any `hooks`
+    block inside `~/.claude/settings.json`), collects each command
+    registration's argv[0] basename — case-folded and `.exe`-stripped, the
+    same normalization `_extract_script_path` already applies, so a native
+    Windows absolute interpreter path is treated the same as a POSIX bareword
+    — and resolves each DISTINCT one exactly once with `shutil.which`. No
+    spawn: only `shutil.which` (a PATH stat) and a file read.
+
+    Absence of a check is not a pass: no readable hooks doc at all is
+    UNKNOWN, never OK — this module's own stated rule (see module docstring,
+    "Absence of a check must not read as the check passing").
+    """
+    name = "Hook-command interpreter resolvability"
+    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+
+    doe_root = coordinator_doe_root()
+    doc_candidates: List[tuple[Path, str]] = []
+    content_root = content_root_for(doe_root)
+    if content_root is not None:
+        doc_candidates.append((content_root / "hooks" / "hooks.json", "hooks.json"))
+    doc_candidates.append((_config_dir() / "settings.json", "settings.json hooks block"))
+
+    # interpreter basename -> count of hook command registrations using it.
+    interpreters: dict = {}
+    any_doc_readable = False
+    for doc_path, _label in doc_candidates:
+        if not doc_path.is_file():
+            continue
+        try:
+            with doc_path.open("r", encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            # Unreadable/unparsable is already a `broken` finding under
+            # layer 2 (hook registration); this layer only needs a resolvable
+            # interpreter list and has nothing further to add for this doc.
+            continue
+        any_doc_readable = True
+        for _event, _m_idx, _h_idx, argv, hook_type in _iter_hook_commands(doc):
+            if hook_type != "command" or not argv:
+                continue
+            interpreter = os.path.basename(argv[0].replace("\\", "/")).lower()
+            if interpreter.endswith(".exe"):
+                interpreter = interpreter[: -len(".exe")]
+            if not interpreter:
+                continue
+            interpreters[interpreter] = interpreters.get(interpreter, 0) + 1
+
+    if not any_doc_readable:
+        return Layer(
+            name,
+            "unknown",
+            [Finding("info", f"{name}: no readable hooks doc found — nothing to check.")],
+        )
+    if not interpreters:
+        return Layer(name, "ok", [])
+
+    findings: List[Finding] = []
+    status = "ok"
+    for interpreter, count in sorted(interpreters.items()):
+        if shutil.which(interpreter) is None:
+            status = "broken"
+            findings.append(
+                Finding(
+                    "broken",
+                    f"hook interpreter '{interpreter}' does not resolve on PATH — "
+                    f"every hook command using it ({count}) fails open, so its guard(s) "
+                    "are not running.",
+                )
+            )
+    return Layer(name, status, findings)
+
+
 def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report = DoctorReport()
     report.layers.append(_check_sibling_resolution())
@@ -992,6 +1084,7 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_kill_switch_marker())
     report.layers.append(_check_hook_generation_currency())
     report.layers.append(_check_shim_freshness())
+    report.layers.append(_check_hook_interpreter_resolvability())
 
     fix_report: List[str] = []
     if fix:

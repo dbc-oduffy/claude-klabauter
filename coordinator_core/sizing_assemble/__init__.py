@@ -314,7 +314,28 @@ TSHIRT_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
 TSHIRT_WEIGHT = {"XS": 1, "S": 2, "M": 4, "L": 8, "XL": 16, "XXL": 32}
 
 APPETITE_ENUM = ("small", "medium", "large")
-ROUTE_ENUM = ("dispatch", "spec-dispatch", "shape", "plan", "roadmap", "pm-decision", "goal-setting")
+ROUTE_ENUM = (
+    "dispatch",
+    "spec-dispatch",
+    "shape",
+    "plan",
+    "roadmap",
+    "pm-decision",
+    "goal-setting",
+    # APPENDED (R7, C2): a typed `repo_span` input mapping deterministically
+    # to a route, extending the table rather than overriding it. Never
+    # re-sorted — enum ORDER is load-bearing against DoE's
+    # EQUAL_VERSION_SHAPE_DRIFT gate.
+    "first-person",
+)
+
+# REPO_SPAN_ENUM: the sizing EM's caller-declared answer to "is this
+# single-repo work?" (R7). `None` (absent) means "not declared" and changes
+# nothing -- an omitted flag fails toward the heavier `plan` path, never into
+# `first-person`. There is no `multi` value: nothing routes, narrates, or
+# teaches differently on it than on absent, and multi-repo work is anti-scope
+# here (module docstring's negative-spec siblings apply identically).
+REPO_SPAN_ENUM = ("single",)
 FORK_ENUM = ("cut_to_fit", "raise_appetite")
 XL_EXIT_ENUM = ("split", "shape", "roadmap", "accept_multi_session")
 DETENT_ENUM = (
@@ -364,6 +385,9 @@ _PROBE_RAISE_SUPPRESSION_DETENT = {
 _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 
 # Adding a KEY for a new size (XXL, below) is an EXTENSION of this table's
+# HARD GATE. Likewise, a typed input mapping deterministically to a route
+# (`repo_span`, R7, C2) is an extension of this table, as the D5 shape
+# inputs already are, and not an override -- sizing stays the gate.
 _BASE_ROUTE_BY_TSHIRT = {
     "XS": "dispatch",
     "S": "spec-dispatch",
@@ -430,6 +454,13 @@ def _validate_boundary_in_notch(boundary_in_notch: Optional[str]) -> None:
         )
 
 
+def _validate_repo_span(repo_span: Optional[str]) -> None:
+    if repo_span is not None and repo_span not in REPO_SPAN_ENUM:
+        raise SizingAssembleError(
+            f"repo_span must be one of (None, {REPO_SPAN_ENUM}), got {repo_span!r}"
+        )
+
+
 def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
     if scout_evidence_kind is not None and scout_evidence_kind not in SCOUT_EVIDENCE_KIND_ENUM:
         raise SizingAssembleError(
@@ -485,6 +516,10 @@ _LOBBY_CHAINS = {
         "scoped code-reviewer + review-integrator",
     ],
     "plan": ["plan", "plan review", "execute-plan"],
+    # first-person (R7): the EM builds the work itself and delegates only
+    # review -- no plan file, no executor dispatch, no wave polling. Terminal
+    # is forced to quick-wrap below regardless of tshirt (Design, § R7).
+    "first-person": ["the work", "named reviewer on the diff"],
 }
 
 _ROOM_ENTRY = {
@@ -544,7 +579,7 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
     """
     terminal = (
         "quick-wrap"
-        if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS
+        if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS or resolved_route == "first-person"
         else "/workstream-complete"
     )
 
@@ -661,6 +696,7 @@ def route(
     intent_source: Optional[str] = None,
     precedent: Optional[str] = None,
     probe_raise_basis: Optional[str] = None,
+    repo_span: Optional[str] = None,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
@@ -700,6 +736,14 @@ def route(
             `mention-count` sets the advisory `scout_evidence_mention_count`
             detent. A typed field BESIDE the free text; `scout_evidence`
             itself is still never parsed. Never alters `route` or `xl_exit`.
+        repo_span: None | "single" -- the sizing EM's caller-declared answer
+            to "is this single-repo work?" (R7). `None` means not declared
+            and changes nothing: the resolved t-shirt still routes through
+            `_BASE_ROUTE_BY_TSHIRT`. When the resized t-shirt is "M",
+            `repo_span == "single"`, and no shape-entry condition fires
+            (neither `jtbd_unclear` nor `well_trodden_step_change`), the
+            route resolves to `"first-person"` instead of `"plan"`. There is
+            no "multi" value (module docstring's negative-spec).
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate, stages,
@@ -711,6 +755,7 @@ def route(
     _validate_probe_signal(probe_signal)
     _validate_premise_provenance(premise_provenance)
     _validate_boundary_in_notch(boundary_in_notch)
+    _validate_repo_span(repo_span)
     _validate_scout_evidence_kind(scout_evidence_kind)
     _validate_intent_source(intent_source)
     _validate_precedent(precedent)
@@ -762,6 +807,15 @@ def route(
     if (resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear) or well_trodden_step_change:
         resolved_route = "shape"
         detents.append("scope_boundary_acknowledged")
+    elif resized_tshirt == "M" and repo_span == "single" and not jtbd_unclear:
+        # R7: a typed input mapping deterministically to a route, an
+        # extension of the table (like the D5 shape inputs), not an
+        # override -- sizing stays the gate. `jtbd_unclear` is checked here
+        # even though it does not gate the shape arm at "M" (_LARGE_TSHIRTS
+        # excludes M): an unclear JTBD is evidence against the first-person
+        # shortcut regardless of whether it crosses the shape-route size
+        # threshold.
+        resolved_route = "first-person"
     else:
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
@@ -844,6 +898,13 @@ def route(
         )
     elif resolved_route == "shape":
         next_move = "Route to /shape for PM problem-alignment before plan/roadmap."
+    elif resolved_route == "first-person":
+        next_move = (
+            "First-person: build it yourself, no plan file. Baseline check/test, then "
+            "one module, its test, a scoped run while working, a final sweep, then one "
+            "named reviewer on the diff. No executor dispatch, no wave polling, no "
+            "double validation."
+        )
     elif resolved_route == "spec-dispatch":
         next_move = (
             "Route to a light plan artifact (scope_mode: spec-dispatch): substrate "
@@ -1014,7 +1075,8 @@ def _usage(prog: str, stream=None) -> int:
         "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
         "[--name <short label>] "
         "[--precedent shipped-before|novel] "
-        "[--probe-raise-basis ask-scope|substrate-condition|breadth]",
+        "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
+        "[--repo-span single]",
         file=stream,
     )
     return EXIT_USAGE
@@ -1039,6 +1101,7 @@ def main(argv: list[str]) -> int:
     name = None
     precedent = None
     probe_raise_basis = None
+    repo_span = None
     scout_evidence: list[str] = []
 
     i = 0
@@ -1092,6 +1155,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--probe-raise-basis" and i + 1 < len(argv):
             probe_raise_basis = argv[i + 1]
             i += 2
+        elif tok == "--repo-span" and i + 1 < len(argv):
+            repo_span = argv[i + 1]
+            i += 2
         elif tok == "--json":
             i += 1
         else:
@@ -1117,6 +1183,7 @@ def main(argv: list[str]) -> int:
             intent_source=intent_source,
             precedent=precedent,
             probe_raise_basis=probe_raise_basis,
+            repo_span=repo_span,
             name=name,
         )
     except SizingAssembleError as exc:

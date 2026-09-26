@@ -37,7 +37,7 @@ commits: []
 
 _PROVISIONED_SHAPE = """---
 status: open
-agent_type: coordinator:review-integrator
+agent_type: coordinator:code-reviewer
 spawned_at: 2026-08-16T00:00:00+00:00
 lead_session_id: abc123
 divergence:

@@ -223,6 +223,24 @@ def test_compute_scope_wiki_inventory_default_dirs(fixture_repo):
     }
 
 
+def test_compute_scope_wiki_inventory_indexes_nested_pages(fixture_repo):
+    """C3 (ANWH): the navigable-hierarchy wiki nests family pages under a
+    family directory. wiki_slugs must index a nested page (rglob, not the
+    prior top-level-only glob), keyed and pathed exactly as a top-level page,
+    and must never index a generated _index.md."""
+    _write(fixture_repo / "docs" / "wiki" / "fam.md", "# Fam\n")
+    _write(fixture_repo / "docs" / "wiki" / "fam" / "child.md", "# Child\n")
+    _write(fixture_repo / "docs" / "wiki" / "fam" / "_index.md", "# Index\n")
+
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    slugs = wiki_slugs_as_dict(result.manifest)
+
+    assert slugs["fam"] == "docs/wiki/fam.md"
+    assert slugs["child"] == "docs/wiki/fam/child.md"
+    assert "index" not in slugs
+    assert "docs/wiki/fam/_index.md" not in slugs.values()
+
+
 def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_repo):
     _write(
         fixture_repo / "coordinator" / "docs" / "wiki" / "other-guide.md",

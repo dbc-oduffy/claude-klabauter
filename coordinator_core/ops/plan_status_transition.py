@@ -14,6 +14,7 @@ Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-reopened --plan <path> --reason "<why>"
     plan-status-transition stamp-blocked --plan <path> --reason "<why>"
     plan-status-transition stamp-unblocked --plan <path>
+    plan-status-transition stamp-abandoned --plan <path> --reason "<why>"
 
 ``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
 stamps-implemented-without-reading-the-ac-table.md): an explicit,
@@ -498,11 +499,27 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     happen only from that same single non-no-op call site.
 
     Returns this leg's contribution to the CLI's own exit code (see module docstring):
-    0 when the cascade is clean, there was nothing to cascade (no deliverable_id, or
-    repo-root unresolvable), or AT LEAST ONE kind advanced something; 2 only when
-    EVERY targeted kind ran and resolved no downstream artifact (AC2) -- the flip
-    itself still succeeded, this is a "needs attention" signal, not a reversal of
-    the flip.
+    0 when the cascade is clean, there was nothing to cascade (no deliverable_id,
+    repo-root unresolvable, or the deliverable LEGITIMATELY has no downstream
+    artifact of any targeted kind -- `candidates_matched == 0` for every kind, see
+    below), or AT LEAST ONE kind advanced something; 2 only when at least one
+    targeted kind matched one or more candidates and every one of THOSE was
+    refused (AC2) -- the flip itself still succeeded, this is a "needs attention"
+    signal, not a reversal of the flip.
+
+    Item 11 (DoE inbox-blitz thread, plan row C12): before this fix, an EMPTY
+    cascade -- zero candidates matched for every targeted kind, which is the
+    honest "this deliverable never had a downstream artifact of either kind"
+    case -- returned exit_code 2 identically to a cascade that matched
+    candidates and had every one of them refused. The two cases are not the
+    same signal: a refusal means something needs attention (a candidate
+    existed and this run could not advance it); a legitimately empty corpus
+    means there was nothing to advance at all, and the flip needs no follow-up.
+    `deliverable_cascade._handler`'s own result already distinguishes them --
+    `candidates_matched == 0` names the empty case, `candidates_matched > 0`
+    with nothing advanced names the refused case (see its own docstring's
+    "Failure posture") -- so this function reads that field instead of
+    treating every non-advancing result alike.
     """
     deliverable_id = (deliverable_id or "").strip()
     if not deliverable_id:
@@ -587,6 +604,21 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
             print(f"{_PROG}: cascade commit note: {commit_notice}", file=sys.stderr)
 
     if any_advanced:
+        return 0
+
+    # Item 11: an empty cascade -- zero candidates matched, for every targeted
+    # kind -- is a legitimate "this deliverable has no downstream artifact"
+    # outcome, not a failure. Only a result that matched one or more
+    # candidates and still advanced none of them (every candidate refused) is
+    # the "needs attention" signal exit_code 2 exists to carry.
+    any_matched = any(result.get("candidates_matched", 0) for _target_kind, result in results)
+    if not any_matched:
+        print(
+            f"{_PROG}: {plan_path} — cascade resolved no downstream artifact for any "
+            f"targeted kind ({', '.join(_CASCADE_TARGET_KINDS)}); the deliverable "
+            "legitimately has none — flip succeeded, no follow-up needed",
+            file=sys.stderr,
+        )
         return 0
 
     for target_kind, result in results:
@@ -2547,6 +2579,191 @@ def _stamp_unblocked(opts: _Opts) -> int:
     return 0
 
 
+# Source statuses `stamp-abandoned` accepts -- a plan cancelled before (or
+# during, from a hold) execution ever produced anything worth keeping. Does
+# NOT include `executing`/`landed` (work is already in flight -- see
+# `_stamp_abandoned`'s own docstring for why those refuse toward
+# `closed_partial`/`stamp-superseded` instead) or any `_FROZEN_STATUSES`
+# member (a human judgment call already made; this verb never overwrites a
+# different terminal status, mirroring `_stamp_superseded`'s identical
+# refusal).
+_ABANDONABLE_STATUSES = frozenset({"draft", "reviewed", "approved", "blocked"})
+
+
+def _stamp_abandoned(opts: _Opts) -> int:
+    """Perform the stamp-abandoned verb (IBPBE-B04c, docs/plans/2026-09-26-
+    inbox-blitz-part-b-engine-defects.md); returns the exit code.
+
+    Purpose: a plan cancelled BEFORE execution ever produced anything worth
+    keeping has no writer today -- `stamp-superseded` requires naming a
+    successor plan (there may be none), and `stamp-implemented` never
+    accepts a bare cancellation. This verb records that judgment call
+    directly: legal from `draft`, `reviewed`, `approved` and `blocked`
+    (`_ABANDONABLE_STATUSES`) only -- a plan already `executing`/`landed`
+    has work in flight, and `implemented` plus every other
+    `_FROZEN_STATUSES` member is a different terminal judgment already
+    made. Both refuse, naming the two verbs that DO fit those shapes
+    (`closed_partial` for a genuine delivered tranche, `stamp-superseded`
+    for an already-existing successor) rather than silently accepting a
+    cancellation that would misrepresent either.
+
+    Mirrors `_stamp_superseded`'s authorized-writer discipline (path
+    containment via `_resolve_worktree_root_and_check_containment`, status
+    parsing via `_read_and_normalize_status`, locked read-modify-write,
+    writer-side commit ownership, exit-code conventions) exactly, per this
+    row's own instruction ("modelled on stamp-superseded's arm") -- see that
+    function's docstring for the shared machinery this one reuses. Diverges
+    only where the verb itself differs:
+      - requires `--reason`, a non-empty string (written as `status_reason`,
+        mirroring `_stamp_blocked`'s field, not `_by`'s "path that must
+        exist" shape -- an abandon reason is prose, not a successor plan);
+      - writes `status_reason` alongside the status flip, the durable record
+        of the judgment call this verb exists to capture;
+      - never fires the terminal-state cascade (`_run_cascade` is specific
+        to `stamp-implemented`'s own semantics; an abandoned plan has
+        nothing live left to cascade).
+
+    Negative-spec: NOT reachable from any automated sweep, cascade, or
+    ceremony tail -- mirrors `_stamp_superseded`'s identical negative-spec
+    verbatim (see that function's docstring). Only ever invoked from
+    `main()`'s explicit `stamp-abandoned` verb dispatch, itself only
+    reachable via a human/EM-typed CLI invocation naming both `--plan` and
+    `--reason` by hand -- never looped over the corpus.
+    """
+    if not opts.plan:
+        print(f"{_PROG}: stamp-abandoned requires --plan <path>", file=sys.stderr)
+        return 1
+    if not opts.reason or not opts.reason.strip():
+        print(
+            f"{_PROG}: stamp-abandoned requires --reason \"<why>\" "
+            "(state WHY this plan is abandoned -- no bare/blank reason)",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+    plan_display: str = opts.plan
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir, refusal = _resolve_worktree_root_and_check_containment(
+        plan_path, plan_display
+    )
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    reason_value = opts.reason
+    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = _read_and_normalize_status(split.fm_text, plan_display)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+        _state["prior_status"] = status
+
+        if status not in _ABANDONABLE_STATUSES:
+            expected = ", ".join(sorted(_ABANDONABLE_STATUSES))
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\" -- stamp-abandoned "
+                f"refuses this source (expected one of: {expected}); if the plan "
+                "delivered a genuine, load-bearing tranche use closed_partial, or if "
+                "a successor plan already exists use stamp-superseded instead"
+            )
+
+        fm_text = replace_fm_field(split.fm_text, "status", "abandoned")
+        if read_fm_field(fm_text, "status_reason") is not None:
+            fm_text = replace_fm_field(fm_text, "status_reason", reason_value)
+        else:
+            fm_text = insert_fm_field(fm_text, "status_reason", reason_value, after_key="status")
+
+        _state["flipped"] = True
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        # Unreachable in practice (`mutate` either flips or raises MutateAbort
+        # above), kept only as a defensive mirror of the sibling verbs' shape.
+        return 1
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> abandoned "
+                f"(reason: {reason_value}) on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → abandoned "
+        f"(reason: {reason_value})"
+    )
+    return 0
+
+
 def _stamp_rung(
     opts: _Opts, verb: str, target_status: str, allow_landed_reentry: bool = False
 ) -> int:
@@ -3158,6 +3375,30 @@ def main(argv: List[str]) -> int:
             return 1
         return _stamp_unblocked(opts)
 
+    if opts.verb == "stamp-abandoned":
+        if opts.by is not None:
+            print(
+                f"{_PROG}: stamp-abandoned does not accept --by "
+                "(it has no successor-plan judgment call to record -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: stamp-abandoned does not accept --override-reason "
+                "(it has no completeness verdict to override -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.findings is not None:
+            print(
+                f"{_PROG}: stamp-abandoned does not accept --findings "
+                "(it has no review-trail attest to record -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        return _stamp_abandoned(opts)
+
     if opts.verb in ("stamp-reviewed", "stamp-approved", "stamp-executing"):
         # AC3: none of the three rung-advance verbs assert completeness, so
         # none may claim to override a completeness verdict -- symmetric
@@ -3211,7 +3452,7 @@ def main(argv: List[str]) -> int:
     print(
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
         "stamp-superseded, stamp-reopened, stamp-reviewed, stamp-approved, stamp-executing, "
-        "stamp-review-verified, stamp-blocked, stamp-unblocked",
+        "stamp-review-verified, stamp-blocked, stamp-unblocked, stamp-abandoned",
         file=sys.stderr,
     )
     return 1

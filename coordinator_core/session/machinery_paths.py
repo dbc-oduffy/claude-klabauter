@@ -177,10 +177,6 @@ def cache_dir(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "cache")
 
 
-def orientation_cache_path(repo_root: str) -> str:
-    return os.path.join(machinery_root(repo_root), "orientation_cache.md")
-
-
 def cockpit_emission_path(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "cockpit-emission.json")
 

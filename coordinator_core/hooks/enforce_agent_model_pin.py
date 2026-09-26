@@ -64,6 +64,24 @@ pass-with-context shape this repo's other advisory hooks already use
 (e.g. `bash_guards/block_illegal_filename.py`). No new envelope shape is
 invented for this.
 
+UNPINNED-MODEL ADVISORY. A dispatch that passes no `model` at all, against a
+`subagent_type` `resolve_model_pins()` has NO ENTRY for (an unenumerated or
+genuinely unpinned type -- `general-purpose`, a host-native type, or a
+custom agent whose frontmatter carries no `model:` pin), gets a
+non-blocking advisory suggesting `model: sonnet` -- the house cost default,
+never a silent opus-by-harness-default. This is deliberately WEAKER than
+the DENY/advisory legs above: those compare a PASSED value against a PIN;
+this leg fires on the ABSENCE of both, so there is nothing to compare and
+nothing to deny -- see "R14 warns; it does not refuse" in the plan's
+Design decisions. Fires at most once per `(session_id, subagent_type)` --
+a session-scoped sentinel file under
+`<git common dir>/coordinator-sessions/<session_id>/`, the same hub every
+other per-session dedup marker in this package uses (see
+`hooks.support.session_hub`). Dedup is advisory-only plumbing, not a
+correctness gate: an unresolvable session id or git root just means the
+advisory fires every time rather than once -- it never blocks, so failing
+to dedupe costs a repeated notice, not a wrong verdict.
+
 ESCAPE HATCH -- `COORDINATOR_OVERRIDE_AGENT_MODEL_PIN`, non-empty to
 bypass, read INLINE inside `check()` (never hoisted to module scope --
 F2 discipline, matching `block_illegal_filename.py`'s own inline-read
@@ -106,13 +124,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core._hook_envelope import allow_advisory, deny
 from coordinator_core.hooks.block_unenumerated_agent_type import (
     resolve_model_pins,
     resolve_subagent_type,
+)
+from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
+from coordinator_core.hooks.support.session_hub import (
+    ensure_session_dir,
+    session_id_is_real,
 )
 
 CLASS = "hard-deny"
@@ -127,6 +152,65 @@ _FORK_TYPE = "fork"
 _MODEL_ORDER: Dict[str, int] = {"haiku": 0, "sonnet": 1, "opus": 2}
 
 _EFFORT_ORDER: Dict[str, int] = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
+
+#: sentinel filename prefix for the unpinned-model advisory dedup marker --
+#: see "UNPINNED-MODEL ADVISORY" in the module docstring.
+_UNPINNED_SENTINEL_PREFIX = "unpinned-model-advisory."
+
+_UNSAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]")
+
+_UNPINNED_MODEL_MESSAGE = (
+    "ADVISORY: {subagent_type} was dispatched with no `model` and has no "
+    "model pin on record -- consider `model: sonnet` (the house cost "
+    "default). Advisory only -- an unpinned type is never blocked."
+)
+
+
+def _repo_root_from_cwd(cwd: Optional[str]) -> Optional[str]:
+    probe = os.path.abspath(cwd if isinstance(cwd, str) and cwd else os.getcwd())
+    while True:
+        if os.path.exists(os.path.join(probe, ".git")):
+            return probe
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return None
+        probe = parent
+
+
+def _claim_unpinned_advisory_once(payload: Dict[str, Any], subagent_type: str) -> bool:
+    """Return True if this `(session_id, subagent_type)` has not yet fired.
+
+    Best-effort: any resolution failure (no real session id, no git root, an
+    OSError writing the sentinel) returns True -- see "Dedup is
+    advisory-only plumbing" in the module docstring.
+    """
+    session_id = payload.get("session_id")
+    if not session_id_is_real(session_id):
+        return True
+    repo_root = _repo_root_from_cwd(payload.get("cwd"))
+    if not repo_root:
+        return True
+    common_dir = resolve_git_common_dir(repo_root)
+    if not common_dir:
+        return True
+    session_dir = Path(common_dir) / "coordinator-sessions" / str(session_id)
+    safe_type = _UNSAFE_CHARS_RE.sub("_", subagent_type) or "unknown"
+    sentinel = session_dir / (_UNPINNED_SENTINEL_PREFIX + safe_type)
+    try:
+        if sentinel.exists():
+            return False
+        if not ensure_session_dir(session_dir, session_id):
+            return True
+        sentinel.touch()
+    except OSError:
+        return True
+    return True
+
+
+def _unpinned_model_advisory(payload: Dict[str, Any], subagent_type: str) -> Optional[Dict[str, Any]]:
+    if not _claim_unpinned_advisory_once(payload, subagent_type):
+        return None
+    return allow_advisory("PreToolUse", _UNPINNED_MODEL_MESSAGE.format(subagent_type=subagent_type))
 
 
 def _clean_str(value: Any) -> Optional[str]:
@@ -185,13 +269,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     passed_model = _clean_str(tool_input.get("model"))
     passed_effort = _clean_str(tool_input.get("effort"))
-    if passed_model is None and passed_effort is None:
-        return None
 
     if subagent_type == _FORK_TYPE:
         return None
 
     if os.environ.get(_OVERRIDE_ENV):
+        return None
+
+    if passed_model is None and passed_effort is None:
+        pins, _error_reason = resolve_model_pins()
+        if pins is not None and not pins.get(subagent_type):
+            return _unpinned_model_advisory(payload, subagent_type)
         return None
 
     pins, error_reason = resolve_model_pins()
@@ -200,6 +288,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     entry = pins.get(subagent_type)
     if not entry:
+        if passed_model is None:
+            return _unpinned_model_advisory(payload, subagent_type)
         return None
 
     pin_model = entry.get("model")

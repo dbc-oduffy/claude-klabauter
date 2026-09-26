@@ -502,7 +502,12 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
             "disposition_superseded=true -> superseding_note/"
             "superseding_realized_by/superseded_at + status already "
             "actioned/superseded. Memos created before the grandfather "
-            "cutoff (see `created`) skip cross-field validation entirely."
+            "cutoff (see `created`) skip cross-field validation entirely. "
+            "`applies_to` is corpus-relative, not repo-root-relative: a "
+            "receiver's corpus lives at state/cross-repo/ (canonical) or "
+            "legacy cross-repo/, and match_schema matches a "
+            "state/cross-repo/... path by its tail after stripping the "
+            "leading state/ (schema_validate.match_schema)."
         ),
         "type": "object",
         "required": ["title", "from", "to", "created", "status", "delivery_mode"],
@@ -750,7 +755,9 @@ def _build_archived_memo_schema() -> dict[str, Any]:
         "description": (
             "Archived cross-repo memo — outbound memos relayed and archived at "
             "cross-repo/archive/. GENERATED PROJECTION, not hand-vendored — see "
-            "cross-repo-memo.schema.json's description for the ownership note. "
+            "cross-repo-memo.schema.json's description for the ownership note "
+            "and for the `applies_to` corpus-relative tail-match rule, which "
+            "applies here too. "
             "Spec backlink: docs/plans/2026-06-23-deliverable-type-schema-taxonomy.md "
             "§ C1b; pln-take-ownership-of-the-cross-re-ac97ef § C5."
         ),

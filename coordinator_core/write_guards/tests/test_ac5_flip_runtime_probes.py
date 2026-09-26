@@ -10,9 +10,8 @@ PreToolUse dispatcher calls it.
 Covers the write-side wave's hard-deny -> advisory flips (DR-277,
 docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md):
 block_cutover_phase_hand_edit, block_dev_repo_sentinel_write,
-block_em_hand_edit_pending_review_integration, block_priority_ledger_edit,
-check_claude_md_size, nudge_improvement_queue_write,
-nudge_prose_queue_creation.
+block_priority_ledger_edit, check_claude_md_size,
+nudge_improvement_queue_write, nudge_prose_queue_creation.
 
 `guard_memory_store_cap` was one of the original nine C2-C12 flips covered
 here; it moved back to hard-deny 2026-08-21
@@ -50,7 +49,6 @@ import pytest
 from coordinator_core.write_guards import engine
 from coordinator_core.write_guards import block_cutover_phase_hand_edit
 from coordinator_core.write_guards import block_dev_repo_sentinel_write
-from coordinator_core.write_guards import block_em_hand_edit_pending_review_integration
 from coordinator_core.write_guards import block_priority_ledger_edit
 from coordinator_core.write_guards import check_claude_md_size
 from coordinator_core.write_guards import nudge_improvement_queue_write
@@ -114,45 +112,6 @@ class TestBlockDevRepoSentinelWrite:
         hso = out["hookSpecificOutput"]
         assert "permissionDecision" not in hso
         assert hso["additionalContext"]
-
-
-class TestBlockEmHandEditPendingReviewIntegration:
-    _FINDINGS_FRONTMATTER = (
-        "---\nstatus: open\nagent_type: coordinator:code-reviewer\n"
-        "spawned_at: 2026-07-27T00:00:00Z\nlead_session_id: sess-abc\n"
-        "divergence:\n  diverged: false\ncommits: []\ndispatch_feed: null\n---\n\n"
-    )
-    _TARGET_FILE = "coordinator_core/write_guards/block_priority_ledger_edit.py"
-    _TARGET_BASENAME = "block_priority_ledger_edit.py"
-
-    def _findings_body(self) -> str:
-        citation = (
-            f"- [P2] `{self._TARGET_BASENAME}:42` unused import — disposition: accepted — "
-            "rationale: dead import, safe to drop.\n\n"
-        )
-        return "## Findings\n\n" + citation
-
-    def test_former_deny_now_advises_through_engine(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(
-            block_em_hand_edit_pending_review_integration._OVERRIDE_ENV_VAR, raising=False
-        )
-        sidecar_dir = tmp_path / "state" / "subagent-share" / "sess-abc"
-        sidecar_dir.mkdir(parents=True)
-        (sidecar_dir / "codereview-sliceA.md").write_text(
-            self._FINDINGS_FRONTMATTER + self._findings_body(), encoding="utf-8"
-        )
-        payload = {
-            "tool_name": "Edit",
-            "tool_input": {
-                "file_path": self._TARGET_FILE,
-                "old_string": "x",
-                "new_string": "y",
-            },
-            "cwd": str(tmp_path),
-            "session_id": "sess-abc",
-        }
-        out = engine.evaluate(payload)
-        _assert_advisory_not_deny(out, must_contain="review")
 
 
 class TestBlockPriorityLedgerEdit:
@@ -228,7 +187,6 @@ class TestNudgeProseQueueCreation:
     [
         (block_cutover_phase_hand_edit, 112),
         (block_dev_repo_sentinel_write, 122),
-        (block_em_hand_edit_pending_review_integration, 115),
         (block_priority_ledger_edit, 114),
         (check_claude_md_size, 106),
         (nudge_improvement_queue_write, 120),

@@ -49,7 +49,7 @@ def test_stage_order_and_unique_titles_preserved():
     stages = [
         Stage(agents=["coordinator:prior-art-checker"], gate=True),
         Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
-        Stage(agents=["coordinator:review-integrator"], gate=False),
+        Stage(agents=["coordinator:code-reviewer-weekly"], gate=False),
     ]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
     titles = [t for t, _ in out]
@@ -145,7 +145,7 @@ def test_gate_stage_prompt_carries_the_run_nonce_when_supplied():
 
 
 def test_non_gate_stage_prompt_never_carries_a_run_nonce():
-    stages = [Stage(agents=["coordinator:review-integrator"], gate=False)]
+    stages = [Stage(agents=["coordinator:code-reviewer-weekly"], gate=False)]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
     _, block = out[0]
     assert "run_nonce" not in block

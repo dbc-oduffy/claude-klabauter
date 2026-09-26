@@ -152,6 +152,7 @@ Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -177,6 +178,119 @@ _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
 _SENTINEL_NAME = ".coordinator-doctrine-edit-approved"
 _APPROVAL_WINDOW_SECONDS = 30 * 60
+
+# Rot-token advisory (B06) -- fires only on an ALLOWED doctrine-surface edit
+# (sentinel present and unexpired) that ADDS one of three token shapes the
+# old text lacked. Shapes and rationale: see plan
+# docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md, B06 body and
+# "Design decisions". A bare numeral ("count-shaped") is deliberately NOT a
+# shape here -- it cannot be told apart from ordinary prose numbers at write
+# time. Return shape mirrors `wiki_changelog_prose_advisory` (additionalContext
+# only; never denies).
+_ROT_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_ROT_VERSION_RE = re.compile(r"\bv?\d+\.\d+\.\d+\b")
+_ROT_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def _rot_sha_candidate_ok(token: str) -> bool:
+    has_digit = any(ch.isdigit() for ch in token)
+    has_letter = any(ch in "abcdef" for ch in token)
+    return has_digit and has_letter
+
+
+def _rot_tokens(text: str) -> "set[str]":
+    if not text:
+        return set()
+    tokens: "set[str]" = set()
+    tokens.update(_ROT_DATE_RE.findall(text))
+    tokens.update(_ROT_VERSION_RE.findall(text))
+    for match in _ROT_SHA_RE.findall(text):
+        if _rot_sha_candidate_ok(match):
+            tokens.add(match)
+    return tokens
+
+
+def _rot_old_text(tool_name: str, tool_input: Dict[str, Any], target: str) -> str:
+    """The "old side" for the B06 advisory diff.
+
+    Edit -> `old_string`. MultiEdit -> concatenation of each edit's
+    `old_string`. Write -> the file's CURRENT on-disk bytes (one read;
+    absent/unreadable file treated as empty old text -- the whole `content`
+    is then "net-added", which is the correct read for a brand-new file).
+    """
+    if tool_name == "Edit":
+        old_s = tool_input.get("old_string")
+        return old_s if isinstance(old_s, str) else ""
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return ""
+        parts = []
+        for edit in edits:
+            if isinstance(edit, dict):
+                old_s = edit.get("old_string")
+                if isinstance(old_s, str):
+                    parts.append(old_s)
+        return "\n".join(parts)
+    if tool_name == "Write":
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+        except Exception:
+            return ""
+    return ""
+
+
+def _rot_new_text(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    if tool_name == "Write":
+        content = tool_input.get("content")
+        return content if isinstance(content, str) else ""
+    if tool_name == "Edit":
+        new_s = tool_input.get("new_string")
+        return new_s if isinstance(new_s, str) else ""
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return ""
+        parts = []
+        for edit in edits:
+            if isinstance(edit, dict):
+                new_s = edit.get("new_string")
+                if isinstance(new_s, str):
+                    parts.append(new_s)
+        return "\n".join(parts)
+    return ""
+
+
+def _rot_token_advisory(
+    tool_name: str, tool_input: Dict[str, Any], target: str
+) -> "Optional[Dict[str, Any]]":
+    try:
+        new_text = _rot_new_text(tool_name, tool_input)
+        if not new_text:
+            return None
+        old_text = _rot_old_text(tool_name, tool_input, target)
+        added = _rot_tokens(new_text) - _rot_tokens(old_text)
+        if not added:
+            return None
+        names = ", ".join(sorted(added))
+        reason = (
+            "[doctrine-surface guard] advisory: this edit adds a date-, "
+            f"version-, or SHA-shaped token ({names}) to a protected "
+            "doctrine surface. A pointer to the file that holds the value "
+            "does not go stale -- consider linking to it instead of "
+            "restating it here."
+        )
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": reason,
+            }
+        }
+    except Exception:
+        return None
 
 
 def _norm(path: str) -> str:
@@ -534,7 +648,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     state = _sentinel_state(owning_root or repo_root)
     if state == "allow":
-        return None
+        return _rot_token_advisory(
+            payload.get("tool_name", ""), tool_input, target
+        )
 
     return {
         "hookSpecificOutput": {

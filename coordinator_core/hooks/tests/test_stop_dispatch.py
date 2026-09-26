@@ -28,10 +28,14 @@ from __future__ import annotations
 import asyncio
 import importlib
 import os
+import subprocess
+
+import pytest
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 from coordinator_core.session import machinery_paths
+from coordinator_core.win_portability import no_console_creationflags
 
 _MODULE = "coordinator_core.hooks.stop_dispatch"
 
@@ -83,6 +87,64 @@ def test_stop_dispatch_op_registers_and_resolves_through_op_for_path() -> None:
 
 def test_classification_matches_each_legs_write_semantics() -> None:
     assert classify("hooks.stop_dispatch") == OpClass.MUTATING
+    assert classify("hooks.guard_terminal_review") == OpClass.COMPUTE_ONLY
+
+
+def test_guard_terminal_review_is_composed_into_the_fold() -> None:
+    module = importlib.import_module(_MODULE)
+    assert hasattr(module, "_guard_terminal_review_handler")
+
+
+def _git(repo, *args, env=None):
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        **no_console_creationflags(),
+    )
+
+
+def _git_repo_with_unreviewed_code_commit(tmp_path, session_id: str) -> str:
+    """A fixture repo whose HEAD commit is an uncredited code-diff commit for
+    `session_id` — the guard_terminal_review block case (no receipt, no
+    window, no Inline-Review trailer)."""
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "coordinator" / "x.py").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "coordinator" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    env = os.environ.copy()
+    env["GIT_AUTHOR_DATE"] = "2026-01-01T00:00:00+00:00"
+    env["GIT_COMMITTER_DATE"] = "2026-01-01T00:00:00+00:00"
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        f"work\n\nSession-Id: {session_id}",
+        env=env,
+    )
+    return str(repo)
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_aggregate_stop_dispatch_folds_guard_terminal_review_block(tmp_path) -> None:
+    from coordinator_core.hooks.stop_dispatch import _handler
+
+    session_id = "sess-terminal-review-1"
+    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, session_id)
+    payload = {"cwd": repo_root, "session_id": session_id}
+
+    result = asyncio.run(_handler({"payload": payload}))
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "review" in result["hookSpecificOutput"]["permissionDecisionReason"].lower()
 
 
 def test_guard_kira_verdict_routed_skips_on_subagent_stop(tmp_path) -> None:
@@ -155,9 +217,9 @@ def test_guard_kira_verdict_routed_passes_when_answered(tmp_path) -> None:
     )
     _write_sidecar(
         share_dir,
-        "coordinatorreview-integrator.def.md",
+        "coordinatorexecutor.def.md",
         [
-            "agent_type: coordinator:review-integrator",
+            "agent_type: coordinator:executor",
             "spawned_at: 2026-08-31T00:01:00Z",
             "integrated_from: [coordinatoroverengineering-reviewer.abc]",
         ],

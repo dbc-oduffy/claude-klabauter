@@ -662,15 +662,72 @@ def test_indirection_xargs_with_visible_destructive_text_still_denies():
     assert "rm -r/-f" in hso["permissionDecisionReason"]
 
 
-def test_indirection_xargs_benign_content_now_advises():
-    # `xargs` genuinely assembles its command from stdin -- content this
-    # guard cannot see. Opaque, so it now advises rather than denies.
+def test_indirection_xargs_read_only_head_is_silent():
+    # xargs's own resolved command head is `echo` -- read-only
+    # (`_XARGS_READ_ONLY_HEADS`), so this is no longer even an advisory:
+    # the guard is silent, same as any other benign Bash call.
     payload = _payload("echo hello | xargs echo", agent_type="coordinator:executor")
+    assert guard.check(payload) is None
+
+
+def test_indirection_xargs_grep_head_is_silent():
+    # `find . -name '*.py' | xargs grep foo` -- xargs's resolved head is
+    # `grep`, read-only, so the guard stays silent.
+    payload = _payload(
+        "find . -name '*.py' | xargs grep foo", agent_type="coordinator:executor"
+    )
+    assert guard.check(payload) is None
+
+
+def test_indirection_xargs_bundled_flags_skip_to_read_only_head():
+    # `-n1`/`-I{}` are xargs's OWN flags in attached form; the resolved
+    # head is still `cat`, read-only, so this stays silent.
+    payload = _payload("xargs -n1 -I{} cat {}", agent_type="coordinator:executor")
+    assert guard.check(payload) is None
+
+
+def test_indirection_xargs_rm_head_still_advises_one_line():
+    # `rm` is not read-only -- unchanged advisory behavior, now folded to
+    # one line. No `-r`/`-f`/`--force` flag here so the direct RM-surface
+    # literal-text deny (`_RM_DENY_RE`, unaffected by this change) does not
+    # pre-empt the indirection-wrapper path this test targets.
+    payload = _payload("xargs rm", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    context = hso["additionalContext"]
+    assert "ADVISORY" in context
+    assert "xargs" in context
+    assert context.count("\n") == 0
+
+
+def test_indirection_xargs_sh_c_head_unchanged():
+    # `sh` is not read-only -- unchanged behavior: xargs's own unconditional
+    # arm fires the generic "xargs <cmd>" advisory without unwrapping the
+    # nested `sh -c` payload, exactly as before this change.
+    payload = _payload("xargs sh -c 'echo hi'", agent_type="coordinator:executor")
     result = guard.check(payload)
     assert result is not None
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "xargs" in hso["additionalContext"]
+
+
+def test_indirection_xargs_git_rm_head_unchanged():
+    # `git` is not read-only -- unchanged behavior.
+    payload = _payload("xargs git rm", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "xargs" in hso["additionalContext"]
+
+
+def test_indirection_bare_xargs_is_silent():
+    # A bare `xargs` (no head at all) defaults to `echo` -- read-only.
+    payload = _payload("echo hello | xargs", agent_type="coordinator:executor")
+    assert guard.check(payload) is None
 
 
 def test_indirection_env_wrapped_c_destructive_payload_denies():
@@ -3967,3 +4024,108 @@ class TestLegacyPushForceScanIgnoresWrapperOwnFlags:
     def test_force_with_lease_still_allowed(self):
         cmd = "git " + "push" + " --" + "force" + "-with-lease origin main"
         assert guard._evaluate_git_segment_legacy(cmd, False) is None
+
+
+class TestV2DockerKillDbClientMatchers:
+    """Item 23 / memo D2 (cross-repo/archive/2026-09-23-doe-claude-em-
+    destructive-action-v2-gap-still-open.md): docker destructive verbs,
+    kill/pkill of a non-liveness-check shape, and DB-client DROP/TRUNCATE.
+    Each class gets a deny test and a read-only-sibling allow test.
+    """
+
+    # ---- docker ----
+
+    def test_docker_rm_denies(self):
+        payload = _payload("docker rm mycontainer", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "docker rm" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_docker_rmi_denies(self):
+        payload = _payload("docker rmi myimage", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_docker_prune_denies(self):
+        payload = _payload("docker container prune -f", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_docker_system_prune_denies(self):
+        payload = _payload("docker system prune -a -f", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "docker system prune" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_docker_ps_allows(self):
+        payload = _payload("docker ps -a", agent_type="coordinator:executor")
+        assert guard.check(payload) is None
+
+    def test_docker_images_logs_inspect_allow(self):
+        for cmd in ("docker images", "docker logs mycontainer", "docker inspect mycontainer"):
+            payload = _payload(cmd, agent_type="coordinator:executor")
+            assert guard.check(payload) is None
+
+    # ---- kill / pkill ----
+
+    def test_kill_real_signal_to_pid_denies(self):
+        payload = _payload("kill 12345", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "kill" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_kill_dash_9_denies(self):
+        payload = _payload("kill -9 12345", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_pkill_denies(self):
+        payload = _payload("pkill -f some-process", agent_type="coordinator:executor")
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_kill_dash_zero_liveness_check_allows(self):
+        payload = _payload("kill -0 12345", agent_type="coordinator:executor")
+        assert guard.check(payload) is None
+
+    # ---- DB clients ----
+
+    def test_psql_drop_table_denies(self):
+        payload = _payload(
+            'psql -c "DROP TABLE users"', agent_type="coordinator:executor"
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "DROP/TRUNCATE" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_mysql_truncate_denies(self):
+        payload = _payload(
+            'mysql -e "TRUNCATE TABLE sessions"', agent_type="coordinator:executor"
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_sqlite3_drop_denies(self):
+        payload = _payload(
+            'sqlite3 db.sqlite -e "DROP TABLE t"', agent_type="coordinator:executor"
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_psql_select_allows(self):
+        payload = _payload('psql -c "SELECT 1"', agent_type="coordinator:executor")
+        assert guard.check(payload) is None
+
+    def test_db_client_with_no_statement_flag_allows(self):
+        payload = _payload("psql mydb", agent_type="coordinator:executor")
+        assert guard.check(payload) is None

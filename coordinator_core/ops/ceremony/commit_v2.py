@@ -94,7 +94,9 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
 )
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
+from coordinator_core.session import claim_index as session_claim_index
 from coordinator_core.session import core as session_core
+from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.write_guards.guard_class_relay import (
     detect_class_transition,
@@ -287,6 +289,61 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
             "commit_v2: release_committed_claims failed post-commit; "
             "claim(s) retained", exc_info=True,
         )
+
+
+def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
+    """Per DD4 (A5). One BATCHED ``claim_index.lookup(paths)`` call, then a
+    liveness check on each returned claimant that is not this session --
+    called BEFORE ``commit_paths`` runs (the caller passes the pre-commit
+    pathspec), but this step never refuses the commit: a path a live peer
+    holds is reported, not blocked.
+
+    Zero additional process spawns: ``claim_index.lookup`` is an in-memory
+    rebuild over the on-disk touch-record corpus, and ``liveness.
+    session_live`` (its own docstring) resolves off ``meta.json``/pid-recency
+    reads for the common case -- the same batched-lookup-plus-disk-read
+    shape ``session-claim-cli.py``'s own ``who-claims-path`` already uses.
+
+    Returns a bounded ``warnings`` list, never raises: a lookup failure (or
+    an ``UNANSWERABLE`` claim-index entry) degrades to ONE "claim state
+    indeterminate" warning for the whole call rather than a per-path one --
+    the underlying cause (an aborted rebuild) is call-wide, not path-wide --
+    and the commit still lands either way.
+    """
+    if not paths:
+        return []
+
+    own_sid = None
+    try:
+        own_sid = session_core.resolve_session_id(str(worktree_root))
+    except Exception:
+        own_sid = None
+
+    try:
+        lookup_result = session_claim_index.lookup(list(paths), cwd=str(worktree_root))
+    except Exception as exc:  # noqa: BLE001 -- never refuse the commit
+        return [f"claim state indeterminate ({exc!r})"]
+
+    warnings: list = []
+    for path in paths:
+        claimants = lookup_result.get(path, [])
+        if session_claim_index.UNANSWERABLE in claimants:
+            warnings.append(f"claim state indeterminate for {path!r}")
+            continue
+        for sid in claimants:
+            if sid == own_sid:
+                continue
+            try:
+                live = session_liveness.session_live(sid, str(worktree_root))
+            except Exception:  # noqa: BLE001 -- see docstring
+                warnings.append(f"claim state indeterminate for {path!r}")
+                continue
+            if live:
+                warnings.append(
+                    f"{path!r} is held by live peer session {sid!r} -- "
+                    "committed anyway"
+                )
+    return warnings
 
 
 def _pre_commit_gates(
@@ -491,6 +548,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         `write_guards` module CLASS transition in this commit, per path
         under `coordinator_core/write_guards/`. It never gates or delays
         the commit above -- a step failure degrades to a `skips` entry.
+        `warnings` additionally carries one entry per named path a LIVE
+        peer session holds a touch-claim on (A5/DD4) -- run BEFORE this
+        commit lands, from one batched `claim_index.lookup` plus a
+        per-claimant liveness read, zero added process spawns. This never
+        refuses the commit; a lookup/liveness failure degrades to a
+        "claim state indeterminate" warning instead.
         Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
@@ -570,6 +633,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     guard_paths = _guard_module_paths(raw_paths, raw_deleted)
     pre_commit_guard_sources = (
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
+    )
+
+    # A5 (DD4): one batched claim_index.lookup + per-claimant liveness read,
+    # BEFORE commit_paths runs -- a live peer holding a named path is
+    # reported, never refused (see `_peer_claim_warnings` docstring).
+    peer_claim_warnings = _peer_claim_warnings(
+        worktree_root, list(raw_paths) + list(raw_deleted)
     )
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
@@ -689,6 +759,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # legitimate success and the operator still needs to see why, not a
     # fact buried in a dict key nobody is obliged to read.
     warnings = []
+    warnings.extend(peer_claim_warnings)
     if outcome.sign_warning is not None:
         # First-class, not appended after the others: a caller that only
         # reads the first warning (or greps for "sign") should still see

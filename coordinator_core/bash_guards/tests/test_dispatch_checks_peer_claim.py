@@ -503,6 +503,191 @@ class TestOwnerNameProvenanceNote:
         assert "claimed by BOTH" in out["permissionDecisionReason"]
         assert "provenance" in out["permissionDecisionReason"].lower()
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def test_owned_by_another_session_deletion_says_unstaging_is_safe(
+        self, monkeypatch, tmp_path
+    ):
+        """R07: for a staged DELETION the owned-by-another-session deny must
+        point at unstaging as the safe direction (it restores the peer's
+        still-tracked content) -- not the addition/modification wording,
+        which warns that unstaging DISCARDS uncommitted content. Drives the
+        same end-to-end path as
+        ``test_deny_and_warn_templates_carry_the_warning`` above."""
+        import json
+        import subprocess
+        from datetime import datetime, timezone
+
+        from coordinator_core.bash_guards import dispatch as bash_dispatch
+        from coordinator_core.session import core, touch_record
+        from coordinator_core.win_portability import no_console_creationflags
+
+        def _git(root: str, *args: str) -> None:
+            subprocess.run(
+                ["git", *args],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                **no_console_creationflags(),
+            )
+
+        def _init_repo(root_path: Path) -> str:
+            root = str(root_path)
+            _git(root, "init", "-q")
+            _git(root, "config", "user.email", "t@example.com")
+            _git(root, "config", "user.name", "Test")
+            (root_path / "README.md").write_text("init\n", encoding="utf-8")
+            _git(root, "add", "README.md")
+            _git(root, "commit", "-q", "-m", "init")
+            return root
+
+        def _push_started_at_to_future(root: str, sid: str) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            future = datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
+            )
+            (sdir / "started_at").write_text(
+                future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
+            )
+
+        def _claim(root: str, sid: str, path: str, name=None) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir.mkdir(parents=True, exist_ok=True)
+            touch_record.append_event(
+                touch_record.sink_path(sdir),
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=path,
+                name=name,
+            )
+
+        def _em_payload(root: str, sid: str, command: str) -> str:
+            return json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "session_id": sid,
+                "cwd": root,
+            })
+
+        root = _init_repo(tmp_path)
+        sid, other_sid = "my-sess", "other-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "sibling.txt").write_text("owned by sibling\n", encoding="utf-8")
+        _git(root, "add", "sibling.txt")
+        _git(root, "commit", "-q", "-m", "seed sibling.txt")
+
+        _claim(root, other_sid, "sibling.txt", name=REAL_NAME)
+        _git(root, "rm", "-q", "sibling.txt")
+
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        result = bash_dispatch.evaluate_payload_json(
+            _em_payload(root, sid, 'git commit -m "rm sibling"')
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        reason = out["permissionDecisionReason"]
+        assert "owned by" in reason
+        assert "safe direction" in reason
+        assert "restores" in reason
+        assert "discards content" not in reason
+
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def test_owned_by_another_session_modification_still_warns_of_discard(
+        self, monkeypatch, tmp_path
+    ):
+        """The non-deletion sibling of the test above: a staged MODIFICATION
+        (not a delete) must keep the original warning that unstaging
+        discards content, and must NOT pick up the deletion's "safe
+        direction" wording -- the two remedies point opposite ways and
+        must not bleed into each other."""
+        import json
+        import subprocess
+        from datetime import datetime, timezone
+
+        from coordinator_core.bash_guards import dispatch as bash_dispatch
+        from coordinator_core.session import core, touch_record
+        from coordinator_core.win_portability import no_console_creationflags
+
+        def _git(root: str, *args: str) -> None:
+            subprocess.run(
+                ["git", *args],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                **no_console_creationflags(),
+            )
+
+        def _init_repo(root_path: Path) -> str:
+            root = str(root_path)
+            _git(root, "init", "-q")
+            _git(root, "config", "user.email", "t@example.com")
+            _git(root, "config", "user.name", "Test")
+            (root_path / "README.md").write_text("init\n", encoding="utf-8")
+            _git(root, "add", "README.md")
+            _git(root, "commit", "-q", "-m", "init")
+            return root
+
+        def _push_started_at_to_future(root: str, sid: str) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            future = datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
+            )
+            (sdir / "started_at").write_text(
+                future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
+            )
+
+        def _claim(root: str, sid: str, path: str, name=None) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir.mkdir(parents=True, exist_ok=True)
+            touch_record.append_event(
+                touch_record.sink_path(sdir),
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=path,
+                name=name,
+            )
+
+        def _em_payload(root: str, sid: str, command: str) -> str:
+            return json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "session_id": sid,
+                "cwd": root,
+            })
+
+        root = _init_repo(tmp_path)
+        sid, other_sid = "my-sess", "other-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "sibling.txt").write_text("owned by sibling\n", encoding="utf-8")
+        _git(root, "add", "sibling.txt")
+        _git(root, "commit", "-q", "-m", "seed sibling.txt")
+
+        _claim(root, other_sid, "sibling.txt", name=REAL_NAME)
+        (tmp_path / "sibling.txt").write_text("modified by my-sess\n", encoding="utf-8")
+        _git(root, "add", "sibling.txt")
+
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        result = bash_dispatch.evaluate_payload_json(
+            _em_payload(root, sid, 'git commit -m "modify sibling"')
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        reason = out["permissionDecisionReason"]
+        assert "owned by" in reason
+        assert "discards content" in reason
+        assert "safe direction" not in reason
+
 
 class TestLivenessBasisYieldsToName:
 

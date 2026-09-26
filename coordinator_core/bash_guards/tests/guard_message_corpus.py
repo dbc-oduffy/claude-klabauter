@@ -1849,28 +1849,6 @@ def _wg_disarm_marker_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[st
     }
 
 
-def _wg_em_hand_edit_pending_review_fire(
-    scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, Any]:
-    sidecar_dir = scratch_dir / "state" / "subagent-share" / "sess-c3c-01"
-    sidecar_dir.mkdir(parents=True)
-    (sidecar_dir / "findings.md").write_text(
-        "---\nagent_type: coordinator:code-reviewer\n---\n"
-        "## Findings\n- target.py: something\n",
-        encoding="utf-8",
-    )
-    return {
-        "tool_name": "Edit",
-        "tool_input": {
-            "file_path": "target.py",
-            "old_string": "x",
-            "new_string": "y",
-        },
-        "session_id": "sess-c3c-01",
-        "cwd": str(scratch_dir),
-    }
-
-
 def _wg_sentinel_retained_review_sidecar_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -2546,13 +2524,6 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_disarm_marker_sentinel_write", "fire", True, _wg_disarm_marker_fire),
     WriteGuardRow("block_disarm_marker_sentinel_write", "control", False, _wg_benign),
     WriteGuardRow(
-        "block_em_hand_edit_pending_review_integration",
-        "fire",
-        True,
-        _wg_em_hand_edit_pending_review_fire,
-    ),
-    WriteGuardRow("block_em_hand_edit_pending_review_integration", "control", False, _wg_benign),
-    WriteGuardRow(
         "block_fleet_delegation_write", "fire", True, _wg_fleet_delegation_write_fire
     ),
     WriteGuardRow("block_fleet_delegation_write", "control", False, _wg_benign),
@@ -2948,7 +2919,6 @@ from coordinator_core.hooks import guard_named_dispatch_tool_restriction as _hoo
 from coordinator_core.hooks import guard_posix_invocation_doctrine_write as _hook_guard_posix_invocation_doctrine_write
 from coordinator_core.hooks import guard_python_syntax_on_write as _hook_guard_python_syntax_on_write
 from coordinator_core.hooks import guard_repo_setup_claude_home_refusal as _hook_guard_repo_setup_claude_home_refusal
-from coordinator_core.hooks import guard_review_integrator_sidecar_intake as _hook_guard_review_integrator_sidecar_intake
 from coordinator_core.hooks import guard_test_tree_git_fixture_spawn as _hook_guard_test_tree_git_fixture_spawn
 from coordinator_core.hooks import nudge_initiative_goals_ladder as _hook_nudge_initiative_goals_ladder
 from coordinator_core.hooks import nudge_multiwave_workflow as _hook_nudge_multiwave_workflow
@@ -3976,33 +3946,6 @@ def _fire_guard_repo_setup_claude_home_refusal_control() -> Optional[Dict[str, A
             )
 
 
-def _fire_guard_review_integrator_sidecar_intake() -> Optional[Dict[str, Any]]:
-    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "review-integrator", "prompt": "do a review"}}
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_guard_review_integrator_sidecar_intake._handler(payload))
-    )
-
-
-def _fire_guard_review_integrator_sidecar_intake_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-grisi-ctrl-", dir=_neutral_scratch_parent()) as scratch:
-        sc_dir = Path(scratch) / "state" / "subagent-share" / "sess1"
-        sc_dir.mkdir(parents=True)
-        (sc_dir / "findings.md").write_text("x")
-        payload = {
-            "tool_name": "Agent",
-            "tool_input": {
-                "subagent_type": "review-integrator",
-                "prompt": "see state/subagent-share/sess1/findings.md",
-            },
-            "cwd": scratch,
-        }
-        return _to_envelope_or_none(
-            _run_maybe_async(
-                _hook_guard_review_integrator_sidecar_intake._handler(payload, repo_root=scratch)
-            )
-        )
-
-
 def _fire_guard_test_tree_git_fixture_spawn() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gttgfs-", dir=_neutral_scratch_parent()) as scratch:
         target = Path(scratch) / "tests" / "test_foo.py"
@@ -4773,18 +4716,6 @@ HOOK_ROWS: List[HookRow] = [
         "control-dry-run",
         False,
         _fire_guard_repo_setup_claude_home_refusal_control,
-    ),
-    HookRow(
-        "guard_review_integrator_sidecar_intake",
-        "fire-no-sidecar-named",
-        True,
-        _fire_guard_review_integrator_sidecar_intake,
-    ),
-    HookRow(
-        "guard_review_integrator_sidecar_intake",
-        "control-sidecar-on-disk",
-        False,
-        _fire_guard_review_integrator_sidecar_intake_control,
     ),
     HookRow(
         "guard_test_tree_git_fixture_spawn",

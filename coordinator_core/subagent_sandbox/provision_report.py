@@ -562,7 +562,7 @@ def _splice_review_receipt(doc_text: str, session_id: str, agent_id: str, agent_
 #: C3): the bare (namespace-stripped) ``agent_type``/``subagent_type`` this
 #: repo's routing table registers the review-integrator persona under
 #: (`coordinator:review-integrator`) -- see this module's docstring cross-
-#: refs into `coordinator_core.ops.append_integrator_dispositions` for the
+#: refs into `coordinator_core.ops.review_findings_ledger` for the
 #: sibling doctrine. Deliberately its own single-member check, not folded
 #: into `_DELEGATE_REVIEWERS`: the integrator is not a delegate REVIEWER
 #: (it applies findings, it does not render a verdict) and C3's whole point
@@ -821,13 +821,13 @@ def _build_staff_eng_review_doc_text(
     ``## Findings`` is the canonical heading for review output across every
     consumer (DoE-claude ruling, 2026-08-10 memo): a type whose name promises
     review output must emit a sidecar
-    ``ops.append_integrator_dispositions.append_dispositions`` can write into.
-    A verdict is not a finding, so ``## Verdict``/``## Rationale`` stay and the
-    three coexist.
+    ``ops.review_findings_ledger.verify`` can read a ``## Findings Ledger``
+    block out of. A verdict is not a finding, so ``## Verdict``/``## Rationale``
+    stay and the three coexist.
 
     SECTION ORDER IS LOAD-BEARING, not cosmetic. That module's
     ``_extract_findings_section`` carves from ``## Findings`` to whichever of
-    ``## Exit interview`` / ``## Integrator Dispositions`` comes first, and
+    ``## Exit interview`` / ``## Findings Ledger`` comes first, and
     deliberately does NOT stop at an intervening ``## `` heading (the reviewer
     layout nests ``## Summary``/``### Finding N`` inside the findings body).
     Emitting ``## Verdict``/``## Rationale`` AFTER ``## Findings`` would fold

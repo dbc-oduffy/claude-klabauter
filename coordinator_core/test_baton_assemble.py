@@ -2299,10 +2299,13 @@ class TestBareSlugArtifactPathNormalization:
 
 class TestD5ClaimPlanArgs:
     """Authoring a handoff/spinoff is a RELINQUISHMENT of the plan claim, not
-    an acquisition: d5 must name the ``release-artifact`` subcommand (class
-    ``plan``) and hand it a bare slug (no directory, no ``.md``), never the
-    raw ``artifact_path``. See coordinator_core.session.claims.release_artifact's
-    own boundary/no-op-when-not-holder contract for the receiving side."""
+    an acquisition: d5 must name the ``release-or-relinquish`` subcommand
+    (class ``plan``) and hand it a bare slug (no directory, no ``.md``),
+    never the raw ``artifact_path``. See
+    coordinator_core.session.claims.release_or_relinquish_artifact's own
+    boundary/no-op-when-not-holder contract for the receiving side (it calls
+    ``release_artifact`` unchanged, then may additionally write a DR-205
+    relinquishment marker)."""
 
     def test_d5_releases_the_plan_claim_rather_than_claiming_it(self, tmp_path):
         artifact = _write_artifact(
@@ -2311,7 +2314,7 @@ class TestD5ClaimPlanArgs:
         )
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         d5 = next(d for d in decision["directives"] if d["id"] == "d5")
-        assert d5["args"][0] == "release-artifact"
+        assert d5["args"][0] == "release-or-relinquish"
         assert d5["args"][1] == "plan"
 
     def test_d5_third_arg_is_bare_slug_not_path(self, tmp_path):
@@ -2321,11 +2324,11 @@ class TestD5ClaimPlanArgs:
         )
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         d5 = next(d for d in decision["directives"] if d["id"] == "d5")
-        assert d5["args"] == ["release-artifact", "plan", "2026-07-26-some-plan"]
+        assert d5["args"] == ["release-or-relinquish", "plan", "2026-07-26-some-plan"]
 
 
 class TestD5EmissionDiscriminator:
-    """d5 (`session-claim-cli release-artifact plan <slug>`) must fire ONLY
+    """d5 (`session-claim-cli release-or-relinquish plan <slug>`) must fire ONLY
     on the handoff path, never on the spinoff path -- same asymmetry as d6's
     own discriminator (TestD6EmissionDiscriminator above). A handoff is a
     RELINQUISHMENT of the plan claim (the successor must find it unclaimed);
@@ -2390,7 +2393,7 @@ class TestD5EmissionDiscriminator:
         )
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         d5 = next(d for d in decision["directives"] if d["id"] == "d5")
-        assert d5["args"] == ["release-artifact", "plan", "2026-07-26-some-plan"]
+        assert d5["args"] == ["release-or-relinquish", "plan", "2026-07-26-some-plan"]
 
 
 class TestBatonNeverClaims:
@@ -2426,6 +2429,7 @@ class TestBatonNeverClaims:
     # this set is presumptively unvetted, not presumptively safe.
     SESSION_CLAIM_CLI_NON_ACQUIRING_SUBCOMMANDS = {
         "release-artifact",
+        "release-or-relinquish",
         "clear-claim-if-dead",
         "is-session-live",
         "list-stale-claim-handoffs",

@@ -81,6 +81,7 @@ from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_cli_script_root,
 )
 from coordinator_core.contract import apply_base
+from coordinator_core.contract.apply_base import assert_in_repo_root
 from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST, brief
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
 
@@ -131,7 +132,49 @@ def _load(cli_name: str) -> ModuleType:
     return module
 
 
+def _write_target_indexes(cli_name: str, args: list[str]) -> list[int]:
+    """Names the `args` indexes this module's own `build_directives` fills
+    with a WRITE-target path for `cli_name`, never a read-only source path
+    (23b). `lessons-outbox-drain read <root>...` is the one deliberate
+    exception: its `<root>...` tail is `ops.learn_lessons_roots.
+    resolve_roots()`'s PEER repo list, read-only by design and legitimately
+    outside `repo_root` — containment here would refuse the very cross-repo
+    drain this pipeline exists to run, so `read` names no index at all."""
+    if cli_name == "extract-lessons":
+        if args and args[0] == "extract":
+            indexes = [1]
+            if "-o" in args:
+                indexes.append(args.index("-o") + 1)
+            return indexes
+        if args and args[0] == "verify":
+            return [1, 2]
+        return []
+    if cli_name == "lessons-outbox-drain":
+        if args and args[0] == "assert-empty":
+            return [1]
+        return []
+    if cli_name == "age-sweep-lessons":
+        return [0]
+    return []
+
+
+def _assert_write_targets_in_repo_root(
+    cli_name: str, args: list[str], repo_root: Path
+) -> None:
+    """Refuses (raises `OutOfRepoPath`) a dispatched fixer CLI whose own
+    WRITE-target argument resolves outside `--repo-root` (23b — the
+    2026-09-24 example-game-repo-em memo's "fixers can write outside --repo-root"
+    sub-claim). Reuses `apply_base.assert_in_repo_root`, the same
+    containment primitive `scoped_commit` already applies to a commit
+    target, rather than re-deriving a second copy of that check here."""
+    for idx in _write_target_indexes(cli_name, args):
+        if idx >= len(args):
+            continue
+        assert_in_repo_root(Path(args[idx]), repo_root)
+
+
 def _run_cli(cli_name: str, args: list[str], repo_root: Path) -> dict[str, Any]:
+    _assert_write_targets_in_repo_root(cli_name, args, repo_root)
     module = _load(cli_name)
     exit_code, stdout, stderr, _exit_class = invoke_cli_main(module, args)
     if exit_code != 0:

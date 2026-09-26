@@ -110,14 +110,24 @@ Negative-spec:
       in ``state/improvement-queue/2026-07-17-reaper-reclaims-live-executing-
       sessions-d48b81b41d52.yaml``). Enumerate every subdirectory and exclude
       known non-session children via ``_NON_SESSION_DIR_NAMES`` instead.
+
+Claim relinquishment (DR-205) is NOT a liveness source: ``claim_holder_
+relinquished`` answers "has this claim's recorded holder asserted a
+handoff?", a question this module composes AFTER a ``claim_holder_live``
+verdict, never inside it. It is a separate predicate consulted by the
+takeover verb (``coordinator_core.session.claims.take_over_claim``), not a
+branch of liveness.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import FrozenSet, Optional
 
@@ -719,6 +729,209 @@ def claim_holder_live(cdir: str, cwd: Optional[str] = None) -> bool:
     except OSError:
         pid = ""
     return core.pid_alive(pid)
+
+
+# ---------------------------------------------------------------------------
+# Claim relinquishment (DR-205) — NOT a liveness source
+# ---------------------------------------------------------------------------
+#
+# ``claim_holder_relinquished`` answers a different question than
+# ``claim_holder_live`` above: not "is the holder alive" but "has the
+# recorded holder asserted a handoff". It is consulted on the OUTPUT of
+# ``claim_holder_live``, never from inside it (DR-205 (a), (f)) — this module's
+# module docstring's single-liveness-key invariant is unchanged by this
+# section: neither function below calls ``session_live``, ``claim_holder_live``,
+# ``core.stable_pid_alive`` or ``core.pid_alive``.
+
+
+@dataclass(frozen=True)
+class RelinquishmentEvidence:
+    """Evidence returned by ``claim_holder_relinquished``.
+
+    ``kind`` is ``"marker"`` (source (i), ``relinquished.json``) or
+    ``"derived"`` (source (ii), a committed handoff naming this holder and
+    plan). ``holder_sid`` is the claim dir's recorded ``session_id`` this
+    evidence is about. ``at``/``handoff`` are marker-only fields (the
+    marker's own ``at`` timestamp and optional ``handoff`` pointer);
+    ``handoff`` is also set on a ``"derived"`` hit, to the repo-relative
+    forward-slash path of the handoff that supplied the evidence.
+    """
+
+    kind: str
+    holder_sid: str
+    at: Optional[str] = None
+    handoff: Optional[str] = None
+
+
+def _read_relinquishment_marker(
+    cdir: Path, holder_sid: str
+) -> Optional[RelinquishmentEvidence]:
+    """Source (i): ``<cdir>/relinquished.json``. Counts only when its
+    ``session_id`` equals ``holder_sid`` — the claim dir's CURRENT recorded
+    holder, read by the caller before this is invoked. A marker naming a
+    stale sid (a takeover raced the write) is ignored by construction (D1):
+    it never speaks for the new holder. Any read/parse failure -> None,
+    never an exception — an unreadable or malformed marker is not evidence.
+    """
+    try:
+        raw = (cdir / "relinquished.json").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("session_id") != holder_sid:
+        return None
+    at = data.get("at")
+    handoff = data.get("handoff")
+    return RelinquishmentEvidence(
+        kind="marker",
+        holder_sid=holder_sid,
+        at=at if isinstance(at, str) else None,
+        handoff=handoff if isinstance(handoff, str) else None,
+    )
+
+
+def _handoff_landed(handoff_path: str, worktree: Path) -> bool:
+    """One ``git cat-file -e HEAD:<repo-relative-path>`` spawn — the ONLY
+    spawn ``claim_holder_relinquished`` ever makes, and only for a candidate
+    that already matched on sid + governing_plan (no match, no spawn)."""
+    try:
+        rel = (
+            Path(handoff_path)
+            .resolve()
+            .relative_to(Path(worktree).resolve())
+            .as_posix()
+        )
+    except (OSError, ValueError):
+        return False
+    from coordinator_core.win_portability import leaf_spawn_creationflags
+
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{rel}"],
+            cwd=str(worktree),
+            capture_output=True,
+            text=True,
+            **leaf_spawn_creationflags(),
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _derived_relinquishment_evidence(
+    cdir: Path, holder_sid: str
+) -> Optional[RelinquishmentEvidence]:
+    """Source (ii), plan class only. Keys the plan subject on ``cdir``'s own
+    basename (``docs/plans/<basename>.md`` — the same repo-relative path
+    ``claim_artifact``/``_CLAIM_REPORT_PATH_FMT`` use for a plan claim),
+    enumerates live+archived handoffs via
+    ``handoff_children._collect_handoff_paths`` (function-local import, as in
+    ``claims._handoff_has_named_successor``), byte-filters each for the
+    holder sid before parsing frontmatter, and spawns ``git cat-file -e``
+    only for a matched candidate to confirm it is committed. Any
+    incompleteness (scan error, unresolvable worktree, any exception) ->
+    None -- fails closed, never treats an unreadable subtree as evidence.
+    """
+    from coordinator_core.ops.fleet._common import main_worktree_root
+    from coordinator_core.ops.handoff_children import _collect_handoff_paths
+    from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+
+    try:
+        sessions_dir_path = cdir.parent.parent
+        common_dir = sessions_dir_path.parent
+        worktree = main_worktree_root(common_dir)
+        if not worktree:
+            return None
+    except Exception:
+        return None
+
+    try:
+        paths, scan_errors = _collect_handoff_paths(worktree)
+    except Exception:
+        return None
+    if scan_errors:
+        return None
+
+    plan_path = f"docs/plans/{cdir.name}.md"
+    sid_bytes = holder_sid.encode("utf-8")
+
+    for handoff_path in paths:
+        try:
+            with open(handoff_path, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        if sid_bytes not in raw:
+            continue
+        authoring_session = read_frontmatter_field(handoff_path, "authoring_session")
+        if authoring_session != holder_sid:
+            continue
+        governing_plan = read_frontmatter_field(handoff_path, "governing_plan")
+        if governing_plan.replace("\\", "/") != plan_path:
+            continue
+        if not _handoff_landed(handoff_path, worktree):
+            continue
+        try:
+            rel = (
+                Path(handoff_path)
+                .resolve()
+                .relative_to(Path(worktree).resolve())
+                .as_posix()
+            )
+        except (OSError, ValueError):
+            rel = handoff_path
+        return RelinquishmentEvidence(kind="derived", holder_sid=holder_sid, handoff=rel)
+    return None
+
+
+def claim_holder_relinquished(
+    cdir: str, cwd: Optional[str] = None
+) -> Optional[RelinquishmentEvidence]:
+    """DR-205's ``claim_holder_relinquished`` predicate: has ``cdir``'s
+    recorded holder asserted a handoff? Consulted on the OUTPUT of
+    ``claim_holder_live``, never from inside it, and composes AFTER that
+    verdict (DR-205 (f)) — this function calls neither ``session_live`` nor
+    ``claim_holder_live`` nor ``core.stable_pid_alive`` nor ``core.pid_alive``.
+
+    Returns the FIRST evidence found (marker, then the plan-class derived
+    fallback), or ``None``. ``None`` is also the answer on ANY read failure
+    -- this function fails closed, and an unreadable subtree never counts as
+    evidence.
+
+    A pid-only claim dir (no ``session_id`` file — the legacy fallback
+    ``claim_holder_live`` still serves) has no marker by construction and no
+    derived evidence either: there is no session_id to key either source on.
+
+    ``cwd`` is accepted for signature symmetry with ``claim_holder_live`` /
+    ``claim_held_by_me`` but unused here — every path this function reads is
+    already anchored under ``cdir`` itself or derived from ``cdir``'s own
+    claim-store ancestry (see ``_derived_relinquishment_evidence``), never
+    re-resolved against the caller's ``cwd``.
+    """
+    if not cdir:
+        return None
+    p = Path(cdir)
+    try:
+        if not (p / "session_id").is_file():
+            return None
+        holder_sid = (p / "session_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not holder_sid:
+        return None
+
+    marker_evidence = _read_relinquishment_marker(p, holder_sid)
+    if marker_evidence is not None:
+        return marker_evidence
+
+    if p.parent.name != "plan-claims":
+        return None
+    return _derived_relinquishment_evidence(p, holder_sid)
 
 
 def claim_held_by_me(

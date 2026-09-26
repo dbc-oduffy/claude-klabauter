@@ -3,6 +3,12 @@ commit -- `deletion_block_gate`, `carry_gate`, `op_scope_coverage_gate` --
 in-process, against a ceremony-sized path set. (A fourth gate, `dirty_tree_gate`,
 was probed here until its brightline-kill-bar deletion -- Review: overengineering-reviewer.)
 
+`attribution_gate` is measured too, but for a different reason: it is NOT
+wired into `commit_v2` yet (plan `docs/plans/2026-09-25-reviewer-attribution-commit-gate.md`
+C5) -- this is the pre-wiring cost check the C4 wiring row waits on, not a
+reinstatement question. It is excluded from the "ALL THREE (reinstate shape)"
+bundle below, which is specific to the three `run_commit_pipeline` gates.
+
 THE QUESTION THIS ANSWERS, and it is the one the P1 asks rather than a
 general benchmark: `run_commit_pipeline` was killed at the 500ms brightline
 and C3 repointed every caller onto `commit_paths`/`ceremony.commit_v2`, which
@@ -35,10 +41,12 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC))
 
+from coordinator_core.attribution import is_exempt_path
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.commit_gates import (
+    attribution_gate,
     carry_gate,
     deletion_block_gate,
     op_scope_coverage_gate,
@@ -46,12 +54,37 @@ from coordinator_core.ops.ceremony.commit_gates import (
 
 WARMUP = 3
 
-SIZES = (1, 6, 35)
+SIZES = (1, 2, 6, 35)
+"""Ceremony-measured percentiles this repo's last 300 commits show: median 1,
+p75 2, p90 6, p99 35 (see module docstring). `attribution_gate`'s C5 row
+names this same sweep explicitly; the other three gates were already
+measured only at (1, 6, 35) and gain the p75 point too rather than diverge
+onto a second sweep."""
+
+PROCESS_TIME_TARGET_MS = 50.0
+"""Same bar `ceremony.commit_v2` measures itself against --
+`coordinator_core/benchmarks/tests/test_commit_v2_process_time_gate.py:138`,
+not `commit_v2.py`'s docstring mention of it (Review: coordinator:staff-eng
+finding 3, coordinator:eng-director finding 2)."""
 
 
 def _tracked_sample(root: Path, n: int) -> list:
     out = run_git(["ls-files", "--", "coordinator_core"], cwd=str(root)).stdout.split("\n")
     live = [p for p in out if p.strip() and (root / p).is_file()]
+    return live[:n]
+
+
+def _tracked_non_exempt_python_sample(root: Path, n: int) -> list:
+    """Real `.py` paths from HEAD that `is_exempt_path` would NOT skip --
+    `attribution_gate`'s own filter runs first and reads nothing for an
+    exempt path, so a sample built from exempt paths (e.g. anything under
+    `coordinator_core/attribution/` itself) would measure the empty-fast-path
+    cost, not the real one the C5 row asks for."""
+    out = run_git(["ls-files", "--", "coordinator_core"], cwd=str(root)).stdout.split("\n")
+    live = [
+        p for p in out
+        if p.strip() and p.endswith(".py") and (root / p).is_file() and not is_exempt_path(p)
+    ]
     return live[:n]
 
 
@@ -93,8 +126,10 @@ def main(n=12):
     print(f"{'gate':28s} {'paths':>5s}  {'proc_ms':>8s} {'procs':>6s}  {'wall_ms':>8s}")
 
     msg = "probe: measuring gate cost\n\nbody\n"
+    attribution_results = {}
     for size in SIZES:
         paths = _tracked_sample(root, size)
+        attribution_paths = _tracked_non_exempt_python_sample(root, size)
         cases = (
             ("deletion_block_gate",
              lambda: deletion_block_gate(msg, paths, cwd=root)),
@@ -102,10 +137,14 @@ def main(n=12):
              lambda: carry_gate(root, paths)),
             ("op_scope_coverage_gate",
              lambda: op_scope_coverage_gate(root, paths)),
+            ("attribution_gate",
+             lambda: attribution_gate(root, attribution_paths)),
         )
         for label, fn in cases:
             ms, procs, wall = _window(fn, n)
             print(f"{label:28s} {size:5d}  {ms:8.2f} {procs:6.2f}  {wall:8.2f}")
+            if label == "attribution_gate":
+                attribution_results[size] = (ms, procs, wall, len(attribution_paths))
 
         def all_three():
             deletion_block_gate(msg, paths, cwd=root)
@@ -115,6 +154,16 @@ def main(n=12):
         ms, procs, wall = _window(all_three, n)
         print(f"{'ALL THREE (reinstate shape)':28s} {size:5d}  {ms:8.2f} {procs:6.2f}  {wall:8.2f}")
         print()
+
+    within_budget = all(
+        procs == 0 and ms <= PROCESS_TIME_TARGET_MS
+        for ms, procs, _wall, _paths in attribution_results.values()
+    )
+    print(
+        f"attribution_gate summary: within_{PROCESS_TIME_TARGET_MS}ms_and_0_spawns="
+        f"{within_budget}"
+    )
+    return attribution_results, within_budget
 
 
 if __name__ == "__main__":

@@ -82,6 +82,24 @@ def test_the_amend_provenance_probe_reads_the_payload_repo(probe_cwds):
     assert set(probe_cwds) == {PAYLOAD_CWD}
 
 
+def test_a_leading_cd_prefix_wins_over_the_payload_cwd_for_amend(probe_cwds):
+    # CEPEF-B9 / V1: `check_offer_git_c` is bypassed here entirely (this test
+    # calls `check_git_commit_safe_commit_advise` directly, not the folded
+    # dispatch chain), so the amend-provenance probe is the one under test.
+    # A leading `cd <dir> &&` names a repo just as explicitly as `-C` does.
+    named = "/cd-target-repo"
+    _run("cd %s && git commit --amend -m x" % named)
+    assert probe_cwds, "the amend provenance probe never ran"
+    assert set(probe_cwds) == {named}
+
+
+def test_a_leading_cd_prefix_still_loses_to_an_explicit_dash_c_for_amend(probe_cwds):
+    named = "/dash-c-repo"
+    _run("cd /cd-target-repo && git -C %s commit --amend -m x" % named)
+    assert probe_cwds, "the amend provenance probe never ran"
+    assert set(probe_cwds) == {named}
+
+
 def test_the_sequencer_probe_reads_the_payload_repo(probe_cwds):
     _run("git add a.py && git commit -m x")
     assert probe_cwds, "the sequencer probe never ran"

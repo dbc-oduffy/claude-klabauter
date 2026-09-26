@@ -57,6 +57,10 @@ from coordinator_core.ops.fleet._common import (
     rel_id,
     rm_and_commit,
 )
+from coordinator_core.ops.review_findings_ledger import (
+    _extract_frontmatter_key,
+    _frontmatter_bounds,
+)
 from coordinator_core.session.machinery_paths import review_trail_dir
 
 _LOG = logging.getLogger(__name__)
@@ -108,9 +112,35 @@ def cited_review_trail_relpaths(worktree_root: Path) -> set:
             cited.add(m.group(1))
     return cited
 
-# "## Integrator Dispositions" as an anchored heading line — marker-PRESENT means
-# leg (a) (integrated, DoE-owned) owns the sidecar.
+# "## Integrator Dispositions" as an anchored heading line — the RETIRED
+# marker (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md,
+# row M4): the review-integrator agent no longer exists, so no NEW sidecar
+# ever carries this heading. Kept ONLY to keep classifying pre-retirement
+# historical sidecars (Anti-scope: "Do not edit historical records") as
+# integrated, alongside the ledger-verified predicate below.
 _MARKER_RE = re.compile(r"^## Integrator Dispositions[ \t]*$", re.MULTILINE)
+
+
+def _has_verified_findings_ledger(text: str) -> bool:
+    """True when `text`'s frontmatter carries a non-empty `findings_ledger:`
+    stamp — the ONLY thing a post-retirement reviewer sidecar writes to mark
+    itself integrated (`review_findings_ledger.verify`, row M2). Reuses that
+    module's own frontmatter-bounds/key-extraction helpers rather than
+    re-deriving a second frontmatter parser here (row M4 body: "Import the
+    parser from review_findings_ledger; do not copy it")."""
+    bounds = _frontmatter_bounds(text)
+    if bounds is None:
+        return False
+    head = text[: bounds[1]]
+    value = _extract_frontmatter_key(head, "findings_ledger")
+    return bool(value)
+
+
+def is_integrated(text: str) -> bool:
+    """`text` reads as an integrated review-findings sidecar: either the
+    retired marker heading (historical sidecars) or a verified
+    `findings_ledger` stamp (the current, post-retirement route)."""
+    return bool(_MARKER_RE.search(text)) or _has_verified_findings_ledger(text)
 
 
 # ---------------------------------------------------------------------------

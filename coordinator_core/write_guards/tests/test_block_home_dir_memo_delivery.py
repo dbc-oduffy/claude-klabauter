@@ -142,3 +142,89 @@ class TestDenyAndAllow:
         result = guard.check(_payload(target))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestDenyMessageContent:
+    """Item 30 (cross-repo/archive/2026-09-24-doe-claude-em-block-home-dir-
+    memo-delivery-lost-config-only.md): ``_deny_reason`` had drifted from
+    the module's own docstring, dropping the CONFIG-ONLY framing, the
+    ``claude-home`` alias, and the destination inbox path. Pins three of the
+    memo's four literal needles verbatim. The fourth, a single-shot
+    ``cross-repo-memo --to doe-claude-em --topic <slug> --title "<t>"``
+    invocation, is a RETIRED CLI flag form (DR-210 -- see
+    ``coordinator/bin/cross-repo-memo.py``'s ``send`` subparser comment,
+    "No legacy one-shot flag form") and is deliberately NOT reproduced: an
+    offered command that no longer runs is not a real ALTERNATIVE
+    (docs/wiki/guard-messaging.md § Trichotomy), so this checks for the
+    live two-verb form (``draft`` then ``send``) instead."""
+
+    def test_deny_message_carries_config_only_and_claude_home_framing(self, _fake_home):
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        assert "CONFIG-ONLY" in reason
+        assert "claude-home" in reason
+
+    def test_deny_message_names_the_destination_inbox_path(self, _fake_home):
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        assert "cross-repo/inbox/" in reason
+
+    def test_deny_message_names_the_real_receiver_and_live_cli_form(self, _fake_home):
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        assert "doe-claude-em" in reason
+        assert "cross-repo-memo draft" in reason
+        assert "cross-repo-memo send" in reason
+
+    def test_deny_message_via_check_carries_all_needles(self, _fake_home):
+        """End-to-end through ``check()``, not only the text-builder."""
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        result = guard.check(_payload(target))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        for needle in ("CONFIG-ONLY", "cross-repo/inbox/", "claude-home", "doe-claude-em"):
+            assert needle in reason, "missing needle: %r in %r" % (needle, reason)
+
+
+class TestDenyMessageInboxResolution:
+    """The inbox path is RESOLVED, never a hardcoded host literal (item 30,
+    plan body)."""
+
+    def test_inbox_path_falls_back_to_placeholder_when_doe_root_unresolvable(
+        self, monkeypatch, _fake_home
+    ):
+        monkeypatch.setattr(
+            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
+            lambda: (None, None),
+        )
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        assert "<doe_claude>/cross-repo/inbox/" in reason
+
+    def test_inbox_path_resolves_to_the_actual_receiver_root(
+        self, monkeypatch, tmp_path, _fake_home
+    ):
+        doe_root = tmp_path / "DoE-claude"
+        (doe_root / "state" / "cross-repo").mkdir(parents=True)
+        monkeypatch.setattr(
+            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
+            lambda: (str(doe_root), "env"),
+        )
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        expected = str(doe_root / "state" / "cross-repo" / "inbox").replace("\\", "/") + "/"
+        assert expected in reason
+
+    def test_inbox_resolution_failure_does_not_raise(self, monkeypatch, _fake_home):
+        """Fail-open on the deny path's own message composition: an
+        exception here must degrade to the placeholder text, never bubble
+        out of ``_deny_reason`` (this module's own never-raises contract)."""
+        def _boom():
+            raise RuntimeError("registry unreadable")
+
+        monkeypatch.setattr(
+            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
+            _boom,
+        )
+        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+        reason = guard._deny_reason(target)
+        assert "<doe_claude>/cross-repo/inbox/" in reason

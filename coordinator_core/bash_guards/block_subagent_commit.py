@@ -1237,6 +1237,20 @@ def _import_denial_is_wholly_indeterminate():
         return None
     return denial_is_wholly_indeterminate
 
+
+def _import_classification_orphan():
+    """Same lazy-import shape as the two seams above -- imports the
+    EXISTING `_CLASSIFICATION_ORPHAN` constant (never redefines it here) so
+    `_deny_reason`'s orphan branch below can recognise the classification
+    without re-deriving its wording."""
+    try:
+        from coordinator_core.ops.session.scope_report import (
+            _CLASSIFICATION_ORPHAN,
+        )
+    except Exception:
+        return None
+    return _CLASSIFICATION_ORPHAN
+
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity): a dispatched
 MATCHERS = COMMAND_TOOL_NAMES
@@ -1245,6 +1259,72 @@ PRIORITY = 40
 #: Ruling 3, C3 of the plan named above) -- resolved STRICTLY from the
 #: added to `_ALLOWED_SUBAGENT_TYPES` below -- that set exempts a type on
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+
+#: R21 (2026-09-26, IBMFR): the ``agentType`` a degraded host substitutes for
+#: `_GIT_COMMIT_AGENT_TYPE` -- `emit.py::_HOST_NATIVE_AGENT_TYPE_ROSTER`'s
+#: ``general-purpose`` -- the harness's own universal built-in every host can
+#: resolve. On a degraded host, LEG 1's strict ``payload["agent_type"] ==
+#: _GIT_COMMIT_AGENT_TYPE`` check can never hold: the harness-supplied
+#: `agent_type` IS this literal, not the coordinator:* one, for every
+#: degraded dispatch -- executor, enricher, commit and test alike -- so this
+#: value alone identifies nothing about WHICH row is running. Recognising the
+#: degraded commit dispatch therefore needs a SECOND, commit-specific signal
+#: (`_transcript_carries_commit_phase_sentinel` below); matching this literal
+#: alone would exempt every general-purpose agent's commits, degraded
+#: git-commit-agent or not -- exactly what this constant must never be used
+#: to do on its own.
+_DEGRADED_HOST_NATIVE_AGENT_TYPE = "general-purpose"
+
+#: The one substring `_commit_agent_call` in
+#: `coordinator_core/ops/dispatch_emit/emit.py` bakes, VERBATIM and
+#: UNCONDITIONALLY, into every commit-phase prompt it composes -- present
+#: whether or not the run is agent-type-host-degraded, because emit.py
+#: appends it to `doctrine` before any degrade substitution ever touches the
+#: `agentType` literal. It is therefore an EXISTING marker "already carried
+#: by commit:wave-N dispatches" (R21's own framing) rather than a new stamp
+#: this fix invents -- reading it needs no emit.py change. Imported from
+#: emit.py (its actual composition site) rather than duplicated, so the two
+#: sides cannot drift out of byte-for-byte sync silently.
+from coordinator_core.ops.dispatch_emit.emit import (  # noqa: E402
+    _COMMIT_PHASE_PROMPT_SENTINEL,
+)
+
+#: Upper bound on how much of a subagent's own transcript file
+#: `_transcript_carries_commit_phase_sentinel` will read, applied so a huge
+#: or adversarially-inflated transcript cannot turn this leg into an
+#: unbounded read on the hot Bash-guard path. The commit-phase prompt this
+#: sentinel is drawn from is composed of a handful of fixed paragraphs (see
+#: `_commit_agent_call`) that comfortably fit well inside this bound; a
+#: transcript whose first entry does not contain the sentinel within it is
+#: not a commit-phase dispatch, degraded or not.
+_TRANSCRIPT_SENTINEL_READ_CAP_BYTES = 262144
+
+
+def _transcript_carries_commit_phase_sentinel(transcript_path: Optional[str]) -> bool:
+    """True iff ``transcript_path``'s FIRST line (the harness-authored
+    dispatch entry, written before the subagent's own first tool call ever
+    runs) contains `_COMMIT_PHASE_PROMPT_SENTINEL`.
+
+    Reads only the first line, bounded by
+    `_TRANSCRIPT_SENTINEL_READ_CAP_BYTES` -- never the whole file -- and does
+    no JSON parsing: the sentinel is plain ASCII with no character JSON
+    string-encoding would escape, so a raw substring search against the
+    JSON-encoded line finds it exactly as reliably as parsing would, at a
+    fraction of the cost.
+
+    Fails CLOSED (returns ``False``) on a missing/unreadable file, an empty
+    path, or any exception -- an unread transcript is "not a commit-phase
+    dispatch", never "assume yes", matching this module's existing
+    fail-closed discipline for every other LEG 1 leg.
+    """
+    if not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline(_TRANSCRIPT_SENTINEL_READ_CAP_BYTES)
+    except OSError:
+        return False
+    return _COMMIT_PHASE_PROMPT_SENTINEL in first_line
 
 #: Resolved from the HARNESS-SUPPLIED `payload["agent_type"]` ONLY, never
 #: `effective_type` -- the same discipline `_GIT_COMMIT_AGENT_TYPE` is held to
@@ -1447,6 +1527,121 @@ def _python_c_payload_argv_text(payload: str) -> str:
     """
     literals = [m.group(0)[1:-1] for m in _PYTHON_STRING_LITERAL_RE.finditer(payload)]
     return " ".join(literals)
+
+
+#: Part 22 (2026-09-26, IBMDT item 6): python interpreter identity, reused
+#: from `_normalized_interpreter_head` rather than a second name set --
+#: only ``python``/``python3`` (any version suffix, path prefix, ``.exe``)
+#: ever normalize into this.
+_PYTHON_INTERPRETER_HEADS = frozenset({"python", "python3"})
+
+#: The one shape item 6 names: an import of `coordinator_core.git.commit`,
+#: in any of the three forms Python source actually spells it in. Deny-by-
+#: default, so this is an OVER-approximation deliberately, same posture as
+#: every prefilter in this module: a comment merely mentioning the module
+#: path (not an import statement) also matches, and that is accepted --
+#: the guard cannot tell intent from a heredoc body, only text.
+_GIT_COMMIT_IMPORT_RE = re.compile(
+    r"\bimport\s+coordinator_core\.git\.commit\b"
+    r"|\bfrom\s+coordinator_core\.git\.commit\s+import\b"
+    r"|\bfrom\s+coordinator_core\.git\s+import\s+commit\b"
+)
+
+
+def _line_reaches_python_interpreter(line: str) -> bool:
+    """Whether any whitespace- or ``|``-separated token on ``line``
+    normalizes to a Python interpreter identity -- covers both
+    ``python3 <<'EOF'`` (head of the line) and ``cat <<'EOF' | python3``
+    (interpreter after a pipe on the SAME line the heredoc operator is on).
+    Quote characters around a token (``'python3'``) are stripped before
+    normalizing, since a quoted interpreter name is unusual but not
+    meaningfully different in intent.
+    """
+    for raw_tok in line.replace("|", " ").split():
+        tok = raw_tok.strip("'\"")
+        if _normalized_interpreter_head(tok) in _PYTHON_INTERPRETER_HEADS:
+            return True
+    return False
+
+
+def _heredoc_bodies_fed_to_python(cmd: str) -> List[str]:
+    """Own-purpose sibling of `_strip_heredoc_bodies`, over the SAME
+    ``cmd`` text -- but where that function DISCARDS each heredoc body
+    (deliberately, for unrelated false-positive reasons -- see its call
+    site in `check()`), this one COLLECTS the bodies whose heredoc line
+    reaches a Python interpreter (`_line_reaches_python_interpreter`), so
+    the import scan below can see text `_strip_heredoc_bodies` would have
+    made invisible. Runs on the RAW, unstripped ``cmd`` -- calling this on
+    an already-heredoc-stripped string would find nothing, by construction.
+    """
+    lines = cmd.split("\n")
+    bodies: List[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        i += 1
+        for delim in [m.group(2) for m in _HEREDOC_OP_RE.finditer(line)]:
+            body_lines: List[str] = []
+            while i < n and lines[i].strip() != delim:
+                body_lines.append(lines[i])
+                i += 1
+            if i < n:
+                i += 1
+            if _line_reaches_python_interpreter(line):
+                bodies.append("\n".join(body_lines))
+    return bodies
+
+
+def _stdin_pipe_payloads_fed_to_python(cmd: str) -> List[str]:
+    """``echo '<script>' | python3`` -- no heredoc; the script text is a
+    quoted string literal in the pipeline segment(s) preceding a
+    python-headed segment on the same line. Extracts every visible quoted
+    literal from the segments before such a pipe boundary. A payload
+    supplied through a file (``cat script.py | python3``) has no literal
+    text in the command itself and is out of scope -- unreadable to a text
+    scan, same boundary `_prefilter_mentions_commit`'s own docstring draws
+    elsewhere in this module.
+    """
+    payloads: List[str] = []
+    for line in cmd.split("\n"):
+        if "|" not in line:
+            continue
+        segments = line.split("|")
+        for idx in range(1, len(segments)):
+            head_tokens = segments[idx].split()
+            if not head_tokens:
+                continue
+            if _normalized_interpreter_head(head_tokens[0].strip("'\"")) in (
+                _PYTHON_INTERPRETER_HEADS
+            ):
+                preceding = "|".join(segments[:idx])
+                literals = [
+                    m.group(0)[1:-1]
+                    for m in _PYTHON_STRING_LITERAL_RE.finditer(preceding)
+                ]
+                if literals:
+                    payloads.append(" ".join(literals))
+    return payloads
+
+
+def _has_python_heredoc_or_stdin_git_commit_import(
+    cmd: str, *, legs: Optional[Set[str]] = None
+) -> bool:
+    """The item-6 matcher: does a stdin- or heredoc-fed Python interpreter
+    in ``cmd`` carry a body importing ``coordinator_core.git.commit``.
+    Runs on the RAW ``cmd`` (see `_heredoc_bodies_fed_to_python`'s
+    docstring) -- never on `check()`'s heredoc-stripped ``cmd_for_scan``.
+    """
+    bodies = _heredoc_bodies_fed_to_python(cmd) + _stdin_pipe_payloads_fed_to_python(
+        cmd
+    )
+    for body in bodies:
+        if _GIT_COMMIT_IMPORT_RE.search(body):
+            if legs is not None:
+                legs.add(_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT)
+            return True
+    return False
 
 
 #: 2026-08-04; NARROWED part 17, 2026-08-05). Pure data/text/format modules
@@ -2259,6 +2454,19 @@ _PAYLOAD_LEG_PYTHON_STRING_LITERALS = "payload-leg:python-string-literals"
 #: with a message naming the wrong cause; see `_GIT_COMMIT_AGENT_LEG_
 #: MESSAGES`' own note.
 _PAYLOAD_LEG_PYTHON_OPAQUE_SINK = "payload-leg:python-opaque-sink"
+
+#: Part 22 (2026-09-26, IBMDT item 6): a stdin- or heredoc-fed Python
+#: interpreter whose body imports `coordinator_core.git.commit` reaches
+#: the commit primitive directly, bypassing every `-c`-shaped payload
+#: matcher above -- those only ever see a `-c`-style argv payload, and
+#: `_strip_heredoc_bodies` (this module's own pre-scan step, run for
+#: unrelated false-positive reasons -- see its call site in `check()`)
+#: discards the heredoc BODY before any of them run, so the import was
+#: never visible to any matcher. Own leg, own message: neither existing
+#: `-c` message is accurate here (there is no `-c` flag, and no re-spelling
+#: fixes it -- the fix is to not pipe/heredoc source into an interpreter at
+#: all).
+_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT = "payload-leg:python-heredoc-stdin-import"
 
 
 def _wrapped_shell_c_payload_legs(
@@ -4667,7 +4875,41 @@ _SWEEPING_FLAG_TOKENS = frozenset({"-A", "-a", "--all"})
 _GLOB_CHARS = frozenset("*?[")
 
 
+#: `git`'s literal-pathspec magic prefix. `:(literal)<path>` disables ALL
+#: glob interpretation of `<path>` by construction -- git itself never
+#: expands it -- so a sweeping check that still runs a glob test against
+#: the wrapped path is testing something git already promised not to do.
+#: Every OTHER `:`-magic form (`:/`, `:(top)`, `:(glob)`, ...) carries no
+#: such promise and stays sweeping.
+_LITERAL_PATHSPEC_PREFIX = ":(literal)"
+
+
+def _literal_pathspec_inner_path(candidate: str) -> Optional[str]:
+    """If ``candidate`` is exactly ``:(literal)`` plus a non-empty path,
+    return that inner path. ``None`` for every other shape, including a
+    bare ``:(literal)`` with nothing after it -- an empty operand names no
+    path to treat literally.
+
+    Single home for both commit guards
+    (this module's ``_pathspec_element_is_sweeping`` and
+    ``dispatch_checks._bt_commit_scope_operand_is_sweeping``, which imports
+    this function) so the `:(literal)` carve-out is recognized identically
+    in both rather than copied and drifting.
+    """
+    if candidate.startswith(_LITERAL_PATHSPEC_PREFIX):
+        inner = candidate[len(_LITERAL_PATHSPEC_PREFIX):]
+        if inner:
+            return inner
+    return None
+
+
 def _bracket_candidate_exists_literally(candidate: str, git_root: str) -> bool:
+    """True iff a `[`-bearing (but `*`/`?`-free) pathspec candidate exists
+    on disk under ``git_root``, taken as a literal filename rather than a
+    glob character class -- e.g. a Next.js dynamic-route path,
+    `src/app/[id]/page.tsx`. Single home for both commit guards; imported
+    by ``dispatch_checks`` rather than copied.
+    """
     if not git_root:
         return False
     candidate_posix = candidate.replace("\\", "/")
@@ -4692,6 +4934,13 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
     not require every directory pathspec to be rejected, only the repo root
     and its ancestors; `ceremony.scoped_git_commit`'s own docstring treats a
     directory pathspec as an accepted input shape).
+
+    ONE named carve-out inside the magic-pathspec form: `:(literal)<path>`
+    is unwrapped to `<path>` (via `_literal_pathspec_inner_path`)
+    and resolved as that ordinary path, with the glob-chars test skipped --
+    `:(literal)` is git's own promise that `<path>` is never glob-expanded,
+    deleted-file-or-not. A bare `:(literal)` with nothing after it, and
+    every OTHER `:`-magic form, stays sweeping.
 
     Resolved with ``posixpath`` (not ``os.path``) deliberately -- a git
     pathspec is always forward-slash-normalized regardless of host OS, so
@@ -4753,11 +5002,18 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
         return True
     if candidate in (".", "./"):
         return True
-    if candidate.startswith(":"):
+    literal_inner = _literal_pathspec_inner_path(candidate)
+    if literal_inner is not None:
+        # `:(literal)<path>` disables git's own glob interpretation of
+        # `<path>` -- the glob-chars test below would be testing an
+        # expansion git itself never performs, so it is skipped for this
+        # shape and resolution continues against the unwrapped inner path.
+        candidate = literal_inner
+    elif candidate.startswith(":"):
         return True
     if candidate in _SWEEPING_FLAG_TOKENS:
         return True
-    if any(ch in candidate for ch in _GLOB_CHARS):
+    if literal_inner is None and any(ch in candidate for ch in _GLOB_CHARS):
         if not (
             "[" in candidate
             and "*" not in candidate
@@ -5158,6 +5414,15 @@ _PYTHON_C_OPAQUE_SINK_DENY_REASON = (
     "spell the argv as literals, or run the command directly as Bash."
 )
 
+#: The deny message for `_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT` (part 22)
+#: -- stays inside `_message_size.MESSAGE_PROSE_CAP_BYTES`.
+_PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON = (
+    "BLOCKED: a stdin- or heredoc-fed Python interpreter body imports "
+    "`coordinator_core.git.commit` -- that reaches the commit primitive the "
+    "same as a `-c` payload naming it would. Finish your edits and report "
+    "to the EM instead; the EM runs `git commit`."
+)
+
 #: check runs, and which `_GIT_COMMIT_AGENT_DENY_REASON`'s "check path
 #: `_GIT_COMMIT_AGENT_LEG_MESSAGES` below, so an unrecognized value can only
 #: operator_tokens`), and the denial then told the agent its PATHSPEC was
@@ -5222,6 +5487,18 @@ _OWNERSHIP_LEG_REASON_ENUMERATION_MARKER = "; denied paths"
 
 _OWNERSHIP_LEG_SUMMARY_MAX_BYTES = 70
 
+#: A5/DD4: SC-DR-023's own "no holder is not evidence" caveat, cited
+#: verbatim (Review: coordinator:staff-eng -- register is one fact, once)
+#: rather than paraphrased -- same wording as `session-claim-cli.py`'s
+#: `who-claims-path` empty-result output. Measured to stay under
+#: `_message_size.MESSAGE_PROSE_CAP_BYTES` (220) with room to spare;
+#: pinned by `test_git_commit_agent_orphan_denial_names_no_holder_caveat`.
+_GIT_COMMIT_AGENT_ORPHAN_DENY_REASON = (
+    "BLOCKED: git-commit-agent -- no session holds a claim on this path. "
+    "no holder is not evidence no one wrote it: a write through a "
+    "subprocess or an unrecognised shape records no claim (SC-DR-023)."
+)
+
 
 def _ownership_leg_summary(reason: str, *, max_bytes: int = _OWNERSHIP_LEG_SUMMARY_MAX_BYTES) -> str:
     if not reason:
@@ -5247,6 +5524,7 @@ def _deny_reason(
     cmd: str,
     ownership_reason: str = "",
     command_leg: str = "",
+    is_degraded_git_commit_agent: bool = False,
 ) -> str:
     """Build the operator-facing deny message.
 
@@ -5276,6 +5554,13 @@ def _deny_reason(
     content even though the verdict itself still correctly denies. Gating on
     `agent_type` alone closes that probing seam without changing any
     verdict.
+
+    ``is_degraded_git_commit_agent`` (R21, 2026-09-26): True only when
+    ``check()`` already found the SECOND, commit-specific signal
+    (`_transcript_carries_commit_phase_sentinel`) alongside the degraded
+    ``general-purpose`` `agent_type` -- never derived from `agent_type`
+    alone here, for the identical Finding-2 reason: a bare `general-purpose`
+    `agent_type` must not, by itself, select this message branch.
 
     Ownership-leg naming (this dispatch's fix): ``_git_commit_agent_may_
     commit`` threads its ``ownership_reason`` leg through to ``check()``,
@@ -5321,11 +5606,16 @@ def _deny_reason(
         return _PYTHON_C_PAYLOAD_DENY_REASON
     if command_leg == _PAYLOAD_LEG_PYTHON_OPAQUE_SINK:
         return _PYTHON_C_OPAQUE_SINK_DENY_REASON
-    if agent_type == _GIT_COMMIT_AGENT_TYPE:
+    if command_leg == _PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT:
+        return _PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON
+    if agent_type == _GIT_COMMIT_AGENT_TYPE or is_degraded_git_commit_agent:
         if ownership_reason.startswith(_LEG_SENTINEL_PREFIX):
             return _GIT_COMMIT_AGENT_LEG_MESSAGES.get(
                 ownership_reason, _GIT_COMMIT_AGENT_DENY_REASON
             )
+        classification_orphan = _import_classification_orphan()
+        if classification_orphan and classification_orphan in ownership_reason:
+            return _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON
         summary = _ownership_leg_summary(ownership_reason)
         if summary:
             return (
@@ -5368,7 +5658,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _bsc_ps_tokens is not None:
             cmd_for_scan = " ".join(expand_start_process_invocations(_bsc_ps_tokens))
 
-    if not _prefilter_mentions_commit(cmd_for_scan):
+    # Part 22 (2026-09-26, IBMDT item 6): computed on the RAW, unstripped
+    # ``cmd`` -- ``cmd_for_scan`` has its heredoc bodies discarded by
+    # ``_strip_heredoc_bodies`` above, which is exactly the text this
+    # matcher needs to see. Also stands in for ``_prefilter_mentions_
+    # commit`` below for this one shape: that prefilter runs against
+    # ``cmd_for_scan``, so a heredoc body's own "commit" substring (e.g.
+    # ``coordinator_core.git.commit``) is invisible to it too.
+    payload_legs: Set[str] = set()
+    heredoc_stdin_import_hit = _has_python_heredoc_or_stdin_git_commit_import(
+        cmd, legs=payload_legs
+    )
+
+    if not _prefilter_mentions_commit(cmd_for_scan) and not heredoc_stdin_import_hit:
         return None
 
     # The two memos below are WITHIN-ONE-CHECK caches, not cross-call ones,
@@ -5376,7 +5678,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _wrapped_shell_c_payload_legs_with_head.cache_clear()
     _fold_python_c_payload.cache_clear()
     # NEGATIVE SPEC) -- the `or` short-circuit, and therefore the verdict,
-    payload_legs: Set[str] = set()
     if not (
         _has_git_commit(cmd_for_scan, legs=payload_legs)
         or _has_coordinator_safe_commit(cmd_for_scan, legs=payload_legs)
@@ -5384,6 +5685,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         or _has_reconstructed_commit_identity(cmd_for_scan, legs=payload_legs)
         or _has_folded_commit_identity(cmd_for_scan, legs=payload_legs)
         or _has_opaque_execution_sink(cmd_for_scan, legs=payload_legs)
+        or heredoc_stdin_import_hit
     ):
         return None
 
@@ -5418,7 +5720,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     ownership_reason = ""
-    if agent_type == _GIT_COMMIT_AGENT_TYPE:
+    is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
+    is_degraded_git_commit_agent = (
+        not is_git_commit_agent
+        and agent_type == _DEGRADED_HOST_NATIVE_AGENT_TYPE
+        and _transcript_carries_commit_phase_sentinel(
+            payload.get("transcript_path")
+        )
+    )
+    if is_git_commit_agent or is_degraded_git_commit_agent:
         may_commit, ownership_reason = _git_commit_agent_may_commit(
             cmd_for_scan, git_root, session_id, cwd
         )
@@ -5433,6 +5743,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         command_leg = _PAYLOAD_LEG_PYTHON_STRING_LITERALS
     elif _PAYLOAD_LEG_PYTHON_OPAQUE_SINK in payload_legs:
         command_leg = _PAYLOAD_LEG_PYTHON_OPAQUE_SINK
+    elif _PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT in payload_legs:
+        command_leg = _PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT
     reason = _deny_reason(
         agent_id or raw_agent_id,
         effective_type,
@@ -5440,6 +5752,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd,
         ownership_reason,
         command_leg,
+        is_degraded_git_commit_agent,
     )
     verdict = {
         "hookSpecificOutput": {

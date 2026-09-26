@@ -51,7 +51,6 @@ _SHAPED_CLAUSE_INDICES = (
     substrate._CLAUSE_ORPHAN_SWEEP,
     substrate._CLAUSE_PRUNE_ORPHANED_STATIC,
     substrate._CLAUSE_CAREFUL_BACKUP,
-    substrate._CLAUSE_WHOAMI_COPY,
 )
 
 
@@ -72,7 +71,7 @@ def test_clause_indices_point_at_the_declared_shaped_clauses():
     """Sanity-pins the `_CLAUSE_*` constants against `WRITE_SURFACE.clauses`
     itself — every one of the ten must resolve to an actual `ShapedClause`
     at that position, never a `StaticClause` or the wrong shaped clause."""
-    assert len(_SHAPED_CLAUSE_INDICES) == 10
+    assert len(_SHAPED_CLAUSE_INDICES) == 9
     for idx in _SHAPED_CLAUSE_INDICES:
         clause = substrate.WRITE_SURFACE.clauses[idx]
         assert isinstance(clause, ShapedClause), (
@@ -95,7 +94,6 @@ _EXPECTED_DISCOVERED_BY = {
     "_CLAUSE_ORPHAN_SWEEP": "_sweep_orphaned_agent_helpers (marker-provenance orphan sweep)",
     "_CLAUSE_PRUNE_ORPHANED_STATIC": "_prune_orphaned_static_bin_names (previous-manifest diff)",
     "_CLAUSE_CAREFUL_BACKUP": "_careful_write_backup_path",
-    "_CLAUSE_WHOAMI_COPY": "_iter_whoami_files (_c10a_copy_one)",
 }
 """Manifest-driven ML_FAMILY/ML_EXPLICIT/PLATFORM_LOCALIZE clauses (7, 8, 9)
 are covered by identity below via `_BIN_TEMPLATE_MANIFEST_GROUP_ATTRS`
@@ -370,7 +368,7 @@ def test_percolation_check_only_never_journals(tmp_path):
     assert substrate._WRITER_ID not in journal
 
 
-# --- _c10a_steps whoami copy (clause _CLAUSE_WHOAMI_COPY) -------------------
+# --- _c10a_steps (whoami-copy clause retired; check-only-never-journals still applies)
 
 
 def _c10a_common(tmp_path):
@@ -381,50 +379,6 @@ def _c10a_common(tmp_path):
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
     return install_base, settings_home, plugin_root, bin_dst
-
-
-def test_c10a_whoami_no_source_journals_empty_tuple(tmp_path):
-    install_base, settings_home, plugin_root, bin_dst = _c10a_common(tmp_path)
-
-    substrate._c10a_steps(str(install_base), settings_home, plugin_root, bin_dst, check_only=False)
-
-    journal = resolution_journal.read_journal()
-    assert journal[substrate._WRITER_ID][substrate._CLAUSE_WHOAMI_COPY].entries == ()
-
-
-def test_c10a_whoami_dest_already_populated_journals_empty_tuple(tmp_path):
-    install_base, settings_home, plugin_root, bin_dst = _c10a_common(tmp_path)
-    (plugin_root / "whoami").mkdir(parents=True)
-    (plugin_root / "whoami" / "a.txt").write_text("a\n", encoding="utf-8")
-    dst_whoami = settings_home / substrate._WHOAMI_DIRNAME
-    dst_whoami.mkdir(parents=True)
-    (dst_whoami / "already-here.txt").write_text("already\n", encoding="utf-8")
-
-    substrate._c10a_steps(str(install_base), settings_home, plugin_root, bin_dst, check_only=False)
-
-    journal = resolution_journal.read_journal()
-    assert journal[substrate._WRITER_ID][substrate._CLAUSE_WHOAMI_COPY].entries == ()
-
-
-def test_c10a_whoami_copy_journals_the_copied_files(tmp_path):
-    install_base, settings_home, plugin_root, bin_dst = _c10a_common(tmp_path)
-    src_whoami = plugin_root / "whoami"
-    src_whoami.mkdir(parents=True)
-    (src_whoami / "a.txt").write_text("a\n", encoding="utf-8")
-    (src_whoami / "sub").mkdir()
-    (src_whoami / "sub" / "b.txt").write_text("b\n", encoding="utf-8")
-
-    substrate._c10a_steps(str(install_base), settings_home, plugin_root, bin_dst, check_only=False)
-
-    dst_whoami = settings_home / substrate._WHOAMI_DIRNAME
-    journal = resolution_journal.read_journal()
-    resolution = journal[substrate._WRITER_ID][substrate._CLAUSE_WHOAMI_COPY]
-    got_paths = {e.path for e in resolution.entries}
-    assert got_paths == {
-        str(dst_whoami / "a.txt"),
-        str(dst_whoami / "sub" / "b.txt"),
-    }
-    assert all(e.kind == "file-path" for e in resolution.entries)
 
 
 def test_c10a_whoami_check_only_never_journals(tmp_path):

@@ -1725,16 +1725,26 @@ def _has_prose_gate(handoff: Dict[str, Any]) -> bool:
 
 
 def _has_blocking_notes(handoff: Dict[str, Any]) -> bool:
-    """True iff `handoff` carries a non-empty (non-whitespace) `blocking_notes`.
+    """True iff `handoff` carries a non-empty (non-whitespace) `gate_notes`,
+    falling back to the deprecated `blocking_notes` when `gate_notes` is
+    absent.
 
     Dominance twin of `_has_prose_gate` (see module docstring "BLOCKING_NOTES
     DOMINANCE"): a corpus migration deposits the operative human-authored gate
-    text into `blocking_notes` rather than `gate_dependency` for some handoff
-    kinds, so this predicate must apply the SAME strip-and-check discipline —
-    a whitespace-only value is empty, never a gate, exactly as `gate_dependency`
-    already treats it."""
-    blocking_notes = handoff.get("blocking_notes")
-    return isinstance(blocking_notes, str) and blocking_notes.strip() != ""
+    text into `gate_notes`/`blocking_notes` rather than `gate_dependency` for
+    some handoff kinds, so this predicate must apply the SAME strip-and-check
+    discipline — a whitespace-only value is empty, never a gate, exactly as
+    `gate_dependency` already treats it.
+
+    `gate_notes` is `blocking_notes`' current name (handoff schema 8.11.0,
+    DR-190 §13; see `schema_validate.py::_cf_awaiting_gate_needs_dependency`
+    for the same alias order) — reading only the deprecated key left a baton
+    gated via a current-shape `gate_notes` unrecognized here."""
+    for key in ("gate_notes", "blocking_notes"):
+        notes = handoff.get(key)
+        if isinstance(notes, str) and notes.strip() != "":
+            return True
+    return False
 
 
 #: "C2 SCAFFOLD SENTINEL"). The prefix tuple covers the C1 scaffold's own

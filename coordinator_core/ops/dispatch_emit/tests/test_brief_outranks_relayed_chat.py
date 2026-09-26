@@ -89,6 +89,21 @@ def test_the_clause_forbids_acting_on_relayed_text_as_a_task():
     assert "never satisfied" in _BRIEF_PRECEDENCE_CLAUSE
 
 
+def test_the_clause_names_the_launching_sessions_message_as_bounded_direction():
+    assert "no one is conversing with you" not in _BRIEF_PRECEDENCE_CLAUSE
+    assert "the launching session addresses to you directly" in _BRIEF_PRECEDENCE_CLAUSE
+    assert "bounded direction you act on" in _BRIEF_PRECEDENCE_CLAUSE
+
+
+def test_bounded_direction_is_still_refused_when_wrong_on_the_merits():
+    # Mirrors state/audits/2026-09-02-executor-refused-its-ems-mid-flight-correction.md:
+    # the clause's bound is on authority (who may narrow the task), never on
+    # correctness -- an addressed, in-scope message that is wrong on the
+    # merits is not thereby authorized.
+    assert "That bound is on authority, not correctness" in _BRIEF_PRECEDENCE_CLAUSE
+    assert "wrong on the merits is still refused on the merits" in _BRIEF_PRECEDENCE_CLAUSE
+
+
 def test_an_unanswered_brief_is_incomplete_and_named():
     block = _status_check_block("wave1Results", ["C1"], "wave1Stopped")
     assert "_unansweredBriefs.push(id)" in block

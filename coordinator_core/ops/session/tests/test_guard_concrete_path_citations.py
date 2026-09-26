@@ -443,7 +443,7 @@ def test_new_violations_evidence_artifact_filename_exempts_both_sides() -> None:
     before = "no findings yet\n"
     after = "Finding: drive-letter citation -- `X:\\Users\\realperson\\notes.txt`\n"
     new = new_violations(
-        before, after, filename="state/subagent-share/some-session/coordinatorreview-integrator-abc.md"
+        before, after, filename="state/subagent-share/some-session/coordinatorcode-reviewer-abc.md"
     )
     assert new == []
 

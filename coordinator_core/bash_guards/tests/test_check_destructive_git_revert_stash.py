@@ -97,7 +97,10 @@ class TestBareStashSweepingPeerTrackedEdits:
             "git -C %s %s" % (repo_with_peer_work, cmd.removeprefix("git "))
         )
         assert result is not None, "unscoped %r swept a peer's tracked work undetected" % cmd
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        # SC-DR-023 (CEPEF-B6): every one of these shapes is a whole-tree
+        # form now denied from the command string alone -- the reason no
+        # longer names a specific probed path.
+        assert "SC-DR-023" in _deny_reason(result)
 
     @pytest.mark.parametrize(
         "template",
@@ -114,7 +117,7 @@ class TestBareStashSweepingPeerTrackedEdits:
         cmd = template % repo_with_peer_work
         result = check_destructive_git_revert(cmd)
         assert result is not None, "%r masked the stash behind an earlier git invocation" % cmd
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
     def test_pathspec_scoped_stash_is_allowed(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert(
@@ -148,12 +151,12 @@ class TestWindowsExeStashRealEntrypoint:
     def test_git_exe_bare_stash_denies(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert("git.exe -C %s stash" % repo_with_peer_work)
         assert result is not None, "git.exe stash swept a peer's tracked work undetected"
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
     def test_git_exe_uppercase_bare_stash_denies(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert("GIT.EXE -C %s stash" % repo_with_peer_work)
         assert result is not None, "GIT.EXE stash swept a peer's tracked work undetected"
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
     def test_windows_spaced_path_backslash_git_exe_stash_denies(
         self, repo_with_peer_work: Path
@@ -162,7 +165,7 @@ class TestWindowsExeStashRealEntrypoint:
             "C:\\Program Files\\Git\\bin\\git.exe -C %s stash" % repo_with_peer_work
         )
         assert result is not None, "spaced-path git.exe stash swept a peer's tracked work undetected"
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
     def test_windows_spaced_path_forward_slash_git_exe_stash_denies(
         self, repo_with_peer_work: Path
@@ -171,7 +174,7 @@ class TestWindowsExeStashRealEntrypoint:
             "C:/Program Files/Git/bin/git.exe -C %s stash" % repo_with_peer_work
         )
         assert result is not None, "spaced-path git.exe stash swept a peer's tracked work undetected"
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
     def test_git_exe_pathspec_scoped_stash_still_allowed(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert(
@@ -190,7 +193,7 @@ class TestTrackedRowsAreCollected:
         assert not [p for p in repo_with_peer_work.rglob("*") if p.name.startswith("untracked")]
         result = check_destructive_git_revert("git -C %s stash -u" % repo_with_peer_work)
         assert result is not None
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "SC-DR-023" in _deny_reason(result)
 
 
 class TestCommandReallyInvokes:
@@ -352,70 +355,94 @@ def clean_repo(tmp_path: Path) -> Path:
 
 
 class TestAdvisoryFloorDirtyNotLoadbearing:
+    """SC-DR-023 (CEPEF-B6): `stash`/`stash push`, bare `reset --hard`, and
+    `checkout .`/`checkout -- .`/`restore .` are whole-tree forms and now
+    deny unconditionally, from the command string alone -- they no longer
+    fall through to this advisory floor. `stash -u` is the same bare-sweep
+    shape (the `-u` flag widens WHAT is swept, not whether it is a sweep)
+    and denies too."""
 
     @pytest.mark.parametrize(
         "cmd_tail",
         ["stash", "stash push", "stash -u"],
     )
-    def test_stash_advises(self, repo_with_ordinary_dirty_file: Path, cmd_tail: str) -> None:
+    def test_stash_denies(self, repo_with_ordinary_dirty_file: Path, cmd_tail: str) -> None:
         cmd = "git -C %s %s" % (repo_with_ordinary_dirty_file, cmd_tail)
-        assert check_destructive_git_revert(cmd) is None
-        result = check_destructive_git_revert_advisory(cmd)
+        result = check_destructive_git_revert(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "ADVISORY" in hso["additionalContext"]
+        assert hso["permissionDecision"] == "deny"
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
-    def test_reset_hard_advises(self, repo_with_ordinary_dirty_file: Path) -> None:
+    def test_reset_hard_denies(self, repo_with_ordinary_dirty_file: Path) -> None:
         cmd = "git -C %s reset --hard" % repo_with_ordinary_dirty_file
-        assert check_destructive_git_revert(cmd) is None
-        result = check_destructive_git_revert_advisory(cmd)
+        result = check_destructive_git_revert(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "ADVISORY" in hso["additionalContext"]
+        assert hso["permissionDecision"] == "deny"
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
     @pytest.mark.parametrize("verb_cmd", ["checkout .", "checkout -- .", "restore ."])
-    def test_checkout_restore_dot_advises(
+    def test_checkout_restore_dot_denies(
         self, repo_with_ordinary_dirty_file: Path, verb_cmd: str
     ) -> None:
         cmd = "git -C %s %s" % (repo_with_ordinary_dirty_file, verb_cmd)
-        assert check_destructive_git_revert(cmd) is None
-        result = check_destructive_git_revert_advisory(cmd)
+        result = check_destructive_git_revert(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "ADVISORY" in hso["additionalContext"]
+        assert hso["permissionDecision"] == "deny"
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
 
-class TestCleanTreeStaysSilent:
+class TestCleanTreeStillDeniesWholeTreeForms:
+    """SC-DR-023 (CEPEF-B6): a whole-tree form denies even against a clean
+    tree, because the classification never runs `git status` at all --
+    "clean tree" is not something this check can see for these shapes
+    anymore. Named to replace the retired `TestCleanTreeStaysSilent`
+    (pre-B6, when these same shapes fell through to `None`/advisory on a
+    clean tree)."""
 
     @pytest.mark.parametrize(
         "cmd_tail",
         ["stash", "stash -u", "reset --hard", "checkout .", "restore ."],
     )
-    def test_clean_tree_returns_none(self, clean_repo: Path, cmd_tail: str) -> None:
-        assert check_destructive_git_revert("git -C %s %s" % (clean_repo, cmd_tail)) is None
+    def test_clean_tree_still_denies(self, clean_repo: Path, cmd_tail: str) -> None:
+        result = check_destructive_git_revert("git -C %s %s" % (clean_repo, cmd_tail))
+        assert result is not None
+        assert "SC-DR-023" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 class TestAdvisoryNeverDemotesADeny:
+    """SC-DR-023 (CEPEF-B6): these two shapes are now whole-tree forms that
+    deny unconditionally, before any `git status` probe -- so the deny
+    reason no longer names a specific peer-claimed path (there was no probe
+    to find one). The load-bearing/peer-claimed tree is kept here only to
+    prove the deny still fires when there IS something at risk, not merely
+    when the tree happens to be clean."""
 
     def test_reset_hard_on_loadbearing_still_denies(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert("git -C %s reset --hard" % repo_with_peer_work)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
     def test_checkout_dot_on_loadbearing_still_denies(self, repo_with_peer_work: Path) -> None:
         result = check_destructive_git_revert("git -C %s checkout ." % repo_with_peer_work)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
 
 class TestDenySegmentWinsOverAdvisorySegment:
+    """SC-DR-023 (CEPEF-B6): both segments here are bare `git stash` -- a
+    whole-tree form that now denies unconditionally, from the command
+    string alone, on the FIRST such segment encountered. Neither segment
+    reaches the load-bearing/peer-claim probe any more, so this class no
+    longer exercises deny-vs-pending-advisory precedence for stash; it
+    pins that a chained pair of whole-tree segments still denies, in
+    either order."""
 
     def test_deny_wins_across_segments(
         self, repo_with_ordinary_dirty_file: Path, repo_with_peer_work: Path
@@ -428,7 +455,7 @@ class TestDenySegmentWinsOverAdvisorySegment:
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
     def test_deny_wins_reverse_order(
         self, repo_with_ordinary_dirty_file: Path, repo_with_peer_work: Path
@@ -441,7 +468,7 @@ class TestDenySegmentWinsOverAdvisorySegment:
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
 
 class TestScopedStashStillNone:
@@ -540,9 +567,12 @@ class TestWirePathThroughDispatch:
             "block-subagent-stash-creation must win over the advisory leg; got %r" % hso
         )
 
-    def test_plain_reset_hard_still_advises_when_nothing_downstream_denies(
+    def test_plain_reset_hard_now_denies_at_wire_level(
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
+        """SC-DR-023 (CEPEF-B6): bare `git reset --hard` is a whole-tree
+        form and denies unconditionally -- it no longer reaches the
+        advisory leg this test used to pin."""
         import json
 
         from coordinator_core.bash_guards import dispatch
@@ -553,22 +583,24 @@ class TestWirePathThroughDispatch:
         )
         assert out is not None
         hso = out["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "ADVISORY" in hso["additionalContext"]
+        assert hso["permissionDecision"] == "deny"
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
 
 class TestShellCRescanAdvisoryFloor:
+    """SC-DR-023 (CEPEF-B6): a bare `git stash`, unwrapped from an `sh -c`
+    payload, is a whole-tree form and now denies unconditionally -- it no
+    longer reaches the advisory leg this suite's name once pinned."""
 
-    def test_advisory_surfaces_through_sh_c_wrapper(
+    def test_rescanned_bare_stash_now_denies(
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
         cmd = "sh -c 'git -C %s stash'" % repo_with_ordinary_dirty_file
-        assert check_destructive_git_revert(cmd) is None
-        result = check_destructive_git_revert_advisory(cmd)
+        result = check_destructive_git_revert(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "ADVISORY" in hso["additionalContext"]
+        assert hso["permissionDecision"] == "deny"
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
     def test_rescan_deny_wins_over_outer_pending_advisory(
         self, repo_with_ordinary_dirty_file: Path, repo_with_peer_work: Path
@@ -581,7 +613,7 @@ class TestShellCRescanAdvisoryFloor:
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+        assert "SC-DR-023" in hso["permissionDecisionReason"]
 
 
 class TestForceCheckoutWholeTree:

@@ -163,10 +163,8 @@ def _fold_agent_type(value: str) -> str:
     they ever spell one agent differently -- a `coordinator:` namespace on
     one side, a case difference -- the exact `==` below sends an ORDINARY
     dispatch to the AMBIGUOUS arm, which four bash guards read as hostile.
-    That the class varies in spelling is not speculative: two DoE hooks
-    already fold it (`guard-review-integrator-sidecar-intake.py ::
-    _normalize_subagent_type` for the namespace,
-    `offer-exploration-tier-dispatch.py` for case).
+    That the class varies in spelling is not speculative: DoE hooks already
+    fold it (`offer-exploration-tier-dispatch.py` for case).
 
     Reported by doe-claude-em 2026-08-18 with the sample size stated rather
     than rounded: zero AMBIGUOUS rows across 8 post-change dispatches --

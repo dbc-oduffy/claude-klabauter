@@ -41,13 +41,20 @@ onto one key (dedupe fires); two calls whose non-command prose genuinely
 differs (a different shape) mint different keys and both fire. See
 ``advisory_dedupe_key``'s own docstring for the exact construction.
 
-DEGRADE, DON'T SILENCE -- a repeat firing is never fully suppressed. The
-caller (``dispatch.py``) swaps the envelope for
-``degrade_advisory_envelope``'s shortened form (the terse "Use instead"/
-rewrite span only, prose dropped) and RETURNS it, rather than `continue`ing
-the guard chain -- see that function's own docstring for why the return
-(vs. suppress-and-continue) also fixes a guard-precedence bug: a
-`continue` on a suppressed slot let a LOWER-precedence guard win it.
+SILENCE, DON'T DEGRADE (R6, 2026-09-26) -- a repeat non-blocking advisory on
+an allowed call puts NO TEXT in context at all, superseding the earlier
+degrade-to-terse-alternative shape. The caller (``dispatch.py``) swaps the
+envelope for ``silence_repeat_advisory``'s result and RETURNS it, rather
+than `continue`ing the guard chain -- the return (vs. suppress-and-continue)
+is what fixes a guard-precedence bug: a `continue` on a suppressed slot let
+a LOWER-precedence guard win it. For a `permissionDecision` that is absent
+or ``"allow"``, ``silence_repeat_advisory`` drops `additionalContext`
+while keeping any `updatedInput` rewrite and `permissionDecision` intact;
+for ``"ask"`` it returns the envelope unchanged (a repeat `ask` still needs
+its full text to make sense of the prompt); it is never called for a
+`deny` (see "NEVER CALLED FOR A BLOCK" below). When nothing but
+`hookEventName` would remain, it returns `{}` (no-advisory-equivalent),
+still RETURNED, never `continue`d.
 
 FAIL OPEN, UNCONDITIONALLY -- the single most important property here,
 exactly as `_write_bump_marker.py`'s own docstring insists for its marker.
@@ -55,7 +62,7 @@ A dedupe bug must never silently swallow a guard's advisory: an
 unresolvable session id, an unresolvable/unwritable gitdir, a malformed
 envelope, or ANY exception anywhere in this module's public surface all
 resolve to "not yet advised this session" -- i.e. EMIT, never suppress.
-`already_advised`/`mark_advised`/`degrade_advisory_envelope` never raise;
+`already_advised`/`mark_advised`/`silence_repeat_advisory` never raise;
 every branch degrades to that fail-open answer.
 
 NEVER CALLED FOR A BLOCK. This module has no notion of "block" at all --
@@ -126,7 +133,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 
@@ -223,8 +229,7 @@ def terse_alternative_text(text: str) -> Optional[str]:
     being consumed by it).
 
     Returns ``None`` when no cue word is present at all -- there is no
-    alternative span to isolate, and a caller (``degrade_advisory_envelope``)
-    must not synthesize one.
+    alternative span to isolate.
     """
     match = _CUE_WINDOW_RE.search(text)
     if match is None:
@@ -236,53 +241,52 @@ def terse_alternative_text(text: str) -> Optional[str]:
     return text[start:end].rstrip()
 
 
-def degrade_advisory_envelope(envelope: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Shorten a REPEAT-firing advisory ``envelope`` to carry only its terse
-    alternative, dropping the explanatory prose that already fired once this
-    session -- degrade, never silence.
+def silence_repeat_advisory(envelope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """R6 (2026-09-26): put NO TEXT in context for a REPEAT firing of the
+    same (guard, shape) on an allowed call -- supersedes the retired
+    ``degrade_advisory_envelope`` (terse-alternative-only) shape per
+    ``docs/wiki/guard-messaging.md`` § Register: a repeat of a non-blocking
+    advisory is silent, full stop.
 
-    This is strictly NEW, shorter content relative to the first firing (the
-    register contract in ``docs/wiki/guard-messaging.md`` § Register: "one
-    fact, stated once, plus a terse alternative" -- the first firing
-    delivers both, the repeat delivers only the alternative), so it is not a
-    second delivery of the same prose. Returning a real envelope here
-    (rather than suppressing to ``None``) is also what fixes the
-    guard-precedence bug this finding named: the caller now RETURNS this
-    shortened envelope instead of ``continue``-ing the guard chain, so a
-    lower-precedence guard can no longer win the slot a higher-precedence
-    one already claimed.
+    Dispatch to this function is caller-gated to a non-hard-deny envelope
+    already confirmed to have fired once this session (module docstring,
+    "NEVER CALLED FOR A BLOCK") -- a ``deny`` never reaches here.
 
-    Returns ``None`` when the terse alternative cannot be isolated (no cue
-    word present in either prose field, or ``envelope`` carries no prose at
-    all) -- the caller's own contract is to fall back to the FULL envelope
-    in that case, never to silence (module docstring, "FAIL OPEN,
-    UNCONDITIONALLY" -- degradation must fail open exactly like dedupe
-    itself). Never raises.
+    - ``permissionDecision`` absent or ``"allow"``: return a copy of
+      ``envelope`` with ``additionalContext`` removed, keeping
+      ``updatedInput`` and ``permissionDecision`` (and every other field)
+      intact -- an ``updatedInput`` rewrite must survive a repeat exactly as
+      it did on the first firing.
+    - ``permissionDecision == "ask"``: return ``envelope`` unchanged -- an
+      ``ask`` still needs its full text to make sense of the prompt on a
+      repeat.
+    - If, after stripping, ``hookSpecificOutput`` carries no field besides
+      ``hookEventName``, return ``{}`` (``_hook_envelope.no_advisory()``'s
+      own shape) -- still RETURNED by the caller, never ``continue``d, so a
+      lower-precedence guard cannot win the slot a higher-precedence one
+      already claimed.
+
+    Fail-open, unconditionally, exactly like the rest of this module (module
+    docstring, "FAIL OPEN, UNCONDITIONALLY"): any exception here falls back
+    to the FULL, unmodified ``envelope`` (or ``{}`` for a non-dict input) --
+    never to silence. Never raises.
     """
     try:
         if not isinstance(envelope, dict):
-            return None
+            return {}
         hso = envelope.get("hookSpecificOutput")
         if not isinstance(hso, dict):
-            return None
-        for field in ("additionalContext", "permissionDecisionReason"):
-            text = hso.get(field)
-            if not isinstance(text, str) or not text:
-                continue
-            terse = terse_alternative_text(text)
-            if terse is None:
-                continue
-            marker_prefix = (
-                COORDINATOR_PROVENANCE_MARKER + " " if text.startswith(COORDINATOR_PROVENANCE_MARKER) else ""
-            )
-            new_hso = dict(hso)
-            new_hso[field] = marker_prefix + terse
-            new_envelope = dict(envelope)
-            new_envelope["hookSpecificOutput"] = new_hso
-            return new_envelope
-        return None
-    except Exception:  # noqa: BLE001 -- fail open: caller falls back to full envelope
-        return None
+            return dict(envelope)
+        if hso.get("permissionDecision") == "ask":
+            return envelope
+        new_hso = {k: v for k, v in hso.items() if k != "additionalContext"}
+        if set(new_hso) <= {"hookEventName"}:
+            return {}
+        new_envelope = dict(envelope)
+        new_envelope["hookSpecificOutput"] = new_hso
+        return new_envelope
+    except Exception:  # noqa: BLE001 -- fail open: never silence on a bug here
+        return envelope if isinstance(envelope, dict) else {}
 
 
 #: is used directly as a path COMPONENT (`_session_dedupe_dir`), then

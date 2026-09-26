@@ -18,11 +18,12 @@ for the shipped case):
     that `status: implemented` transition, so the cascade never fires — there
     is no plan to trigger it, and (per that op's own docstring) no minting-a-
     plan step this ruling now says should not always be required.
-  - quick-wrap's dispatch-routed closure step writes `status: shipped`
-    directly, but only for `dispatch`-routed sizings whose session closes
-    through quick-wrap. A `spec-dispatch`/`plan`-routed sizing that ships
-    without ever entering quick-wrap's dispatch-closure path (the exact gap
-    the stranded live example — `state/sizings/2026-08-13-chase-down-the-
+  - quick-wrap's dispatch-routed closure step now calls THIS op (see
+    "Caller seam" below) rather than writing `status: shipped` directly, but
+    only for `dispatch`-routed sizings whose session closes through
+    quick-wrap. A `spec-dispatch`/`plan`-routed sizing that ships without
+    ever entering quick-wrap's dispatch-closure path (the exact gap the
+    stranded live example — `state/sizings/2026-08-13-chase-down-the-
     frontmatter-drift-failure.yaml`, `route: spec-dispatch`, no plan FK,
     work fully shipped, `status: sized` — demonstrates) has neither writer
     reach it.
@@ -63,12 +64,16 @@ Semantic decisions (the judgment calls, each justified):
     a plan) this op has no plan to record: the entire point of it existing is
     that no plan was ever minted.
 
-Caller seam (report-only, not wired in this dispatch — see docstring of the
-dispatching brief / run-report sidecar for the seam found and why it is not
-wired here): a workstream-complete ceremony body reaching a terminal-positive
-outcome for a `spec-dispatch`/`plan`-routed sizing with no plan FK is this
-op's intended trigger. The ceremony body itself lives in DoE-claude and needs
-a cross-repo memo — out of scope for this engine-primitive dispatch.
+Caller seam: `quick_wrap_assemble._ship_landed_dispatch_sizings`
+(docs/plans/2026-09-26-silent-engine-bookkeeping.md § C1) calls this handler
+in-process, under `brief(commit=True)`, for every `dispatch`-routed, no-plan-FK
+sizing the close commit's own committed-path set names. That closes the
+`dispatch`-routed, no-plan gap this docstring used to describe as unwired. A
+`spec-dispatch`/`plan`-routed sizing that ships without ever entering
+quick-wrap's `dispatch`-routed closure path remains unwired — the
+workstream-complete ceremony body such a sizing would need still lives in
+DoE-claude and still needs a cross-repo memo, out of scope for this
+engine-primitive.
 
 Scope, deliberately narrow (same "one value, its applier, its consumers, one
 migration" discipline `sizing_decline.py` names):

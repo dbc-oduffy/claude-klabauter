@@ -136,6 +136,7 @@ CLOSED PORTING GAPS:
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
 import re
@@ -157,6 +158,10 @@ from coordinator_core.bash_guards._dialect import (
     tokenize_command,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards.block_subagent_commit import (
+    _literal_pathspec_inner_path as literal_pathspec_inner_path,
+    _bracket_candidate_exists_literally as bracket_candidate_exists_literally,
+)
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _PS_REMOVE_VERBS,
     _ps_normalize_verb_token,
@@ -5302,6 +5307,22 @@ def _check_destructive_git_revert_full(
     both the hard-deny and advisory legs never re-spawns the underlying
     `git status`/`git rev-parse` calls -- this guard sits on the PreToolUse
     hot path under an end-to-end invocation budget.
+
+    SC-DR-023 guard boundary (2026-09-26, CEPEF-B6): four whole-tree forms --
+    pathspec-less `git stash`/`git stash push`, `git checkout .`/`git
+    checkout -- .`, `git restore .`, and bare `git reset --hard` (no ref) --
+    deny from the command string ALONE, with no `git status` probe and
+    regardless of whether the tree is clean. SC-DR-023 asked for only an
+    ADVISORY on this leg; this guard is stricter by design (DD3,
+    docs/plans/2026-09-26-commit-emit-plane-engine-findings.md) and DoE's
+    reply names the difference and asks whether to relax it. Every other
+    shape here -- path-scoped forms, `git reset --hard <ref>`, force-flag
+    checkout/switch (`-f`/`--force`), and `git clean` (its own check) --
+    keeps today's probe-then-deny-on-load-bearing-or-peer-claim behavior,
+    unchanged by this boundary. What this guard cannot catch: a whole-tree
+    write made through a channel this dispatch never sees at all (a
+    subprocess, an IDE action, a GUI git client) -- SC-DR-023 governs the
+    Bash/PowerShell tool-call surface, not every way a tree can be reverted.
     """
     if not cmd:
         return None, None
@@ -5535,6 +5556,29 @@ def _check_destructive_git_revert_full(
                 has_worktree = bool(re.search(r"(^|\s)(-[a-zA-Z]*W[a-zA-Z]*|--worktree)(\s|$)", after))
                 if verb == "restore" and has_staged and not has_worktree:
                     continue
+                # SC-DR-023 (CEPEF-B6, DD3): `git checkout .`/`git checkout
+                # -- .` and `git restore .` are two of the four whole-tree
+                # forms named in the ruling -- deny from the command string
+                # alone, before any `git status` probe, regardless of
+                # whether the tree is clean. `switch` and the force-flag
+                # leg (`force_whole_tree`) are NOT part of SC-DR-023's four
+                # forms and keep today's probe-then-deny-on-risk behavior
+                # below, unchanged.
+                if dotspec and verb in ("checkout", "restore"):
+                    return _deny(
+                        "BLOCKED: 'git %s .' is a whole-tree revert "
+                        "(SC-DR-023) -- denied from the command alone, "
+                        "with no git-status check of what it would "
+                        "discard.\n\n"
+                        "Did you mean to scope this to your own paths?\n"
+                        "  git checkout -- <your-paths>\n"
+                        "  git restore -- <your-paths>\n\n"
+                        "Preserve first (recoverable stash of everything, "
+                        "including untracked):\n"
+                        '  git stash push -u -m "before-revert" -- <paths>'
+                        % (verb,)
+                        + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    ), None
                 # Name the shape actually seen: `git checkout -f` reaches this
                 # oracle too now, and reporting it as `git checkout .` would
                 # describe a command the caller never typed.
@@ -5568,6 +5612,26 @@ def _check_destructive_git_revert_full(
 
         elif verb == "reset":
             if re.search(r"(^|\s)--hard(\s|$)", after):
+                # SC-DR-023 (CEPEF-B6, DD3): bare `git reset --hard` (no ref)
+                # is one of the four whole-tree forms -- deny from the
+                # command string alone, before any `git status` probe.
+                # `git reset --hard <ref>` still names a target and stays on
+                # today's probe-then-deny path below (the orphan check's own
+                # case; unchanged by this boundary).
+                _reset_hard_tokens = [
+                    tk for tk in after.split() if tk != "--hard" and not tk.startswith("-")
+                ]
+                if not _reset_hard_tokens:
+                    return _deny(
+                        "BLOCKED: 'git reset --hard' is a whole-tree revert "
+                        "(SC-DR-023) -- denied from the command alone, with "
+                        "no git-status check of what it would discard.\n\n"
+                        "Preserve it first instead of discarding it -- "
+                        "stash, then reset:\n"
+                        '  git stash push -u -m "before-reset"\n'
+                        "  git reset --hard"
+                        + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    ), None
                 rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
                     return _deny(
@@ -5640,37 +5704,21 @@ def _check_destructive_git_revert_full(
             # stash.py` for reset/checkout/restore over the same fixture,
             # so this branch never needs its own local corroboration.
             if is_sweep_shape and not has_dashdash:
-                rc, out = _memo_status_porcelain(git_cwd)
-                if rc == -1:
-                    return _deny(
-                        "BLOCKED: 'git stash' oracle (git status) timed "
-                        "out (2 s) — cannot verify the sweep is safe.\n\n"
-                        "Safe path first — scope the stash to your own "
-                        "paths:\n"
-                        '  git stash push -u -m "before-stash" -- <paths>'
-                        + ("\n\nOr: " + _gr_hint if _gr_hint else "")
-                    ), None
-                if rc != 0:
-                    continue
-                for line in out.splitlines():
-                    if not line:
-                        continue
-                    cols = line[:2]
-                    path = line[3:]
-                    if " -> " in path:
-                        path = path.rsplit(" -> ", 1)[-1]
-                    if cols == "??":
-                        # Untracked -- swept only by the `-u`/`-a` widening.
-                        if has_u:
-                            affected.append(path)
-                        continue
-                    # Tracked with any staged or unstaged modification: taken
-                    # by EVERY stash write shape, bare `git stash` included.
-                    # Collecting only `??` here (the pre-2026-07-28 behavior)
-                    # meant a stash sweeping a peer's tracked in-flight edits
-                    # found nothing to report and allowed silently.
-                    if cols != "  ":
-                        affected.append(path)
+                # SC-DR-023 (CEPEF-B6, DD3): pathspec-less `git stash`/`git
+                # stash push` (and its `save` alias) is one of the four
+                # whole-tree forms -- deny from the command string alone,
+                # before any `git status` probe. A `--`-delimited pathspec
+                # (`has_dashdash`) already routes around this branch
+                # entirely and stays on today's allowed path.
+                return _deny(
+                    "BLOCKED: 'git stash' (unscoped) is a whole-tree revert "
+                    "(SC-DR-023) -- denied from the command alone, with no "
+                    "git-status check of what it would sweep.\n\n"
+                    "Scope the stash to your own paths instead of sweeping "
+                    "every session's uncommitted work:\n"
+                    '  git stash push -u -m "before-stash" -- <your-paths>'
+                    + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                ), None
 
         if not affected:
             continue
@@ -6100,6 +6148,14 @@ _GIT_ADD_INVOCATION_OPTS_RE = re.compile(
     r"\bgit((?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*)\s+add\b"
 )
 _GIT_ADD_DASH_C_VALUE_RE = re.compile(r"-C\s+(\S+)")
+#: C6 (Items 28/16.6): the COMMIT-side gate this guard's top-of-function
+#: short-circuit also checks -- widens the same "does this command line even
+#: mention the subcommand" pre-filter to `git commit`, reusing the identical
+#: global-option vocabulary `_GIT_ADD_GLOBAL_OPT_RE` already enumerates (the
+#: options that may sit between `git` and its subcommand are the same set
+#: for every subcommand; duplicating the alternation under a second name
+#: would just be the same list twice).
+_GIT_COMMIT_GATE_RE = re.compile(r"\bgit(?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*\s+commit\b")
 
 
 def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
@@ -6189,7 +6245,11 @@ def check_blanket_git_add(
         cmd, "blanket-git-add", hook_payload
     ) or []
 
-    if not _GIT_ADD_GATE_RE.search(cmd) and not _ga_ps_segments:
+    if (
+        not _GIT_ADD_GATE_RE.search(cmd)
+        and not _GIT_COMMIT_GATE_RE.search(cmd)
+        and not _ga_ps_segments
+    ):
         return None
 
     _ga_dash_c_cwd = _bt_blanket_add_dash_c_cwd(cmd)
@@ -6396,7 +6456,80 @@ def check_blanket_git_add(
             matched_cmd = "%s [matched flag: %s]" % (full_seg_trimmed, deny_reason)
             break
 
+    # C6 (Items 28/16.6, `docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-
+    # thread.md`): the COMMIT-side of this guard, flipped to the same shape
+    # as the ADD side above -- one branch, not a restructure. Only reached
+    # when the ADD-side scan above found nothing to deny. Scoped to the
+    # canonical `-- <paths>` spelling only (SC-DR-008's ratified form; `-o`/
+    # `--only`'s sweeping-scope shape is `check_git_commit_safe_commit_
+    # advise`'s own remit and stays there, unescalated, per that check's own
+    # negative spec) -- a root-anchor or `-A`-equivalent operand denies
+    # unconditionally, exactly like `.`/`:/`/`-A` do on the ADD side; a
+    # subtree operand denies ONLY if it would actually commit a foreign
+    # path (`_bt_commit_subtree_foreign_paths`, the commit-side analogue of
+    # `_bt_add_subtree_foreign_paths` -- `git diff --cached --name-only`
+    # instead of `git add --dry-run`, since COMMIT never stages); a literal
+    # file operand is never touched here, matching "a scoped pathspec
+    # commit still passes."
+    commit_matched_cmd = ""
     if not matched_cmd:
+        for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
+            if not seg.strip():
+                continue
+            seg_cmd = re.sub(r'"[^"]*"', " ", seg)
+            seg_cmd = re.sub(r"'[^']*'", " ", seg_cmd)
+            if not re.match(
+                r"^\s*" + _BYPASS_PREFIX + r"git(?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*\s+commit\b",
+                seg_cmd,
+            ):
+                continue
+            after = re.sub(
+                r".*(^|\s)git(?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*\s+commit\s*",
+                " ",
+                seg,
+                count=1,
+            )
+            after = after.replace('"', "").replace("'", "")
+            gc_toks = after.split()
+            if "--" not in gc_toks:
+                continue
+            gc_operands = gc_toks[gc_toks.index("--") + 1 :]
+            for gc_tok in gc_operands:
+                if gc_tok in (".", "./", ":/", ":/."):
+                    commit_matched_cmd = "%s [root pathspec]" % gc_tok
+                    break
+                gc_tok_slashed = gc_tok.replace("\\", "/")
+                if (
+                    gc_tok.startswith("/")
+                    or gc_tok.startswith("\\")
+                    or re.match(r"^[A-Za-z]:[\\/]", gc_tok)
+                ) and git_root:
+                    gc_norm = os.path.normpath(gc_tok_slashed.rstrip("/")) or gc_tok_slashed
+                    if _paths_match(gc_norm, git_root):
+                        commit_matched_cmd = "%s [root pathspec]" % gc_tok
+                        break
+                gc_abs_dir = _bt_add_resolve_subtree_dir_token(
+                    gc_tok, git_root, _ga_dash_c_cwd
+                )
+                if gc_abs_dir is not None:
+                    gc_foreign = _bt_commit_subtree_foreign_paths(
+                        gc_abs_dir, _ga_dash_c_cwd, git_root, session_id
+                    )
+                    if gc_foreign:
+                        commit_matched_cmd = "%s [foreign: %s]" % (
+                            gc_tok,
+                            ", ".join(sorted(gc_foreign)[:5]),
+                        )
+                        break
+            if commit_matched_cmd:
+                full_seg_trimmed = seg.lstrip()[:120]
+                commit_matched_cmd = "%s [matched: %s]" % (
+                    full_seg_trimmed,
+                    commit_matched_cmd,
+                )
+                break
+
+    if not matched_cmd and not commit_matched_cmd:
         # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted
         # argument is executed, not inert text -- unwrap and re-scan it too.
         for payload in _shell_c_unwrap_payloads(cmd):
@@ -6404,6 +6537,19 @@ def check_blanket_git_add(
             if result is not None:
                 return result
         return None
+
+    if commit_matched_cmd and not matched_cmd:
+        _commit_note = operator_override_note(
+            "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
+        )
+        commit_reason = (
+            "BLOCKED: this 'git commit' names a pathspec that sweeps in "
+            "sibling sessions' edits (SC-DR-014, COMMIT-side). Matched: %s\n\n"
+            "Use instead:\n"
+            "  git commit -m <subject> -- path/to/file"
+            % (commit_matched_cmd,)
+        ) + ("\n\nOr: %s" % _commit_note if _commit_note else "")
+        return _deny(commit_reason)
 
     _add_note = operator_override_note(
         "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
@@ -6483,6 +6629,50 @@ def _bt_add_subtree_foreign_paths(
         except ValueError:
             continue
         staged.append(rel)
+    if not staged:
+        return []
+
+    try:
+        from coordinator_core.session.touch_record import (
+            project_live_claims,
+            sink_path,
+        )
+
+        sid_dir = os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+        touch_record_path = sink_path(sid_dir)
+        projection = project_live_claims(touch_record_path, cwd=git_root)
+        if projection.degraded:
+            return []
+        my_claims = set(projection.claims.keys())
+    except Exception:
+        return []
+
+    return [p for p in staged if p not in my_claims]
+
+
+def _bt_commit_subtree_foreign_paths(
+    abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
+) -> List[str]:
+    """C6 (Items 28/16.6, `docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-
+    doe-thread.md`) -- the COMMIT-side analogue of
+    `_bt_add_subtree_foreign_paths`. A `git commit -- <abs_dir>` names no new
+    content (COMMIT never stages), so the WHICH-paths oracle is `git diff
+    --cached --name-only -- <abs_dir>` (Check 5's own re-derivation pattern,
+    already reused at the add site by that function's own docstring) rather
+    than a dry-run add. Checked against THIS session's own claimed scope via
+    the same `session.touch_record.project_live_claims` reader.
+
+    Fails toward the EMPTY list (never flagging) on any ambiguity -- missing
+    session_id, a failed/unparseable diff, or a degraded touch-record
+    projection -- same soft/fail-open posture as the add-side sibling this
+    mirrors (this guard is registered fail_closed=False)."""
+    if not session_id:
+        return []
+    rc, out = _run_git(["diff", "--cached", "--name-only", "--", abs_dir], cwd)
+    if rc != 0:
+        return []
+
+    staged = [ln for ln in out.splitlines() if ln]
     if not staged:
         return []
 
@@ -6841,6 +7031,13 @@ def _resolve_owner_writer_name(fact: "OwnerFact") -> Optional[str]:
     026b33fcd43d.yaml), applying ``_holder_context``'s discipline
     (``coordinator/bin/coordinator-safe-commit.py``, landed 3dcf73f06c/
     586bb605a6) VERBATIM: PROVENANCE, never ADDRESS.
+
+    IDENTIFY-BY-SID, ADDRESS-BY-RESOLVED-NAME (DoE ruling 6,
+    ``2026-09-11-doe-claude-em-rulings-owed-bundle.md``): ``fact.owner`` is
+    the stable identifier Check 5's owner sentence is ABOUT; the name this
+    ladder returns is the address, resolved fresh at render time, not a
+    permanently stable claim on either side -- neither a sid nor a name is
+    guaranteed to stay resolvable forever.
 
     Rung 1 -- ``fact.writer_name``, the name C1 stamped ON the claim at
     write time. Survives the writer exiting, a name re-point, and a
@@ -7394,6 +7591,20 @@ def check_validate_commit(
                 if _deleted_path not in _scope_set:
                     _scope_set.add(_deleted_path)
                     commit_scope.append(_deleted_path)
+
+    # R07: paths staged as a `D` record (a true deletion, never a rename's
+    # source side -- `_status_lines` already collapsed `git mv` into `R`,
+    # same reasoning as the re-add loop just above). Used only to pick the
+    # owned-by-another-session deny's remedy direction: unstaging a
+    # deletion is the safe direction (it restores the tracked content),
+    # the OPPOSITE of unstaging an addition/modification (which discards
+    # uncommitted content). Built once here, off the same probe, rather
+    # than re-querying git per staged file.
+    _staged_deletion_paths: Set[str] = {
+        _line.split("\t", 1)[1]
+        for _line in (_status_lines or [])
+        if _line.startswith("D\t") and len(_line.split("\t")) >= 2
+    }
 
     # --- Check 5: Scoped staging -- warn-only by default (Phase 2). Strict
     # mode (COORDINATOR_SCOPE_STRICT=1) promotes this to a DENY (Phase 5 --
@@ -7999,6 +8210,31 @@ def check_validate_commit(
                             # denies on a `None` read (same fail-open posture
                             # as `compute_content_hash`'s own contract).
                             if _current_hash is not None and _current_hash != _own_hash:
+                                # D2 (docs/research/2026-09-26-foreign-hunk-
+                                # discriminator.md, H4): `compute_content_hash`
+                                # has no EOL awareness -- a CRLF checkout or an
+                                # EOL-repair pass rewriting the SAME logical
+                                # content reproduces this identical disagreement.
+                                # Re-hash disk-now with CRLF/CR normalized to LF
+                                # and excuse the disagreement if THAT matches the
+                                # recorded hash -- this only excuses a byte-for-
+                                # byte-after-normalization match, so a genuinely
+                                # foreign edit (different content, not just line
+                                # endings) still falls through and denies below.
+                                try:
+                                    _current_bytes = Path(_abs_staged).read_bytes()
+                                    _eol_normalized_hash = hashlib.sha256(
+                                        _current_bytes.replace(
+                                            b"\r\n", b"\n"
+                                        ).replace(b"\r", b"\n")
+                                    ).hexdigest()
+                                except OSError:
+                                    _eol_normalized_hash = None
+                                if (
+                                    _eol_normalized_hash is not None
+                                    and _eol_normalized_hash == _own_hash
+                                ):
+                                    continue
                                 # First disagreement -- pay the lazy `.agents`
                                 # walk (see `_agent_owned_content_hashes`'s own
                                 # docstring above). A self-back-pointed
@@ -8180,10 +8416,34 @@ def check_validate_commit(
                                 ),
                             })
                             continue
-                        _deny_entries.append({
-                            "path": staged_file,
-                            "kind": "owned by another session",
-                            "text": (
+                        # R07: a staged DELETION is the one case where
+                        # unstaging is the safe direction -- it restores the
+                        # owner's still-tracked content, the opposite of an
+                        # addition/modification, where unstaging discards
+                        # content the owner has not committed. Branch the
+                        # remedy sentence on that fact rather than telling
+                        # every kind to avoid the safe move for a deletion.
+                        if staged_file in _staged_deletion_paths:
+                            _owned_deletion_text = (
+                                "BLOCKED (strict scope): %s is staged as a "
+                                "deletion but not in this session's touch "
+                                "list — owned by %s.%s\n\n"
+                                "%s\n\n"
+                                "Unstaging it (git restore --staged %s) is "
+                                "the safe direction here: it restores the "
+                                "owner's still-tracked content. Only record "
+                                "it as touched first if this deletion "
+                                "genuinely belongs to this session's work."
+                                % (
+                                    staged_file,
+                                    owner_sentence,
+                                    _owner_name_provenance_note(owner_sentence),
+                                    _SAFE_COMMIT_ROUTE_CLAUSE,
+                                    staged_file,
+                                )
+                            )
+                        else:
+                            _owned_deletion_text = (
                                 "BLOCKED (strict scope): %s is staged but not in "
                                 "this session's touch list — owned by %s.%s\n\n"
                                 "%s\n\n"
@@ -8198,7 +8458,11 @@ def check_validate_commit(
                                     _SAFE_COMMIT_ROUTE_CLAUSE,
                                     staged_file,
                                 )
-                            ),
+                            )
+                        _deny_entries.append({
+                            "path": staged_file,
+                            "kind": "owned by another session",
+                            "text": _owned_deletion_text,
                         })
                         continue
 
@@ -10532,16 +10796,28 @@ def _bt_commit_scope_operand_is_sweeping(operand: str, cwd: Optional[str]) -> bo
     """True iff ONE `git commit` scope operand names a subtree rather than a
     path the operator can be said to have chosen.
 
-    Three sweeping shapes, cheapest test first (this runs on the
+    Four sweeping shapes, cheapest test first (this runs on the
     PreToolUse(Bash) hot path -- `os.path.isdir` is one stat, no spawn, and
-    the glob/separator arms are pure string work; DR-344):
+    the glob/separator/magic arms are pure string work; DR-344):
 
-      1. a trailing forward or back slash -- an unambiguous directory
+      1. a `:`-magic pathspec form (`:/`, `:(top)`, `:(glob)`, ...), with
+         ONE named carve-out: `:(literal)<path>` is unwrapped to `<path>`
+         (via `block_subagent_commit._literal_pathspec_inner_path`) and resolved as that
+         ordinary path, glob-metacharacter test skipped -- `:(literal)`
+         is git's own promise that `<path>` is never glob-expanded,
+         deleted-file-or-not. A bare `:(literal)` with nothing after it
+         stays sweeping via this same rule (the helper returns ``None``);
+      2. a trailing forward or back slash -- an unambiguous directory
          before touching the filesystem so a deleted-or-not-yet-existing
          directory still reads as a sweep;
-      2. a glob metacharacter -- membership resolves at commit time, not at
-         read-back time;
-      3. an operand that resolves to a real directory on disk.
+      3. a glob metacharacter -- membership resolves at commit time, not at
+         read-back time; with its own narrow carve-out (shared with
+         `block_subagent_commit._pathspec_element_is_sweeping` via
+         `block_subagent_commit._bracket_candidate_exists_literally`): a `[`-bearing but
+         `*`/`?`-free operand that exists on disk under `cwd` is a literal
+         filename, not a glob character class -- e.g. a Next.js dynamic
+         route, `src/app/[id]/page.tsx`;
+      4. an operand that resolves to a real directory on disk.
 
     Resolution is relative to the payload cwd, never `os.getcwd()`: the guard
     runs in whatever directory the harness happens to sit in, and a relative
@@ -10564,10 +10840,21 @@ def _bt_commit_scope_operand_is_sweeping(operand: str, cwd: Optional[str]) -> bo
     """
     if not operand:
         return True
+    literal_inner = literal_pathspec_inner_path(operand)
+    if literal_inner is not None:
+        operand = literal_inner
+    elif operand.startswith(":"):
+        return True
     if operand.endswith("/") or operand.endswith("\\"):
         return True
-    if _COMMIT_GLOB_META_RE.search(operand):
-        return True
+    if literal_inner is None and _COMMIT_GLOB_META_RE.search(operand):
+        if not (
+            "[" in operand
+            and "*" not in operand
+            and "?" not in operand
+            and bracket_candidate_exists_literally(operand, cwd or "")
+        ):
+            return True
     base = cwd or ""
     try:
         candidate = operand if os.path.isabs(operand) else os.path.join(base, operand)
@@ -10785,11 +11072,15 @@ def _bt_git_dash_c_value(tokens: List[str]) -> Optional[str]:
 
 
 def _bt_probe_cwd(
-    seg_tokens: List[str], payload: Optional[Dict[str, Any]]
+    seg_tokens: List[str],
+    payload: Optional[Dict[str, Any]],
+    cmd: Optional[str] = None,
 ) -> Optional[str]:
     """The directory every `git commit` probe in this cascade must run
     against: the command's own `-C` value when it carries one, resolved
-    against the PAYLOAD cwd, and the payload cwd alone when it does not.
+    against the PAYLOAD cwd; failing that, a leading `cd <dir> &&`/`;`
+    prefix on the same command (when the caller passes `cmd`); and the
+    payload cwd alone when neither is present.
 
     `_bt_git_dash_c_value` answers only the first half, and returns None for
     the overwhelmingly common command that carries no `-C` at all. Passing
@@ -10810,10 +11101,33 @@ def _bt_probe_cwd(
     to neither. An absolute `-C` stands alone, and a relative one with no
     payload cwd to anchor it is returned unchanged -- no worse than today,
     and the probes' own fail-open posture covers a miss.
+
+    A `cd <dir> && git commit --amend ...` chain names a repo just as
+    explicitly as `-C` does, but `_bt_git_dash_c_value` cannot see it -- it
+    inspects only the `git ...` segment's own tokens, never the command
+    prefix ahead of it. Left unhandled, the amend-provenance probe (the
+    caller `check_git_commit_safe_commit_advise` reaches through the
+    aggregating `collect_advisories=True` path once `check_offer_git_c`'s
+    own rewrite is bypassed or not taken) reads the PAYLOAD cwd for a
+    command that names a different repo entirely -- CEPEF-B9 / V1's finding
+    on `docs/plans/2026-09-26-commit-emit-plane-engine-findings.md`, the same
+    class of gap `_bt_leading_cd_prefix_cwd` was already written to close for
+    other guards (state/bug-backlog/2026-08-27-destructive-git-and-scope-
+    guards-resolve-295928a71726.yaml). `cmd` is optional and defaults to
+    `None` so every existing caller that has no raw command string handy (or
+    no leading-`cd` shape to worry about) keeps today's `-C`/payload-cwd
+    behaviour unchanged; only a caller that HAS the raw command string opts
+    in by passing it. `_bt_leading_cd_prefix_cwd` itself narrows on a miss
+    and never guesses, so this can only narrow a probe's target, never widen
+    one into a false deny.
     """
     dash_c = _bt_git_dash_c_value(seg_tokens)
     payload_cwd = (payload or {}).get("cwd")
     if dash_c is None:
+        if cmd is not None:
+            cd_cwd = _bt_leading_cd_prefix_cwd(cmd, payload_cwd)
+            if cd_cwd is not None:
+                return cd_cwd
         return payload_cwd
     if os.path.isabs(dash_c) or not payload_cwd:
         return dash_c
@@ -11403,7 +11717,7 @@ def check_git_commit_safe_commit_advise(
             "COORDINATOR_ALLOW_GIT_COMMIT_AMEND", payload=payload
         ):
             provenance = _bt_head_commit_amend_provenance(
-                _bt_probe_cwd(seg_tokens, payload), session_id
+                _bt_probe_cwd(seg_tokens, payload, cmd), session_id
             )
             owned = provenance is not None and provenance[2]
             if not owned:

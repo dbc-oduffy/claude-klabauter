@@ -47,25 +47,24 @@ Ported from the retired DoE bash guard ``block-subagent-archive-write.sh``
 Widened 2026-08-03 to close a naming-dependent hole (see
 ``cross-repo/inbox/2026-08-03-doe-claude-em-archive-write-guard-pincer.md``):
 the guard now gates on RAW ``agent_id`` presence (any non-empty value),
-the exact complement of
-``block_em_hand_edit_pending_review_integration.py``'s own EM/subagent
-split (``payload.get("agent_id")`` present -> allow, at that guard's
-line 252) — so the two guards' allow-conditions are complementary rather
+the exact complement of the (now-retired) EM-side pending-review-integration
+guard's own EM/subagent split (``payload.get("agent_id")`` present ->
+allow) — so the two guards' allow-conditions were complementary rather
 than leaving a gap for a named-teammate ``agent_id`` shape
 (``a<name>-<16hex>``) to fall through both. The resolved/canonical
 identity (via the shared ``_subagent_identity`` resolver,
 factored out of ``block_subagent_plan_body_write.py``) is used only for
-the deny-reason text and the deny audit-log line, and for the new
+the deny-reason text and the deny audit-log line, and for the
 review-integrator allow-condition below — never for the fire/no-fire
 decision itself, which is presence-only.
 
 Also widened 2026-08-03 to give ``coordinator:review-integrator`` a
-sanctioned ``archive/`` write path (same memo): the EM-side guard
-``block_em_hand_edit_pending_review_integration`` routes its deny to
-"dispatch coordinator:review-integrator against <sidecar>", but without
-this allow-condition that dispatch's own write to ``archive/`` was denied
-right back — a composition leaving no sanctioned writer and training
-operators toward an unrelated override.
+sanctioned ``archive/`` write path (same memo): the EM-side pending-review-
+integration guard (retired, docs/plans/2026-09-26-retire-review-integrator.md)
+routed its deny to "dispatch coordinator:review-integrator against
+<sidecar>", but without this allow-condition that dispatch's own write to
+``archive/`` was denied right back — a composition leaving no sanctioned
+writer and training operators toward an unrelated override.
 
 Fires on Write|Edit|MultiEdit|NotebookEdit when:
   (1) the top-level ``agent_id`` field is present and non-empty (subagent

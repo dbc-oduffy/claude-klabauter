@@ -899,10 +899,50 @@ def _unlinked_plan_claim(fm: Dict[str, Any], worktree_root: Path) -> Optional[Di
 _WEAK_PLAN_LINK_BASES = frozenset({"sizing_object", "sizing_objects"})
 
 
+#: `plan.schema.json`'s `status` enum, in lifecycle-progression order. Used
+#: only to break a `(coded, approved)` tie between two plans — never as a
+#: standalone ranking, since the tail (`closed_partial`/`deferred`/
+#: `abandoned`/`superseded`) are terminal alternates, not "further along"
+#: than `implemented`. An unrecognised or empty status sorts lowest.
+_STATUS_LIFECYCLE_ORDER: Tuple[str, ...] = (
+    "draft",
+    "reviewed",
+    "approved",
+    "blocked",
+    "executing",
+    "landed",
+    "implemented",
+    "closed_partial",
+    "deferred",
+    "abandoned",
+    "superseded",
+)
+
+
+def _status_rank(status: Optional[str]) -> int:
+    try:
+        return _STATUS_LIFECYCLE_ORDER.index(status or "")
+    except ValueError:
+        return -1
+
+
+def _plan_rank_key(plan: Dict[str, Any]) -> Tuple[bool, bool, int]:
+    """`_best_plan`'s reduction key: coded > approved > lifecycle progression."""
+    return (bool(plan["coded"]), bool(plan["approved"]), _status_rank(plan.get("status")))
+
+
+def _tied_top_hits(hits: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every hit sharing the maximum `_plan_rank_key`, or `[]` if `hits` is empty."""
+    if not hits:
+        return []
+    best_key = max(_plan_rank_key(p) for p in hits)
+    return [p for p in hits if _plan_rank_key(p) == best_key]
+
+
 def _best_plan(
     hits: Sequence[Dict[str, Any]], basis: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    """The most advanced of several linked plans: coded > approved > anything.
+    """The most advanced of several linked plans: coded > approved > lifecycle.
 
     The reduction presupposes the hit set is the baton's OWN plans — true for
     `governing_plan`/`origin_plan_id`/`plan_ids`/`deliverable_id`, where a
@@ -917,12 +957,21 @@ def _best_plan(
     `_plan_link_ambiguity` names the candidates. A gate that fails OPEN on a
     mis-resolution authorises exactly the work the edge existed to hold; an
     honest "I cannot tell which of these is yours" is a closed gate.
+
+    A `(coded, approved)` tie is broken by `_STATUS_LIFECYCLE_ORDER`, never by
+    the incidental order `hits` arrives in (which tracked alphabetical path
+    order under the old `max()` call). If the lifecycle order also ties —
+    both hits at the exact same `status` — that is an exact tie: declined the
+    same way a weak-basis multi-hit is, and named by `_plan_link_ambiguity`.
     """
     if not hits:
         return None
     if len(hits) > 1 and basis in _WEAK_PLAN_LINK_BASES:
         return None
-    return max(hits, key=lambda p: (bool(p["coded"]), bool(p["approved"])))
+    top = _tied_top_hits(hits)
+    if len(top) > 1:
+        return None
+    return top[0]
 
 
 def _plan_link_ambiguity(
@@ -935,17 +984,36 @@ def _plan_link_ambiguity(
     the output from one that has no plan at all, and the repair differs —
     write `governing_plan:` (or the plan's own `deliverable_id:`) onto the
     baton, rather than write a plan.
+
+    Fires on two distinct declines: a weak-basis multi-hit (every candidate
+    named), and a strong-basis exact tie (only the tied top named — a
+    strong-basis set can legitimately carry a less-advanced plan alongside
+    the tied pair, and that one is not ambiguous, just outranked).
     """
-    if len(hits) < 2 or basis not in _WEAK_PLAN_LINK_BASES:
+    if len(hits) < 2:
         return None
-    paths = sorted(p["path"] for p in hits)
+    if basis in _WEAK_PLAN_LINK_BASES:
+        paths = sorted(p["path"] for p in hits)
+        return {
+            "basis": basis,
+            "paths": paths,
+            "repair": (
+                f"{len(paths)} plans link on `{basis}` alone, which every baton in a "
+                "sizing shares — cannot tell which is this baton's. Write "
+                "`governing_plan:` (or the plan's own `deliverable_id:`) onto the baton"
+            ),
+        }
+    top = _tied_top_hits(hits)
+    if len(top) < 2:
+        return None
+    paths = sorted(p["path"] for p in top)
     return {
         "basis": basis,
         "paths": paths,
         "repair": (
-            f"{len(paths)} plans link on `{basis}` alone, which every baton in a "
-            "sizing shares — cannot tell which is this baton's. Write "
-            "`governing_plan:` (or the plan's own `deliverable_id:`) onto the baton"
+            f"{len(paths)} plans link on `{basis}` and tie exactly on lifecycle "
+            "progression — cannot tell which is more advanced. Advance or "
+            "disambiguate one of them"
         ),
     }
 

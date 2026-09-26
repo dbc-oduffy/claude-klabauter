@@ -18,14 +18,27 @@ chmod/chown) when the caller is a subagent, leaving the EM main-loop
 unaffected.
 
 TWO-LAYER CLASSIFIER:
-  Layer 1 -- dangerous-surface detection (v1 scope: git + rm + chmod/chown -R
-    ONLY -- docker/kill/DB-client surfaces are OUT of v1, deliberately not
-    implemented here). A command touching none of these surfaces allows
+  Layer 1 -- dangerous-surface detection. v2 scope (this change, item 23 of
+    docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md, closing
+    deferred D2 from cross-repo/archive/2026-09-23-doe-claude-em-destructive-
+    action-v2-gap-still-open.md): git + rm + chmod/chown -R (v1, unchanged)
+    PLUS three named v2 surfaces -- docker, kill/pkill, and a fixed set of
+    DB-client binaries (psql/mysql/mariadb/sqlite3). Each of the three is a
+    NAMED matcher class, not a widening of the default-deny-with-allowlist
+    posture below to those surfaces -- see `_evaluate_docker_surface`/
+    `_evaluate_kill_surface`/`_evaluate_dbclient_surface` for what each one
+    actually denies. A command touching none of the v1+v2 surfaces allows
     immediately, BEFORE identity resolution, so the overwhelming majority of
     subagent Bash (ls/grep/python/cat) pays no identity-resolution cost.
   Layer 2 -- within a detected dangerous surface, DEFAULT-DENY with a
-    safe-forward allowlist. A novel destructive git verb is denied because it
-    is NOT on the allowlist, not because it matched a blocklist entry.
+    safe-forward allowlist for the v1 git/rm/chmod-chown surfaces. A novel
+    destructive git verb is denied because it is NOT on the allowlist, not
+    because it matched a blocklist entry. The three v2 surfaces above use a
+    NAMED-deny shape instead (deny the memo's named destructive verbs; every
+    other verb on that surface -- recognized-read-only or not -- allows) --
+    a deliberate, narrower posture than v1's, see the plan's own anti-scope
+    ("Do not widen `block_subagent_destructive_action.py` beyond the three
+    matcher classes the memo names").
 
 IDENTITY AXIS -- DUAL OR-resolver (mirrors the
 block_reviewer_bash_outside_allowlist sibling guard's resolver, per the Staff Engineer
@@ -59,8 +72,13 @@ Anti-scope (do NOT extend without a spec update):
   - Do NOT default-deny all subagent Bash -- Layer 1 must gate identity
     resolution; benign Bash exits before any identity-resolution cost.
   - Do NOT add a subagent-reachable override env var.
-  - Do NOT widen Layer 1 to docker/kill/DB-client surfaces (deferred, out of
-    v1 scope).
+  - Do NOT widen the docker/kill/DB-client v2 matchers beyond the memo's
+    three named classes (docker destructive verbs, kill/pkill of a
+    non-liveness-check shape, DB-client DROP/TRUNCATE) -- e.g. do NOT turn
+    the docker or DB-client surfaces into a default-deny-with-allowlist like
+    v1's git/rm/chmod-chown, and do NOT attempt self-vs-non-self process
+    scoping for kill/pkill (the memo's own recommendation, taken here, is to
+    defer that distinction entirely rather than half-match it).
 
 FAIL-OPEN OBSERVABILITY (2026-07-29 addition, PM-authorized, observability
 only -- see "FAIL-OPEN OBSERVABILITY" comment block above `_log_fail_open`
@@ -356,6 +374,54 @@ survey-analyst-friction-digest.md, ranked #2 and #3):
   changed on any existing test; this is a message-text and docstring
   change only, per the dispatching brief's explicit scope.
 
+DESTRUCTIVE-ACTION GUARD v2 -- DOCKER/KILL/DB-CLIENT MATCHER CLASSES
+(2026-09-26, this change, item 23 of docs/plans/2026-09-26-inbox-blitz-
+Claude-klabauter-fixes-doe-thread.md, closing deferred D2 from
+cross-repo/archive/2026-09-23-doe-claude-em-destructive-action-v2-gap-still-
+open.md, originally the Staff Engineer Finding 5 of
+2026-07-13-subagent-destructive-action-em-lock): the module docstring's own
+"OUT of v1" note and anti-scope line named docker/kill/DB-client surfaces as
+deliberately unimplemented; this change implements the three matcher
+classes the memo names, and nothing beyond them (plan anti-scope: "Do not
+widen ... beyond the three matcher classes the memo names").
+
+Each is its own Layer-1 raw-text surface probe (`_DOCKER_SURFACE_RE`/
+`_KILL_SURFACE_RE`/`_DBCLIENT_SURFACE_RE`, same cheap boundary-anchored
+style as the existing git/rm/chmod-chown probes -- a command touching none
+of them pays no identity-resolution cost) plus its own Layer-2 evaluator,
+called from `check()` only after identity resolves and only when no earlier
+surface already denied:
+
+  - `_evaluate_docker_surface` -- denies the memo's named destructive verbs
+    (`docker rm`, `docker rmi`, `docker prune`, `docker system prune`).
+    Read-only introspection (`ps`/`images`/`logs`/`inspect`/...) and every
+    OTHER docker verb this matcher does not enumerate allow -- this is a
+    NAMED deny list, not a default-deny-with-allowlist surface like v1's
+    git ladder (the memo's ask was to "distinguish", not to build a docker
+    allowlist).
+  - `_evaluate_kill_surface` -- denies `kill`/`pkill` UNLESS the only flag
+    present is `-0` (the liveness-check shape: sends no signal, only tests
+    whether the target exists). The memo's own recommendation is taken
+    verbatim here: scoping "a process this subagent launched" vs "an
+    unrelated one sharing the box" needs a live process-tree fact this text
+    classifier has no access to, so rather than half-match that distinction,
+    every real signal (any flag other than bare `-0`, any target) is denied
+    outright -- deferred, not attempted.
+  - `_evaluate_dbclient_surface` -- for a FIXED set of DB-client binaries
+    (`psql`/`mysql`/`mariadb`/`sqlite3`), inspects the statement text passed
+    via `-c`/`--command`/`-e`/`--execute` (space- or `=`-attached) for a
+    `DROP`/`TRUNCATE` keyword (word-boundary, case-insensitive) and denies
+    only then -- a concrete client-binary + flag rule, not a naive
+    free-text word-match over the whole command (the memo's own framing:
+    "not a naive word-match"). `SELECT`/any other statement, or a client
+    invocation with no `-c`/`-e`-style flag at all (an interactive session,
+    unexamined), allows.
+
+No new spawn: all three reuse this module's own `_tokenize_full_command`/
+`_segments_from_tokens`/`_normalize_executable_basename`/`_strip_env_prefix`
+machinery already in the process, exactly like the existing wrapper-
+indirection evaluator does.
+
 shell-doc-ok: the recipes quoted above are real shell commands a subagent
 runs, and the deny-message section exists to name the exact spelling this
 guard intercepts -- re-rendering them in prose would leave the guard's
@@ -430,6 +496,19 @@ _RECURSIVE_FLAG_RE = re.compile(
 _RM_DENY_RE = re.compile(
     _BOUNDARY_PRE + r"rm(?:\s+-[a-zA-Z]*[rRfF][a-zA-Z]*|\s+--recursive|\s+--force)",
     re.MULTILINE,
+)
+
+# v2 SURFACE PROBES (module comment "DESTRUCTIVE-ACTION GUARD v2"): same
+# cheap, boundary-anchored raw-text style as the v1 probes above -- each is
+# a Layer-1 gate only, the actual deny/allow classification is Layer-2
+# (`_evaluate_docker_surface`/`_evaluate_kill_surface`/
+# `_evaluate_dbclient_surface`).
+_DOCKER_SURFACE_RE = re.compile(_BOUNDARY_PRE + r"docker" + _BOUNDARY_POST, re.MULTILINE)
+_KILL_SURFACE_RE = re.compile(
+    _BOUNDARY_PRE + r"(?:kill|pkill)" + _BOUNDARY_POST, re.MULTILINE
+)
+_DBCLIENT_SURFACE_RE = re.compile(
+    _BOUNDARY_PRE + r"(?:psql|mysql|mariadb|sqlite3)" + _BOUNDARY_POST, re.MULTILINE
 )
 
 # "INDIRECTION-WRAPPER HARDENING"). Cheap, boundary-anchored, same style as
@@ -745,6 +824,76 @@ def _unwrap_and_classify(payload: str, depth: int) -> Optional[str]:
     return _evaluate_wrapper_indirection(payload, depth)
 
 
+#: xargs options that consume a SEPARATE following argv token as their
+#: value (short and long spellings) -- used by `_xargs_command_head` to
+#: skip past xargs's OWN flags when hunting for the command it will run.
+_XARGS_SHORT_VALUE_FLAGS = frozenset({"-n", "-L", "-P", "-I", "-d", "-E", "-s", "-a"})
+_XARGS_LONG_VALUE_FLAGS = frozenset(
+    {
+        "--max-args", "--max-lines", "--max-procs", "--replace",
+        "--delimiter", "--max-chars", "--arg-file",
+    }
+)
+
+#: Commands xargs may assemble that cannot write -- an xargs invocation
+#: whose own resolved command head is one of these (or has no head at all,
+#: which means xargs runs its default, `echo`) is read-only, so the opaque-
+#: indirection advisory is silent for it (module docstring "xargs advisory").
+_XARGS_READ_ONLY_HEADS = frozenset(
+    {
+        "grep", "rg", "cat", "head", "tail", "wc", "ls", "stat", "file",
+        "echo", "basename", "dirname", "realpath", "sha256sum", "md5sum",
+    }
+)
+
+
+def _xargs_command_head(tokens: List[str]) -> Optional[str]:
+    """Return the normalized basename of the command xargs will run, given
+    the argv tokens AFTER `xargs` itself, or ``None`` when no command head
+    is present (a bare `xargs` runs its default, `echo`, which is read-only).
+
+    Skips xargs's own option tokens, including value-taking ones in both
+    their separate-token (`-n 1`, `--max-args 1`) and attached forms
+    (`-n1`, `-I{}`, `--max-args=1`), so `xargs -n1 -I{} cat {}` resolves to
+    `cat`, never `-I{}` or its value.
+    """
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok in _XARGS_SHORT_VALUE_FLAGS or tok in _XARGS_LONG_VALUE_FLAGS:
+            i += 2
+            continue
+        if any(tok.startswith(f + "=") for f in _XARGS_LONG_VALUE_FLAGS):
+            i += 1
+            continue
+        if (
+            len(tok) > 2
+            and tok[0] == "-"
+            and tok[1] != "-"
+            and tok[:2] in _XARGS_SHORT_VALUE_FLAGS
+        ):
+            i += 1
+            continue
+        if tok.startswith("-") and tok != "-":
+            i += 1
+            continue
+        break
+    if i >= n:
+        return None
+    return _normalize_interpreter_basename(_normalize_executable_basename(tokens[i]))
+
+
+def _xargs_head_is_read_only(tokens: List[str]) -> bool:
+    """True iff xargs's own resolved command head (per
+    `_xargs_command_head`) is read-only, or absent entirely (defaults to
+    `echo`)."""
+    head = _xargs_command_head(tokens)
+    return head is None or head in _XARGS_READ_ONLY_HEADS
+
+
 def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str]:
     if depth > _MAX_INDIRECTION_DEPTH:
         return "indirection nesting too deep (fails closed)"
@@ -770,6 +919,8 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
         head_base = _normalize_interpreter_basename(head_base)
 
         if head_base == "xargs":
+            if _xargs_head_is_read_only(tokens[1:]):
+                continue
             return "xargs <cmd> (command assembled from stdin -- indirection wrapper)"
 
         if head_base in _C_FLAG_INTERPRETERS:
@@ -808,6 +959,164 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
             if verdict is not None:
                 return verdict
 
+    return None
+
+
+# v2 MATCHER CLASSES (module comment "DESTRUCTIVE-ACTION GUARD v2"): docker,
+# kill/pkill, DB-client. Each function below tokenizes the FULL command once
+# (`_tokenize_full_command`, same helper the wrapper-indirection evaluator
+# above already uses -- no new spawn) and walks its segments, stripping a
+# leading `env` prefix (`_strip_env_prefix`) so `env FOO=bar docker rm x`
+# still resolves `docker` at the true command-position head. An unparseable
+# command (`_tokenize_full_command` returns ``None``) allows outright for
+# ALL THREE -- consistent with this module's existing fail-open posture on
+# infra/parse failure (module docstring "FAIL POSTURE").
+
+_DOCKER_READONLY_VERBS = frozenset(
+    {"ps", "images", "logs", "inspect", "version", "info", "top", "diff", "port", "stats"}
+)
+#: Top-level destructive verbs (``docker rm ...``, ``docker rmi ...``).
+_DOCKER_DESTRUCTIVE_VERBS = frozenset({"rm", "rmi", "prune"})
+#: Resource-namespace subcommands (``docker <namespace> <action>``) whose
+#: ``prune``/``rm`` action is the SAME memo-named destructive op, just
+#: spelled through docker's real namespaced CLI shape (`docker system
+#: prune`, `docker container prune`, `docker volume rm`, ...) rather than
+#: the bare top-level verb -- recognizing this nesting is not a widening of
+#: the memo's three named verbs, only recognizing docker's actual grammar
+#: for them.
+_DOCKER_NAMESPACE_VERBS = frozenset({"system", "container", "image", "volume", "network"})
+_DOCKER_NAMESPACE_DESTRUCTIVE_ACTIONS = frozenset({"prune", "rm"})
+
+
+def _docker_command_verb(tokens: List[str]) -> "tuple[Optional[str], Optional[str]]":
+    """Return ``(verb, subverb)`` for a docker invocation's argv tokens
+    AFTER the ``docker`` head, skipping docker's own global options (``-D``,
+    ``--config <path>``, ...) to find the first non-flag token as ``verb``.
+    ``subverb`` is the next non-flag token after ``verb`` (used for the
+    namespaced ``<namespace> prune``/``<namespace> rm`` shape) -- ``None``
+    when absent.
+    """
+    i, n = 0, len(tokens)
+    while i < n and tokens[i].startswith("-"):
+        i += 1
+    if i >= n:
+        return None, None
+    verb = tokens[i]
+    j = i + 1
+    while j < n and tokens[j].startswith("-"):
+        j += 1
+    subverb = tokens[j] if j < n else None
+    return verb, subverb
+
+
+def _evaluate_docker_surface(cmd_norm: str) -> Optional[str]:
+    """Deny the memo's named destructive docker verbs -- ``rm``/``rmi``/
+    ``prune``, whether invoked bare (``docker rm ...``) or through docker's
+    namespaced CLI shape (``docker system prune``, ``docker volume rm``,
+    ...). Read-only introspection (``_DOCKER_READONLY_VERBS``) and every
+    OTHER docker verb this matcher does not enumerate allow -- a NAMED deny
+    list, not a default-deny surface (see module comment "DESTRUCTIVE-ACTION
+    GUARD v2").
+    """
+    all_tokens = _tokenize_full_command(cmd_norm)
+    if all_tokens is None:
+        return None
+    for tokens, _pipe_before in _segments_from_tokens(all_tokens):
+        if not tokens:
+            continue
+        working = _strip_env_prefix(tokens)
+        if not working:
+            continue
+        head_base = _normalize_executable_basename(working[0])
+        if head_base != "docker":
+            continue
+        verb, subverb = _docker_command_verb(working[1:])
+        if verb is None or verb in _DOCKER_READONLY_VERBS:
+            continue
+        if verb in _DOCKER_DESTRUCTIVE_VERBS:
+            return f"docker {verb} (destructive)"
+        if verb in _DOCKER_NAMESPACE_VERBS and subverb in _DOCKER_NAMESPACE_DESTRUCTIVE_ACTIONS:
+            return f"docker {verb} {subverb} (destructive)"
+    return None
+
+
+#: The ONLY flag this matcher treats as a no-signal liveness check
+#: (`kill -0 <pid>` tests existence, sends nothing) -- anything else,
+#: including a bare `kill <pid>` (default `-TERM`), is denied outright per
+#: the memo's own "defer entirely rather than half-match" recommendation.
+_KILL_LIVENESS_ONLY_RE = re.compile(r"^-0$")
+
+
+def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
+    """Deny `kill`/`pkill` UNLESS the only flag token present is the bare
+    liveness-check `-0`. Scoping "a process this subagent itself launched"
+    vs "an unrelated one sharing the box" needs a live process-tree fact
+    this text classifier has no access to, so no attempt is made here --
+    every real-signal shape denies, not just ones a heuristic happens to
+    flag (module comment "DESTRUCTIVE-ACTION GUARD v2").
+    """
+    all_tokens = _tokenize_full_command(cmd_norm)
+    if all_tokens is None:
+        return None
+    for tokens, _pipe_before in _segments_from_tokens(all_tokens):
+        if not tokens:
+            continue
+        working = _strip_env_prefix(tokens)
+        if not working:
+            continue
+        head_base = _normalize_executable_basename(working[0])
+        if head_base not in ("kill", "pkill"):
+            continue
+        flags = [tok for tok in working[1:] if tok.startswith("-") and tok != "--"]
+        if flags == ["-0"] or (len(flags) == 1 and _KILL_LIVENESS_ONLY_RE.match(flags[0])):
+            continue
+        return f"{head_base} (process signal -- scoping deferred, see memo D2)"
+    return None
+
+
+#: Fixed set of DB-client binaries the memo names -- deliberately NOT a
+#: free-text "any binary that looks like a DB client" match.
+_DBCLIENT_BASENAMES = frozenset({"psql", "mysql", "mariadb", "sqlite3"})
+_DBCLIENT_STATEMENT_FLAGS = frozenset({"-c", "--command", "-e", "--execute"})
+#: word-boundary, case-insensitive -- matches a DROP/TRUNCATE STATEMENT, not
+#: a table/column merely named "drop_x" (word boundary excludes the
+#: trailing underscore-joined suffix).
+_DB_DESTRUCTIVE_STATEMENT_RE = re.compile(r"\b(?:DROP|TRUNCATE)\b", re.IGNORECASE)
+
+
+def _evaluate_dbclient_surface(cmd_norm: str) -> Optional[str]:
+    """For a fixed DB-client binary, inspect the statement text passed via
+    `-c`/`--command`/`-e`/`--execute` (space- or `=`-attached) for a
+    DROP/TRUNCATE keyword and deny only then -- a concrete client-binary +
+    flag rule (module comment "DESTRUCTIVE-ACTION GUARD v2"), not a naive
+    word-match over the whole command. `SELECT`, any other read-only
+    statement, or an invocation with none of these flags at all
+    (interactive session, unexamined) allows.
+    """
+    all_tokens = _tokenize_full_command(cmd_norm)
+    if all_tokens is None:
+        return None
+    for tokens, _pipe_before in _segments_from_tokens(all_tokens):
+        if not tokens:
+            continue
+        working = _strip_env_prefix(tokens)
+        if not working:
+            continue
+        head_base = _normalize_executable_basename(working[0])
+        if head_base not in _DBCLIENT_BASENAMES:
+            continue
+        rest = working[1:]
+        for idx, tok in enumerate(rest):
+            flag, value = tok, None
+            if "=" in tok:
+                maybe_flag, _, maybe_value = tok.partition("=")
+                if maybe_flag in _DBCLIENT_STATEMENT_FLAGS:
+                    flag, value = maybe_flag, maybe_value
+            elif tok in _DBCLIENT_STATEMENT_FLAGS and idx + 1 < len(rest):
+                value = rest[idx + 1]
+            if flag in _DBCLIENT_STATEMENT_FLAGS and value is not None:
+                if _DB_DESTRUCTIVE_STATEMENT_RE.search(value):
+                    return f"{head_base} {flag} (DROP/TRUNCATE statement)"
     return None
 
 
@@ -1574,6 +1883,8 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
             continue
 
         if norm_head == "xargs":
+            if _xargs_head_is_read_only(working[1:]):
+                continue
             result.is_wrapper = True
             if result.deny_kind is None:
                 result.deny_kind = (
@@ -2017,17 +2328,14 @@ def _is_opaque_indirection(wrapper_verdict: str) -> bool:
 
 
 def _build_indirection_advisory_reason(wrapper_shape: str) -> str:
-    """Short (Axis-A, <220-byte-prose-cap) advisory for an OPAQUE
+    """One-line (Axis-A, <220-byte-prose-cap) advisory for an OPAQUE
     indirection wrapper (see `_is_opaque_indirection`) -- the guard cannot
     see the payload, so it no longer blocks it outright; it only flags the
     shape. No override note: this guard has none, by design (module
     docstring "OVERRIDE-WITHHOLDING")."""
     return (
-        "ADVISORY: not blocked. This is an indirection wrapper whose "
-        "payload is opaque to this guard's text classifier -- it may be "
-        "entirely benign.\n\n"
-        f"  Shape: {wrapper_shape}\n\n"
-        "Genuinely destructive? Surface it to the EM instead of running it."
+        f"ADVISORY: indirection wrapper, payload opaque, not blocked -- "
+        f"shape: {wrapper_shape}. Genuinely destructive? Surface it to the EM."
     )
 
 
@@ -2786,6 +3094,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # HARDENING"): a fourth Layer-1 probe, cheap and boundary-anchored like
     is_wrapper_surface = bool(_WRAPPER_PROBE_RE.search(cmd_norm))
 
+    # v2 SURFACE PROBES (module comment "DESTRUCTIVE-ACTION GUARD v2"): raw-
+    # text Layer-1 gates, same cheap boundary-anchored style as the v1
+    # probes above -- classification is Layer-2, in the deny-evaluation
+    # block below.
+    is_docker_surface = bool(_DOCKER_SURFACE_RE.search(cmd_norm))
+    is_kill_surface = bool(_KILL_SURFACE_RE.search(cmd_norm))
+    is_dbclient_surface = bool(_DBCLIENT_SURFACE_RE.search(cmd_norm))
+
     tok_surfaces = _evaluate_tokenized(cmd_norm)
     is_git_surface = is_git_surface or tok_surfaces.is_git
     is_rm_surface = is_rm_surface or tok_surfaces.is_rm
@@ -2801,6 +3117,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         or is_chmod_chown_r_surface
         or is_wrapper_surface
         or is_machine_local_surface
+        or is_docker_surface
+        or is_kill_surface
+        or is_dbclient_surface
     ):
         return None
 
@@ -2897,6 +3216,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not deny and tok_surfaces.is_machine_local and tok_surfaces.deny_kind:
             deny = True
             deny_kind = tok_surfaces.deny_kind
+
+        if not deny and is_docker_surface:
+            verdict = _evaluate_docker_surface(cmd_norm)
+            if verdict is not None:
+                deny = True
+                deny_kind = verdict
+
+        if not deny and is_kill_surface:
+            verdict = _evaluate_kill_surface(cmd_norm)
+            if verdict is not None:
+                deny = True
+                deny_kind = verdict
+
+        if not deny and is_dbclient_surface:
+            verdict = _evaluate_dbclient_surface(cmd_norm)
+            if verdict is not None:
+                deny = True
+                deny_kind = verdict
 
     if not deny:
         if kind_unresolved:

@@ -93,20 +93,36 @@ Residual coupling, named rather than hidden: these templates depend on
 regexes tighten, these templates could go over cap without any edit here --
 AC7's firing-row/measure_envelope assertion is what would catch that. Margin
 against the 220-byte cap is NOT uniform across the four templates
-(`measure_envelope`, measured): foreign/em 169 bytes (margin 51),
-foreign/subagent 192 bytes (margin 28 -- the tightest of the four),
-publish/em 149 bytes (margin 71), publish/subagent 149 bytes (margin 71).
-foreign/subagent is the one that breaks first if these regexes ever tighten.
+(`measure_envelope`, measured): foreign/em 192 bytes (margin 28 -- now the
+tightest of the four), foreign/subagent 142 bytes (margin 78),
+publish/em 170 bytes (margin 50), publish/subagent 189 bytes (margin 31).
+foreign/em is the one that breaks first if these regexes ever tighten.
 
 MARGIN UPDATE 2026-09-03 (`DR-298` route added to foreign/em): that clause
 costs foreign/em +36 prose bytes, measured before/after on identical inputs
 -- the backticked `DR-298` itself is exempt, the surrounding prose is not.
-foreign/em keeps a comfortable margin and foreign/subagent remains the
-tightest template; the ordering above is unchanged. The four ABSOLUTE
-figures above do not reproduce under arbitrary inputs (they were taken with
-one specific target/session pair) -- re-measure with `measure_envelope`
-before trusting any single number, and treat the RANKING, not the absolute
-byte counts, as the durable claim.
+
+MARGIN UPDATE 2026-09-26 (A3, `git ls-remote` pointer added to both
+foreign-class renderers): re-measured at HEAD, this repo, before the pointer
+existed -- foreign/em was 169 bytes (margin 51), foreign/subagent was 143
+bytes (margin 77); the earlier 2026-09-03 paragraph's own absolute figures
+had already drifted from those (see its own closing sentence on this). The
+pointer sentence ("Confirm state first: `git ls-remote <remote>`.") costs
+foreign/em +23 prose bytes and foreign/subagent -1 (net, following an
+unrelated one-byte punctuation shift) -- foreign/em's margin tightened from
+51 to 28 and it is now the tightest template, displacing foreign/subagent.
+The four ABSOLUTE figures above do not reproduce under arbitrary inputs
+(they were taken with one specific target/session pair) -- re-measure with
+`measure_envelope` before trusting any single number, and treat the
+RANKING, not the absolute byte counts, as the durable claim.
+
+B1 MARGIN NOTE (docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md):
+`_OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE` below is appended ONLY when
+`target_repo` carries `bump_outside_repo_write.py`'s own "no git repo ("
+label -- never on an ordinary foreign-repo path -- so it does not touch the
+margins measured above for a real cross-repo target; a caller-supplied
+outside-repo label pays this clause's own extra prose bytes, not counted in
+this docstring's own historical figures.
 
 CALLERS RESOLVE THE INPUTS; THIS MODULE ONLY COMPOSES. `target_repo`,
 `session_repo`, `gitdir`, `session_id`, `sandbox_root`, and (for the publish
@@ -210,6 +226,34 @@ DESTINATION_PUBLISH = "publish"
 #: destination path (Anti-scope: "do not hardcode a mirror DESTINATION path
 _PUBLISH_DOCTRINE_CITATION = "plugin-extraction-and-distribution.md"
 _PUBLISH_DOCTRINE_SECTION = "Publish-Repo Content Authoring"
+
+#: B1 (docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md): the
+#: OUTSIDE-repo guard (`bump_outside_repo_write.py`) classifies command
+#: SHAPES (a write-sink verb plus a target that resolves under no git
+#: root), never the EFFECT a file-invoked script actually has once run.
+#: `bump_outside_repo_write.py` is the ONLY caller that ever labels
+#: `target_repo` this way (`_no_git_repo_target_label`, and its
+#: PowerShell-leg twin, both build `"no git repo (%s)" % ...` /
+#: `"no git repo (%s; ...)"`); `bump_foreign_repo_write.py`'s `target_repo`
+#: is always a real repo path, never this prefix -- so keying this clause
+#: off the label already flowing through `target_repo` (never a new
+#: caller-passed flag, and no edit to either Bash guard's own call site)
+#: keeps the two guards' copy apart with no coupling beyond what
+#: `render_bump_message`'s existing single argument already carries.
+_OUTSIDE_ANY_REPO_LABEL_PREFIX = "no git repo ("
+
+
+def _target_repo_is_outside_any_repo(target_repo: str) -> bool:
+    """True only for `bump_outside_repo_write.py`'s own label shape (see
+    `_OUTSIDE_ANY_REPO_LABEL_PREFIX`'s docstring) -- never for an ordinary
+    repo path, which is what every other caller of this module passes."""
+    return bool(target_repo) and target_repo.startswith(_OUTSIDE_ANY_REPO_LABEL_PREFIX)
+
+
+_OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE = (
+    " This guard classifies command shapes, not their effects; a script "
+    "that writes here is not checked."
+)
 
 #: write reaching the FOREIGN-class renderer at all. Named once here so
 _CLASSIFICATION_DEFECT_BACKLOG_ENTRY = (
@@ -454,18 +498,26 @@ def render_em_message(
     docstring): the `(not `{session_repo}`)` contrast leg below is correct
     only when `target_repo != session_repo` -- an invariant this function
     never checked before. When it fails, this renders a distinct
-    defect-attribution message instead of the degenerate contrast."""
+    defect-attribution message instead of the degenerate contrast.
+
+    B1 OUTSIDE-REPO CLAUSE (see `_target_repo_is_outside_any_repo`'s own
+    docstring): appended only when `target_repo` carries
+    `bump_outside_repo_write.py`'s own label shape."""
     del gitdir, session_id, surface
     defect = _classification_defect_notice(target_repo, session_repo, "your PM")
     if defect is not None:
         return defect
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
-    return (
+    message = (
         "Coordinator guard — instead: writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
         "is yours to grant in-band — `DR-298`, no PM utterance needed. "
-        "Beyond your remit? cross-repo-memo is the sanctioned channel."
+        "Beyond your remit? cross-repo-memo is the sanctioned channel. "
+        "Confirm state first: `git ls-remote <remote>`."
     )
+    if _target_repo_is_outside_any_repo(target_repo):
+        message += _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE
+    return message
 
 
 def render_subagent_message(
@@ -491,17 +543,24 @@ def render_subagent_message(
     docstring): the `(not `{session_repo}`)` contrast leg below is correct
     only when `target_repo != session_repo` -- an invariant this function
     never checked before. When it fails, this renders a distinct
-    defect-attribution message instead of the degenerate contrast."""
+    defect-attribution message instead of the degenerate contrast.
+
+    B1 OUTSIDE-REPO CLAUSE -- same as `render_em_message`, see
+    `_target_repo_is_outside_any_repo`'s own docstring."""
     del gitdir, session_id, surface
     defect = _classification_defect_notice(target_repo, session_repo, "the EM that dispatched you")
     if defect is not None:
         return defect
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
-    return (
+    message = (
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
-        f"write in your sandbox `{sandbox_root}` instead."
+        f"write in your sandbox `{sandbox_root}` instead. "
+        "Confirm state first: `git ls-remote <remote>`."
     )
+    if _target_repo_is_outside_any_repo(target_repo):
+        message += _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE
+    return message
 
 
 def render_unknown_message(
@@ -540,16 +599,22 @@ def render_unknown_message(
     single dispatch signature -- none is rendered here.
 
     CLASSIFICATION-DEFECT GUARD -- same shared check as the two positive-
-    class renderers (see `_classification_defect_notice`'s own docstring)."""
+    class renderers (see `_classification_defect_notice`'s own docstring).
+
+    B1 OUTSIDE-REPO CLAUSE -- same as `render_em_message`, see
+    `_target_repo_is_outside_any_repo`'s own docstring."""
     del gitdir, session_id, surface
     defect = _classification_defect_notice(target_repo, session_repo, "your PM or dispatching EM")
     if defect is not None:
         return defect
-    return (
+    message = (
         "Coordinator guard — instead: the caller could not be resolved for "
         f"writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`) — "
         "your own session, check with your PM; dispatched, report to your EM."
     )
+    if _target_repo_is_outside_any_repo(target_repo):
+        message += _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE
+    return message
 
 
 #: "push"`) -- the one shape this module renders DIFFERENT publish-class
@@ -703,6 +768,13 @@ def render_bump_message(
     templates (see `_GIT_PUSH_WRITE_VERB_LABEL`); the FOREIGN-class
     templates never take it, since a hand-authored write into an ordinary
     foreign repo has no `percolate-push`-shaped alternative to offer.
+
+    B1 (docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md) adds NO
+    new keyword here: the outside-repo clause is keyed off `target_repo`'s
+    own label shape (see `_target_repo_is_outside_any_repo`), inside the
+    three FOREIGN-class renderers this function dispatches to below -- so
+    neither Bash guard's own call site changes, and this dispatcher's
+    contract is unchanged.
     """
     if destination_class == DESTINATION_PUBLISH:
         if agent_class == AGENT_CLASS_SUBAGENT:

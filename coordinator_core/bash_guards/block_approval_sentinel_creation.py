@@ -167,22 +167,36 @@ always-loaded-doctrine edits.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import os
 import re
+import shlex
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
     INDIRECTION_REMEDY,
+    REASON_DIRECT,
     REASON_INDIRECTION,
     SentinelCreationDetector,
+    _DD_OF_RE,
+    _FILE_ARG_COMMANDS,
     _REDIR_PREFIX_RE,
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
+    _BUNDLED_C_FLAG_RE,
+    _C_FLAG_INTERPRETERS,
+    _LONG_OPT_WITH_VALUE_RE,
+    _MAX_INDIRECTION_DEPTH,
+    _SHELL_FILE_INTERPRETERS,
+    _has_noexec_flag_before_script,
+    _has_script_operand,
     _normalize_executable_basename,
+    _normalize_interpreter_basename,
     _strip_env_prefix,
     _strip_heredoc_bodies,
     _tokenize_full_command,
 )
+from coordinator_core.bash_guards._command_tokenizer import _SEPARATOR_TOKEN_RE
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -197,6 +211,123 @@ _TARGET_BASENAME = ".coordinator-doctrine-edit-approved"
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 
 _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+#: Item 33 (2026-09-26 narrowing) size cap for the readable-script override
+#: below. WHY 256 KiB and a named constant rather than an inline literal:
+#: the allow path performs exactly one bounded file read on the guard's
+#: PreToolUse hot path (fires for every Bash call), so the cap bounds that
+#: read's cost independent of whatever the caller's script actually
+#: contains -- an unbounded read here would let an oversized file turn a
+#: cheap classifier into an expensive one.
+_MAX_SCRIPT_READ_BYTES = 256 * 1024
+
+#: Item 33: the narrow subclass of `_C_FLAG_INTERPRETERS` this override
+#: reads a bare `<interp> <path>` invocation's script for, instead of
+#: denying it unconditionally. Deliberately NOT all of
+#: `_SHELL_FILE_INTERPRETERS` (excludes `zsh`) and NOT bare `python` --
+#: exactly the set named in the dispatch brief (§ Design decisions, item
+#: 33), no wider.
+_READABLE_SCRIPT_INTERPRETERS = frozenset({"bash", "sh", "python3"})
+
+
+def _segments_with_background(tokens: List[str]) -> "list[tuple[list[str], bool, bool]]":
+    """Item 33: like the shared engine's `_segments_from_tokens`, but each
+    segment also carries whether IT ITSELF was launched backgrounded --
+    terminated by a bare `&`, never `&&` (`_SEPARATOR_TOKEN_RE` matches
+    both, so the separator token's exact text, not just its membership, is
+    what distinguishes them). Needed only by this override's readable-
+    script branch ("no earlier segment is backgrounded" -- see class
+    docstring "ITEM 33 NARROWING"); every other rule in this module uses
+    the shared engine's own `pipe_before`-only segmenter unchanged."""
+    segments: "list[tuple[list[str], bool, bool]]" = []
+    current: List[str] = []
+    pipe_before = False
+    for tok in tokens:
+        if _SEPARATOR_TOKEN_RE.match(tok):
+            if current:
+                segments.append((current, pipe_before, tok == "&"))
+            current = []
+            pipe_before = "|" in tok
+            continue
+        current.append(tok)
+    if current:
+        segments.append((current, pipe_before, False))
+    return segments
+
+
+def _first_operand_token(interpreter_args: List[str]) -> Optional[str]:
+    """Item 33: the actual OPERAND token `_has_script_operand` (shared
+    engine) only ever reports the presence of, as a boolean -- this
+    override needs the path itself to read. Mirrors that function's own
+    option-scanning exactly (see its docstring for the option-value edge
+    cases), returning the operand token instead of `True`."""
+    n = len(interpreter_args)
+    for idx, tok in enumerate(interpreter_args):
+        if tok == "--":
+            return interpreter_args[idx + 1] if idx + 1 < n else None
+        if _LONG_OPT_WITH_VALUE_RE.match(tok):
+            return tok.split("=", 1)[1]
+        if tok.startswith("-") and tok != "-":
+            continue
+        return tok
+    return None
+
+
+def _has_module_flag(interpreter_args: List[str]) -> bool:
+    """Item 33: `python3 -m <module>` names a MODULE, not a script path --
+    `_has_script_operand` (shared engine) does not distinguish the two, so
+    without this check `python3 -m pytest` would be misread as `python3
+    <path=pytest>` and routed into the readable-script branch (regression
+    caught by the pre-existing `test_python_dash_m_allows` pin). True only
+    when `-m`/an attached `-m<module>` precedes the first positional
+    operand -- mirrors `_has_script_operand`'s own option-scanning walk."""
+    for tok in interpreter_args:
+        if tok == "--":
+            return False
+        if tok == "-m" or (tok.startswith("-m") and len(tok) > 2 and "=" not in tok):
+            return True
+        if tok.startswith("-"):
+            continue
+        return False
+    return False
+
+
+def _segment_writes_target_path(seg_tokens: List[str], path_token: str) -> bool:
+    """Item 33: "no earlier segment of the same command writes or
+    redirects to that path" -- an exact-token compare (the same spelling
+    the interpreter invocation itself used, not a resolved/normalized
+    path; a same-command writer that spells the path differently is the
+    module's own documented lexical-classifier limit, same class as every
+    other exact-token compare in this package) against a redirect target
+    or a file-creating command's argument, mirroring the shared engine's
+    own `_redirect_target_denies`/`_file_arg_command_denies`/`_dd_of_arg_
+    denies` shapes but against an arbitrary path instead of the sentinel
+    basename."""
+    n = len(seg_tokens)
+    for i, tok in enumerate(seg_tokens):
+        m = _REDIR_PREFIX_RE.match(tok)
+        if not m:
+            continue
+        remainder = tok[m.end() :]
+        candidate = remainder if remainder else (seg_tokens[i + 1] if i + 1 < n else None)
+        if candidate == path_token:
+            return True
+
+    argv0_idx = 0
+    while argv0_idx < n and _ASSIGN_RE.match(seg_tokens[argv0_idx]):
+        argv0_idx += 1
+    if argv0_idx >= n:
+        return False
+    base = _normalize_executable_basename(seg_tokens[argv0_idx])
+    rest = seg_tokens[argv0_idx + 1 :]
+    if base in _FILE_ARG_COMMANDS or base == "sed":
+        return any(tok == path_token for tok in rest)
+    if base == "dd":
+        for tok in rest:
+            m2 = _DD_OF_RE.match(tok)
+            if m2 and m2.group(1) == path_token:
+                return True
+    return False
 
 
 class _ApprovalSentinelDetector(SentinelCreationDetector):
@@ -310,6 +441,58 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     detector exists to deny, transcribed from a confirmed-live evasion --
     the taint rules are unexplainable without the assignment-and-dereference
     spelling they match.
+
+    ITEM 33 NARROWING (2026-09-26, bounded forge-closure fix -- reported
+    false positive: `machine-local`, DoE-claude
+    `coordinator/templates/bin/machine-local`, a forwarder that names
+    `python3`/`exec`/`bash` in its own text and was denied outright by the
+    inherited "interpreter-invoked script, content unexamined" branch this
+    override narrows). For a bare `bash|sh|python3 <path>` invocation, ONE
+    level deep (never inside a `-c`/`env`-unwrapped payload), this override
+    reads `<path>` and applies THIS detector's own mention/taint scan to
+    its text instead of denying unconditionally -- denying on a mention,
+    allowing otherwise. This is a NARROWING of a deny, which this class's
+    own "THE INVERSION ITSELF" default-deny posture does not otherwise
+    permit; it is scoped to this one branch only and every other rule in
+    this class stays a pure widening. The inherited unconditional deny
+    still stands, unchanged, whenever any of the following holds -- this
+    override never trusts a script it cannot cheaply and safely account
+    for:
+
+      - the path does not resolve to an existing, readable REGULAR file
+        (missing, unreadable, or a directory);
+      - the path is a symlink (a pre-existing link could point anywhere by
+        the time the command actually runs -- same read-time-vs-exec-time
+        concern as the residual gap below, just caught earlier here);
+      - the file exceeds `_MAX_SCRIPT_READ_BYTES`;
+      - an EARLIER segment of the same command writes or redirects to that
+        same path (the guard would be reading content it cannot trust was
+        the content that runs);
+      - an EARLIER segment of the same command is backgrounded (`&`) --
+        `bash writer.sh & bash s.sh` could have `writer.sh` rewrite `s.sh`
+        concurrently with this guard's read.
+
+    Three residual gaps are accepted, not closed, and documented rather
+    than solved by a token deny on interpreter/indirection shapes (a token
+    deny would re-deny exactly the command this item exists to allow):
+
+      1. RUNTIME BASENAME ASSEMBLY -- a script whose own text assembles the
+         sentinel basename at runtime (string concatenation, `chr()`, a
+         computed `$()`), never spelling it as a contiguous substring, is
+         the same class as this module's own "KNOWN OPEN GAP" above and is
+         not newly closed by reading the file -- reading only lets the
+         EXISTING mention/taint scan run over more text, it does not add
+         string-construction evaluation.
+      2. THE SCRIPT CHAIN -- this scan reads only the script named on the
+         command line; a clean script that itself runs `bash other.sh` or
+         `python -c ...` is allowed without `other.sh` (or the `-c`
+         payload) ever being read.
+      3. READ-TIME VS EXEC-TIME (TOCTOU) -- the guard reads `<path>` at
+         PreToolUse; a separate, concurrent process outside this command
+         can still swap the file's content between that read and the
+         command's actual run. Same-command writers and backgrounded
+         segments are denied (see above); a writer outside the command is
+         not visible to this guard at all.
     """
 
     _SAFE_ARGV0 = frozenset(
@@ -338,6 +521,13 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         super().__init__(target_basename)
         #: docstring "VARIABLE TAINT".
         self._tainted_vars: "set[str]" = set()
+        #: Item 33: the PreToolUse payload's own `cwd`, set fresh by
+        #: `evaluate()` on every call -- a relative script path resolves
+        #: against this, never process cwd (see class docstring "ITEM 33
+        #: NARROWING"). Defaults to `None` (no relative resolution) so a
+        #: caller reaching the readable-script path before `evaluate()` --
+        #: which does not happen in normal use -- fails to the safe side.
+        self._cwd: Optional[str] = None
 
     def _collect_tainted_vars(self, tokens: "list[str]") -> "set[str]":
         """Scan every token of the (whole, not-yet-segmented) command for a
@@ -424,18 +614,247 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 return True
         return False
 
-    def evaluate(self, cmd: str):
+    def evaluate(
+        self, cmd: str, cwd: Optional[str] = None
+    ) -> Tuple[bool, str, str]:
         """OVERRIDE: recompute `self._tainted_vars` from THIS call's command
-        string before delegating to the parent's `evaluate()`, which drives
-        `_segment_denies` (and, through it, the two taint-aware overrides
-        above) per segment. Falls back to an empty taint set for an
-        unparseable command -- the parent's own legacy free-text fallback
+        string, then drive the per-segment loop itself (rather than
+        delegating to the parent's `evaluate()`) so the Item 33 readable-
+        script override below can see EARLIER segments of the same command
+        (its own "no earlier segment writes/redirects to the path, no
+        earlier segment is backgrounded" conditions -- see class docstring
+        "ITEM 33 NARROWING"). `cwd` resolves a relative script path the
+        same way a shell would -- relative to the PreToolUse payload's own
+        `cwd`, never process cwd, since a Bash guard has no other cwd
+        signal. Falls back to an empty taint set for an unparseable
+        command -- the parent's own legacy free-text fallback
         (`_evaluate_legacy`) does not use segments or taint at all, so an
         empty set there costs nothing."""
+        self._cwd = cwd
         cmd_norm = _strip_heredoc_bodies(cmd)
         tokens = _tokenize_full_command(cmd_norm)
         self._tainted_vars = self._collect_tainted_vars(tokens) if tokens else set()
-        return super().evaluate(cmd)
+
+        if tokens is None:
+            if self._evaluate_legacy(cmd_norm):
+                return (
+                    True,
+                    "unparseable shell shape mentioning the sentinel filename",
+                    REASON_DIRECT,
+                )
+            return False, "", ""
+
+        prior_segments: "list[tuple[list[str], bool, bool]]" = []
+        for seg_tokens, pipe_before, backgrounded in _segments_with_background(tokens):
+            if self._segment_denies(seg_tokens):
+                return (
+                    True,
+                    "command shape that would create or overwrite %s" % self.target_basename,
+                    REASON_DIRECT,
+                )
+            verdict = self._indirection_verdict_with_reason(
+                seg_tokens, pipe_before, 0, prior_segments
+            )
+            if verdict is not None:
+                msg, reason_class = verdict
+                return True, msg, reason_class
+            prior_segments.append((seg_tokens, pipe_before, backgrounded))
+        return False, "", ""
+
+    def _indirection_verdict_with_reason(
+        self,
+        seg_tokens: "list[str]",
+        pipe_before: bool,
+        depth: int,
+        prior_segments: "list[tuple[list[str], bool, bool]]",
+    ) -> Optional[Tuple[str, str]]:
+        """Own copy of the shared engine's `_evaluate_segment_indirection`
+        (xargs-read-only-head short-circuit, then the walk below) -- needed
+        because the walk itself must be a copy too (see
+        `_indirection_walk_with_reason` docstring for why no seam exists to
+        override just the one branch this item narrows)."""
+        if self._xargs_runs_read_only_head(seg_tokens):
+            return None
+        return self._indirection_walk_with_reason(
+            seg_tokens, pipe_before, depth, prior_segments
+        )
+
+    def _indirection_walk_with_reason(
+        self,
+        seg_tokens: "list[str]",
+        pipe_before: bool,
+        depth: int,
+        prior_segments: "list[tuple[list[str], bool, bool]]",
+    ) -> Optional[Tuple[str, str]]:
+        """Own copy of the shared engine's
+        `SentinelCreationDetector._evaluate_segment_indirection_walk`, byte-
+        for-byte identical except the ONE branch Item 33 narrows (the
+        `<interp> <file>` bare-script-operand deny) -- routed through
+        `_script_file_verdict` instead of an unconditional deny. No seam
+        exists on the shared class to override only that branch: the shared
+        walk is one method with the deny inlined, so narrowing it without
+        touching the shared class (per this row's brief -- other sentinels
+        built on that class must not change behavior) means owning a copy
+        of the whole method here. Every other branch below is intentionally
+        UNCHANGED from the shared version, including the recursive `-c`/
+        `env` unwrap, which still calls the INHERITED (non-reasoned)
+        `_classify_payload` -- Item 33 is scoped to a bare top-level
+        `<interp> <path>` only, never one nested inside a `-c` payload (see
+        class docstring "ITEM 33 NARROWING": "ONE level deep")."""
+        if depth > _MAX_INDIRECTION_DEPTH:
+            return "indirection nesting too deep (fails closed)", REASON_INDIRECTION
+        if not seg_tokens:
+            return None
+
+        argv0_idx = self._env_skip_index(seg_tokens)
+        if argv0_idx >= len(seg_tokens):
+            return None
+        working = seg_tokens[argv0_idx:]
+        env_assignment_stripped = argv0_idx > 0
+
+        was_env_wrapped = False
+        if working[0] == "env":
+            stripped = _strip_env_prefix(working)
+            was_env_wrapped = stripped != working
+            working = stripped
+        if not working:
+            return None
+
+        head_base = _normalize_executable_basename(working[0])
+        norm_head = _normalize_interpreter_basename(head_base)
+
+        if norm_head == "xargs":
+            return (
+                "xargs <cmd> (command assembled from stdin -- indirection wrapper)",
+                REASON_INDIRECTION,
+            )
+
+        if norm_head in _SHELL_FILE_INTERPRETERS and pipe_before:
+            return (
+                f"{norm_head} (bare interpreter fed via stdin pipe -- "
+                "indirection wrapper, piped content unexamined)",
+                REASON_INDIRECTION,
+            )
+
+        if norm_head in _C_FLAG_INTERPRETERS:
+            if norm_head in _SHELL_FILE_INTERPRETERS and _has_noexec_flag_before_script(
+                working[1:]
+            ):
+                return None
+            c_flag_positions = [
+                i for i in range(1, len(working)) if _BUNDLED_C_FLAG_RE.match(working[i])
+            ]
+            if c_flag_positions:
+                idx = c_flag_positions[0]
+                if idx + 1 < len(working):
+                    inline_payload = working[idx + 1]
+                else:
+                    inline_payload = (
+                        " ".join(shlex.quote(t) for t in working[idx + 1 :])
+                        or " ".join(shlex.quote(t) for t in seg_tokens)
+                    )
+                # ITEM 33: nested `-c` payload -- inherited (non-reasoned)
+                # `_classify_payload`, one level deeper, unaffected by this
+                # override (see class docstring "ITEM 33 NARROWING").
+                verdict = self._classify_payload(inline_payload, depth + 1)
+                if verdict is not None:
+                    return f"{norm_head} -c '<inline>' -> {verdict}", REASON_INDIRECTION
+                return None
+            if norm_head in _SHELL_FILE_INTERPRETERS and _has_script_operand(
+                working[1:]
+            ):
+                return self._script_file_verdict(
+                    norm_head, working, depth, prior_segments
+                )
+            # `python3` is a `_C_FLAG_INTERPRETERS` member with no bare-file
+            # branch at all above this override (see module docstring
+            # "Item 21"'s python/file carve-out precedent) -- `-m <module>`
+            # is not a script PATH (`python3 -m pytest` must keep allowing
+            # unexamined, same as before this item), so Item 33 only claims
+            # a `python3` invocation here when it names an operand AND that
+            # operand is not a `-m` module name.
+            if (
+                norm_head == "python3"
+                and _has_script_operand(working[1:])
+                and not _has_module_flag(working[1:])
+            ):
+                return self._script_file_verdict(
+                    norm_head, working, depth, prior_segments
+                )
+            return None
+
+        if was_env_wrapped or env_assignment_stripped:
+            remainder = " ".join(shlex.quote(t) for t in working)
+            verdict = self._classify_payload(remainder, depth + 1)
+            if verdict is not None:
+                return verdict, REASON_INDIRECTION
+            return None
+
+        return None
+
+    def _script_file_verdict(
+        self,
+        norm_head: str,
+        working: "list[str]",
+        depth: int,
+        prior_segments: "list[tuple[list[str], bool, bool]]",
+    ) -> Tuple[str, str]:
+        """Item 33: the one narrowed branch. `working` is `<interp>
+        <args...>` with `<interp>` already confirmed to name a script
+        operand. Falls back to the inherited unconditional deny (byte-
+        identical message to the shared engine's own) whenever any safety
+        condition in the class docstring's "ITEM 33 NARROWING" list holds --
+        this method NEVER widens what the inherited behavior already
+        denies, only narrows it under the enumerated conditions."""
+        fallback = (
+            f"{norm_head} <file> (interpreter-invoked script -- "
+            "indirection wrapper, script content unexamined)",
+            REASON_INDIRECTION,
+        )
+        if depth != 0 or norm_head not in _READABLE_SCRIPT_INTERPRETERS:
+            return fallback
+        path_token = _first_operand_token(working[1:])
+        if not path_token:
+            return fallback
+        if any(
+            backgrounded or _segment_writes_target_path(prior_tokens, path_token)
+            for prior_tokens, _pipe_before, backgrounded in prior_segments
+        ):
+            return fallback
+        mentions = self._readable_script_mentions_target(path_token)
+        if mentions is None:
+            return fallback
+        if mentions:
+            return (
+                "command shape that would create or overwrite %s" % self.target_basename,
+                REASON_DIRECT,
+            )
+        return None  # clean read -- allow this segment's indirection check
+
+    def _readable_script_mentions_target(self, path_token: str) -> Optional[bool]:
+        """Read `path_token` (resolved against `self._cwd`) and apply this
+        detector's own mention-plus-taint scan to its text. Returns `None`
+        (caller keeps the inherited unconditional deny) when the path is
+        not a safely readable regular file within the size cap -- missing,
+        unreadable, a directory, a symlink (residual-gap avoidance, see
+        class docstring), or too large."""
+        candidate = path_token
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(self._cwd or ".", candidate)
+        try:
+            if os.path.islink(candidate) or not os.path.isfile(candidate):
+                return None
+            if os.path.getsize(candidate) > _MAX_SCRIPT_READ_BYTES:
+                return None
+            with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return None
+        if self._mention_re.search(text):
+            return True
+        if any(vm.group(1) in self._tainted_vars for vm in _VAR_REF_RE.finditer(text)):
+            return True
+        return False
 
     def _segment_denies(self, seg_tokens: "list[str]") -> bool:  # noqa: D401
         """Default-deny override: a redirect into the sentinel always
@@ -463,9 +882,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 _detector = _ApprovalSentinelDetector(_TARGET_BASENAME)
 
 
-def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
+def _evaluate(cmd: str, dialect: Optional[Dialect] = None, cwd: Optional[str] = None):
     if dialect is None or dialect is Dialect.BASH:
-        return _detector.evaluate(cmd)
+        return _detector.evaluate(cmd, cwd=cwd)
     return _detector.evaluate_for_dialect(
         cmd, dialect, guard_name="block_approval_sentinel_creation"
     )
@@ -530,10 +949,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
 
     # NOTE: deliberately no raw-text `_MENTION_RE` pre-filter gate here
     # characters sit between the two halves); only the TOKENIZED form (after
-    deny, reason_kind, reason_class = _evaluate(cmd, dialect)
+    deny, reason_kind, reason_class = _evaluate(cmd, dialect, cwd=cwd)
     if not deny:
         return None
 

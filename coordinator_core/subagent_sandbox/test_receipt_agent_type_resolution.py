@@ -1,8 +1,8 @@
 """A receipt must be stamped with the reviewer's TYPE, never a dispatch label.
 
-Both eligibility checks (`_is_close_receipt_reviewer`, `_is_review_integrator`)
-read `agent_type` AND `subagent_type`, because which one carries the persona
-is not fixed across callers. The stamp beneath them read only `agent_type`.
+`_is_close_receipt_reviewer` reads `agent_type` AND `subagent_type`, because
+which one carries the persona is not fixed across callers. The stamp beneath
+it read only `agent_type`.
 For a NAMED (Agent-teams teammate) dispatch that field holds the teammate's
 own name rather than a `coordinator:*` type — the same one-leg/two-leg
 asymmetry `block_reviewer_bash_outside_allowlist`'s Divergence 16 fixed in
@@ -26,7 +26,6 @@ import pytest
 
 from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS, DELEGATE_REVIEWERS
 from coordinator_core.subagent_sandbox.provision_report import (
-    _INTEGRATOR_AGENT_TYPE,
     _is_close_receipt_reviewer,
     _receipt_agent_type,
 )
@@ -73,15 +72,6 @@ def test_prefers_agent_type_when_both_resolve(agent_type, subagent_type, expecte
 def test_never_invents_a_type_when_neither_label_resolves():
     assert _receipt_agent_type("odd-name", "also-odd", DELEGATE_REVIEWERS) == "odd-name"
     assert _receipt_agent_type("", "", DELEGATE_REVIEWERS) == ""
-
-
-def test_the_integrator_receipt_has_the_same_resolution():
-    assert (
-        _receipt_agent_type(
-            "some-label", "coordinator:review-integrator", {_INTEGRATOR_AGENT_TYPE}
-        )
-        == "coordinator:review-integrator"
-    )
 
 
 def test_close_floor_reviewer_resolves_and_stamps_a_receipt():

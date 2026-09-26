@@ -385,6 +385,7 @@ def resolve_deliverable_and_initiative(
     additional_predecessors: list[str] | None = None,
     predecessor_is_plan_input: bool = False,
     work_slug: str | None = None,
+    sizing: "tuple[str, str | None] | None" = None,
 ) -> tuple[str, str]:
     """Run the carry-or-mint cascade. Returns (deliverable_id, initiative_id).
 
@@ -400,11 +401,39 @@ def resolve_deliverable_and_initiative(
     present: the plan rung still takes precedence over the predecessor rung, byte-
     identical to the prior first-hit-wins cascade in every non-divergent case.
 
+    Sizing rung (memo C7, keyword-only, defaults `None` — every existing call site is
+    unaffected): `sizing` is a caller-READ `(path, deliverable_id)` pair, the same
+    shape as this function's internal `rungs` entries — this function never opens the
+    path itself. A sizing object has no `---` frontmatter fence, so the injected
+    `read_frontmatter_field` cannot read one; the caller resolves the pair with the
+    reader it already uses for sizing objects (`deliverable_cascade._read_sizing_meta`,
+    via `_resolve_cited_sizing_deliverable_id`), mirroring this module's standing
+    contract that the caller resolves paths and facts, never this function.
+
+    Precedence: sizing > plan > predecessor — `sizing_id or plan_dlvr_id or
+    predecessor_dlvr_id`. The order is moot for the carried VALUE: every present rung
+    (sizing included) still goes through the unchanged divergence check below, so any
+    disagreement raises `DivergentDeliverableIdError` rather than letting one rung
+    silently win, and the order can only change which rung is *labelled* as the
+    source in that error's message. This is deliberate, not an oversight — 15 of 25
+    sizing-carrying handoffs measured on this corpus DISAGREE with their sizing
+    (plan-blitz mints a sizing after the baton it sizes as often as before it), so a
+    rung that silently beat a disagreeing plan or predecessor would re-key those
+    chains. The house posture is loud refusal (see `DivergentDeliverableIdError`'s own
+    docstring), and the sizing rung inherits it rather than getting a carve-out.
+
+    A sizing with no `deliverable_id` (the pair's second element `None`, or `sizing`
+    itself `None`) is an absent rung, exactly like an absent plan or predecessor rung —
+    it never arms `DroppedDeliverableJoinError` by itself, and is the routing-time NORM
+    for most sizing routes (`docs/wiki/deliverable-id.md` § Sizing-object negative
+    spec), not a gap. `sizing` omitted is byte-identical to every pre-existing call
+    site's behaviour: no rung is added, no divergence surface widens.
+
     N-rung widening (sedge-01, `succession-edge-cardinality` roadmap): `additional_
     predecessors` — every fan-in leg beyond the primary predecessor — is compared
-    against the plan/predecessor rungs for divergence too, but participates in
-    divergence detection ONLY. The carry/mint WINNER is still `plan_dlvr_id or
-    predecessor_dlvr_id`, unchanged from the 2-rung cascade — an additional-
+    against the plan/predecessor/sizing rungs for divergence too, but participates in
+    divergence detection ONLY. The carry/mint WINNER is still `sizing_dlvr_id or
+    plan_dlvr_id or predecessor_dlvr_id`, unchanged by this widening — an additional-
     predecessor rung never becomes the carried id, it only ever proves (or fails to
     prove) that every rung agrees. Each entry is expected already-RESOLVED (archive-
     aware, qualified) by the caller — this function does no path resolution itself,
@@ -461,6 +490,15 @@ def resolve_deliverable_and_initiative(
         (plan_file, plan_dlvr_id),
         (predecessor, predecessor_dlvr_id),
     ]
+    sizing_dlvr_id = ""
+    if sizing is not None:
+        sizing_path, sizing_dlvr_id_raw = sizing
+        sizing_dlvr_id = sizing_dlvr_id_raw or ""
+        # Prepended, not appended: precedence is sizing > plan > predecessor (see
+        # this function's own docstring), and `rungs`' ORDER is what
+        # `present_rungs`/the divergence message walk, ahead of the
+        # additional-predecessors fan-in below.
+        rungs.insert(0, (sizing_path, sizing_dlvr_id))
     for _extra_path in additional_predecessors or []:
         _extra_id = (
             read_frontmatter_field(_extra_path, "deliverable_id")
@@ -485,7 +523,7 @@ def resolve_deliverable_and_initiative(
             "DivergentDeliverableIdError's own docstring)."
         )
 
-    dlvr_id = plan_dlvr_id or predecessor_dlvr_id
+    dlvr_id = sizing_dlvr_id or plan_dlvr_id or predecessor_dlvr_id
 
     if not dlvr_id and plan_active:
         raise DroppedDeliverableJoinError(

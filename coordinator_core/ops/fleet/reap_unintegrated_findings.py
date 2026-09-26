@@ -65,10 +65,10 @@ from typing import List, Optional, Tuple
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root, rel_id
 from coordinator_core.ops.fleet._findings_reap import (
-    _MARKER_RE,
     _extract_authored_date,
     _review_trail_roots,
     cited_review_trail_relpaths,
+    is_integrated,
     reap_findings,
     scan_findings,
     scan_review_trail_rest,
@@ -99,16 +99,21 @@ REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS = 90
 
 
 def classify_unintegrated(path: Path) -> Optional[str]:
-    """Leg (b) reap predicate: marker-absent AND aged > _AGE_THRESHOLD_DAYS.
+    """Leg (b) reap predicate: not integrated AND aged > _AGE_THRESHOLD_DAYS.
+
+    "Integrated" (RRI-M4) means a verified `findings_ledger` frontmatter
+    stamp, or (historical sidecars only) the retired "## Integrator
+    Dispositions" marker heading — see `_findings_reap.is_integrated`.
 
     Age-gate-first ordering (reviewer finding 5) is load-bearing: the
     filename-only age check runs BEFORE any file is opened, so a boot-time
     sweep over ~340 sidecars reads content for only the aged minority, not
     the whole directory every time.
 
-    Returns a note string ("marker-absent; authored ...") when reapable, else
-    None (KEEP) — covers too-young, unreadable, marker-present, and
-    unparseable-filename cases (all fail-closed-to-keep).
+    Returns a note string ("findings present; not integrated; authored ...")
+    when reapable, else None (KEEP) — covers too-young, unreadable,
+    already-integrated, and unparseable-filename cases (all
+    fail-closed-to-keep).
     """
     d = _extract_authored_date(path.name)
     if d is None:
@@ -124,10 +129,13 @@ def classify_unintegrated(path: Path) -> Optional[str]:
     except OSError:
         return None  # unreadable — fail-closed-to-keep
 
-    if _MARKER_RE.search(text):
-        return None  # marker-present — integrated, leg (a)
+    if is_integrated(text):
+        return None  # integrated — leg (a)
 
-    return f"marker-absent; authored {d.isoformat()} (aged > {_AGE_THRESHOLD_DAYS}d)"
+    return (
+        f"findings present; not integrated (no verified ledger); "
+        f"authored {d.isoformat()} (aged > {_AGE_THRESHOLD_DAYS}d)"
+    )
 
 
 def _reap_subject_builder(n: int) -> str:

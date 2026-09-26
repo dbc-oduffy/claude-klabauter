@@ -152,7 +152,8 @@ _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
 def _output_root_override() -> "str | None":
     """The ``QUEUE_APPEND_OUTPUT_ROOT`` test-isolation redirect, but ONLY
-    when this process is the one the caller ran in.
+    when this process is the one the caller ran in, AND only when it has not
+    already latched onto another session's live temp root.
 
     ``QUEUE_APPEND_OUTPUT_ROOT`` is a property of a CALLING process (a test
     redirecting its own writes into a tmpdir). Under the warm engine the op
@@ -166,15 +167,25 @@ def _output_root_override() -> "str | None":
     -- a silently lost write, which for a queue whose whole job is not
     losing items is the worst available failure.
 
-    Refusing the env read on the warm-server route is the whole fix: a
-    genuine in-process test caller (``execution_route() == IN_PROCESS``,
-    which is every non-server process) is unaffected, and the CLI never
-    reaches the native path with this var set anyway -- it forces the legacy
-    in-process write when it is present, so the only way this env var can
-    reach a served handler is by leaking off the server.
+    Refusing the env read on the warm-server route closes that gap, but not
+    a second one: an IN-PROCESS caller (``execution_route() == IN_PROCESS``,
+    every non-server process, deliberately still honoured for test
+    isolation) can ALSO inherit ``QUEUE_APPEND_OUTPUT_ROOT`` from a
+    different, concurrent session's shell environment while that other
+    session's temp root is still LIVE (not yet swept). ``_is_swept_tmp_root``
+    only excludes a root that no longer exists, so a live foreign root
+    passed both checks and used to be honoured unconditionally, with no
+    verification that it belongs to the CURRENT caller.
+    ``_verify_override_session_ownership`` closes this by checking the
+    override against the resolved current session id -- the same identity
+    chain every other op-level provenance check uses -- rather than a
+    session-scoped temp root of our own minting, so it also catches a
+    foreign override wherever it points, temp-rooted or not.
 
-    Never a raise: an override that cannot be honoured is dropped, and the
-    write lands where it should have all along.
+    Never a raise on an override this process cannot verify at all (no
+    resolvable session id): unverifiable is not the same as foreign, so it
+    is honoured unchanged, same as before this fix. Only the pre-existing
+    swept-root check and the new session-ownership check raise.
     """
     override = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
     if not override:
@@ -187,7 +198,89 @@ def _output_root_override() -> "str | None":
             f"under the system temp directory and no longer exists -- refusing a "
             f"write that would silently recreate and then abandon it."
         )
+    _verify_override_session_ownership(override)
     return override
+
+
+_SESSION_OWNER_MARKER_NAME = ".queue_append_session_owner"
+
+
+def _verify_override_session_ownership(override: str) -> None:
+    """Refuse ``override`` if it is already claimed by a DIFFERENT session.
+
+    The first in-process caller to honour a given ``QUEUE_APPEND_OUTPUT_ROOT``
+    stamps it with its own resolved session id (a marker file inside the
+    override root). A later caller that resolves to the SAME session id may
+    keep using it -- one session legitimately issuing several queue.append
+    calls across several CLI invocations, each a fresh process, is the
+    common case and must keep working. A caller that resolves to a
+    DIFFERENT, non-empty session id is exactly the memo's failure mode -- an
+    env var inherited from another session's shell, still pointing at that
+    other session's live temp root -- and is refused loud, matching
+    ``_StaleIsolationRoot``'s "fail loud, never degrade" posture: this is
+    not a normal "engine unregistered" state, the environment cannot be
+    trusted for THIS write.
+
+    A session id this process cannot resolve at all (empty/``None``) leaves
+    ownership unverifiable, not foreign -- the pre-existing behaviour
+    (honour the override) is preserved rather than guessed at.
+    """
+    current_session = (resolve_current_session_id() or "").strip()
+    if not current_session:
+        return
+
+    marker_path = os.path.join(override, _SESSION_OWNER_MARKER_NAME)
+    try:
+        os.makedirs(override, exist_ok=True)
+    except OSError:
+        return
+
+    try:
+        with open(marker_path, "r", encoding="utf-8") as fh:
+            claimed_by = fh.read().strip()
+    except FileNotFoundError:
+        claimed_by = ""
+    except OSError:
+        return
+
+    if not claimed_by:
+        # Exclusive-create the marker rather than read-then-write: two
+        # concurrent first-callers can both observe an empty/absent marker,
+        # and a plain ``open(..., "w")`` lets the second silently clobber
+        # the first's claim stamp. O_EXCL makes the claim itself the race
+        # winner -- a loser falls through to re-read whichever session did
+        # win and is checked against it below, same as any other foreign
+        # claim.
+        try:
+            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                with open(marker_path, "r", encoding="utf-8") as fh:
+                    claimed_by = fh.read().strip()
+            except OSError:
+                return
+            if not claimed_by:
+                # Winner created the file but hasn't written its session id
+                # yet -- unverifiable, not foreign; honour unchanged rather
+                # than raising on an empty comparison.
+                return
+        except OSError:
+            return
+        else:
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(current_session)
+            except OSError:
+                pass
+            return
+
+    if claimed_by != current_session:
+        raise _ForeignIsolationRoot(
+            f"queue.append: {_QUEUE_APPEND_OUTPUT_ROOT_ENV}={override!r} is "
+            f"already claimed by session {claimed_by!r} -- refusing a write "
+            f"from a different session ({current_session!r}) onto that live, "
+            f"foreign root."
+        )
 
 
 def _is_swept_tmp_root(path: str) -> bool:
@@ -206,6 +299,15 @@ class _StaleIsolationRoot(RuntimeError):
     unlike `_ClaudeKlabauterUnresolvable`, a stale isolation root is not a normal
     "engine unregistered" state; it means this process's environment cannot
     be trusted for THIS write, and the caller must fail loud.
+    """
+
+
+class _ForeignIsolationRoot(RuntimeError):
+    """Raised when ``QUEUE_APPEND_OUTPUT_ROOT`` names a LIVE temp root already
+    claimed by a different session (see `_verify_override_session_ownership`).
+    Never caught for graceful degradation, same as `_StaleIsolationRoot`: an
+    override this process cannot trust for the current caller must fail
+    loud, not silently land in a foreign session's tree.
     """
 
 

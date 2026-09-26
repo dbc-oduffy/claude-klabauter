@@ -41,9 +41,6 @@ Consumes (orchestrates, reimplements none):
     coordinator/bin/freeze-review-diff.py
         -> d-freeze-and-dispatch-review-partition's per-slice
         directives[].cli.
-    coordinator/bin/fan-out-integrator.py
-        -> d-freeze-and-dispatch-review-partition's post-reviewer
-        integrator directives[].cli.
     coordinator/bin/classify-dispatch-shape.py
         -> d-classify-dispatch-shape's directives[].cli.
 
@@ -794,7 +791,6 @@ def build_review_brightline_gate_directive(
 
 
 _FREEZE_REVIEW_DIFF_CLI = "freeze-review-diff"
-_FAN_OUT_INTEGRATOR_CLI = "fan-out-integrator"
 
 
 class ReviewSlice(NamedTuple):
@@ -813,10 +809,6 @@ def build_review_partition_freeze_directives(range_: str, slices: Iterable[Revie
     ]
 
 
-def build_review_partition_integrator_directive(spec_tsv_path: str) -> dict[str, Any]:
-    return _directive("d-freeze-and-dispatch-review-partition-integrator", _FAN_OUT_INTEGRATOR_CLI, ["--spec", spec_tsv_path])
-
-
 def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]:
     if not (review_partition.get("range") and review_partition.get("slices")):
         return []
@@ -825,8 +817,6 @@ def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]
         for s in review_partition["slices"]
     ]
     ids = [d["id"] for d in build_review_partition_freeze_directives(str(review_partition["range"]), slices)]
-    if review_partition.get("integrator_spec_tsv"):
-        ids.append(build_review_partition_integrator_directive(str(review_partition["integrator_spec_tsv"]))["id"])
     return ids
 
 

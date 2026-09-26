@@ -158,6 +158,21 @@ def resize_verdict_map(routing: Mapping[str, dict], triage_node_id: str) -> tupl
     return fix_verdict, close_verdict
 
 
+#: Substring of `grind_rows.cmd_close`'s own stderr line ("grind-row close:
+#: schema validation failed: {result}") -- the committer's `reason` carries
+#: the verbatim refusal per `compose_commit_call`'s docstring, so a commit
+#: that failed because the close it was staging was schema-refused (a
+#: judgment call: is the row's frontmatter wrong, or the schema?) is
+#: distinguishable from an ordinary git-commit failure without a new
+#: outcome value on the closed `STAGE_OUTCOMES["commit"]` vocabulary
+#: (item 17.6, IBMDT-C22).
+_SCHEMA_REFUSAL_MARKER = "schema validation failed"
+
+def _commit_result_is_schema_refused(commit_result: Mapping[str, Any]) -> bool:
+    reason = commit_result.get("reason") or ""
+    return _SCHEMA_REFUSAL_MARKER in str(reason)
+
+
 def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "Row") -> tuple[str, str]:
     node = routing[node_id]
     target = node["edges"].get(outcome)
@@ -363,6 +378,8 @@ def run_admission(
                 if commit_result.get("outcome") == "committed":
                     row.sha = commit_result.get("sha", "")
                     settled.append({"row": row.row_id, "outcome": "committed", "sha": row.sha})
+                elif _commit_result_is_schema_refused(commit_result):
+                    _handback(row, "needs-judgment", "close's archive-move commit did not land: schema refused the close")
                 else:
                     _handback(row, "commit-failed", "close's archive-move commit did not land")
         for entry in result.get("refuted", []):
@@ -433,7 +450,10 @@ def run_admission(
     def _commit_row(row: Row) -> None:
         result = _record_call("commit", row.row_id) or {}
         if result.get("outcome") != "committed":
-            _handback(row, "commit-failed", "commit did not land")
+            if _commit_result_is_schema_refused(result):
+                _handback(row, "needs-judgment", "commit did not land: schema refused the close")
+            else:
+                _handback(row, "commit-failed", "commit did not land")
             return
         row.done = True
         row.sha = result.get("sha", "")

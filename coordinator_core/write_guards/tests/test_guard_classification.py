@@ -199,7 +199,6 @@ ADVISORY_NAMES = [
     "block_cutover_phase_hand_edit",
     "block_dev_repo_sentinel_write",
     "block_dev_side_mirror_wiki",
-    "block_em_hand_edit_pending_review_integration",
     "block_priority_ledger_edit",
     "check_claude_md_size",
     "guard_concrete_path_citations",

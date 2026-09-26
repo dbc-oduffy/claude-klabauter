@@ -1,47 +1,32 @@
 """
 coordinator_core.backlog_grind_assemble.readers_debt — debt-triage reader
-(C3d): self-gating `collect(cadence)`, and this cluster's clustering owner.
+(C3d): self-gating `collect(cadence)`.
 
 Purpose: computes the read-half of `coordinator/skills/debt-triage/SKILL.md`
 — `state/debt-backlog/`, `state/bug-backlog/` (Step 1b cross-reference), and
 `state/improvement-queue/` (Step 1d) — and surfaces it as ONE batched
 untrusted-gate judgment point mirroring Step 5's own "This is the terminus's
-PM gate" framing (five asks: close-approval, YAGNI/scope, prioritization,
-deferral agreement, and surviving-improvement-queue-entry disposition under
-`docs/wiki/queue-terminus-doctrine.md`'s four outcome classes). This reader
-computes evidence; it never resolves the gate itself (offer, never verdict —
-`coordinator_core.contract.decision_object.judgment`'s own contract).
+PM gate" framing (close-approval, YAGNI/scope, prioritization, and deferral
+agreement). This reader computes evidence; it never resolves the gate itself
+(offer, never verdict — `coordinator_core.contract.decision_object.judgment`'s
+own contract).
 
-Clustering (this reader's C3d-specific remit): delegates to
-`coordinator_core.clustering.candidates.detect_candidates`
-(`MIN_CLUSTER_SIZE = 3`, DR-209) over currently-open `improvement-queue`
-records, run AHEAD of the Step 5 presentation exactly as
-`debt-triage/SKILL.md` § Step 6b specifies ("Clustering, ahead of the Step 5
-presentation") — clustering runs over the full open set before the PM's
-survives/doesn't-survive call, not after. Per that same section, the
-`directory` signal is suppressed (`_SUPPRESSED_CLUSTER_SIGNAL`): on a
-single-project-queue corpus it returns one cluster containing everything and
-is structurally useless for triage. This is the ONLY local retention of
-Step 6b's clustering procedure — per D-4's pinned contract
-(`docs/plans/2026-07-26-backlog-grind-computed-frontage.md` § D-4), neither
-this reader nor `debt-triage/SKILL.md` (C10) carries the clustering
-DEGRADATION LADDER (registered op → `detect-initiative-candidates` CLI → EM
-judgment) as prose/logic — that ladder lives exactly once, cited by name, at
-`queue-terminus-doctrine.md` § Clustering. This module calls
-`coordinator_core.clustering.candidates` directly (the in-process rung of
-that ladder now that the algorithm has been relocated into an importable
-package, per `candidates.py`'s own "moved verbatim ... from
-coordinator/bin/detect-initiative-candidates" docstring) — it does not walk
-the ladder's CLI/EM-judgment rungs itself; that degradation-order judgment
-is `queue-terminus-doctrine.md`'s to state, not this reader's to restate.
+No clustering leg (item 19, IBMDT-C22): this reader carries no improvement-
+queue clustering and no judgment-point item disposing of surviving
+improvement-queue entries under the four queue-terminus outcome classes.
+Item (5) of the batched PM gate and `_cluster_candidates` were dropped —
+`_load_improvement_queue`'s only surfaced signal is now a pre-fire open-row
+count. Clustering over `improvement-queue` (`MIN_CLUSTER_SIZE = 3`, DR-209,
+the `directory` signal suppressed) and its DEGRADATION LADDER remain
+`queue-terminus-doctrine.md` § Clustering's to state; this reader does not
+retain, restate, or invoke them.
 
 Universal-vs-project-specific classification of `improvement-queue` entries
 (SKILL.md Step 1d — "would apply if a different project type used the
 coordinator pipeline?") is semantic judgment, not a disk predicate, and is
-NOT force-classified here — `_load_improvement_queue` surfaces every open
-entry as evidence; the classification itself stays inside the batched
-judgment point this reader emits, exactly as `debt-triage/SKILL.md` frames
-it as the EM's own call.
+NOT force-classified here — `_load_improvement_queue` surfaces its open-row
+count as evidence; the classification itself is out of this reader's
+batched judgment point (see item 19 note above).
 
 SUBSTRATE CHECK, re-confirmed at authoring time (2026-07-27, this chunk):
 a recursive grep for `debt-backlog` under `coordinator_core/ops/` on this
@@ -77,9 +62,9 @@ Negative-spec:
       themed baton / immediate dispatch / close-or-park) — that vocabulary
       is `queue-terminus-doctrine.md`'s; this module's evidence strings name
       the classes without re-deriving their definitions.
-    - Does NOT retain the clustering DEGRADATION LADDER as prose or logic —
-      only the `directory`-signal suppression, which is genuinely
-      project-local tuning, not the algorithm (D-4's pinned contract).
+    - Does NOT cluster `improvement-queue` records or retain the clustering
+      DEGRADATION LADDER as prose or logic (item 19, IBMDT-C22) — that stays
+      `queue-terminus-doctrine.md` § Clustering's alone.
     - Does NOT emit a debt-backlog archive/close directive — see the
       SUBSTRATE CHECK above.
     - Does NOT invoke `subprocess`/`git log` to reproduce SKILL.md's
@@ -95,7 +80,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.clustering.candidates import detect_candidates
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_untrusted_gate_judgment_point,
@@ -107,8 +91,6 @@ __all__ = ["ReaderResult", "collect"]
 
 #: IDENTITY test, since this reader owns exactly one of backlog-grind's five
 _CADENCE = "debt-triage"
-
-_SUPPRESSED_CLUSTER_SIGNAL = "directory"
 
 
 @dataclass(frozen=True)
@@ -157,17 +139,6 @@ def _cross_reference_overlap(debt_records: list[dict], bug_records: list[dict]) 
     return overlaps
 
 
-def _cluster_candidates(improvement_records: list[dict]) -> list[dict]:
-    """Cluster currently-open `improvement-queue` records ahead of the
-    Step 5 presentation (see module docstring) and drop the suppressed
-    `directory` signal. `detect_candidates` already applies the
-    `MIN_CLUSTER_SIZE = 3` floor (DR-209) — nothing here re-derives that
-    threshold."""
-    open_records = _open_records(improvement_records)
-    clusters = detect_candidates(open_records)
-    return [c for c in clusters if c.get("signal") != _SUPPRESSED_CLUSTER_SIGNAL]
-
-
 def _load_debt_backlog(repo_root: Path) -> list[dict]:
     return load_family_records("debt-backlog", repo_root)
 
@@ -185,31 +156,27 @@ def _build_batched_pm_gate(
     debt_open: list[dict],
     bug_overlaps: list[dict],
     improvement_open: list[dict],
-    clusters: list[dict],
 ) -> dict[str, Any]:
     """Build the ONE batched untrusted-gate judgment point mirroring
-    `debt-triage/SKILL.md` Step 5's own five-item PM gate ("This is the
-    terminus's PM gate" — DEC-7, `docs/plans/2026-07-23-queue-triage-
-    terminates-in-batons.md`). Built with `build_untrusted_gate_judgment_
-    point` — never `build_judgment_point` — because Step 5 is explicitly
-    the PM's own disposition call (close-approval, YAGNI/scope,
-    prioritization, deferral agreement, and surviving-improvement-queue-
-    entry classification), not a recommendation this engine is positioned
-    to offer. No directive resolves off either disposition — per the
+    `debt-triage/SKILL.md` Step 5's own PM gate ("This is the terminus's PM
+    gate" — DEC-7, `docs/plans/2026-07-23-queue-triage-terminates-in-
+    batons.md`). Built with `build_untrusted_gate_judgment_point` — never
+    `build_judgment_point` — because Step 5 is explicitly the PM's own
+    disposition call (close-approval, YAGNI/scope, prioritization, and
+    deferral agreement), not a recommendation this engine is positioned to
+    offer. No directive resolves off either disposition — per the
     SUBSTRATE CHECK in the module docstring, the debt-backlog terminus op
     is absent, so there is no execution-ready write for either disposition
     to gate; this judgment point is evidence-and-ask only, exactly like
     `orient_assemble.readers_health_reaper`'s week-cadence marker-freshness
-    gate (also un-gated to any directive)."""
+    gate (also un-gated to any directive).
+
+    Item (5) (disposition of surviving project-specific improvement-queue
+    entries under the four queue-terminus outcome classes) and the
+    clustering evidence that fed it are dropped (item 19, IBMDT-C22):
+    `improvement_open` contributes only its pre-fire open-row count."""
     severity_counts = _severity_breakdown(debt_open)
     severity_str = ", ".join(f"{sev}={n}" for sev, n in sorted(severity_counts.items())) or "none"
-    cluster_summary = (
-        "; ".join(
-            f"{c['signal']}={c['value']!r} ({len(c['items'])} items, label={c['suggestedLabel']!r})"
-            for c in clusters
-        )
-        or "no clusters at MIN_CLUSTER_SIZE=3 floor"
-    )
     overlap_summary = (
         "; ".join(f"{o['surface']!r}: {o['debt_path']} <-> {o['bug_path']}" for o in bug_overlaps)
         or "no exact-surface overlaps"
@@ -217,9 +184,7 @@ def _build_batched_pm_gate(
     evidence = (
         f"debt-backlog open={len(debt_open)} (by severity: {severity_str}) | "
         f"improvement-queue open={len(improvement_open)} | "
-        f"bug/debt exact-surface overlaps: {overlap_summary} | "
-        f"improvement-queue clusters (directory signal suppressed, "
-        f"MIN_CLUSTER_SIZE=3): {cluster_summary}"
+        f"bug/debt exact-surface overlaps: {overlap_summary}"
     )
     return build_untrusted_gate_judgment_point(
         id="j-debt-triage-batched-pm-gate",
@@ -227,11 +192,7 @@ def _build_batched_pm_gate(
             "Debt-triage Step 5 batched gate: (1) approve closing no-longer-"
             "applicable debt-backlog items, (2) YAGNI/scope decisions on "
             "flagged items, (3) prioritize immediate-action items, "
-            "(4) agree deferral reasoning, (5) disposition surviving "
-            "project-specific improvement-queue entries under the four "
-            "queue-terminus outcome classes (see "
-            "docs/wiki/queue-terminus-doctrine.md), using the clustering "
-            "evidence above for themed-baton candidates."
+            "(4) agree deferral reasoning."
         ),
         dispositions=[
             build_disposition("reviewed_and_disposed"),
@@ -259,12 +220,10 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
     improvement_open = _open_records(improvement_records)
 
     bug_overlaps = _cross_reference_overlap(debt_open, bug_open)
-    clusters = _cluster_candidates(improvement_open)
 
     jp = _build_batched_pm_gate(
         debt_open=debt_open,
         bug_overlaps=bug_overlaps,
         improvement_open=improvement_open,
-        clusters=clusters,
     )
     return ReaderResult(directives=[], judgment_points=[jp])

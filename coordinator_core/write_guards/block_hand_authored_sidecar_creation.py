@@ -3,8 +3,8 @@ hard-deny guard.
 
 Purpose: refuse a hand-created run-report sidecar LOUDLY, at the point it is
 CREATED, instead of letting a downstream CLI (e.g.
-``coordinator/bin/append-integrator-dispositions.py`` ->
-``coordinator_core.ops.append_integrator_dispositions.append_dispositions``,
+``coordinator/bin/review-findings-ledger.py`` ->
+``coordinator_core.ops.review_findings_ledger.verify``,
 which checks the target's frontmatter ``agent_type:`` against
 ``_REVIEWER_AGENT_TYPES``/``_REVIEWER_DOC_TYPE_TOKENS`` and refuses if it is
 absent) discover the malformation late, to an agent that can do nothing
@@ -17,7 +17,7 @@ provisioned by the engine (``coordinator_core.subagent_sandbox.
 provision_report``), so the repair produced a SECOND, frontmatter-less file
 at a different path. The two integrators dispatched against those repaired
 sidecars only discovered the missing ``agent_type:`` when
-``append-integrator-dispositions.py`` refused their write — long after the
+``review-findings-ledger.py`` refused their write — long after the
 hand-authored file was created, to an agent with no path back to fix it.
 
 Why this is the right seam. The engine's real provisioner
@@ -74,7 +74,7 @@ Scope — deliberately narrow:
 Negative-spec:
   - Does NOT gate on any other required field (``status``, ``spawned_at``,
     ...) — ``agent_type`` is the one field this incident's downstream
-    refusal actually keys on (``append_integrator_dispositions.py``'s own
+    refusal actually keys on (``review_findings_ledger.py``'s own
     ``_extract_frontmatter_agent_type`` check), and widening the gate risks
     false-positive-denying a legitimate ad-hoc scaffold shape this module's
     author has not audited.
@@ -307,7 +307,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             "BLOCKED: no agent_type: frontmatter — refused by "
-            "append-integrator-dispositions.py.\n"
+            "review-findings-ledger.py.\n"
             "Use instead: coordinator-doc-new --type run-report"
             + ("\n\n" + _note if _note else "")
         )

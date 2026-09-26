@@ -116,3 +116,31 @@ def test_subagent_message_session_repo_renders_exactly_once(tmp_path):
     )
     assert text.count(_SESSION_REPO) == 1
     assert f"(not `{_SESSION_REPO}`)" in text
+
+
+# A3 (docs/plans/2026-09-26-commit-emit-plane-engine-findings.md, row B7):
+# both foreign-class renderers point at `git ls-remote <remote>` to confirm
+# the foreign repo's state before retrying, and both stay under the prose
+# cap with the pointer included.
+
+
+def test_em_message_carries_ls_remote_pointer_and_stays_under_cap(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
+    assert "`git ls-remote <remote>`" in text
+    measurement = _measure(text)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    assert measurement.over_cap is False
+
+
+def test_subagent_message_carries_ls_remote_pointer_and_stays_under_cap(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_subagent_message(
+        _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
+    )
+    assert "`git ls-remote <remote>`" in text
+    measurement = _measure(text)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    assert measurement.over_cap is False

@@ -167,7 +167,6 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_disarm_marker_sentinel_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 130],
 "block_duplicate_decision_record_id": ["hard-deny", ["Write", "Edit", "MultiEdit"], 137],
 "block_em_strict_dispatch_code_write": ["hard-deny", ["Write", "Edit", "MultiEdit"], 138],
-"block_em_hand_edit_pending_review_integration": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 115],
 "block_fleet_delegation_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 49],
 "block_foreign_family_sidecar_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 31],
 "block_goals_log_hand_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 65],

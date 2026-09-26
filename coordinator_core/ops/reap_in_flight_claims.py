@@ -525,7 +525,10 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
                     r.holder,
                     _VERDICT_SKIP_GOVERNED_PLAN,
                     f"deliverable_id {r.deliverable_id!r} governed by implemented plan "
-                    f"{plan.get('path')!r} — releasing would re-advertise shipped work",
+                    f"{plan.get('path')!r} — holder {r.holder!r} is dead at survey time, "
+                    "but the plan's cascade did not ship this handoff (most likely refused "
+                    "on leg (a) while the holder was still alive) and nothing re-fires it. "
+                    f"Recovery: archive-stamp-cli ship-handoff {str(r.path)!r} [<SHA>]",
                 )
             )
             governed.append(r)

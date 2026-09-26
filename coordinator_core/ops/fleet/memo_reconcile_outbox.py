@@ -13,9 +13,9 @@ the outbox looking exactly like a live draft. A triage of one such outbox
 found 25 of 30 entries were already delivered: a reader who trusted the count
 scheduled roughly six times the work that existed.
 
-This op reconciles that: every entry whose `status:` is not `draft` is MOVED
-to `sent/`, never deleted, so the paper trail survives and an operator can
-still audit what went where.
+This op reconciles that: every entry whose `status:` is not `draft` AND that
+already has a local `sent/<name>` receipt is MOVED to `sent/`, never deleted,
+so the paper trail survives and an operator can still audit what went where.
 
 It also reports the opposite asymmetry — a DELIVERY THAT HAS NO SENDER
 RECEIPT. `memo.send` writes its `sent/<topic>.md` copy only after reading the
@@ -36,11 +36,17 @@ about a half-landed delivery is an operator's judgement and a sweep that
 guesses at it writes into history.
 
 Delivery truth is ultimately the RECEIVER's own inbox/archive, not the local
-`status:` field. This op deliberately uses the local field anyway: in all 20
-non-draft entries checked against their receiving repos the two agreed, and a
-sweep that reaches into peer trees to read them is a different, heavier op
-with a different blast radius. A local status that lies about delivery is a
-defect in whatever wrote it, and is not made better by this op guessing.
+`status:` field, and a `status:` claim is not itself evidence: `_classify`
+keys "delivered" on whether a `sent/<name>` receipt already exists locally,
+never on `status != draft` alone. A `status: sent`/`open` entry with no
+`sent/<name>` copy has no local evidence it ever left this repo by the
+route this op can see, so it is left in place — on the staleness-nudge
+surface, where an undelivered ask belongs — rather than moved on the
+strength of a field that can lie. Reaching into peer trees to confirm
+delivery is a different, heavier op with a different blast radius; this op
+does not do that either, so an entry with a receipt is trusted (the receipt
+is downstream of `memo.send`'s own receiver-side verification) and an entry
+without one is left alone rather than guessed at.
 
 Negative-spec:
   - Does NOT delete anything, ever. Every action is a move into `sent/`.
@@ -48,6 +54,10 @@ Negative-spec:
     with a note, never overwritten — the archived copy is authoritative.
   - Does NOT touch `status: draft` entries. A draft's home IS the outbox;
     moving one would be the very over-count this op exists to fix, inverted.
+  - Does NOT move a non-draft entry that has no local `sent/<name>` receipt.
+    A `status:` field claiming delivery is not itself a receipt; without one
+    the entry stays in the outbox, on the staleness-nudge surface, until a
+    receipt lands or an operator disposes of it by hand.
   - Does NOT act on frontmatter-less files. Those are orphaned `--body-file`
     fragments from the one-shot flag form DR-210 retired; they were never
     memos and `sent/` is not their home. They are REPORTED so an operator can
@@ -161,7 +171,21 @@ def _classify(path: Path, archived: bool = False) -> tuple[str, Optional[str], O
                 f"moving it onto the stamped one",
             )
         return "keep", status, None
-    return "move", status, None
+    # `status != draft` is NOT itself a receipt — key "delivered" on the
+    # already-computed receipt check (a local `sent/<name>` copy), not on
+    # the status field, which can claim delivery a hand edit invented. No
+    # receipt means no local evidence this ever left the repo; leave it in
+    # the outbox, on the staleness-nudge surface, rather than moving it on
+    # the strength of a field that can lie.
+    if archived:
+        return "move", status, None
+    return (
+        "keep",
+        status,
+        f"status: {status} but no sent/{path.name} receipt exists locally — "
+        f"no evidence of delivery by any route this op can see; left on the "
+        f"staleness-nudge surface rather than moved on the status field alone",
+    )
 
 
 def _relpath(path: Path, worktree_root: Path) -> str:

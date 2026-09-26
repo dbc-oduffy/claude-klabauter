@@ -615,6 +615,46 @@ def test_runner_recognized_true_for_tox_and_nox():
     assert guard._runner_recognized(["nox", "-s", "tests"])
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest $FILES",
+        'python -m pytest "$env:FILES"',
+        "pytest ${FILES}",
+    ],
+)
+def test_variable_held_path_operand_remediation_names_the_friction(command):
+    """Item 5.1 (cross-repo/archive/2026-09-11-doe-claude-em-suite-guard-
+    and-emit-preamble-frictions.md): the classification is unchanged --
+    a variable-held path list still classifies Tier U, correctly, since
+    this guard cannot see inside a variable -- but the remediation used to
+    read as "scope this to what was actually touched", which is exactly
+    what the caller believed it had done. One line closes the friction."""
+    matches = guard.classify_command(command)
+    assert [m.tier for m in matches] == ["U"]
+    assert "held in a variable" in matches[0].remediation
+    assert "name the paths literally" in matches[0].remediation.lower()
+
+
+def test_bare_unscoped_command_remediation_has_no_variable_note():
+    """Negative case: an ordinary unscoped command (no variable-shaped
+    operand at all) must not gain the new line -- it would misdirect a
+    caller whose breadth, not a variable, is the actual problem."""
+    matches = guard.classify_command("pytest")
+    assert [m.tier for m in matches] == ["U"]
+    assert "variable" not in matches[0].remediation
+
+
+def test_has_variable_path_operand_does_not_match_embedded_reference():
+    """Anchored to the WHOLE token: a variable reference embedded inside a
+    larger literal (`tests/$SUITE/`) is a different, unaddressed shape --
+    see `_has_variable_path_operand`'s own docstring."""
+    assert not guard._has_variable_path_operand(["pytest", "tests/$SUITE/"])
+    assert guard._has_variable_path_operand(["pytest", "$FILES"])
+    assert guard._has_variable_path_operand(["pytest", "${FILES}"])
+    assert guard._has_variable_path_operand(["pytest", "$env:FILES"])
+
+
 def test_top_level_em_allowed_when_mutex_free(repo, free_mutex):
     assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 

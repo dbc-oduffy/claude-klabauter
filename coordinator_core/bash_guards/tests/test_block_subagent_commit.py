@@ -2203,6 +2203,53 @@ def test_ownership_leg_denial_names_peer_claim(monkeypatch):
     assert "claimed by live session" in reason
 
 
+def test_ownership_leg_orphan_denial_names_no_holder_caveat(monkeypatch):
+    """A5/DD4: the orphan classification gets a DEDICATED deny message
+    carrying SC-DR-023's own "no holder is not evidence" caveat, cited
+    verbatim -- the same wording `session-claim-cli.py`'s `who-claims-path`
+    empty-result output carries. Built from the REAL production
+    classification constant, not a hand-reworded literal (same discipline
+    as the indeterminate test below)."""
+    scope_reason = "path outside session sess1 scope: %r (%s)" % (
+        "orphan.py",
+        _scope_report._CLASSIFICATION_ORPHAN,
+    )
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- orphan.py',
+        scope_result=(False, scope_reason),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no holder is not evidence no one wrote it" in reason
+    assert "SC-DR-023" in reason
+
+
+def test_ownership_leg_orphan_denial_stays_under_prose_cap(monkeypatch):
+    """The dedicated orphan message is a FIXED string (no per-call
+    interpolation), so it needs no `_ownership_leg_summary` truncation --
+    still pinned against the real cap so a future re-wording cannot regress
+    it silently."""
+    from coordinator_core.bash_guards._message_size import (
+        MESSAGE_PROSE_CAP_BYTES,
+        measure_envelope,
+    )
+
+    scope_reason = "path outside session sess1 scope: %r (%s)" % (
+        "orphan.py",
+        _scope_report._CLASSIFICATION_ORPHAN,
+    )
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- orphan.py',
+        scope_result=(False, scope_reason),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    envelope = {"hookSpecificOutput": {"permissionDecisionReason": reason}}
+    measurement = measure_envelope(envelope)
+    assert not measurement.over_cap
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+
+
 def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
     """REVERSED VERDICT, and the reversal is the fix: an indeterminate call no
     longer denies here.
@@ -2726,8 +2773,12 @@ class TestRealOwnershipScopeWiring:
         assert result is not None, "expected DENY: an agent may not adopt orphans"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "denied on path scope" in reason
-        assert "orphan.py" in reason
+        # A5/DD4: the orphan classification now gets the dedicated deny
+        # message carrying SC-DR-023's own caveat (see
+        # test_ownership_leg_orphan_denial_names_no_holder_caveat) rather
+        # than the generic path/classification-naming template -- this test
+        # still pins that the VERDICT is deny.
+        assert "no holder is not evidence no one wrote it" in reason
 
     def test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_allowed(
         self, tmp_path
@@ -2860,8 +2911,10 @@ class TestRealOwnershipScopeWiring:
         assert result is not None, "expected DENY: an agent may not adopt orphans"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "denied on path scope" in reason
-        assert "bash_authored.py" in reason
+        # A5/DD4: the orphan classification (bash_authored.py's shape) now
+        # gets the dedicated deny message carrying SC-DR-023's caveat -- see
+        # test_ownership_leg_orphan_denial_names_no_holder_caveat.
+        assert "no holder is not evidence no one wrote it" in reason
 
 
 # --- In-repo ABSOLUTE pathspec elements: the ownership leg's path-FORM gap ---

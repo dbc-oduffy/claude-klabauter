@@ -41,7 +41,6 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "block_dev_repo_sentinel_write",
         "block_dev_side_mirror_wiki",
         "block_disarm_marker_sentinel_write",
-        "block_em_hand_edit_pending_review_integration",
         "block_em_strict_dispatch_code_write",
         "block_fleet_delegation_write",
         "block_foreign_family_sidecar_write",

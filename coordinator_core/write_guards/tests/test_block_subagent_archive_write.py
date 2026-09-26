@@ -142,18 +142,7 @@ class TestCarveOutsAllowForBothIdentityShapes:
         assert guard.check(payload) is None
 
 
-class TestReviewIntegratorAllowCondition:
-
-    def test_review_integrator_backpointer_allows(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
-        monkeypatch.setattr(
-            guard,
-            "_read_backpointer_subagent_type",
-            _stub_subagent_type("coordinator:review-integrator"),
-        )
-
-        payload = _payload(tmp_path, "archive/specs/foo.md")
-        assert guard.check(payload) is None
+class TestExecutorBackpointerStillDenies:
 
     def test_executor_backpointer_still_denies(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))

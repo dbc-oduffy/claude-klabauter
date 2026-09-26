@@ -66,11 +66,18 @@ section forbids outright.
 
 Idempotence (AC-5's freeze half): `/pickup`'s negative-spec freezes a
 claimed body as narrative, with `## Session Ledger` the ONE carve-out
-taking exactly one appended row per session, never edited after. This op
-refuses outright (before any write) if a row for the resolved session's
-sid6 already exists anywhere in the target's `## Session Ledger`
-block(s) — re-invoking `/handoff` or `/workstream-complete` twice in one
-session, or a stray double-dispatch of this op, must not duplicate the row.
+allowing an appended row per closing ceremony, never edited after. This op
+refuses outright (before any write) only if a row IDENTICAL to the one
+about to be written — same `session_ledger.row_identity(session_id,
+summary)`, the one shared identity `session_ledger.aggregate_chain_loe`'s
+own dedup also uses — already exists anywhere in the target's `##
+Session Ledger` block(s): a stray double-dispatch of this op with the same
+params, or a re-invocation of `/handoff`/`/workstream-complete` with
+nothing new to say, must not duplicate the row. A session closing via a
+SECOND, distinct ceremony (different `closing_ceremony`, hence a different
+rendered summary) is a genuinely different row and is NOT refused — the
+freeze is on repeating the identical row, not on a session ever writing a
+second one.
 
 Mechanism: reads the target's CURRENT body (read-only, pre-lock — mirrors
 `handoff_discharge_criteria._resolve_read_path`, duplicated here deliberately
@@ -110,8 +117,13 @@ Negative-spec:
       paper trail — all inherited by delegation.
     - Does NOT generate, template, or derive `summary` — required, EM-supplied,
       verbatim.
-    - Does NOT edit or replace an already-appended row for the SAME session —
-      refuses outright rather than risk a silent duplicate.
+    - Does NOT edit or replace an already-appended row IDENTICAL to the one
+      about to be written — refuses outright rather than risk a silent
+      duplicate. Does NOT refuse a second, genuinely distinct row for the
+      SAME session (a different `closing_ceremony` or summary) — one row
+      per closing ceremony, not one row per session.
+    - Does NOT derive, template, or guess `closing_ceremony` — free-form,
+      optional, EM/caller-supplied verbatim; no enumerated vocabulary.
     - Does NOT touch any file outside `state/handoffs/`/`archive/handoffs/` —
       inherited from `handoff_correct_body`'s own containment.
     - Does NOT write a zero it did not measure: on the `session_id`-override
@@ -138,11 +150,11 @@ from coordinator_core.ops.handoff_correct_body import _MAX_OLD_STRING_LEN
 from coordinator_core.ops.handoff_correct_body import _handler as _correct_body_handler
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session import core as _session_core
-from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE
+from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE, row_identity
 from coordinator_core.session_ledger.aggregate_chain_loe import (
+    _ONELINE_RE,
     _count_dispatches_from_agents_file,
     format_oneline_row,
-    parse_session_ledgers,
     unparseable_ledger_rows,
 )
 
@@ -150,6 +162,22 @@ from coordinator_core.session_ledger.aggregate_chain_loe import (
 _ANY_HEADING_RE = re.compile(r"^## ")
 
 _MAX_CONTEXT_EXPANSION_LINES = 30
+
+# Closed param set for this op — same fail-loud shape as
+# `records_query._KNOWN_PARAM_KEYS` (2026-07-22 claude-central-em
+# silent-param-drop memo): an unknown key must refuse loudly, never be
+# silently ignored. `closing_ceremony` is listed here ahead of its own
+# handling (B15a) — see that row's `depends_on` note — so a caller adopting
+# it early is refused for the RIGHT reason (not yet wired) rather than the
+# wrong one (typo). Envelope keys starting with `_` are tolerated
+# (transport/metadata keys this handler never reads).
+_KNOWN_PARAM_KEYS = frozenset(
+    {
+        "handoff_path", "summary", "created", "session_id",
+        "agent_dispatches", "opus_dispatches", "override_reason",
+        "closing_ceremony",
+    }
+)
 
 
 def _err(msg: str) -> dict:
@@ -212,6 +240,35 @@ def _resolve_read_path(
                 f"archive/handoffs/): {handoff_path_raw}"
             )
     return p, None
+
+
+def _existing_row_identities(body: str) -> "list[tuple[str, str]]":
+    """One ``row_identity()`` tuple per existing one-line-append row across
+    every ``## Session Ledger`` block in *body*. Mirrors
+    ``aggregate_chain_loe.parse_session_ledgers``'s own block-boundary scan
+    (heading in, next-``##``-heading or EOF out) but captures ``summary``
+    too — that module's parsed record deliberately drops it (tshirt/summary
+    are display-only there), so this op re-scans with ``_ONELINE_RE``
+    directly rather than widening a sibling module's return shape for one
+    caller. Legacy Field/Value rows carry no single-line summary and are
+    silently skipped: this op only ever WRITES the one-line-append grammar,
+    so a legacy row can never collide with a row this op is about to write.
+    """
+    identities: "list[tuple[str, str]]" = []
+    in_ledger = False
+    for line in body.splitlines():
+        if SESSION_LEDGER_HEADING_RE.match(line):
+            in_ledger = True
+            continue
+        if in_ledger and _ANY_HEADING_RE.match(line) and not SESSION_LEDGER_HEADING_RE.match(line):
+            in_ledger = False
+            continue
+        if not in_ledger:
+            continue
+        m = _ONELINE_RE.match(line.strip())
+        if m:
+            identities.append(row_identity(m.group("session_id"), m.group("summary")))
+    return identities
 
 
 def _find_ledger_block(lines: "list[str]") -> "tuple[Optional[int], Optional[int], Optional[str]]":
@@ -305,6 +362,19 @@ async def _handler(
                               doc) — consulted only when the calling session
                               is neither the claim holder nor the authoring
                               session of the target.
+        closing_ceremony (str) — OPTIONAL, free-form non-empty text (no
+                              enumerated vocabulary — a new ceremony name
+                              needs no code change here). Rendered as the
+                              row's summary with a trailing
+                              `(<closing_ceremony> close)`. Omitting it
+                              leaves the summary unchanged; there is no
+                              separate no-param branch — the SAME identity
+                              rule (`session_ledger.row_identity`) applies
+                              either way, so a second call for the same
+                              session with a DIFFERENT `closing_ceremony`
+                              (or no ceremony at all, if the first call
+                              supplied one) is a distinct row and appends,
+                              while an identical repeat is refused.
 
     Returns: `handoff_correct_body._handler`'s own result dict, verbatim
     (its own `session_id`/`session_source` name the AUTHORIZING session, per
@@ -318,6 +388,16 @@ async def _handler(
     measured zero from a read one), and `tshirt` naming the resolved values
     actually written.
     """
+    unknown_keys = sorted(
+        k for k in params if k not in _KNOWN_PARAM_KEYS and not k.startswith("_")
+    )
+    if unknown_keys:
+        valid = ", ".join(sorted(_KNOWN_PARAM_KEYS))
+        return _err(
+            f"unknown param(s): {', '.join(repr(k) for k in unknown_keys)}. "
+            f"Valid: {valid}."
+        )
+
     handoff_path_raw: str = params.get("handoff_path") or ""
     if not handoff_path_raw:
         return _err("missing required param: handoff_path")
@@ -326,6 +406,16 @@ async def _handler(
     if not isinstance(summary_raw, str) or not summary_raw.strip():
         return _err("missing required param: summary (must be a non-empty string)")
     summary = summary_raw.strip()
+
+    closing_ceremony_raw = params.get("closing_ceremony")
+    if closing_ceremony_raw is not None:
+        if not isinstance(closing_ceremony_raw, str) or not closing_ceremony_raw.strip():
+            return _err("closing_ceremony must be a non-empty string when supplied")
+        closing_ceremony = closing_ceremony_raw.strip()
+        row_summary = f"{summary} ({closing_ceremony} close)"
+    else:
+        closing_ceremony = None
+        row_summary = summary
 
     if repo_root is None:
         return _err(
@@ -345,7 +435,12 @@ async def _handler(
             "CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID, and no session_id param "
             "supplied — cannot resolve whose row this is"
         )
-    sid6 = session_id[-6:]
+    # LEADING 6, matching `format_oneline_row`'s own truncation (that
+    # function documents this explicitly — a 2026-08-14 corpus measurement
+    # found every matchable row abbreviates the leading 6). A refusal check
+    # using a DIFFERENT slice than the one the row is actually written with
+    # would never match its own row.
+    sid6 = session_id[:6]
 
     created_raw = params.get("created")
     if created_raw is not None and not isinstance(created_raw, str):
@@ -387,7 +482,7 @@ async def _handler(
         dispatch_source = "absent_means_zero"
     tshirt = compute_tshirt(agent_dispatches, opus_dispatches, None)
 
-    row_line = format_oneline_row(created, session_id, tshirt, agent_dispatches, opus_dispatches, summary)
+    row_line = format_oneline_row(created, session_id, tshirt, agent_dispatches, opus_dispatches, row_summary)
 
     p, resolve_err = _resolve_read_path(handoff_path_raw, repo_root)
     if p is None:
@@ -403,13 +498,14 @@ async def _handler(
         return _err(f"no valid YAML frontmatter block in: {handoff_path_raw}")
     body = split.body_with_leading_newline
 
-    for rec in parse_session_ledgers(body):
-        if rec["session_id"].lower() == sid6.lower():
-            return _err(
-                f"a Session Ledger row for session {sid6!r} already exists in "
-                f"{handoff_path_raw} — appending twice for one session is refused "
-                "(the freeze on '## Session Ledger' allows exactly one row per session)"
-            )
+    new_identity = row_identity(sid6, row_summary)
+    if new_identity in _existing_row_identities(body):
+        return _err(
+            f"a Session Ledger row identical to this one (session {sid6!r}, "
+            f"summary {row_summary!r}) already exists in {handoff_path_raw} — "
+            "append_session_ledger refuses only an identical row, and this one "
+            "is a byte-for-byte repeat"
+        )
 
     lines = body.splitlines(keepends=True)
     heading_idx, section_end, block_err = _find_ledger_block(lines)

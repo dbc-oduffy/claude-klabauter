@@ -1,5 +1,5 @@
 """coordinator_core.hooks.preuse_agent_dispatch — PreToolUse(Agent) fan-in
-op: three registered guards, one call.
+op: two registered guards, one call.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
 from DoE-claude `coordinator/hooks/scripts/preuse-agent-dispatch.py`, a
@@ -29,24 +29,27 @@ source). Registration order == DoE's own prior `hooks.json` precedence:
        `support.*` modules.
     2. `hooks.block_unenumerated_agent_type` (this row's own sibling op,
        registered in this same commit).
-    3. `hooks.guard_review_integrator_sidecar_intake` (already landed,
-       W4-C7).
-    4. `hooks.enforce_agent_dispatch_mode` (this row's own sibling op) — the
+    3. `hooks.enforce_agent_dispatch_mode` (this row's own sibling op) — the
        ONLY leg that ever emits an "allow"+`updatedInput` rewrite; every
        other leg here only ever emits a deny or nothing. Reached only once
-       legs 1-3 have all declined to deny, preserving the single-emitter
-       invariant automatically: legs 1-3 run first, first-deny-wins,
-       short-circuiting leg 4 too.
+       legs 1-2 have all declined to deny, preserving the single-emitter
+       invariant automatically: legs 1-2 run first, first-deny-wins,
+       short-circuiting leg 3 too.
 
-FAILURE ISOLATION (unchanged from source): legs 1-3 each run inside their
+Retired 2026-09-26 (docs/plans/2026-09-26-retire-review-integrator.md, row
+M1): `hooks.guard_review_integrator_sidecar_intake` — the review-integrator
+agent it gated is gone, and its sidecar-intake shape has no successor
+gate.
+
+FAILURE ISOLATION (unchanged from source): legs 1-2 each run inside their
 own `try`/`except BaseException` — one leg crashing (or, for leg 1, being
 absent from this engine's op registry) skips only that leg, with a
 best-effort stderr breadcrumb, and this dispatcher proceeds to the next.
-Leg 4 (`enforce_agent_dispatch_mode`) is NOT wrapped the same way — it is
+Leg 3 (`enforce_agent_dispatch_mode`) is NOT wrapped the same way — it is
 the sole `updatedInput` emitter and its own handler contract already
 degrades every internal failure to `no_advisory()` rather than raising (see
 that module's own "Fail-open discipline" section), so an exception reaching
-this dispatcher from leg 4 is a genuine bug in that op, not a runtime
+this dispatcher from leg 3 is a genuine bug in that op, not a runtime
 condition this fan-in papers over.
 
 Op contract: `params` is the flat PreToolUse payload dict. Returns the
@@ -101,12 +104,6 @@ def _call_unenumerated_agent_type_leg(params: dict) -> dict:
     return _handler(params)
 
 
-def _call_review_integrator_leg(params: dict) -> dict:
-    from coordinator_core.hooks.guard_review_integrator_sidecar_intake import _handler
-
-    return _handler(params)
-
-
 def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
@@ -122,7 +119,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     for leg_name, leg_fn in (
         ("block_dispatch_suite_invocation", _call_suite_invocation_leg),
         ("block_unenumerated_agent_type", _call_unenumerated_agent_type_leg),
-        ("guard_review_integrator_sidecar_intake", _call_review_integrator_leg),
     ):
         try:
             out = leg_fn(params)

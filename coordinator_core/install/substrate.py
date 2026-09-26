@@ -88,7 +88,6 @@ from coordinator_core.install._shared import (
     RequireHomeError,
     atomic_write_bytes,
     env_overlay,
-    is_pointer,
     require_home,
 )
 from coordinator_core.install import resolution_journal
@@ -583,10 +582,11 @@ _SETTINGS_MANIFEST_FILENAME = "settings-manifest.md"
 template (see `_install_one`'s docstring)."""
 
 _WHOAMI_DIRNAME = "coordinator-whoami"
-"""Shared leaf name for both the settings-home destination
-(`<settings-home>/coordinator-whoami/`) and the legacy install-base
-location (`<install_base>/.claude/coordinator-whoami`) `_c10a_steps`
-relocates away from, replacing it with a compat pointer."""
+"""Leaf name of the settings-home `coordinator_whoami` package location
+(`<settings-home>/coordinator-whoami/`), read by `_c10a_steps`'s Step
+C10a-3 (`has_viable_whoami`) as one of two candidate package sources. The
+legacy install-base relocation (Steps C10a-1/2) that used to populate this
+dir is retired — see `_c10a_steps`."""
 
 _LEGACY_VENV_DIRNAME = ".coordinator-venv"
 """Shared leaf name for both the legacy `<install_base>/.claude/
@@ -3212,7 +3212,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
         # --- Step 3h: hardware audit ---
         _run_hardware_audit(check_only)
 
-        # --- Steps C10a-1/2/3: whoami relocation, registry key, venv rebuild ---
+        # --- Step C10a-3: venv rebuild (C10a-1/2 whoami relocation + registry key retired) ---
         rc = _c10a_steps(
             install_base, settings_home_path, plugin_root, bin_dst, check_only,
             allow_venv_fallback=allow_venv_fallback,
@@ -4468,116 +4468,19 @@ def _c10a_steps(
     install_base: str, settings_home_path: Path, plugin_root: Path, bin_dst: Path, check_only: bool,
     *, allow_venv_fallback: bool = False,
 ) -> int:
-    legacy_whoami = Path(install_base) / ".claude" / _WHOAMI_DIRNAME
+    # Steps C10a-1 (coordinator-whoami/ relocation copy + legacy compat
+    # pointer) and C10a-2 (`coordinator.whoami_src` registry key) are
+    # RETIRED (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md
+    # chunk C2, item 1). `coordinator_whoami` ships no package source on any
+    # current box (state/cross-repo/archive/2026-09-12-doe-claude-em-
+    # installer-still-registers-retired-whoami-src.md), so both steps only
+    # ever advertised a stale or empty seam. The sole live reader,
+    # `ensure_venv._resolve_whoami_pkg`, already falls back to
+    # `plugin_root / "whoami"` directly whenever the registry key is unset
+    # or stale — not writing the key is the correct behaviour there, not a
+    # regression. `bin_dst` is unused now that C10a-2's registry write is
+    # gone; kept as a parameter for call-site compatibility.
     dst_whoami = settings_home_path / _WHOAMI_DIRNAME
-
-    if legacy_whoami.is_dir() and not is_pointer(legacy_whoami):
-        src_whoami = legacy_whoami
-    elif (plugin_root / "whoami").is_dir():
-        src_whoami = plugin_root / "whoami"
-    else:
-        src_whoami = None
-        # No legacy dir and no plugin-side whoami/ — a genuinely checked,
-        # known fact (not "never got there"): clause 22 resolves to zero
-        # entries this run.
-        if not check_only:
-            resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_WHOAMI_COPY, [])
-
-    if src_whoami is not None:
-        # Mirror bash's exclusion-aware emptiness probe precisely.
-        dst_has_files = dst_whoami.is_dir() and any(True for _ in _iter_whoami_files(dst_whoami))
-        if not dst_has_files:
-            if check_only:
-                print(f"[install-substrate] would: relocate coordinator-whoami/ from {src_whoami} to {dst_whoami}")
-            else:
-                dst_whoami.mkdir(parents=True, exist_ok=True)
-                whoami_copied: "list[WriteSurfaceEntry]" = []
-                try:
-                    for rel in _iter_whoami_files(src_whoami):
-                        _c10a_copy_one(src_whoami / rel, dst_whoami / rel)
-                        whoami_copied.append(WriteSurfaceEntry(kind="file-path", path=str(dst_whoami / rel)))
-                    for dirpath, dirnames, filenames in os.walk(src_whoami):
-                        dirnames[:] = [d for d in dirnames if d not in _WHOAMI_EXCLUDE_DIRS and not d.endswith(".egg-info")]
-                        if not dirnames and not filenames and Path(dirpath) != src_whoami:
-                            rel = Path(dirpath).relative_to(src_whoami)
-                            (dst_whoami / rel).mkdir(parents=True, exist_ok=True)
-                except SubstrateFatalError as exc:
-                    # Journal whatever copies genuinely completed before the
-                    # divergent-file abort — each entry in `whoami_copied`
-                    # really did land on disk; only the remainder never
-                    # happened. Never phantom, never silently dropped.
-                    resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_WHOAMI_COPY, whoami_copied)
-                    print(str(exc), file=sys.stderr)
-                    return 1
-                resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_WHOAMI_COPY, whoami_copied)
-        else:
-            # dst_whoami already has files — this run genuinely resolves
-            # clause 22 to "nothing to copy" (a known, meaningful zero),
-            # distinct from src_whoami being None below (never got there).
-            if not check_only:
-                resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_WHOAMI_COPY, [])
-
-    if legacy_whoami.is_dir() and not is_pointer(legacy_whoami) and dst_whoami.is_dir():
-        legacy_whoami_blocked = None if check_only else _refuse_machine_mutation(
-            str(legacy_whoami), what="remove/replace legacy coordinator-whoami directory",
-            check_temp_path=False,
-        )
-        if check_only:
-            print(f"[install-substrate] would: replace {legacy_whoami} (real dir) with compat pointer → {dst_whoami}")
-        elif legacy_whoami_blocked:
-            print(f"[install-substrate] REFUSED: {legacy_whoami_blocked}", file=sys.stderr)
-        else:
-            platform = _quiet_output(["uname", "-s"])
-            if platform.startswith(("MINGW", "MSYS", "CYGWIN")):
-                if not shutil.which("cygpath"):
-                    print(
-                        "install-substrate C10a: FATAL — cygpath not found on Windows host; "
-                        "cannot create coordinator-whoami junction.",
-                        file=sys.stderr,
-                    )
-                    print("  Remediation: ensure cygpath is on PATH (provided by MSYS2, Cygwin, or Git-for-Windows).", file=sys.stderr)
-                    return 1
-                win_legacy = _cygpath_w(str(legacy_whoami))
-                win_dst = _cygpath_w(str(dst_whoami))
-                try:
-                    legacy_whoami.rmdir()
-                except OSError:
-                    shutil.rmtree(legacy_whoami, ignore_errors=True)
-                proc = _run(["cmd", "/c", "mklink", "/J", win_legacy, win_dst], capture_output=True)
-                if proc.returncode != 0:
-                    print("install-substrate C10a: FATAL — mklink /J failed for coordinator-whoami.", file=sys.stderr)
-                    print(f"  Link path: {win_legacy}", file=sys.stderr)
-                    print(f"  Target   : {win_dst}", file=sys.stderr)
-                    print("  Note: mklink /J does not require elevation or Developer Mode.", file=sys.stderr)
-                    return 1
-                print(f"[install-substrate] installed coordinator-whoami compat junction: {legacy_whoami} → {dst_whoami}")
-            else:
-                shutil.rmtree(legacy_whoami, ignore_errors=True)
-                legacy_whoami.symlink_to(dst_whoami)
-                print(f"[install-substrate] installed coordinator-whoami compat symlink: {legacy_whoami} → {dst_whoami}")
-
-    # Step C10a-2: register coordinator.whoami_src registry key.
-    # Windows CreateProcess cannot exec an extension-less shebang script (WinError
-    # 193). The substrate deliberately delivers a `machine-local.cmd` alongside the
-    # POSIX wrapper for exactly this reason — prefer it when it exists. Keyed on
-    # os.name, NOT _is_windows_shell(): the constraint is the OS exec loader, which
-    # applies under Git Bash just the same.
-    ml_cli = bin_dst / "machine-local"
-    if os.name == "nt" and (bin_dst / "machine-local.cmd").is_file():
-        ml_cli = bin_dst / "machine-local.cmd"
-    # is_executable() handles the Windows PATHEXT-sibling case (e.g. a bare
-    # "machine-local" whose launchable form is "machine-local.cmd") itself,
-    # so no separate os.name == "nt" carve-out is needed here.
-    if ml_cli.is_file() and is_executable(ml_cli):
-        cur = _quiet_output([str(ml_cli), "get", "coordinator.whoami_src"])
-        if check_only:
-            if cur != str(dst_whoami):
-                print(f"[install-substrate] would: set coordinator.whoami_src → {dst_whoami}")
-        elif cur != str(dst_whoami):
-            _run([str(ml_cli), "set", "coordinator.whoami_src", str(dst_whoami)])
-            print(f"[install-substrate] set coordinator.whoami_src → {dst_whoami}")
-    else:
-        print(f"[install-substrate] WARNING: machine-local CLI not found at {ml_cli}; coordinator.whoami_src not persisted", file=sys.stderr)
 
     # Step C10a-3: venv rebuild + legacy venv removal (native —
     # coordinator_core.install.ensure_venv). Reachable ONLY behind
@@ -5226,7 +5129,7 @@ but always AFTER module load completes) and `WRITE_SURFACE` read one
 spelling rather than risking drift between the two."""
 
 # `resolution_journal.record_resolution`'s `clause_index` for each of this
-# module's ten `ShapedClause` declarations — the position of that clause
+# module's nine `ShapedClause` declarations — the position of that clause
 # within `WRITE_SURFACE.clauses` below (0-indexed). Named here, read at
 # each clause's write site, so a future clause insertion/reorder in
 # `WRITE_SURFACE` is the ONE place that needs updating, not N scattered
@@ -5240,7 +5143,9 @@ _CLAUSE_PLATFORM_LOCALIZE = 8  # clause 9
 _CLAUSE_ORPHAN_SWEEP = 12  # clause 13
 _CLAUSE_PRUNE_ORPHANED_STATIC = 13  # clause 14
 _CLAUSE_CAREFUL_BACKUP = 14  # clause 15
-_CLAUSE_WHOAMI_COPY = 21  # clause 22
+# _CLAUSE_WHOAMI_COPY (formerly clause 22, `_c10a_steps` Step C10a-1's
+# coordinator-whoami/ relocation copy) retired along with Steps C10a-1/2 --
+# see `_c10a_steps` and the removed clauses 22-25 below.
 
 
 WRITE_SURFACE = WriteSurfaceDeclaration(
@@ -5616,25 +5521,28 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 22 — `_c10a_steps` Step C10a-1: the `coordinator-whoami/`
-        # tree copy from either the legacy install-base location or the
-        # plugin's `whoami/` source into
-        # `<settings-home>/coordinator-whoami/`. SHAPED: the file set is
-        # discovered per run via `_iter_whoami_files`, never enumerable in
-        # source.
-        ShapedClause(
-            discovered_by="_iter_whoami_files (_c10a_copy_one)",
-            entry_template=WriteSurfaceEntry(
-                kind="file-path",
-                path=f"<settings-home>/{_WHOAMI_DIRNAME}/<relative-whoami-path>",
-                reason="only when destination has no files yet (dst_has_files probe); preserve-on-diff per-file via _c10a_copy_one",
+        # Clause 22 — RETIRED (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-
+        # fixes-doe-thread.md chunk C2, item 1). Formerly `_c10a_steps` Step
+        # C10a-1's `coordinator-whoami/` tree copy from either the legacy
+        # install-base location or the plugin's `whoami/` source into
+        # `<settings-home>/coordinator-whoami/`. No longer written —
+        # `coordinator_whoami` ships no package source to relocate on any
+        # current box. Entry kept (not removed), same precedent as clause
+        # 28/29 below, so a stale settings-home copy left by a
+        # pre-retirement install remains a recognized prune candidate.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path=f"<settings-home>/{_WHOAMI_DIRNAME}/",
+                    reason="RETIRED: no longer written — Step C10a-1's relocation copy is deleted (item 1). Entry stays declared, unwritten, for stale-residue recognition on a pre-retirement box",
+                ),
             ),
         ),
-        # Clause 23 — `_c10a_steps` Step C10a-1: removal of the legacy
-        # `<install_base>/.claude/coordinator-whoami` REAL directory once
-        # the settings-home copy (clause 22) exists, ahead of clause 24
-        # replacing it with a compat pointer. effect="delete", gated by
-        # `_refuse_machine_mutation`.
+        # Clause 23 — RETIRED (same chunk as clause 22). Formerly
+        # `_c10a_steps` Step C10a-1's removal of the legacy
+        # `<install_base>/.claude/coordinator-whoami` REAL directory ahead
+        # of clause 24 replacing it with a compat pointer.
         StaticClause(
             effect="delete",
             entries=(
@@ -5642,34 +5550,36 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     kind="file-path",
                     path=f"<install-base>/.claude/{_WHOAMI_DIRNAME}",
                     effect="delete",
-                    reason="removed (rmdir/rmtree) only when it is a real dir, not already a compat pointer, and the settings-home copy exists; gated by _refuse_machine_mutation",
+                    reason="RETIRED: no longer written — Step C10a-1's legacy-dir removal is deleted (item 1). Entry stays declared, unwritten, for stale-residue recognition on a pre-retirement box",
                 ),
             ),
         ),
-        # Clause 24 — `_c10a_steps` Step C10a-1: the compat pointer
-        # replacing the removed legacy directory (clause 23) —
-        # `mklink /J` junction on MSYS/MINGW/CYGWIN (via `cygpath`),
-        # `Path.symlink_to` on POSIX. Same fixed destination path either
-        # way; the creation mechanism is platform-branched, not the
-        # surface itself.
+        # Clause 24 — RETIRED (same chunk as clause 22). Formerly the
+        # compat pointer replacing the removed legacy directory (clause
+        # 23) — `mklink /J` junction on MSYS/MINGW/CYGWIN (via `cygpath`),
+        # `Path.symlink_to` on POSIX.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
                     path=f"<install-base>/.claude/{_WHOAMI_DIRNAME}",
-                    reason="compat pointer to <settings-home>/coordinator-whoami/: mklink /J junction (MSYS/MINGW/CYGWIN, via cygpath) or symlink_to (POSIX)",
+                    reason="RETIRED: no longer written — Step C10a-1's compat pointer is deleted (item 1). Entry stays declared, unwritten, for stale-residue recognition on a pre-retirement box",
                 ),
             ),
         ),
-        # Clause 25 — `_c10a_steps` Step C10a-2: `coordinator.whoami_src`
-        # machine-local key, set to the settings-home whoami destination
-        # path when the currently-registered value differs.
+        # Clause 25 — RETIRED (same chunk as clause 22). Formerly
+        # `_c10a_steps` Step C10a-2's `coordinator.whoami_src`
+        # machine-local key. The sole live reader
+        # (`ensure_venv._resolve_whoami_pkg`) already falls back to
+        # `plugin_root / "whoami"` when this key is unset or stale, so
+        # retiring the write is the correct behaviour there, not a
+        # regression.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
                     kind="machine-local-key",
                     key="coordinator.whoami_src",
-                    reason="set to <settings-home>/coordinator-whoami when the registered value differs (Step C10a-2, via the settings-home machine-local CLI)",
+                    reason="RETIRED: no longer written — Step C10a-2's registry-key set is deleted (item 1). Entry stays declared, unwritten, so a stale key left by a pre-retirement box remains a recognized prune candidate",
                 ),
             ),
         ),
@@ -5805,9 +5715,12 @@ the `<settings-home>/machine-local/` seeding family (clauses 16-19: tracked
 templates, unreal.toml, registry.toml, hardware.toml), `settings-manifest.md`
 (clause 20), the `concerns[]` structured-key merge (clause 21), the
 `_c10a_steps` whoami/venv group (clauses 22-26: tree copy, legacy-dir
-delete, compat-pointer creation, `coordinator.whoami_src` key, legacy-venv
-delete — NOT `ensure_venv`'s own current-venv surface, which stays that
-module's declaration), clause 27 (`_fnm_step`'s brew/curl third-party `fnm`
+delete, compat-pointer creation, `coordinator.whoami_src` key — clauses
+22-25 RETIRED 2026-09-26 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-
+doe-thread.md chunk C2, item 1), kept declared/unwritten per the clause
+28/29 precedent — and legacy-venv delete (clause 26, still live) — NOT
+`ensure_venv`'s own current-venv surface, which stays that module's
+declaration), clause 27 (`_fnm_step`'s brew/curl third-party `fnm`
 installer leg, declared via the stated-reason escape hatch rather than left
 silently undeclared — no kind in the frozen eight-kind vocabulary honestly
 expresses an unenumerable third-party installer footprint) — see

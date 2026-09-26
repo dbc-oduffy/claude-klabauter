@@ -6,7 +6,9 @@ every ``## Session Ledger`` block encountered, and emit summed LoE metrics.
 Given the terminal handoff of a multi-session chain (the one consumed by the
 chain-terminal ``/workstream-complete``), walks the ``predecessor:`` chain
 backward to root, collects every Session Ledger block from every handoff
-visited, deduplicates by ``session_id``, and emits summed
+visited, deduplicates by row identity (``session_ledger.row_identity`` —
+``(session_id, summary)``, so two distinct-summary rows for one session
+both count), and emits summed
 (agent_dispatches, opus_dispatches, em_tokens) + unioned commits + recomputed
 t-shirt. Consumed by ``/workstream-complete`` Step 2.6 on the chain-terminal
 path.
@@ -92,6 +94,7 @@ from coordinator_core.wire_paths import rel_id
 from coordinator_core.loe_thresholds import DEFAULT_THRESHOLDS, compute_tshirt, load_thresholds
 from coordinator_core.session import core as _session_core
 from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE as _SESSION_LEDGER_HEADING_RE
+from coordinator_core.session_ledger import row_identity as _row_identity
 from coordinator_core.state_root import StateRootError, coordinator_state_root
 
 _EDGE_KINDS = {"predecessor", "additional_predecessors"}
@@ -382,6 +385,7 @@ def _parse_oneline_row(line: str) -> Optional[Dict[str, str]]:
         "em_tokens": "null",
         "commits": "",
         "created": m.group("created"),
+        "summary": m.group("summary"),
     }
 
 
@@ -437,6 +441,12 @@ def parse_session_ledgers(text: str) -> List[Dict[str, str]]:
                     "em_tokens": current["em_tokens"] or "null",
                     "commits": current["commits"],
                     "created": current["created"],
+                    # Field/Value grammar carries no summary column; default
+                    # to "" so every row from this grammar shares one
+                    # row_identity per session_id, preserving sid-only dedup
+                    # for the archived grammar (only the one-line-append
+                    # grammar's ``summary`` distinguishes same-session rows).
+                    "summary": "",
                 }
             )
 
@@ -629,6 +639,7 @@ def _dispatch_fallback_record(text: str) -> Optional[Dict[str, str]]:
         "em_tokens": "null",
         "commits": "",
         "created": created,
+        "summary": "",
     }
 
 
@@ -781,6 +792,7 @@ def aggregate(
     total_tok: Optional[int] = None
     commits: List[str] = []
     seen_sids: set = set()
+    seen_identities: set = set()
     anonymous_records = 0
     handoffs_with_ledger = 0
     handoffs_with_dispatch_fallback = 0
@@ -815,9 +827,17 @@ def aggregate(
         for rec in records:
             sid = rec["session_id"]
             if sid:
-                if sid in seen_sids:
-                    continue
+                # `seen_sids` stays a per-sid set (every sid ever seen, not
+                # gated on row_identity) — the closing-session attribution
+                # block below still needs to know whether THIS session has
+                # any row at all, for its own idempotency, regardless of
+                # how many distinct-summary rows that session wrote (see
+                # this module's docstring / the plan-B15b comment).
                 seen_sids.add(sid)
+                identity = _row_identity(sid, rec.get("summary", ""))
+                if identity in seen_identities:
+                    continue
+                seen_identities.add(identity)
             else:
                 anonymous_records += 1
 

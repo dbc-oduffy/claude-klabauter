@@ -119,7 +119,11 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
-from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS, SIZING_TERMINAL_STATUS
+from coordinator_core.lifecycle_constants import (
+    HANDOFF_TERMINAL_DEPLOYMENT,
+    PLAN_TERMINAL_STATUS,
+    SIZING_TERMINAL_STATUS,
+)
 from coordinator_core.ops.ceremony.git_native import (
     REASON_WORKTREE_DIRTY,
     dirty_relpaths_from_porcelain,
@@ -228,6 +232,130 @@ def _forward_plan_refusal_reason(
         return (
             f"{_REASON_FORWARD_PLAN_NOT_TERMINAL}: plan {plan_fk!r} status is "
             f"{plan_status!r}, not terminal"
+        )
+    return None
+
+
+#: A sizing whose `route:` is this value is initiative-scale by itself.
+_ROUTE_ROADMAP = "roadmap"
+
+#: A sizing whose `route:` is `pm-decision` and whose `xl_exit:` is this
+#: value has been resolved to the same initiative-scale outcome as
+#: `route: roadmap` directly — see plan_gate.py's own `_XL_EXIT_RESOLVING_TO_PLAN`
+#: sibling constant for the parallel "effective route" reasoning on the other
+#: `xl_exit` value.
+_ROUTE_PM_DECISION = "pm-decision"
+_XL_EXIT_ROADMAP = "roadmap"
+
+_REASON_ROADMAP_STUBS_NOT_TERMINAL = "roadmap-stubs-not-terminal"
+
+#: Corpus roots this module scans for a reverse `sizing_object:` citation.
+#: Mirrors handoff.schema.json / plan.schema.json's shared FK shape — see
+#: `_citer_is_terminal` for why handoffs and plans are tested differently.
+_CITER_SEARCH_SUBDIRS = (
+    ("docs", "plans"),
+    ("state", "handoffs"),
+    ("archive", "specs"),
+    ("archive", "handoffs"),
+)
+
+
+def _is_roadmap_exit(route: Optional[str], xl_exit: Optional[str]) -> bool:
+    """True when a sizing's route resolves to the initiative-scale roadmap exit.
+
+    Two shapes name the same outcome (mirrors plan_gate.py's own
+    `_sizing_route` "effective, not literal" reasoning): `route: roadmap`
+    directly, or `route: pm-decision` with `xl_exit: roadmap` once the PM has
+    recorded that choice.
+    """
+    if route == _ROUTE_ROADMAP:
+        return True
+    return route == _ROUTE_PM_DECISION and xl_exit == _XL_EXIT_ROADMAP
+
+
+def _citer_is_terminal(path: Path) -> bool:
+    """True when a file that cites a sizing via `sizing_object:` is itself terminal.
+
+    A handoff (state/handoffs/, archive/handoffs/) is terminal by its own
+    `deployment_state`, per HANDOFF_TERMINAL_DEPLOYMENT — the same axis
+    archive_terminal_handoffs.py reads. A plan (docs/plans/, archive/specs/)
+    is terminal by `status`, per PLAN_TERMINAL_STATUS. Path membership under
+    a `handoffs` directory decides which axis applies.
+    """
+    if "handoffs" in path.parts:
+        deployment_state = (parse_frontmatter_field(path, "deployment_state") or "").strip().lower()
+        return deployment_state in HANDOFF_TERMINAL_DEPLOYMENT
+    status = parse_frontmatter_status(path)
+    return status in PLAN_TERMINAL_STATUS
+
+
+def _build_citer_index(worktree_root: Path) -> Dict[str, List[Path]]:
+    """One walk of `_CITER_SEARCH_SUBDIRS`, grouped by cited basename.
+
+    Hoisted out of `_find_sizing_citers` so a batch of many candidates (as
+    `_handle_preview`/`_handle_act` process, one candidate at a time) shares
+    a single corpus walk instead of re-`rglob`-ing the same subtrees once
+    per candidate being previewed/acted on.
+    """
+    index: Dict[str, List[Path]] = {}
+    for subdir in _CITER_SEARCH_SUBDIRS:
+        root = worktree_root.joinpath(*subdir)
+        if not root.is_dir():
+            continue
+        for candidate in sorted(root.rglob("*.md")):
+            if not candidate.is_file():
+                continue
+            cited = parse_frontmatter_field(candidate, "sizing_object")
+            if not cited:
+                continue
+            basename = os.path.basename(cited.replace("\\", "/"))
+            index.setdefault(basename, []).append(candidate)
+    return index
+
+
+def _find_sizing_citers(
+    worktree_root: Path,
+    sizing_relpath: str,
+    citer_index: Optional[Dict[str, List[Path]]] = None,
+) -> List[Path]:
+    """Every stub/plan under `_CITER_SEARCH_SUBDIRS` whose `sizing_object:`
+    names this sizing, matched by basename (the FK is archive-agnostic by
+    design, per `_sizing_citation`'s docstring — a citer written before this
+    sizing ever moves still spells it as the live `state/sizings/...` path,
+    so basename is sufficient and avoids re-deriving that fallback here).
+
+    ``citer_index`` (from `_build_citer_index`) lets a caller processing many
+    candidates share one walk; omitted, this builds its own (single-candidate
+    callers, tests).
+    """
+    basename = os.path.basename(sizing_relpath.replace("\\", "/"))
+    index = citer_index if citer_index is not None else _build_citer_index(worktree_root)
+    return index.get(basename, [])
+
+
+def _roadmap_stubs_refusal_reason(
+    worktree_root: Path,
+    sizing_path: Path,
+    sizing_relpath: str,
+    citer_index: Optional[Dict[str, List[Path]]] = None,
+) -> Optional[str]:
+    """Refuse a roadmap-exit sizing until every stub/plan citing it is terminal.
+
+    Terminality on the FIRST citer to ship is not terminality of the
+    initiative the roadmap exit opened — the sizing stays live until every
+    citer this module can find is itself terminal (or none exist yet).
+    """
+    route = parse_frontmatter_field(sizing_path, "route")
+    xl_exit = parse_frontmatter_field(sizing_path, "xl_exit")
+    if not _is_roadmap_exit(route, xl_exit):
+        return None
+
+    citers = _find_sizing_citers(worktree_root, sizing_relpath, citer_index=citer_index)
+    non_terminal = [rel_id(c, worktree_root) for c in citers if not _citer_is_terminal(c)]
+    if non_terminal:
+        return (
+            f"{_REASON_ROADMAP_STUBS_NOT_TERMINAL}: "
+            f"{', '.join(sorted(non_terminal))}"
         )
     return None
 
@@ -346,6 +474,7 @@ async def _handle_preview(
     scan_skipped: Optional[List[dict]] = None,
 ) -> dict:
     candidates: List[dict] = []
+    citer_index = _build_citer_index(worktree_root)
 
     for path in sorted(sizings_dir.glob("*.yaml")):
         status = parse_frontmatter_status(path)
@@ -371,6 +500,14 @@ async def _handle_preview(
                 if scan_skipped is not None:
                     scan_skipped.append({"id": rel_path, "reason": refusal})
                 continue
+
+        roadmap_refusal = _roadmap_stubs_refusal_reason(
+            worktree_root, path, rel_path, citer_index=citer_index
+        )
+        if roadmap_refusal is not None:
+            if scan_skipped is not None:
+                scan_skipped.append({"id": rel_path, "reason": roadmap_refusal})
+            continue
 
         title = _extract_title(path) or path.stem
         candidates.append({
@@ -455,6 +592,7 @@ async def _handle_act(
         dirty = _dirty_sizing_relpaths(worktree_root, [cid for cid, _p in classified])
 
     candidate_moves: Dict[str, Move] = {}
+    citer_index = _build_citer_index(worktree_root) if classified else {}
 
     for cid, sizing_path in classified:
         if cid in dirty:
@@ -467,6 +605,13 @@ async def _handle_act(
             if refusal is not None:
                 skipped.append({"id": cid, "reason": refusal})
                 continue
+
+        roadmap_refusal = _roadmap_stubs_refusal_reason(
+            worktree_root, sizing_path, cid, citer_index=citer_index
+        )
+        if roadmap_refusal is not None:
+            skipped.append({"id": cid, "reason": roadmap_refusal})
+            continue
 
         yyyy_mm = _derive_yyyy_mm(sizing_path.name)
         if yyyy_mm is None:

@@ -2114,7 +2114,6 @@ def _sweep_directive_ids_and_resolves_ids(
         "review_partition": {
             "range": "aaaaaaa..bbbbbbb",
             "slices": [{"slice_id": "s1", "paths": ["coordinator/tests/contract-test.py"]}],
-            "integrator_spec_tsv": "state/review-trail/contract-test-spec.tsv",
         },
         "orientation_cache_exists": True,
         "pinboard_note": "contract-test pinboard note",

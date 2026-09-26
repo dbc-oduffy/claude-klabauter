@@ -33,7 +33,7 @@ import re
 SESSION_LEDGER_BLOCK_LINES: list[str] = [
     "## Session Ledger",
     "",
-    "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+    "<!-- Phase 2 LoE accumulator. Each session appends one line per closing ceremony. -->",
     "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
     "<!-- N is an integer COUNT of dispatches, NOT a duration: Nd = agent dispatches, -->",
     "<!-- No = opus dispatches. e.g. `3d / 1o`. A row written as days (`0.3d`) does not -->",
@@ -44,6 +44,22 @@ SESSION_LEDGER_BLOCK_LINES: list[str] = [
 # ``.search(text)`` (MULTILINE, any line in a larger document) and as
 # unaffected by the MULTILINE flag either way).
 SESSION_LEDGER_HEADING_RE = re.compile(r"^## Session Ledger", re.MULTILINE)
+
+
+def row_identity(session_id: str, summary: str) -> "tuple[str, str]":
+    """The one shared definition of what makes two Session Ledger rows the
+    SAME row: ``(session_id lower-cased, summary stripped)``. Two rows for
+    one session with a DIFFERENT summary (e.g. a distinct
+    ``closing_ceremony`` suffix — see
+    ``ops.handoff_append_session_ledger``) are NOT the same row and both
+    count; only a byte-identical (case-insensitive session id) pair
+    collapses to one. Shared by the append op's refusal gate
+    (``ops.handoff_append_session_ledger``) and the chain aggregator's
+    dedup (``session_ledger.aggregate_chain_loe``) so "does this row already
+    exist" and "has this row already been counted" agree by construction —
+    do not fork this tuple shape per caller.
+    """
+    return (session_id.lower(), summary.strip())
 
 
 def body_has_session_ledger_heading(body: str) -> bool:

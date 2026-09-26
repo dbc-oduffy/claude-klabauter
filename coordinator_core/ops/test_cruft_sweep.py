@@ -972,3 +972,390 @@ def test_toolchain_cache_tools_table_is_data_shape(tmp_path):
     hf_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "huggingface")
     assert hf_row["executable"] == "hf"
     assert hf_row["executable"] != "huggingface-cli"
+
+
+# ---------------------------------------------------------------------------
+# BCHST-C2 — sub-tier retention: memory/ survival, blocklist shielding at
+# sub-tier and cap, mtime floor, tool-results cap-only, mtime invariance,
+# oldest-first budget.
+#
+# Spec: docs/plans/2026-09-26-bound-the-claude-home-sub-tier-retention.md (C2)
+#
+# T1's leg (i) is HEAD-compatible (no new sweep_harness kwargs) and must pass
+# today. T1's legs (ii)/(iii), and T2-T6b, exercise `size_cap_bytes` /
+# `size_cap_mtime_floor_secs` kwargs that C3 adds to `sweep_harness` — they
+# fail with TypeError until C3 lands, by design (this row authors the tests
+# the engine chunk must satisfy).
+# ---------------------------------------------------------------------------
+
+_HUGE_CAP_BYTES = 10 * 1024**4  # never reached by any fixture here
+
+
+def _mk_session(repo_dir: Path, uuid: str, *, transcript: bool = True) -> Path:
+    """Create projects/<repo>/<uuid>/ (and, by default, its sibling
+    <uuid>.jsonl transcript). Returns the session dir."""
+    session_dir = repo_dir / uuid
+    session_dir.mkdir(parents=True)
+    if transcript:
+        _write(repo_dir / f"{uuid}.jsonl", "transcript\n")
+    return session_dir
+
+
+def _mk_subtier_file(
+    session_dir: Path, artifact_class: str, name: str, *, content: str = "x", age_secs: int = None,
+) -> Path:
+    """Create session_dir/<artifact_class>/<name> (e.g. subagents/agent-1.jsonl
+    or tool-results/blob.json), optionally aged."""
+    d = session_dir / artifact_class
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    _write(f, content)
+    if age_secs is not None:
+        _age_path(f, age_secs)
+    return f
+
+
+def _mk_memory(repo_dir: Path, *, age_secs: int = None) -> tuple[Path, Path]:
+    """Create projects/<repo>/memory/MEMORY.md plus a nested file, both aged
+    if requested. Returns (top_file, nested_file)."""
+    memory_dir = repo_dir / "memory"
+    top = memory_dir / "MEMORY.md"
+    nested = memory_dir / "nested" / "note.md"
+    _write(top, "keep me")
+    _write(nested, "keep me too")
+    if age_secs is not None:
+        _age_path(top, age_secs)
+        _age_path(nested, age_secs)
+    return top, nested
+
+
+_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+_UUID_C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+
+# T1 is split into one test function per leg (Review finding 1): leg (i) is
+# HEAD-compatible and must pass today, standalone, without ever touching the
+# `size_cap_*` kwargs C3 has not yet added — combining all three legs into
+# one function would make leg (i) untestable in isolation, since a shared
+# function body raises TypeError on leg (ii)/(iii) before pytest can report
+# leg (i) as its own pass/fail.
+
+
+def test_memory_dir_survives_head_leg(tmp_path):
+    """T1 (i): days=0, no new kwargs. HEAD-compatible -- must pass before C3
+    lands (whole-dir/jsonl pass only)."""
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+    top, nested = _mk_memory(repo_dir, age_secs=400 * 86400)
+
+    records = []
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 0, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+    assert top.exists() and top.read_text() == "keep me"
+    assert nested.exists() and nested.read_text() == "keep me too"
+    assert not any("/memory/" in r["path"].replace("\\", "/") for r in records)
+
+
+def test_memory_dir_survives_subtier_pass(tmp_path):
+    """T1 (ii): whole-dir pass inert (days huge), sub-tier active, cap huge.
+    Runs only after C3 lands `size_cap_bytes` / `size_cap_mtime_floor_secs`."""
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+    top, nested = _mk_memory(repo_dir, age_secs=400 * 86400)
+
+    records = []
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+        size_cap_bytes=_HUGE_CAP_BYTES, size_cap_mtime_floor_secs=0,
+    )
+    assert top.exists() and nested.exists()
+    assert not any("/memory/" in r["path"].replace("\\", "/") for r in records)
+
+
+def test_memory_dir_survives_size_cap_pass(tmp_path):
+    """T1 (iii): cap=0, floor=0 -- maximal eviction pressure, memory/ still
+    exempt (it is never a candidate: the UUID gate never descends into it).
+    Runs only after C3 lands the cap kwargs."""
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+    top, nested = _mk_memory(repo_dir, age_secs=400 * 86400)
+
+    records = []
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+        size_cap_bytes=0, size_cap_mtime_floor_secs=0,
+    )
+    assert top.exists() and nested.exists()
+    assert not any("/memory/" in r["path"].replace("\\", "/") for r in records)
+
+
+def test_subtier_age_never_enters_blocklisted_session(tmp_path):
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+
+    blocked_session = _mk_session(repo_dir, _UUID_A)
+    blocked_file = _mk_subtier_file(
+        blocked_session, "subagents", "agent-1.jsonl", age_secs=30 * 86400,
+    )
+    live_session = _mk_session(repo_dir, _UUID_B)
+    live_file = _mk_subtier_file(
+        live_session, "subagents", "agent-1.jsonl", age_secs=30 * 86400,
+    )
+
+    records = []
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, {_UUID_A},
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+        size_cap_bytes=_HUGE_CAP_BYTES, size_cap_mtime_floor_secs=0,
+    )
+
+    assert blocked_file.exists(), "blocklisted session's subagents file must survive the sub-tier pass"
+    assert not any(str(blocked_session) in r["path"] for r in records), (
+        "no record may be emitted for any file under a blocklisted session"
+    )
+    assert not live_file.exists(), "the non-blocklisted twin must be pruned by the 3-day subagents window"
+
+
+def test_size_cap_honours_blocklist_memory_and_floor(tmp_path):
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+
+    top, nested = _mk_memory(repo_dir, age_secs=400 * 86400)
+
+    blocked_session = _mk_session(repo_dir, _UUID_A)
+    blocked_file = _mk_subtier_file(
+        blocked_session, "tool-results", "blob.json", content="x" * 5000, age_secs=30 * 86400,
+    )
+
+    floor_secs = 86400
+    young_session = _mk_session(repo_dir, _UUID_B)
+    young_file = _mk_subtier_file(
+        young_session, "tool-results", "blob.json", content="x" * 5000, age_secs=100,
+    )
+
+    old_session = _mk_session(repo_dir, _UUID_C)
+    old_file = _mk_subtier_file(
+        old_session, "tool-results", "blob.json", content="x" * 5000, age_secs=30 * 86400,
+    )
+
+    # Cap set below the total of (young + old) eligible bytes, so the floor
+    # keeps the pass from reaching the cap: only `old_file` is eligible.
+    cap_bytes = 1000
+
+    records = []
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, {_UUID_A},
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+        size_cap_bytes=cap_bytes, size_cap_mtime_floor_secs=floor_secs,
+    )
+
+    assert top.exists() and nested.exists(), "memory/ must survive the cap pass"
+    assert blocked_file.exists(), "blocklisted session's files must survive the cap pass"
+    assert young_file.exists(), "a file younger than the mtime floor is never removed by cap pressure"
+    assert not old_file.exists(), "the old, non-blocklisted, non-floor-protected file is evicted"
+
+    floor_skip_records = [
+        r for r in records
+        if r["disposition"] == "skip" and r["evidence"] == "size-cap mtime floor"
+    ]
+    # The fixture's session transcripts are also younger than the floor, so they
+    # are floor-skipped too; the subject here is the young tool-results blob.
+    assert str(young_file) in {r["path"] for r in floor_skip_records}
+    assert str(old_file) not in {r["path"] for r in floor_skip_records}
+
+    residue_records = [r for r in records if r["name"] == "size-cap-residue"]
+    assert len(residue_records) == 1
+    residue = residue_records[0]
+    assert residue["evidence"] == "size-cap residue protected-by-floor"
+    assert residue["disposition"] == "skip"
+    assert residue["path"] == str(projects_root)
+    # post-eviction total (UUID-gated, non-blocklisted, memory/ excluded) is
+    # every floor-protected survivor: young_file plus the fixture's session
+    # transcripts outside the blocklist.
+    expected_total_after_eviction = sum(
+        r["size_bytes"] for r in floor_skip_records
+    )
+    assert residue["size_bytes"] == expected_total_after_eviction - cap_bytes
+
+    # Sibling run where the cap is reachable: no residue row.
+    other_root = tmp_path / "projects-reachable"
+    other_repo = other_root / "repo"
+    other_repo.mkdir(parents=True)
+    reachable_session = _mk_session(other_repo, _UUID_C)
+    _mk_subtier_file(
+        reachable_session, "tool-results", "blob.json", content="x" * 5000, age_secs=30 * 86400,
+    )
+    reachable_records = []
+    cruft_sweep.sweep_harness(
+        other_root, tmp_path / "file-history-2", 10000, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=reachable_records.append,
+        size_cap_bytes=_HUGE_CAP_BYTES, size_cap_mtime_floor_secs=0,
+    )
+    assert not any(r["name"] == "size-cap-residue" for r in reachable_records)
+
+
+def test_tool_results_never_age_pruned_but_cap_eligible(tmp_path):
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+
+    session = _mk_session(repo_dir, _UUID_A)
+    tr_file = _mk_subtier_file(
+        session, "tool-results", "blob.json", content="x" * 5000, age_secs=30 * 86400,
+    )
+
+    # Huge cap: the age pass never touches tool-results (no window for it).
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, set(),
+        apply=True, json_mode=False, quiet=True,
+        size_cap_bytes=_HUGE_CAP_BYTES, size_cap_mtime_floor_secs=0,
+    )
+    assert tr_file.exists(), "tool-results/ must never be pruned by an age window"
+
+    # Tight cap, floor=0: the same file is now cap-eligible.
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, set(),
+        apply=True, json_mode=False, quiet=True,
+        size_cap_bytes=0, size_cap_mtime_floor_secs=0,
+    )
+    assert not tr_file.exists(), "tool-results/ is cap-eligible once the cap is tight"
+
+
+def test_new_passes_never_change_uuid_dir_mtime(tmp_path):
+    projects_root = tmp_path / "projects"
+    repo_dir = projects_root / "repo"
+    repo_dir.mkdir(parents=True)
+
+    session = _mk_session(repo_dir, _UUID_A)
+    _mk_subtier_file(session, "subagents", "agent-1.jsonl", age_secs=30 * 86400)
+    _mk_subtier_file(session, "tool-results", "blob.json", content="x" * 5000, age_secs=30 * 86400)
+    depth1_file = session / "ccr-tip.json"
+    _write(depth1_file, "{}")
+    _age_path(depth1_file, 30 * 86400)
+    _age_path(session, 30 * 86400)
+
+    before_mtime = session.stat().st_mtime
+
+    cruft_sweep.sweep_harness(
+        projects_root, tmp_path / "file-history", 10000, set(),
+        apply=True, json_mode=False, quiet=True,
+        size_cap_bytes=0, size_cap_mtime_floor_secs=0,
+    )
+
+    after_mtime = session.stat().st_mtime
+    assert after_mtime == before_mtime, "evicting files inside <uuid>/ must never touch its own mtime"
+    assert depth1_file.exists(), "depth-1 files directly inside <uuid>/ are never candidates"
+
+
+def test_size_cap_dry_run_deletes_nothing_and_matches_apply_set(tmp_path):
+    def _build(root: Path) -> None:
+        repo_dir = root / "repo"
+        repo_dir.mkdir(parents=True)
+        for uuid in (_UUID_A, _UUID_B, _UUID_C):
+            session = _mk_session(repo_dir, uuid)
+            _mk_subtier_file(
+                session, "tool-results", "blob.json", content="x" * 5000, age_secs=10 * 86400,
+            )
+
+    dry_root = tmp_path / "dry"
+    apply_root = tmp_path / "apply"
+    _build(dry_root)
+    _build(apply_root)
+
+    dry_records = []
+    cruft_sweep.sweep_harness(
+        dry_root, tmp_path / "fh-dry", 10000, set(),
+        apply=False, json_mode=True, quiet=True, emit_fn=dry_records.append,
+        size_cap_bytes=1000, size_cap_mtime_floor_secs=0,
+    )
+    apply_records = []
+    cruft_sweep.sweep_harness(
+        apply_root, tmp_path / "fh-apply", 10000, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=apply_records.append,
+        size_cap_bytes=1000, size_cap_mtime_floor_secs=0,
+    )
+
+    def _evicted_paths(recs):
+        return {
+            r["path"] for r in recs
+            if r["evidence"].startswith("size-cap") and r["disposition"] == "auto-prune"
+        }
+
+    dry_evicted = _evicted_paths(dry_records)
+    apply_evicted = {
+        p.replace(str(apply_root), str(dry_root)) for p in _evicted_paths(apply_records)
+    }
+    assert dry_evicted == apply_evicted
+    assert dry_evicted, "fixture is over the cap, so the eviction set must be non-empty"
+
+    for uuid in (_UUID_A, _UUID_B, _UUID_C):
+        f = dry_root / "repo" / uuid / "tool-results" / "blob.json"
+        assert f.exists(), "dry-run must delete nothing"
+
+
+def test_size_cap_dry_run_matches_apply_when_whole_dir_pass_has_candidates(tmp_path):
+    def _build(root: Path) -> Path:
+        repo_dir = root / "repo"
+        repo_dir.mkdir(parents=True)
+        # whole-dir-pass-eligible (>14-day) session -- its own bytes are the
+        # whole-dir pass's candidate, and must be excluded from the cap
+        # total the same way in dry-run and apply.
+        stale_session = _mk_session(repo_dir, _UUID_A)
+        _mk_subtier_file(
+            stale_session, "tool-results", "blob.json", content="x" * 5000, age_secs=20 * 86400,
+        )
+        _age_path(stale_session, 20 * 86400)
+
+        # cap-pass-eligible session, younger than the whole-dir threshold.
+        live_session = _mk_session(repo_dir, _UUID_B)
+        _mk_subtier_file(
+            live_session, "tool-results", "blob.json", content="x" * 5000, age_secs=10 * 86400,
+        )
+        return root
+
+    dry_root = tmp_path / "dry"
+    apply_root = tmp_path / "apply"
+    _build(dry_root)
+    _build(apply_root)
+
+    dry_records = []
+    cruft_sweep.sweep_harness(
+        dry_root, tmp_path / "fh-dry", 14, set(),
+        apply=False, json_mode=True, quiet=True, emit_fn=dry_records.append,
+        size_cap_bytes=1000, size_cap_mtime_floor_secs=0,
+    )
+    apply_records = []
+    cruft_sweep.sweep_harness(
+        apply_root, tmp_path / "fh-apply", 14, set(),
+        apply=True, json_mode=True, quiet=True, emit_fn=apply_records.append,
+        size_cap_bytes=1000, size_cap_mtime_floor_secs=0,
+    )
+
+    def _cap_evicted_paths(recs):
+        return {
+            r["path"] for r in recs
+            if r["evidence"].startswith("size-cap") and r["disposition"] == "auto-prune"
+        }
+
+    dry_cap_evicted = _cap_evicted_paths(dry_records)
+    apply_cap_evicted = {
+        p.replace(str(apply_root), str(dry_root)) for p in _cap_evicted_paths(apply_records)
+    }
+    assert dry_cap_evicted == apply_cap_evicted, (
+        "dry-run must exclude the whole-dir pass's own candidate bytes from the cap total "
+        "the same way apply does, or the two eviction sets diverge"
+    )
+
+    for uuid in (_UUID_A, _UUID_B):
+        f = dry_root / "repo" / uuid / "tool-results" / "blob.json"
+        assert f.exists(), "dry-run must delete nothing, including the whole-dir pass's own candidates"

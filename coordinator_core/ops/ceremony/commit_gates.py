@@ -69,7 +69,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 
-from coordinator_core.git.git_state import IndexParseError, head_blobs, read_index
+from coordinator_core.attribution import is_exempt_path, scan_added_lines
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_index import (
+    IndexParseError as _IndexV4ParseError,
+    parse_index_identity,
+)
+from coordinator_core.git.git_objects import read_object
+from coordinator_core.git.git_state import (
+    IndexParseError,
+    head_blobs,
+    read_index,
+    read_tree_spine,
+)
 from coordinator_core.ops.ceremony.git_native import (
     _git,
     diff_cached_name_status,
@@ -688,6 +700,188 @@ def carry_gate(
         diagnostics.append(_CARRY_GATE_RESTAGE_HINT)
 
     return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Attribution gate
+# ---------------------------------------------------------------------------
+
+_ATTRIBUTION_GATE_REMEDY = (
+    "state the purpose, invariant or trap without naming the reviewer."
+)
+
+
+def _head_text(
+    spine: Optional[dict], common_dir: Path, path: str
+) -> Optional[str]:
+    """The decoded text of `path`'s blob per `spine` (a `read_tree_spine`
+    result), or `None` when the path is absent from the spine, the blob is
+    unreadable, or it is not valid UTF-8 -- all three read as "no HEAD
+    source", mirroring `commit_v2.py::_blob_source`'s own posture (this
+    module deliberately keeps its own copy rather than importing that
+    private helper across modules -- see this file's own negative-spec on
+    cross-module coupling). Never raises.
+    """
+    if spine is None:
+        return None
+    head_dir, _, head_name = path.rpartition("/")
+    entry = spine.get(head_dir, {}).get(head_name)
+    if entry is None:
+        return None
+    result = read_object(common_dir, entry[1])
+    if result is None:
+        return None
+    _otype, payload = result
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def attribution_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    prefer_staged: Sequence[str] = (),
+    deliberate_stage: bool = False,
+) -> GateOutcome:
+    """Refuse a commit whose staged content ADDS a reviewer-attribution line
+    (`coordinator_core.attribution.scan_added_lines`) to a non-exempt
+    tracked path -- a sibling to `carry_gate` and `deletion_block_gate`
+    (same module, same `GateOutcome` shape), in-process and zero-spawn.
+
+    Reads only:
+      1. `is_exempt_path` -- pure string compare, no IO. Filters
+         `gate_paths` to `remaining` FIRST; an empty `remaining` returns
+         `skipped=True` having read nothing.
+      2. HEAD bytes for `remaining`, one scoped `read_tree_spine` +
+         `read_object` per path -- the same object-cache-warm read
+         `commit_v2._pre_commit_guard_sources` already makes.
+      2b. Rename sources: `_staged_deletions_and_renames_in_process` is
+          called ONCE over the UNFILTERED `gate_paths` (not `remaining`),
+          so a rename source under an exempt root (e.g. a purge rewrite
+          moving a `state/` file into tracked source) still resolves. Every
+          returned deletion/rename source's HEAD text is pooled -- lines
+          joined into ONE old-side text -- and used as `old_text` for
+          EVERY path in `remaining` that HEAD does not have. `old_text` is
+          `None` only when the commit vacates no HEAD path at all (no
+          deletion, no rename source).
+      3. New bytes: worktree `read_text()`. For a path in `prefer_staged`,
+         or every path when `deliberate_stage`, the staged index blob is
+         also read (`parse_index_identity` + `read_object`) and scanned
+         too when it differs from the worktree text -- a superset scan,
+         never a miss of what will actually commit.
+      4. A path the worktree no longer has is a deletion candidate UNLESS
+         the index still carries a blob for it (checked via the same
+         `parse_index_identity` call, made for every path in `remaining`
+         so this holds regardless of `prefer_staged`) -- that blob is what
+         `commit_paths` will actually commit, so it is scanned, not
+         skipped as a deletion.
+      5. Undecodable (non-UTF-8) bytes are binary and are skipped.
+
+    All reads route through `read_tree_spine`/`read_object`/
+    `parse_index_identity`, none of which spawns a subprocess -- no `git`
+    process is reachable from this function.
+
+    Diagnostics are `<path>:<line_no>: adds reviewer attribution
+    ("<match>")`, capped at 5, followed by exactly one remedy line in the
+    guard-messaging register (WHAT HAPPENED, already stated per-line; WHAT
+    TO DO INSTEAD, stated once).
+
+    There is no override key and no bypass.
+    """
+    root = Path(worktree_root)
+    remaining = [p for p in gate_paths if not is_exempt_path(p)]
+    if not remaining:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    common_dir = resolve_git_common_dir(root)
+    spine = read_tree_spine(root, remaining)
+
+    # Rename-source pool -- resolved over the UNFILTERED gate set (a rename
+    # source may itself sit under an exempt root), never over `remaining`.
+    try:
+        staged_deletions, rename_sources = _staged_deletions_and_renames_in_process(
+            root, set(gate_paths)
+        )
+    except IndexParseError:
+        staged_deletions, rename_sources = set(), set()
+    vacated_paths = staged_deletions | rename_sources
+
+    rename_pool_lines: List[str] = []
+    if vacated_paths:
+        vacated_spine = read_tree_spine(root, sorted(vacated_paths))
+        for vp in sorted(vacated_paths):
+            text = _head_text(vacated_spine, common_dir, vp)
+            if text is not None:
+                rename_pool_lines.extend(text.splitlines())
+    rename_pool_text = "\n".join(rename_pool_lines) if rename_pool_lines else None
+
+    # Index identities for EVERY path in `remaining` -- needed both for
+    # step 3's staged-scan widening (`prefer_staged`/`deliberate_stage`) and
+    # step 4's worktree-missing-but-still-staged check, which applies
+    # regardless of either flag.
+    try:
+        index_identities = parse_index_identity(root, wanted=set(remaining))
+    except (IndexParseError, _IndexV4ParseError):
+        index_identities = {}
+
+    prefer_staged_set = set(prefer_staged)
+    diagnostics: List[str] = []
+
+    for path in remaining:
+        head_text = _head_text(spine, common_dir, path)
+        if head_text is not None:
+            old_text = head_text
+        elif vacated_paths:
+            old_text = rename_pool_text
+        else:
+            old_text = None
+
+        index_entry = index_identities.get(path)
+        index_text: Optional[str] = None
+        if index_entry is not None:
+            result = read_object(common_dir, index_entry.sha)
+            if result is not None:
+                _otype, payload = result
+                try:
+                    index_text = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    index_text = None
+
+        worktree_path = root / path
+        candidates: List[str] = []
+        if worktree_path.exists():
+            try:
+                worktree_text: Optional[str] = worktree_path.read_text(
+                    encoding="utf-8"
+                )
+            except (OSError, UnicodeDecodeError):
+                worktree_text = None
+            if worktree_text is not None:
+                candidates.append(worktree_text)
+            widen = path in prefer_staged_set or deliberate_stage
+            if widen and index_text is not None and index_text != worktree_text:
+                candidates.append(index_text)
+        elif index_text is not None:
+            # Worktree-missing but still staged -- that blob is what
+            # actually commits, so it is scanned, not treated as a
+            # deletion (step 4).
+            candidates.append(index_text)
+        # else: a genuine deletion (worktree gone, no staged blob) -- no
+        # bytes to scan.
+
+        for new_text in candidates:
+            for match in scan_added_lines(new_text, old_text, path):
+                diagnostics.append(
+                    f'{path}:{match.line_no}: adds reviewer attribution ("{match.text}")'
+                )
+
+    if not diagnostics:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+    capped = diagnostics[:5]
+    capped.append(_ATTRIBUTION_GATE_REMEDY)
+    return GateOutcome(passed=False, skipped=False, diagnostics=capped)
 
 
 # ---------------------------------------------------------------------------

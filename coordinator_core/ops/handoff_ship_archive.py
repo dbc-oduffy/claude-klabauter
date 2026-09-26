@@ -288,7 +288,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # never be read for this call — passing it would be a dead, misleading
     # argument.
     if _archive_shipped_act is None:
-        return _err(
+        msg = (
             "handoff.ship_and_archive is inoperative: its archive leg "
             "(ops/fleet/archive_shipped_handoffs) was deleted by the C1b "
             "subsumption without migrating this caller. The successor drops "
@@ -296,6 +296,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "is a safety decision, not a repoint. Ship and archive as two "
             "steps until it is settled."
         )
+        _LOG.warning("handoff.ship_and_archive: %s", msg)
+        # Steps 1-2 already succeeded by this point (ship transition landed
+        # above) — report their true per-step state rather than _err's
+        # hardcoded False, which would falsely claim the ship stamp never
+        # happened on this dead archive-leg branch.
+        return {
+            "exit_code": 1,
+            "shipped": True,
+            "shipped_in_stamped": shipped_in_stamped,
+            "archived": False,
+            "archive_skip_reason": None,
+            "error": msg,
+        }
     act = await _archive_shipped_act(
         _MODE, worktree, [rel_id], restage_src=True, holder_initiated=True
     )

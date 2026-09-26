@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.write_guards import (
-    block_em_hand_edit_pending_review_integration as sibling_guard,
-)
+from coordinator_core.ops.review_findings_ledger import _stamp_frontmatter_key
 from coordinator_core.write_guards import (
     nudge_sentinel_retained_review_sidecar as guard,
 )
@@ -112,7 +110,7 @@ def _payload(
 
 @pytest.fixture(autouse=True)
 def _clear_override_env(monkeypatch):
-    monkeypatch.delenv(sibling_guard._OVERRIDE_ENV_VAR, raising=False)
+    monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
 
 
 def _advise(payload):
@@ -142,7 +140,7 @@ class TestFiresOnSentinelRetainedFilledFindings:
         result = _advise(_payload(tmp_path))
         text = result["hookSpecificOutput"]["additionalContext"]
         assert "codereview-sliceA.md" in text
-        assert "review-integrator" in text
+        assert "review-findings-ledger verify" in text
         assert _TARGET_FILE in text
 
     def test_advisory_text_explains_warn_not_block(self, tmp_path):
@@ -182,11 +180,30 @@ class TestSilentWhenSentinelAbsent:
 
 class TestSilentWhenDispositionsPresent:
     def test_silent_once_integrator_dispositions_block_present(self, tmp_path):
+        """Historical marker only — no NEW sidecar ever writes this heading
+        post-retirement, but a pre-retirement sidecar must still read as
+        already-closed."""
         body = (
             _sentinel_retained_filled_body()
             + "## Integrator Dispositions\n\n- F1: Applied\n"
         )
         _write_sidecar(tmp_path, "sess-abc", "codereview-sliceA.md", body=body)
+        _silent(_payload(tmp_path))
+
+
+class TestSilentWhenFindingsLedgerVerified:
+    def test_silent_once_verified_findings_ledger_stamp_present(self, tmp_path):
+        """RRI-M4: the current "loop already closed" signal is a verified
+        `findings_ledger:` frontmatter stamp, not the retired heading."""
+        sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        frontmatter = _FINDINGS_FRONTMATTER
+        doc = _stamp_frontmatter_key(
+            frontmatter + _sentinel_retained_filled_body(),
+            "findings_ledger",
+            "{rows: 1, applied: 1, em_rejected: 0, suspended: 0, verified_at: 2026-09-26T00:00:00Z}",
+        )
+        (sidecar_dir / "codereview-sliceA.md").write_text(doc, encoding="utf-8")
         _silent(_payload(tmp_path))
 
 
@@ -209,7 +226,7 @@ class TestOverrideAndToolGating:
             "codereview-sliceA.md",
             body=_sentinel_retained_filled_body(),
         )
-        monkeypatch.setenv(sibling_guard._OVERRIDE_ENV_VAR, "1")
+        monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
         _silent(_payload(tmp_path))
 
     def test_non_write_tool_silent(self, tmp_path):

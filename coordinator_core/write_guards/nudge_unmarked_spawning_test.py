@@ -36,6 +36,28 @@ with `import pytest` and `_WRAPPER_RESOLVER` construction a production
 dependency of every matching write on this box) for "is that spawn
 covered by a marker."
 
+REGISTERED-MARKER GATE (Item 27,
+docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md § R27): the
+offer names `@pytest.mark.spawns_process` unconditionally, which is
+wrong for a consumer repo that never registered that marker -- pytest
+runs an unregistered custom marker under `--strict-markers` as a hard
+collection error, so the nudge would be steering the author to add a
+line that breaks their own test run. This guard resolves the target
+repo root the same way its write-guard siblings do
+(`write_guards._repo_root.resolve_repo_root`, no new subprocess), reads
+ONLY `pyproject.toml`'s `[tool.pytest.ini_options] markers` list (via
+stdlib `tomllib`, no spawn) or, failing that, an ini-shaped
+`pytest.ini`/`setup.cfg`'s `[pytest] markers` key (via stdlib
+`configparser`) -- never spawns pytest to ask it. If neither file
+registers a `markers` list at all, the guard stays silent: it cannot
+tell whether the marker exists, and a wrong assertion in either
+direction is worse than no offer. If a markers list IS found but does
+not contain the bare `spawns_process` name, the guard stays silent for
+the same reason -- offering a marker the target repo has not opted into
+would recommend an addition that itself fails `--strict-markers`. Only
+when `spawns_process` is confirmed registered does the existing
+detection-and-render pipeline below run.
+
 WHOLE-FILE RECONSTRUCTION is REUSED, not re-derived, from
 `nudge_windows_subprocess_popup` — identical fidelity requirement to
 `nudge_shell_shaped_spawn`'s own reuse of the same helpers. `_extract_content_ex`
@@ -72,6 +94,14 @@ Negative-spec:
     with no spawn sites at all.
   - Does NOT fire on a non-test-tree `.py` file (see SCOPE above) or a
     non-`.py` file.
+  - Does NOT fire when the target repo has no `markers` list in either
+    `pyproject.toml`'s `[tool.pytest.ini_options]` or an ini-shaped
+    `pytest.ini`/`setup.cfg`'s `[pytest]` section -- absence is silence,
+    never an assumed registration.
+  - Does NOT fire when a `markers` list IS found but does not register
+    the bare `spawns_process` name.
+  - Does NOT spawn pytest, or any process, to answer either question
+    above -- both files are parsed directly off disk.
   - Does NOT name the override key inline — this guard is advisory and
     has no unlock path of its own; nothing here invents one.
   - Never raises: any unexpected input shape, oversized file, or parse
@@ -83,7 +113,9 @@ Spec backlink: docs/plans/2026-08-20-the-spawn-ratchet-stops-accumulating-arrear
 from __future__ import annotations
 
 import ast
+import configparser
 import os
+import tomllib
 from typing import Any, Dict, Optional
 
 from coordinator_core.spawn_policy import SpawnParseError, sites_in_source
@@ -92,6 +124,7 @@ from coordinator_core.spawn_policy.marker_check import (
     has_marker_decorator,
     has_module_level_pytestmark,
 )
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
     _MAX_WHOLE_FILE_BYTES,
     _extract_content_ex,
@@ -101,6 +134,77 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 191
+
+#: bare marker name registered via `@pytest.mark.spawns_process` --
+#: `SPAWNS_PROCESS_MARKER` is the dotted decorator form ("pytest.mark.…"),
+#: registration lists carry only the trailing segment.
+_SPAWNS_PROCESS_MARKER_NAME = SPAWNS_PROCESS_MARKER.rsplit(".", 1)[-1]
+
+
+def _marker_names_from_list(raw_markers: Any) -> Optional[set[str]]:
+    if not isinstance(raw_markers, (list, tuple)):
+        return None
+    names: set[str] = set()
+    for entry in raw_markers:
+        if not isinstance(entry, str):
+            continue
+        name = entry.split(":", 1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _registered_markers_from_pyproject(repo_root: str) -> Optional[set[str]]:
+    path = os.path.join(repo_root, "pyproject.toml")
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    ini_options = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
+    if not isinstance(ini_options, dict):
+        return None
+    return _marker_names_from_list(ini_options.get("markers"))
+
+
+def _registered_markers_from_ini(repo_root: str) -> Optional[set[str]]:
+    for basename in ("pytest.ini", "setup.cfg"):
+        path = os.path.join(repo_root, basename)
+        parser = configparser.ConfigParser()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                parser.read_file(fh)
+        except (OSError, configparser.Error, UnicodeDecodeError):
+            continue
+        if not parser.has_section("pytest"):
+            continue
+        raw = parser.get("pytest", "markers", fallback=None)
+        if raw is None:
+            continue
+        lines = [line for line in raw.splitlines() if line.strip()]
+        names = _marker_names_from_list(lines)
+        if names is not None:
+            return names
+    return None
+
+
+def _spawns_process_marker_registered(repo_root: Optional[str]) -> bool:
+    """True only if `repo_root` explicitly registers the bare
+    `spawns_process` marker name in `pyproject.toml`'s
+    `[tool.pytest.ini_options] markers` or an ini-shaped
+    `pytest.ini`/`setup.cfg`'s `[pytest] markers`. Never spawns pytest;
+    parses both candidate files directly off disk. Absent root, absent
+    file, or a file present without a `markers` list at all all return
+    False -- the caller reads False as "stay silent," not as "confirmed
+    unregistered."""
+    if not repo_root:
+        return False
+    registered = _registered_markers_from_pyproject(repo_root)
+    if registered is None:
+        registered = _registered_markers_from_ini(repo_root)
+    if registered is None:
+        return False
+    return _SPAWNS_PROCESS_MARKER_NAME in registered
 
 
 def _is_test_tree_path(file_path: str) -> bool:
@@ -246,6 +350,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             unmarked.add(site.enclosing)
 
         if not unmarked:
+            return None
+
+        repo_root = resolve_repo_root(payload.get("cwd"))
+        if not _spawns_process_marker_registered(repo_root):
             return None
 
         reason = _reason_for(file_path, sorted(unmarked))

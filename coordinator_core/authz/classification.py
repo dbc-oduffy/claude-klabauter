@@ -315,9 +315,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.stop_dispatch (C3) — MUTATING by union: composes
     # hooks.runtime_tripwire_em_check, hooks.watchdog_undischarged_next_move,
     # and hooks.receiver_state_sensor (all MUTATING), plus the in-module
-    # guard-kira-verdict-routed leg (read-only) and three sentinel-writing
-    # wrappers over library op()s. See coordinator_core/hooks/stop_dispatch.py's
-    # own module docstring for the full eight-leg disposition.
+    # guard-kira-verdict-routed and guard_terminal_review legs (both
+    # read-only/COMPUTE_ONLY) and three sentinel-writing wrappers over
+    # library op()s. See coordinator_core/hooks/stop_dispatch.py's own
+    # module docstring for the full nine-leg disposition.
     # The four sibling op-key rows
     # formerly here (guard_kira_verdict_routed, stop_em_report_altitude,
     # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
@@ -376,7 +377,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.guard_test_tree_git_fixture_spawn": OpClass.MUTATING,
     "hooks.guard_handoff_summary_cap_on_write": OpClass.MUTATING,
     "hooks.guard_repo_setup_claude_home_refusal": OpClass.MUTATING,
-    "hooks.guard_review_integrator_sidecar_intake": OpClass.MUTATING,
     "hooks.nudge_plan_test_surface_tier": OpClass.MUTATING,
     "hooks.preuse_agent_dispatch": OpClass.MUTATING,
     "hooks.preuse_skill_dispatch": OpClass.MUTATING,
@@ -423,6 +423,17 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.subagent_zero_tool_use_detect": OpClass.MUTATING,
     "hooks.group_em_park_spool": OpClass.MUTATING,
     "hooks.guard_kira_verdict_routed": OpClass.MUTATING,
+    # hooks.guard_terminal_review — COMPUTE_ONLY per this op's own dispatch
+    # brief ("classify by what the op does: it reads git and sidecars and
+    # writes nothing"). Five-question checklist:
+    #   1. Writes/reorders a state file?  No.
+    #   2. Writes rag's relational store?  No.
+    #   3. Opens any file for write?  No — reads git log/reflog and sidecar
+    #      frontmatter under the share dir only.
+    #   4. Mutates shared mutable state outside its own module?  No.
+    #   5. Side effects observable across process boundaries?  No — returns
+    #      a computed refusal/advisory/pass verdict only.
+    "hooks.guard_terminal_review": OpClass.COMPUTE_ONLY,
     "hooks.guard_manufactured_blocker": OpClass.MUTATING,
     # goal.append — MUTATING: appends a goal-event JSON line to the per-machine append-only
     # JSONL shard <central_state_root>/goals-log.<machine>.jsonl (an on-disk state write).
@@ -2029,6 +2040,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   when the affirmation explicitly justifies it. Spec: strang-11 C1a.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "records.query": OpClass.COMPUTE_ONLY,
+    "records.by_origin_plan": OpClass.COMPUTE_ONLY,
     # records.history — COMPUTE_ONLY: derives per-file lifecycle events (creation, rename
     # chains, frontmatter field transitions) for a record type from a single `git log -p -U0`
     # pass over that type's directory pathspec (record_history.py :: derive_type_history) and
@@ -3905,6 +3917,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "workday.surface_auto_push_failure_stats": OpClass.COMPUTE_ONLY,
     "ci.run_pip_audit": OpClass.COMPUTE_ONLY,
     "ci.run_semgrep_scan": OpClass.COMPUTE_ONLY,
+    #   ci.run_commenting_sweep — ops/run_commenting_sweep.py: reads
+    #     git-tracked files and runs `commenting.scan_text` (a pure regex
+    #     pass, no subprocess) over each; opens no file for write and spawns
+    #     no external tool beyond the read-only `git ls-files` call already
+    #     covered above.
+    "ci.run_commenting_sweep": OpClass.COMPUTE_ONLY,
     # MUTATING group — each handler below writes, deletes, or reorders disk
     # state (coordinator substrate, a scratch/target repo tree, or an external
     # system the operator's own machine hosts); per-op citation follows.

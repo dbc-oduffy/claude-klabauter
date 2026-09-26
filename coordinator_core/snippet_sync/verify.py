@@ -480,7 +480,17 @@ def _grep_scan(search_root: Path, sentinels: list[str]) -> list[str]:
     # shells out to on Windows) — these are filesystem paths callers reopen via
     # Path/os.path APIs and compare against native os.sep-built strings, not
     # wire ids, so normalize to the host's native separator here.
-    return [os.path.normpath(line) for line in result.stdout.split("\n") if line]
+    #
+    # `grep -rlF` walks EVERY file under search_root, including `__pycache__`
+    # and other dirs `_ORPHAN_SKIP_DIRS` already excludes from the orphan walk
+    # — a `.pyc` grep hit here fed straight into a later unguarded `read_text`
+    # (item 39). Filtering here keeps consumer-discovery and orphan-detection
+    # scoped to the same tree, not two different ones that happen to overlap.
+    candidates = [os.path.normpath(line) for line in result.stdout.split("\n") if line]
+    return [
+        c for c in candidates
+        if not any(part in _ORPHAN_SKIP_DIRS for part in Path(c).parts)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1104,7 +1114,14 @@ def run(
         for f in raw_candidates:
             if not Path(f).is_file():
                 continue
-            text = Path(f).read_text(encoding="utf-8")
+            try:
+                text = Path(f).read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # A binary file matched by grep's literal-substring scan
+                # (item 39) — not decodable text, so it cannot carry a
+                # sentinel; skip rather than half-reading via errors="ignore",
+                # which would silently smear a false sentinel match into it.
+                continue
             if _is_standalone_sentinel_line(text, begin_sentinel, fence_aware=fence_aware) or (
                 in_fence_consumers and _has_in_fence_shell_block(text, shell_begin)
             ):
@@ -1124,7 +1141,14 @@ def run(
         if not p.is_file():
             stderr_lines.append(f"SKIPPED (not found): {raw}")
             continue
-        text = p.read_text(encoding="utf-8")
+        try:
+            text = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Same non-text guard as the --list branch above (item 39): a
+            # binary file cannot carry a sentinel, so it is skipped rather
+            # than half-read via errors="ignore".
+            stderr_lines.append(f"SKIPPED (not text): {raw}")
+            continue
         has_sentinel = _is_standalone_sentinel_line(text, begin_sentinel, fence_aware=fence_aware)
         has_shell = in_fence_consumers and _has_in_fence_shell_block(text, shell_begin)
         if has_shell:

@@ -79,7 +79,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
         checklist WARN gate has NO backing CLI (a pure read+render, per that
         module's own Design note) and is surfaced as `gates.completeness_
         checklist`, never a `directives[]` entry.
-    review-brightline-gate.py, freeze-review-diff.py, fan-out-integrator.py,
+    review-brightline-gate.py, freeze-review-diff.py,
         classify-dispatch-shape.py ->
         `directives_review.py` (C2d). `wsc-coverage-gate-runner.py`'s
         `coverage-gate` subcommand was already removed (K-001) and its
@@ -215,7 +215,7 @@ Negative-spec:
       need a real `archive/` or `docs/project-tracker.md` (or a real
       `state/subagent-share/` sidecar dir); `regenerate-orientation-cache`
       needs a caller-decided pinboard note; `freeze-review-diff.py`/
-      `fan-out-integrator.py`/`classify-dispatch-shape.py` need
+      `classify-dispatch-shape.py` need
       caller-resolved review-partition/plan-file facts the sweep's fixed
       `_rich_decisions` payload does not carry. C1's own module docstring (its "Coverage caveat" section)
       names this exact class of gap as legitimate, expected residual red —
@@ -429,7 +429,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "sweep-terminal-sizings",
     "review-brightline-gate",
     "freeze-review-diff",
-    "fan-out-integrator",
     "classify-dispatch-shape",
     # Plugin-local barewords (docs/plans/2026-09-07-directive-resolution-
     # reaches-a-plugin-local-cli.md, T1b): added here only. No payload, no
@@ -1548,8 +1547,51 @@ def build_directives(
     """
     directives: list[dict[str, Any]] = []
 
+    # -- Step 2.4b (C2a): deferral-harvest sweep -- built and appended BEFORE
+    # Step 2.4's claim+stamp (below) so `d-stamp-plan-implemented` can gate
+    # on the sweep having already landed THIS pass (Item 10, IBMDT-C13:
+    # "run the deferral-harvest sweep (2.4b) against the governing plan
+    # before the `d-stamp-plan-implemented` directive can archive it").
+    # `apply._resolve_arg_tokens`'s `{<id>.landed}` token requires its
+    # producer to be a key of `stdout_by_id` -- populated only as directives
+    # dispatch in `directives[]` order -- so the harvest directives must
+    # precede the stamp directive in this list, not merely exist somewhere
+    # in the batch.
+    harvest_targets = [governing_plan] if governing_plan else []
+    for slug in decisions.get("additional_governing_plan_slugs", []) or []:
+        for dirname in directives_lessons_plan._GOVERNING_PLAN_GLOB_DIRS:  # noqa: SLF001 - same-package sibling constant
+            candidate = repo_root / dirname / f"{slug}.md"
+            if candidate.is_file():
+                harvest_targets.append(
+                    directives_lessons_plan.GoverningPlan(
+                        slug=slug,
+                        path=candidate,
+                        rel=directives_lessons_plan._rel_to_repo(candidate, repo_root),  # noqa: SLF001 - same-package sibling helper
+                    )
+                )
+                break
+    harvest_directives = directives_lessons_plan.build_deferral_harvest_directives(harvest_targets)
+    directives.extend(harvest_directives)
+
     # -- Step 2.4 (C2a): governing-plan claim + stamp + deferral harvest --
     plan_claim_directives = directives_lessons_plan.build_plan_claim_and_stamp_directives(governing_plan)
+    # Item 10 (IBMDT-C13): thread one `{<id>.landed}` token per harvest
+    # directive onto `d-stamp-plan-implemented`'s own args, mirroring the
+    # existing `{d-claim-plan-execution-lock.landed}` fail-loud idiom this
+    # builder already carries -- proves each harvest sweep ran and exited 0
+    # before the stamp dispatches, without threading any value from it.
+    # `directives_lessons_plan.py` is out of this row's writes footprint, so
+    # the wiring happens here, on the builder's own returned dicts, rather
+    # than inside that module. This preserves the sibling-failure isolation
+    # `test_apply.py::test_harvest_deferrals_failure_does_not_abort_sibling_
+    # directives` pins: a failed harvest fails only `d-stamp-plan-
+    # implemented` (via the unresolved token), every other directive in
+    # this batch still dispatches and can still land.
+    if harvest_directives:
+        harvest_landed_tokens = [f"{{{h['id']}.landed}}" for h in harvest_directives]
+        for directive in plan_claim_directives:
+            if directive["id"] == "d-stamp-plan-implemented":
+                directive["args"] = list(directive["args"]) + harvest_landed_tokens
     directives.extend(plan_claim_directives)
 
     # Every OTHER consumer below that reads `decisions.get("governing_plan_
@@ -1574,22 +1616,6 @@ def build_directives(
     # -- Convert #2 original: d-coverage-gate REMOVED (K-001); d-write-trail
     # DROPPED (C12) -- see that builder's own removal note above. No
     # replacement directive is emitted here.
-
-    # -- Step 2.4b (C2a): deferral-harvest sweep --
-    harvest_targets = [governing_plan] if governing_plan else []
-    for slug in decisions.get("additional_governing_plan_slugs", []) or []:
-        for dirname in directives_lessons_plan._GOVERNING_PLAN_GLOB_DIRS:  # noqa: SLF001 - same-package sibling constant
-            candidate = repo_root / dirname / f"{slug}.md"
-            if candidate.is_file():
-                harvest_targets.append(
-                    directives_lessons_plan.GoverningPlan(
-                        slug=slug,
-                        path=candidate,
-                        rel=directives_lessons_plan._rel_to_repo(candidate, repo_root),  # noqa: SLF001 - same-package sibling helper
-                    )
-                )
-                break
-    directives.extend(directives_lessons_plan.build_deferral_harvest_directives(harvest_targets))
 
     # -- Step 1/1.2 (C2a): lesson capture --
     # C11 (AC15): gated on producer reachability, not decision-shape --
@@ -1733,7 +1759,7 @@ def build_directives(
         # choice itself.
         raise ValueError(
             f"decisions['review_partition'] must be a mapping with 'range' and "
-            f"'slices' keys (optionally 'integrator_spec_tsv'), got "
+            f"'slices' keys, got "
             f"{review_partition!r} ({type(review_partition).__name__}) — this is "
             "NOT the same key as review-partition-strategy's judgment-point "
             "answer (e.g. 'by-concern'); that strategy choice belongs under "
@@ -1748,10 +1774,13 @@ def build_directives(
         directives.extend(
             directives_review.build_review_partition_freeze_directives(str(review_partition["range"]), slices)
         )
-        if review_partition.get("integrator_spec_tsv"):
-            directives.append(
-                directives_review.build_review_partition_integrator_directive(str(review_partition["integrator_spec_tsv"]))
-            )
+        # RRI-M4: the post-reviewer `fan-out-integrator` directive is retired
+        # with the review-integrator agent (row M2 deleted the CLI it named).
+        # The EM now runs one `review-findings-ledger verify` sweep over
+        # every slice's reviewer sidecar and lands one commit, per § Design
+        # decisions 2 -- no per-partition directive replaces it; a bare
+        # `verify` sweep needs no caller-resolved review-partition facts
+        # this builder didn't already have.
     classify_directive = directives_review.build_classify_dispatch_shape_directive(decisions.get("classify_dispatch_plan_file"))
     if classify_directive is not None:
         directives.append(classify_directive)
@@ -2564,8 +2593,12 @@ def _compute_review_receipt_gate(
     the session's completion writer ran and this sidecar carries no
     session-matching `review_completion` block of its own.
 
-    The `integrator_receipt:` leg is unchanged by this chunk (Anti-scope):
-    it still counts on a plain non-blank body, no completion predicate.
+    RRI-M4 repoint (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md):
+    the review-integrator agent is retired, so no sidecar ever stamps a fresh
+    `integrator_receipt:` block again. "Findings were applied" is now read
+    directly off the MATCHED review sidecar's own `findings_ledger:`
+    frontmatter stamp (written by `review_findings_ledger.verify`), not from
+    a separate integrator sidecar's spawn-time receipt.
 
     C11 — WHY THE RECEIPT BLOCK AND NOT THE SIDECAR HEADER. The first
     implementation keyed on the sidecar's top-level `agent_type` /
@@ -2578,7 +2611,7 @@ def _compute_review_receipt_gate(
     provisioning, which happens regardless of review. Do not "simplify" this
     back to the header fields; that is the same defect, not a cleanup.
 
-    An `integrator_receipt:` block is reported in `detail` but never
+    A verified `findings_ledger:` stamp is reported in `detail` but never
     required (AC2) — "findings were applied" stays separately legible without
     becoming a second gate that would block every close whose review found
     nothing to apply."""
@@ -2630,8 +2663,8 @@ def _compute_review_receipt_gate(
     window_start = _parse_review_receipt_timestamp(claimed_at)
     now = datetime.now(timezone.utc)
 
-    integrator_receipts: list[str] = []
     reviewer_hit: Optional[str] = None
+    reviewer_hit_ledger: Optional[Any] = None
     # First such counting-vocabulary review receipt the widened loop refused
     # BECAUSE the session's completion writer is live and this sidecar
     # carries no completion block of its own (C4 step 3) -- the path is
@@ -2675,79 +2708,63 @@ def _compute_review_receipt_gate(
 
     for candidate, frontmatter, text, body in parsed_candidates:
         # C11: read the RECEIPT BLOCK the dispatch seam splices in
-        # (`provision_report._splice_review_receipt` /
-        # `_splice_integrator_receipt`), never the sidecar's generic
-        # provisioning header. The header's `agent_type`/`lead_session_id`/
-        # `spawned_at` are written for EVERY provisioned agent, so keying on
-        # them made this gate pass identically with the whole receipt
-        # mechanism reverted -- C2 and C3 became decorative and no test went
-        # red, which is exactly what AC13 forbids. The receipt block is the
-        # only field on this sidecar whose presence means "a review was
-        # dispatched", so it is the only field the floor may rest on.
-        for key, sink in (("review_receipt", None), ("integrator_receipt", integrator_receipts)):
-            receipt = frontmatter.get(key)
-            if not isinstance(receipt, dict):
-                continue
-            if receipt.get("session_id") != sid:
-                continue
-            receipt_agent_type = receipt.get("agent_type")
-            if not isinstance(receipt_agent_type, str):
-                continue
+        # (`provision_report._splice_review_receipt`), never the sidecar's
+        # generic provisioning header. The header's `agent_type`/
+        # `lead_session_id`/`spawned_at` are written for EVERY provisioned
+        # agent, so keying on them made this gate pass identically with the
+        # whole receipt mechanism reverted -- C2 and C3 became decorative and
+        # no test went red, which is exactly what AC13 forbids. The receipt
+        # block is the only field on this sidecar whose presence means "a
+        # review was dispatched", so it is the only field the floor may rest
+        # on.
+        receipt = frontmatter.get("review_receipt")
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("session_id") != sid:
+            continue
+        receipt_agent_type = receipt.get("agent_type")
+        if not isinstance(receipt_agent_type, str):
+            continue
 
-            if sink is None:
-                # `review_receipt` leg: C4 replaces the bare body-blank check
-                # with C3's completion/content predicate (AC5 is no longer
-                # "non-blank body", it is "authored content the completion
-                # writer, if live, actually produced"). Anti-scope: the
-                # `integrator_receipt` leg below is untouched.
-                bare = (
-                    receipt_agent_type.rpartition(":")[2]
-                    if ":" in receipt_agent_type
-                    else receipt_agent_type
-                )
-                if bare not in CLOSE_RECEIPT_REVIEWERS:
-                    continue
-                if not _receipt_counts(frontmatter, text, sid, summary):
-                    if (
-                        dispatched_never_completed_path is None
-                        and summary.session_has_completion
-                        and not _has_own_completion(frontmatter, sid)
-                    ):
-                        dispatched_never_completed_path = candidate.as_posix()
-                    continue
-            else:
-                # `integrator_receipt` leg (Anti-scope): a blank sidecar is
-                # an ABORTED review, not a pass. The receipt exists (it is
-                # stamped at dispatch, before the agent runs) precisely so
-                # that "dispatched then died" is distinguishable from
-                # "never dispatched" -- both must block, and this is the
-                # check that makes the distinction cost nothing.
-                if not isinstance(body, str) or not body.strip():
-                    continue
+        # C4 replaces the bare body-blank check with C3's completion/content
+        # predicate (AC5 is no longer "non-blank body", it is "authored
+        # content the completion writer, if live, actually produced").
+        bare = (
+            receipt_agent_type.rpartition(":")[2]
+            if ":" in receipt_agent_type
+            else receipt_agent_type
+        )
+        if bare not in CLOSE_RECEIPT_REVIEWERS:
+            continue
+        if not _receipt_counts(frontmatter, text, sid, summary):
+            if (
+                dispatched_never_completed_path is None
+                and summary.session_has_completion
+                and not _has_own_completion(frontmatter, sid)
+            ):
+                dispatched_never_completed_path = candidate.as_posix()
+            continue
 
-            stamped_at = _parse_review_receipt_timestamp(receipt.get("stamped_at"))
-            if window_start is not None and stamped_at is not None and stamped_at < window_start:
-                continue
-            if stamped_at is not None and stamped_at > now:
-                continue
+        stamped_at = _parse_review_receipt_timestamp(receipt.get("stamped_at"))
+        if window_start is not None and stamped_at is not None and stamped_at < window_start:
+            continue
+        if stamped_at is not None and stamped_at > now:
+            continue
 
-            if sink is not None:
-                sink.append(candidate.as_posix())
-                continue
-
-            if reviewer_hit is None:
-                reviewer_hit = candidate.as_posix()
+        if reviewer_hit is None:
+            reviewer_hit = candidate.as_posix()
+            reviewer_hit_ledger = frontmatter.get("findings_ledger")
 
     if reviewer_hit is not None:
-        # AC2: the integrator receipt is reported alongside, never required.
-        # "Review ran" is the floor (AC3); "findings were applied" is a
-        # separate fact the plan asks to keep legible, not a second gate --
-        # inventing one here would be scope this plan did not authorise, and
-        # would block every close whose review found nothing to apply.
-        if integrator_receipts:
-            applied = f"; integrator receipt: {integrator_receipts[0]}"
+        # AC2: a verified findings ledger is reported alongside, never
+        # required. "Review ran" is the floor (AC3); "findings were applied"
+        # is a separate fact the plan asks to keep legible, not a second gate
+        # -- inventing one here would be scope this plan did not authorise,
+        # and would block every close whose review found nothing to apply.
+        if reviewer_hit_ledger:
+            applied = f"; findings ledger verified: {reviewer_hit_ledger}"
         else:
-            applied = "; no integrator receipt (review ran, findings not recorded as applied)"
+            applied = "; no verified findings ledger (review ran, findings not recorded as applied)"
         return ReviewReceiptGate(
             applies=True,
             blocks=False,
@@ -4926,6 +4943,20 @@ def _measure_session_review_scale_inputs(
         code_loc += _accumulate_code_loc_numstat(committed)
         if commit_slices_out is not None:
             for sha in shas:
+                # Item 36 (IBMDT-C13): per-commit reviewable SURFACE count,
+                # not just diff_loc -- a commit can carry a binary reviewable
+                # row (`_accumulate_numstat`'s own contract: 0 LOC, still a
+                # touched surface) or, at the other extreme, touch nothing
+                # but `state/` bookkeeping paths (`_is_ceremony_exhaust_path`/
+                # `_is_noise_path`, both already excluded by `_reviewable_row`)
+                # and so contribute a genuinely empty reviewable surface set
+                # even when its raw numstat is non-trivial. `zero_diff_
+                # commit_count`'s caller (`__init__.py`'s review-scale
+                # assembly, below) reads this alongside `diff_loc` so a
+                # bookkeeping-only commit is excluded from the commit
+                # brightline the same way a zero-LOC one already is.
+                _sha_surfaces: set[str] = set()
+                _accumulate_numstat(per_sha_text.get(sha, ""), _sha_surfaces)
                 commit_slices_out.append(
                     {
                         "sha": sha,
@@ -4939,6 +4970,7 @@ def _measure_session_review_scale_inputs(
                         # consumer path on a first-class platform.
                         "sha_range": f"{sha}~1..{sha}",
                         "diff_loc": _accumulate_code_loc_numstat(per_sha_text.get(sha, "")),
+                        "reviewable_surface_count": len(_sha_surfaces),
                     }
                 )
 
@@ -5732,16 +5764,26 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
                     "sha": _entry["sha"],
                     "sha_range": f"{_entry['sha']}~1..{_entry['sha']}",
                     "diff_loc": _entry_code_loc,
+                    "reviewable_surface_count": len(_surfaces),
                     "attributed_via": f"plan-spine {_entry['chunk']} (no Session-Id trailer)",
                 }
             )
         if _recoverable:
             review_scale_commit_slices.sort(key=lambda s: s["sha"] not in {e["sha"] for e in _recoverable})
 
+    # Item 36 (IBMDT-C13): a commit whose touched paths are ALL under
+    # `state/` bookkeeping directories, or otherwise carry zero reviewable
+    # surface (`reviewable_surface_count == 0` -- see the per-sha slice
+    # builder above), is excluded from the commit brightline the same as a
+    # genuine zero-LOC commit already was. `.get(..., 0)` treats a slice
+    # that never got this field populated (none exist today; defensive only)
+    # as having a surface, never as bookkeeping-eligible by omission.
     zero_diff_commit_count: Optional[int] = None
     if measured_commit_count is not None and decisions.get("commit_count") is None:
         zero_diff_commit_count = sum(
-            1 for _slice in review_scale_commit_slices if _slice["diff_loc"] == 0
+            1
+            for _slice in review_scale_commit_slices
+            if _slice["diff_loc"] == 0 or _slice.get("reviewable_surface_count", 1) == 0
         )
 
     review_scale_decision = directives_review.decide_review_scale(

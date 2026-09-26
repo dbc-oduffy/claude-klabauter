@@ -181,6 +181,15 @@ def test_ac4_non_spinoff_with_same_shape_is_still_refused(tmp_path):
 
     assert result["exit_code"] == 1, result
     assert "governing plan" in result["error"] or "implemented" in result["error"]
+    # C2: the hedge is gone; the message is determinate and names the
+    # recovery. The seeded claimant sid is not a live session in this test
+    # process, so the holder reads "dead". The retired hedge phrase is
+    # assembled at runtime (never written literally here) so this test
+    # itself does not become a live site AC1's repo-wide grep counts.
+    _retired_hedge = "may not have " + "fired"
+    assert _retired_hedge not in result["error"]
+    assert "ship-handoff" in result["error"]
+    assert "dead" in result["error"]
     # No write occurred — still claimed, unchanged deployment_state.
     assert _fm_field(handoff, "status") == "claimed"
     assert _fm_field(handoff, "deployment_state") == "in_flight"

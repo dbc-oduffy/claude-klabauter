@@ -70,7 +70,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root, rel_id
 from coordinator_core.ops.fleet._findings_reap import (
-    _MARKER_RE,
+    is_integrated,
     reap_findings,
     scan_findings,
 )
@@ -79,20 +79,24 @@ _LOG = logging.getLogger(__name__)
 
 
 def classify_integrated(path: Path) -> Optional[str]:
-    """Leg (a) reap predicate: marker-present, no age gate.
+    """Leg (a) reap predicate: integrated, no age gate.
 
-    Returns a note string when the "## Integrator Dispositions" marker
-    heading is present in the file's content (REAPABLE regardless of how
-    recently the file was authored), else None (KEEP) — covers marker-absent
-    and unreadable cases (fail-closed-to-keep on read failure).
+    "Integrated" (RRI-M4) means a verified `findings_ledger` frontmatter
+    stamp, or (historical sidecars only) the retired "## Integrator
+    Dispositions" marker heading — see `_findings_reap.is_integrated`.
+
+    Returns a note string when integrated (REAPABLE regardless of how
+    recently the file was authored), else None (KEEP) — covers
+    not-yet-integrated and unreadable cases (fail-closed-to-keep on read
+    failure).
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
-    if _MARKER_RE.search(text):
-        return "marker-present (integrated); reapable regardless of age"
+    if is_integrated(text):
+        return "integrated (verified ledger or historical marker); reapable regardless of age"
 
     return None
 

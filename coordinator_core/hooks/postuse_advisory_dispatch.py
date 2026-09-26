@@ -1,18 +1,43 @@
 """
 coordinator_core.hooks.postuse_advisory_dispatch — PostToolUse advisory dispatcher op.
 
-Purpose: Folds six PostToolUse advisory checks — context-pressure, runtime-tripwire,
-a one-time first-Agent-dispatch sidecar advisory, the unauthorized-handoff nudge, the
-workflow-monitor arming advisory, and the Group EM watch arming advisory — into a
-single in-process op, eliminating bash.exe spawns per tool call on Windows.
+Purpose: Folds five PostToolUse advisory checks — context-pressure, runtime-tripwire,
+a one-time first-Agent-dispatch sidecar advisory, the unauthorized-handoff nudge, and
+the Group EM watch arming advisory — plus two silent bookkeeping legs (a Workflow-run
+capture, and a Bash-commit claim-release), into a single in-process op, eliminating
+bash.exe spawns per tool call on Windows.
 Context-pressure, runtime-tripwire, and the Group EM watch arming check fire on ALL
 PostToolUse events (no tool_name gate — all three are universal, cheap to
 short-circuit); the first-Agent-dispatch advisory fires only on tool_name == "Agent",
 and only once per session; the unauthorized-handoff nudge only on tool_name == "Write"
-with a handoff/spinoff file_path; the workflow-monitor arming advisory only on
-tool_name == "Workflow", and only once per task id per session. The latter three
-narrow themselves internally — no handler-level tool_name gate is applied to the
-universal three.
+with a handoff/spinoff file_path. The latter two narrow themselves internally — no
+handler-level tool_name gate is applied to the universal three. The Workflow-run
+capture (`_capture_workflow_run_record_sync`) narrows itself the same way, on
+tool_name == "Workflow", but never contributes advisory text — see its own docstring.
+The Bash-commit claim-release leg (`_release_claims_on_bash_commit_sync`, R03 of
+docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md) narrows itself on
+tool_name == "Bash" plus a `git commit -- <paths>` match, also never contributing
+advisory text — see its own docstring. DORMANT IN PRODUCTION TODAY (traced
+2026-09-26, review-integration on this row): DoE-claude's dispatcher stub
+(coordinator/hooks/scripts/postuse-advisory-dispatch.py) never maps
+`tool_input.command` into params for any tool_name, and DoE-claude's
+hooks.json matcher for this dispatcher does not include `Bash` at all
+(`Write|Edit|MultiEdit|NotebookEdit|Agent|Workflow`) — so the hook process
+is never invoked on a Bash PostToolUse event, and even if it were, `command`
+would arrive as "". Both are DoE-claude-side wiring fixes, outside this
+engine repo; see test_real_doe_wrapper_shape_never_forwards_command_for_bash
+in test_postuse_bash_commit_releases_claims.py.
+
+There used to be a sixth advisory here, `_check_workflow_monitor_arm_sync`, naming an
+exact `Monitor(...)` call for the EM to paste against a just-launched background
+Workflow run. Retired per docs/plans/2026-09-26-coordinator-remedies-engine-items.md
+(C3, R2): the watcher (coordinator_core.workflow_watch) no longer needs a per-event
+Monitor invitation — it defaults to rendering exactly one terminal line and exits, so
+there is nothing left to watch live unless the EM explicitly asks for it (`--follow`).
+The one piece of that leg still load-bearing — persisting `{run_id, scriptPath, args}`
+so a later PreCompact can carry the resume call across a compaction that killed the
+run's own session state (coordinator_core.hooks.context_pressure_precompact reads
+these records) — survives as the silent capture leg above.
 
 The session-scoped checks run concurrently via asyncio.gather. Whichever fire have
 their additionalContext texts merged with a blank-line separator into ONE
@@ -20,10 +45,9 @@ post_advisory() call (a PostToolUse hook must emit at most one JSON object). Whe
 fire, no_advisory() is returned.
 
 Port of: postuse-advisory-dispatch.sh (DoE 2f8b8450, 2026-07-16). The first-Agent-
-dispatch sidecar advisory, the workflow-monitor arming advisory, and the Group EM
-watch arming advisory have no bash-era equivalent — added directly here. The
-unauthorized-handoff nudge is a fan-in of DoE's separate PostToolUse(Write)
-registration, whose logic already lived in this engine
+dispatch sidecar advisory and the Group EM watch arming advisory have no bash-era
+equivalent — added directly here. The unauthorized-handoff nudge is a fan-in of DoE's
+separate PostToolUse(Write) registration, whose logic already lived in this engine
 (coordinator_core.hooks.nudge_unauthorized_handoff, still registered as its own op for
 direct callers) — folding it here drops Write's registration count by one.
 
@@ -33,12 +57,14 @@ Translation notes:
     (new) first-Agent-dispatch  → _check_first_agent_dispatch_sync (session_id + tool_name)
     (fan-in) unauthorized-handoff → nudge_unauthorized_handoff.advisory_text
                                     (tool_name + file_path + content + transcript_path)
-    (new) workflow-monitor-arm  → _check_workflow_monitor_arm_sync
-                                    (session_id + transcript_path + tool_name)
     (new) group-em-watch-arm    → _check_group_em_watch_arm_sync
                                     (session_id + transcript_path)
+    (new) workflow-run capture  → _capture_workflow_run_record_sync (bookkeeping only,
+                                    no advisory text)
+                                    (session_id + transcript_path + tool_name)
     jq merge logic               → plain string concatenation + post_advisory()
-    All six return str advisory text or "" — "" means "did not fire".
+    The five advisory-emitting checks return str advisory text or "" — "" means
+    "did not fire". The capture leg returns nothing and is never merged.
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7,
 docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md § C10
@@ -1208,9 +1234,9 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     same posture as the other two checks in this module (see the durable-state
     comment above _advisory_state_path).
 
-    Sentinel written BEFORE the advisory is returned, not after: this leg (unlike
-    workflow_monitor_arm's) composes only a static string once the sentinel
-    write itself succeeds, so there is no later step that can raise and leave
+    Sentinel written BEFORE the advisory is returned, not after: this leg
+    composes only a static string once the sentinel write itself succeeds,
+    so there is no later step that can raise and leave
     the sentinel on disk while the caller gets nothing. A write that fails
     (open() raises, or write() raises mid-write leaving a partial file on
     disk) is cleaned up with a best-effort remove so a later Agent dispatch in
@@ -1254,13 +1280,24 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# _check_workflow_monitor_arm_sync
+# _capture_workflow_run_record_sync
 #
-# New (no bash-era equivalent): a once-per-task advisory telling the
+# Bookkeeping only, no advisory text. Used to be reached from inside
+# `_check_workflow_monitor_arm_sync`, a once-per-task advisory telling the
 # dispatching EM the exact `Monitor(...)` call to paste to arm the watcher
 # built in coordinator_core.workflow_watch (C1a/C1b) against a just-launched
-# harness `Workflow` background run, so the EM stops hand-writing monitors
-# (or worse, forgetting one and never learning the run ended).
+# harness `Workflow` background run. That advisory is retired per
+# docs/plans/2026-09-26-coordinator-remedies-engine-items.md (C3, R2): the
+# watcher no longer needs a per-event Monitor invitation, so this stops
+# inviting one. What this function keeps is the OTHER thing that advisory did
+# on every fire, independent of whether it ever emitted text: persisting
+# `{run_id, scriptPath, args}` so a later PreCompact
+# (coordinator_core.hooks.context_pressure_precompact) can carry the exact
+# `Workflow({scriptPath, args, resumeFromRunId})` resume call across a
+# compaction that killed the background run's own session state. Dropping
+# that persist alongside the advisory would have silently broken compaction
+# recovery for background Workflow runs — a regression this row's spec did
+# not ask for, so the persist stays wired even though the advisory does not.
 #
 # Gate is tool_name == "Workflow" — PostToolUse fires immediately after the
 # tool returns its async-launch result, so the launch record this check looks
@@ -1282,11 +1319,10 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 #
 # taskId/runId are captured with the SAME charset this module treats as a safe
 # filesystem-path component (_SAFE_ID_RE, below), not `[^"]*` — both values
-# flow unmodified into `_workflow_run_record_path`/`_workflow_monitor_sentinel_
-# path`'s os.path.join, and the harness's own task/run ids are opaque
-# hex/uuid-shaped tokens, so narrowing the capture costs nothing real while
-# closing the path-traversal opening a permissive `[^"]*` transcript-text
-# capture left.
+# flow unmodified into `_workflow_run_record_path`'s os.path.join, and the
+# harness's own task/run ids are opaque hex/uuid-shaped tokens, so narrowing
+# the capture costs nothing real while closing the path-traversal opening a
+# permissive `[^"]*` transcript-text capture left.
 _ASYNC_LAUNCH_RE = re.compile(
     r'"status"\s*:\s*"async_launched"'
     r'[^{}]*?"taskId"\s*:\s*"(?P<task_id>[A-Za-z0-9_-]*)"'
@@ -1386,57 +1422,28 @@ def _persist_workflow_run_record(
         pass
 
 
-def _workflow_monitor_sentinel_path(tmpdir: str, session_id: str, task_id: str) -> str:
-    return os.path.join(tmpdir, f"workflow-monitor-armed-{session_id}-{task_id}")
+def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, tool_name: str) -> None:
+    """Bookkeeping-only capture: persists `{run_id, scriptPath, args}` for a
+    just-launched harness `Workflow` background run, for a later PreCompact
+    (coordinator_core.hooks.context_pressure_precompact) to carry the resume
+    call across a compaction that killed the run's own session state.
 
+    Never returns advisory text — callers must not merge this leg's result
+    into post_advisory(). "" on every early-exit path (non-Workflow tool
+    call, no async_launched/local_workflow record found near the transcript
+    tail, or an undecodable transcript_dir). Never raises — fail-open on all
+    I/O errors, same posture as the other checks in this module (see the
+    durable-state comment above _advisory_state_path).
 
-def _workflow_watch_launcher() -> str | None:
-    """Absolute path to the installed `workflow-watch` launcher, or None.
-
-    Windows installs one native launcher image per generator-known name as
-    `<name>.exe`; POSIX installs the bare extensionless name. Both are probed
-    regardless of host, because a settings home synced between a Mac and a
-    Windows box carries both images and only one of them is the runnable one
-    here -- probing on-disk existence rather than on `os.name` is what makes
-    this correct on whichever platform is actually running.
-
-    Returns None when neither is present. The caller emits NOTHING in that
-    case: a command naming a launcher that is not installed fails
-    command-not-found, which reads to an EM as "this watcher does not exist"
-    rather than "reinstall the settings home".
-    """
-    try:
-        from coordinator_core._settings_home import settings_home
-
-        bin_dir = settings_home() / "bin"
-    except Exception:
-        return None
-    for candidate in (bin_dir / "workflow-watch.exe", bin_dir / "workflow-watch"):
-        try:
-            if candidate.is_file():
-                return str(candidate)
-        except OSError:
-            continue
-    return None
-
-
-def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool_name: str) -> str:
-    """One-time-per-task advisory: names the exact `Monitor(...)` call to arm
-    against a just-launched harness `Workflow` background run.
-
-    Returns non-empty advisory text when it fires; "" on every early-exit path
-    (non-Workflow tool call, no async_launched/local_workflow record found
-    near the transcript tail, sentinel already present/written, or the
-    watcher's wall-clock cap constant is unavailable). Never raises —
-    fail-open on all I/O errors, same posture as the other four checks in
-    this module (see the durable-state comment above _advisory_state_path).
-
-    Does NOT key on the `wf_` run id (see the plan's Anti-scope) — the
-    sentinel and the Monitor call's watcher argv are both keyed on the task
-    id; runId is read only to help derive the journal path to render.
+    This used to be the front half of `_check_workflow_monitor_arm_sync`
+    (retired — see the module comment above this function). It keeps only
+    the persist side-effect that other leg always performed on a successful
+    parse, ahead of (and independent from) that leg's own since-removed
+    once-per-task advisory dedup — dropping this persist too would silently
+    break the compaction-recovery reader.
     """
     if not session_id or tool_name != "Workflow" or not transcript_path:
-        return ""
+        return
 
     try:
         from coordinator_core.workflow_watch.tail import TailReader
@@ -1448,20 +1455,12 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
         # seek_to_tail bounds the read to the trailing window instead.
         text = TailReader(transcript_path, seek_to_tail=True).poll()
     except Exception:
-        return ""
+        return
     if not text:
-        return ""
+        return
 
     # Last match wins: PostToolUse fires immediately after the tool returns,
     # so the most recent async_launched record in the tail IS this launch.
-    #
-    # THAT PREMISE IS FALSE UNDER CONCURRENT FIRES, and `shadowed_by` below is
-    # how this stops asserting through it. Example-market-data-repo-fa saw a wrong
-    # id on FOUR of five launches in one run; example-cockpit-repo-f6 filed the same
-    # thing independently; example-store-repo-fb hit it first. Nothing in this
-    # function can see the tool call it is firing on — the hook's declared
-    # input carries no tool_response — so where the tail holds more than one
-    # candidate launch, the right answer is to say so, not to pick one.
     # Materialized (not iterated once) so the chosen match's own capture
     # window (below) can be bounded by its NEIGHBOURS in this list — the
     # previous match's end and the next match's start — rather than scanning
@@ -1469,62 +1468,38 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     all_launches = list(_ASYNC_LAUNCH_RE.finditer(text))
     match = None
     match_index = -1
-    # Scoped to local_workflow launches only
-    # (the different-taskType case is handled by the breadcrumb branch below);
-    # named accordingly so a future reader doesn't assume general-purpose scope.
-    seen_local_workflow_task_ids: list[str] = []
     for idx, candidate in enumerate(all_launches):
         match = candidate
         match_index = idx
-        if candidate.group("task_type") == "local_workflow":
-            task = candidate.group("task_id")
-            if task and task not in seen_local_workflow_task_ids:
-                seen_local_workflow_task_ids.append(task)
     if match is None:
-        # Breadcrumb, not silence. Every other failure path in this module
-        # surfaces through _text_or_breadcrumb; a regex that stopped matching
-        # because the harness reordered or nested these fields would otherwise be
-        # indistinguishable from "no Workflow was launched" -- forever, with no
-        # signal. (Review: code-reviewer slice 2.)
+        # Breadcrumb, not silence. A regex that stopped matching because the
+        # harness reordered or nested these fields would otherwise be
+        # indistinguishable from "no Workflow was launched" -- forever, with
+        # no signal.
         print(
-            "postuse_advisory_dispatch: workflow_monitor_arm found no "
+            "postuse_advisory_dispatch: capture_workflow_run_record found no "
             "async_launched record in the transcript tail -- if a Workflow did "
             "launch, _ASYNC_LAUNCH_RE no longer matches the harness record shape",
             file=sys.stderr,
         )
-        return ""
+        return
     if match.group("task_type") != "local_workflow":
         # "Last match wins" assumes the most recent async_launched record is this
         # tool call's own launch. A concurrent background dispatch of another
         # taskType landing later in the same tail window would shadow it, and the
-        # real launch sits moments earlier, unseen. Name it rather than returning
-        # empty as though nothing happened.
+        # real launch sits moments earlier, unseen. Name it rather than
+        # persisting a record for the wrong run.
         print(
-            "postuse_advisory_dispatch: workflow_monitor_arm saw taskType="
+            "postuse_advisory_dispatch: capture_workflow_run_record saw taskType="
             f"{match.group('task_type')!r}"
             " nearest the tail, not local_workflow -- a concurrent dispatch may "
             "have shadowed this Workflow's own launch record",
             file=sys.stderr,
         )
-        return ""
+        return
 
     task_id = match.group("task_id")
     run_id = match.group("run_id")
-    # More than one distinct local_workflow launch in the window means the
-    # "last match wins" premise above cannot be checked from here. The branch
-    # below already breadcrumbs a DIFFERENT-taskType shadow; same-type
-    # shadowing — which is exactly the plan-blitz case, and the only one that
-    # has ever been reported — passed it silently (doe-claude-b9, 2026-09-11).
-    shadowed_by = [t for t in seen_local_workflow_task_ids if t != task_id]
-    if shadowed_by:
-        print(
-            "postuse_advisory_dispatch: workflow_monitor_arm saw "
-            f"{len(seen_local_workflow_task_ids)} local_workflow launches in the transcript "
-            f"tail ({', '.join(seen_local_workflow_task_ids)}) and cannot tell which is this "
-            "tool call's own — the advisory below names the most recent and "
-            "says so",
-            file=sys.stderr,
-        )
     # The regex captures a JSON STRING LITERAL out of the raw transcript text,
     # so a Windows path arrives with its separators still escaped
     # (C:\Users\... as two characters each). Feeding that to os.path.join
@@ -1533,18 +1508,13 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     try:
         transcript_dir = json.loads('"' + match.group("transcript_dir") + '"')
     except Exception:
-        return ""
+        return
     if not task_id or not run_id or not transcript_dir:
-        return ""
+        return
 
     # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
 
-    # Persist the run-id capture ahead of (and independent from) this leg's
-    # own once-per-task advisory dedup below: the compaction-recovery reader
-    # (context_pressure_precompact.py) needs the record on every fire, not
-    # just the first, and must not be starved by the monitor-arm sentinel.
-    #
     # Scoped to the text strictly between the PRECEDING async_launched record
     # (or start of text) and the FOLLOWING one (or end of text) -- not the
     # whole tail. `scriptPath`/`args` are observed to precede the record they
@@ -1564,159 +1534,6 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     script_path, args = _capture_script_path_and_args(capture_window)
     _persist_workflow_run_record(tmpdir, session_id, task_id, run_id, script_path, args)
 
-    sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
-    if os.path.isfile(sentinel):
-        return ""
-    # An ambiguous read must not WRITE the once-per-task guard. The sentinel is
-    # keyed on task_id, so a wrong id suppresses the advisory for a task that
-    # never got one while leaving the real task unguarded — a silent wrong
-    # answer made permanent. Re-advising is the cheap failure; suppressing
-    # forever on a guessed key is not.
-    write_sentinel = not shadowed_by
-
-    # The watcher's own wall-clock cap default (coordinator_core.workflow_watch,
-    # C1b) is the single source of truth for this number — the emitted
-    # timeout_ms below MUST be the same number as workflow_watch's own --cap
-    # default, derived once in one place, so the two cannot drift apart.
-    # Imported here, not at module scope. Unconditional -- there is no
-    # ImportError branch to fossilize a chunk boundary (review:
-    # overengineering-reviewer #4) -- but function-local, because this is a
-    # PostToolUse hook: a module-scope import is paid on EVERY tool call in
-    # every session, while this constant is read only when tool_name ==
-    # "Workflow". Measured at 7.8ms cumulative (python -X importtime), most
-    # of it render.py pulling json. Same discipline as _tempfile above.
-    from coordinator_core.workflow_watch import DEFAULT_CAP_MS, DEFAULT_CAP_SECONDS
-
-    cap_ms = DEFAULT_CAP_MS
-    cap_seconds = DEFAULT_CAP_SECONDS
-
-    # `transcriptDir` as the harness emits it ALREADY ends in the run id
-    # (observed: .../subagents/workflows/wf_<id>). Appending run_id again
-    # yields .../wf_<id>/wf_<id>/journal.jsonl, a path that never exists —
-    # the watcher would then render nothing at all. Append only when the
-    # directory does not already name the run, so both shapes resolve.
-    # Case-insensitive: Windows filesystems are case-preserving but
-    # case-insensitive, so a segment differing only in case is the SAME
-    # directory. A case-sensitive compare there would append run_id a second
-    # time and name a path that never exists -- the exact failure this
-    # conditional exists to prevent. (Review: code-reviewer slice 2.)
-    if os.path.basename(transcript_dir.rstrip("/\\")).lower() == run_id.lower():
-        journal_path = os.path.join(transcript_dir, "journal.jsonl")
-    else:
-        journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
-    # Quote every interpolated path. These are Windows paths on this box
-    # (C:\\Users\\...), and a POSIX shell eats the backslashes -- the
-    # command then names a path that does not exist, TailReader swallows the
-    # OSError, and the watcher polls a file it can never read for the FULL cap
-    # before exiting 1. That is silent, and it is the exact "outlives the run"
-    # failure this check exists to remove. A path containing a space breaks the
-    # unquoted form in any shell, on any host.
-    # The watcher is named by the ABSOLUTE settings-home launcher path, never
-    # as `python3 -m coordinator_core.workflow_watch`. The bare `-m` form
-    # resolves only where `coordinator_core` is already importable -- the
-    # engine's own environment, which is where THIS hook runs, which is
-    # precisely why the emitted command's failure was invisible to the code
-    # emitting it. In a consumer repo the EM pasted it and got
-    # `ModuleNotFoundError: No module named 'coordinator_core'`, exit 1, after
-    # the advisory's imperative wording had already talked them out of their own
-    # monitor -- and a dead watcher and a quiet run look identical. The launcher
-    # (coordinator/bin/workflow-watch.py, forwarded into <settings-home>/bin/)
-    # self-resolves the engine, so the command runs from any repo, any cwd.
-    # Absolute-path-through-the-launcher is the one sanctioned resolution
-    # (DoE-claude coordinator/snippets/resolve-coordinator-bin.md).
-    # cross-repo/inbox/2026-08-30-doe-claude-em-workflow-watch-command-is-unrunnable-outside-the-engine.md
-    watcher_path = _workflow_watch_launcher()
-    if watcher_path is None:
-        # Silence, not a command naming a launcher that is not on disk. An
-        # uninstalled/partially-migrated settings home would otherwise turn one
-        # broken command into another, and the EM cannot tell the two apart.
-        # Same posture as the unquotable-path branch below.
-        print(
-            "postuse_advisory_dispatch: workflow_monitor_arm found no "
-            "workflow-watch launcher under the settings home -- staying silent "
-            "rather than emitting a command that cannot run. Reinstall via "
-            "scripts/setup.py to provision it.",
-            file=sys.stderr,
-        )
-        return ""
-
-    formatted = [_portable_arg(v) for v in (watcher_path, transcript_path, journal_path, task_id)]
-    if any(arg is None for arg in formatted):
-        print(
-            "postuse_advisory_dispatch: workflow_monitor_arm cannot emit a "
-            "shell-safe command for these paths -- staying silent rather than "
-            "emitting one that would tokenize differently per shell",
-            file=sys.stderr,
-        )
-        return ""
-    q_watcher, q_transcript, q_journal, q_task = formatted
-    monitor_command = (
-        f"{q_watcher}"
-        f" --transcript {q_transcript}"
-        f" --journal {q_journal}"
-        f" --task-id {q_task}"
-        " --poll-interval 1"
-        f" --cap {cap_seconds}"
-    )
-
-    # Sentinel LAST, after the advisory is fully composed. Written before
-    # composition it is a point of no return: anything raising after it -- the
-    # import, the path arithmetic, the quoting -- would leave the sentinel on
-    # disk while the caller got nothing, and every later Workflow PostToolUse
-    # for the same task id would then short-circuit on os.path.isfile() and stay
-    # silent forever. The handler's return_exceptions=True makes that failure
-    # invisible, so the suppression would be permanent AND undiagnosed.
-    # _check_first_agent_dispatch_sync can write early because only a static
-    # string follows it; this leg cannot. (Review: code-reviewer slice 2, P1.)
-    #
-    # Skipped entirely when the task id is ambiguous — see `write_sentinel`.
-    try:
-        if write_sentinel:
-            with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(str(int(time.time())))
-    except Exception:
-        # Sentinel unwritable — fail open toward silence this call rather than
-        # raising or emitting an advisory whose one-time firing can't be
-        # recorded. Review: code-reviewer (Finding 3) — if open() succeeded
-        # but write() raised mid-write (e.g. disk full), the sentinel file
-        # already exists on disk, and every later call in this session would
-        # see it and stay silent forever. Best-effort remove it (swallow any
-        # error from the remove itself, keeping this path fail-open) so a
-        # later Agent dispatch in the same session can retry the write and
-        # actually fire once.
-        try:
-            os.remove(sentinel)
-        except Exception:
-            pass
-        return ""
-
-    # Optional by wording, never imperative: the harness already delivers a
-    # completion notification, so a driver told to "arm the watcher" hears a
-    # second instruction beside plan-blitz's "then wait". The watcher is for
-    # following a run live, and its cap can end before a long run does.
-    #
-    # Under concurrent fires the id may be the wrong one, and the reader is the
-    # only party who can tell — they are holding the tool result this hook
-    # cannot see. So the uncertainty is stated where it is acted on, naming the
-    # run id to check against, rather than left for them to discover by
-    # watching the wrong workflow to its cap.
-    caveat = ""
-    if shadowed_by:
-        caveat = (
-            f" CHECK BEFORE PASTING: {len(seen_local_workflow_task_ids)} Workflow runs launched"
-            " close together and this hook cannot see which one it fired on, so"
-            f" it names the most recent — run {run_id}, task {task_id}. If the"
-            " result you just received names a different runId, this command"
-            " watches the wrong run and will report nothing about yours."
-        )
-    return (
-        "WORKFLOW MONITOR (optional): completion arrives as a task notification"
-        " without any watcher. To follow this run live instead:"
-        f' Monitor(command="{monitor_command}", timeout_ms={cap_ms},'
-        f" persistent=false). It stops at its own {cap_seconds}s cap or at the"
-        " run's end, whichever comes first." + caveat
-    )
-
 
 # ---------------------------------------------------------------------------
 # _check_group_em_watch_arm_sync
@@ -1726,10 +1543,10 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 # tick-carries-standing-obligations.md) for a session that holds the Group EM
 # Group-EM for its repo and has never armed that watch -- the population C2's
 # own docstring names as undischarged: "a Group-EM that armed nothing
-# and then stopped ticking". Modelled directly on
-# _check_workflow_monitor_arm_sync (same sentinel-guarded, fail-open-to-
-# silence contract, same _portable_arg quoting reuse) per this chunk's own
-# spec (plan § C10) rather than a second composition path.
+# and then stopped ticking". Modelled directly on the now-retired
+# _check_workflow_monitor_arm_sync advisory (same sentinel-guarded,
+# fail-open-to-silence contract, same _portable_arg quoting reuse) per this
+# chunk's own spec (plan § C10) rather than a second composition path.
 #
 # GROUP-EM CHECK is a real, current fact: `group_em.nomination.read_record`
 # read fresh against this tool call, joined on this session's own id -- never
@@ -1813,9 +1630,10 @@ def _group_em_watch_checked_sentinel_path(tmpdir: str, session_id: str) -> str:
 def _group_em_watch_launcher() -> str | None:
     """Absolute path to an installed `group-em-watch` launcher, or None.
 
-    Mirrors `_workflow_watch_launcher` exactly (same `.exe`/bare-name probe
-    under `<settings-home>/bin/`, same reasoning for probing on-disk
-    existence rather than `os.name`). Returns None today -- no such launcher
+    Same `.exe`/bare-name probe under `<settings-home>/bin/`, same reasoning
+    for probing on-disk existence rather than `os.name`, that the now-retired
+    `_check_workflow_monitor_arm_sync` advisory used for its own launcher.
+    Returns None today -- no such launcher
     has been generated yet (see the module-level comment above this
     function's call site) -- and the caller emits NOTHING in that case,
     never a command naming a launcher that is not installed.
@@ -1975,6 +1793,187 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
 
 
 # ---------------------------------------------------------------------------
+# _release_claims_on_bash_commit_sync
+#
+# Item 3 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md, row R03):
+# a sanctioned `git commit -- <paths>` run through the Bash tool (e.g.
+# `coordinator-safe-commit`, or an EM's own scoped commit) lands the named
+# paths, but nothing releases the committing session's `T`-claim on them --
+# the claim survives until reap or an explicit release call, so a peer
+# blocked on those paths stays blocked for no reason once the commit has
+# already landed. This leg closes that gap: PostToolUse(Bash), on a `git
+# commit` invocation carrying an explicit trailing `--` pathspec, calls
+# `coordinator_core.session.scope.release_committed_claims` for exactly the
+# named paths once the commit is confirmed to have landed.
+#
+# Bookkeeping only, like `_capture_workflow_run_record_sync` -- never
+# contributes advisory text, and its result is never merged into
+# post_advisory(). Gates internally on tool_name == "Bash", the same
+# narrowing shape as the other tool-scoped legs in this module.
+#
+# Command source: this leg reads `command = field(params, "command")` rather
+# than re-deriving it from the transcript tail. `_handler`'s own params set is
+# session_id/transcript_path/agent_id/tool_name/file_path/content/command --
+# pinned by test_handler_reads_no_params_field_beyond_the_seven_mapped_fields,
+# a contract test outside this row's own writes scope.
+#
+# NOT YET LIVE (traced 2026-09-26, review-integration on this row): `command`
+# reaching params as a FLAT key presumes DoE-claude's dispatcher stub
+# (coordinator/hooks/scripts/postuse-advisory-dispatch.py) maps
+# `tool_input.command` into it the same way it already maps `file_path`/
+# `content` for a Write event -- it does not, for any tool_name. Worse,
+# DoE-claude's hooks.json matcher for this dispatcher
+# (`Write|Edit|MultiEdit|NotebookEdit|Agent|Workflow`) omits `Bash` entirely,
+# so the hook process is not even invoked on a Bash PostToolUse event today.
+# Both are DoE-claude-side fixes (hooks.json + the dispatcher stub), outside
+# this engine repo's write scope -- see
+# test_real_doe_wrapper_shape_never_forwards_command_for_bash. Until they
+# land, this leg is correct but dormant: it never releases a claim in
+# production, and the transcript-tail scan it replaced was at least
+# sometimes live.
+#
+# Step 1's own finding (captured against this repo's PostToolUse(Bash)
+# transcript shape, both a landed and a failed `git commit`): Claude Code's
+# own Bash tool result carries NO numeric exit status -- the toolUseResult
+# record is `{stdout, stderr, interrupted, isImage}`. There is therefore no
+# exit-status field available from the payload at all today, so
+# landed-detection has exactly one path in production:
+#
+#   Fall through to a single git spawn: `git diff --cached --name-only --
+#   <paths>`. A landed commit leaves the index clean for those paths
+#   (nothing left to diff against HEAD); a failed commit (non-zero exit,
+#   e.g. a failing pre-commit hook, or `nothing to commit`) leaves them
+#   staged and still reported. One spawn, gated strictly behind the `git
+#   commit ... -- <paths>` match below -- never paid on a non-commit Bash
+#   call, and never paid twice per fire.
+#
+# `_bash_commit_landed`'s `exit_code_field` parameter is forward defense only
+# (kept for the day the harness starts emitting one on the payload) -- no
+# production caller passes a non-empty value today.
+#
+# No `--` pathspec on the `git commit` invocation -> this leg does not fire
+# at all (no path set to release, and no claim to scope a blanket release
+# to). This mirrors the plan row's own title, "sanctioned bash `git commit
+# -- <paths>`" -- the unscoped `git commit` (whatever is staged) is a
+# different shape this leg does not attempt to reason about.
+#
+# Fails open and never raises, same posture as every other leg in this
+# module: an I/O or subprocess failure degrades to "did not release", never
+# to a crash on the PostToolUse hot path. A claim that is not released here
+# is still released by reap/session-close on the existing paths -- this leg
+# only removes the WAIT, it is not the only route to correctness.
+# ---------------------------------------------------------------------------
+
+def _extract_git_commit_pathspec(command: str) -> "list[str] | None":
+    """Return the trailing `-- <paths>` pathspec of a `git commit` segment in
+    `command`, or None when `command` names no such segment (reuses
+    `bash_guards.commit_tripwires._extract_commit_trailing_pathspecs`, the
+    existing quote-aware tokenizer for this exact shape -- SC-DR-015 -- rather
+    than a second, independently-derived parse of the same command text).
+
+    Deferred import: `bash_guards.commit_tripwires` is a PreToolUse-side
+    module this op has no other reason to load, and lazy op registration
+    means most PostToolUse(Bash) fires never touch a `git commit` segment at
+    all -- paying that import eagerly for the common case (every OTHER Bash
+    call) is pure overhead.
+
+    Never raises -- any tokenization failure inside the delegated helper
+    already returns None per its own contract; this wrapper adds no new
+    failure mode.
+    """
+    try:
+        from coordinator_core.bash_guards.commit_tripwires import (
+            _extract_commit_trailing_pathspecs,
+        )
+    except Exception:
+        return None
+    try:
+        return _extract_commit_trailing_pathspecs(command)
+    except Exception:
+        return None
+
+
+def _bash_commit_landed(
+    exit_code_field: str, paths: "list[str]", cwd: Optional[str]
+) -> bool:
+    """True iff a `git commit -- <paths>` invocation landed.
+
+    Prefers an explicit exit-status field where the payload carries one
+    (`"0"` only counts as landed -- an unparseable or non-zero value is NOT
+    landed, fail-closed toward "do not release a claim the commit may not
+    have actually discharged"). Falls back to one `git diff --cached
+    --name-only -- <paths>` spawn: empty output means the index no longer
+    diverges from HEAD for those paths, i.e. they left the index (either
+    committed, or reverted -- either way the claim's `stage_paths` no longer
+    describes live staged content, so holding it serves no one). A non-empty
+    result, or a git failure of any kind, is NOT landed -- fail-closed, this
+    check may only WITHHOLD a release, never wrongly issue one.
+    """
+    if exit_code_field:
+        return exit_code_field.strip() == "0"
+    if not paths:
+        return False
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--", *paths],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip() == ""
+
+
+def _release_claims_on_bash_commit_sync(
+    session_id: str,
+    tool_name: str,
+    command: str,
+    cwd: Optional[str],
+) -> None:
+    """Bookkeeping-only: release this session's claim on a `git commit --
+    <paths>` invocation's named paths, once confirmed landed. Never returns
+    advisory text -- callers must not merge this leg's result into
+    post_advisory() (mirrors `_capture_workflow_run_record_sync`'s own
+    contract and the comment at its call site).
+
+    `command` is the Bash tool's own `tool_input.command`, forwarded by
+    `_handler` as params["command"] -- see the module comment above this
+    leg for why this reads the payload field directly rather than
+    re-deriving it from the transcript tail.
+
+    Early-exits (zero spawns, no import paid) on: no session_id, tool_name
+    != "Bash", no command, or a command naming no `git commit -- <paths>`
+    segment.
+    """
+    if not session_id or tool_name != "Bash" or not command:
+        return
+
+    paths = _extract_git_commit_pathspec(command)
+    if not paths:
+        return
+
+    try:
+        if not _bash_commit_landed("", paths, cwd):
+            return
+
+        from coordinator_core.session.scope import release_committed_claims
+
+        release_committed_claims(session_id, paths, cwd=cwd)
+    except Exception:
+        # Fail open -- a release that could not be confirmed/performed leaves
+        # the claim exactly where reap/session-close would have found it
+        # anyway; never let this leg's failure escape the PostToolUse hook.
+        return
+
+
+# ---------------------------------------------------------------------------
 # Failure isolation for the fold
 # ---------------------------------------------------------------------------
 
@@ -2025,7 +2024,8 @@ async def _leg_text(label: str, coro) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse advisory dispatcher: folds context-pressure + runtime-tripwire +
     the first-Agent-dispatch sidecar advisory + the unauthorized-handoff nudge +
-    the workflow-monitor arming advisory + the Group EM watch arming advisory.
+    the Group EM watch arming advisory, plus the silent Workflow-run bookkeeping
+    capture (no advisory text — see _capture_workflow_run_record_sync).
 
     Context-pressure, runtime-tripwire, and the Group EM watch arming check fire on
     ALL PostToolUse events (no tool_name gate — all three are universal). The
@@ -2034,17 +2034,17 @@ async def _handler(params: dict, repo_root=None) -> dict:
     _check_first_agent_dispatch_sync), not a handler-level tool_name gate applied to
     the other three. The unauthorized-handoff nudge gates internally on
     tool_name == "Write" plus a handoff/spinoff file_path, the same narrowing shape.
-    The workflow-monitor arming advisory gates internally on tool_name == "Workflow"
-    plus a durable once-per-task sentinel (see _check_workflow_monitor_arm_sync), the
-    same narrowing shape again. Merges whichever fire (blank-line separator,
-    cp/rt/first-agent-dispatch/unauthorized-handoff/workflow-monitor-arm/
-    group-em-watch-arm order), or returns no_advisory() when none fire.
+    The Workflow-run capture gates internally on tool_name == "Workflow", the same
+    narrowing shape again, but contributes nothing to the merged text. Merges
+    whichever of the five advisory legs fire (blank-line separator,
+    cp/rt/first-agent-dispatch/unauthorized-handoff/group-em-watch-arm order), or
+    returns no_advisory() when none fire.
 
     Merge contract (mirrors postuse-advisory-dispatch.sh, extended for the third
-    through sixth checks):
-        N of 6 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
+    through fifth checks):
+        N of 5 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
                        cp/rt/first-agent-dispatch/unauthorized-handoff/
-                       workflow-monitor-arm/group-em-watch-arm order)
+                       group-em-watch-arm order)
         none fire   → no_advisory()
 
     Folding the fourth check in retires DoE's separate PostToolUse(Write)
@@ -2054,23 +2054,36 @@ async def _handler(params: dict, repo_root=None) -> dict:
     tool_input.file_path and tool_input.content into params; absent those, the
     fourth check stays silent and the other three are unaffected.
 
+    The Bash-commit claim-release leg reads its command text directly from
+    params["command"] (`tool_input.command`, MAPPED HERE IN CONTRACT ONLY --
+    DoE-claude's dispatcher stub does not yet map it for any tool_name, nor
+    does its hooks.json matcher include Bash; see the module comment above
+    `_release_claims_on_bash_commit_sync` for the traced gap) —
+    `_handler`'s params set is now seven fields (session_id, transcript_path,
+    agent_id, tool_name, file_path, content, command); absent a command or a
+    Bash `git commit -- <paths>` match in it, the leg stays silent and every
+    other leg is unaffected.
+
     Negative-spec:
         Context-pressure, runtime-tripwire, and the Group EM watch arming check DO
         NOT gate on tool_name — PostToolUse fires on every tool and all three checks
-        are universal (not tool-name-scoped). The first-Agent-dispatch,
-        unauthorized-handoff, and workflow-monitor-arm advisories DO gate on
-        tool_name internally ("Agent", "Write", and "Workflow" respectively) — their
-        own internal early-exits, not handler-level gates applied to the universal
-        three.
+        are universal (not tool-name-scoped). The first-Agent-dispatch and
+        unauthorized-handoff advisories DO gate on tool_name internally ("Agent" and
+        "Write" respectively) — their own internal early-exits, not handler-level
+        gates applied to the universal three. The Workflow-run capture leg gates on
+        tool_name == "Workflow" the same way, but NEVER emits advisory text and
+        must never be folded into the merged texts — there used to be a sixth,
+        Monitor-arming advisory leg here (`_check_workflow_monitor_arm_sync`),
+        retired per docs/plans/2026-09-26-coordinator-remedies-engine-items.md
+        (C3, R2): stop inviting a per-event Monitor.
         DOES NOT gate the unauthorized-handoff nudge on session_id — its
         predicate is the Write payload alone, so it runs ahead of the
         session-scoped short-circuit rather than being swallowed by it.
         DOES NOT block execution — PostToolUse is advisory only.
-        DOES NOT arm the Monitor call itself — the workflow-monitor-arm and
-        group-em-watch-arm checks only name the call for the EM to paste; neither
-        ever dispatches, spawns, or writes into the shared
-        advisory-hook-state-{session_id}.json (each's once-per-task/once-per-session
-        sentinel is its own disjoint file, matching the first-Agent-dispatch and
+        DOES NOT arm any Monitor call — the group-em-watch-arm check only names the
+        call for the EM to paste; it never dispatches, spawns, or writes into the
+        shared advisory-hook-state-{session_id}.json (its once-per-session sentinel
+        is its own disjoint file, matching the first-Agent-dispatch and
         runtime-tripwire checks' own disjoint sentinels — see the module-level
         state-management comment above _advisory_state_path for why sharing that
         file across concurrent legs is the regression this avoids).
@@ -2085,7 +2098,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
         execution model). See coordinator_core/authz/classification.py.
 
     Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7,
-    docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md § C10
+    docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md § C10,
+    docs/plans/2026-09-26-coordinator-remedies-engine-items.md § C3
     """
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime. Spec:
@@ -2100,6 +2114,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     tool_name = field(params, "tool_name")
     file_path = field(params, "file_path")
     content = field(params, "content")
+    command = field(params, "command")
 
     # The unauthorized-handoff nudge is the one check that does NOT depend on
     # session_id — its predicate is the Write payload alone — so it runs even
@@ -2123,7 +2138,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
         uh_text = await _leg_text("unauthorized_handoff", uh_coro)
         return post_advisory(uh_text) if uh_text else no_advisory()
 
-    # Run all five checks concurrently — they use disjoint sentinel namespaces.
+    # Run all five checks plus the silent capture leg concurrently — they use
+    # disjoint sentinel namespaces.
     #
     # `return_exceptions=True` IS THE FAILURE-ISOLATION BUY-BACK, and it is not the
     # same concern as the ordering/latency argument above. This fold replaced FOUR
@@ -2131,7 +2147,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # raising script could not suppress the other three's advisories. A bare `gather`
     # gives that away silently — it propagates the first exception and abandons its
     # siblings' results, so a single unreadable transcript or sentinel takes down all
-    # five legs at once. All five read transcripts and sentinel files off a shared
+    # legs at once. All of them read transcripts and sentinel files off a shared
     # disk on a box running ~50 concurrent sessions, so a transient read failure is
     # the expected case, not the exotic one.
     #
@@ -2140,15 +2156,26 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # with it. The concurrency reasoning above is correct and answers a different
     # question; failure isolation simply was not the axis. Every fan-in in this
     # package owes this buy-back, and it is per-fold — never inherited.
+    # The Workflow-run capture leg is scheduled alongside the five advisory
+    # legs (same asyncio.gather, same failure-isolation buy-back below) but is
+    # NOT zipped against `labels` and NOT folded into `texts` — it returns
+    # None, never advisory text, and its result here is deliberately unused.
     results = await asyncio.gather(
         asyncio.to_thread(_check_context_pressure_sync, session_id, transcript_path),
         asyncio.to_thread(_check_runtime_tripwire_sync, session_id, agent_id),
         asyncio.to_thread(_check_first_agent_dispatch_sync, session_id, tool_name),
         uh_coro,
-        asyncio.to_thread(
-            _check_workflow_monitor_arm_sync, session_id, transcript_path, tool_name
-        ),
         asyncio.to_thread(_check_group_em_watch_arm_sync, session_id, transcript_path),
+        asyncio.to_thread(
+            _capture_workflow_run_record_sync, session_id, transcript_path, tool_name
+        ),
+        asyncio.to_thread(
+            _release_claims_on_bash_commit_sync,
+            session_id,
+            tool_name,
+            command,
+            repo_root,
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -2156,14 +2183,23 @@ async def _handler(params: dict, repo_root=None) -> dict:
         "runtime_tripwire",
         "first_agent_dispatch",
         "unauthorized_handoff",
-        "workflow_monitor_arm",
         "group_em_watch_arm",
     )
-    cp_text, rt_text, ad_text, uh_text, wm_text, ge_text = (
+    cp_text, rt_text, ad_text, uh_text, ge_text = (
         _text_or_breadcrumb(label, result) for label, result in zip(labels, results)
     )
+    # The sixth and seventh gathered results (index 5, the Workflow-run
+    # capture leg; index 6, the Bash-commit-release leg) are intentionally
+    # not read here — see the comment above the gather call. Both are
+    # bookkeeping-only and never contribute advisory text.
+    capture_result = results[5]
+    if isinstance(capture_result, BaseException):
+        _text_or_breadcrumb("workflow_run_capture", capture_result)
+    release_result = results[6]
+    if isinstance(release_result, BaseException):
+        _text_or_breadcrumb("bash_commit_release", release_result)
 
-    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, wm_text, ge_text) if text]
+    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, ge_text) if text]
     if texts:
         return post_advisory("\n\n".join(texts))
     return no_advisory()

@@ -88,18 +88,18 @@ def test_started_line_names_agent_type_and_model(tmp_path):
     assert "claude-opus-5" in lines[0]
 
 
-def test_started_line_survives_absent_meta_file(tmp_path):
+def test_started_line_falls_back_to_agent_id_when_meta_absent(tmp_path):
     journal = tmp_path / "journal.jsonl"
     _write(journal, _event("a1", "started") + "\n")
 
     renderer = JournalRenderer(str(journal))
     lines = renderer.poll()
     assert len(lines) == 1
-    assert "unknown-agent" in lines[0]
+    assert "a1" in lines[0]
     assert "unknown-model" in lines[0]
 
 
-def test_started_line_survives_malformed_meta_file(tmp_path):
+def test_started_line_falls_back_to_agent_id_when_meta_malformed(tmp_path):
     journal = tmp_path / "journal.jsonl"
     meta_path = tmp_path / "agent-a1.meta.json"
     meta_path.write_text("{not valid json", encoding="utf-8")
@@ -108,8 +108,31 @@ def test_started_line_survives_malformed_meta_file(tmp_path):
     renderer = JournalRenderer(str(journal))
     lines = renderer.poll()
     assert len(lines) == 1
-    assert "unknown-agent" in lines[0]
+    assert "a1" in lines[0]
     assert "unknown-model" in lines[0]
+
+
+def test_started_line_prefers_label_over_agent_id_when_meta_absent(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    _write(journal, _event("a1", "started", label="reviewer-slice-3") + "\n")
+
+    renderer = JournalRenderer(str(journal))
+    lines = renderer.poll()
+    assert len(lines) == 1
+    assert "reviewer-slice-3" in lines[0]
+    assert lines[0].count("a1") == 0
+
+
+def test_started_line_prefers_meta_agent_type_over_label(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    _write_meta(tmp_path, "a1", agent_type="executor")
+    _write(journal, _event("a1", "started", label="reviewer-slice-3") + "\n")
+
+    renderer = JournalRenderer(str(journal))
+    lines = renderer.poll()
+    assert len(lines) == 1
+    assert "executor" in lines[0]
+    assert "reviewer-slice-3" not in lines[0]
 
 
 def test_failed_line_is_unmistakably_marked(tmp_path):
@@ -223,21 +246,24 @@ def test_journal_shrink_to_empty_then_regrowth_does_not_duplicate(tmp_path):
     assert renderer.poll() == []
 
 
-def _run_module(tmp_path, task_id, transcript_text, cap="2", poll="0.2"):
+def _run_module(tmp_path, task_id, transcript_text, cap="2", poll="0.2", follow=False, journal_text=None):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(transcript_text, encoding="utf-8")
     journal = tmp_path / "journal.jsonl"
-    journal.write_text("", encoding="utf-8")
+    journal.write_text(journal_text or "", encoding="utf-8")
+    args = [
+        sys.executable, "-m", "coordinator_core.workflow_watch",
+        "--transcript", str(transcript),
+        "--journal", str(journal),
+        "--task-id", task_id,
+        "--poll-interval", poll,
+        "--cap", cap,
+    ]
+    if follow:
+        args.append("--follow")
     started = time.monotonic()
     proc = subprocess.run(
-        [
-            sys.executable, "-m", "coordinator_core.workflow_watch",
-            "--transcript", str(transcript),
-            "--journal", str(journal),
-            "--task-id", task_id,
-            "--poll-interval", poll,
-            "--cap", cap,
-        ],
+        args,
         capture_output=True,
         text=True,
         timeout=60,
@@ -271,6 +297,38 @@ def test_terminal_record_exits_zero_for_every_status(tmp_path, status):
     assert proc.returncode == 0
     assert f"terminal: {status}" in proc.stdout
     assert elapsed < 30
+
+
+def test_default_run_prints_exactly_one_terminal_line_no_journal_events(tmp_path):
+    """R2 (docs/plans/2026-09-26-coordinator-remedies-engine-items.md, C3): the
+    watcher stops inviting a per-event Monitor -- the default prints just the
+    `terminal: <status>` line, never the journal's own event lines."""
+    transcript = (
+        '{"noise":1}\n'
+        "<task-notification><task-id>ends-now</task-id>"
+        "<status>completed</status></task-notification>\n"
+    )
+    journal_text = json.dumps({"type": "started", "agentId": "a1"}) + "\n"
+    proc, _ = _run_module(tmp_path, "ends-now", transcript, cap="30", journal_text=journal_text)
+    assert proc.returncode == 0
+    lines = [line for line in proc.stdout.splitlines() if line]
+    assert lines == ["terminal: completed"]
+
+
+def test_follow_renders_journal_event_lines_ahead_of_the_terminal_line(tmp_path):
+    transcript = (
+        '{"noise":1}\n'
+        "<task-notification><task-id>ends-now</task-id>"
+        "<status>completed</status></task-notification>\n"
+    )
+    journal_text = json.dumps({"type": "started", "agentId": "a1"}) + "\n"
+    proc, _ = _run_module(
+        tmp_path, "ends-now", transcript, cap="30", follow=True, journal_text=journal_text
+    )
+    assert proc.returncode == 0
+    lines = [line for line in proc.stdout.splitlines() if line]
+    assert lines[-1] == "terminal: completed"
+    assert len(lines) > 1
 
 
 def test_poll_lines_returns_only_the_delta(tmp_path):

@@ -1243,6 +1243,51 @@ def test_commit_slices_out_excludes_interleaved_foreign_commit(tmp_path):
     assert slices[1]["diff_loc"] == 2
 
 
+def test_commit_slices_out_carries_reviewable_surface_count(tmp_path):
+    """Item 36 (IBMDT-C13): each slice's own `reviewable_surface_count` is
+    the noise/prose/ceremony-exhaust-filtered surface count for THAT
+    commit alone -- a code commit resolves >0, a commit touching only
+    `state/` bookkeeping paths (ceremony-exhaust, per `_is_ceremony_
+    exhaust_path`) resolves exactly 0, mirroring `diff_loc`'s own per-commit
+    (not running-total) contract."""
+    _init_git_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    (tmp_path / "engine.py").write_text("x = 1\n", encoding="utf-8")
+    _run_git(["add", "engine.py"], str(tmp_path))
+    _commit_as(tmp_path, "code commit", _SESSION_ID)
+    code_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "tasks").mkdir()
+    (tmp_path / "state" / "tasks" / "t1.md").write_text("task\n" * 10, encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "bookkeeping commit one", _SESSION_ID)
+    bk1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "state" / "tasks" / "t2.md").write_text("task2\n" * 10, encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "bookkeeping commit two", _SESSION_ID)
+    bk2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    slices: list = []
+    result = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
+    )
+    assert result[2] == 3  # commit_count: one code commit, two bookkeeping
+
+    by_sha = {s["sha"]: s for s in slices}
+    assert by_sha[code_sha]["reviewable_surface_count"] > 0
+    assert by_sha[bk1]["reviewable_surface_count"] == 0
+    assert by_sha[bk2]["reviewable_surface_count"] == 0
+
+
 def test_commit_slices_out_untouched_when_shas_unresolvable():
     """(3, producer half) When `_session_owned_shas` cannot resolve (no
     `session_id`), `commit_slices_out` is left EMPTY, never populated with a

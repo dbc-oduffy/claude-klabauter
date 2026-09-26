@@ -17,6 +17,14 @@ per-type ruleset (it needs to run its own test suite) — see that section for
 why the two types' rulesets diverge and how AC3 (code-reviewer unchanged) is
 preserved despite the shared module.
 
+Authoritative source (item 8, cross-repo/archive/2026-09-19-doe-claude-em-
+agent-contract-defects-residual-c8-guard-docstring-pointer.md): THIS module
+— ``_is_confined_type``/``_DEFAULT_RULESET_TYPE_OVERRIDES`` and the
+allowlist tiers below — is the SSOT for the reviewer-Bash allowlist and
+confinement legs. A DoE-side doctrine surface that cites this module should
+name it by enclosing function rather than transcribe the allowed set, so it
+never drifts out of sync with the engine ruleset.
+
 This was originally a faithful byte-for-byte engine-ification of the
 reference hook. It now carries two deliberate post-migration divergences,
 plus a third added 2026-07-25 (below).
@@ -2043,6 +2051,49 @@ def _evaluate_machine_local_tier_a(cmd: str, ruleset: Dict[str, Any]) -> tuple:
     return False, None
 
 
+#: M3 (2026-09-26, DoE-claude docs/plans/2026-09-26-retire-review-integrator.md):
+#: the ``review-findings-ledger`` CLI trampoline's ``verify`` subcommand is
+#: added to the reviewer Bash allowlist so a confined reviewer can self-check
+#: its own findings ledger before returning (§ Contract). ``reject``/
+#: ``targets`` are EM-only and denied upstream by
+#: ``block_subagent_findings_reject`` -- this leg never enumerates them.
+_FINDINGS_LEDGER_BINARY = "review-findings-ledger"
+_FINDINGS_LEDGER_READONLY_SUBCOMMANDS = frozenset({"verify"})
+
+_PY_INTERPRETER_BASENAME_RE = re.compile(r"^python[0-9.]*$")
+
+
+def _token_is_findings_ledger_binary(token: str) -> bool:
+    """``token_matches_binary`` does not strip a ``.py`` suffix (only
+    ``.exe``/``.cmd``, per its own docstring) -- the trampoline's on-disk
+    name is ``review-findings-ledger.py``, so that suffix is stripped here
+    before delegating, mirroring how ``_first_token_is_allowlisted_binary``
+    handles ``coordinator-doc-new.py`` for the scaffolder tier."""
+    stripped = token[:-3] if token.endswith(".py") else token
+    return _token_matches_binary(stripped, _FINDINGS_LEDGER_BINARY)
+
+
+def _evaluate_findings_ledger_tier(cmd: str) -> bool:
+    """(M3) Sibling of ``_evaluate_machine_local_tier_a``: ``True`` iff
+    ``cmd`` is a bare, path-prefixed, or ``python3``-prefixed invocation of
+    the ``review-findings-ledger`` CLI trampoline whose immediate next
+    token is ``verify`` -- deny-by-omission for every other subcommand
+    (never a denylist), same shape the machine-local tier already uses."""
+    tokens = _tokenize_segment(cmd)
+    if not tokens:
+        return False
+    idx = 0
+    head_base = _normalize_executable_basename(tokens[0])
+    if _PY_INTERPRETER_BASENAME_RE.match(head_base) and len(tokens) > 1:
+        idx = 1
+    if idx >= len(tokens) or not _token_is_findings_ledger_binary(tokens[idx]):
+        return False
+    if len(tokens) <= idx + 1:
+        return False
+    subcommand = tokens[idx + 1]
+    return subcommand in _FINDINGS_LEDGER_READONLY_SUBCOMMANDS
+
+
 def _has_find_write_flag(cmd: str, ruleset: Dict[str, Any]) -> bool:
     denied = ruleset["find_denied_options"]
     return any(token in denied for token in _tokenize_segment(cmd))
@@ -2556,6 +2607,8 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
                 deny = True
                 deny_reason = ml_deny_reason
         elif _is_readonly_fs_command(cmd_for_check, ruleset):
+            return None
+        elif _evaluate_findings_ledger_tier(cmd_for_check):
             return None
         elif dialect is Dialect.POWERSHELL and _is_readonly_powershell_command(cmd_for_check):
             return None

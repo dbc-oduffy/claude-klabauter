@@ -298,6 +298,35 @@ def test_distinct_sessions_produce_distinct_shards(tmp_path, monkeypatch):
     assert len(_scope_shards(repo)) == 2
 
 
+def test_trail_root_resolved_via_coordinator_root_from_subdirectory(tmp_path, monkeypatch):
+    """B7: the review-trail root is resolved through
+    coordinator_core.review_trail.records' state-root resolver, not cwd —
+    invoking from a subdirectory of the repo with COORDINATOR_ROOT set to
+    the repo root still finds the week's trail records and writes the shard
+    under the resolved root, not under a nonexistent cwd-relative path."""
+    repo = _make_fixture(tmp_path / "t_subdir")
+    sha = _add_commit(repo, "src/only.py")
+    header = _write_header(repo, "2000-01-01")
+
+    subdir = repo / "some" / "nested" / "dir"
+    subdir.mkdir(parents=True)
+
+    monkeypatch.chdir(subdir)
+    monkeypatch.setenv("HEADER_FILE", str(header))
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "test-session-subdir1")
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.setattr(workweek_trail_scope, "collect_segments", _fake_collect_segments([]))
+
+    rc = main([])
+    assert rc == 0
+
+    shards = _scope_shards(repo)
+    assert len(shards) == 1
+    obj = json.loads(shards[0].read_text())
+    assert sha in obj["staff_eng"]
+
+
 def test_same_session_rapid_reinvocation_produces_distinct_shards(tmp_path, monkeypatch):
     """Two back-to-back invocations with the SAME session id must not clobber
     each other — the microsecond-precision native timestamp is the

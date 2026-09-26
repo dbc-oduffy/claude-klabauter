@@ -212,7 +212,7 @@ def plan_file(
         return _plan_ts(repo_root, rel_path, text, lang, referenced_tokens, whole_file_ref_keep)
 
     if lang == "clike":
-        spans = lang_clike.find_comment_spans(text)
+        spans = lang_clike.find_comment_spans(text, cpp_raw_strings=True)
         return _finish_generic_lex(rel_path, "clike", text, spans, referenced_tokens, whole_file_ref_keep)
 
     if lang == "clike-noline":
@@ -427,13 +427,14 @@ class _TsWarmProc:
         )
         self._next_id = 0
 
-    def scan(self, variant: str, text: str) -> list[dict] | None:
+    def _call(self, payload: dict) -> dict | None:
         if self._proc.stdin is None or self._proc.stdout is None or self._proc.poll() is not None:
             return None
         req_id = self._next_id
         self._next_id += 1
+        payload = {**payload, "id": req_id}
         try:
-            self._proc.stdin.write(json.dumps({"id": req_id, "variant": variant, "text": text}) + "\n")
+            self._proc.stdin.write(json.dumps(payload) + "\n")
             self._proc.stdin.flush()
             line = self._proc.stdout.readline()
             if not line:
@@ -443,7 +444,15 @@ class _TsWarmProc:
             return None
         if resp.get("error") is not None or resp.get("id") != req_id:
             return None
-        return resp.get("spans")
+        return resp
+
+    def scan(self, variant: str, text: str) -> list[dict] | None:
+        resp = self._call({"mode": "scan", "variant": variant, "text": text})
+        return None if resp is None else resp.get("spans")
+
+    def verify(self, variant: str, orig_text: str, new_text: str) -> bool | None:
+        resp = self._call({"mode": "verify", "variant": variant, "text": orig_text, "newText": new_text})
+        return None if resp is None else resp.get("equal")
 
     def close(self) -> None:
         try:
@@ -491,23 +500,16 @@ def _plan_ts(repo_root: Path, rel_path: str, text: str, lang: str, referenced_to
     )
 
 
-def _scan_ts_spans(ts_pkg: str, variant: str, text: str) -> list[tuple[int, int]] | None:
-    raw = _TsWarmProc.get(ts_pkg).scan(variant, text)
-    if raw is None:
-        return None
-    return [(d["start"], d["end"]) for d in raw]
-
-
 def _proof_ts(ts_pkg: str, variant: str, original: str, new_text: str) -> bool:
-    """Proof: strip ALL comments (re-scanned fresh) from both `original` and `new_text`,
-    the non-comment stream must match exactly."""
-    orig_spans = _scan_ts_spans(ts_pkg, variant, original)
-    new_spans = _scan_ts_spans(ts_pkg, variant, new_text)
-    if orig_spans is None or new_spans is None:
-        return False
-    stripped_orig = _apply_span_removals(original, orig_spans)
-    stripped_new = _apply_span_removals(new_text, new_spans)
-    return stripped_orig == stripped_new
+    """Proof: parse both `original` and `new_text` with the real TypeScript parser and
+    require an identical `ts.createPrinter({removeComments:true})` print, with an equal
+    parse-diagnostic count (a file that only parses "successfully" by accident — e.g. a
+    comment whose prose contains an early-terminating `*/` — must not silently pass). This
+    is the AST-level proof, not a re-lex-and-diff: a raw re-scan cannot tell a `//`/`*/`
+    inside a template-literal substitution from a real comment (see scan_ts.js's header),
+    so it must never be trusted as the proof, only as the span source for planning."""
+    equal = _TsWarmProc.get(ts_pkg).verify(variant, original, new_text)
+    return bool(equal)
 
 
 _TS_PKG_CACHE: str | None = "__unset__"
