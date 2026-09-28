@@ -59,6 +59,63 @@ def test_verify_passes_a_clean_replacement(tmp_path):
     assert rows[0]["verified"] is True
 
 
+def _capture_rung_fires(monkeypatch) -> list:
+    from coordinator_core.ops import plan_status_transition
+
+    calls: list = []
+    monkeypatch.setattr(plan_status_transition, "main", lambda argv: calls.append(argv) or 0)
+    return calls
+
+
+def test_verify_fires_stamp_reviewed_on_a_reviewed_plan(tmp_path, monkeypatch):
+    calls = _capture_rung_fires(monkeypatch)
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nstatus: draft\n---\nnew text\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"docs/plans/p.md": _sha256("---\nstatus: draft\n---\nold text\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "docs/plans/p.md", "before": "old text", "after": "new text"}],
+    )
+    assert m.verify(sidecar, repo_root=tmp_path).ok
+    assert calls == [["stamp-reviewed", "--plan", str(plan)]]
+
+
+def test_verify_refuses_when_reviewed_plan_frontmatter_no_longer_parses(tmp_path, monkeypatch):
+    """F24b (gh-klabauter#71): a reviewer's edit that broke the reviewed
+    plan's own YAML frontmatter must refuse `verify` -- not stamp
+    `status: reviewed` over a document nothing can read frontmatter off."""
+    calls = _capture_rung_fires(monkeypatch)
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nstatus: draft\nauthor: [unclosed\n---\nnew text\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"docs/plans/p.md": _sha256("---\nstatus: draft\n---\nold text\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "docs/plans/p.md", "before": "old text", "after": "new text"}],
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert not outcome.ok
+    assert any("frontmatter no longer parses" in f for f in outcome.failures), outcome.failures
+    assert calls == []
+    assert "findings_ledger:" not in sidecar.read_text(encoding="utf-8")
+
+
+def test_verify_fires_no_rung_for_a_non_plan_target(tmp_path, monkeypatch):
+    calls = _capture_rung_fires(monkeypatch)
+    (tmp_path / "src.py").write_text("x = 2\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("x = 1\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "x = 1", "after": "x = 2"}],
+    )
+    assert m.verify(sidecar, repo_root=tmp_path).ok
+    assert calls == []
+
+
 def test_verify_fails_on_row_count_mismatch(tmp_path):
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")

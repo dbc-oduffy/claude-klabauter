@@ -255,9 +255,9 @@ JITTER_ALLOWANCE_BYTES = max(5, _ceil_to_5(2.1618))
 RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     "confinement-deny": 250 + JITTER_ALLOWANCE_BYTES,
     "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
-    "platform-conditioned-deny": 750 + JITTER_ALLOWANCE_BYTES,
+    "platform-conditioned-deny": 625 + JITTER_ALLOWANCE_BYTES,
     "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
-    "directory:hooks": 230 + JITTER_ALLOWANCE_BYTES,
+    "directory:hooks": 220 + JITTER_ALLOWANCE_BYTES,
 }
 
 
@@ -291,7 +291,6 @@ def leg3_ratchet_violations(cells: List[_Cell]) -> List[str]:
     return violations
 
 
-@pytest.mark.pending_fix
 def test_leg1_ceiling_per_band(measured_corpus):
     cells, _elapsed = measured_corpus
     violations = leg1_ceiling_violations(cells)

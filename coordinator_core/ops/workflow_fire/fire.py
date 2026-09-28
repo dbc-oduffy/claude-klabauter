@@ -23,8 +23,10 @@ docs/research/spike-verdicts/2026-08-18-claude-klabauter-fires-an-emitted-workfl
     omitted flag. Omitting ``--plugin-dir`` would ALSO remove the inner
     per-agent guard layer described below — a second, independent reason
     that flag stays fail-loud rather than optional.
-  - probe 1 vs the driver-cost note: the driver only calls one tool once,
-    so a cheap model (``haiku``) is correct; the workflow's own agents'
+  - probe 1 vs the driver-cost note: the driver calls at most two tools
+    (``Workflow`` once, then one ``Bash`` relay of the returned digest's
+    ``next_action`` into ``dispatch.terminal_commit`` when present), so a
+    cheap model (``haiku``) is still correct; the workflow's own agents'
     ``model:`` fields, not this driver, control the real work's cost tier.
 
 ``--allowedTools`` scope (two-probe live finding, post-spike): this flag
@@ -151,9 +153,25 @@ DEFAULT_CONCURRENCY_CAP = 3
 #: because ``--plugin-dir`` is passed), never re-derived here.
 _SESSION_ALLOWED_TOOLS = ("Workflow", "Read", "Write", "Edit", "Bash", "Grep", "Glob", "ToolSearch")
 
+#: The driver's whole job, in one prompt: call Workflow once, and relay its
+#: returned wake digest's ``next_action`` into ONE terminal-commit call when
+#: the digest asks for one. Plan
+#: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § C7 --
+#: this replaces the five-cap per-wave commit-agent dispatch with a single
+#: driver-side commit after the whole workflow returns (Standing Order 1:
+#: no agent, including this driver's own workflow, commits mid-run -- only
+#: this final relay, via ``dispatch.terminal_commit``, ever calls
+#: ``ceremony.commit_v2``). The digest's ``next_action.params`` is relayed
+#: VERBATIM plus ``script_path`` -- the driver never re-derives or edits it.
 _PROMPT_TEMPLATE = (
-    "Call the Workflow tool exactly once, with scriptPath set to {script_path!r}, "
-    "and no other tool."
+    "Call the Workflow tool exactly once, with scriptPath set to {script_path!r}. "
+    "The tool's return value is the workflow's wake digest. "
+    "If the digest's next_action.op equals \"dispatch.terminal_commit\", run exactly "
+    "one Bash command: coordinator-invoke dispatch.terminal_commit '<json>' -- where "
+    "<json> is the digest's next_action.params object, verbatim, with a \"script_path\" "
+    "key added set to {script_path!r}, serialized as compact JSON with no extra keys. "
+    "Otherwise call no other tool. Never call more than these two tools, and never call "
+    "either one more than once."
 )
 
 #: Windows console-subprocess discipline: guards a bare CREATE_NO_WINDOW

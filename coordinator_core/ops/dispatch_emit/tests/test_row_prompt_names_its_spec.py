@@ -313,12 +313,3 @@ def test_row_prompt_names_the_resave_for_cli_written_files():
     assert "Write it back unchanged with the Write tool" in prompt
 
 
-def test_commit_prompt_does_not_carry_the_write_tool_rule():
-    from coordinator_core.ops.dispatch_emit.emit import _commit_agent_call
-
-    call = _commit_agent_call(
-        pathspec=["a.py"],
-        phase_title="Commit",
-        index=0,
-    )
-    assert "never through Bash" not in call

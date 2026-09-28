@@ -478,9 +478,8 @@ def _check_head_tail_plumbing_powershell(
     script = "\n".join(script_lines)
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
-        "Auto-rewrite: pipe into '%s' forks twice for one answer -- "
-        "replaced with one python3 -c reproducing the same output and "
-        "slicing head/tail inside that single subprocess. %s"
+        "Auto-rewrite: '%s' piped through head/tail forked twice; "
+        "replaced with one python3 -c doing the same slice. %s"
         % (
             ht_tokens[0],
             operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
@@ -649,9 +648,8 @@ def check_head_tail_plumbing_rewrite(
     script = "\n".join(script_lines)
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
-        "Auto-rewrite: pipe into '%s' forks twice for one answer -- "
-        "replaced with one python3 -c reproducing the same output and "
-        "slicing head/tail inside that single subprocess. %s"
+        "Auto-rewrite: '%s' piped through head/tail forked twice; "
+        "replaced with one python3 -c doing the same slice. %s"
         % (
             ht_tokens[0],
             operator_override_note(

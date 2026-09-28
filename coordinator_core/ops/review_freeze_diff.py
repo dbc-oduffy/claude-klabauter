@@ -88,6 +88,21 @@ Negative-spec (hard-won — do NOT reintroduce):
       diff — a second git spawn, which this op's spawn budget forbids (see
       "Cost:" below). The killed K-101 warning had the same blind spot, so
       this is not a regression against what was cut.
+    - Worktree mode (``worktree=True``) does NOT touch ``.git/index``: no
+      ``git add -N``, no staging of any kind. Untracked declared paths are
+      read straight off disk and turned into a synthesized "new file" diff
+      hunk in-process; the real index that `commit_paths` later commits
+      through stays a private/scoped index the same way range mode's own
+      commit leg already does (P157-C1) — nothing new here changes that.
+    - Worktree mode spawns exactly ONE git process (`git diff <base> --
+      <paths>`), same budget as range mode's own single spawn. It never
+      probes per-path whether a path is tracked at base via a spawn —
+      "tracked at base" is read from the already-in-process
+      `parse_index_stat` (a plain `.git/index` file read, not a spawn),
+      which is an approximation ("tracked in the current index") the
+      caller accepts: this op's callers always pass a `base` that is HEAD
+      or an ancestor of it with no intervening index surgery, so index and
+      base tree agree for every declared path in practice.
     - Does NOT treat a zero-net-change diff over a >= 1-commit range as an
       error (see negative-spec entries above) — an unrestricted one stays a
       valid ``empty: true`` outcome. The ONLY refusal this op adds beyond
@@ -365,6 +380,8 @@ def freeze_diff(
     range_: str,
     slice_id: str,
     paths: Optional[List[str]] = None,
+    *,
+    worktree: bool = False,
 ) -> dict:
     """Core algorithm: freeze `range_`'s diff (optionally restricted to `paths`)
     plus the freeze-time HEAD sha to
@@ -375,20 +392,35 @@ def freeze_diff(
     parity guarantee this delegation exists to hold. Both the `review.freeze_diff`
     JSON-RPC handler below and `coordinator/bin/freeze-review-diff.py`'s CLI call
     this function; neither re-derives the git-diff-and-write sequence, and this
-    function itself no longer re-derives it either.
+    function itself no longer re-derives it either. `worktree=True` is the one
+    exception: it does NOT delegate to `freeze_diffs_batch` (see
+    `_freeze_diff_worktree`'s own docstring for why range mode's batching
+    machinery does not fit a base-to-worktree freeze).
 
     Params:
         repo_root — the git worktree root the freeze runs against.
         range_    — caller-supplied git diff range (e.g. "abc123..def456" or
                     "origin/main...HEAD"). REQUIRED; never defaulted (see
                     module negative-spec) — an empty string is a structured
-                    error, not a fallback trigger.
+                    error, not a fallback trigger. In worktree mode this
+                    parameter carries a single BASE rev instead of a range
+                    (there is no second endpoint — the other side is
+                    whatever is on disk right now).
         slice_id  — filename component used to name the two output files.
                     REQUIRED; rejected if it contains a path separator or
                     '..' (see `_validate_slice_id`).
         paths     — optional pathspec list restricting the diff; None/empty
                     means "no restriction" (matches the CLI's `--paths` with
                     zero values behaving identically to omitting the flag).
+                    In worktree mode `paths` is REQUIRED and non-empty (see
+                    `_freeze_diff_worktree`) — an unrestricted worktree
+                    freeze has no bounded "declared paths" set to read
+                    untracked additions from.
+        worktree  — when True, freeze `range_` (read as a single base rev)
+                    against the current worktree instead of a second commit
+                    (§ Design D7, docs/plans/2026-09-27-emitter-dag-
+                    terminal-commit-wake-digest.md). See
+                    `_freeze_diff_worktree` for the full contract.
 
     Negative-spec: does NOT overwrite an existing frozen diff whose content
     differs. A slice id is a filename, so a generic one (`ceremony-artifacts`,
@@ -421,10 +453,199 @@ def freeze_diff(
         commit refusal never turns a written freeze into a failed one — see
         `freeze_diffs_batch`'s own docstring for the batching and the
         re-freeze rule that keeps `head_sha` pinned to freeze-time HEAD.
+        In worktree mode `head_sha` carries `"<base> worktree"` instead of a
+        resolved sha (`.head.sha`'s recorded content — see § Design D7's
+        freeze bullet), since there is no second commit endpoint to pin.
     """
+    if worktree:
+        return _freeze_diff_worktree(repo_root, range_, slice_id, paths or [])
     return freeze_diffs_batch(
         repo_root, [{"slice_id": slice_id, "range": range_, "paths": paths}]
     )[0]
+
+
+_BINARY_NULL_SNIFF = b"\x00"
+
+
+def _is_binary_bytes(data: bytes) -> bool:
+    """Git's own default binary-content heuristic: a NUL byte anywhere in the
+    blob. Close enough for a synthesized new-file hunk — the op only needs
+    to pick between a text hunk and git's "Binary files differ" stanza, the
+    same choice `git diff` itself makes on this content."""
+    return _BINARY_NULL_SNIFF in data
+
+
+def _synthesize_new_file_hunk(path: str, content: bytes) -> str:
+    """One `diff --git` stanza for a path untracked at base and present in
+    the worktree, shaped to match `git diff`'s own "new file" output (mode
+    pinned to 100644 — this op never reads an executable bit) so a
+    synthesized hunk composes byte-for-byte with a tracked-diff prefix in
+    reviewer tooling that already parses one."""
+    header = (
+        f"diff --git a/{path} b/{path}\n"
+        "new file mode 100644\n"
+        "index 0000000..0000000\n"
+    )
+    if _is_binary_bytes(content):
+        return header + f"Binary files /dev/null and b/{path} differ\n"
+    text = content.decode("utf-8", errors="surrogateescape")
+    trailing_newline = text.endswith("\n")
+    lines = text.split("\n")
+    if trailing_newline:
+        lines = lines[:-1]
+    body_parts = [f"+{ln}\n" for ln in lines]
+    if not trailing_newline and body_parts:
+        body_parts[-1] = body_parts[-1].rstrip("\n") + "\n\\ No newline at end of file\n"
+    return (
+        header
+        + "--- /dev/null\n"
+        + f"+++ b/{path}\n"
+        + f"@@ -0,0 +1,{len(lines)} @@\n"
+        + "".join(body_parts)
+    )
+
+
+def _freeze_diff_worktree(
+    repo_root: Path,
+    base: str,
+    slice_id: str,
+    paths: List[str],
+) -> dict:
+    """Worktree-mode freeze: `base` -> the current worktree, restricted to
+    declared `paths` (§ Design D7's freeze bullet). Does NOT delegate to
+    `freeze_diffs_batch`: that function's shared algorithm resolves TWO
+    commit endpoints via `git rev-parse` and diffs them via `git diff-tree
+    --stdin`, neither of which can express "diff a commit against whatever
+    is on disk right now" — `git diff-tree` only ever compares trees, and
+    the working tree is not one. Range mode's own spawn shape does not fit
+    here either.
+
+    Tracked changes come from ONE `git diff <base> -- <paths>` spawn — the
+    same single-spawn budget range mode holds. A declared path this diff
+    does not cover AND that is not present in `parse_index_stat`'s reading
+    of `.git/index` (an in-process file read, no spawn — see module
+    negative-spec's worktree-mode bullet for the "tracked at base" caveat)
+    AND that exists on disk is untracked-and-new: it is synthesized as a
+    "new file" hunk via `_synthesize_new_file_hunk`, appended to the tracked
+    diff text, and never staged — `.git/index` is READ here (via
+    `parse_index_stat`) and never written by this function.
+
+    A path that is neither covered by the tracked diff nor synthesizable
+    (absent everywhere, or tracked-and-unmodified) falls through to
+    `_uncovered_paths`'s existing refusal — same posture as range mode's own
+    K-101 coverage refusal, computed over the combined diff text with no
+    added spawn.
+
+    UNLIKE range mode (post-P157-C1), this function does NOT commit its
+    writes: worktree mode exists for a review read that must not land a
+    mid-run commit (§ Design D7 — "without a mid-run commit"), so
+    `committed`/`commit_sha`/`commit_error` are always `False`/`None`/`None`
+    and `.git/index` stays byte-identical end to end (AC7). Same collision
+    (a differently-shaped existing freeze under this `slice_id`) contract as
+    `freeze_diffs_batch`'s per-request tail; a byte-identical re-freeze is
+    idempotent (the write is skip-equivalent, the on-disk pair is
+    unchanged) — not re-derived from `freeze_diffs_batch` because worktree
+    mode never batches and has no commit leg to share.
+    """
+    slice_err = _validate_slice_id(slice_id)
+    if slice_err is not None:
+        return _error(slice_err)
+    if not base:
+        return _error(
+            "worktree mode requires a single base rev in 'range_' — never "
+            "defaulted, same posture as range mode's own 'range' param."
+        )
+    if not paths:
+        return _error(
+            "worktree mode requires a non-empty 'paths' list — an "
+            "unrestricted worktree freeze has no bounded set to read "
+            "untracked additions from."
+        )
+
+    diff_argv = ["diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *paths]
+    dr = _git(diff_argv, cwd=repo_root)
+    if not dr.ok:
+        raise ValueError(
+            f"git diff failed while freezing worktree base {base!r}: {dr.stderr.strip()}"
+        )
+    diff_text = dr.stdout
+
+    tracked_covered = _covered_paths_from_diff(diff_text)
+    try:
+        index_stat = parse_index_stat(repo_root)
+    except IndexParseError:
+        index_stat = {}
+
+    synthesized: List[str] = []
+    for p in paths:
+        if _is_magic_pathspec(p):
+            continue
+        if _entry_covered(p, tracked_covered):
+            continue
+        if p in index_stat:
+            continue  # tracked at base (by proxy) and unmodified -- nothing to freeze
+        data = _read_worktree_path_bytes(repo_root, p)
+        if data is None:
+            continue  # absent everywhere -- _uncovered_paths reports it below
+        synthesized.append(_synthesize_new_file_hunk(p, data))
+
+    if synthesized:
+        diff_text = diff_text + "".join(synthesized)
+
+    uncovered = _uncovered_paths(diff_text, paths)
+    if uncovered:
+        return _error(
+            "--paths entries matched no change between base and the worktree: "
+            f"{', '.join(uncovered)} — re-run without them.",
+            uncovered_paths=uncovered,
+        )
+
+    diffs_dir = repo_root / "state" / "review-trail" / "diffs"
+    diffs_dir.mkdir(parents=True, exist_ok=True)
+    diff_path = diffs_dir / f"{slice_id}.diff"
+    sha_path = diffs_dir / f"{slice_id}.head.sha"
+    sha_content = f"{base} worktree"
+
+    diff_unchanged = diff_path.exists() and diff_path.read_text(encoding="utf-8") == diff_text
+    if diff_path.exists() and not diff_unchanged:
+        return _error(
+            f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
+            "different content — a slice id is a filename, and a generic one collides "
+            "with whatever peer froze it first. Re-freeze under a slice id that names "
+            "this range."
+        )
+
+    # No commit leg here (unlike range mode's post-P157-C1 behaviour):
+    # worktree mode exists specifically for a review read that must NOT
+    # land a mid-run commit (§ Design D7 — "without a mid-run commit"), so
+    # `.git/index` is read (parse_index_stat, above) but never written by
+    # this function at all — the two output files are plain untracked
+    # writes, matching AC7's "leaves .git/index byte-identical".
+    diff_path.write_text(diff_text, encoding="utf-8", newline="\n")
+    declare_write(diff_path)
+    sha_path.write_text(sha_content + "\n", encoding="utf-8", newline="\n")
+    declare_write(sha_path)
+
+    return {
+        "diff_path": str(diff_path),
+        "head_sha_path": str(sha_path),
+        "head_sha": sha_content,
+        "empty": not diff_text.strip(),
+        "uncovered_paths": [],
+        "error": None,
+        "committed": False,
+        "commit_sha": None,
+        "commit_error": None,
+    }
+
+
+def _read_worktree_path_bytes(repo_root: Path, path: str) -> Optional[bytes]:
+    """Bytes of `<repo_root>/<path>` if it is a regular file, else None
+    (absent, a directory, or otherwise unreadable as a plain file)."""
+    p = repo_root / path
+    if not p.is_file():
+        return None
+    return p.read_bytes()
 
 
 def _range_shape(range_: str) -> Optional[int]:
@@ -805,8 +1026,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         range    (str, REQUIRED) — see `freeze_diff`'s `range_` — never
                                     defaulted; an absent/empty value is a
                                     structured error, not a silent fallback.
+                                    In worktree mode this carries the single
+                                    base rev.
         slice_id (str, required) — see `freeze_diff`.
-        paths    (list[str], optional) — see `freeze_diff`.
+        paths    (list[str], optional) — see `freeze_diff`. REQUIRED and
+                                    non-empty when `worktree` is true.
+        worktree (bool, optional) — see `freeze_diff`'s `worktree` param;
+                                    defaults to False (range mode, unchanged).
 
     Returns: see `freeze_diff`'s Returns section.
 
@@ -831,4 +1057,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error("params.paths must be a list of strings when provided")
     paths = paths_raw or None
 
-    return freeze_diff(repo_root, range_, slice_id, paths)
+    worktree = bool(params.get("worktree"))
+
+    return freeze_diff(repo_root, range_, slice_id, paths, worktree=worktree)

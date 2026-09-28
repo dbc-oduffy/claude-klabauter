@@ -456,28 +456,53 @@ def _stamp_author_sprints(
     order: List[str],
     sprint_wave: Dict[str, Dict[str, int]],
     sprints: Dict[str, int],
+    edges: "List[Dict[str, str]] | None" = None,
 ) -> Dict[str, Dict[str, int]]:
     """Stamp author-assigned sprint values (AC21) onto ``topo_number``'s
     per-label ``sprintWave`` output in place of its uniform ``sprint: 1``, and
-    recompute each label's ``wave`` as a per-sprint sequential counter walked
-    over the already-topological *order*.
+    recompute each label's ``wave`` from its within-sprint ``blocked_by``
+    depth walked over the already-topological *order*.
+
+    F16 fix: this used to assign wave as a per-sprint SEQUENTIAL counter,
+    incrementing once per node regardless of edges — so two edge-free,
+    write-disjoint siblings (no ``blocked_by`` between them) always landed in
+    different waves, contradicting the roadmap-planning skill's Step 2.1.6
+    fold rule ("Same wave + pairwise-disjoint scope + no blocked_by between
+    members -> one baton"): the rule can never fire if same-wave never
+    happens for exactly the nodes it is meant to collapse. Wave is now
+    dependency depth (0 for a node with no in-sprint predecessor, else
+    1 + max(depth of its in-sprint blocked_by targets)) — edge-free siblings
+    in the same sprint now share wave 1, and dependents still strictly
+    outrank every in-sprint predecessor they depend on.
 
     A label absent from *sprints* keeps ``topo_number``'s own ``sprint: 1``
-    (byte-parity default). Because *order* is dependency-before-dependent and
-    each sprint's wave counter only ever increases while walking it, wave
-    strictly increases within a sprint along every edge — cross-sprint
-    monotonicity is NOT assumed here and must be re-verified by the caller via
-    ``check_dependency_order`` (an author can still assign a dependency to a
-    LATER sprint than its dependent; that is a fail-loud error, not something
-    this stamping step can silently prevent).
+    (byte-parity default). Only ``blocked_by`` edges whose both endpoints
+    share a sprint constrain depth here — a dependency assigned to an
+    EARLIER sprint is already done by the time this sprint starts and does
+    not push its dependent's wave; cross-sprint monotonicity is NOT assumed
+    here and must be re-verified by the caller via ``check_dependency_order``
+    (an author can still assign a dependency to a LATER sprint than its
+    dependent; that is a fail-loud error, not something this stamping step
+    can silently prevent).
     """
-    stamped: Dict[str, Dict[str, int]] = {}
-    wave_counters: Dict[int, int] = {}
-    for label in order:
-        sprint = sprints.get(label, sprint_wave[label]["sprint"])
-        wave_counters[sprint] = wave_counters.get(sprint, 0) + 1
-        stamped[label] = {"sprint": sprint, "wave": wave_counters[sprint]}
-    return stamped
+    sprint_of: Dict[str, int] = {
+        label: sprints.get(label, sprint_wave[label]["sprint"]) for label in order
+    }
+
+    in_sprint_deps: Dict[str, List[str]] = {label: [] for label in order}
+    for e in edges or []:
+        frm, to = e["from"], e["to"]
+        if frm in sprint_of and to in sprint_of and sprint_of[frm] == sprint_of[to]:
+            in_sprint_deps.setdefault(frm, []).append(to)
+
+    depth: Dict[str, int] = {}
+    for label in order:  # order is dependency-before-dependent (topological)
+        deps = in_sprint_deps.get(label, [])
+        depth[label] = 1 + max((depth[d] for d in deps), default=-1)
+
+    return {
+        label: {"sprint": sprint_of[label], "wave": depth[label] + 1} for label in order
+    }
 
 
 def _validate_sprint_axis_order(
@@ -544,7 +569,7 @@ def run_default_mode(edges_file_path: str) -> None:
 
     order = result["order"]
     number = result["number"]
-    sprint_wave = _stamp_author_sprints(order, result["sprintWave"], author_sprints)
+    sprint_wave = _stamp_author_sprints(order, result["sprintWave"], author_sprints, edges)
 
     axis_check = _validate_sprint_axis_order(order, number, sprint_wave, edges)
     if not axis_check["ok"]:

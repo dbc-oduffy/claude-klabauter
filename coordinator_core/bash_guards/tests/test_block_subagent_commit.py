@@ -2305,27 +2305,18 @@ def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
     )
 
 
-def test_include_orphans_from_an_agent_denies_before_the_ownership_leg():
-    """SC-DR-022's leg, pinned at the PREDICATE rather than through argv
-    (2026-08-30). Neither live allow shape carries an orphan-adoption
-    opt-in -- `ceremony.commit_v2` has no such parameter and plain `git
-    commit` has no such concept -- so `_resolve_git_commit_agent_pathspec`
-    can no longer produce `include_orphans=True`, and this leg has no argv
-    spelling left to exercise it through.
-
-    That is a reason to test it directly, NOT a reason to delete it: the
-    same `_pathspec_shape_permitted` is called by `action_guard.assert_
-    pathspec_shape_permitted` (the `commit_paths()` in-process seam), whose
-    `include_orphans` argument is caller-supplied, and the gate must stay
-    armed for any future shape that carries one. Pinned so a later change
-    reintroducing an opt-in cannot land with the refusal quietly gone.
+def test_include_orphans_no_longer_denies_the_shape_leg():
+    """BV-20260927-01 (2026-09-27) supersedes SC-DR-022's predicate-level
+    pin: `_pathspec_shape_permitted` no longer refuses on `include_orphans`
+    at all -- the flag is read (still threaded through, for callers like
+    `action_guard.assert_pathspec_shape_permitted` that pass one
+    explicitly) but inert. `_LEG_AGENT_ORPHAN_ADOPTION` is retired along
+    with the leg it named.
     """
     allowed, reason = guard._pathspec_shape_permitted(["a.py"], True, "/repo")
-    assert allowed is False
-    assert reason == guard._LEG_AGENT_ORPHAN_ADOPTION
-    message = guard._GIT_COMMIT_AGENT_LEG_MESSAGES[reason]
-    assert "RELAY" in message
-    assert "include_orphans ignored" not in message
+    assert allowed is True
+    assert reason == ""
+    assert not hasattr(guard, "_LEG_AGENT_ORPHAN_ADOPTION")
 
 
 def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reached(
@@ -2383,13 +2374,13 @@ def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reac
 # ---------------------------------------------------------------------------
 
 
-def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_false(
+def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_true(
     monkeypatch,
 ):
-    """No `--include-orphans` anywhere in the invocation -- behaves EXACTLY
-    as it did before any of today's changes: strict, orphans denied (the
-    derived `allow_orphans` value passed to the ownership-scope helper is
-    `False`, the same default both that helper and the sink already had).
+    """BV-20260927-01: no `--include-orphans` anywhere in the invocation --
+    `allow_orphans` is now passed `True` UNCONDITIONALLY, since the paths
+    reaching this call are already this invocation's own explicit,
+    non-sweeping pathspec regardless of whether the flag was named.
     """
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
@@ -2399,7 +2390,7 @@ def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_false(
         )
     )
     assert len(calls) == 1
-    assert calls[0]["allow_orphans"] is False
+    assert calls[0]["allow_orphans"] is True
 
 
 def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
@@ -2431,19 +2422,9 @@ def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
 
 def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch):
     """An `"include_orphans": true` key in a `ceremony.commit_v2` payload is
-    INERT, and must be read that way rather than as an opt-in to refuse.
-
-    That op has no such parameter (`ops/ceremony/commit_v2.py :: _handler`
-    reads `paths`/`deleted_paths`/`message`/`prefer_staged` and nothing
-    else), so the key changes nothing about what would be committed. The
-    guard therefore passes `allow_orphans=False` to the ownership leg and
-    lets that leg decide -- exactly as if the key were absent. Denying on
-    the key instead would name a cause that does not exist: the invocation
-    is not asking for adoption, it is carrying a key the sink ignores.
-
-    The SC-DR-022 refusal itself is unchanged and pinned directly at
-    `_pathspec_shape_permitted` -- see
-    `test_include_orphans_from_an_agent_denies_before_the_ownership_leg`.
+    INERT -- it neither widens nor narrows the verdict, since
+    `allow_orphans=True` is now passed unconditionally at this call site
+    (BV-20260927-01).
     """
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
@@ -2455,29 +2436,15 @@ def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch
         )
     )
     assert len(calls) == 1
-    assert calls[0]["allow_orphans"] is False
+    assert calls[0]["allow_orphans"] is True
 
 
-def test_agent_orphan_adoption_deny_tells_the_agent_to_relay_not_re_invoke(
-    monkeypatch,
-):
-    """The deny prose is the operative half of SC-DR-022: the offer in an
-    orphan refusal is addressed to an operator, and for an agent it is
-    information to RELAY. Pinned because the failure mode this closes is a
-    message that sends the agent back to re-invoke with the flag.
-    """
-    message = guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_AGENT_ORPHAN_ADOPTION]
-    assert "RELAY" in message
-    assert "operator" in message
-    # Must not instruct the agent to do the forbidden thing.
-    assert "--include-orphans" not in message
-
-
-def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_false(
+def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_true(
     monkeypatch,
 ):
     """The JSON-body spelling with no `include_orphans` key at all -- must
-    default to `False`, same as the trampoline's no-flag case.
+    also pass `allow_orphans=True`, same as the trampoline's no-flag case
+    (BV-20260927-01: the flag is no longer what decides this).
     """
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
@@ -2488,7 +2455,7 @@ def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_false
         )
     )
     assert len(calls) == 1
-    assert calls[0]["allow_orphans"] is False
+    assert calls[0]["allow_orphans"] is True
 
 
 def test_ownership_leg_denial_still_within_prose_cap_budget(monkeypatch):
@@ -2708,16 +2675,15 @@ class TestRealOwnershipScopeWiring:
         result = guard.check(payload)
         assert result is None, f"expected ALLOW (self-liveness is not gated), got deny: {result!r}"
 
-    def test_orphan_unowned_path_without_include_orphans_flag_still_denies(
-        self, tmp_path
-    ):
-        """F0 (staff-eng review, 2026-08-04): an invocation that does NOT
-        carry `--include-orphans` must behave EXACTLY as it did before any
-        of today's changes -- strict, orphans denied -- because the guard
-        now MIRRORS the invocation's own flag instead of hard-coding
-        `allow_orphans=True`. Same fixture as
-        `test_orphan_unowned_path_denies_even_with_orphans_requested` below,
-        differing ONLY in the absence of the flag in the command text.
+    def test_orphan_inside_declared_pathspec_is_adopted(self, tmp_path):
+        """BV-20260927-01 (PM ruling 2026-09-27, supersedes SC-DR-022):
+        an unclaimed dirty path INSIDE this invocation's own explicit,
+        non-sweeping pathspec is now adoptable -- no `--include-orphans`
+        flag needed, since the pathspec itself (mirroring what an emitted
+        wave's declared `writes:` hands the committer) is the provenance.
+        `orphan.py` here has no session touch-claim at all (the same shape
+        a Bash-authored write leaves per DR-258), and the invocation asks
+        for nothing special -- it just names the path.
         """
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
@@ -2729,25 +2695,15 @@ class TestRealOwnershipScopeWiring:
             'git commit -m "msg" -- orphan.py', repo, "mine"
         )
         result = guard.check(payload)
-        assert result is not None, "expected DENY: no --include-orphans in the invocation"
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result is None, f"expected ALLOW: orphan.py is inside the declared pathspec, got deny: {result!r}"
 
-    def test_orphan_unowned_path_denies_even_with_orphans_requested(self, tmp_path):
-        """CONTRACT CHANGE (SC-DR-022, claude-central-em, 2026-08-04) --
-        supersedes this test's prior `…_now_allowed_with_orphans_enabled`
-        form, which asserted ALLOW here.
-
-        A DISPATCHED agent may never adopt an orphan, so the flag no longer
-        rescues this shape: `orphan.py` is a genuine unclaimed orphan, the
-        invocation asks for adoption, and the guard refuses at the
-        agent-adoption leg before the ownership helper is consulted.
-
-        This deliberately RE-CLOSES the agent's primary workload at this
-        seam. That is the ruling's intent, not a regression of the LEG-3
-        fix: engine-authored state is meant to become committable by being
-        CLAIMED at the dispatch chokepoint (self-reported touches, the
-        SC-DR-021 (a) population), not by being adopted after the fact by a
-        committer that never authored it.
+    def test_orphan_inside_pathspec_adopted_with_include_orphans_flag_too(
+        self, tmp_path
+    ):
+        """The `--include-orphans` flag is now read but INERT -- carrying it
+        must not change the verdict from the flag-absent case above. Pins
+        that the flag is not a required opt-in, nor a separately-refused
+        shape, post-BV-20260927-01.
         """
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
@@ -2755,30 +2711,13 @@ class TestRealOwnershipScopeWiring:
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
         (repo / "orphan.py").write_text("o")
 
-        # 2026-08-30: respelled onto a LIVE allow shape. The invocation this
-        # used to carry (`scoped-git-commit ... --include-orphans`) can no
-        # longer reach any leg -- the trampoline is deleted and no live shape
-        # carries an adoption opt-in -- so keeping it would have pinned a
-        # deny produced by an unparseable route rather than by the claim
-        # under test. Spelled as the sanctioned plain-`git commit`, the
-        # refusal now comes from the OWNERSHIP leg on a real repo: an
-        # unclaimed orphan is not this session's to commit, with or without
-        # a flag to ask for it.
         payload = _real_scope_payload(
             'git commit -m "msg" -- orphan.py',
             repo,
             "mine",
         )
         result = guard.check(payload)
-        assert result is not None, "expected DENY: an agent may not adopt orphans"
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        # A5/DD4: the orphan classification now gets the dedicated deny
-        # message carrying SC-DR-023's own caveat (see
-        # test_ownership_leg_orphan_denial_names_no_holder_caveat) rather
-        # than the generic path/classification-naming template -- this test
-        # still pins that the VERDICT is deny.
-        assert "no holder is not evidence no one wrote it" in reason
+        assert result is None, f"expected ALLOW: {result!r}"
 
     def test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_allowed(
         self, tmp_path
@@ -2858,23 +2797,20 @@ class TestRealOwnershipScopeWiring:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_mixed_authorship_pathspec_denies_when_adoption_is_requested(self, tmp_path):
-        """CONTRACT CHANGE (SC-DR-022, 2026-08-04) -- this test has now been
-        through both directions, and the history is the point.
+    def test_mixed_authorship_pathspec_is_allowed(self, tmp_path):
+        """CONTRACT CHANGE (BV-20260927-01, 2026-09-27) -- supersedes this
+        test's SC-DR-022-era `_denies_when_adoption_is_requested` form,
+        which asserted DENY here.
 
-        It originally pinned a deterministic deny (the ownership leg took
-        `allow_orphans`'s `False` default positionally). The LEG-3 fix
-        flipped it to ALLOW via mirrored adoption, on the reasoning that
-        engine-authored state IS the commit agent's characteristic workload
-        and denying it defeated the agent's primary job. SC-DR-022 flips it
-        back to DENY, and answers the reasoning rather than discarding it:
-        the workload is real, but adoption was the wrong instrument for it.
-        Adoption is safe only when the adopter authored the bytes, and a
-        dispatched committer never did.
-
-        The workload's real route is SC-DR-021 (a) -- engine ops
-        self-reporting their writes at the dispatch chokepoint, so the paths
-        arrive CLAIMED and are never orphans at this seam in the first place.
+        A pathspec mixing a claimed path (`edited.py`, touched through the
+        Edit tool) and an unclaimed one (`bash_authored.py`, written through
+        Bash/CLI and so recording no `touched.txt` claim per DR-258) is now
+        ALLOWED end to end: both paths are elements of this invocation's own
+        explicit, non-sweeping, in-repo pathspec, which is exactly the
+        provenance BV-20260927-01 grants adoption on. Bash-authored engine
+        state reaching the committer through its own declared pathspec is
+        the fleet's actual, common workload (PM ruling 2026-09-27), not an
+        edge case to keep denying.
 
         Peer-claim coverage stays pinned directly in
         `test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_
@@ -2882,12 +2818,6 @@ class TestRealOwnershipScopeWiring:
         """
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
-        # Backdate started_at, mirroring
-        # test_orphan_unowned_path_denies_even_with_orphans_requested above,
-        # so compute_scope's mtime fallback does not silently adopt the
-        # untouched file into this session's own safe_paths via a DIFFERENT
-        # mechanism than the one this test exists to exercise -- it must
-        # land as a genuine orphan, adopted only via `allow_orphans=True`.
         sdir = Path(_session_core.session_dir("mine", cwd=str(repo)))
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
 
@@ -2899,22 +2829,13 @@ class TestRealOwnershipScopeWiring:
         # fast-exit) records no claim in touched.txt at all.
         (repo / "bash_authored.py").write_text("authored via Bash/CLI")
 
-        # Respelled onto a live allow shape for the same reason as the
-        # orphan test above -- the deny must come from the mixed-authorship
-        # pathspec, not from a route the guard can no longer parse.
         payload = _real_scope_payload(
             'git commit -m "msg" -- edited.py bash_authored.py',
             repo,
             "mine",
         )
         result = guard.check(payload)
-        assert result is not None, "expected DENY: an agent may not adopt orphans"
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        # A5/DD4: the orphan classification (bash_authored.py's shape) now
-        # gets the dedicated deny message carrying SC-DR-023's caveat -- see
-        # test_ownership_leg_orphan_denial_names_no_holder_caveat.
-        assert "no holder is not evidence no one wrote it" in reason
+        assert result is None, f"expected ALLOW: both paths are inside the declared pathspec, got deny: {result!r}"
 
 
 # --- In-repo ABSOLUTE pathspec elements: the ownership leg's path-FORM gap ---

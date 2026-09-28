@@ -82,7 +82,7 @@ class TestQueueWriteDenied:
         reason = _advisory_context(result)
         assert "queue-admission-five-questions.md" in reason
         assert "justification:" in reason
-        assert "state/improvement-queue/new-item.yaml" in reason
+        assert "improvement queue entry" in reason
 
     def test_multiedit_queue_deny(self):
         result = guard.check(

@@ -11,6 +11,7 @@ different plan must not be counted against this verdict.
 from __future__ import annotations
 
 from coordinator_core.hooks.guard_kira_verdict_routed import (
+    _guard_kira_verdict_routed,
     _kira_has_verified_ledger,
     _kira_unstamped_integrators,
 )
@@ -53,6 +54,32 @@ def test_unstamped_integrators_falls_back_to_session_wide_when_plan_unreadable()
         "integrator-a.md",
         "integrator-b.md",
     ]
+
+
+def test_guard_passes_when_kira_carries_her_own_verified_ledger(tmp_path):
+    """End-to-end twin of DoE's
+    test_pass_when_kira_carries_her_own_verified_ledger: reviewers apply
+    their own findings in place ("Apply, Then Ledger, Then Verify" --
+    coordinator/agents/overengineering-reviewer.md), so a verified
+    `findings_ledger` on Kira's own sidecar routes the verdict with no
+    sibling code-reviewer sidecar required."""
+    (tmp_path / ".git").mkdir()
+    session_id = "sess-rri-m4"
+    share_dir = tmp_path / ".coordinator-local" / "subagent-share" / session_id
+    share_dir.mkdir(parents=True)
+    (share_dir / "coordinatoroverengineering-reviewer.a1.md").write_text(
+        "---\n"
+        "agent_type: coordinator:overengineering-reviewer\n"
+        "spawned_at: 2026-09-27T00:00:00Z\n"
+        "findings_count: 2\n"
+        "rebuild_recommended: false\n"
+        "findings_ledger: {rows: 2, applied: 2, em_rejected: 0, suspended: 0}\n"
+        "---\n"
+        "body\n"
+    )
+
+    out = _guard_kira_verdict_routed({"cwd": str(tmp_path), "session_id": session_id})
+    assert out == {}
 
 
 def test_verified_ledger_stamp_on_kira_sidecar_satisfies_routing():

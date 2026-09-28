@@ -112,6 +112,18 @@ differently than an ``output-consumption-runtime`` gate would.
 This module is a pure function: same rows in, same wave order out, no I/O,
 no mutation of its inputs.
 
+## DAG emission (2026-09-27, C3)
+
+``build_waves`` validates and reports; ``build_dag`` is what the emitter
+schedules from. ``dag_from_waves(waves)`` re-expresses an already-validated
+wave list as ``DagPlan`` — waves flattened into one topological order, each
+row's ``after`` naming exactly the row ids its own promise must await
+(declared/derived ordering edges plus a write-overlap edge back to any
+earlier-wave row) — and ``build_dag(rows)`` composes it with ``build_waves``.
+Neither function re-validates: a cycle, holdout or overlap-collapse already
+happened in ``build_waves``; ``dag_from_waves`` only re-derives edges over
+rows ``build_waves`` already placed.
+
 Negative-spec:
   - Does NOT re-derive the UNDECLARED-vs-empty distinction; it trusts
     ``spine_read``'s sentinel via identity check.
@@ -159,6 +171,40 @@ class WaveRow(NamedTuple):
 
 class WaveCycleError(ValueError):
     pass
+
+
+class DagNode(NamedTuple):
+    """One scheduled row plus the row ids its own promise must await.
+
+    ``after`` unions two edge sources: ``_predecessors``'s real ordering
+    edges (declared depends_on, plus surviving read-after-write) over the
+    full flattened row set, and a write-overlap edge back to any row in an
+    EARLIER wave whose ``writes`` collide with this row's (``_writes_overlap``)
+    — the wave-placement algorithm already keeps overlapping writers apart by
+    wave index; this is that separation re-expressed as an explicit DAG edge
+    so the emitter can serialize it without reading wave index at all.
+    Ordered to match ``nodes``' flattened (topological) order, never id
+    sort order or insertion order into the set.
+    """
+
+    row: WaveRow
+    after: tuple
+
+
+class DagPlan(NamedTuple):
+    """The DAG form ``build_dag``/``dag_from_waves`` schedule from.
+
+    ``nodes`` is the waves flattened into one topological order (unchanged
+    from ``build_waves``'s own within-wave and across-wave ordering).
+    ``waves`` is passed through unchanged — ``build_waves`` stays the
+    validator and reporter (cycles, epistemic and BLOCKED-predecessor
+    holdout, overlap); this is what the emitter schedules from.
+    """
+
+    nodes: tuple
+    waves: list
+    max_concurrent_rows: int
+    critical_path_rows: int
 
 
 def _normalize_path(path: str) -> PurePosixPath:
@@ -583,3 +629,57 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
         for wave in waves
         if wave
     ]
+
+
+def dag_from_waves(waves: list[list[WaveRow]]) -> DagPlan:
+    """Waves (as ``build_waves`` returns them) -> the DAG the emitter schedules from.
+
+    ``after(row)`` is the union of: ``_predecessors`` over the flattened row
+    set (declared depends_on plus surviving read-after-write edges), and an
+    edge to every row in an EARLIER wave whose ``writes`` overlap this row's
+    (``_writes_overlap``) — the wave-placement pass already keeps such rows
+    apart by wave index; this re-expresses that separation as an explicit
+    edge, since a DAG-scheduled row has no wave index to consult at run
+    time. ``critical_path_rows`` is the longest ``after`` chain, counted in
+    rows (one more than the deepest ASAP depth); ``max_concurrent_rows`` is
+    the largest number of rows sharing one ASAP depth.
+    """
+    flat = [row for wave in waves for row in wave]
+    order_index = {row.id: i for i, row in enumerate(flat)}
+    preds = _predecessors(flat)
+    wave_of = {row.id: wave_idx for wave_idx, wave in enumerate(waves) for row in wave}
+
+    nodes: list[DagNode] = []
+    depth: dict[str, int] = {}
+    depth_counts: dict[int, int] = {}
+
+    for row in flat:
+        after_ids = set(preds[row.id])
+        own_wave = wave_of[row.id]
+        for earlier_wave in waves[:own_wave]:
+            for other in earlier_wave:
+                if _writes_overlap(row, other):
+                    after_ids.add(other.id)
+
+        after = tuple(
+            sorted(after_ids, key=lambda rid: order_index[rid])
+        )
+        row_depth = 1 + max((depth[a] for a in after), default=-1)
+        depth[row.id] = row_depth
+        depth_counts[row_depth] = depth_counts.get(row_depth, 0) + 1
+        nodes.append(DagNode(row=row, after=after))
+
+    max_concurrent_rows = max(depth_counts.values(), default=0)
+    critical_path_rows = (max(depth.values()) + 1) if depth else 0
+
+    return DagPlan(
+        nodes=tuple(nodes),
+        waves=waves,
+        max_concurrent_rows=max_concurrent_rows,
+        critical_path_rows=critical_path_rows,
+    )
+
+
+def build_dag(rows: list[EmitterRow]) -> DagPlan:
+    """``dag_from_waves(build_waves(rows))`` — the emitter's one entry point."""
+    return dag_from_waves(build_waves(rows))

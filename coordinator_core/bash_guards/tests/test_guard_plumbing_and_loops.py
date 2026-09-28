@@ -188,8 +188,8 @@ class TestSeamConfirmedOutletMessageShape:
         # RETARGETED (DR-280, 2026-08-07): this guard's deny branch is
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
-        assert "consider the seam-confirmed single-process rewrite here too" in ctx
-        assert "below." not in ctx.split("consider")[1].split("\n")[0]
+        assert "use the seam-confirmed single-process rewrite" in ctx
+        assert "below." not in ctx.split("use the seam-confirmed")[1].split("\n")[0]
 
     def test_override_note_lands_in_example_cue_window_not_consider_sentence(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_override_note_lands_
@@ -197,10 +197,10 @@ class TestSeamConfirmedOutletMessageShape:
         # `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS` key -- it renders a doc
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
-        consider_line = next(
-            line for line in ctx.splitlines() if "consider" in line
+        use_line = next(
+            line for line in ctx.splitlines() if "use the seam-confirmed" in line
         )
-        assert OVERRIDE_KEYS_DOC not in consider_line
+        assert OVERRIDE_KEYS_DOC not in use_line
         example_idx = ctx.index("Example:")
         override_idx = ctx.index(OVERRIDE_KEYS_DOC)
         assert override_idx > example_idx
@@ -208,7 +208,7 @@ class TestSeamConfirmedOutletMessageShape:
     def test_advisory_summary_reads_sensibly_on_macos_too(self):
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
-        assert "consider the seam-confirmed single-process rewrite here too" in ctx
+        assert "use the seam-confirmed single-process rewrite" in ctx
 
 
 class TestForLoopWrappingFindExec:

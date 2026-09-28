@@ -268,6 +268,44 @@ class TestNonGitFollowerStaysRungBWithSafeOffer:
         assert "'ls subdir/'" in reason
 
 
+class TestAttachedRepoRootWithNonGitFollowerAllows:
+    """F10 (GH #71): a leading `cd` into a REAL repo root (`.git` present)
+    with a non-git follower must pass through unrewritten rather than deny
+    -- a `-C` rewrite would lose cwd tracking for the follower anyway."""
+
+    def test_attached_repo_root_with_non_git_follower_allows(self, tmp_path):
+        origin = tmp_path / "origin_repo"
+        (origin / ".git").mkdir(parents=True)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        out = guard.check_offer_git_c(
+            "cd %s && git status && ls subdir/" % repo, cwd=str(origin)
+        )
+        assert out is None
+
+    def test_non_repo_directory_with_non_git_follower_still_denies(self, tmp_path):
+        origin = tmp_path / "origin_repo"
+        (origin / ".git").mkdir(parents=True)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        out = guard.check_offer_git_c(
+            "cd %s && git status && ls subdir/" % scratch, cwd=str(origin)
+        )
+        hso = _reason(out)
+        assert hso["permissionDecision"] == "deny"
+
+    def test_no_cwd_supplied_still_denies_even_for_real_repo_target(self, tmp_path):
+        # No payload `cwd` corroborating signal -- must not fire on the
+        # target's `.git` presence alone.
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        out = guard.check_offer_git_c(
+            "cd %s && git status && ls subdir/" % repo
+        )
+        hso = _reason(out)
+        assert hso["permissionDecision"] == "deny"
+
+
 class TestFollowerAnchoringRespectsExistingBailOuts:
 
     def test_env_prefix_before_cd_with_all_git_followers_still_denies(self):

@@ -966,3 +966,98 @@ def test_receipt_under_second_share_root_only_still_counts(monkeypatch, tmp_path
 
     review_receipt_gate = decision_object["gates"]["review_receipt"]
     assert review_receipt_gate["blocks"] is False
+
+
+# ---------------------------------------------------------------------------
+# MK2 (DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md): a
+# plan-bearing close whose governing plan carries a valid review_stamp is
+# discharged by the stamp alone -- no per-reviewer receipt required, and
+# supersession is never re-checked (a later foreign commit to a declared
+# write must not brick the close).
+# ---------------------------------------------------------------------------
+
+
+def test_review_stamp_on_governing_plan_clears_the_gate_with_no_reviewer_receipt(
+    integrator_git_repo,
+):
+    repo = integrator_git_repo
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    plan_path = plans_dir / "stamped-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: executing\n---\n\n# a plan\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_creationflags())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_creationflags()
+    )
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    head_tree = subprocess.run(
+        ["git", "log", "-1", "--format=%T", head_sha], cwd=repo, check=True, capture_output=True,
+        text=True, **no_console_creationflags(),
+    ).stdout.strip()
+
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8").replace(
+            "status: executing\n",
+            "status: executing\nreview_stamp:\n"
+            f"  terminal_commit_sha: {head_sha}\n"
+            f"  terminal_tree_sha: {head_tree}\n",
+        ),
+        encoding="utf-8",
+    )
+
+    gate = wsc._compute_review_receipt_gate(repo, "no-such-session", "implemented", None, plan_path)
+    assert gate.blocks is False
+    assert "review_stamp" in gate.detail
+
+
+def test_review_stamp_close_survives_a_later_foreign_commit_to_a_declared_write(
+    integrator_git_repo,
+):
+    """MK1/MK2: mint's supersession leg (asked with supersession=True) refuses
+    a later commit touching a declared write, but the CLOSE gate here always
+    calls `check(..., supersession=False)` -- a later, unrelated commit must
+    not brick the close."""
+    repo = integrator_git_repo
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    plan_path = plans_dir / "stamped-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: executing\nscope:\n  - docs/plans/stamped-plan.md\n---\n\n# a plan\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_creationflags())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_creationflags()
+    )
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    head_tree = subprocess.run(
+        ["git", "log", "-1", "--format=%T", head_sha], cwd=repo, check=True, capture_output=True,
+        text=True, **no_console_creationflags(),
+    ).stdout.strip()
+
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8").replace(
+            "status: executing\n",
+            "status: executing\nreview_stamp:\n"
+            f"  terminal_commit_sha: {head_sha}\n"
+            f"  terminal_tree_sha: {head_tree}\n",
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_creationflags())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "unrelated later touch"], cwd=repo, check=True,
+        **no_console_creationflags(),
+    )
+
+    gate = wsc._compute_review_receipt_gate(repo, "no-such-session", "implemented", None, plan_path)
+    assert gate.blocks is False

@@ -1186,6 +1186,54 @@ _PACKAGE_SCRIPT_OFFER = (
     "  npx jest src/thing.test.js"
 )
 
+#: F15 (GH #71): the identity-leg deny's primary suggestion block used to be
+#: a hardcoded `python3 -m pytest ...` triple regardless of ecosystem, so a
+#: vitest/jest repo was told to run a tool that does not exist there. Reuses
+#: `_is_package_script_label` (already package.json-aware -- `npm test`,
+#: `pnpm test`, etc.) plus this new direct-binary check, so `npx jest ...`/
+#: bare `vitest run ...` (no package-manager script wrapper at all) is
+#: caught too.
+_JS_TEST_RUNNER_BASES = frozenset({"jest", "vitest", "mocha", "jasmine", "ava"})
+
+
+def _is_js_runner_label(detected: str) -> bool:
+    """True when `detected` names a JS test runner directly (bare, or via
+    `npx`) -- as opposed to `_is_package_script_label`'s package-manager
+    SCRIPT shape (`npm test`) or an ordinary Python runner label."""
+    parts = detected.split()
+    if not parts:
+        return False
+    if parts[0] == "npx" and len(parts) > 1:
+        return parts[1] in _JS_TEST_RUNNER_BASES
+    return parts[0] in _JS_TEST_RUNNER_BASES
+
+
+#: Scoped-alternative TRIPLES for the two ecosystems this module already
+#: detects (`_classify_pytest`/`_classify_js_runner`/package-script). A repo
+#: with neither signature (unrecognised runner) keeps the Python triple as
+#: the fallback -- this module's suite-shape detection is pytest-anchored
+#: throughout (`testpaths`, `_classify_pytest`), so "no JS signal" reads as
+#: "assume the Python leg", not "guess a third ecosystem".
+_JS_SCOPED_ALTERNATIVES = (
+    "  npx vitest run src/thing.test.ts\n"
+    "  npx jest src/thing.test.js::test_case\n"
+    "  npx vitest run -t \"test name\"\n"
+)
+
+_PY_SCOPED_ALTERNATIVES = (
+    "  python3 -m pytest path/to/test_file.py\n"
+    "  python3 -m pytest path/to/test_file.py::test_case\n"
+    "  python3 -m pytest -k behaviour_changed\n"
+)
+
+
+def _scoped_alternatives_block(detected: str) -> str:
+    """Ecosystem-aware primary suggestion triple for a `detected` label --
+    the fix for F15 (GH #71: "suggests pytest in a TypeScript/vitest repo")."""
+    if _is_package_script_label(detected) or _is_js_runner_label(detected):
+        return _JS_SCOPED_ALTERNATIVES
+    return _PY_SCOPED_ALTERNATIVES
+
 #: Item 5.1 (cross-repo/archive/2026-09-11-doe-claude-em-suite-guard-and-
 #: emit-preamble-frictions.md): a BARE bash `$VAR`/`${VAR}` or PowerShell
 #: `$env:VAR` token, anchored to the WHOLE token -- a variable reference
@@ -1919,9 +1967,7 @@ def _deny_reason_subagent(
     _override_line = "  " + _override_note + "\n" if _override_note else ""
     return (
         "Full-suite subagent runs are denied (concurrency). Use instead:\n"
-        "  python3 -m pytest path/to/test_file.py\n"
-        "  python3 -m pytest path/to/test_file.py::test_case\n"
-        "  python3 -m pytest -k behaviour_changed\n"
+        + _scoped_alternatives_block(detected)
         + _override_line
         + "  Detected: %s\n"
         "  Command:  %s\n\n"
@@ -2131,7 +2177,7 @@ def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> 
     return (
         "Wait for the in-flight suite run, or scope this to what you touched "
         "in the meantime:\n"
-        "  python3 -m pytest path/to/your/test_file.py\n\n"
+        + _scoped_alternatives_block(detected) + "\n"
         "A suite run already holds the machine-wide test mutex — one at a "
         "time, machine-wide. Concurrent runs on this fleet do not merely cost "
         "wall-clock; they produce untrustworthy output (mid-edit reads, and "
@@ -2355,9 +2401,7 @@ def _deny_reason_grant(
                 "No Tier-F escape -- get the PM's Tier-U authorization grant, "
                 "or run what you touched:\n"
                 "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
-                "  python3 -m pytest path/to/your/test_file.py\n"
-                "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-                "  python3 -m pytest -k the_behaviour_you_changed\n\n"
+                + _scoped_alternatives_block(detected) + "\n"
                 "  Detected: %s\n"
                 "  Command:  %s\n\n"
                 "Grant detail: %s"
@@ -2370,9 +2414,7 @@ def _deny_reason_grant(
             "Ask the PM for a Tier-U authorization grant (their exact words go "
             "in the quotes), or run only what you touched:\n"
             "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
-            "  python3 -m pytest path/to/your/test_file.py\n"
-            "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-            "  python3 -m pytest -k the_behaviour_you_changed\n\n"
+            + _scoped_alternatives_block(detected) + "\n"
             "  Detected: %s\n"
             "  Command:  %s\n\n"
             "Full grant detail (ceremonies, session scope, authority vs. "
@@ -2933,9 +2975,7 @@ def _remediation_text(
     return (
         "Scope this to what was actually touched instead of the whole "
         "suite:\n"
-        "  python3 -m pytest path/to/the/test_file.py\n"
-        "  python3 -m pytest path/to/the/test_file.py::test_the_case_that_changed\n"
-        "  python3 -m pytest -k the_behaviour_that_changed\n\n"
+        + _scoped_alternatives_block(detected) + "\n"
         "Unscoped/full-suite runs require a Tier-U grant and are reserved "
         "for the top-level EM -- never a dispatched subagent or a bare "
         "dispatch-brief instruction."

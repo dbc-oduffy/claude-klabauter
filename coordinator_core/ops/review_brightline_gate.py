@@ -38,6 +38,13 @@ CLI contract (unchanged from the bash oracle):
     note); the bash oracle carried no such guard, so this is a deliberate,
     non-faithful divergence, not a reproduced quirk.
 
+`--worktree-base <base> --paths <p>...` (D7/C9, added — no bash-oracle
+analogue) counts loc/surfaces over base->worktree restricted to exactly
+`paths` (untracked declared paths read in-process, counted as all-added);
+`commits` is not evaluated (`commits=n/a`) and the line reports
+`basis=code-only,worktree`. `--paths` is required and refused (exit 1) with
+none given. See `_worktree_scoped`.
+
 --session-id <id> filters the range to commits whose trailer matches
 `^Session-Id: <id>` (prepare-commit-msg hook injects this trailer per
 docs/wiki/workstream-complete-review.md — UNANCHORED at the end, 2026-09-21,
@@ -838,6 +845,89 @@ def _session_scoped(range_: str, session_id: str) -> int:
     return 0
 
 
+def _worktree_scoped(base: str, paths: List[str]) -> int:
+    """`--worktree-base <base> --paths <p>...` mode (D7/C9): counts loc/
+    surfaces over base->worktree restricted to exactly the declared `paths`
+    — never the whole base->worktree diff, so a peer's commit to an
+    undeclared path between the review's base capture and this scan is
+    never swept in. `commits` is NOT evaluated in this mode (a worktree has
+    no commit history of its own to count) and is reported as the literal
+    token `commits=n/a`; the line reports `basis=code-only,worktree`.
+
+    A declared path untracked at `base` (new work with nothing to diff
+    against) is read in-process and counted as all-added, mirroring
+    `review.freeze_diff`'s own worktree-mode treatment of untracked
+    declared paths as synthesized new-file hunks. The existing noise/
+    prose/ceremony-exhaust filters and planning-artifact de-weight apply
+    identically to both the tracked and untracked legs, same as every
+    other mode in this module."""
+    if not paths:
+        print(f"{_PROG}: --worktree-base requires --paths <path>...", file=sys.stderr)
+        return 1
+
+    untracked_out, rc_u = _run_git(
+        ["ls-files", "--others", "--exclude-standard", "--", *paths]
+    )
+    untracked = (
+        {ln.strip() for ln in untracked_out.splitlines() if ln.strip()}
+        if rc_u == 0
+        else set()
+    )
+    tracked_paths = [p for p in paths if p not in untracked]
+
+    loc = 0
+    surfaces: Set[str] = set()
+    files: Set[str] = set()
+
+    def _apply(path: str, row_loc: int) -> None:
+        nonlocal loc
+        if (
+            _is_noise_path(path)
+            or _is_prose_bearing_path(path)
+            or _is_ceremony_exhaust_path(path)
+        ):
+            return
+        if _is_planning_artifact_path(path):
+            row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
+        loc += row_loc
+        surfaces.add(_classify_surface(path))
+        files.add(path)
+
+    if tracked_paths:
+        numstat_out, rc = _run_git(["diff", "--numstat", base, "--", *tracked_paths])
+        if rc != 0:
+            print(
+                f"{_PROG}: warning: git diff --numstat against {base} failed — "
+                "metrics may be incomplete",
+                file=sys.stderr,
+            )
+        for line in numstat_out.splitlines():
+            m = _CHAIN_NUMSTAT_RE.match(line)
+            if not m:
+                continue
+            added, deleted, raw_path = m.group(1), m.group(2), m.group(3)
+            path = _resolve_numstat_row_path(raw_path)
+            a = int(added) if added.isdigit() else 0
+            d = int(deleted) if deleted.isdigit() else 0
+            _apply(path, a + d)
+
+    for path in sorted(untracked):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                added = sum(1 for _ in fh)
+        except OSError:
+            continue
+        _apply(path, added)
+
+    verdict = _verdict(loc, 0, len(surfaces))
+    print(
+        f"range={base}..worktree loc={loc} commits=n/a "
+        f"surfaces={len(surfaces)} files={len(files)} "
+        f"basis=code-only,worktree VERDICT={verdict}"
+    )
+    return 0
+
+
 def _unfiltered(range_: str) -> int:
     shortstat_out, _rc = _run_git(["diff", "--shortstat", range_])
     loc, matched = _sum_loc(shortstat_out)
@@ -862,6 +952,17 @@ def _unfiltered(range_: str) -> int:
 
 
 def main(argv: List[str]) -> int:
+    if argv and argv[0] == "--worktree-base":
+        if len(argv) < 2 or not argv[1]:
+            print(f"{_PROG}: --worktree-base requires an argument", file=sys.stderr)
+            return 1
+        base = argv[1]
+        rest = argv[2:]
+        if not rest or rest[0] != "--paths" or not rest[1:]:
+            print(f"{_PROG}: --worktree-base requires --paths <path>...", file=sys.stderr)
+            return 1
+        return _worktree_scoped(base, rest[1:])
+
     if argv and argv[0] == "--from-handoff":
         print(
             f"{_PROG}: --from-handoff was removed (state/kill-ledger.md K-007, "

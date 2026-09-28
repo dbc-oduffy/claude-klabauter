@@ -15,7 +15,14 @@ record why the engine stopped. Consequences of that one property:
 
     - ``sample_once()`` never imports ``coordinator_core.ipc``, never goes
       through ``dispatch_message``, and is never called from an op handler.
-      It is invoked as a standalone process -- deployed as
+      This clause binds ``sample_once`` (the independent, sink-writing
+      recorder) specifically -- ``read_load()`` (2026-09-27 addition, see
+      below) is the SANCTIONED in-process read for engine callers (the
+      workflow-admission gate): it never writes the sink, never walks the
+      process table, never spawns, and costs microseconds, so it carries
+      none of the "must survive the engine dying" load-bearing requirement
+      this module otherwise exists to satisfy. It is invoked as a standalone
+      process -- deployed as
       ``python <abs-path-to-this-file>`` (direct-script invocation, see
       "Invocation-cost ratchet" below; ``python -m
       coordinator_core.telemetry.host_sampler`` also still works, e.g. under
@@ -199,6 +206,58 @@ Spec backlink: state/audits/2026-08-15-fleet-degradation-forensics.md
                state/handoffs/2026-08-15-kill-it-if-it-cannot-pay-for-itself.md
                docs/wiki/machine-load-norm.md
                docs/wiki/cost-budgets-and-the-kill-disposition.md
+
+``read_load()`` -- public read-only load reader (2026-09-27 addition, see
+docs/plans/2026-09-27-load-aware-workflow-admission.md C1):
+    Never raises, never writes the sink, never walks the process table, never
+    spawns a subprocess. Returns ``{"cpu_load": float|None, "mem_avail_mb":
+    int|None, "mem_total_mb": int|None, "platform": "linux"|"darwin"|
+    "windows"|"other", "read_cost_ms": float}``, gated under
+    ``_MAX_READ_LOAD_COST_MS`` (50ms -- an order of magnitude inside the
+    500ms brightline, see coordinator.local.md's Load norm). It is the
+    sanctioned in-process read for ``coordinator_core.ops.dispatch_emit
+    .admission``; ``sample_once``'s 20-minute sink cadence is too stale for
+    a per-emission admission decision, hence this separate, cheaper reader.
+
+    ``cpu_load`` -- ONE meaning on every OS (EM ruling): a fraction of the
+    box's logical CPUs currently in use. On POSIX (Linux, macOS) it is the
+    1-minute load average divided by ``os.cpu_count()``, NOT clamped (2.0
+    means twice as many runnable tasks as CPUs); on Windows it is the busy
+    fraction of ``GetSystemTimes`` ticks, in ``[0.0, 1.0]``. A single
+    ``cpu_load_max`` threshold compares against both -- a value above 1.0
+    can only ever trip on POSIX. Two accepted properties of the signal, not
+    defects: the POSIX figure is an exponentially-damped ~1-minute average,
+    so it lags relief by up to a minute; on Linux it also counts
+    uninterruptible (I/O-blocked) tasks, not just CPU-bound ones. The sink
+    row's existing ``cpu_pct`` field (0-100 percentage) is unrelated and
+    unchanged.
+
+    macOS memory (the other half of this addition's fix): ``_posix_memory_mb``
+    reads ``/proc/meminfo``, which macOS does not have, so both
+    ``read_load`` and the 20-minute sink row (``_collect_row``) silently
+    carried null memory on macOS before this addition. ``_darwin_memory_mb``
+    reads real memory via ``ctypes`` ``sysctlbyname`` against the process's
+    own namespace (``ctypes.CDLL(None)`` -- never
+    ``ctypes.util.find_library``, which can spawn a subprocess on some
+    hosts): ``hw.memsize`` for total, ``kern.memorystatus_level`` (percent
+    free) for available, falling back to
+    ``(vm.page_free_count + vm.page_speculative_count) * hw.pagesize`` when
+    that key is unreadable. Never raises; ``(None, None, None)`` on total
+    failure. macOS process counts (``_posix_process_counts``, also
+    ``/proc``-based) are a KNOWN, separately-filed limit -- admission never
+    reads them, and this addition does not fix them (see the plan's C1 body
+    and the bug-backlog row it files at close-out).
+
+    Windows CPU for ``read_load`` reuses ``_windows_cpu_pct``'s two-
+    ``GetSystemTimes``-snapshot delta arithmetic but avoids paying that
+    snapshot's gap sleep on every call: ``_windows_cpu_load`` holds the
+    previous snapshot at module scope and, when it is between 0.25s and 60s
+    old (the common case on a warm, repeatedly-polled pool worker), computes
+    the delta against it with NO sleep at all, refreshing the held snapshot
+    every call. Outside that age window it falls back to a fresh two-
+    snapshot pair (the existing ``_WINDOWS_CPU_SAMPLE_GAP_SECS`` wall-time
+    sleep) -- paid at most once per worker per minute of idleness, never in
+    the steady-state polling path ``read_load`` exists to serve cheaply.
 """
 
 from __future__ import annotations
@@ -286,11 +345,25 @@ _MAX_SAMPLE_COST_MS = 250.0
 # as `_MAX_SAMPLE_COST_MS`.
 _MAX_INVOCATION_COST_MS = 500.0
 
+# Ratchet high-water mark for read_load()'s own in-process cost (no sink
+# write, no process-table walk, no spawn -- see module docstring's
+# "read_load()" section). An order of magnitude inside the 500ms DR-344
+# brightline, same ratchet-not-quietly-raised rule as the two constants
+# above.
+_MAX_READ_LOAD_COST_MS = 50.0
+
 # Gap between the two GetSystemTimes snapshots used to compute a
 # point-in-time CPU percentage on Windows. Short enough to keep sample cost
 # low, long enough that the kernel/idle/user tick deltas aren't dominated by
 # measurement noise.
 _WINDOWS_CPU_SAMPLE_GAP_SECS = 0.05
+
+# _windows_cpu_load's held-snapshot age window -- see module docstring's
+# "read_load()" section. Below the minimum the tick deltas are too small to
+# be meaningful signal; above the maximum the snapshot is too stale to
+# reflect current load, so a fresh pair is taken instead.
+_WINDOWS_LOAD_SNAPSHOT_MIN_AGE_S = 0.25
+_WINDOWS_LOAD_SNAPSHOT_MAX_AGE_S = 60.0
 
 # os.name, not platform.system() -- see coordinator_core.atomic_append's own
 # identical rationale (platform.system() costs ~28ms on Windows resolving
@@ -329,36 +402,33 @@ def _filetime_to_100ns(ft: "_FILETIME") -> int:
     return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
 
 
-def _windows_cpu_pct() -> Optional[float]:
-    """Point-in-time CPU utilisation via two GetSystemTimes snapshots.
+def _windows_get_system_times() -> Optional[tuple]:
+    """Raw (idle, kernel, user) 100ns-tick snapshot via GetSystemTimes.
 
-    Returns None (never raises) if the ctypes call is unavailable or fails --
-    a missing CPU field must not stop the rest of the row from being written.
+    Returns None (never raises) if the ctypes call is unavailable or fails.
+    Extracted from ``_windows_cpu_pct`` so ``_windows_cpu_load`` can inject a
+    fake snapshot source in tests (runs on every host, not just Windows).
     """
     try:
         kernel32 = ctypes.windll.kernel32
-
-        def _snapshot():
-            idle, kernel, user = _FILETIME(), _FILETIME(), _FILETIME()
-            ok = kernel32.GetSystemTimes(
-                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
-            )
-            if not ok:
-                return None
-            return (
-                _filetime_to_100ns(idle),
-                _filetime_to_100ns(kernel),
-                _filetime_to_100ns(user),
-            )
-
-        first = _snapshot()
-        if first is None:
+        idle, kernel, user = _FILETIME(), _FILETIME(), _FILETIME()
+        ok = kernel32.GetSystemTimes(
+            ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
+        )
+        if not ok:
             return None
-        time.sleep(_WINDOWS_CPU_SAMPLE_GAP_SECS)
-        second = _snapshot()
-        if second is None:
-            return None
+        return (
+            _filetime_to_100ns(idle),
+            _filetime_to_100ns(kernel),
+            _filetime_to_100ns(user),
+        )
+    except Exception:
+        return None
 
+
+def _cpu_pct_from_snapshots(first: tuple, second: tuple) -> Optional[float]:
+    """Busy-percentage (0-100) delta between two GetSystemTimes snapshots."""
+    try:
         idle_delta = second[0] - first[0]
         # kernel time INCLUDES idle time on Windows; total busy ticks are
         # (kernel - idle) + user.
@@ -369,6 +439,70 @@ def _windows_cpu_pct() -> Optional[float]:
             return 0.0
         busy_delta = total_delta - idle_delta
         return max(0.0, min(100.0, (busy_delta / total_delta) * 100.0))
+    except Exception:
+        return None
+
+
+def _windows_cpu_pct() -> Optional[float]:
+    """Point-in-time CPU utilisation via two GetSystemTimes snapshots.
+
+    Returns None (never raises) if the ctypes call is unavailable or fails --
+    a missing CPU field must not stop the rest of the row from being written.
+    """
+    try:
+        first = _windows_get_system_times()
+        if first is None:
+            return None
+        time.sleep(_WINDOWS_CPU_SAMPLE_GAP_SECS)
+        second = _windows_get_system_times()
+        if second is None:
+            return None
+        return _cpu_pct_from_snapshots(first, second)
+    except Exception:
+        return None
+
+
+# Module-held (monotonic_ts, snapshot) pair for _windows_cpu_load's
+# held-snapshot fast path -- see module docstring's "read_load()" section.
+_windows_last_load_snapshot: Optional[tuple] = None
+
+
+def _windows_cpu_load(
+    snapshot_fn=None, sleep=time.sleep, monotonic=time.monotonic
+) -> Optional[float]:
+    """Busy fraction [0.0, 1.0] of Windows CPU ticks, for read_load().
+
+    Uses a module-held previous GetSystemTimes snapshot when it is
+    0.25s-60s old -- no per-call sleep in that (common, warm-pool-worker)
+    case. Outside that window, falls back to a fresh two-snapshot pair (the
+    existing gap sleep, wall time, at most once per worker per minute of
+    idleness). Refreshes the held snapshot on every read. Never raises.
+    ``snapshot_fn``/``sleep``/``monotonic`` are injectable seams so tests
+    exercise this branch on every host, not just Windows.
+    """
+    global _windows_last_load_snapshot
+    try:
+        snap = snapshot_fn or _windows_get_system_times
+        now = monotonic()
+        cur = snap()
+        if cur is None:
+            return None
+        prev = _windows_last_load_snapshot
+        if prev is not None:
+            prev_ts, prev_snap = prev
+            age = now - prev_ts
+            if _WINDOWS_LOAD_SNAPSHOT_MIN_AGE_S <= age <= _WINDOWS_LOAD_SNAPSHOT_MAX_AGE_S:
+                pct = _cpu_pct_from_snapshots(prev_snap, cur)
+                _windows_last_load_snapshot = (now, cur)
+                return None if pct is None else max(0.0, min(1.0, pct / 100.0))
+        sleep(_WINDOWS_CPU_SAMPLE_GAP_SECS)
+        second = snap()
+        if second is None:
+            _windows_last_load_snapshot = (now, cur)
+            return None
+        pct = _cpu_pct_from_snapshots(cur, second)
+        _windows_last_load_snapshot = (monotonic(), second)
+        return None if pct is None else max(0.0, min(1.0, pct / 100.0))
     except Exception:
         return None
 
@@ -466,6 +600,78 @@ def _posix_cpu_pct() -> Optional[float]:
         return None
 
 
+def _posix_cpu_load() -> Optional[float]:
+    """1-minute load average / logical CPU count -- NOT clamped.
+
+    See module docstring's "read_load()" section: 2.0 means twice as many
+    runnable tasks as CPUs, and that is meaningful signal for admission, not
+    an error to clamp away. Distinct from ``_posix_cpu_pct`` (which IS
+    clamped to a 0-100 display percentage for the sink row) -- both stay,
+    each serving its own caller.
+    """
+    try:
+        load1, _, _ = os.getloadavg()
+        cpu_count = os.cpu_count() or 1
+        return load1 / cpu_count
+    except Exception:
+        return None
+
+
+def _sysctlbyname(name: str, out_ctype) -> Optional[int]:
+    """One ``sysctlbyname(3)`` read via ``ctypes.CDLL(None)`` -- the process's
+    own namespace, no ``ctypes.util.find_library`` (can spawn on some
+    hosts), no subprocess. Returns the scalar value or None (never raises).
+    """
+    try:
+        libc = ctypes.CDLL(None)
+        buf = out_ctype()
+        size = ctypes.c_size_t(ctypes.sizeof(buf))
+        ret = libc.sysctlbyname(
+            name.encode("ascii"), ctypes.byref(buf), ctypes.byref(size), None, 0
+        )
+        if ret != 0:
+            return None
+        return buf.value
+    except Exception:
+        return None
+
+
+def _darwin_memory_mb(_sysctl=None) -> tuple:
+    """(used_mb, avail_mb, total_mb) via ctypes sysctlbyname, macOS only.
+
+    See module docstring's "read_load()" section -- the macOS memory fix.
+    ``hw.memsize`` for total; ``kern.memorystatus_level`` (percent free) for
+    available, falling back to
+    ``(vm.page_free_count + vm.page_speculative_count) * hw.pagesize`` when
+    that key is unreadable. (None, None, None) on total failure; never
+    raises. ``_sysctl`` is an injectable ``(name, out_ctype) -> value|None``
+    seam so tests run on every host, not just macOS.
+    """
+    try:
+        sysctl = _sysctl or _sysctlbyname
+        total = sysctl("hw.memsize", ctypes.c_uint64)
+        if total is None:
+            return (None, None, None)
+
+        level = sysctl("kern.memorystatus_level", ctypes.c_uint32)
+        if level is not None:
+            avail = (total * level) // 100
+        else:
+            page_free = sysctl("vm.page_free_count", ctypes.c_uint32)
+            page_spec = sysctl("vm.page_speculative_count", ctypes.c_uint32)
+            page_size = sysctl("hw.pagesize", ctypes.c_uint64)
+            if page_free is None or page_spec is None or page_size is None:
+                return (None, None, None)
+            avail = (page_free + page_spec) * page_size
+
+        total_mb = int(total) // (1024 * 1024)
+        avail_mb = int(avail) // (1024 * 1024)
+        used_mb = total_mb - avail_mb
+        return (int(used_mb), int(avail_mb), int(total_mb))
+    except Exception:
+        return (None, None, None)
+
+
 def _posix_memory_mb() -> tuple:
     try:
         info = {}
@@ -513,6 +719,16 @@ def _collect_row() -> dict:
         cpu_pct = _windows_cpu_pct()
         used_mb, avail_mb, total_mb = _windows_memory_mb()
         proc_count, claude_count, python_count = _windows_process_counts()
+    elif sys.platform == "darwin":
+        # macOS memory fix (2026-09-27) -- _posix_memory_mb reads
+        # /proc/meminfo, which macOS lacks, so the sink row silently carried
+        # null memory here before this branch. Process counts stay
+        # /proc-based (a known, separately-filed limit -- see module
+        # docstring's "read_load()" section); this branch does not touch
+        # them.
+        cpu_pct = _posix_cpu_pct()
+        used_mb, avail_mb, total_mb = _darwin_memory_mb()
+        proc_count, claude_count, python_count = _posix_process_counts()
     else:
         cpu_pct = _posix_cpu_pct()
         used_mb, avail_mb, total_mb = _posix_memory_mb()
@@ -530,6 +746,53 @@ def _collect_row() -> dict:
         "claude_proc_count": claude_count,
         "python_proc_count": python_count,
         "sample_cost_ms": round(sample_cost_ms, 3),
+    }
+
+
+def read_load() -> dict:
+    """Public, read-only, in-process load reader for the workflow-admission
+    gate. Never raises, never writes the sink, never walks the process
+    table, never spawns a subprocess -- see module docstring's "read_load()"
+    section for the full contract (cpu_load semantics, the macOS memory
+    fix, the Windows held-snapshot cost avoidance) and
+    ``_MAX_READ_LOAD_COST_MS`` for the cost ratchet this is measured
+    against.
+
+    Returns ``{"cpu_load": float|None, "mem_avail_mb": int|None,
+    "mem_total_mb": int|None, "platform": "linux"|"darwin"|"windows"|
+    "other", "read_cost_ms": float}``.
+    """
+    t_start = time.perf_counter()
+    try:
+        if _IS_WINDOWS:
+            platform_name = "windows"
+            cpu_load = _windows_cpu_load()
+            _used_mb, avail_mb, total_mb = _windows_memory_mb()
+        elif sys.platform == "darwin":
+            platform_name = "darwin"
+            cpu_load = _posix_cpu_load()
+            _used_mb, avail_mb, total_mb = _darwin_memory_mb()
+        elif sys.platform.startswith("linux"):
+            platform_name = "linux"
+            cpu_load = _posix_cpu_load()
+            _used_mb, avail_mb, total_mb = _posix_memory_mb()
+        else:
+            platform_name = "other"
+            cpu_load = _posix_cpu_load()
+            avail_mb, total_mb = (None, None)
+    except Exception:
+        platform_name = "other"
+        cpu_load = None
+        avail_mb = None
+        total_mb = None
+
+    read_cost_ms = (time.perf_counter() - t_start) * 1000.0
+    return {
+        "cpu_load": cpu_load,
+        "mem_avail_mb": avail_mb,
+        "mem_total_mb": total_mb,
+        "platform": platform_name,
+        "read_cost_ms": round(read_cost_ms, 3),
     }
 
 

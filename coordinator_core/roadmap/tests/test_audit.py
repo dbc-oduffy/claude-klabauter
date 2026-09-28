@@ -910,9 +910,10 @@ def test_parse_keep_cluster_ids_reads_first_column_of_bolded_keep_rows() -> None
         "| `cl-01` | **KEEP** | engine work |",
         "| `cl-02` | **KEEP** | mentions cl-01 in prose, must not double-count |",
         "| `cl-03` | **MOVE** | peer plane |",
-        "| `cl-04` | KEEP | unbolded is not a verdict |",
+        "| `cl-04` | KEEP | unbolded is a verdict too |",
+        "| `cl-05` | KEEP ME | not exactly KEEP, not a verdict |",
     ]) + _NL
-    assert parse_keep_cluster_ids(text) == ["cl-01", "cl-02"]
+    assert parse_keep_cluster_ids(text) == ["cl-01", "cl-02", "cl-04"]
 
 
 def test_parse_keep_cluster_ids_honours_column_3_verdict_shape() -> None:

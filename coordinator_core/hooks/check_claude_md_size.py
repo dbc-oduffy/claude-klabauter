@@ -102,7 +102,7 @@ from coordinator_core.write_guards._sentinel_write_guard import reconstruct_afte
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
-_RULE_ANCHOR = "the CLAUDE.md admission gate and byte-size budget"
+_RULE_ANCHOR = "the CLAUDE.md admission gate"
 
 _CHANNEL_ADVISORY = "advisory"
 _CHANNEL_DENY = "deny"

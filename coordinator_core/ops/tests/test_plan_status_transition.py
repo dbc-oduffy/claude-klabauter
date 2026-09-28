@@ -1971,3 +1971,70 @@ def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
     dest = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-04-superseded-me.md"
     assert dest.is_file()
     assert "status: superseded" in dest.read_text(encoding="utf-8")
+
+
+def test_stamp_implemented_refuses_subject_plan_with_no_review_stamp(tmp_path, capsys):
+    """MK1: a plan authorized strictly after review_stamp's cutoff (a SUBJECT
+    plan) cannot reach `implemented` with no `review_stamp` on record."""
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-09-28-subject-no-stamp.md",
+        "---\ntitle: T\nstatus: executing\n"
+        "execution_authorized_at: '2026-12-01T00:00:00Z'\n---\n\nBody.\n",
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "review-stamp" in err
+    assert "status: implemented" not in p.read_text(encoding="utf-8")
+
+
+def test_stamp_implemented_admits_subject_plan_with_valid_review_stamp(tmp_path, capsys):
+    """MK1: a subject plan carrying a valid `review_stamp` bound to an
+    ancestor commit whose tree matches is admitted to `implemented`."""
+    import subprocess as _sp
+
+    from coordinator_core.ops import review_stamp as _rs
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-09-28-subject-with-stamp.md",
+        "---\ntitle: T\nstatus: executing\n"
+        "execution_authorized_at: '2026-12-01T00:00:00Z'\n---\n\nBody.\n",
+    )
+    env = {**__import__("os").environ, **_GIT_ENV_KEYS}
+    head_sha = _sp.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), capture_output=True, text=True,
+        env=env, **no_console_creationflags(),
+    ).stdout.strip()
+    head_tree = _sp.run(
+        ["git", "log", "-1", "--format=%T", head_sha], cwd=str(tmp_path), capture_output=True,
+        text=True, env=env, **no_console_creationflags(),
+    ).stdout.strip()
+
+    stamp_block = (
+        "review_stamp:\n"
+        f"  terminal_commit_sha: {head_sha}\n"
+        f"  terminal_tree_sha: {head_tree}\n"
+    )
+    text = p.read_text(encoding="utf-8")
+    text = text.replace(
+        "execution_authorized_at: '2026-12-01T00:00:00Z'\n",
+        "execution_authorized_at: '2026-12-01T00:00:00Z'\n" + stamp_block,
+    )
+    p.write_text(text, encoding="utf-8")
+    _track(tmp_path, p)
+
+    reason = _rs.check(p, tmp_path, supersession=True)
+    assert reason is None, reason
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    # The archival sweep relocates the plan on a real `implemented` flip
+    # (see test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp);
+    # read wherever it landed rather than assuming it stayed in place.
+    dest = tmp_path / "archive" / "specs" / "2026-09" / "2026-09-28-subject-with-stamp.md"
+    landed = p if p.exists() else dest
+    assert landed.exists(), f"plan not found at {p} or {dest}"
+    assert "status: implemented" in landed.read_text(encoding="utf-8")

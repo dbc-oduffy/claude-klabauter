@@ -146,9 +146,12 @@ def test_an_ordinary_allow_is_untouched(records):
     assert records == []
 
 
-def test_include_orphans_ask_never_reaches_the_stand_down(records):
-    """SC-DR-022 refuses the ASK before the ownership leg runs, and the
-    stand-down must not launder it: the `_LEG_*` sentinel is what comes back.
+def test_include_orphans_ask_is_inert_and_reaches_the_ownership_leg(records):
+    """BV-20260927-01 supersedes SC-DR-022's pre-ownership refusal: an
+    `include_orphans` ask no longer short-circuits before the ownership leg
+    runs -- it reaches `assert_paths_in_session_scope` (here stubbed to
+    allow), and the stand-down is never consulted because there is no
+    denial to stand down.
     """
     allowed, reason = guard._git_commit_agent_pathspec_permitted(
         list(_PATHS),
@@ -158,8 +161,8 @@ def test_include_orphans_ask_never_reaches_the_stand_down(records):
         None,
         assert_paths_in_session_scope=lambda *a, **kw: (True, ""),
     )
-    assert allowed is False
-    assert reason == guard._LEG_AGENT_ORPHAN_ADOPTION
+    assert allowed is True
+    assert reason == ""
     assert records == []
 
 

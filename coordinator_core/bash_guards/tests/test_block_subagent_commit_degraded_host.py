@@ -1,39 +1,40 @@
-"""Tests for R21 (2026-09-26, IBMFR item 21): the `coordinator:git-commit-
-agent` C3 commit exemption must reach a DEGRADED-host dispatch of that same
-row -- one whose harness-supplied `payload["agent_type"]` is the host-native
-`general-purpose` roster substitution (`emit.py::_HOST_NATIVE_AGENT_TYPE_
-ROSTER`), never the coordinator:* literal `_git_commit_agent_may_commit`'s
-own LEG 1 was written against.
+"""C6 (2026-09-27): the R21 degraded-host commit-phase sentinel leg is
+retired. `emit.py`'s DAG-form scripts (C12) no longer compose a
+`coordinator:git-commit-agent` commit-phase prompt of any kind -- degraded
+host or not -- and the grind route's commit stage never carried the
+sentinel, so the leg guarded nothing after C12 lands: recognising a
+degraded-host `general-purpose` dispatch as an exempt commit-agent by a
+transcript sentinel is deleted outright, not widened or reshaped.
 
-The fix recognises this case by a SECOND signal alongside the degraded
-`agent_type`: whether the subagent's own transcript's first (harness-
-authored, pre-tool-call) line carries the fixed sentinel substring
-`_commit_agent_call` in `coordinator_core/ops/dispatch_emit/emit.py` bakes
-into every commit-phase prompt it composes, degraded or not -- an EXISTING
-marker, not a new stamp. `agent_type == "general-purpose"` ALONE must never
-be sufficient: that would exempt every general-purpose agent's commits, not
-only a degraded git-commit-agent's.
+This file now pins two things instead:
+
+1. The guard denies a subagent's own `coordinator-invoke
+   dispatch.terminal_commit '<json>'` call -- the new op is a member of
+   `_COMMITTING_OP_NAMES`, same as `ceremony.commit_v2`.
+2. A general-purpose subagent whose transcript happens to still carry the
+   old sentinel text is denied like any other subagent: the sentinel leg no
+   longer exists to read it, so it is inert data, not an admission signal.
 
 Pure Python -- no shell spawns. Identity/ownership seams are monkeypatched
 directly onto the guard module object, mirroring test_block_subagent_
-commit.py's own pattern; the transcript file is a real tmp_path file (the
-one piece of real I/O `_transcript_carries_commit_phase_sentinel` performs).
+commit.py's own pattern.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import pytest
-
 from coordinator_core.bash_guards import block_subagent_commit as guard
 
 _GIT_COMMIT_AGENT_TYPE = guard._GIT_COMMIT_AGENT_TYPE
-_DEGRADED_HOST_NATIVE_AGENT_TYPE = guard._DEGRADED_HOST_NATIVE_AGENT_TYPE
-_SENTINEL = guard._COMMIT_PHASE_PROMPT_SENTINEL
 _FAKE_REPO_ROOT = "/repo"
 
 _SCOPED_COMMIT_CMD = 'git commit -m "msg" -- src/foo.py'
+
+# The literal string the old degraded-host leg used to look for. Retained
+# here only as inert fixture text -- the guard no longer imports or reads
+# `emit._COMMIT_PHASE_PROMPT_SENTINEL` at all (that import is deleted).
+_OLD_SENTINEL_TEXT = "coordinator:terminal-commit-request"
 
 
 def _payload(command, agent_type, transcript_path=None, agent_id="deadbeef0123"):
@@ -81,156 +82,73 @@ def _write_transcript(tmp_path, first_line):
     return str(path)
 
 
-def _sentinel_transcript_line():
-    # A JSON-string-encoded line, the same shape a real transcript entry
-    # takes -- the sentinel needs no escaping (plain ASCII, no quotes/
-    # backslashes), so it survives verbatim inside the JSON string.
-    return (
-        '{"role": "user", "content": "Commit wave 1\'s work. '
-        + _SENTINEL
-        + '"}'
-    )
+# --- Deleted-leg negative specs ---
 
 
-# --- The degraded-host exemption fires only with BOTH signals present ---
+def test_leg_symbols_no_longer_exist_on_the_guard_module():
+    """The degraded-host sentinel leg's constant, import and reader
+    function are gone entirely -- not renamed, not stubbed."""
+    for name in (
+        "_DEGRADED_HOST_NATIVE_AGENT_TYPE",
+        "_COMMIT_PHASE_PROMPT_SENTINEL",
+        "_TRANSCRIPT_SENTINEL_READ_CAP_BYTES",
+        "_transcript_carries_commit_phase_sentinel",
+    ):
+        assert not hasattr(guard, name), f"{name} should have been deleted"
 
 
-def test_degraded_general_purpose_with_sentinel_allows(monkeypatch, tmp_path):
+def test_degraded_general_purpose_with_old_sentinel_text_still_denies(monkeypatch, tmp_path):
+    """A general-purpose subagent whose transcript carries the old sentinel
+    text is denied like any other subagent -- the leg that used to read it
+    is gone, so the text is inert."""
     _git_commit_agent_setup(monkeypatch)
-    transcript = _write_transcript(tmp_path, _sentinel_transcript_line())
+    transcript = _write_transcript(
+        tmp_path, '{"role": "user", "content": "' + _OLD_SENTINEL_TEXT + '"}'
+    )
     result = guard.check(
         _payload(
             _SCOPED_COMMIT_CMD,
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
+            agent_type="general-purpose",
             transcript_path=transcript,
         )
     )
-    assert result is None, f"expected ALLOW, got {result!r}"
-
-
-def test_bare_general_purpose_without_sentinel_still_denies(monkeypatch, tmp_path):
-    """The negative spec this row's body names explicitly: `general-
-    purpose` alone must never be sufficient."""
-    _git_commit_agent_setup(monkeypatch)
-    transcript = _write_transcript(tmp_path, '{"role": "user", "content": "do some work"}')
-    result = guard.check(
-        _payload(
-            _SCOPED_COMMIT_CMD,
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
-            transcript_path=transcript,
-        )
-    )
-    assert result is not None, "expected DENY for an ordinary general-purpose agent"
+    assert result is not None, "expected DENY for a general-purpose agent"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_general_purpose_with_no_transcript_path_still_denies(monkeypatch):
-    """No transcript at all (absent path) must fail closed, not open."""
-    _git_commit_agent_setup(monkeypatch)
-    result = guard.check(
-        _payload(
-            _SCOPED_COMMIT_CMD,
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
-            transcript_path=None,
-        )
-    )
-    assert result is not None, "expected DENY with no transcript_path"
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_general_purpose_with_unreadable_transcript_still_denies(monkeypatch, tmp_path):
-    """A transcript_path that does not resolve to a readable file must
-    fail closed (never assume the sentinel is present)."""
-    _git_commit_agent_setup(monkeypatch)
-    missing = str(tmp_path / "does-not-exist.jsonl")
-    result = guard.check(
-        _payload(
-            _SCOPED_COMMIT_CMD,
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
-            transcript_path=missing,
-        )
-    )
-    assert result is not None, "expected DENY on an unreadable transcript"
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_ordinary_coordinator_agent_type_ignores_transcript_path(monkeypatch, tmp_path):
+def test_ordinary_coordinator_agent_type_still_works_unchanged(monkeypatch, tmp_path):
     """The pre-existing, non-degraded route (agent_type ==
-    coordinator:git-commit-agent) must keep working unchanged, regardless
-    of what the transcript does or doesn't say."""
+    coordinator:git-commit-agent) keeps working unchanged."""
     _git_commit_agent_setup(monkeypatch)
-    transcript = _write_transcript(tmp_path, '{"role": "user", "content": "irrelevant"}')
     result = guard.check(
         _payload(
             _SCOPED_COMMIT_CMD,
             agent_type=_GIT_COMMIT_AGENT_TYPE,
-            transcript_path=transcript,
         )
     )
     assert result is None, f"expected ALLOW, got {result!r}"
 
 
-def test_degraded_exemption_still_honors_ownership_scope_leg(monkeypatch, tmp_path):
-    """The degraded route must not skip LEG 3 -- an ownership-scope denial
-    still denies even with the sentinel present and agent_type degraded."""
-    _git_commit_agent_setup(monkeypatch, scope_result=(False, "claimed by peer session x"))
-    transcript = _write_transcript(tmp_path, _sentinel_transcript_line())
+# --- AC19: dispatch.terminal_commit is denied to subagents ---
+
+
+def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch):
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: _FAKE_REPO_ROOT)
+    monkeypatch.setattr(
+        guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
+    )
+    monkeypatch.setattr(
+        guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
+    )
     result = guard.check(
         _payload(
-            _SCOPED_COMMIT_CMD,
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
-            transcript_path=transcript,
+            "coordinator-invoke dispatch.terminal_commit '{\"script_path\": \"x\"}'",
+            agent_type="general-purpose",
         )
     )
-    assert result is not None, "expected DENY on an ownership-scope refusal"
+    assert result is not None, "expected DENY for a subagent dispatch.terminal_commit invoke"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_degraded_exemption_still_denies_a_sweeping_pathspec(monkeypatch, tmp_path):
-    """LEG 3's sweeping-pathspec rejection must still run unconditionally
-    on the degraded route -- the sentinel is not a blanket bypass."""
-    _git_commit_agent_setup(monkeypatch)
-    transcript = _write_transcript(tmp_path, _sentinel_transcript_line())
-    result = guard.check(
-        _payload(
-            "git commit -A -m msg",
-            agent_type=_DEGRADED_HOST_NATIVE_AGENT_TYPE,
-            transcript_path=transcript,
-        )
-    )
-    assert result is not None, "expected DENY on a sweeping pathspec"
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-# --- Unit coverage of the sentinel-reading helper itself ---
-
-
-def test_sentinel_helper_true_on_matching_first_line(tmp_path):
-    path = _write_transcript(tmp_path, _sentinel_transcript_line())
-    assert guard._transcript_carries_commit_phase_sentinel(path) is True
-
-
-def test_sentinel_helper_false_on_non_matching_first_line(tmp_path):
-    path = _write_transcript(tmp_path, '{"role": "user", "content": "hi"}')
-    assert guard._transcript_carries_commit_phase_sentinel(path) is False
-
-
-def test_sentinel_helper_false_on_missing_file(tmp_path):
-    missing = str(tmp_path / "nope.jsonl")
-    assert guard._transcript_carries_commit_phase_sentinel(missing) is False
-
-
-def test_sentinel_helper_false_on_empty_path():
-    assert guard._transcript_carries_commit_phase_sentinel("") is False
-    assert guard._transcript_carries_commit_phase_sentinel(None) is False
-
-
-def test_sentinel_helper_false_when_sentinel_only_on_second_line(tmp_path):
-    """Only the FIRST line is trusted -- a later line (which a subagent's
-    own tool use could in principle append to) must not count."""
-    path = tmp_path / "transcript.jsonl"
-    path.write_text(
-        '{"role": "user", "content": "hi"}\n' + _sentinel_transcript_line() + "\n",
-        encoding="utf-8",
-    )
-    assert guard._transcript_carries_commit_phase_sentinel(str(path)) is False
+def test_terminal_commit_op_name_is_a_committing_op():
+    assert "dispatch.terminal_commit" in guard._COMMITTING_OP_NAMES

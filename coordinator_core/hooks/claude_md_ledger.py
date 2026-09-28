@@ -389,10 +389,7 @@ _LEDGER_PATH_OVERRIDES = {
 #: demote target, not merely refuse (an offer, not a nag). Points at the
 #: channel-purpose contract that is the routing authority for where content
 #: should go instead.
-_DEFAULT_DEMOTE_TARGET_HINT = (
-    "Demote target: non-conduct content -> wiki (coordinator/docs/wiki/, "
-    "channel 5), per doctrine-channel-purposes.md."
-)
+_DEFAULT_DEMOTE_TARGET_HINT = "Demote target: wiki (coordinator/docs/wiki/)."
 
 
 def surface_slug(surface: str) -> str:
@@ -556,8 +553,7 @@ def admission_check_for_surface(
         if new_size > old_size:
             return False, (
                 f"Refused: {surface} has no ledger yet ({ledger_path}). "
-                f"Growth blocked until one exists; shrinkage always OK. "
-                f"{_DEFAULT_DEMOTE_TARGET_HINT}"
+                f"Growth blocked; shrinkage OK. {_DEFAULT_DEMOTE_TARGET_HINT}"
             )
         return True, ""
 

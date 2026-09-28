@@ -173,14 +173,58 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.cartography._guard import PathEscapeError
+from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
 from coordinator_core.ops.dispatch_emit.inventory_mint import mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
+from coordinator_core.ops.review_mint.op import load_fragment as _load_review_roster_fragment
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.ops._param_alias import aliased_param, spellings
+
+#: Sibling-relative path of DoE's roster-v5 stage-schema file (AC22) --
+#: joined onto the SAME sibling root ``review_mint.op.load_fragment``
+#: already resolves the roster fragment from (``read_doe_root_pointer()``),
+#: never a second cross-repo pointer.
+_REVIEW_STAGE_SCHEMA_RELPATH = "coordinator/schemas/review-stage.schema.json"
+
+
+def _load_review_roster_and_stage_schemas() -> tuple:
+    """Best-effort load of the v5 review roster fragment plus DoE's stage
+    schemas (AC22) -- reusing ``review_mint.op.load_fragment``'s own
+    DoE-root resolution for the fragment, never a duplicated pointer.
+
+    Returns ``(fragment, stage_schemas)``, each ``None`` on any failure
+    (unresolvable DoE root, missing file, unparseable JSON, or a stage
+    schema file whose ``$defs`` is not a mapping) -- ``compose_script``
+    degrades to its own narration on either being ``None``; this never
+    raises and never guesses a roster.
+    """
+    try:
+        fragment = _load_review_roster_fragment()
+    except (FileNotFoundError, OSError, ValueError):
+        return None, None
+
+    doe_root = read_doe_root_pointer()
+    if not doe_root:
+        return fragment, None
+
+    schema_path = Path(doe_root) / _REVIEW_STAGE_SCHEMA_RELPATH
+    if not schema_path.is_file():
+        return fragment, None
+
+    try:
+        doc = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return fragment, None
+
+    stage_schemas = doc.get("$defs") if isinstance(doc, dict) else None
+    if not isinstance(stage_schemas, dict):
+        return fragment, None
+
+    return fragment, stage_schemas
 
 
 # Generator-provenance: writes the emitted script to a caller-supplied,
@@ -758,12 +802,20 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
     else:
+        # AC22: the plan route loads the roster fragment and DoE's stage
+        # schemas itself, through the existing DoE-root pointer resolution
+        # -- never a caller-supplied fragment param, and never a guessed
+        # roster on an unresolvable sibling root (degrades to emit.py's own
+        # narration instead).
+        review_roster_fragment, review_stage_schemas = _load_review_roster_and_stage_schemas()
         script = emit_script(
             plan_path,
             name=params.get("name"),
             description=params.get("description"),
             repo_root=repo_root or _repo_root_for_plan(plan_path),
             session_id=emitting_session_id,
+            review_roster_fragment=review_roster_fragment,
+            review_stage_schemas=review_stage_schemas,
             agent_type_host=agent_type_host,
             preamble=preamble,
         )

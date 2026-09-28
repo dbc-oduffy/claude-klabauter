@@ -21,9 +21,12 @@ Every real computation lives one layer down:
     `--fire` path; `--plan`, `--inventory`, and `--restamp` alone spawn
     nothing (S1-C7 AC).
 
-This module owns nothing but argv parsing and the exit-code mapping over
-those three functions' own return/raise contracts. It does NOT derive
-waves, pathspecs, script text, or receipt shape itself.
+This module owns nothing but argv parsing, the exit-code mapping over
+those three functions' own return/raise contracts, and one added step:
+running load-aware admission (`admission.await_admission`) before emission
+on the plan/inventory/queue routes, merging the returned record into the
+printed JSON (docs/plans/2026-09-27-load-aware-workflow-admission.md, C4).
+It does NOT derive waves, pathspecs, script text, or receipt shape itself.
 
 Negative-spec:
   - Does NOT re-implement `_dispatch_emit`'s InventoryPathConflictError,
@@ -72,6 +75,11 @@ from coordinator_core.ops.dispatch_emit.op import (
     QueuePlanConflictError,
     _dispatch_emit,
     restamp,
+)
+from coordinator_core.ops.dispatch_emit.mark_landed import (
+    NoEmbeddedCommitPhaseError,
+    PhaseNotFoundError,
+    mark_landed_and_restamp,
 )
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
@@ -142,6 +150,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SCRIPT",
         help="re-stamp an emission receipt's sha256 over SCRIPT after a deliberate edit",
+    )
+    parser.add_argument(
+        "--mark-landed",
+        dest="mark_landed_phase",
+        default=None,
+        metavar="PHASE_TITLE",
+        help="resume a halted commit phase: splice its `phase: 'PHASE_TITLE...'` "
+        "step to a literal `COMMIT-LANDED <sha>` and re-stamp -- requires "
+        "--sha and a positional SCRIPT",
+    )
+    parser.add_argument(
+        "--sha",
+        default=None,
+        help="commit sha to mark as landed (with --mark-landed)",
+    )
+    parser.add_argument(
+        "script_positional",
+        nargs="?",
+        metavar="SCRIPT",
+        help="the emitted script to edit, with --mark-landed",
     )
     parser.add_argument("--out", dest="out_path", default=None, help="path to write the emitted .mjs script to")
     parser.add_argument(
@@ -217,6 +245,39 @@ def _default_repo_root_from_cwd() -> "Optional[Path]":
     return None
 
 
+def _do_mark_landed(script_arg: "Optional[str]", phase_title: str, sha: "Optional[str]") -> int:
+    if not script_arg:
+        print(
+            "emit-dispatch-workflow: ERROR — --mark-landed requires a positional "
+            "SCRIPT argument",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not sha:
+        print(
+            "emit-dispatch-workflow: ERROR — --mark-landed requires --sha",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    session_id = resolve_session_id() or ""
+    try:
+        receipt = mark_landed_and_restamp(Path(script_arg), phase_title, sha, session_id)
+    except (
+        NoEmbeddedCommitPhaseError,
+        PhaseNotFoundError,
+        NoReceiptToRestampError,
+        ForeignSessionRestampError,
+    ) as exc:
+        print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+        return EXIT_DATA_ERROR
+    except OSError as exc:
+        print(f"emit-dispatch-workflow: ERROR — cannot read/write {script_arg!r}: {exc}",
+              file=sys.stderr)
+        return EXIT_DATA_ERROR
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    return EXIT_OK
+
+
 def _do_restamp(script_arg: str) -> int:
     session_id = resolve_session_id() or ""
     try:
@@ -275,6 +336,16 @@ def _print_workflow_invocation(
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+
+    if args.mark_landed_phase:
+        if args.plan or args.inventory or args.out_path or args.fire or args.restamp:
+            print(
+                "emit-dispatch-workflow: ERROR — --mark-landed is exclusive of "
+                "--plan/--inventory/--out/--fire/--restamp",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
 
     if args.restamp:
         if args.plan or args.inventory or args.out_path or args.fire:
@@ -408,12 +479,30 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if overrides:
             params["overrides"] = overrides
 
+    # Lazy imports (not module-level) so a test can stub `admission` via
+    # `monkeypatch.setitem(sys.modules, "coordinator_core.ops.dispatch_emit.admission", fake)`
+    # before this function runs -- a top-level `from ... import admission` would bind the
+    # real module at cli.py's own import time, before any test gets a chance to swap it.
+    from coordinator_core.ops.dispatch_emit import admission
+    from coordinator_core.telemetry import op_latency
+
+    hold_allowed = op_latency.execution_route() != op_latency.WARM_SERVER
+    admission_record = admission.await_admission(Path.cwd(), hold_allowed=hold_allowed)
+    if admission_record.get("verdict") not in ("admitted", "disabled"):
+        print(
+            "emit-dispatch-workflow: admission — "
+            f"{admission_record.get('verdict')}; {admission_record.get('reasons')}; "
+            f"waited {admission_record.get('waited_s')}s",
+            file=sys.stderr,
+        )
+
     try:
         result = _dispatch_emit(params, repo_root=repo_root)
     except _DATA_ERRORS as exc:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
 
+    result["admission"] = admission_record
     print(json.dumps(result, indent=2, sort_keys=True))
     _print_workflow_invocation(
         result, is_queue_route=is_queue_route, profile_dir=args.profile_dir

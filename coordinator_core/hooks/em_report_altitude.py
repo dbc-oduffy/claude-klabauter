@@ -236,9 +236,8 @@ def _d1_block(word_count: int) -> str:
 
 def _d2_block(citation_count: int) -> str:
     return (
-        f"[comms] {citation_count} file:line/absolute-path citations this reply — "
-        "they rarely change what the PM decides, so they usually read better living "
-        "in the commit than the reply. Ignore this if the citation was the point."
+        f"[comms] {citation_count} path citations this reply — usually read "
+        "better living in the commit. Ignore this if intentional."
     )
 
 

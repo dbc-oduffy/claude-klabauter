@@ -343,7 +343,7 @@ def test_d1_firing_full_form(tmp_path):
 def test_d2_firing_full_form(tmp_path):
     text = "See coordinator_core/hooks/foo.py:42 and also /Users/alice/X/bar.py for context."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
-    assert "Ignore this if the citation was the point" in result["message"]
+    assert "Ignore this if intentional" in result["message"]
 
 
 def test_full_form_contains_release_clause(tmp_path):

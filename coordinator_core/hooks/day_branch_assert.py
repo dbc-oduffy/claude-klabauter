@@ -69,6 +69,16 @@ INHERITED = "INHERITED"
 COMPLIANT = "COMPLIANT"
 WARN = "WARN"
 FAILED = "FAILED"
+#: F7 (GH #71): `repo_root` resolved to a directory that is not itself a git
+#: checkout (`.git` absent) -- e.g. a multi-repo container's session root,
+#: which `_engine_root._session_repo_root()`'s `CLAUDE_PROJECT_DIR` rung
+#: trusts blindly without a `.git` check (pinned intentionally,
+#: `test_claude_project_dir_env_rung_accepts_other_dirs`). Silent, same as
+#: COMPLIANT -- this is not a detached-HEAD/non-compliant-branch finding,
+#: it is "there is no tree here to evaluate", and misreporting it as
+#: "detached HEAD / crash insurance NOT in force" is the bug this outcome
+#: fixes.
+NOT_A_REPO = "NOT-A-REPO"
 
 
 class DayBranchAssertResult(NamedTuple):
@@ -139,7 +149,18 @@ def assert_day_branch(
     harness-designated branch) and the tree already sits on it, the invariant
     already holds — silent COMPLIANT, ahead of the main/non-main dispatch, no
     cut and no warn, whatever the branch's shape.
+
+    NOT-A-REPO short-circuit (F7, GH #71), ahead of everything else: a
+    `repo_root` with no `.git` entry at all is not a tree to assert an
+    invariant over -- `resolve_branch()` returning `None` for such a path is
+    indistinguishable, downstream, from a genuine detached HEAD, and case (B)
+    used to render that as "detached HEAD / crash insurance NOT in force" for
+    a directory that was never a git checkout in the first place. Silent,
+    same as COMPLIANT.
     """
+    if not (Path(repo_root) / ".git").exists():
+        return DayBranchAssertResult(NOT_A_REPO, "", "")
+
     branch = _current_branch(repo_root)
 
     from coordinator_core.daily_branch import (

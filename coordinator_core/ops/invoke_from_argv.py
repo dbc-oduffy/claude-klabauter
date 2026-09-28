@@ -204,6 +204,22 @@ _POOL_REFUSED_VERBS = frozenset({
     ("workday-complete-args-and-validate", "run-step1"),
 })
 
+#: Load-conditional carve-out (docs/plans/2026-09-27-load-aware-workflow-
+#: admission.md, chunk C3; PM ruling cited in
+#: docs/reference/warm-pool-carve-outs.md's load-conditional table). Unlike
+#: `_POOL_REFUSED_VERBS`, membership here does not refuse unconditionally --
+#: it refuses only when `admission.should_refuse_warm` reads the box as
+#: already over its configured threshold. Both checks share the same -32007
+#: proof: the read is read-only (no import, no `main` call, no mutation), so
+#: the door's "nothing ran" guarantee stays true either way.
+_LOAD_CONDITIONAL_COLD_ENTRYPOINTS = frozenset({"emit-dispatch-workflow"})
+
+#: argv flags that mark an `emit-dispatch-workflow` call as emission-shaped
+#: (the plan/inventory/queue routes `admission` is scoped to -- see the plan's
+#: prime exit criterion). `--restamp` carries none of these and so never
+#: reads load, matching § Design's "`--restamp` and `--help` never read load".
+_LOAD_CONDITIONAL_EMISSION_FLAGS = ("--plan", "--inventory", "--queue")
+
 
 def _resolve_entrypoint_script(entrypoint: str) -> Path:
     """Validates `entrypoint` against the committed allowlist and against
@@ -584,6 +600,17 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
     result the caller sees exactly as an ordinary CLI failure — never a
     JSON-RPC error, never a killed server.
 
+    LOAD-CONDITIONAL COLD LEG (C3): ahead of both the containment `try` above
+    and `_entrypoint_argv_shape`, an emission-shaped `emit-dispatch-workflow`
+    call (`_LOAD_CONDITIONAL_COLD_ENTRYPOINTS`, argv carrying one of
+    `_LOAD_CONDITIONAL_EMISSION_FLAGS`, no help gesture) asks
+    `admission.should_refuse_warm` a read-only question about current host
+    load. A refusal raises `EntrypointNotWarmLoadableError` before anything
+    is imported or invoked — the door reads this exactly like
+    `_POOL_REFUSED_VERBS`'s refusal and re-runs the CLI cold, where
+    `cli.main` holds for admission in the caller's own process, never a pool
+    worker (docs/reference/warm-pool-carve-outs.md's load-conditional table).
+
     `--help`/`-h` (mirrors `entry_point_shim._help_requested`'s semantics:
     anywhere in argv wins, position never special-cased) is intercepted
     below via `call_argv`, substituting a bare `["--help"]` for the real
@@ -616,6 +643,26 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
             f"invoke.from_argv: {entrypoint} {argv[0]} runs a test suite behind the "
             "machine-wide suite mutex; it runs cold, never in the shared pool."
         )
+
+    # Load-conditional carve-out (C3): read-only, ahead of any load/mutation,
+    # so the -32007 proof holds exactly as it does for `_POOL_REFUSED_VERBS`
+    # above. `--restamp`/`--help` carry none of `_LOAD_CONDITIONAL_EMISSION_
+    # FLAGS` and so never reach this branch -- no separate help check needed.
+    if (
+        entrypoint in _LOAD_CONDITIONAL_COLD_ENTRYPOINTS
+        and any(flag in argv for flag in _LOAD_CONDITIONAL_EMISSION_FLAGS)
+        and not any(a in ("--help", "-h") for a in argv)
+    ):
+        from coordinator_core.ops.dispatch_emit import admission
+
+        refusal = admission.should_refuse_warm(Path(cwd))
+        if refusal is not None:
+            raise EntrypointNotWarmLoadableError(
+                f"invoke.from_argv: {entrypoint} refuses warm -- host load is over "
+                f"its configured admission threshold ({refusal.get('reasons')}); "
+                "the door runs this emission cold, where it holds for admission."
+            )
+
     shape = _entrypoint_argv_shape(script)
 
     help_requested = any(a in ("--help", "-h") for a in argv)

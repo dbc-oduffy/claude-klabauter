@@ -119,7 +119,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         "claude-klabauter",
     ]
     monkeypatch.setattr(
-        _mod, "_mirror_groups", lambda root: {"X:/claude-klabauter": targets}
+        _mod, "_mirror_groups", lambda root, target_filter="": {"X:/claude-klabauter": targets}
     )
     monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
     monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
@@ -148,7 +148,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
     # Nested dests, like the real mirror: the toplevel row's dest IS the repo
     # root, so only deepest-prefix attribution keeps the other rows' files out
     # of its scan.
-    monkeypatch.setattr(_mod, "_row_paths", lambda r: {n: ("X:/src", _ROW_DESTS[n]) for n in targets})
+    monkeypatch.setattr(_mod, "_row_paths", lambda r, target_filter="": {n: ("X:/src", _ROW_DESTS[n]) for n in targets})
     monkeypatch.setattr(_mod._round, "_resolve_central_state", lambda: None)
 
     publish_calls = []
@@ -218,6 +218,17 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
     monkeypatch.setattr(
         _mod._round, "_pathspec_from_manifest", lambda manifest, repo_root: (sorted(declared), _mod._round._no_filter_drops())
     )
+    # BV-20260927-05 fix 6: percolate-mirror.py now partitions the pathspec
+    # into present/deletion before calling `commit_paths` (§ `_wire`'s own
+    # `_fake_commit_paths` below never sees `deleted_paths` otherwise). No
+    # deletions in this fixture's manifest, so present == the whole pathspec
+    # and no real `git ls-tree` spawn is needed.
+    monkeypatch.setattr(_mod._round, "_dest_head_tree", lambda repo_root: set())
+    monkeypatch.setattr(
+        _mod._round,
+        "_partition_pathspec_for_commit",
+        lambda pathspec, repo_root, head_tracked: (list(pathspec), [], []),
+    )
 
     # The commit leg is an in-process `commit_paths` call (C4 repoint,
     # docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-
@@ -235,6 +246,112 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
 
     monkeypatch.setattr(commit_mod, "commit_paths", _fake_commit_paths)
     return targets, publish_calls
+
+
+def test_deletions_in_the_pathspec_are_forwarded_as_deleted_paths(tmp_path, monkeypatch):
+    """BV-20260927-05 fix 6: a path this mirror's manifest marks removed must
+    reach `commit_paths` via `deleted_paths`, not folded into `paths` — the
+    real-run failure this closes: `commit_paths` refusing a gone-but-tracked
+    path because percolate-mirror.py's single multi-row commit call never
+    partitioned the pathspec before this fix."""
+    order: List[str] = []
+    targets, _ = _wire(monkeypatch, order)
+
+    removed_path = "coordinator_core/ops/dispatch_emit/tests/test_gone.py"
+    monkeypatch.setattr(
+        _mod._round,
+        "_partition_pathspec_for_commit",
+        lambda pathspec, repo_root, head_tracked: (
+            [p for p in pathspec if p != removed_path],
+            [removed_path] if removed_path in pathspec else [],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        _mod._round,
+        "_pathspec_from_manifest",
+        lambda manifest, repo_root: (
+            sorted(set(_ROW_FILES.values()) | {removed_path}),
+            _mod._round._no_filter_drops(),
+        ),
+    )
+
+    from coordinator_core.git import commit as commit_mod
+
+    captured: dict = {}
+
+    def _fake_commit_paths(repo_root, paths, message, **kwargs):
+        order.append("commit")
+        captured["paths"] = paths
+        captured["deleted_paths"] = kwargs.get("deleted_paths")
+        return commit_mod.CommitOutcome(
+            sha="deadbeef1234", staged_preferred=(), worktree_over_staged=()
+        )
+
+    monkeypatch.setattr(commit_mod, "commit_paths", _fake_commit_paths)
+
+    rc = _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    assert rc == _mod._round._EXIT_OK
+    assert captured["deleted_paths"] == [removed_path]
+    assert removed_path not in captured["paths"]
+
+
+def test_commit_subject_names_the_removal_when_deletion_paths_is_non_empty(
+    tmp_path, monkeypatch
+):
+    """`commit_tripwires.check_undeclared_staged_deletion` fails closed unless
+    the commit MESSAGE itself contains a deletion verb -- a subject that only
+    reports "(N row(s), M file(s))" never says so, so a real deny-listed path
+    (e.g. this repo's own driver script moving to kl bin's deny list) trips
+    the guard even though `deletion_paths` already told this leg it is
+    removing tracked files. The subject must name the removal so the guard's
+    verb-match passes without an operator override."""
+    order: List[str] = []
+    targets, _ = _wire(monkeypatch, order)
+
+    removed_path = "coordinator_core/ops/dispatch_emit/tests/test_gone.py"
+    monkeypatch.setattr(
+        _mod._round,
+        "_partition_pathspec_for_commit",
+        lambda pathspec, repo_root, head_tracked: (
+            [p for p in pathspec if p != removed_path],
+            [removed_path] if removed_path in pathspec else [],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        _mod._round,
+        "_pathspec_from_manifest",
+        lambda manifest, repo_root: (
+            sorted(set(_ROW_FILES.values()) | {removed_path}),
+            _mod._round._no_filter_drops(),
+        ),
+    )
+
+    from coordinator_core.git import commit as commit_mod
+
+    captured: dict = {}
+
+    def _fake_commit_paths(repo_root, paths, message, **kwargs):
+        order.append("commit")
+        captured["message"] = message
+        return commit_mod.CommitOutcome(
+            sha="deadbeef1234", staged_preferred=(), worktree_over_staged=()
+        )
+
+    monkeypatch.setattr(commit_mod, "commit_paths", _fake_commit_paths)
+
+    rc = _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    assert rc == _mod._round._EXIT_OK
+    from coordinator_core.bash_guards.commit_tripwires import _DELETION_VERBS
+
+    assert _DELETION_VERBS.search(captured["message"]), captured["message"]
 
 
 def test_all_rows_go_through_a_single_publish_invocation(tmp_path, monkeypatch):
@@ -389,7 +506,7 @@ def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypat
         "claude-klabauter",
     ]
     monkeypatch.setattr(
-        _mod, "_mirror_groups", lambda root: {"X:/claude-klabauter": targets}
+        _mod, "_mirror_groups", lambda root, target_filter="": {"X:/claude-klabauter": targets}
     )
     monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
     monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
@@ -477,7 +594,7 @@ def test_a_resolution_abort_is_not_reported_as_an_empty_target_set(monkeypatch, 
     targets) mean opposite things. Collapsing them printed "no registered
     publish targets" over a named, fixable registry failure, sending the
     operator to look for a missing topology file."""
-    monkeypatch.setattr(_mod, "_mirror_groups", lambda root: None)
+    monkeypatch.setattr(_mod, "_mirror_groups", lambda root, target_filter="": None)
     monkeypatch.setattr(_mod._round, "_resolve_percolate_root", lambda override: "/p")
 
     rc = _mod.main(["claude-klabauter", "--list"])

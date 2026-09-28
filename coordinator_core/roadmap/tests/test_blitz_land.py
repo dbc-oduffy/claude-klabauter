@@ -1003,6 +1003,38 @@ def test_next_wave_is_computed_after_the_writes_not_before(tmp_path):
     assert out["next_wave"]["waveIndex"] == 1
 
 
+def test_next_wave_is_scoped_to_the_runs_roadmap_id(tmp_path):
+    """F21: an unscoped fresh gate read handed `next_wave` batons belonging to
+    an UNRELATED roadmap — the next emit then refused the roadmap-scoped
+    report. `next_wave` must only ever carry batons sharing this wave's own
+    roadmap_id."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "blocker-plan", "draft")
+    _baton(root, "blocker-1", roadmap_id="rm-a")
+    _baton(root, "dependent-1", blocked_by=["blocker-1"], roadmap_id="rm-a")
+    _baton(root, "other-roadmap-1", roadmap_id="rm-b")
+
+    out = bl.land_wave(
+        root, {"waveIndex": 0, "ready": [{"batonId": "blocker-1", "planPath": plan}]}
+    )
+
+    ids = {b["id"] for b in out["next_wave"]["batons"]}
+    assert ids == {"dependent-1"}, f"unrelated roadmap's baton leaked into next_wave: {ids}"
+
+
+def test_next_wave_excludes_a_baton_whose_plan_already_implemented(tmp_path):
+    """F21: a baton whose own plan already landed `implemented` is done, not
+    a candidate for the next fire."""
+    root = _repo(tmp_path)
+    _plan(root, "done-plan", "implemented", deliverable_id="dlv-done")
+    _baton(root, "done-1", deliverable_id="dlv-done", roadmap_id="rm-a")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
+
+    ids = {b["id"] for b in out["next_wave"]["batons"]}
+    assert "done-1" not in ids
+
+
 def test_next_wave_entries_are_shaped_for_the_workflow_and_carry_planPath(tmp_path):
     """A hand-built fire array is where `planPath` silently becomes null for a
     baton that already has a plan — which is how a wave duplicates a plan."""

@@ -127,6 +127,28 @@ def test_dest_mismatch_refuses_and_names_both_refs(tmp_path, monkeypatch, capsys
     assert "main" in combined
 
 
+def test_dest_mismatch_names_track_ref_and_the_checkout_fix(tmp_path, monkeypatch, capsys):
+    """BV-20260927-05 fix 5: the refusal must name the declared `track_ref`
+    key explicitly and the literal `git checkout` command that resolves it —
+    not just the two bare branch names, which left an operator to work out
+    the fix by hand."""
+    dest = tmp_path / "dest"
+    _init_git_repo(dest, branch="main")
+    registry_dir = tmp_path / "registry"
+    _write_registry(registry_dir, dest=dest, track_ref="candidate")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+
+    target = _make_target("row-mismatch", tmp_path / "src", dest)
+    totals = publish.RunTotals()
+
+    result = publish.assert_dest_on_declared_ref(target, totals)
+    combined = capsys.readouterr().err
+
+    assert result is False
+    assert "track_ref" in combined
+    assert f"git -C {dest} checkout candidate" in combined
+
+
 def test_absent_track_ref_defaults_to_remote_default_branch(tmp_path, monkeypatch):
     dest_ok = tmp_path / "dest-ok"
     _init_git_repo(dest_ok, branch="main")

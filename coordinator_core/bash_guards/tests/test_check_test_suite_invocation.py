@@ -149,6 +149,44 @@ def test_subagent_suite_shaped_denied(repo, free_mutex, command):
     out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert reason.startswith("Full-suite subagent runs are denied")
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["jest", "vitest run", "npx jest", "npm test", "yarn test", "pnpm test"],
+)
+def test_subagent_js_ecosystem_deny_suggests_js_runner_not_pytest(
+    repo, free_mutex, command
+):
+    """F15 (GH #71): a JS-runner-shaped or package-script-shaped subagent
+    deny must not tell a TypeScript/vitest repo to run `python3 -m
+    pytest` -- it names a JS runner instead."""
+    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    reason = _reason(out)
+    assert "python3 -m pytest" not in reason
+    assert "vitest" in reason or "jest" in reason
+
+
+def test_mutex_deny_js_ecosystem_suggests_js_runner_not_pytest(repo, held_mutex):
+    """F15 non-subagent path: the MUTEX leg's deny (top-level EM, another
+    suite run already holding the machine-wide lock) must also route
+    through the ecosystem-aware helper -- it used to hard-code
+    `python3 -m pytest` regardless of what runner the caller invoked."""
+    out = guard.check(_payload("vitest run", repo))
+    reason = _reason(out)
+    assert "python3 -m pytest" not in reason
+    assert "vitest" in reason
+
+
+@pytest.mark.parametrize("command", ["pytest", "python3 -m pytest", "tox", "nox"])
+def test_subagent_python_ecosystem_deny_still_suggests_pytest(
+    repo, free_mutex, command
+):
+    """Regression pin: the ecosystem-aware F15 fix must not disturb the
+    pre-existing Python-repo suggestion."""
+    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    reason = _reason(out)
+    assert "python3 -m pytest path/to/test_file.py" in reason
     assert "Reshaping the command text does not bypass" in reason
 
 
@@ -1156,6 +1194,18 @@ class TestGrantLeg:
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
+
+    def test_em_tier_u_no_grant_denied_js_ecosystem_suggests_js_runner(
+        self, grant_repo, free_mutex
+    ):
+        """F15 non-subagent path: the GRANT leg's deny (top-level EM,
+        Tier-U command, no live grant) must also route through the
+        ecosystem-aware helper rather than hard-coding `python3 -m pytest`
+        for a vitest-shaped invocation."""
+        out = guard.check(_payload("vitest run", grant_repo))
+        reason = _reason(out)
+        assert "python3 -m pytest" not in reason
+        assert "vitest" in reason
 
     def test_em_tier_u_live_grant_allowed(self, grant_repo, free_mutex):
         """AC-2: a live grant for THIS session allows the same command."""

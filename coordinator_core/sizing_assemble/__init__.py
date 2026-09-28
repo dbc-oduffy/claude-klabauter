@@ -30,15 +30,41 @@ against the klabauter mirror's build, not this tree — its own Session
 Ledger later refuted that attribution as mirror-side, which this
 measurement corroborates: no perf cut is needed here.
 
+Measured process time, C6 (2026-09-27-sizing-carries-exit-criterion-and-
+interaction-mode plan): a fresh in-tree `getrusage(RUSAGE_CHILDREN)`
+measurement (k=20, fresh process per sample; this session's container, not
+the ~56.8ms baseline's own machine, so the two absolute figures are not
+directly comparable — the DELTA is what this note establishes) of
+`main()` through the real CLI read ~44ms for `import
+coordinator_core.sizing_assemble` alone versus ~51ms for a full
+`--tshirt M --exit-criterion x --interaction-mode pm` run (a ~7ms delta,
+regardless of whether `--interaction-mode` is passed — `route()`'s own
+`_validate_interaction_mode` lazily imports `mode_resolution` on every
+call, flag or not). `mode_resolution`'s own cold-import cost, measured
+standalone the same way (`import coordinator_core.session.mode_resolution`,
+k=20, fresh process), read ~47ms against a ~12ms bare-interpreter floor in
+this same container (~35ms marginal). The ~7ms observed delta here is
+comfortably inside that import-cost envelope, and the absolute run time
+(~51ms) stays well under the ≤200ms budget ceiling (DR-344 §7) — no perf
+cut needed.
+
 READ-ONLY, by construction: `route()` only reads its arguments — it never
-touches disk, never writes a sizing-object, never shells out. The caller
-(the sizing skill / a future scaffolder) is responsible for persisting the
-returned decision into a `state/sizings/*.yaml` sizing-object; this module
-computes the routing fields (`route`, `detents`, `fork`) of that object, plus
-transport-only convenience keys (`resolved_estimate`, `scout_evidence`,
-`narration`, `next_move`) the caller doesn't have to recompute — the
-schema-persisted fields are `route`/`detents`/`fork`, not the full return
-payload (see `route()`'s own docstring for the complete return shape).
+touches disk, never writes a sizing-object, never shells out; its lazy,
+function-local `mode_resolution` import (`_validate_interaction_mode`)
+reaches only that module's pure constants/validation, never
+`resolve_mode`'s fleet-record read. `main()` is the one caller that reads
+disk here, through `_resolve_interaction_mode_and_source`'s
+`resolve_mode`/`read_fleet_mode` calls, when no `--interaction-mode` flag
+was given. The caller (the sizing skill / a future scaffolder) is
+responsible for persisting the returned decision into a
+`state/sizings/*.yaml` sizing-object; this module computes the routing
+fields (`route`, `detents`, `fork`) of that object, plus transport-only
+convenience keys (`resolved_estimate`, `scout_evidence`, `narration`,
+`next_move`, `exit_criterion`, `interaction_mode`,
+`interaction_mode_source`, `touchpoints`) the caller doesn't have to
+recompute — the schema-persisted fields are `route`/`detents`/`fork`/
+`exit_criterion`/`interaction_mode`, not the full return payload (see
+`route()`'s own docstring for the complete return shape).
 
 Design D4 (route computed here, not chosen by skill prose): `route()` is the
 ONLY place the express-lane / plan-check-first / shape / roadmap-re-aim
@@ -249,6 +275,11 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
 # sizing-object` at write time; that refusal is the EXECUTOR's problem
 _SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--title", "title", required=False),
+    # C6: threaded so `d-scaffold-sizing-object` scaffolds the PM-facing
+    # exit criterion and the mode this sizing ran under, matching C3's
+    # `_scaffold_sizing --exit-criterion/--interaction-mode` flags exactly.
+    Flag("--exit-criterion", "exit_criterion", required=False),
+    Flag("--interaction-mode", "interaction_mode", required=False),
 )
 
 
@@ -291,7 +322,10 @@ def _capped_slug(text: str) -> str:
 
 
 def _sizing_object_scaffold_directive(
-    intent: Optional[str], name: Optional[str] = None
+    intent: Optional[str],
+    name: Optional[str] = None,
+    exit_criterion: Optional[str] = None,
+    interaction_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     root = Path.cwd()
     today = date.today().isoformat()
@@ -300,6 +334,8 @@ def _sizing_object_scaffold_directive(
     resolved: dict[str, Any] = {
         "title": title,
         "out": f"state/sizings/{today}-{slug}.yaml",
+        "exit_criterion": exit_criterion,
+        "interaction_mode": interaction_mode,
     }
     return build_scaffold_directive(
         "d-scaffold-sizing-object",
@@ -322,20 +358,8 @@ ROUTE_ENUM = (
     "roadmap",
     "pm-decision",
     "goal-setting",
-    # APPENDED (R7, C2): a typed `repo_span` input mapping deterministically
-    # to a route, extending the table rather than overriding it. Never
-    # re-sorted — enum ORDER is load-bearing against DoE's
-    # EQUAL_VERSION_SHAPE_DRIFT gate.
-    "first-person",
 )
 
-# REPO_SPAN_ENUM: the sizing EM's caller-declared answer to "is this
-# single-repo work?" (R7). `None` (absent) means "not declared" and changes
-# nothing -- an omitted flag fails toward the heavier `plan` path, never into
-# `first-person`. There is no `multi` value: nothing routes, narrates, or
-# teaches differently on it than on absent, and multi-repo work is anti-scope
-# here (module docstring's negative-spec siblings apply identically).
-REPO_SPAN_ENUM = ("single",)
 FORK_ENUM = ("cut_to_fit", "raise_appetite")
 XL_EXIT_ENUM = ("split", "shape", "roadmap", "accept_multi_session")
 DETENT_ENUM = (
@@ -360,6 +384,10 @@ DETENT_ENUM = (
     "probe_raise_ask_scope_asserted",
     # EQUAL_VERSION_SHAPE_DRIFT gate.
     "probe_raise_on_breadth",
+    # APPENDED by C6 (2026-09-27-sizing-carries-exit-criterion-and-interaction-mode),
+    # never re-sorted — order is load-bearing against DoE's
+    # EQUAL_VERSION_SHAPE_DRIFT gate, same as every prior append above.
+    "exit_criterion_pending",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -385,9 +413,7 @@ _PROBE_RAISE_SUPPRESSION_DETENT = {
 _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 
 # Adding a KEY for a new size (XXL, below) is an EXTENSION of this table's
-# HARD GATE. Likewise, a typed input mapping deterministically to a route
-# (`repo_span`, R7, C2) is an extension of this table, as the D5 shape
-# inputs already are, and not an override -- sizing stays the gate.
+# HARD GATE.
 _BASE_ROUTE_BY_TSHIRT = {
     "XS": "dispatch",
     "S": "spec-dispatch",
@@ -454,13 +480,6 @@ def _validate_boundary_in_notch(boundary_in_notch: Optional[str]) -> None:
         )
 
 
-def _validate_repo_span(repo_span: Optional[str]) -> None:
-    if repo_span is not None and repo_span not in REPO_SPAN_ENUM:
-        raise SizingAssembleError(
-            f"repo_span must be one of (None, {REPO_SPAN_ENUM}), got {repo_span!r}"
-        )
-
-
 def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
     if scout_evidence_kind is not None and scout_evidence_kind not in SCOUT_EVIDENCE_KIND_ENUM:
         raise SizingAssembleError(
@@ -516,10 +535,6 @@ _LOBBY_CHAINS = {
         "scoped code-reviewer + review-integrator",
     ],
     "plan": ["plan", "plan review", "execute-plan"],
-    # first-person (R7): the EM builds the work itself and delegates only
-    # review -- no plan file, no executor dispatch, no wave polling. Terminal
-    # is forced to quick-wrap below regardless of tshirt (Design, § R7).
-    "first-person": ["the work", "named reviewer on the diff"],
 }
 
 _ROOM_ENTRY = {
@@ -530,6 +545,87 @@ _ROOM_ENTRY = {
 }
 
 _LIGHT_TERMINAL_TSHIRTS = ("XS", "S")
+
+# Mirrors `coordinator_core.session.mode_resolution.INTERACTION_MODES`
+# order. Duplicated locally (never imported at module top level) for the
+# same reason ROUTE_ENUM/DETENT_ENUM above are hand-authored copies of the
+# vendored schema rather than a live import: `route()` must stay
+# import-light (Design § Engine), and this totality check runs at IMPORT
+# TIME, before any lazy `mode_resolution` import has happened. Drift
+# between this tuple and C2's canonical one is caught by
+# `test_interaction_mode_touchpoints.py`, which imports both and asserts
+# equality.
+_INTERACTION_MODES_EXPECTED = ("hands-on", "pm", "ceo")
+
+
+def _validate_interaction_mode(interaction_mode: str) -> None:
+    # Lazy, function-local import (Design § Engine: "importing mode_resolution
+    # lazily ... so that route() stays import-light") -- validates against
+    # C2's canonical registry, not the local mirror above, so a caller
+    # actually gets checked against the live source of truth.
+    from coordinator_core.session.mode_resolution import (
+        INTERACTION_MODE_VALUES,
+        INTERACTION_MODES,
+    )
+
+    if interaction_mode not in INTERACTION_MODE_VALUES:
+        raise SizingAssembleError(
+            f"interaction_mode must be one of {INTERACTION_MODES}, got {interaction_mode!r}"
+        )
+
+
+#: Design § Engine's touchpoint table. Each mode's ids, IN ORDER, with the
+#: human-facing "asks" gloss from the PM ruling (target-design.md § 11):
+#: PM mode is two touchpoints (accept sizing, which includes the exit
+#: criterion, then accept the result); CEO mode is one (accept the exit
+#: criterion); hands-on keeps today's richer gates (sizing, execute, wrap-up).
+TOUCHPOINTS_BY_MODE: dict[str, tuple[dict[str, str], ...]] = {
+    "hands-on": (
+        {"id": "accept_sizing", "asks": "size + exit criterion"},
+        {"id": "execute_go", "asks": "whether to execute the plan"},
+        {"id": "wrap_up", "asks": "whether to wrap up"},
+    ),
+    "pm": (
+        {"id": "accept_sizing", "asks": "size + exit criterion"},
+        {"id": "accept_result", "asks": "accept the result"},
+    ),
+    "ceo": (
+        {"id": "accept_exit_criterion", "asks": "accept the exit criterion"},
+    ),
+}
+
+#: The sizing-stage touchpoint ids dropped at a resized XS/S (Design §
+#: Engine "Size rule" -- XS/S never ask today, so the later touchpoints
+#: stay but the size-gate ask is skipped).
+_SIZING_STAGE_TOUCHPOINT_IDS = frozenset({"accept_sizing", "accept_exit_criterion"})
+
+
+def _assert_touchpoint_table_total() -> None:
+    """Every member of `_INTERACTION_MODES_EXPECTED` has a `TOUCHPOINTS_BY_MODE`
+    entry, and vice versa -- import-time, in the style of
+    `_assert_stage_table_total` above."""
+    covered = set(TOUCHPOINTS_BY_MODE)
+    expected = set(_INTERACTION_MODES_EXPECTED)
+    missing = expected - covered
+    extra = covered - expected
+    if missing or extra:
+        raise AssertionError(
+            f"sizing_assemble: TOUCHPOINTS_BY_MODE not total over interaction "
+            f"modes: missing={sorted(missing)} extra={sorted(extra)}"
+        )
+
+
+_assert_touchpoint_table_total()
+
+
+def touchpoints(interaction_mode: str, resized_tshirt: str) -> list[dict[str, str]]:
+    """Which human gates `interaction_mode` has at `resized_tshirt` (Design §
+    Engine). At a resized XS/S the sizing-stage touchpoint is dropped (it
+    never asks today); the later touchpoints in the mode's chain are kept."""
+    base = TOUCHPOINTS_BY_MODE[interaction_mode]
+    if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS:
+        return [dict(t) for t in base if t["id"] not in _SIZING_STAGE_TOUCHPOINT_IDS]
+    return [dict(t) for t in base]
 
 
 def _assert_stage_table_total() -> None:
@@ -579,7 +675,7 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
     """
     terminal = (
         "quick-wrap"
-        if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS or resolved_route == "first-person"
+        if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS
         else "/workstream-complete"
     )
 
@@ -696,8 +792,10 @@ def route(
     intent_source: Optional[str] = None,
     precedent: Optional[str] = None,
     probe_raise_basis: Optional[str] = None,
-    repo_span: Optional[str] = None,
     name: Optional[str] = None,
+    exit_criterion: Optional[str] = None,
+    interaction_mode: str = "hands-on",
+    interaction_mode_source: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -736,18 +834,29 @@ def route(
             `mention-count` sets the advisory `scout_evidence_mention_count`
             detent. A typed field BESIDE the free text; `scout_evidence`
             itself is still never parsed. Never alters `route` or `xl_exit`.
-        repo_span: None | "single" -- the sizing EM's caller-declared answer
-            to "is this single-repo work?" (R7). `None` means not declared
-            and changes nothing: the resolved t-shirt still routes through
-            `_BASE_ROUTE_BY_TSHIRT`. When the resized t-shirt is "M",
-            `repo_span == "single"`, and no shape-entry condition fires
-            (neither `jtbd_unclear` nor `well_trodden_step_change`), the
-            route resolves to `"first-person"` instead of `"plan"`. There is
-            no "multi" value (module docstring's negative-spec).
+        exit_criterion: the PM-facing primary success / exit criterion
+            sentence, or `None` when none has been proposed yet. Never
+            alters `route`. A resized t-shirt at or above `"M"` sets the
+            `exit_criterion_pending` detent regardless of whether a
+            statement was passed — this module never sees PM acceptance
+            (that is `sizing.accept_exit_criterion`, C4).
+        interaction_mode: "hands-on" (default) | "pm" | "ceo" — which human
+            touchpoints this sizing's size commits to (Design § Engine).
+            Validated against `mode_resolution.INTERACTION_MODES`. Never
+            alters `route`, `fork`, or `xl_exit` — it selects which
+            `touchpoints` render, exactly as `compaction_warnings` selects
+            an advisory variant without ever suppressing the advisory
+            itself. In `ceo` mode only, `post_size_prompt_pending` is
+            suppressed (ceo's single touchpoint is the exit criterion).
+        interaction_mode_source: "flag" | "fleet" | "default" — set by
+            `main()`; `route()` never resolves this itself and only echoes
+            the value it is given back into the return payload.
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate, stages,
-        scout_evidence, narration, next_move} — READ-ONLY, mutates nothing.
+        scout_evidence, narration, next_move, exit_criterion,
+        interaction_mode, interaction_mode_source, touchpoints} —
+        READ-ONLY, mutates nothing.
     """
     _validate_appetite(appetite)
     tshirt = estimate.get("tshirt")
@@ -755,12 +864,15 @@ def route(
     _validate_probe_signal(probe_signal)
     _validate_premise_provenance(premise_provenance)
     _validate_boundary_in_notch(boundary_in_notch)
-    _validate_repo_span(repo_span)
     _validate_scout_evidence_kind(scout_evidence_kind)
     _validate_intent_source(intent_source)
     _validate_precedent(precedent)
     _validate_probe_raise_basis(probe_raise_basis)
+    _validate_interaction_mode(interaction_mode)
     scout_evidence = list(scout_evidence or [])
+    exit_criterion_field = (
+        {"statement": exit_criterion, "accepted": None} if exit_criterion else None
+    )
 
     if express_lane:
         return {
@@ -776,6 +888,10 @@ def route(
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
             "directives": [],
+            "exit_criterion": exit_criterion_field,
+            "interaction_mode": interaction_mode,
+            "interaction_mode_source": interaction_mode_source,
+            "touchpoints": [],
         }
 
     resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
@@ -801,21 +917,19 @@ def route(
             detents.append("appetite_exceeded")
         else:
             detents.append("appetite_conform")
-    elif resized_tshirt in _POST_SIZE_PROMPT_TSHIRTS:
+    elif resized_tshirt in _POST_SIZE_PROMPT_TSHIRTS and interaction_mode != "ceo":
+        # ceo suppresses this ask (Design § Engine): its single touchpoint
+        # is the exit criterion, put via `exit_criterion_pending` below.
         detents.append("post_size_prompt_pending")
+
+    if resized_tshirt in _POST_SIZE_PROMPT_TSHIRTS:
+        # Fires in EVERY mode, including ceo and including when a statement
+        # was passed -- this module never sees PM acceptance (C4's job).
+        detents.append("exit_criterion_pending")
 
     if (resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear) or well_trodden_step_change:
         resolved_route = "shape"
         detents.append("scope_boundary_acknowledged")
-    elif resized_tshirt == "M" and repo_span == "single" and not jtbd_unclear:
-        # R7: a typed input mapping deterministically to a route, an
-        # extension of the table (like the D5 shape inputs), not an
-        # override -- sizing stays the gate. `jtbd_unclear` is checked here
-        # even though it does not gate the shape arm at "M" (_LARGE_TSHIRTS
-        # excludes M): an unclear JTBD is evidence against the first-person
-        # shortcut regardless of whether it crosses the shape-route size
-        # threshold.
-        resolved_route = "first-person"
     else:
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
@@ -898,13 +1012,6 @@ def route(
         )
     elif resolved_route == "shape":
         next_move = "Route to /shape for PM problem-alignment before plan/roadmap."
-    elif resolved_route == "first-person":
-        next_move = (
-            "First-person: build it yourself, no plan file. Baseline check/test, then "
-            "one module, its test, a scoped run while working, a final sweep, then one "
-            "named reviewer on the diff. No executor dispatch, no wave polling, no "
-            "double validation."
-        )
     elif resolved_route == "spec-dispatch":
         next_move = (
             "Route to a light plan artifact (scope_mode: spec-dispatch): substrate "
@@ -1038,6 +1145,28 @@ def route(
             "elaboration."
         )
 
+    mode_touchpoints = touchpoints(interaction_mode, resized_tshirt)
+
+    if "exit_criterion_pending" in detents:
+        if exit_criterion:
+            criterion_clause = f'accept the exit criterion: "{exit_criterion}"'
+        else:
+            criterion_clause = (
+                "propose an exit criterion for the PM to accept -- none was passed"
+            )
+        if interaction_mode == "ceo":
+            next_move += (
+                f" CEO mode's single touchpoint: ask the PM to {criterion_clause}."
+            )
+        else:
+            next_move += f" Also ask the PM to {criterion_clause}."
+
+    touchpoint_ids = ", ".join(t["id"] for t in mode_touchpoints) or "none"
+    next_move += (
+        f" Mode {interaction_mode} (source: {interaction_mode_source or 'default'}) "
+        f"touchpoints at this size: {touchpoint_ids}."
+    )
+
     return {
         "route": resolved_route,
         "detents": detents,
@@ -1050,8 +1179,28 @@ def route(
         "scout_evidence": scout_evidence,
         "narration": narration,
         "next_move": next_move,
+        "exit_criterion": exit_criterion_field,
+        "interaction_mode": interaction_mode,
+        "interaction_mode_source": interaction_mode_source,
+        "touchpoints": mode_touchpoints,
         # the object is minted regardless of RESOLVED route; only D3's
-        "directives": [_sizing_object_scaffold_directive(intent, name)],
+        # short-circuit skips it. `--interaction-mode` is threaded onto the
+        # directive only when the caller (main(), via interaction_mode_source)
+        # actually resolved one from a flag or the fleet record -- never
+        # merely route()'s own "hands-on" default, so a caller that never
+        # asked about mode still gets today's byte-identical directive.
+        "directives": [
+            _sizing_object_scaffold_directive(
+                intent,
+                name,
+                exit_criterion=exit_criterion,
+                interaction_mode=(
+                    interaction_mode
+                    if interaction_mode_source in ("flag", "fleet")
+                    else None
+                ),
+            )
+        ],
     }
 
 
@@ -1076,10 +1225,36 @@ def _usage(prog: str, stream=None) -> int:
         "[--name <short label>] "
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
-        "[--repo-span single]",
+        "[--exit-criterion <str>] "
+        "[--interaction-mode hands-on|pm|ceo]",
         file=stream,
     )
     return EXIT_USAGE
+
+
+#: `main()`'s own dummy session id for the `interaction_mode` fleet-record
+#: read below. Never consulted for anything else: `interaction_mode`
+#: declares `session_pair=None` (C2), so `resolve_mode`'s session-scoped
+#: rung is never reached for this key -- any literal string works here.
+_CLI_SESSION_ID = "sizing-assemble-cli"
+
+
+def _resolve_interaction_mode_and_source(cli_value: Optional[str]) -> tuple[str, str]:
+    """flag -> fleet -> default (Design § Mode resolution). Lazy,
+    function-local import (`main()`'s own "importing mode_resolution lazily
+    ... so that route() stays import-light") -- resolving through C2's
+    `resolve_mode` (never a hand-rolled copy of its fleet-wins precedence)
+    keeps this in sync with the registry by construction."""
+    if cli_value is not None:
+        return cli_value, "flag"
+
+    from coordinator_core.session.fleet_mode import read_fleet_mode
+    from coordinator_core.session.mode_resolution import resolve_mode
+
+    resolved = resolve_mode("interaction_mode", _CLI_SESSION_ID, env=None)
+    fleet_map = read_fleet_mode()
+    source = "fleet" if fleet_map.get("interaction_mode") == resolved else "default"
+    return resolved, source
 
 
 def main(argv: list[str]) -> int:
@@ -1101,8 +1276,9 @@ def main(argv: list[str]) -> int:
     name = None
     precedent = None
     probe_raise_basis = None
-    repo_span = None
     scout_evidence: list[str] = []
+    exit_criterion = None
+    interaction_mode_flag = None
 
     i = 0
     while i < len(argv):
@@ -1155,8 +1331,11 @@ def main(argv: list[str]) -> int:
         elif tok == "--probe-raise-basis" and i + 1 < len(argv):
             probe_raise_basis = argv[i + 1]
             i += 2
-        elif tok == "--repo-span" and i + 1 < len(argv):
-            repo_span = argv[i + 1]
+        elif tok == "--exit-criterion" and i + 1 < len(argv):
+            exit_criterion = argv[i + 1]
+            i += 2
+        elif tok == "--interaction-mode" and i + 1 < len(argv):
+            interaction_mode_flag = argv[i + 1]
             i += 2
         elif tok == "--json":
             i += 1
@@ -1166,6 +1345,10 @@ def main(argv: list[str]) -> int:
 
     if tshirt is None:
         return _usage(prog)
+
+    interaction_mode, interaction_mode_source = _resolve_interaction_mode_and_source(
+        interaction_mode_flag
+    )
 
     try:
         decision = route(
@@ -1183,8 +1366,10 @@ def main(argv: list[str]) -> int:
             intent_source=intent_source,
             precedent=precedent,
             probe_raise_basis=probe_raise_basis,
-            repo_span=repo_span,
             name=name,
+            exit_criterion=exit_criterion,
+            interaction_mode=interaction_mode,
+            interaction_mode_source=interaction_mode_source,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)

@@ -60,6 +60,15 @@ def test_commit_pathspec_falls_back_to_concrete_surface():
     ]
 
 
+def test_commit_pathspec_literalizes_app_router_bracket_paths():
+    # klabauter#71 F24a: git reads a bare `[slug]` as glob magic, so the
+    # commit pathspec must carry the `:(literal)` prefix downstream.
+    wave = [_wave_row("C1", ["src/app/(main)/players/[slug]/page.tsx"])]
+    assert commit_pathspec(wave) == [
+        ":(literal)src/app/(main)/players/[slug]/page.tsx"
+    ]
+
+
 def test_commit_pathspec_ignores_non_concrete_surface_fallback():
     wave = [_wave_row("C1", UNDECLARED, surface="dispatch_emit")]
     with pytest.raises(NoWritesDeclaredError, match="C1"):

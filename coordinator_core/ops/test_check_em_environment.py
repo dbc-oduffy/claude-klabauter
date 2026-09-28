@@ -38,7 +38,7 @@ def _mk_transcript(tmp_path: Path, name: str, model: str) -> Path:
 @pytest.fixture
 def homes(tmp_path):
     return {
-        "medium": _mk_home(tmp_path, "home_medium", "medium"),
+        "low": _mk_home(tmp_path, "home_low", "low"),
         "high": _mk_home(tmp_path, "home_high", "high"),
         "none": _mk_home(tmp_path, "home_none", None),
     }
@@ -74,14 +74,14 @@ def _classify(out: str) -> str:
     return "silent"
 
 
-def test_opus_and_medium_is_silent(capsys, monkeypatch, homes, transcripts):
-    rc, out = _run(capsys, monkeypatch, homes["medium"], transcripts["opus"])
+def test_opus_and_low_is_silent(capsys, monkeypatch, homes, transcripts):
+    rc, out = _run(capsys, monkeypatch, homes["low"], transcripts["opus"])
     assert rc == 0
     assert _classify(out) == "silent"
 
 
-def test_no_transcript_and_medium_is_silent(capsys, monkeypatch, homes):
-    rc, out = _run(capsys, monkeypatch, homes["medium"], None)
+def test_no_transcript_and_low_is_silent(capsys, monkeypatch, homes):
+    rc, out = _run(capsys, monkeypatch, homes["low"], None)
     assert rc == 0
     assert _classify(out) == "silent"
 
@@ -98,8 +98,8 @@ def test_opus_and_unpinned_effort_warns_effort(capsys, monkeypatch, homes, trans
     assert _classify(out) == "effort"
 
 
-def test_sonnet_and_medium_warns_model(capsys, monkeypatch, homes, transcripts):
-    rc, out = _run(capsys, monkeypatch, homes["medium"], transcripts["sonnet"])
+def test_sonnet_and_low_warns_model(capsys, monkeypatch, homes, transcripts):
+    rc, out = _run(capsys, monkeypatch, homes["low"], transcripts["sonnet"])
     assert rc == 0
     assert _classify(out) == "model"
 

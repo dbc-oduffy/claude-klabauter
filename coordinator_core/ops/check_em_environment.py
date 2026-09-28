@@ -3,7 +3,7 @@ coordinator_core.ops.check_em_environment — EM effort/model drift banner.
 
 Purpose: invoked as a STEP inside the start ceremonies (/workstream-start,
 /workday-start, /workweek-start), NOT as a hook. Verifies the EM is running on
-the expected EFFORT (medium) and, best-effort, MODEL (Opus), and prints a loud
+the expected EFFORT (low) and, best-effort, MODEL (Opus), and prints a loud
 banner on drift. Silent on a clean env. Always returns 0.
 
 Why a skill step, not a hook: a UserPromptSubmit hook would fire before every
@@ -49,6 +49,8 @@ import re
 import sys
 from pathlib import Path
 from typing import List, Optional
+
+_EXPECTED_EFFORT = "low"
 
 
 def _read_effort(path: Path) -> Optional[str]:
@@ -147,7 +149,7 @@ def main(argv: List[str]) -> int:
     effort_warn = ""
     if not effort:
         effort_warn = "unpinned"
-    elif effort != "medium":
+    elif effort != _EXPECTED_EFFORT:
         effort_warn = effort
 
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
@@ -174,14 +176,14 @@ def main(argv: List[str]) -> int:
         lines.append("║")
         if effort_warn == "unpinned":
             lines.append("║  EFFORT: not pinned in any settings.json — runtime follows Anthropic's")
-            lines.append("║    default, which drifts upward (a token pit). Expected: medium.")
-            lines.append('║    → Recommend pinning "effortLevel": "medium" in settings.json.')
+            lines.append("║    default, which drifts upward (a token pit). Expected: low.")
+            lines.append('║    → Recommend pinning "effortLevel": "low" in settings.json.')
         else:
             source_display = str(effort_source) if effort_source else ""
             if home and source_display.startswith(home):
                 source_display = "~" + source_display[len(home):]
-            lines.append(f"║  EFFORT: pinned to '{effort_warn}', not medium  ({source_display}).")
-            lines.append("║    → WARN the PM; medium is the cost-calibrated default for EM work.")
+            lines.append(f"║  EFFORT: pinned to '{effort_warn}', not low  ({source_display}).")
+            lines.append("║    → WARN the PM; low is the default for EM work: the EM oversees workflows, it does not do the work.")
     lines.append("╚══════════════════════════════════════════════════════════════════╝")
     lines.append("")
 

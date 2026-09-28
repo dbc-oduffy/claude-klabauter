@@ -71,7 +71,28 @@ from coordinator_core.session.claimed_write import append_claimed_line
 # so the write SET is not a fixed artifact list; MUTATES over GENERATES.
 MUTATES = ["state/goals-log.*.jsonl"]
 
-_VALID_PERIODS = frozenset({"day", "week", "repo"})
+_VALID_PERIODS: Optional[frozenset] = None
+
+
+def _valid_periods() -> frozenset:
+    """Derive the valid `period` enum from goal.schema.json (single source of
+    truth — F1/klabauter#71,#70: this used to hardcode {day,week,repo}, silently
+    diverging from the schema's {day,week,repo,quarter,year} and rejecting
+    authored quarter/year goals the schema, scaffold, and goal-setting doctrine
+    all prescribe)."""
+    global _VALID_PERIODS
+    if _VALID_PERIODS is None:
+        import json as _json
+
+        from coordinator_core.frontmatter.baton_class import VENDORED_SCHEMAS_DIR
+
+        schema_path = VENDORED_SCHEMAS_DIR / "goal.schema.json"
+        with open(schema_path, "r", encoding="utf-8") as fh:
+            schema = _json.load(fh)
+        enum = schema["properties"]["period"]["enum"]
+        _VALID_PERIODS = frozenset(enum)
+    return _VALID_PERIODS
+
 
 _VALID_STATUSES: Optional[frozenset] = None
 
@@ -259,11 +280,14 @@ def append_goal(
     Raises:
         ValueError: if period or text or period_value or status is invalid.
     """
+    valid_periods = _valid_periods()
     period = period.strip() if period else ""
     if not period:
-        raise ValueError("period is required (one of: day | week | repo)")
-    if period not in _VALID_PERIODS:
-        raise ValueError(f"period must be one of: day | week | repo (got: {period!r})")
+        raise ValueError(f"period is required (one of: {' | '.join(sorted(valid_periods))})")
+    if period not in valid_periods:
+        raise ValueError(
+            f"period must be one of: {' | '.join(sorted(valid_periods))} (got: {period!r})"
+        )
     period_value = period_value.strip() if period_value else ""
     if not period_value:
         raise ValueError("period_value is required")

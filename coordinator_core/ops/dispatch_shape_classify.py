@@ -22,7 +22,7 @@ BINDING CONSTRAINTS (from the bash oracle's own the Staff Engineer-reviewed head
   - F3: Filter agentId count to EXECUTOR-CLASS subagent_type only (exclude
         reviewers, scouts, personas). Executor-class: `general-purpose`,
         `coordinator:executor`, `feature-dev:*`. Non-executor: any `coordinator:*`
-        except executor, `coordinator:staff-eng`, `coordinator:review-integrator`,
+        except executor, `coordinator:staff-eng`,
         persona names.
   - F4: Use a BOUNDED per-gate-group window derived from the em_sid session dir.
         Whole-session is the bound — finer granularity is not available without

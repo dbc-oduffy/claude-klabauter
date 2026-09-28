@@ -1935,21 +1935,34 @@ class _ServerContext:
         (EXIT_REASON_SUPERSEDED vs EXIT_REASON_IDLE_DEMOTION) for a server
         that only actually saw one verdict. One tick must observe one
         consistent verdict.
+
+        ALSO CHECKS `version_state.is_source_stale()` (axis 2), for the
+        same reason `_token_is_stale` (axis 1) is checked here rather than
+        only reactively: `skew.ServerVersionState.is_skewed` -- axis 2's
+        own home -- is reachable only from `_serve_line`, once per REQUEST,
+        so a bare source edit (no publish, no token rotation) is invisible
+        until the next caller happens to dial in. This watchdog already
+        polls on a fixed interval with no traffic required for axis 1; the
+        identical poll now asks axis 2 the identical question, at the
+        identical cost (`is_source_stale`'s own `refresh()` throttle -- one
+        `os.stat`, not a rehash, on most ticks). BV-20260927-06.
         """
         token_stale = self._token_is_stale()
+        source_stale = self.version_state.is_source_stale()
+        stale = token_stale or source_stale
         if idle.should_demote(
             served_count=self.telemetry.served_count,
-            token_stale=lambda: token_stale,
+            token_stale=lambda: stale,
         ):
             # `warm.telemetry`'s EXIT_REASON_SUPERSEDED note. Use the
             self.record_exit(
                 telemetry.EXIT_REASON_SUPERSEDED
-                if token_stale
+                if stale
                 else telemetry.EXIT_REASON_IDLE_DEMOTION
             )
         idle.demote_if_idle(
             served_count=self.telemetry.served_count,
-            token_stale=lambda: token_stale,
+            token_stale=lambda: stale,
             close_listener=self.close_listener,
             in_flight_count=self.drain_outstanding,
             ctx_shutdown=self._ctx_shutdown,

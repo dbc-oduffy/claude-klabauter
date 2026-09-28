@@ -841,6 +841,31 @@ class ServerVersionState:
         if current_hash != self._boot_hash:
             self._source_stale = True
 
+    def is_source_stale(self) -> bool:
+        """Axis 2 alone, traffic-independent: True iff this server's own
+        engine source has changed since boot, per the same throttled
+        prefilter-then-hash check `is_skewed` already runs.
+
+        EXISTS FOR A BACKGROUND WATCHDOG, not the request path. `is_skewed`
+        is reachable only from `_serve_line`, which runs once per REQUEST --
+        so a source edit lands invisibly until the next caller happens to
+        dial in with a valid `_engine_token`. Both `warm.server`'s idle
+        watchdog and `warm.supervisor`'s skew watchdog already poll on a
+        fixed interval with no traffic required (mirroring the token-axis
+        "superseded generation" check each already runs there); this method
+        gives them the identical question for axis 2, at the identical cost
+        -- `refresh()`'s own throttle -- so calling it every watchdog tick
+        is exactly one `os.stat` per un-elapsed interval, never a rehash per
+        tick.
+
+        Calls `refresh()` first, same as `is_skewed`, so a caller needs no
+        separate timer of its own. Does not touch or report axis 1 (token) --
+        a caller wanting both compares this alongside its own token check,
+        exactly as `is_skewed` compares both internally for the request path.
+        """
+        self.refresh()
+        return self._source_stale
+
     def is_skewed(self, client_token: str) -> bool:
         """True iff this request should be treated as version-skewed --
         axis 2 (the throttled secondary check has flagged this server's

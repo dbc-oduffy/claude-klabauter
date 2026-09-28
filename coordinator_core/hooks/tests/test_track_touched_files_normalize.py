@@ -369,3 +369,27 @@ class TestAC3OutOfWorktreePathReachableThroughHandler:
                 verb=touch_record.VERB_TOUCH,
                 path="/etc/passwd",
             )
+
+
+class TestHandlerRecordsTouchInTheFilesOwnRepo:
+
+    def test_absolute_path_in_a_sibling_repo_lands_in_that_repos_store(self, tmp_path):
+        (tmp_path / "caller").mkdir()
+        (tmp_path / "sibling").mkdir()
+        caller = _make_repo(tmp_path / "caller")
+        sibling = _make_repo(tmp_path / "sibling")
+        (sibling / "src").mkdir()
+        target = sibling / "src" / "new.py"
+        target.write_text("y")
+
+        params = {
+            "session_id": "deadbeefcafe0003",
+            "tool_name": "Edit",
+            "file_path": str(target),
+        }
+        asyncio.run(ttf._handler(params, repo_root=git_common_dir(caller)))
+
+        sink = git_common_dir(sibling) / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+        assert "src/new.py" in _decoded_paths(sink)
+        caller_sink = git_common_dir(caller) / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+        assert "src/new.py" not in _decoded_paths(caller_sink)

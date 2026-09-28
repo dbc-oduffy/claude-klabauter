@@ -97,6 +97,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -1004,7 +1005,149 @@ def _external_deps(
 # ---------------------------------------------------------------------------
 
 
-def _prime_exit(fm: Dict[str, Any]) -> Dict[str, Any]:
+#: Matches ``prime_exit_criterion.derived_from`` values this rung will even
+#: attempt to resolve — a sizing path under ``state/sizings/``. Anything else
+#: (a goal KR, free prose, a foreign-repo sentinel) is out of this rung's
+#: business and keeps today's verdict, per Design § Inheritance, gate side.
+_SIZING_DERIVED_FROM_RE = re.compile(r"^state/sizings/.+\.ya?ml$")
+
+
+def _read_sizing_exit_criterion(repo_root: Path, derived_from: str) -> Optional[Dict[str, Any]]:
+    """The cited sizing's ``exit_criterion`` mapping, or ``None``.
+
+    Deliberately does NOT import ``ops/deliverable_cascade`` (Design § Inheritance,
+    gate side): that module pulls in ``ipc``, ``claim_state``, ``git_native`` and
+    ``locked_write`` at module level, which would invert the roadmap→ops layering
+    and add a cold-import cost to every ``gate_plan`` call. This helper is a local,
+    guarded ``yaml.safe_load`` instead — no side effects, and any failure (missing
+    file, path escaping ``repo_root``, unparsable YAML, non-mapping content) is a
+    silent ``None``, because this rung is a no-op on anything it cannot resolve:
+    never a DEFECT and never an exception.
+    """
+    if not _SIZING_DERIVED_FROM_RE.match(derived_from):
+        return None
+    try:
+        root = repo_root.resolve()
+        candidate = (root / derived_from).resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    try:
+        loaded = yaml.safe_load(candidate.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    criterion = loaded.get("exit_criterion")
+    return criterion if isinstance(criterion, dict) else None
+
+
+def _falsifier_shape_defect(
+    fm: Dict[str, Any], repo_root: Optional[Path]
+) -> Optional[str]:
+    """The falsifier's OWN authoring-time SHAPE defects -- misnesting and a
+    non-sha-shaped `baseline_ref` -- read through the SAME predicates
+    `close_out_and_stamp._evaluate_goal_falsifier_gate` judges them by
+    (`_falsifier_misnested`, `_falsifier_block`, the same size/date gate),
+    reused rather than restated so this bar and the terminal close-out gate
+    cannot disagree about the same plan (gh-klabauter#71, F23b).
+
+    Deliberately NARROWER than that gate: both defects here are checkable
+    from the plan's OWN bytes alone -- a `falsifier:` key nested one level
+    too shallow, or a `baseline_ref` that is not even sha-shaped, are wrong
+    regardless of whether the plan has executed. `_verify_baseline_ref`'s
+    own git-ancestry half (does the sha exist, does `HEAD` reach it) is
+    NOT reused here -- this module is a ZERO-SPAWN bar by contract (see its
+    own module docstring's Budget section), and a git spawn per corpus plan
+    is exactly the cost that contract exists to keep off this path.
+    `exit_criterion_met` absence and a non-`pass` verdict are not reused
+    either -- both describe an OBSERVATION made after the work runs, which
+    this pre-execution bar has nothing to observe yet.
+
+    `None` on anything the goal gate itself would decline on (no
+    `prime_exit_criterion`, grandfathered, S/XS, a taken exemption, a
+    correctly-nested well-formed falsifier) -- never raises, never spawns."""
+    if repo_root is None:
+        return None
+    try:
+        # `close_out_and_stamp.falsifier_shape` -- NOT `close_out_and_stamp`
+        # itself: that module's top-level imports pull in git commit
+        # machinery, ceremony, and session plumbing, which is fine for a
+        # terminal once-per-close-out gate but not for this per-plan,
+        # ZERO-SPAWN corpus hot path. See `falsifier_shape.py`'s own module
+        # docstring for the measured brightline regression that import
+        # caused. `close_out_and_stamp.py` imports these SAME names back
+        # (re-export) -- this is the one definition, not a second copy.
+        from coordinator_core.execute_plan_assemble.falsifier_shape import (
+            _BASELINE_REF_CROSS_REPO_RE,
+            _DISPOSITION_REF_SHA_RE,
+            _falsifier_block,
+            _falsifier_exemption,
+            _falsifier_misnested,
+            _plan_created_on_or_after_grandfather,
+            _plan_is_m_plus,
+        )
+    except Exception:
+        return None
+    prime = fm.get("prime_exit_criterion")
+    if not isinstance(prime, dict):
+        return None
+    try:
+        misnested = _falsifier_misnested(fm)
+        falsifier = _falsifier_block(prime)
+        effective = falsifier if falsifier is not None else (fm.get("falsifier") if misnested else None)
+    except Exception:
+        return None
+
+    # Cheap, I/O-free candidates first (pure dict/regex reads): the common
+    # case -- a correctly-nested, well-shaped falsifier, or none declared at
+    # all -- exits here on every one of a corpus's plans without ever
+    # touching disk. `_plan_is_m_plus` below reads a file, and this bar is a
+    # ZERO-SPAWN, per-plan corpus hot path (module Budget section) -- paying
+    # that read on every prime_exit-carrying plan, defect or not, is what
+    # pushed the real-corpus worst case over the 500ms brightline the first
+    # time this predicate ran unconditionally
+    # (`test_every_real_plan_holds_the_brightline`, 2026-09-27). Deferred
+    # until a candidate defect exists to gate.
+    candidates: List[str] = []
+    if misnested:
+        candidates.append(
+            "plan declares a top-level falsifier: key as a sibling of "
+            "prime_exit_criterion instead of nesting it under "
+            "prime_exit_criterion.falsifier"
+        )
+    if isinstance(effective, dict):
+        baseline_ref = effective.get("baseline_ref")
+        if isinstance(baseline_ref, str) and baseline_ref.strip():
+            stripped = baseline_ref.strip()
+            if not _DISPOSITION_REF_SHA_RE.match(stripped) and not _BASELINE_REF_CROSS_REPO_RE.match(
+                stripped
+            ):
+                candidates.append(
+                    "prime_exit_criterion.falsifier.baseline_ref is not a "
+                    f"resolvable sha shape: {baseline_ref!r}"
+                )
+    if not candidates:
+        return None
+
+    # A candidate exists -- NOW pay for the size/date gate (one file read)
+    # to decide whether it is actually in scope, same bounds the goal gate
+    # itself uses: a taken exemption, an S/XS plan, or one created before
+    # the grandfather date never refuses on these, regardless of what its
+    # falsifier looks like.
+    try:
+        if _falsifier_exemption(prime) is not None:
+            return None
+        if not _plan_created_on_or_after_grandfather(fm):
+            return None
+        if not _plan_is_m_plus(fm, repo_root):
+            return None
+    except Exception:
+        return None
+    return "; ".join(candidates)
+
+
+def _prime_exit(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """``prime_exit_criterion.statement`` and ``.derived_from`` non-empty, at
     every size.
 
@@ -1017,6 +1160,16 @@ def _prime_exit(fm: Dict[str, Any]) -> Dict[str, Any]:
 
     ``falsifier`` is deliberately NOT required — its proportionality rule is
     unchanged and is not this bar's business.
+
+    A second, additive rung (Design § Inheritance, gate side / C5): when
+    ``derived_from`` resolves under ``repo_root`` to a ``state/sizings/*.yaml``
+    record whose ``exit_criterion.accepted`` is non-null, the plan's statement
+    must match it (modulo whitespace normalisation) or the verdict is
+    ``prime-exit-diverges-from-sizing``. An unresolvable path, a foreign-repo
+    path, or a sizing with no or unaccepted ``exit_criterion`` leaves the verdict
+    exactly as it was before this rung existed — this rung never turns a PASS
+    into an exception, and it is itself a no-op: never a DEFECT on its own account
+    beyond the one divergence case above.
     """
     criterion = fm.get("prime_exit_criterion")
     if not isinstance(criterion, dict):
@@ -1024,25 +1177,41 @@ def _prime_exit(fm: Dict[str, Any]) -> Dict[str, Any]:
             "prime-exit-absent",
             "no prime_exit_criterion (required at every size, not only M/L/XL)",
         )
-    if not str(criterion.get("statement") or "").strip():
+    statement = criterion.get("statement")
+    if not str(statement or "").strip():
         return _defect("prime-exit-empty", "prime_exit_criterion carries no statement")
-    if is_placeholder(criterion.get("statement")):
+    if is_placeholder(statement):
         return _defect(
             "prime-exit-placeholder",
             "prime_exit_criterion.statement is still a scaffold placeholder "
             "(replace the <REPLACE: ...> marker with the falsifiable sentence)",
         )
-    if not str(criterion.get("derived_from") or "").strip():
+    derived_from = criterion.get("derived_from")
+    if not str(derived_from or "").strip():
         return _defect(
             "prime-exit-underived",
             "prime_exit_criterion has no derived_from (a link, not a self-declaration)",
         )
-    if is_placeholder(criterion.get("derived_from")):
+    if is_placeholder(derived_from):
         return _defect(
             "prime-exit-placeholder",
             "prime_exit_criterion.derived_from is still a scaffold placeholder "
             "(replace it with the sizing object or goal KR it derives from)",
         )
+    if repo_root is not None:
+        sizing_exit = _read_sizing_exit_criterion(repo_root, str(derived_from).strip())
+        if isinstance(sizing_exit, dict) and isinstance(sizing_exit.get("accepted"), dict):
+            sizing_statement = str(sizing_exit.get("statement") or "")
+            if " ".join(str(statement).split()) != " ".join(sizing_statement.split()):
+                return _defect(
+                    "prime-exit-diverges-from-sizing",
+                    "prime_exit_criterion.statement differs from the accepted "
+                    f"exit_criterion on {derived_from} (plans inherit an accepted "
+                    "criterion; they do not re-author it)",
+                )
+    shape_defect = _falsifier_shape_defect(fm, repo_root)
+    if shape_defect is not None:
+        return _defect("prime-exit-falsifier-shape", shape_defect)
     return _pass("declared")
 
 
@@ -1105,7 +1274,9 @@ def _is_stamp_field_error(error: Dict[str, Any]) -> bool:
     return all(n.split(".")[0].startswith(_SCHEMA_STAMP_FIELD_PREFIX) for n in names)
 
 
-def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
+def _schema(
+    fm: Dict[str, Any], prime_exit: Dict[str, Any], parse_error: Optional[str] = None
+) -> Dict[str, Any]:
     """``plan.schema.json`` over the frontmatter this gate is about to certify.
 
     example-retrieval-repo, 2026-09-11: a plan reached approved AND certified carrying
@@ -1121,7 +1292,15 @@ def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
     missing schema file would refuse every plan in a tree whose vendored schemas
     have not been re-published yet, which is a defect in this gate, not in the
     plans.
+
+    F24b: ``parse_error``, when given, means the PLAN's own frontmatter --
+    not the schema -- failed to parse. Reported as the parse error itself and
+    nothing else: a schema walk over ``plan_frontmatter``'s fail-safe ``{}``
+    would otherwise report every required field missing, which is a true
+    but misleading restatement of "this YAML did not parse at all".
     """
+    if parse_error is not None:
+        return _defect("frontmatter-parse-error", parse_error)
     try:
         from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 
@@ -1157,6 +1336,15 @@ def plan_frontmatter(text: str) -> Dict[str, Any]:
     Splitting is delegated to ``primitives.split_frontmatter`` — a second
     frontmatter locator is a second place the rule can drift from the one every
     other reader in this engine uses.
+
+    A YAML parse failure and a genuinely EMPTY/absent frontmatter block both
+    collapse to ``{}`` here on purpose — every existing predicate over the
+    returned mapping (``_census``, ``_prime_exit``, ...) needs nothing more
+    than "no fields to read". A caller that needs to tell the two apart (F24b,
+    gh-klabauter#71: a YAML parse error was reported as "title/created/author/
+    status: required field missing", which sent an author hunting for four
+    fields that were never the problem) reads ``frontmatter_parse_error``
+    instead, which is the ONLY place that distinction is checked.
     """
     from coordinator_core.frontmatter.primitives import split_frontmatter
 
@@ -1168,6 +1356,38 @@ def plan_frontmatter(text: str) -> Dict[str, Any]:
     except yaml.YAMLError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def frontmatter_parse_error(text: str) -> Optional[str]:
+    """The frontmatter's own YAML parse error, with the parser's line/column,
+    or ``None`` when it parses (or there is no frontmatter block at all --
+    that is a SPINE/absent-block concern, never a parse error).
+
+    F24b (gh-klabauter#71): wherever this bar reports a defect derived from
+    an UNPARSEABLE frontmatter, it must say so as a parse error, not as
+    "required field X missing" -- the schema walk over ``plan_frontmatter``'s
+    fail-safe ``{}`` cannot tell a plan that never declared ``title:`` from
+    one whose YAML a stray tab or an unclosed quote broke, and reported both
+    the same way. This reads the same bytes a SECOND time only to recover
+    that ONE distinction; ``plan_frontmatter`` itself stays the single
+    parse-or-empty reader every other predicate already depends on.
+    """
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    try:
+        yaml.safe_load(split.fm_text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            location = f"line {mark.line + 1}, column {mark.column + 1}"
+        else:
+            location = "unknown location"
+        problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+        return f"YAML parse error at {location}: {problem}"
+    return None
 
 
 def raw_spine_rows(text: str) -> List[Dict[str, Any]]:
@@ -1219,13 +1439,14 @@ def evaluate_plan(
     if text is None:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     fm = plan_frontmatter(text)
-    prime_exit = _prime_exit(fm)
+    parse_error = frontmatter_parse_error(text)
+    prime_exit = _prime_exit(fm, repo_root)
     classes = {
         "SPINE": _spine(plan_path, text, repo_root),
         "CENSUS": _census(fm),
         "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings, nested_names),
         "PRIME_EXIT": prime_exit,
-        "SCHEMA": _schema(fm, prime_exit),
+        "SCHEMA": _schema(fm, prime_exit, parse_error),
     }
     if any(v["status"] == "REFUSE" for v in classes.values()):
         verdict = REFUSED

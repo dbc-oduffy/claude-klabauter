@@ -140,8 +140,11 @@ Negative-spec:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import NamedTuple, Optional
+
+_LOGGER = logging.getLogger(__name__)
 
 import yaml
 
@@ -372,6 +375,18 @@ class AmbiguousExternalGateError(SpineReadError):
     pass
 
 
+class ContradictoryReadDeclarationError(InvalidFieldTypeError):
+    """Raised when a row names the same path in both ``reads_at_head:``
+    (never orders) and ``consumes:``/``reads:`` (orders) — D5.
+
+    A subclass of ``InvalidFieldTypeError`` (the module's existing
+    field-type refusal), not a bare ``SpineReadError``: the two declarations
+    disagree about whether the same path orders this row, and there is no
+    way to pick a side that would not silently discard the author's other
+    declaration.
+    """
+
+
 class EmitterRow(NamedTuple):
     """One normalized task-spine row for the dispatch-emit pipeline.
 
@@ -410,6 +425,18 @@ class EmitterRow(NamedTuple):
     field ``_row_agent_type`` cannot see the contradiction, so the row emits,
     dispatches, and burns a wave. Defaults to ``None``; a spine declaring no
     ``change_kind`` maps exactly as before the field existed.
+
+    ``reads`` is the ORDERING read set (§ Design D5): the union of a row's
+    declared ``consumes:`` entries and any ``reads:`` entries (``reads:`` is
+    the pre-D5 spelling of the same ordering meaning, kept for back-compat
+    and logged once per ``read_spine`` call — see ``read_spine``).
+    ``wave_map.build_waves`` orders on this field alone and needs no change.
+
+    ``reads_at_head`` is a SEPARATE, non-ordering read set: a path a row
+    reads for its verdict at the plan's base revision, never at another
+    row's write. It never contributes a wave edge. Defaults to ``()`` so
+    DoE-claude's ``emit-dispatch-workflow.py``, which calls ``read_spine``
+    and does not know this field, is unaffected by its addition.
     """
 
     id: str
@@ -424,6 +451,7 @@ class EmitterRow(NamedTuple):
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
+    reads_at_head: tuple = ()
 
 
 def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
@@ -483,6 +511,13 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     default to ``[]`` when omitted (neither carries an undeclared-vs-empty
     distinction per the schema — only ``writes`` does, per
     plan-tasks.schema.json).
+
+    ``reads`` (§ Design D5) is the union of declared ``reads:`` and
+    ``consumes:`` — both order. ``reads_at_head`` defaults to ``()`` and
+    never orders. A row naming the same path in ``reads_at_head:`` and in
+    ``reads:``/``consumes:`` raises ``ContradictoryReadDeclarationError``.
+    Any row using the (deprecated but still-honoured) ``reads:`` key logs
+    one ``logging.warning`` per ``read_spine`` call naming every such row.
 
     Rows whose ``disposition`` is closed (see
     ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, which
@@ -569,6 +604,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     frontmatter_gates = _frontmatter_external_gates(source, row_ids)
 
     rows: list[EmitterRow] = []
+    rows_using_reads: list[str] = []
     for raw in raw_rows:
         row_id = raw.get("id")
         writes = raw.get("writes")
@@ -597,13 +633,45 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             writes_under = tuple(prefix.replace("\\", "/") for prefix in writes_under)
             if writes is UNDECLARED:
                 writes = []
-        reads = raw.get("reads")
-        if reads is None:
-            reads = []
-        elif not isinstance(reads, list):
+        declared_reads = raw.get("reads")
+        if declared_reads is None:
+            declared_reads = []
+        elif not isinstance(declared_reads, list):
             raise InvalidFieldTypeError(
-                f"row {row_id!r} declares reads: as {reads!r}, not a list"
+                f"row {row_id!r} declares reads: as {declared_reads!r}, not a list"
             )
+        else:
+            rows_using_reads.append(row_id)
+
+        consumes = raw.get("consumes")
+        if consumes is None:
+            consumes = []
+        elif not isinstance(consumes, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares consumes: as {consumes!r}, not a list"
+            )
+
+        reads_at_head = raw.get("reads_at_head")
+        if reads_at_head is None:
+            reads_at_head = ()
+        elif not isinstance(reads_at_head, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares reads_at_head: as {reads_at_head!r}, not a list"
+            )
+        else:
+            reads_at_head = tuple(reads_at_head)
+
+        # reads is the ordering set: declared `reads:` union `consumes:`.
+        reads = list(dict.fromkeys([*declared_reads, *consumes]))
+
+        overlap = set(reads) & set(reads_at_head)
+        if overlap:
+            raise ContradictoryReadDeclarationError(
+                f"row {row_id!r} declares {sorted(overlap)!r} in both "
+                "reads_at_head: (never orders) and consumes:/reads: (orders); "
+                "a path cannot be both"
+            )
+
         depends_on = raw.get("depends_on")
         if depends_on is None:
             depends_on = []
@@ -643,7 +711,16 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     else None
                 ),
                 change_kind=raw.get("change_kind"),
+                reads_at_head=reads_at_head,
             )
+        )
+
+    if rows_using_reads:
+        _LOGGER.warning(
+            "read_spine: row(s) %s use the deprecated reads: key; reads: "
+            "still orders (kept for back-compat), but new rows should use "
+            "consumes: (orders) or reads_at_head: (never orders) instead",
+            ", ".join(rows_using_reads),
         )
 
     satisfied_ids: set[str] = set()

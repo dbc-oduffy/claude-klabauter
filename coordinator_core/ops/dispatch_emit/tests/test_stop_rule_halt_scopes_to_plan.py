@@ -1,10 +1,14 @@
 """
-Pins bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane: a STOP-RULE-FIRED
-halt composed for a single-plan spine still stops the whole run (byte-for-
-byte, unchanged), while a mise-inventory compose spanning more than one
-plan (rows carrying `Spec: <path> (<id>)` in their body -- see
-`emit._row_source_plan`) scopes the halt to the stopping row's OWN plan and
-lets every other plan's rows keep running.
+Pins bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane, carried into the
+DAG rewrite (§ Design D4): a STOP-RULE-FIRED halt on a row with no source
+plan sets the GLOBAL ``_halted`` flag (single-plan compose, whole run
+stops); a mise-inventory compose spanning more than one plan (rows
+carrying ``Spec: <path> (<id>)`` in their body -- see
+``emit._row_source_plan``) scopes the halt to the stopping row's OWN plan
+via ``_haltedPlans``/``_haltedPlanReasons``, letting every other plan's
+rows keep running. ``_rowPlan``/``_haltedPlans``/``_haltedPlanReasons`` are
+now ALWAYS declared (empty for the single-plan case) -- one ``_runRow``
+code path, no more ``_skipIfHalted``/``if _multi_plan:`` branching.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ def _spec_body(row_id: str, plan_path: str) -> str:
     return f"Spec: {plan_path} ({row_id})\nSummary: does the thing.\n"
 
 
-def test_single_plan_compose_keeps_whole_run_halt():
+def test_single_plan_compose_declares_empty_plan_tables_and_the_global_halt():
     waves = [
         [_row("C1", ["a.py"])],
         [_row("C2", ["b.py"])],
@@ -41,11 +45,11 @@ def test_single_plan_compose_keeps_whole_run_halt():
         plan_path="docs/plans/example.md",
     )
 
-    assert "_haltedPlans" not in script
-    assert "_skipIfHalted" not in script
-    assert "_rowPlan" not in script
-    assert "if (_stoppedWave1Results.length) return { halted:" in script
-    assert "if (_stoppedWave2Results.length) return { halted:" in script
+    assert "const _rowPlan = {  };" in script
+    assert "const _haltedPlans = new Set();" in script
+    assert "const _haltedPlanReasons = new Map();" in script
+    assert "let _halted = null;" in script
+    assert "_halted = id;" in script
 
 
 def test_single_plan_compose_unaffected_by_a_wave_row_with_no_spec_line():
@@ -56,8 +60,7 @@ def test_single_plan_compose_unaffected_by_a_wave_row_with_no_spec_line():
         description="single-plan spine with a non-Spec body",
         plan_path="docs/plans/example.md",
     )
-    assert "_haltedPlans" not in script
-    assert "if (_stoppedWave1Results.length) return { halted:" in script
+    assert "const _rowPlan = {  };" in script
 
 
 def test_multi_plan_compose_scopes_halt_to_the_stopping_rows_plan():
@@ -82,19 +85,12 @@ def test_multi_plan_compose_scopes_halt_to_the_stopping_rows_plan():
     assert "'P1-C1': 'docs/plans/p1.md'" in script
     assert "'P2-C1': 'docs/plans/p2.md'" in script
     assert "const _haltedPlans = new Set();" in script
-    assert "function _skipIfHalted(id, fn)" in script
+    assert "_haltedPlans.add(plan);" in script
+    assert "_haltedPlanReasons.set(plan, id);" in script
+    assert "_skipIfHalted" not in script
 
-    assert "_skipIfHalted('P1-C1', () => agent(" in script
-    assert "_skipIfHalted('P1-C2', () => agent(" in script
-    assert "_skipIfHalted('P2-C1', () => agent(" in script
-    assert "_skipIfHalted('P2-C2', () => agent(" in script
-
-    assert "STOP RULE in the chunk's own spec fired" not in script
-    assert "if (_stoppedWave1Results.length) return { halted:" not in script
-    assert "if (_stoppedWave2Results.length) return { halted:" not in script
-    assert "for (const id of _stoppedWave1Results)" in script
-    assert "_haltedPlans.add(p);" in script
-    assert "_haltedPlanReasons.set(p, id);" in script
+    assert "_rows['P1-C1'] = _runRow('P1-C1'," in script
+    assert "_rows['P2-C1'] = _runRow('P2-C1'," in script
 
 
 def test_multi_plan_requires_at_least_two_distinct_plans():
@@ -108,5 +104,5 @@ def test_multi_plan_requires_at_least_two_distinct_plans():
         description="mise-inventory spine over a single plan",
         plan_path="state/mise-inventory/example.spine.md",
     )
-    assert "_haltedPlans" not in script
-    assert "if (_stoppedWave1Results.length) return { halted:" in script
+    assert "'C1': 'docs/plans/p1.md'" in script
+    assert "'C2': 'docs/plans/p1.md'" in script

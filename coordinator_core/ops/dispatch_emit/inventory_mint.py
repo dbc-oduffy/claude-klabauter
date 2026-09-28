@@ -119,6 +119,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, read_spine
 
 #: Repo root the `os.path.isdir` rung in `_refuse_if_directory_shaped`
 #: resolves a footprint entry against -- never the process cwd (issue
@@ -167,6 +168,96 @@ _KNOWN_CLOSED_SATISFIED_DISPOSITION_PREFIXES = ("already-fixed", "landed", "drop
 #: mint time, rather than left to fail after the emitted script's work is
 #: already done.
 _GLOB_CHARS = ("*", "?", "[")
+
+#: git pathspec magic prefix that forces literal (non-glob) matching --
+#: `git help glossary` § pathspec. Applied downstream (`as_git_pathspec`)
+#: to a path this module accepted as literal despite carrying `[`/`]`/
+#: `(`/`)`, so the commit stage's own pathspec parser (glob-shaped by
+#: default for any bracket) agrees with the classification made here
+#: rather than re-deriving it and disagreeing (klabauter#71 F24a).
+_LITERAL_PATHSPEC_PREFIX = ":(literal)"
+
+
+def _is_app_router_dynamic_segment(segment: str) -> bool:
+    """True for a whole path segment shaped like Next.js App Router dynamic
+    route syntax -- `[slug]`, `[...slug]`, or the optional-catch-all
+    `[[...slug]]` -- where the bracket pair spans the ENTIRE segment and
+    nothing inside it carries a further `[`/`]`. A segment merely
+    CONTAINING a bracket (`a[b.py`, `x]y`) is not this shape and is left to
+    read as a glob."""
+    if segment.startswith("[[") and segment.endswith("]]"):
+        inner = segment[2:-2]
+    elif segment.startswith("[") and segment.endswith("]"):
+        inner = segment[1:-1]
+    else:
+        return False
+    return bool(inner) and "[" not in inner and "]" not in inner
+
+
+def _is_route_group_segment(segment: str) -> bool:
+    """True for a whole path segment shaped like a Next.js App Router route
+    group -- `(main)`, `(auth)` -- one balanced `(...)` pair spanning the
+    entire segment."""
+    return (
+        segment.startswith("(")
+        and segment.endswith(")")
+        and segment.count("(") == 1
+        and segment.count(")") == 1
+    )
+
+
+def is_glob_pathspec(path: str) -> bool:
+    """True if `path` is a glob pathspec `scoped-git-commit`'s commit
+    preflight would refuse -- `*`/`?` anywhere, or a `[`/`]`/`(`/`)` not
+    confined to a whole Next.js App Router dynamic-route segment
+    (`[slug]`, `[...slug]`, `[[...slug]]`) or route-group segment
+    (`(main)`) (klabauter#71 F24a).
+
+    Before this fix, EVERY `[`/`]`/`(`/`)` character anywhere in the path
+    forced the glob classification, so an App Router path like
+    `src/app/(main)/players/[slug]/page.tsx` -- a concrete, single-file
+    path with no glob semantics at all -- read as an unbounded pathspec
+    and lost file-level collision detection, forcing the plan author onto
+    the coarser `writes_under:` directory declaration instead.
+
+    An explicit `:(literal)`-prefixed path is never a glob: the caller
+    already declared it literal via git's own pathspec magic, and this
+    function trusts that declaration without inspecting the rest of the
+    string -- the escape hatch for a shape this segment-level rule does
+    not (or should not) recognize.
+    """
+    if path.startswith(_LITERAL_PATHSPEC_PREFIX):
+        return False
+    if "*" in path or "?" in path:
+        return True
+    if not any(ch in path for ch in "[]()"):
+        return False
+    for segment in path.split("/"):
+        if not segment or not any(ch in segment for ch in "[]()"):
+            continue
+        if _is_app_router_dynamic_segment(segment) or _is_route_group_segment(segment):
+            continue
+        return True
+    return False
+
+
+def as_git_pathspec(path: str) -> str:
+    """`path`, prefixed with git's `:(literal)` pathspec magic when it
+    carries a `[`/`]`/`(`/`)` character -- git's own pathspec parser reads
+    any bracket as glob magic by default (`git help glossary` § pathspec),
+    so a path this module accepted as literal (`is_glob_pathspec` false)
+    must still be told, downstream, to match literally -- otherwise the
+    commit/pathspec stages disagree with the classification made here
+    (klabauter#71 F24a). Idempotent: a path already carrying pathspec
+    magic (starts with `:(`) is returned unchanged. Never called on a path
+    `is_glob_pathspec` accepted as a genuine glob -- those are refused
+    before reaching here, not literalized.
+    """
+    if path.startswith(":("):
+        return path
+    if any(ch in path for ch in "[]()"):
+        return f"{_LITERAL_PATHSPEC_PREFIX}{path}"
+    return path
 
 _REQUIRED_COLUMNS = (
     "id",
@@ -280,12 +371,19 @@ def _split_id_list(cell: str) -> List[str]:
 
 
 def _refuse_if_glob(row_id: str, path: str, raw_cell: str) -> None:
-    if any(ch in path for ch in _GLOB_CHARS):
+    """Refuse `path` when `is_glob_pathspec` classifies it a genuine glob.
+    A bracket/paren-carrying path this classifier accepts as literal (an
+    App Router dynamic segment or route group) passes through here
+    unrefused -- see `is_glob_pathspec`'s docstring (klabauter#71 F24a)."""
+    if is_glob_pathspec(path):
         raise GlobFootprintError(
             f"chunk table row {row_id!r}: footprint entry {path!r} is a "
-            "glob pathspec (contains '*', '?', or '['); scoped-git-commit's "
-            "commit preflight refuses an unbounded pathspec, so this would "
-            f"only fail after the emitted work is done (raw cell: {raw_cell!r})"
+            "glob pathspec (contains '*', '?', or an unbounded '['); "
+            "scoped-git-commit's commit preflight refuses an unbounded "
+            "pathspec, so this would only fail after the emitted work is "
+            "done. A whole-segment App Router shape (`[slug]`, `(main)`) "
+            "is not a glob and is accepted; an explicit `:(literal)` "
+            f"prefix is also accepted (raw cell: {raw_cell!r})"
         )
 
 
@@ -589,6 +687,29 @@ def _plan_row_execution_mode(
     once per row."""
     if inventory_path is None:
         return None
+    rows_by_id = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+    row = rows_by_id.get(chunk_id)
+    if row is None:
+        row = rows_by_id.get(_bare_plan_row_id(chunk_id))
+    return row.get("execution_mode") if row is not None else None
+
+
+def _plan_raw_rows_by_id(
+    inventory_path: Path, spec_path: str, plan_cache: Dict[Path, Dict[str, dict]]
+) -> Dict[str, dict]:
+    """`spec_path`'s plan-tasks spine -> ``{row id: raw row dict}``, EVERY row
+    the plan's own file declares -- unlike `read_spine`, never filtered to
+    the dispatchable subset. Used to tell a single-chunk-reference item id
+    (matches one row here) apart from a whole-plan-reference item id
+    (matches none) BEFORE any dispatchability filtering narrows the id
+    space -- an item id naming an `execution_mode: operator`-excluded row
+    (present here, absent from `read_spine`'s output) must still read as a
+    single-chunk reference, not a whole-plan expansion of whatever remains.
+
+    Populates and reuses `plan_cache`, the SAME cache `_plan_row_execution_
+    mode` keys by resolved plan path -- one read/parse per plan per mint,
+    shared by both callers.
+    """
     plan_path = _resolve_spec_plan_path(inventory_path, spec_path)
     if plan_path not in plan_cache:
         try:
@@ -605,11 +726,47 @@ def _plan_row_execution_mode(
                     for raw in result.rows
                     if isinstance(raw.get("id"), str) and raw["id"]
                 }
-    rows_by_id = plan_cache[plan_path]
-    row = rows_by_id.get(chunk_id)
-    if row is None:
-        row = rows_by_id.get(_bare_plan_row_id(chunk_id))
-    return row.get("execution_mode") if row is not None else None
+    return plan_cache[plan_path]
+
+
+def _plan_sub_rows(
+    inventory_path: Optional[Path],
+    spec_path: str,
+    spine_cache: Dict[Path, Optional[list]],
+):
+    """`spec_path` (a Chunk-table row's spec cell) -> the LIST of dispatchable
+    ``EmitterRow`` objects `spine_read.read_spine` derives from it, or
+    `None` when `spec_path` is not a plan carrying its own `` ```yaml
+    plan-tasks `` spine at all (coordinator-claude#72 F25b).
+
+    Reuses `spine_read.read_spine` -- the exact `--plan` spine reader --
+    rather than a second parser: a Chunk-table row whose spec IS a
+    multi-chunk plan gets that plan's own chunk DAG, not a re-derivation of
+    it. `inventory_path` omitted (the default `mint_rows` signature) means
+    no expansion is ever attempted -- every existing standalone
+    `mint_rows(rows)` call keeps its prior, single-row-per-item behaviour
+    unchanged (module docstring's own contract for `inventory_path`).
+
+    `spine_cache` memoises by resolved plan path so a spec path shared by
+    many Chunk-table rows -- or read once for `_plan_row_execution_mode`'s
+    OWN cache -- is still only read and parsed once per mint, per cache.
+
+    An unreadable file, or one with no LOCATED plan-tasks block, is not an
+    expansion candidate -- `read_spine` raises `OSError`/`SpineReadError`
+    for either, caught here and folded into `None` (falls back to the
+    existing single-row-per-item mint below) rather than sinking the whole
+    inventory mint over an item whose spec is an ordinary doc, not a plan.
+    """
+    if inventory_path is None:
+        return None
+    plan_path = _resolve_spec_plan_path(inventory_path, spec_path)
+    if plan_path not in spine_cache:
+        try:
+            rows = read_spine(plan_path)
+        except (OSError, SpineReadError):
+            rows = None
+        spine_cache[plan_path] = rows or None
+    return spine_cache[plan_path]
 
 
 def mint_rows(
@@ -656,22 +813,118 @@ def mint_rows(
         live.append((row_id, row, writes))
 
     plan_cache: Dict[Path, Dict[str, dict]] = {}
+    spine_cache: Dict[Path, Optional[list]] = {}
     minted: List[dict] = []
     preceding_ids: set = set()
+    #: Item id -> every minted id it expanded into (one entry for a
+    #: non-plan-sourced item, N for a plan-sourced expansion) -- what an
+    #: inter-item `deps` edge fans out onto, per row (coordinator-claude#72
+    #: F25b: "a dependent plan's roots wait on every chunk of the plan it
+    #: depends on").
+    item_all_ids: Dict[str, List[str]] = {}
+
     for row_id, row, writes in live:
         spec_path = _strip_backtick(row["spec path"])
         summary = row["summary"].strip()
         verification = row["verification"].strip()
         complexity = row["complexity"].strip()
 
-        depends_on = []
         explicit_dep_ids: set = set()
         for dep_id in _split_id_list(row["deps"]):
             dep_kind = dep_kinds.get(dep_id, _DEP_KIND_UNKNOWN)
             if dep_kind == _DEP_KIND_CLOSED_SATISFIED:
                 continue  # satisfied -- the dependency is already discharged
-            depends_on.append({"chunk": dep_id, "gate_kind": "output-consumption-runtime"})
             explicit_dep_ids.add(dep_id)
+        # Every minted id an inter-item `deps` edge from this row must fan
+        # out onto -- the WHOLE dependency item's chunk set, not just its
+        # roots: a dependent's root(s) may consume any of its output.
+        inter_item_targets: List[dict] = [
+            {"chunk": target, "gate_kind": "output-consumption-runtime"}
+            for dep_id in sorted(explicit_dep_ids)
+            for target in item_all_ids.get(dep_id, [dep_id])
+        ]
+
+        sub_rows = _plan_sub_rows(inventory_path, spec_path, spine_cache)
+        if sub_rows:
+            # An item id (or its plan-prefix-stripped form) that already
+            # names ONE specific row in the target plan's spine -- checked
+            # against EVERY row the plan declares, not just the dispatchable
+            # subset `sub_rows` carries, so an `execution_mode: operator`
+            # single-chunk reference (excluded from `read_spine`'s output)
+            # still reads as one -- is the pre-existing single-chunk-
+            # reference convention (`_plan_row_execution_mode`'s own bare-id
+            # match): a scout hand-authored one Chunk-table row per plan
+            # chunk, and that authoring intent must be left exactly as it
+            # was, no expansion, just the single-row mint below. Only an
+            # item id matching NO row in the plan at all is a whole-plan
+            # reference to expand (coordinator-claude#72 F25b).
+            bare_id = _bare_plan_row_id(row_id)
+            raw_ids = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+            if row_id in raw_ids or bare_id in raw_ids:
+                sub_rows = None
+
+        if sub_rows:
+            # Plan-sourced expansion: this Chunk-table row's spec IS a plan
+            # carrying its own `` ```yaml plan-tasks `` spine -- reuse that
+            # spine's own dispatchable rows/depends_on graph verbatim,
+            # namespaced `<item-id>.<chunk-id>` so ids can't collide across
+            # items (coordinator-claude#72 F25b), rather than flattening the
+            # whole plan into one agent.
+            id_map = {r.id: f"{row_id}.{r.id}" for r in sub_rows}
+            entry_ids: List[str] = []
+            for r in sub_rows:
+                minted_id = id_map[r.id]
+                sub_depends_on = [
+                    {
+                        "chunk": id_map[edge.get("chunk")],
+                        "gate_kind": edge.get("gate_kind") or "output-consumption-runtime",
+                    }
+                    for edge in r.depends_on
+                    if isinstance(edge, dict) and edge.get("chunk") in id_map
+                ]
+                is_root = not sub_depends_on
+                depends_on = list(sub_depends_on)
+                if is_root:
+                    # Only a root chunk gates on another plan's whole chunk
+                    # set -- an interior chunk already orders after its own
+                    # plan's predecessors, which order after the dependency
+                    # transitively via those predecessors' own roots.
+                    depends_on.extend(inter_item_targets)
+
+                r_writes = r.writes if isinstance(r.writes, list) else []
+                writes_set = set(r_writes)
+                for earlier_id, earlier_writes in writes_by_id.items():
+                    if earlier_id == minted_id or earlier_id.startswith(f"{row_id}."):
+                        continue
+                    if earlier_id not in preceding_ids:
+                        continue
+                    if any(edge["chunk"] == earlier_id for edge in depends_on):
+                        continue
+                    if writes_set & earlier_writes:
+                        depends_on.append(
+                            {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
+                        )
+                writes_by_id[minted_id] = writes_set
+
+                entry: dict = {
+                    "id": minted_id,
+                    "title": r.title or summary,
+                    "change_kind": r.change_kind or _infer_change_kind(r_writes),
+                    "surface": (r_writes[0] if r_writes else r.surface) or summary,
+                    "body": r.body or _row_body(minted_id, spec_path, r.title or summary, verification, complexity),
+                    "writes": r_writes,
+                }
+                if depends_on:
+                    entry["depends_on"] = depends_on
+                minted.append(entry)
+                preceding_ids.add(minted_id)
+                entry_ids.append(minted_id)
+
+            item_all_ids[row_id] = entry_ids
+            continue
+
+        # Plain, non-plan-sourced row: unchanged single-executor mint.
+        depends_on = list(inter_item_targets)
 
         # Write-overlap edge, added on top where none exists: an EARLIER
         # live row (table order) whose writes intersect this row's writes
@@ -687,12 +940,14 @@ def mint_rows(
                 continue
             if earlier_id not in preceding_ids:
                 continue
-            if writes_by_id[row_id] & earlier_writes:
+            if any(edge["chunk"] == earlier_id for edge in depends_on):
+                continue
+            if set(writes) & earlier_writes:
                 depends_on.append(
                     {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
                 )
 
-        entry: dict = {
+        entry = {
             "id": row_id,
             "title": summary,
             "change_kind": _infer_change_kind(writes),
@@ -709,6 +964,7 @@ def mint_rows(
             entry["depends_on"] = depends_on
         minted.append(entry)
         preceding_ids.add(row_id)
+        item_all_ids[row_id] = [row_id]
 
     return minted
 

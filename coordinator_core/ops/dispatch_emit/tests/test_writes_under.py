@@ -228,41 +228,14 @@ def test_a_prefix_only_spine_has_a_legitimately_empty_test_scope():
     assert terminal_test_scope([[_wave_row("C1", [], [_AUDITS])]]) == []
 
 
-def test_a_prefix_only_wave_keeps_its_commit_phase_with_the_widening_rule():
+def test_a_prefix_only_wave_still_names_its_prefix_in_the_row_prompt():
     script = compose_script(
-        [[_wave_row("C1", [], [_AUDITS])]], name="wf", description="prefix wave"
+        [[_wave_row("C1", [], [_AUDITS])]],
+        name="wf",
+        description="prefix wave",
+        plan_path="docs/plans/fake-plan.md",
     )
-    assert "phase('Commit wave 1')" in script
-    assert "RUN-TIME-NAMED WRITES" in script
-    assert "C1: \\`state/audits/\\`" in script
-    assert "commit phase omitted" not in script
-
-
-def test_the_prefix_widening_names_itself_as_the_one_exception_to_provenance():
-    script = compose_script(
-        [[_wave_row("C1", [], [_AUDITS])]], name="wf", description="prefix wave"
-    )
-    wave_phase = script.split("phase('Commit wave 1')", 1)[1]
-    assert "THE ONE EXCEPTION" in wave_phase
-
-
-def test_a_wave_without_prefixes_carries_no_widening_rule():
-    script = compose_script(
-        [[_wave_row("C1", ["a.py"])]], name="wf", description="plain wave"
-    )
-    assert "RUN-TIME-NAMED WRITES" not in script
-    assert "write PREFIXES" not in script
-
-
-def test_the_preflight_checks_prefixes_for_ignore_rules_not_claims():
-    script = compose_script(
-        [[_wave_row("C1", ["a.py"], [_AUDITS])]], name="wf", description="mixed"
-    )
-    preflight = script.split("phase('Preflight: commit claimability')", 1)[1]
-    preflight = preflight.split("phase(", 1)[0]
-    assert "every path in [a.py" in preflight
-    assert "write PREFIXES" in preflight
-    assert _AUDITS in preflight
+    assert "state/audits/" in script
 
 
 def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_the_prefix():
@@ -307,8 +280,11 @@ def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path)
     waves = [[_wave_row("C1", ["registry/registry.db"], [_AUDITS])]]
     script = compose_script(waves, name="wf", description="ignored+prefix", repo_root=repo)
 
-    assert "commit phase omitted" not in script
-    assert "phase('Commit wave 1')" in script
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
+    request = parse_marker(script)
+    assert request is not None
+    assert request.chunks[0].prefixes == (_AUDITS,)
 
 
 def test_a_row_without_prefixes_gets_no_prefix_claim_field():

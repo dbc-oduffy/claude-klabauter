@@ -210,6 +210,33 @@ class TestAppendGoalValidation:
                 hostname="test-host",
             )
 
+    def test_quarter_and_year_periods_accepted(self, tmp_path: Path) -> None:
+        """F1 (klabauter#71/#70): quarter/year are in goal.schema.json's period
+        enum and must be accepted here too — the emitter derives its enum from
+        the schema instead of a hardcoded, silently-drifted subset."""
+        for period, period_value in [("quarter", "Q3-2026"), ("year", "2026")]:
+            append_goal(
+                period=period,
+                period_value=period_value,
+                text="Test goal text",
+                central_state_root=tmp_path,
+                repo="test-org/test-repo",
+                hostname="test-host",
+            )
+
+    def test_valid_periods_matches_schema_enum(self) -> None:
+        """The op's accepted period set is derived from, and stays equal to,
+        goal.schema.json's period enum — not a copy that can drift."""
+        import json as _json
+
+        from coordinator_core.frontmatter.baton_class import VENDORED_SCHEMAS_DIR
+        from coordinator_core.ops.goal_append import _valid_periods
+
+        schema_path = VENDORED_SCHEMAS_DIR / "goal.schema.json"
+        with open(schema_path, "r", encoding="utf-8") as fh:
+            schema = _json.load(fh)
+        assert _valid_periods() == frozenset(schema["properties"]["period"]["enum"])
+
 
 # ---------------------------------------------------------------------------
 # append_goal(): end-to-end row shape + file assertions

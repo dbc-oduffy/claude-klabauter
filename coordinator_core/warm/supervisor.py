@@ -875,8 +875,19 @@ class _ServerContext:
         2026-08-30, an entire census bucket reading as "unknown" when it was
         this one path. Residual of `docs/research/2026-08-26-repo-warm-
         succession-advisory.md` section 6, whose `ServerTelemetry` and
-        `transport` tag landed while this call did not."""
-        if self._token_is_stale():
+        `transport` tag landed while this call did not.
+
+        ALSO checks `version_state.is_source_stale()` (axis 2) --
+        BV-20260927-06. `_token_is_stale` (axis 1) only fires on a publish
+        rotating the engine token; a bare on-disk source edit in the serving
+        clone (no publish) never moves it, and `skew.ServerVersionState.
+        is_skewed`'s own axis-2 check is reachable only from the request path
+        (`_serve_line`, `supervisor.py`'s `do_POST`), so it never runs for a
+        listener that answers `/health` but otherwise sees no traffic. This
+        watchdog already polls without traffic for axis 1; the same tick now
+        asks axis 2 the identical question, at `is_source_stale`'s own
+        throttled cost (one stat on most ticks, a rehash only when it moved)."""
+        if self._token_is_stale() or self.version_state.is_source_stale():
             self.record_exit(telemetry.EXIT_REASON_SUPERSEDED)
             self.stop()
 

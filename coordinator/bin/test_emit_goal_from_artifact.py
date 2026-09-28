@@ -360,3 +360,90 @@ def test_emit_goal_from_artifact(tmp_path):
 
     inv_abandoned = next((ln for ln in lines18 if "goal-status-abandoned" in ln), "")
     assert "--status dropped" in inv_abandoned, "artifact status 'abandoned' maps to wire status 'dropped'"
+
+
+def test_help_flag_prints_usage_and_exits_zero():
+    """F2 (klabauter#71): --help must work instead of falling through to
+    'Unknown argument'."""
+    result = subprocess.run(
+        [sys.executable, SUBJECT, "--help"],
+        capture_output=True, text=True, **no_console_creationflags(),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Usage" in result.stdout
+    assert "--artifact" in result.stdout
+
+
+_SHIM_BODY_CAPTURES_EVENTS_FILE = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+log = os.environ.get("SHIM_LOG")
+events_file = sys.argv[sys.argv.index("--events-file") + 1]
+with open(events_file, encoding="utf-8") as f:
+    events = json.load(f)
+with open(log, "a", encoding="utf-8") as f:
+    f.write(json.dumps(events) + "\\n")
+sys.exit(0)
+'''
+
+
+def _write_events_capturing_shim(shim_dir: str) -> str:
+    """Like _write_shim(), but reads --events-file's contents (before the
+    caller unlinks it in its `finally`) and logs the parsed events instead of
+    the raw argv — needed to assert on WHICH goal(s) got batched, since the
+    events-file path itself is a fresh tempfile name each run."""
+    os.makedirs(shim_dir, exist_ok=True)
+    path = os.path.join(shim_dir, "append-goal-event.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(_SHIM_BODY_CAPTURES_EVENTS_FILE)
+    return path
+
+
+def test_artifact_flag_emits_only_named_file(tmp_path):
+    """F2: --artifact <path> emits only the named scaffolded artifact, not a
+    whole-directory scan — 'run the emitter against the scaffolded artifact'."""
+    repo = os.path.join(tmp_path, "repo-artifact")
+    _write_goal(repo, "goal-a.yaml", FIXTURE_LEGIBILITY)
+    _write_goal(repo, "goal-b.yaml", FIXTURE_LEGIBILITY.replace("goal-legibility", "goal-b"))
+
+    shim_dir = os.path.join(tmp_path, "shim")
+    shim = _write_events_capturing_shim(shim_dir)
+    log = os.path.join(tmp_path, "artifact.log")
+
+    # NOTE: the shared _write_shim() shim in this file doesn't emit
+    # batch-outcome JSON on stdout, so the emitter's own exit code reflects a
+    # pre-existing, unrelated batch-reporting gap (reproduced against
+    # origin/HEAD, not introduced by this fix) — this test uses its own shim
+    # variant to assert on what --artifact actually controls: which file(s)
+    # get batched.
+    artifact_path = os.path.join(repo, "state", "goals", "goal-b.yaml")
+    _run_emitter(repo, shim, log, extra_args=["--artifact", artifact_path])
+
+    lines = _read_log(log)
+    assert len(lines) == 1, f"--artifact must emit exactly one goal, got: {lines}"
+    events = json.loads(lines[0])
+    assert len(events) == 1, events
+    assert "goal-b" in events[0]["text"], events
+
+
+def test_bare_positional_path_is_artifact_shorthand(tmp_path):
+    """F2: a bare positional path argument is accepted as --artifact shorthand."""
+    repo = os.path.join(tmp_path, "repo-positional")
+    _write_goal(repo, "goal-a.yaml", FIXTURE_LEGIBILITY)
+
+    shim_dir = os.path.join(tmp_path, "shim")
+    shim = _write_shim(shim_dir)
+    log = os.path.join(tmp_path, "positional.log")
+
+    artifact_path = os.path.join(repo, "state", "goals", "goal-a.yaml")
+    env = dict(os.environ)
+    env["COORDINATOR_APPEND_GOAL_HELPER"] = shim
+    env["SHIM_LOG"] = log
+    subprocess.run(
+        [sys.executable, SUBJECT, artifact_path, "--root", repo, "--repo", "dbc-oduffy/doe-test"],
+        capture_output=True, text=True, env=env, **no_console_creationflags(),
+    )
+    lines = _read_log(log)
+    assert len(lines) == 1, lines

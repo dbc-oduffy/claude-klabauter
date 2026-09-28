@@ -25,8 +25,7 @@ Conditions (order preserved exactly from source):
   1. `COORDINATOR_OVERRIDE_MULTIWAVE_WORKFLOW == "1"` -> never fire.
   2. subagent-originated dispatch (`agent_id` present) -> never nudge.
   3. `subagent_type` must match the write-capable roster (*executor*
-     substring, or an exact review-integrator/enricher name,
-     case-insensitive).
+     substring, or an exact enricher name, case-insensitive).
   4. No Workflow launched this session (workflow-launched sentinel absent).
   5. Fires at most once per session (multiwave-workflow-nudged sentinel).
   6. Burst threshold: rolling-window dispatch count (post-prune, INCLUDING
@@ -84,8 +83,6 @@ _WIKI_ANCHOR = (
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 
 _EXACT_WRITE_CAPABLE = {
-    "review-integrator",
-    "coordinator:review-integrator",
     "enricher",
     "coordinator:enricher",
 }

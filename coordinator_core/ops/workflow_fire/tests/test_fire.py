@@ -149,6 +149,17 @@ def test_build_fire_command_never_uses_dangerously_skip_permissions():
     assert "--dangerously-skip-permissions" not in command
 
 
+def test_build_fire_command_prompt_relays_terminal_commit():
+    """AC20: the prompt names dispatch.terminal_commit, the script path and
+    next_action.params, and -p is still carried."""
+    command = fire.build_fire_command("plans/script.mjs", "/resolved/plugin/dir")
+    assert "-p" in command
+    prompt = command[command.index("-p") + 1]
+    assert "dispatch.terminal_commit" in prompt
+    assert "plans/script.mjs" in prompt
+    assert "next_action.params" in prompt
+
+
 # ---------------------------------------------------------------------------
 # resolve_plugin_dir -- native resolver primary, shim fallback, fail loud
 # when both fail. `--print-plugin-dir` is a SHIM flag, not a `claude` flag

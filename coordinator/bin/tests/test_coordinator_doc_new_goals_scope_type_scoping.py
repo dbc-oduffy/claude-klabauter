@@ -54,6 +54,30 @@ class GoalsTypeScopingTest(unittest.TestCase):
         self.assertNotIn("--goals is not accepted", stderr)
 
 
+class RoadmapBatonGoalsTest(unittest.TestCase):
+    """F13 (klabauter#71): --goals must be accepted for --type roadmap-baton
+    so a baton can carry origin_goal_id."""
+
+    def test_goals_accepted_for_roadmap_baton_type(self):
+        code, stderr = _run(
+            "--type", "roadmap-baton", "--title", "t", "--goals", "goal-a,goal-b",
+            "--out", "-",
+        )
+        self.assertNotIn("--goals is not accepted", stderr)
+
+    def test_roadmap_baton_emits_origin_goal_id(self):
+        content = _cli._scaffold_roadmap_baton(
+            title="t",
+            branch="b",
+            roadmap_id="rm-1",
+            stub_id="stub-1",
+            goals=["goal-a", "goal-b"],
+        )
+        self.assertIn("origin_goal_id:", content)
+        self.assertIn('- "goal-a"', content)
+        self.assertIn('- "goal-b"', content)
+
+
 class ScopeTypeScopingTest(unittest.TestCase):
     def test_scope_rejected_for_non_review_findings_type(self):
         code, stderr = _run("--type", "goal", "--title", "t", "--scope", "a.py,b.py")

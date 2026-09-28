@@ -41,14 +41,14 @@ def test_a_bare_prefix_is_not_a_chunk():
 
 
 def test_the_emitter_builds_its_label_through_the_grammar():
-    """Both wave-composition call sites go through `build_work_label`, and
-    neither reconstructs the token itself. A re-introduced f-string passes
+    """The per-row call composer goes through `build_work_label`, and
+    never reconstructs the token itself. A re-introduced f-string passes
     every other test in this file."""
-    source = inspect.getsource(emit._wave_agent_calls)
+    source = inspect.getsource(emit._row_agent_call_expr)
     assert "build_work_label(row.id)" in source, (
-        "the wave composer no longer builds its label through the grammar"
+        "the row call composer no longer builds its label through the grammar"
     )
     assert "f'work:" not in source and 'f"work:' not in source, (
-        "the wave composer composes a `work:` label itself, beside the grammar "
-        "-- that is the drift work_label.py exists to prevent"
+        "the row call composer composes a `work:` label itself, beside the "
+        "grammar -- that is the drift work_label.py exists to prevent"
     )

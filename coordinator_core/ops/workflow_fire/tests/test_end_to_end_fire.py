@@ -15,7 +15,8 @@ scoped to two halves:
      emitted script text is TOP-LEVEL (never a defined-but-uninvoked
      ``async function run(ctx) { ... }`` wrapper -- C5 fixed this; an inert
      script would fire "successfully" while dispatching zero agents) and
-     names a ``coordinator:git-commit-agent`` commit phase.
+     carries one terminal-commit-request marker (§ Design D4, 2026-09-27)
+     rather than a per-wave ``coordinator:git-commit-agent`` phase.
   2. Live-fire (``test_fired_workflow_lands_a_real_commit_in_the_scratch_
      repo``) -- spawns one real, detached ``claude -p`` child via
      ``fire.fire_workflow`` against the emitted script, polling
@@ -220,9 +221,13 @@ def test_emit_synthetic_spine_is_top_level_and_has_a_commit_phase(tmp_path):
     assert "async function run(" not in script
     assert "async function run(ctx)" not in script
 
-    assert "coordinator:git-commit-agent" in script
-    assert "Commit wave 1" in script
-    assert 'phase("Wave 1' in script or "phase('Wave 1" in script
+    # § Design D4 (2026-09-27 restructure): no per-wave commit-agent phase
+    # and no inter-wave `parallel([...])` barrier any more -- one terminal
+    # commit-request marker instead (D2/D3), read by `dispatch.terminal_
+    # commit` after the run.
+    assert "coordinator:git-commit-agent" not in script
+    assert "coordinator:terminal-commit-request" in script
+    assert "phase('Execute')" in script or 'phase("Execute"' in script
 
 
 @pytest.mark.cadence

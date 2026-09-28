@@ -437,10 +437,11 @@ def _core(payload: dict) -> Tuple[str, Optional[str]]:
 
     try:
         commits = _session_commits(repo_root, session_id)
-    except _GitUnavailable as exc:
+    except _GitUnavailable:
         return (
             "advisory",
-            f"[guard] guard-terminal-review could not evaluate: {exc}",
+            "[guard] guard-terminal-review could not evaluate: git "
+            "unavailable in this cwd",
         )
 
     code_commits = [c for c in commits if c.is_code]

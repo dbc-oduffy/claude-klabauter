@@ -174,6 +174,34 @@ def test_op_handler_set_and_show_round_trip(isolated_home):
     assert entry["fleet_value"] is True
 
 
+def test_set_then_show_round_trip_interaction_mode(isolated_home):
+    record = mode_control.set_fleet_mode_key("interaction_mode", "ceo")
+    assert record["interaction_mode"] == "ceo"
+
+    rendered = mode_control.show_fleet_mode()
+    entry = _entry(rendered, "interaction_mode")
+    assert entry["fleet_value"] == "ceo"
+    assert entry["precedence"] == "fleet-wins"
+    assert entry["is_variant_selector"] is False
+
+
+def test_set_bad_interaction_mode_value_rejected(isolated_home):
+    with pytest.raises(ValueError) as exc_info:
+        mode_control.set_fleet_mode_key("interaction_mode", "bogus")
+    message = str(exc_info.value)
+    assert "interaction_mode" in message
+    assert "hands-on" in message
+    assert "pm" in message
+    assert "ceo" in message
+
+
+def test_show_default_interaction_mode_is_hands_on_when_unset(isolated_home):
+    rendered = mode_control.show_fleet_mode()
+    entry = _entry(rendered, "interaction_mode")
+    assert entry["fleet_value"] is None
+    assert entry["declared_default"] == "hands-on"
+
+
 def _entry(rendered: dict, key: str) -> dict:
     for entry in rendered["keys"]:
         if entry["key"] == key:

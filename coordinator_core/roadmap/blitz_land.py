@@ -1189,10 +1189,25 @@ def land_wave(
         except (LandingRefused, OSError, KeyError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
-    after = assemble_plan_gate(worktree_root)
+    # F21: scope the fresh gate read to THIS run's roadmap_id, derived from the
+    # batons this wave actually touched, never repo-wide — an unscoped read
+    # handed `next_wave` batons belonging to an unrelated roadmap, so the next
+    # emit refused the roadmap-scoped report and the operator needed
+    # `--take-remaining` every wave.
+    run_roadmap_id = _wave_roadmap_id(wave_result, all_records)
+    after = assemble_plan_gate(worktree_root, roadmap_id=run_roadmap_id)
     wave = after["waves"][0] if after["waves"] else []
     by_id = {b["id"]: b for b in after["batons"]}
     wave = _without_replanned_sources(wave, by_id, replanned_sources)
+    # F21: a baton whose OWN plan already landed as `implemented` is done, not
+    # a candidate — exclude it explicitly rather than trust `needs_plan` alone,
+    # which is a property of the PLANNING gate and says nothing about a baton
+    # this pass should stop re-offering to fire.
+    wave = [
+        i
+        for i in wave
+        if ((by_id.get(i) or {}).get("plan") or {}).get("status") != "implemented"
+    ]
 
     return {
         "approved": approved,
@@ -1404,6 +1419,28 @@ def _baton_path_for(entry: Dict[str, Any], report: Dict[str, Any]) -> str:
         if ident in record["ids"] or ident == record["path"]:
             return record["path"]
     raise LandingRefused(f"no baton on disk carries id {ident!r}")
+
+
+def _wave_roadmap_id(
+    wave_result: Dict[str, Any], all_records: List[Dict[str, Any]]
+) -> Optional[str]:
+    """The single ``roadmap_id`` every baton THIS wave touched shares, or
+    ``None`` if the wave names no batons, none resolve to a record, or (should
+    never happen for one honestly-fired wave) they disagree — an ambiguous
+    scope must fall back to the repo-wide read rather than guess one roadmap
+    and silently drop the other's batons from `next_wave`.
+    """
+    roadmap_id_by_baton = {r["id"]: r.get("roadmap_id") for r in all_records}
+    seen: set = set()
+    for lane in ("ready", "pulled", "replan", "surfacedToPm"):
+        for entry in wave_result.get(lane) or []:
+            baton_id = entry.get("batonId")
+            rid = roadmap_id_by_baton.get(baton_id)
+            if rid:
+                seen.add(rid)
+    if len(seen) == 1:
+        return next(iter(seen))
+    return None
 
 
 def _without_replanned_sources(

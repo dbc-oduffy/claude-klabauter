@@ -4147,3 +4147,198 @@ class TestResolveDerivedFromArchiveSizingsFallback:
         assert "x.yaml" in failure
 
 
+# ===========================================================================
+# Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-inside-
+# execute-plan.md) -- close_out_and_stamp's own mirror of plan_status_
+# transition._stamp_implemented's identical gate (see that module's own
+# `test_stamp_implemented_refuses_subject_plan_with_no_review_stamp` /
+# `test_stamp_implemented_admits_subject_plan_with_valid_review_stamp` for the
+# style this mirrors). Prior to this file, close_out_and_stamp.py's own leg
+# of this refusal (`close_out_and_stamp`'s inline "Review-stamp refusal"
+# block) had no dedicated coverage at all.
+# ===========================================================================
+
+_DLV_REVIEW_STAMP = "dlv-fixture-review-stamp-000001"
+
+_SUBJECT_PLAN_TEMPLATE = """---
+title: "Fixture plan — review-stamp gate"
+created: 2026-09-28
+author: test-fixture
+status: {status}
+plan_id: "pln-fixture-review-stamp-000001"
+deliverable_id: "dlv-fixture-review-stamp-000001"
+execution_authorized_at: "2026-09-28T12:00:00Z"
+---
+
+# Fixture plan — review-stamp gate
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: "Ship it"
+  change_kind: script-edit
+  surface: x.py
+  deferred: false
+  body: |
+    Ship it end to end.
+```
+"""
+
+
+def _seed_review_stamp_plan(root: Path, status: str = "executing", dest_name: str = "plan.md") -> Path:
+    """Seeds a plan whose `execution_authorized_at` sits strictly after
+    `review_stamp._REVIEW_STAMP_CUTOFF` -- a SUBJECT plan
+    (`review_stamp.is_subject_plan`) -- so `close_out_and_stamp`'s own
+    review-stamp gate is actually reached once the plan's single chunk
+    ships."""
+    text = _SUBJECT_PLAN_TEMPLATE.format(status=status)
+    dest = root / dest_name
+    dest.write_text(text, encoding="utf-8")
+    _run_git(["add", dest_name], root)
+    _run_git(["commit", "-q", "-m", "seed"], root)
+    return dest
+
+
+def _write_yaml_sidecar(path: Path, data: dict) -> None:
+    """Minimal frontmatter-only sidecar writer, mirroring
+    `coordinator_core/ops/tests/test_review_stamp.py`'s own `_write_sidecar`
+    helper (not imported from there -- that module is test-local by
+    convention, same as this file's own fixtures)."""
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm_lines = [f"{key}: {json.dumps(value)}" for key, value in data.items()]
+    path.write_text("---\n" + "\n".join(fm_lines) + "\n---\n\nbody\n", encoding="utf-8")
+
+
+class TestReviewStampGate:
+    def test_fully_shipped_plan_with_no_review_stamp_is_refused(self, tmp_path, monkeypatch):
+        """MK1: a SUBJECT plan with every chunk landed still cannot reach
+        `implemented` with no `review_stamp` on record -- the fix in this
+        chunk also asserts `review_stamp_gate` is actually surfaced on the
+        result dict (it was computed but silently dropped before this fix)."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_review_stamp_plan(root)
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_REVIEW_STAMP)
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is True
+        assert result["stamped"] is False
+        assert result["status_target"] is None
+        assert result["missing_chunk_ids"] == []
+        assert result["review_stamp_gate"]["refused"] is True
+        assert "no review_stamp" in result["review_stamp_gate"]["reason"]
+        assert "review_stamp" in result["message"]
+        assert _read_status(plan_file) != "implemented"
+
+    def test_fully_shipped_plan_with_stale_review_stamp_is_refused(self, tmp_path, monkeypatch):
+        """A `review_stamp` whose `terminal_tree_sha` no longer matches the
+        cited commit's own tree (a stale/mismatched stamp) refuses exactly
+        like the no-stamp case -- `review_stamp.check`'s own tree-equality
+        check, reached through close_out_and_stamp's gate."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_review_stamp_plan(root)
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_REVIEW_STAMP)
+        head_sha = _head_sha(root)
+
+        stale_stamp = (
+            "review_stamp:\n"
+            f"  terminal_commit_sha: {head_sha}\n"
+            # Quoted: an all-zero digit string is YAML-legal but parses as
+            # the INTEGER 0, not a string, unquoted -- `review_stamp.check`
+            # then reads a falsy `expected_tree` and reports the "missing"
+            # refusal instead of the tree-mismatch one this test wants.
+            '  terminal_tree_sha: "0000000000000000000000000000000000000000"\n'
+        )
+        text = plan_file.read_text(encoding="utf-8")
+        text = text.replace(
+            'execution_authorized_at: "2026-09-28T12:00:00Z"\n',
+            'execution_authorized_at: "2026-09-28T12:00:00Z"\n' + stale_stamp,
+        )
+        plan_file.write_text(text, encoding="utf-8")
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["stamped"] is False
+        assert result["status_target"] is None
+        assert result["review_stamp_gate"]["refused"] is True
+        assert "tree no longer matches" in result["review_stamp_gate"]["reason"]
+        assert _read_status(plan_file) != "implemented"
+
+    def test_fully_shipped_plan_with_valid_minted_stamp_is_admitted(self, tmp_path, monkeypatch):
+        """A `review_stamp` genuinely minted via `review_stamp.mint` --
+        bound to a real ancestor commit whose tree still matches -- admits
+        the plan to `implemented`, and `review_stamp_gate` is absent (never
+        merely `None`-valued) from the result, mirroring `goal_gate`'s own
+        "key absent unless consulted-and-refused" posture."""
+        from coordinator_core.ops import review_stamp as rs
+
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_review_stamp_plan(root)
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_REVIEW_STAMP)
+
+        share = root / ".coordinator-local" / "subagent-share" / "sess1"
+        _write_yaml_sidecar(
+            share / "2026-09-28-prep.md",
+            {
+                "run_base_sha": "deadbeef",
+                "product_files": ["coordinator_core/foo.py"],
+                "foreign_claims": [],
+                "slices": [{"id": "A"}],
+                "whole_diff_sidecars": {
+                    "delivery": ".coordinator-local/subagent-share/sess1/2026-09-28-delivery.md"
+                },
+            },
+        )
+        _write_yaml_sidecar(share / "2026-09-28-delivery.md", {"verdict": "PASS"})
+        _write_yaml_sidecar(
+            share / "2026-09-28-integration.md",
+            {
+                "plan_id": "pln-fixture-review-stamp-000001",
+                "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-28-prep.md",
+                "unresolved": [],
+                "confinement_violations": [],
+                "fixes_applied": 1,
+                "em_may_think_differently": [],
+                "brief_conformance": {"items": 1, "met": 1, "unmet": 0},
+            },
+        )
+        product_file = root / "coordinator_core" / "foo.py"
+        product_file.parent.mkdir(parents=True, exist_ok=True)
+        product_file.write_text("x = 1\n", encoding="utf-8")
+
+        _run_git(["add", "-A"], root)
+        _run_git(
+            [
+                "commit", "-q", "-m",
+                "land review\n\nInline-Review: applies 2026-09-28-integration -- execute-review",
+            ],
+            root,
+        )
+
+        build_test = share / "2026-09-28-test-runner.md"
+        _write_yaml_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+        stamp = rs.mint(plan_file, root, build_test_path=str(build_test))
+        assert stamp["terminal_commit_sha"] == _head_sha(root)
+
+        reason = rs.check(plan_file, root, supersession=True)
+        assert reason is None, reason
+
+        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is True
+        assert result["stamped"] is True
+        assert result["status_target"] == "implemented"
+        assert "review_stamp_gate" not in result
+        assert _read_status(plan_file) == "implemented"
+        assert _head_sha(root) != pre_head
+
+

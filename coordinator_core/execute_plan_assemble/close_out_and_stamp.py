@@ -193,6 +193,25 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.wire_paths import rel_id
 
+#: Re-exported from `falsifier_shape` (never a second copy -- see that
+#: module's own docstring for why the pure predicates live there): both
+#: `roadmap.prep_gate`'s pre-execution readiness/mise-prep bar and this
+#: module's own terminal close-out gate judge falsifier placement and
+#: shape through the SAME functions (gh-klabauter#71, F23b).
+from coordinator_core.execute_plan_assemble.falsifier_shape import (
+    _BASELINE_REF_CROSS_REPO_RE,
+    _DISPOSITION_REF_SHA_RE,
+    _EXEMPTION_CLASS,
+    _MPLUS_TSHIRTS,
+    _REQUIRED_FALSIFIER_KEYS,
+    GRANDFATHER_DATE,
+    _falsifier_block,
+    _falsifier_exemption,
+    _falsifier_misnested,
+    _plan_created_on_or_after_grandfather,
+    _plan_is_m_plus,
+)
+
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
@@ -874,8 +893,10 @@ DISPOSITION_REF_GATED = "uncleared-execution-gate"
 #: mistaken for a flag, a symbolic ref like `HEAD~3` that resolves to
 #: something OTHER than what the author actually pinned) is rejected as
 #: `DISPOSITION_REF_MALFORMED` before any subprocess call, rather than
-#: silently resolving to an unintended commit.
-_DISPOSITION_REF_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+#: silently resolving to an unintended commit. Defined in `falsifier_shape`
+#: (imported below, this module's own docstring § re-export note) and used
+#: here before that import line runs -- safe, since nothing calls this
+#: module's functions until the whole module has finished loading.
 
 
 def _verify_disposition_ref(
@@ -925,8 +946,9 @@ def _verify_disposition_ref(
 #: registry key (`registry_get("repos.<repo>")`, the same resolution rung
 #: `discover_working_repos`/`ensure_doe_clone` already use for a sibling
 #: repo lookup) -- never a filesystem path, so a plan file never embeds a
-#: machine-specific path.
-_BASELINE_REF_CROSS_REPO_RE = re.compile(r"^([a-z][a-z0-9_-]*):([0-9a-fA-F]{4,40})$")
+#: machine-specific path. Defined in `falsifier_shape` (re-export note
+#: above) -- same "used before its import line runs, safe at module-load
+#: time" reasoning as `_DISPOSITION_REF_SHA_RE`.
 
 
 def _verify_baseline_ref(
@@ -1096,44 +1118,6 @@ def _disposition_ref_evidence(
 # never refuses.
 # ---------------------------------------------------------------------------
 
-_REQUIRED_FALSIFIER_KEYS = ("how", "baseline_output", "baseline_ref", "expected_when_true")
-
-
-def _falsifier_block(prime_exit_criterion: Any) -> Optional[dict]:
-    """Total, never-raising detection of a real `falsifier` sub-object (AC7):
-    a non-dict `prime_exit_criterion`, an absent/non-dict `falsifier`, or a
-    `falsifier` missing any of its four required non-blank string keys ALL
-    return `None` here -- the caller's own arm 1 ("plan declares no
-    falsifier -> unchanged behaviour, full stop") reads a `None` return
-    identically regardless of WHICH of those shapes produced it, and this
-    function never raises on any of them (a malformed/unparseable shape is
-    exactly the case it exists to route safely, not to crash on)."""
-    if not isinstance(prime_exit_criterion, dict):
-        return None
-    falsifier = prime_exit_criterion.get("falsifier")
-    if not isinstance(falsifier, dict):
-        return None
-    for key in _REQUIRED_FALSIFIER_KEYS:
-        value = falsifier.get(key)
-        if not isinstance(value, str) or not value.strip():
-            return None
-    return falsifier
-
-
-def _falsifier_misnested(fm: dict) -> bool:
-    """Whether a top-level `falsifier:` sibling key -- rather than the
-    nested `prime_exit_criterion.falsifier` `_falsifier_block` reads --
-    explains an otherwise-`None` falsifier block (gh-klabauter#63): a plan
-    author who places `falsifier:` next to `prime_exit_criterion` instead
-    of nesting it under it has NOT omitted the field, so the size-gated
-    arm below must not tell them to author what they already wrote two
-    lines away. Only a genuine non-empty dict counts as that placement
-    error -- a blank or scalar top-level `falsifier:` key is not evidence
-    of misnesting and still reads as plainly absent. Never raises."""
-    top_level = fm.get("falsifier")
-    return isinstance(top_level, dict) and bool(top_level)
-
-
 def _read_status_override(plan_text: str) -> Optional[dict[str, str]]:
     """The sanctioned escape for arms 2-5 (AC19): an existing
     `status_override_by`/`_reason`/`_at` attestation (the same trio
@@ -1229,25 +1213,6 @@ GOAL_REFUSAL_PRIME_ABSENT = "prime_exit_criterion_absent"
 GOAL_REFUSAL_FALSIFIER_ABSENT = "falsifier_absent"
 GOAL_REFUSAL_FALSIFIER_MISNESTED = "falsifier_misnested"
 
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-GRANDFATHER_DATE = "2026-08-27"
-"""The literal ISO date the prime-exit-criterion requirement starts binding.
-
-A plan whose `created` is strictly BEFORE this date is grandfathered and may
-omit `prime_exit_criterion` entirely; one created on or after it, and sized
-M+, must carry the block or its close-out refuses `implemented`.
-
-Why a pinned literal rather than "before this plan's landing commit": the
-landing commit is unresolvable from the sending repo's side, and a rule that
-different repos resolve differently is not one rule. Pinned by DoE-claude's
-cross-repo memo `2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape`
-§ "Pin the grandfather date", which asked for exactly this literal.
-
-NEGATIVE SPEC: this date never moves forward. Advancing it would silently
-re-grandfather a cohort of plans that were authored under the requirement,
-which is the corpus-rewrite this gate exists to prevent."""
-
 _PRIME_ABSENT_NEXT_MOVE = (
     "Author prime_exit_criterion (statement + derived_from, plus a falsifier "
     "or a named falsifier_exemption) in this plan's frontmatter, then re-run "
@@ -1257,103 +1222,6 @@ _PRIME_ABSENT_NEXT_MOVE = (
 misdirect: it says to re-run the observation, and this plan has no observation
 to re-run -- the field that would name one was never written. Same register as
 that constant (one useful move, no restatement of the refusal)."""
-
-
-def _plan_created_on_or_after_grandfather(fm: dict) -> bool:
-    """Whether the plan's `created` places it under the requirement.
-
-    Fails toward GRANDFATHERED (`False`) on anything it cannot read cleanly —
-    absent `created`, a non-scalar, or a value that does not lead with an ISO
-    date. That direction is deliberate and is the opposite of this module's
-    usual fail-loud posture: this arm's refusal blocks a close-out on a field's
-    ABSENCE, so a misparse would refuse a plan that is entitled to its stamp
-    and has no local evidence to argue back with. Every other arm of this gate
-    refuses on something the plan positively declared and got wrong; this one
-    cannot, so it declines rather than guesses.
-
-    `created` may arrive as a `datetime.date` (the YAML loader parses an
-    unquoted ISO date) or as a string, since `schema_validate`'s own leniency
-    accepts both for a `type: string` field. Both are compared lexically after
-    normalising to `YYYY-MM-DD`, which is correct for ISO-8601 dates and needs
-    no date arithmetic."""
-    created = fm.get("created")
-    if isinstance(created, datetime.datetime):
-        created = created.date()
-    if isinstance(created, datetime.date):
-        return created.isoformat() >= GRANDFATHER_DATE
-    if not isinstance(created, str):
-        return False
-    head = created.strip()[:10]
-    if not _ISO_DATE_RE.match(head):
-        return False
-    return head >= GRANDFATHER_DATE
-
-
-_MPLUS_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
-
-
-def _plan_is_m_plus(fm: dict, root: Path) -> bool:
-    """Whether the plan's linked sizing object sizes it M or larger.
-
-    The t-shirt lives in an external `state/sizings/<id>.yaml` document, which
-    is why the schema enforces the falsifier requirement READ-SIDE rather than
-    in JSON Schema (see plan.schema.json's own 2.6.0 bump note) — this is that
-    read.
-
-    Fails toward NOT-M-PLUS (`False`) on an absent, null, unresolvable, or
-    unreadable `sizing_object`, and on a sizing object carrying no usable
-    `estimate.tshirt`. Same direction and same reason as
-    `_plan_created_on_or_after_grandfather`: an unread size must never be the
-    thing that refuses a stamp. An S-or-XS plan omitting the criterion is
-    legitimate and is not this arm's business.
-
-    Reads at most one file and spawns nothing, so the gate's at-most-2 git
-    budget (spent by `baseline_ref`'s ancestor check) is untouched."""
-    sizing_ref = fm.get("sizing_object")
-    if not isinstance(sizing_ref, str) or not sizing_ref.strip():
-        return False
-    sizing_path = root / sizing_ref.strip()
-    try:
-        doc = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        return False
-    if not isinstance(doc, dict):
-        return False
-    estimate = doc.get("estimate")
-    if not isinstance(estimate, dict):
-        return False
-    tshirt = estimate.get("tshirt")
-    return isinstance(tshirt, str) and tshirt.strip().upper() in _MPLUS_TSHIRTS
-
-_EXEMPTION_CLASS = "unfalsifiable-by-observation-doctrine-or-schema-edit"
-
-
-def _falsifier_exemption(prime_exit_criterion: Any) -> Optional[dict]:
-    """Total, never-raising detection of a real `falsifier_exemption`, in
-    `_falsifier_block`'s own shape and for the same reason.
-
-    Returns the exemption only when it carries BOTH required fields in a
-    usable form: `class` at the single spelling the schema pins it to
-    (`_EXEMPTION_CLASS` -- held to one string so a later reader cannot widen
-    the hatch by inventing a new class name), and a non-blank `admission`.
-    Anything else -- a non-dict criterion, an absent or non-dict exemption, a
-    novel class string, a blank admission -- returns `None`, which the caller
-    reads as "no exemption was taken" and proceeds to the size gate.
-
-    The strictness is the point: this is the ONE sanctioned way past an M+
-    falsifier requirement, so a malformed exemption must not buy the same
-    silence a well-formed one does."""
-    if not isinstance(prime_exit_criterion, dict):
-        return None
-    exemption = prime_exit_criterion.get("falsifier_exemption")
-    if not isinstance(exemption, dict):
-        return None
-    if exemption.get("class") != _EXEMPTION_CLASS:
-        return None
-    admission = exemption.get("admission")
-    if not isinstance(admission, str) or not admission.strip():
-        return None
-    return exemption
 
 
 _FALSIFIER_ABSENT_NEXT_MOVE = (
@@ -1456,10 +1324,20 @@ def _evaluate_goal_falsifier_gate(
     Returns `None` only for step 1's absent-prime-exit-criterion case;
     every other path returns a dict:
     `{"refused": bool, "reason": Optional[str], "detail": Optional[str],
-    "override": bool}`. `override` is `True` whenever a current
-    `status_override_*` attestation suppressed what would otherwise have
-    been a refusal (AC19) -- callers must report that as an override, never
-    as a clean stamp. Never raises."""
+    "override": bool, "reasons": list[str], "details": list[str]}`.
+    `override` is `True` whenever a current `status_override_*` attestation
+    suppressed what would otherwise have been a refusal (AC19) -- callers
+    must report that as an override, never as a clean stamp. Never raises.
+
+    F23 (gh-klabauter#71): every applicable arm below is evaluated -- none
+    short-circuits the others -- and every refusal it finds is collected
+    into `reasons`/`details`, in arm order. `reason`/`detail` stay singular
+    (the FIRST collected refusal) for every existing caller that reads them
+    unqualified; a caller that wants the full set reads `reasons`/`details`
+    instead. Before this fix a plan carrying more than one of these defects
+    (e.g. a misnested `falsifier:` AND an unasserted `exit_criterion_met`)
+    was told about only the first, re-ran close-out, and was told about the
+    second -- one round trip per defect, on a corpus where they co-occur."""
     split = split_frontmatter(plan_text)
     if split is None:
         return None
@@ -1512,114 +1390,119 @@ def _evaluate_goal_falsifier_gate(
         "reason": None,
         "detail": None,
         "override": False,
+        "reasons": [],
+        "details": [],
     }
     override = _read_status_override(plan_text)
+
+    def _report(reason: str, detail: str) -> None:
+        """Records ONE applicable refusal (F23) -- every call site below
+        calls this instead of returning, so every arm this function can
+        evaluate gets evaluated, rather than stopping at the first hit.
+        `override`, when set, suppresses the refusal but still marks the
+        result overridden, matching every arm's own pre-existing escape."""
+        if override is not None:
+            result["override"] = True
+            return
+        result["refused"] = True
+        result["reasons"].append(reason)
+        result["details"].append(detail)
+        if result["reason"] is None:
+            result["reason"] = reason
+            result["detail"] = detail
 
     derived_from = prime.get("derived_from") if isinstance(prime, dict) else None
     if isinstance(derived_from, str) and derived_from.strip():
         failure = _resolve_derived_from(derived_from.strip(), root)
         if failure is not None:
-            if override is None:
-                result["refused"] = True
-                result["reason"] = GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE
-                result["detail"] = failure
-                return result
-            result["override"] = True
+            _report(GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE, failure)
 
+    # Arm 1(cont), size-gated. A plan that declares a criterion and no usable
+    # falsifier used to leave here non-refusing at EVERY lane, which applied
+    # the S-lane carve-out to all of them: the schema expresses the carve-out
+    # as a rule keyed on `estimate.tshirt`, and nothing enforced it, so an M+
+    # plan that never authored an observation was indistinguishable from an S
+    # plan that was never asked for one. Measured 2026-08-27 against four
+    # fixtures differing only in t-shirt (S/M/L/XL, all non-refusing) --
+    # cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
+    #
+    # Bounded exactly as arm 0 is, and for the same reasons: grandfather date
+    # first, then M+, each failing toward NOT refusing. A named
+    # `falsifier_exemption` is checked ahead of both -- it is the schema's own
+    # escape hatch for an M+ criterion genuinely un-falsifiable by
+    # observation, and refusing a plan that took the sanctioned route would
+    # punish the discipline the hatch exists to reward.
     falsifier = _falsifier_block(prime)
-    if falsifier is None:
-        # Arm 1(cont), size-gated. A plan that declares a criterion and no
-        # usable falsifier used to leave here non-refusing at EVERY lane,
-        # which applied the S-lane carve-out to all of them: the schema
-        # expresses the carve-out as a rule keyed on `estimate.tshirt`, and
-        # nothing enforced it, so an M+ plan that never authored an
-        # observation was indistinguishable from an S plan that was never
-        # asked for one. Measured 2026-08-27 against four fixtures differing
-        # only in t-shirt (S/M/L/XL, all non-refusing) --
-        # cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
-        #
-        # Bounded exactly as arm 0 is, and for the same reasons: grandfather
-        # date first, then M+, each failing toward NOT refusing. A named
-        # `falsifier_exemption` is checked ahead of both -- it is the
-        # schema's own escape hatch for an M+ criterion genuinely
-        # un-falsifiable by observation, and refusing a plan that took the
-        # sanctioned route would punish the discipline the hatch exists to
-        # reward.
-        if _falsifier_exemption(prime) is not None:
-            return result
-        if not _plan_created_on_or_after_grandfather(fm):
-            return result
-        if not _plan_is_m_plus(fm, root):
-            return result
-        if override is not None:
-            result["override"] = True
-            return result
-        result["refused"] = True
-        if _falsifier_misnested(fm):
+    misnested_top_level = fm.get("falsifier") if _falsifier_misnested(fm) else None
+    falsifier_size_gated = (
+        _falsifier_exemption(prime) is None
+        and _plan_created_on_or_after_grandfather(fm)
+        and _plan_is_m_plus(fm, root)
+    )
+    if falsifier is None and falsifier_size_gated:
+        if misnested_top_level is not None:
             # A distinct reason from GOAL_REFUSAL_FALSIFIER_ABSENT (gh-
             # klabauter#63): the field is present, just nested one level
             # too shallow, so the refusal must not read as missing work.
-            result["reason"] = GOAL_REFUSAL_FALSIFIER_MISNESTED
-            result["detail"] = (
+            _report(
+                GOAL_REFUSAL_FALSIFIER_MISNESTED,
                 "plan declares a top-level falsifier: key as a sibling of "
                 "prime_exit_criterion instead of nesting it under "
                 "prime_exit_criterion.falsifier, and is sized M+ with created "
-                f"on or after {GRANDFATHER_DATE}"
+                f"on or after {GRANDFATHER_DATE}",
             )
         else:
-            result["reason"] = GOAL_REFUSAL_FALSIFIER_ABSENT
-            result["detail"] = (
+            _report(
+                GOAL_REFUSAL_FALSIFIER_ABSENT,
                 "plan declares prime_exit_criterion with no usable falsifier, and "
                 f"is sized M+ with created on or after {GRANDFATHER_DATE} (an M+ "
                 "criterion genuinely un-falsifiable by observation takes a named "
-                "falsifier_exemption instead; S and XS carry no falsifier at all)"
+                "falsifier_exemption instead; S and XS carry no falsifier at all)",
             )
-        return result
+
+    # F23: the misnested top-level `falsifier:` dict carries the SAME fields
+    # (`baseline_ref`, etc.) the correctly-nested block does -- an author who
+    # placed it one level too shallow still wrote a real baseline_ref, and a
+    # gate that refused only "misnested" and never looked at what else that
+    # dict got wrong sent them through another whole close-out round trip to
+    # discover it. Falls back to the misnested dict only when the CORRECTLY
+    # nested block is absent; a well-formed nested falsifier always wins.
+    effective_falsifier = falsifier if falsifier is not None else misnested_top_level
 
     exit_criterion_met = fm.get("exit_criterion_met")
-    if not isinstance(exit_criterion_met, dict) or "asserted" not in exit_criterion_met:
-        if override is None:
-            result["refused"] = True
-            result["reason"] = GOAL_REFUSAL_EXIT_CRITERION_ABSENT
-            result["detail"] = "exit_criterion_met is absent or not an object carrying 'asserted'"
-            return result
-        result["override"] = True
-        return result
-
-    if exit_criterion_met.get("asserted") is False:
-        if override is None:
-            result["refused"] = True
-            result["reason"] = GOAL_REFUSAL_NOT_ASSERTED
-            result["detail"] = (
+    exit_criterion_ok = False
+    if effective_falsifier is not None:
+        if not isinstance(exit_criterion_met, dict) or "asserted" not in exit_criterion_met:
+            _report(
+                GOAL_REFUSAL_EXIT_CRITERION_ABSENT,
+                "exit_criterion_met is absent or not an object carrying 'asserted'",
+            )
+        elif exit_criterion_met.get("asserted") is False:
+            _report(
+                GOAL_REFUSAL_NOT_ASSERTED,
                 "exit_criterion_met.asserted is false: "
-                f"{exit_criterion_met.get('reason') or 'no reason recorded'}"
+                f"{exit_criterion_met.get('reason') or 'no reason recorded'}",
             )
-            return result
-        result["override"] = True
-        return result
+        else:
+            exit_criterion_ok = True
 
-    baseline_ref = falsifier.get("baseline_ref")
-    sha, ref_reason = _verify_baseline_ref(root, baseline_ref)
-    if sha is None:
-        if override is None:
-            result["refused"] = True
-            result["reason"] = f"{GOAL_REFUSAL_BASELINE_REF_PREFIX}{ref_reason}"
-            result["detail"] = (
-                f"prime_exit_criterion.falsifier.baseline_ref did not verify: {ref_reason}"
+        baseline_ref = effective_falsifier.get("baseline_ref") if isinstance(
+            effective_falsifier, dict
+        ) else None
+        sha, ref_reason = _verify_baseline_ref(root, baseline_ref)
+        if sha is None:
+            _report(
+                f"{GOAL_REFUSAL_BASELINE_REF_PREFIX}{ref_reason}",
+                f"prime_exit_criterion.falsifier.baseline_ref did not verify: {ref_reason}",
             )
-            return result
-        result["override"] = True
-        return result
 
-    verdict = exit_criterion_met.get("falsifier_verdict")
-    if verdict != "pass":
-        if override is None:
-            result["refused"] = True
-            result["reason"] = GOAL_REFUSAL_VERDICT_NOT_PASS
-            result["detail"] = f"exit_criterion_met.falsifier_verdict is {verdict!r}, not 'pass'"
-            return result
-        result["override"] = True
-        return result
+        if exit_criterion_ok:
+            verdict = exit_criterion_met.get("falsifier_verdict")
+            if verdict != "pass":
+                _report(
+                    GOAL_REFUSAL_VERDICT_NOT_PASS,
+                    f"exit_criterion_met.falsifier_verdict is {verdict!r}, not 'pass'",
+                )
 
     return result
 
@@ -2877,6 +2760,23 @@ def close_out_and_stamp(
         if contradiction_gate is not None:
             status_target = None
 
+    # Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-
+    # inside-execute-plan.md): review_stamp.subject_refusal, shared with
+    # plan_status_transition._stamp_implemented -- both stamping paths refuse `implemented`
+    # on a SUBJECT plan with no valid review_stamp. Evaluated only on the
+    # branch that would otherwise ship `implemented`, same posture as the
+    # goal-falsifier and contradiction gates above.
+    review_stamp_gate: Optional[dict[str, Any]] = None
+    if status_target == "implemented":
+        from coordinator_core.ops.review_stamp import subject_refusal
+
+        rs_split = split_frontmatter(text)
+        if rs_split is not None:
+            rs_reason = subject_refusal(Path(plan_path), root, rs_split.fm_text)
+            if rs_reason is not None:
+                review_stamp_gate = {"refused": True, "reason": rs_reason}
+                status_target = None
+
     # Delivery proof for `_reach_post_commit_tail_stub_close` (PM ruling --
     # let a positive, complete delivery proof close the origin stub
     # directly). Built ONLY on the full-shipped path (`status_target ==
@@ -3090,6 +2990,14 @@ def close_out_and_stamp(
         subject = (
             f"close-out: {plan_path_rel} not stamped -- prime exit criterion "
             f"goal observation refused ({goal_gate['reason']}): {goal_gate['detail']}"
+        )
+    elif review_stamp_gate is not None and review_stamp_gate.get("refused"):
+        # MK1's refusal class -- the spine oracle would have shipped
+        # `implemented`, but the plan's own review_stamp did not verify (see
+        # this module's own § "Review-stamp refusal" comment above).
+        subject = (
+            f"close-out: {plan_path_rel} not stamped -- review_stamp refused "
+            f"({review_stamp_gate['reason']})"
         )
     else:
         subject = (
@@ -3311,6 +3219,11 @@ def close_out_and_stamp(
             f"{plan_path_rel}: not stamped -- computed CONTRADICTION on "
             f"claim '{contradiction_gate['claim']}' ({contradiction_gate['reason']})"
         )
+    elif review_stamp_gate is not None and review_stamp_gate.get("refused"):
+        message = (
+            f"{plan_path_rel}: not stamped -- review_stamp refused "
+            f"({review_stamp_gate['reason']})"
+        )
     else:
         message = (
             f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
@@ -3381,6 +3294,15 @@ def close_out_and_stamp(
     # tripped it.
     if contradiction_gate is not None:
         result["contradiction_gate"] = contradiction_gate
+    # `review_stamp_gate` follows the same "key absent, not merely `None`-
+    # valued" posture as `goal_gate`/`contradiction_gate` above -- present
+    # only on a subject plan whose review_stamp check actually ran and
+    # refused. Without this, a caller (and this module's own `message`/
+    # `subject` text, before this fix) had no way to see WHY a fully-shipped
+    # plan was refused -- it fell through to the generic "N chunk(s) still
+    # uncommitted" wording even when N == 0.
+    if review_stamp_gate is not None:
+        result["review_stamp_gate"] = review_stamp_gate
     return EXIT_OK, result
 
 

@@ -119,6 +119,15 @@ JOB_MODE_VALUES: FrozenSet[str] = frozenset({"blitz", "cron", "interactive"})
 #: FAIL DIRECTION: FALL_BACK to ``"interactive"``. Declared explicitly here,
 _MOST_CAUTIOUS_JOB_MODE: str = "interactive"
 
+#: same shape as ``COMPACTION_WARNING_VARIANTS`` / ``JOB_MODE_VALUES`` --
+#: ordered so a consumer needing "the declared order" (e.g. a CLI's
+#: ``--help`` choices list) has one to read rather than re-deriving it from
+#: a set. ``INTERACTION_MODE_VALUES`` is the unordered form the registry's
+#: own ``value_type`` slot wants (matching how the other two enum keys pass
+#: a frozenset there).
+INTERACTION_MODES = ("hands-on", "pm", "ceo")
+INTERACTION_MODE_VALUES: FrozenSet[str] = frozenset(INTERACTION_MODES)
+
 ValueType = Union[type, FrozenSet[str]]
 
 
@@ -274,6 +283,21 @@ MODE_KEYS: Dict[str, ModeKey] = {
         value_type=JOB_MODE_VALUES,
         default=_MOST_CAUTIOUS_JOB_MODE,
         environment_default=lambda env: _job_mode_from_environment(env),
+    ),
+    # COST-INCIDENCE: `interaction_mode` is `fleet-wins`, no session-scoped
+    # counterpart (fleet-only, `session_pair=None` -- see module docstring
+    # "FLEET-ONLY KEYS"). It names which human touchpoints a plan/sizing
+    # flow uses (hands-on / pm / ceo); the cost of it being wrong lands on
+    # the human who set (or failed to set) the fleet-wide posture, never on
+    # a shared tree, so fleet governs outright -- same reasoning as
+    # `compaction_warnings`. It never removes a safety guard: it selects
+    # which touchpoints render, exactly as `compaction_warnings` selects an
+    # advisory variant without ever suppressing the advisory itself.
+    "interaction_mode": ModeKey(
+        session_pair=None,
+        precedence="fleet-wins",
+        value_type=INTERACTION_MODE_VALUES,
+        default=INTERACTION_MODES[0],
     ),
 }
 

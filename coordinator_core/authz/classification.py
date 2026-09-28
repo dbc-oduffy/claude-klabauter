@@ -206,6 +206,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # nudge_foreground_agent_dispatch) applies. First hot-path reconstructable unit
     # built against docs/reference/warm-hook-migration.md.
     "hooks.nudge_autonomous_askuserquestion": OpClass.COMPUTE_ONLY,
+    # hooks.flag_em_poll_in_flight — MUTATING: persists a per-session poll-count state file
+    # under tempfile.gettempdir() (docs/plans/2026-09-27-four-turn-em-loop.md C17). Advisory
+    # only (always allows), but the write disqualifies COMPUTE_ONLY under the five-question
+    # test the same way hooks.postuse_advisory_dispatch's own durable state does.
+    "hooks.flag_em_poll_in_flight": OpClass.MUTATING,
     # hooks.postuse_advisory_dispatch — MUTATING (reclassified; was COMPUTE_ONLY).
     #
     # B-F1 had re-plumbed this op's throttle/bark-once/dedup guards from /tmp
@@ -2096,6 +2101,41 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
     "ceremony.commit_v2": OpClass.MUTATING,
+    # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
+    # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
+    # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Indirectly, via the delegated commit_v2 call: writes git objects and
+    #      moves the branch ref.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      This handler itself reads only (the emitted script, DONE chunks'
+    #      report files); the one write is delegated to commit_v2.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The landed commit and moved ref are read by every subsequent
+    #      dispatch against this repo.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The commit sha and ref move persist across the whole box.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
+    "dispatch.terminal_commit": OpClass.MUTATING,
+    # review_stamp.mint — MUTATING: writes `review_stamp:` into the plan's own
+    # frontmatter, the record the implemented refusal and the close gate read.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Rewrites the plan file's frontmatter in place.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The plan file itself.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      plan_status_transition and workstream_complete both read the stamp.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1.
+    "review_stamp.mint": OpClass.MUTATING,
+    # review_stamp.check — COMPUTE_ONLY: pure read (tree/ancestry/supersession
+    # git reads), no write of any kind.
+    "review_stamp.check": OpClass.COMPUTE_ONLY,
     # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
     # is a zero-spawn read, but the act half is an outward-facing publish.
     "push.outstanding": OpClass.MUTATING,
@@ -3250,6 +3290,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (2026-09-11; see coordinator_core/ops/sizing_discharge_surfaced.py docstring —
     # it never writes `surfaced_to_pm`, which stays listed).
     "sizing.discharge_surfaced": OpClass.MUTATING,
+    # sizing.accept_exit_criterion — MUTATING: writes `exit_criterion.accepted` (and,
+    # optionally, `exit_criterion.statement`) under locked_rmw (2026-09-27; see
+    # coordinator_core/ops/sizing_accept_exit_criterion.py docstring).
+    "sizing.accept_exit_criterion": OpClass.MUTATING,
     # sizing.record_spike_verdict — MUTATING: writes `premise.spike_verdict` under
     # locked_rmw (2026-08-14; see coordinator_core/ops/sizing_spike_verdict.py docstring).
     "sizing.record_spike_verdict": OpClass.MUTATING,

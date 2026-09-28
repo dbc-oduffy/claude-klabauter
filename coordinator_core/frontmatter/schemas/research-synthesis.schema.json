@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/research-synthesis.schema.json",
   "x-schema-name": "research-synthesis",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-note": "1.0.0 -> 1.1.0 is nested-field-additive: three new OPTIONAL top-level string properties (market_scope, target_uid, target_label), no `required` change. RE-VENDOR: coordinator_core/frontmatter/schemas/research-synthesis.schema.json (claude-klabauter) needs re-vendor from this commit.",
   "applies_to": "docs/research/*.md",
   "kinds": [
     "research-synthesis"
@@ -50,6 +51,19 @@
     "confidence_summary": {
       "type": "string",
       "description": "Producer-computed aggregate confidence label for the synthesis. OPTIONAL/derived — prefer `--type research-claim --where confidence=HIGH` for confidence-filtered queries rather than filtering on this field."
+    },
+    "market_scope": {
+      "type": "string",
+      "enum": ["subject_repo", "peer", "market_category"],
+      "description": "Addressing kind for this dive, so a CorpusRequest can scope to a subject repo, a peer, or a market category. OPTIONAL — a dive with no market_scope set is unaddressable and reports in CorpusResult.dark rather than matching silently."
+    },
+    "target_uid": {
+      "type": "string",
+      "description": "Addressing target for market_scope: a competitor_uid for `peer`, a repo shortname for `subject_repo`, or a category_id for `market_category` — one vocabulary, no parallel field."
+    },
+    "target_label": {
+      "type": "string",
+      "description": "Human-readable label for the market_scope/target_uid addressing pair."
     }
   }
 }

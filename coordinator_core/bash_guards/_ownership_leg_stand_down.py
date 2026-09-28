@@ -40,17 +40,27 @@ WHAT DOES NOT STAND DOWN, and each of these is the guard's real job:
     frontmatter stamps routinely arrive. So the refusal IS resting on a
     reading the index itself disclaims, and it is why one wave of a workflow
     commits (its executor used `Edit`) and the next refuses (an engine op
-    wrote the file) in the same run, minutes apart. It is nonetheless left
-    DENYING here: reversing it widens a `CLASS = "hard-deny"` allow path
-    against the strict-by-default posture DR-246 set deliberately
-    (`include_orphans` an explicit opt-in, never a standing default) and
-    SC-DR-022 narrowed further for dispatched agents. That is a ruling to
-    change, not a predicate to patch, and the fix with no ruling in it is to
-    make the engine's own writers register the claim -- an absent claim is an
+    wrote the file) in the same run, minutes apart. This is precisely the
+    ruling BV-20260927-01 changed for `coordinator:git-commit-agent`: an
+    orphan inside the invocation's own declared, non-sweeping pathspec is
+    now adopted at `_git_commit_agent_pathspec_permitted`'s call into
+    `assert_paths_in_session_scope` (`allow_orphans=True`,
+    unconditionally), BEFORE this module is ever reached -- so a
+    determinate "nobody holds it" verdict for an in-pathspec path no longer
+    produces a denial here to stand down at all. This module's own posture
+    is UNCHANGED and still left DENYING: it exists for the residual case
+    where `assert_paths_in_session_scope` denies an orphan for a reason
+    OTHER than "no claim recorded" (e.g. `_session_has_positive_evidence`
+    failing, per `block_subagent_commit`'s part-11 changelog entry) --
+    reversing THAT would widen a `CLASS = "hard-deny"` allow path with no
+    ruling behind it. Where the fix with no ruling in it is: make the
+    engine's own writers register the claim -- an absent claim is an
     attribution defect in the writer, not an ownership fact about the path.
-  - `include_orphans` from an agent. SC-DR-022 refuses the ASK, at
-    `block_subagent_commit._LEG_AGENT_ORPHAN_ADOPTION`, before this module is
-    reachable.
+  - `include_orphans` from an agent is no longer a pre-ownership refusal
+    (BV-20260927-01, superseding SC-DR-022): the flag is read but inert,
+    and `allow_orphans=True` is passed to the ownership leg unconditionally
+    regardless of it -- an orphan inside the invocation's own declared
+    pathspec is adopted at that leg itself, not stood down here.
   - A pathspec SHAPE denial. `_pathspec_shape_permitted` runs first and
     returns its own `_LEG_*` sentinel; a sweeping element, an out-of-repo
     absolute, or an unresolvable repo root never reaches this module.

@@ -1841,6 +1841,68 @@ class TestClaimGrantTruthTable:
         assert pa.CLAIM_STALE_AFTER_MINUTES >= liveness_recency_minutes
 
 
+class TestVenueBlocksCloudClaim:
+    """`venue: workstation` (handoff.schema.json 10.8.0) — a cloud session
+    must never auto-claim it, whatever the claim registry says
+    (state/improvement-queue/2026-09-27-handoff-has-no-local-only-venue-field.yaml)."""
+
+    def test_cloud_session_denied_on_venue_workstation_even_with_no_claimant(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(
+            pb._env_locality, "harness_rung",
+            lambda *a, **k: pb._env_locality.Locality("cloud", "certain", "harness", "CLAUDE_CODE_REMOTE=true"),
+        )
+
+        grant = pb.compute_claim_grant(
+            repo, "handoff", "h1.md", "state/handoffs/h1.md", fm={"venue": "workstation"},
+        )
+
+        assert grant["verdict"] == "denied"
+        assert "workstation" in grant["reason"]
+        assert grant["holder"] is None
+
+    def test_workstation_session_unaffected_by_venue_workstation(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(pb._env_locality, "harness_rung", lambda *a, **k: None)
+
+        grant = pb.compute_claim_grant(
+            repo, "handoff", "h1.md", "state/handoffs/h1.md", fm={"venue": "workstation"},
+        )
+
+        assert grant["verdict"] == "granted"
+
+    def test_cloud_session_unaffected_when_venue_absent_or_any(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(
+            pb._env_locality, "harness_rung",
+            lambda *a, **k: pb._env_locality.Locality("cloud", "certain", "harness", "CLAUDE_CODE_REMOTE=true"),
+        )
+
+        assert pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")["verdict"] == "granted"
+        assert pb.compute_claim_grant(
+            repo, "handoff", "h1.md", "state/handoffs/h1.md", fm={"venue": "any"},
+        )["verdict"] == "granted"
+
+    def test_venue_block_folds_into_blocked_coast(self, tmp_path, monkeypatch):
+        """`gates.coast.verdict` reads `claim_grant`'s denied verdict — this
+        is how pickup-autofire's `should_apply` (coast==clear) refuses to
+        auto-claim, not a separate mechanism."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(
+            pb._env_locality, "harness_rung",
+            lambda *a, **k: pb._env_locality.Locality("cloud", "certain", "harness", "CLAUDE_CODE_REMOTE=true"),
+        )
+        grant = pb.compute_claim_grant(
+            repo, "handoff", "h1.md", "state/handoffs/h1.md", fm={"venue": "workstation"},
+        )
+        coast = pb.compute_coast([], claim_grant=grant)
+        assert coast["verdict"] == "blocked"
+
+
 # ---------------------------------------------------------------------------
 # holder_evidence (decidable claim evidence, 2026-07-27) — makes
 # compute_claim_grant's holder_live boolean and claim age falsifiable

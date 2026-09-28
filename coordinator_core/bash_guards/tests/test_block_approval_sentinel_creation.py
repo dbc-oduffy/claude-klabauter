@@ -900,3 +900,24 @@ class TestItem33ReadableScriptOverride:
         self._write(tmp_path, "forwarder.sh", "exec python3 \"$@\"\n")
         out = guard.check(_payload("bash forwarder.sh", cwd=str(tmp_path)))
         assert out is None
+
+    def test_clean_dash_stdin_heredoc_allows(self, tmp_path):
+        # F3 (GH #71): `<interp> - <<EOF ... EOF` -- script fed via stdin
+        # heredoc, not a named file. A clean payload must not deny purely
+        # on the interpreter/stdin shape.
+        cmd = "python3 - <<'EOF'\nprint('hello world')\nEOF"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        assert out is None
+
+    def test_dash_stdin_heredoc_mentioning_basename_denies(self, tmp_path):
+        cmd = "bash - <<'EOF'\ntouch %s\nEOF" % SENTINEL
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)
+
+    def test_dash_stdin_heredoc_backgrounded_earlier_segment_still_denies(
+        self, tmp_path
+    ):
+        self._write(tmp_path, "writer.sh", "echo write\n")
+        cmd = "bash writer.sh & python3 - <<'EOF'\nprint('clean')\nEOF"
+        out = guard.check(_payload(cmd, cwd=str(tmp_path)))
+        _reason(out)

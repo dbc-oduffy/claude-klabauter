@@ -112,3 +112,87 @@ class TestExpressLaneScaffoldsNothing:
             estimate={"tshirt": "XS"}, express_lane=True
         )
         assert result["directives"] == []
+
+
+class TestInteractionModeAndExitCriterionThreading:
+    """C6: `_SIZING_OBJECT_FLAG_SPEC` gained `--exit-criterion`/
+    `--interaction-mode`, threaded through the directive per Design § Engine
+    ("The directive's argv carries --exit-criterion / --interaction-mode
+    when given, and parses under the real doc-new parser")."""
+
+    def test_exit_criterion_present_when_given(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            exit_criterion="Ship the thing",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.exit_criterion == "Ship the thing"
+
+    def test_exit_criterion_absent_when_not_given(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"}, intent="Ship the scaffold emitter"
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        assert not any(a.startswith("--exit-criterion=") for a in directive["args"])
+        args = _parser.parse_args(directive["args"])
+        assert args.exit_criterion is None
+
+    def test_interaction_mode_present_when_resolved_from_flag(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            interaction_mode="pm",
+            interaction_mode_source="flag",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.interaction_mode == "pm"
+
+    def test_interaction_mode_present_when_resolved_from_fleet(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            interaction_mode="ceo",
+            interaction_mode_source="fleet",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.interaction_mode == "ceo"
+
+    def test_interaction_mode_absent_when_merely_defaulted(self) -> None:
+        """`route()`'s own "hands-on" default (no source, i.e. a direct
+        library caller who never resolved a mode) must NOT leak onto the
+        directive -- only an explicit flag/fleet resolution does. This is
+        what keeps every pre-C6 caller's directive byte-identical."""
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"}, intent="Ship the scaffold emitter"
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        assert not any(a.startswith("--interaction-mode=") for a in directive["args"])
+        args = _parser.parse_args(directive["args"])
+        assert args.interaction_mode is None
+
+    def test_interaction_mode_absent_when_source_is_default(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            interaction_mode="hands-on",
+            interaction_mode_source="default",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        assert not any(a.startswith("--interaction-mode=") for a in directive["args"])
+
+    def test_both_flags_present_and_parse_together(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            exit_criterion="Ship the thing",
+            interaction_mode="ceo",
+            interaction_mode_source="flag",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.exit_criterion == "Ship the thing"
+        assert args.interaction_mode == "ceo"

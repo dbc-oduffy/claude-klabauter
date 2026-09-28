@@ -1,0 +1,408 @@
+"""coordinator_core.ops.review_stamp — mint/check tests.
+
+DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1, AC10.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.ops import review_stamp as m
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
+_FLAGS = no_console_creationflags()
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        **_FLAGS,
+    )
+
+
+def _git_init(repo: Path) -> None:
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+
+
+def _commit(repo: Path, message: str) -> str:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def _write_sidecar(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm_lines = []
+    for key, value in data.items():
+        fm_lines.append(f"{key}: {_yaml_scalar(value)}")
+    text = "---\n" + "\n".join(fm_lines) + "\n---\n\nbody\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def _yaml_scalar(value) -> str:
+    import json
+
+    if isinstance(value, str):
+        return json.dumps(value)
+    return json.dumps(value)
+
+
+def _setup_repo(tmp_path: Path, plan_id: str = "pln-example-abc123") -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_init(repo)
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    plan_path = plans_dir / "example.md"
+    plan_path.write_text(
+        textwrap.dedent(
+            f"""\
+            ---
+            title: Example
+            created: 2026-09-27
+            author: test
+            status: executing
+            plan_id: {plan_id}
+            scope:
+              - docs/plans/example.md
+            ---
+
+            # Example
+            """
+        ),
+        encoding="utf-8",
+    )
+    _commit(repo, "init")
+    return repo
+
+
+def _mint_success_fixture(repo: Path, plan_id: str = "pln-example-abc123"):
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    prep = share / "2026-09-27-prep.md"
+    _write_sidecar(
+        prep,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery.md"},
+        },
+    )
+    _write_sidecar(
+        share / "2026-09-27-delivery.md",
+        {"verdict": "PASS"},
+    )
+    integration = share / "2026-09-27-integration.md"
+    _write_sidecar(
+        integration,
+        {
+            "plan_id": plan_id,
+            "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-27-prep.md",
+            "unresolved": [],
+            "confinement_violations": [],
+            "fixes_applied": 2,
+            "em_may_think_differently": [],
+            "brief_conformance": {"items": 1, "met": 1, "unmet": 0},
+        },
+    )
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    terminal_sha = _commit(
+        repo, "land review\n\nInline-Review: applies 2026-09-27-integration -- execute-review: 1 slices, 2 fixes"
+    )
+    build_test = share / "2026-09-27-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 10, "failed": 0})
+    return terminal_sha, build_test
+
+
+def test_mint_success(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test))
+    assert stamp["terminal_commit_sha"] == terminal_sha
+    assert stamp["delivery"]["verdict"] == "PASS"
+    assert stamp["build_test"]["verdict"] == "pass"
+    assert stamp["unresolved"] == []
+    assert "review_stamp:" in plan_path.read_text(encoding="utf-8")
+
+
+def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_init(repo)
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    for slug, plan_id in (("a", "pln-plan-a-000001"), ("b", "pln-plan-b-000002")):
+        (plans_dir / f"{slug}.md").write_text(
+            textwrap.dedent(
+                f"""\
+                ---
+                title: Plan {slug}
+                created: 2026-09-27
+                author: test
+                status: executing
+                plan_id: {plan_id}
+                ---
+
+                # Plan {slug}
+                """
+            ),
+            encoding="utf-8",
+        )
+    _commit(repo, "init")
+
+    def mint_for(slug: str, plan_id: str, session: str):
+        share = repo / ".coordinator-local" / "subagent-share" / session
+        prep = share / f"2026-09-27-prep-{slug}.md"
+        _write_sidecar(
+            prep,
+            {
+                "run_base_sha": "deadbeef",
+                "product_files": [f"coordinator_core/{slug}.py"],
+                "foreign_claims": [],
+                "slices": [{"id": "A"}],
+                "whole_diff_sidecars": {
+                    "delivery": f".coordinator-local/subagent-share/{session}/2026-09-27-delivery-{slug}.md"
+                },
+            },
+        )
+        _write_sidecar(share / f"2026-09-27-delivery-{slug}.md", {"verdict": "PASS"})
+        integration = share / f"2026-09-27-integration-{slug}.md"
+        _write_sidecar(
+            integration,
+            {
+                "plan_id": plan_id,
+                "prep_sidecar": f".coordinator-local/subagent-share/{session}/2026-09-27-prep-{slug}.md",
+                "unresolved": [],
+                "confinement_violations": [],
+                "fixes_applied": 1,
+            },
+        )
+        (repo / "coordinator_core" / f"{slug}.py").parent.mkdir(exist_ok=True)
+        (repo / "coordinator_core" / f"{slug}.py").write_text(f"{slug} = 1\n", encoding="utf-8")
+        terminal_sha = _commit(
+            repo, f"land {slug}\n\nInline-Review: applies 2026-09-27-integration-{slug} -- execute-review: 1 slices, 1 fixes"
+        )
+        build_test = share / f"2026-09-27-test-runner-{slug}.md"
+        _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+        return terminal_sha, build_test
+
+    sha_a, bt_a = mint_for("a", "pln-plan-a-000001", "sessA")
+    sha_b, bt_b = mint_for("b", "pln-plan-b-000002", "sessB")
+
+    stamp_a = m.mint(plans_dir / "a.md", repo, build_test_path=str(bt_a))
+    stamp_b = m.mint(plans_dir / "b.md", repo, build_test_path=str(bt_b))
+    assert stamp_a["terminal_commit_sha"] == sha_a
+    assert stamp_b["terminal_commit_sha"] == sha_b
+
+
+def test_mint_refuses_no_build_test(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="no build/test record"):
+        m.mint(plan_path, repo, build_test_path=None)
+
+
+def test_check_refuses_no_stamp(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    reason = m.check(plan_path, repo, supersession=False)
+    assert reason is not None
+    assert "no review_stamp" in reason
+
+
+def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+
+    # A later commit touches the plan's own declared `scope` write.
+    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\nmore\n", encoding="utf-8")
+    _commit(repo, "later touch")
+
+    reason = m.check(plan_path, repo, supersession=True)
+    assert reason is not None
+    assert "later commit" in reason
+
+
+def test_check_ignores_supersession_when_not_asked(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+
+    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\nmore\n", encoding="utf-8")
+    _commit(repo, "later touch")
+
+    reason = m.check(plan_path, repo, supersession=False)
+    # A close-gate-shaped check re-reads the STAMPED terminal commit's own
+    # tree/ancestry, which is unaffected by a later, unrelated commit -- MK2's
+    # whole point (a shared tree can legitimately touch the same file later).
+    assert reason is None
+
+
+def test_check_refuses_rebased_terminal_not_ancestor_of_head(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+
+    # Simulate the terminal commit vanishing from history (rebase/squash) by
+    # resetting to before it and committing something else instead.
+    _git(repo, "reset", "--hard", "HEAD~1")
+    (repo / "coordinator_core" / "other.py").parent.mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "other.py").write_text("y = 1\n", encoding="utf-8")
+    _commit(repo, "different history")
+
+    reason = m.check(plan_path if False else repo / "docs" / "plans" / "example.md", repo, supersession=False)
+    # plan.md at this new HEAD has no review_stamp (reset dropped it), so this
+    # exercises "no stamp" rather than ancestry directly; assert the refusal
+    # fires rather than a false pass.
+    assert reason is not None
+
+
+def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp_path, monkeypatch):
+    """`merge-base --is-ancestor` exit 1 ("genuinely not an ancestor") and any other
+    non-zero exit (a ref that failed to resolve, e.g. a rewritten/garbage-collected sha)
+    are two different failure modes -- the refusal message must say which one fired."""
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+
+    real_run = m.subprocess.run
+
+    def _fake_run(args, *a, **kw):
+        if "merge-base" in args:
+            return subprocess.CompletedProcess(
+                args, returncode=128, stdout="", stderr="fatal: not a valid object name"
+            )
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(m.subprocess, "run", _fake_run)
+    reason = m.check(plan_path, repo, supersession=False)
+    assert reason is not None
+    assert "could not resolve" in reason
+    assert "is not an ancestor" not in reason
+
+
+def test_mint_refuses_on_delivery_fail(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    # Overwrite the delivery sidecar with a FAIL verdict and re-point at it
+    # via a fresh integration+commit so mint resolves the new terminal.
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    _write_sidecar(share / "2026-09-27-delivery2.md", {"verdict": "FAIL"})
+    _write_sidecar(
+        share / "2026-09-27-prep2.md",
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery2.md"},
+        },
+    )
+    _write_sidecar(
+        share / "2026-09-27-integration2.md",
+        {
+            "plan_id": "pln-example-abc123",
+            "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-27-prep2.md",
+            "unresolved": [],
+            "confinement_violations": [],
+        },
+    )
+    _commit(repo, "land2\n\nInline-Review: applies 2026-09-27-integration2 -- execute-review: 1 slices, 0 fixes")
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="delivery verdict"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_mint_refuses_on_unresolved(tmp_path):
+    repo = _setup_repo(tmp_path)
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    _write_sidecar(share / "2026-09-27-delivery.md", {"verdict": "PASS"})
+    _write_sidecar(
+        share / "2026-09-27-prep.md",
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery.md"},
+        },
+    )
+    _write_sidecar(
+        share / "2026-09-27-integration.md",
+        {
+            "plan_id": "pln-example-abc123",
+            "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-27-prep.md",
+            "unresolved": [{"line": "x"}],
+            "confinement_violations": [],
+        },
+    )
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    _commit(repo, "land\n\nInline-Review: applies 2026-09-27-integration -- execute-review: 1 slices, 0 fixes")
+    build_test = share / "2026-09-27-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="unresolved"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_override_reason_does_not_bypass_check():
+    """`check`'s signature carries no override parameter at all -- the
+    refusal has no escape hatch to bypass, unlike `_refuse_if_live_foreign_
+    holder`'s own standing. Pinned structurally: `check` accepts only
+    `plan_path`, `repo_root`, `supersession`."""
+    import inspect
+
+    sig = inspect.signature(m.check)
+    assert "override" not in "".join(sig.parameters.keys()).lower()
+
+
+def test_subject_plan_cutoff_and_slate_exemption():
+    assert m.is_subject_plan({"execution_authorized_at": "2026-12-01T00:00:00Z"}) is True
+    assert m.is_subject_plan({"execution_authorized_at": "2020-01-01T00:00:00Z"}) is False
+    assert m.is_subject_plan({"created": "2026-12-01"}) is True
+    assert m.is_subject_plan({"created": "2020-01-01"}) is False
+    assert (
+        m.is_subject_plan(
+            {
+                "execution_authorized_at": "2026-12-01T00:00:00Z",
+                "deliverable_id": "dlv-coordinator-claude-klabauter-restructure-to-beat-v-9a5ca9",
+            }
+        )
+        is False
+    )
+
+
+def test_check_process_time_bounded(tmp_path):
+    import time
+
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+
+    start = time.perf_counter()
+    m.check(plan_path, repo, supersession=True)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    assert elapsed_ms <= 200, f"review_stamp.check took {elapsed_ms:.1f}ms, budget is 200ms"

@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.session import mode_resolution
 from coordinator_core.session.mode_resolution import (
     COORDINATOR_JOB_MODE,
+    INTERACTION_MODE_VALUES,
+    INTERACTION_MODES,
     JOB_MODE_VALUES,
     MODE_KEYS,
     ModeKey,
@@ -307,6 +309,34 @@ class TestJobModeEnvironmentWins:
         assert MR._job_mode_from_environment({}) is None
         assert MR._job_mode_from_environment({COORDINATOR_JOB_MODE: ""}) is None
         assert MR._job_mode_from_environment({COORDINATOR_JOB_MODE: "blitz"}) == "blitz"
+
+
+class TestInteractionModeFleetWins:
+    def test_empty_fleet_record_defaults_to_hands_on(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("interaction_mode", "s1") == "hands-on"
+
+    def test_fleet_pm_wins(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"interaction_mode": "pm"})
+        assert resolve_mode("interaction_mode", "s1") == "pm"
+
+    def test_fleet_ceo_wins(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"interaction_mode": "ceo"})
+        assert resolve_mode("interaction_mode", "s1") == "ceo"
+
+    def test_malformed_fleet_value_degrades_to_hands_on(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"interaction_mode": "boss"})
+        assert resolve_mode("interaction_mode", "s1") == "hands-on"
+
+    def test_registry_entry_shape(self):
+        entry = MODE_KEYS["interaction_mode"]
+        assert entry.session_pair is None
+        assert entry.precedence == "fleet-wins"
+        assert entry.value_type == INTERACTION_MODE_VALUES
+        assert entry.default == "hands-on"
+        assert INTERACTION_MODES == ("hands-on", "pm", "ceo")
 
 
 class TestJobModeRegistryInvariant:

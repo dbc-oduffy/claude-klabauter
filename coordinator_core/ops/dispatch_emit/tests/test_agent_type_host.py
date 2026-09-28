@@ -18,7 +18,6 @@ import re
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_TYPE_HOST_COORDINATOR,
     _AGENT_TYPE_HOST_DEGRADED,
-    _COMMIT_AGENT_TYPE,
     _ENRICHER_AGENT_TYPE,
     _EXECUTOR_AGENT_TYPE,
     _TEST_AGENT_TYPE,
@@ -126,7 +125,6 @@ def test_degrade_agent_type_substitutes_known_types_on_degrade():
     for agent_type in (
         _EXECUTOR_AGENT_TYPE,
         _ENRICHER_AGENT_TYPE,
-        _COMMIT_AGENT_TYPE,
         _TEST_AGENT_TYPE,
     ):
         assert _degrade_agent_type(agent_type, _AGENT_TYPE_HOST_DEGRADED) == "general-purpose"
@@ -144,7 +142,6 @@ def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
     script = compose_script(waves, name="wf", description="one wave")
 
     assert f"agentType: '{_EXECUTOR_AGENT_TYPE}'" in script
-    assert f"agentType: '{_COMMIT_AGENT_TYPE}'" in script
     assert "general-purpose" not in script
 
 
@@ -157,7 +154,6 @@ def test_compose_script_degrades_every_emitted_agent_type_on_host():
     agent_types = set(_AGENT_TYPE_LITERAL_RE.findall(script))
     assert agent_types == {"general-purpose"}
     assert _EXECUTOR_AGENT_TYPE not in script
-    assert _COMMIT_AGENT_TYPE not in script
 
 
 def test_compose_script_degraded_narrates_the_loss():

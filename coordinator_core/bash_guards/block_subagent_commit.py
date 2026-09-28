@@ -766,6 +766,41 @@ compliant committer. See the ``if include_orphans:`` block inline in
 entry summarizes, and ``test_include_orphans_from_an_agent_denies_before_
 the_ownership_leg`` for the pinning test.
 
+2026-09-27 update (BV-20260927-01, PM ruling -- SUPERSEDES part 12's
+structural denial): part 12's premise -- "a dispatched committer holds no
+provenance by construction" -- does not hold for the shape it actually
+denied in production. Three emitted-workflow commit phases landed nothing
+or part of their pathspec because every dirty path with no session
+touch-claim was refused as an orphan, including paths INSIDE the wave's own
+declared, EM-emitted pathspec: a Bash-authored write (legitimate and
+common, PM 2026-09-27 -- "Claudes love bash") or an engine-op-authored
+state file records no ``touched.txt`` claim (DR-258's exclusion is about
+the EM's own unscoped scope computation, not a committer handed an
+explicit pathspec) and so classified as an unclaimed orphan every time.
+Part 12 treated that orphan classification as evidence of missing
+provenance; it is not -- the pathspec itself, resolved from the wave's
+``writes:``, IS the provenance, external to and unforgeable by the
+committer, exactly the kind of positive evidence the ownership check
+otherwise demands.
+
+Fix: ``_pathspec_shape_permitted`` no longer denies on
+``include_orphans`` (the ``--include-orphans``/``include_orphans: true``
+flag is read but inert now -- LEG 3's sweeping/absolute/non-empty checks
+above it are UNCHANGED and still bound the pathspec to explicitly-named,
+in-repo, non-sweeping elements before this is ever reached), and
+``_git_commit_agent_pathspec_permitted`` now calls ``assert_paths_in_
+session_scope(..., allow_orphans=True)`` UNCONDITIONALLY instead of
+``False``. The real peer-attribution hazard this module exists to guard
+is UNCHANGED: ``allow_orphans=True`` never relaxes the peer-claimed case
+(re-verified against the same property part 11 cited, and re-pinned by
+``test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_
+allowed``) -- a path a DIFFERENT live session claims still denies
+regardless of this flag. What changed is narrower than it sounds: an
+orphan is adoptable ONLY when it is already an element of this
+invocation's own explicit, non-sweeping, in-repo pathspec -- there is no
+route to adopt an orphan OUTSIDE that pathspec, because nothing outside it
+ever reaches ``assert_paths_in_session_scope`` at all.
+
 2026-08-04 update, part 13 (the C1 payload-reconstruction leg denies
 correctly but MESSAGES wrongly -- dispatched-executor report): part 9's
 ``_python_c_payload_argv_text`` reconstruction is working as designed, and
@@ -1259,72 +1294,6 @@ PRIORITY = 40
 #: Ruling 3, C3 of the plan named above) -- resolved STRICTLY from the
 #: added to `_ALLOWED_SUBAGENT_TYPES` below -- that set exempts a type on
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
-
-#: R21 (2026-09-26, IBMFR): the ``agentType`` a degraded host substitutes for
-#: `_GIT_COMMIT_AGENT_TYPE` -- `emit.py::_HOST_NATIVE_AGENT_TYPE_ROSTER`'s
-#: ``general-purpose`` -- the harness's own universal built-in every host can
-#: resolve. On a degraded host, LEG 1's strict ``payload["agent_type"] ==
-#: _GIT_COMMIT_AGENT_TYPE`` check can never hold: the harness-supplied
-#: `agent_type` IS this literal, not the coordinator:* one, for every
-#: degraded dispatch -- executor, enricher, commit and test alike -- so this
-#: value alone identifies nothing about WHICH row is running. Recognising the
-#: degraded commit dispatch therefore needs a SECOND, commit-specific signal
-#: (`_transcript_carries_commit_phase_sentinel` below); matching this literal
-#: alone would exempt every general-purpose agent's commits, degraded
-#: git-commit-agent or not -- exactly what this constant must never be used
-#: to do on its own.
-_DEGRADED_HOST_NATIVE_AGENT_TYPE = "general-purpose"
-
-#: The one substring `_commit_agent_call` in
-#: `coordinator_core/ops/dispatch_emit/emit.py` bakes, VERBATIM and
-#: UNCONDITIONALLY, into every commit-phase prompt it composes -- present
-#: whether or not the run is agent-type-host-degraded, because emit.py
-#: appends it to `doctrine` before any degrade substitution ever touches the
-#: `agentType` literal. It is therefore an EXISTING marker "already carried
-#: by commit:wave-N dispatches" (R21's own framing) rather than a new stamp
-#: this fix invents -- reading it needs no emit.py change. Imported from
-#: emit.py (its actual composition site) rather than duplicated, so the two
-#: sides cannot drift out of byte-for-byte sync silently.
-from coordinator_core.ops.dispatch_emit.emit import (  # noqa: E402
-    _COMMIT_PHASE_PROMPT_SENTINEL,
-)
-
-#: Upper bound on how much of a subagent's own transcript file
-#: `_transcript_carries_commit_phase_sentinel` will read, applied so a huge
-#: or adversarially-inflated transcript cannot turn this leg into an
-#: unbounded read on the hot Bash-guard path. The commit-phase prompt this
-#: sentinel is drawn from is composed of a handful of fixed paragraphs (see
-#: `_commit_agent_call`) that comfortably fit well inside this bound; a
-#: transcript whose first entry does not contain the sentinel within it is
-#: not a commit-phase dispatch, degraded or not.
-_TRANSCRIPT_SENTINEL_READ_CAP_BYTES = 262144
-
-
-def _transcript_carries_commit_phase_sentinel(transcript_path: Optional[str]) -> bool:
-    """True iff ``transcript_path``'s FIRST line (the harness-authored
-    dispatch entry, written before the subagent's own first tool call ever
-    runs) contains `_COMMIT_PHASE_PROMPT_SENTINEL`.
-
-    Reads only the first line, bounded by
-    `_TRANSCRIPT_SENTINEL_READ_CAP_BYTES` -- never the whole file -- and does
-    no JSON parsing: the sentinel is plain ASCII with no character JSON
-    string-encoding would escape, so a raw substring search against the
-    JSON-encoded line finds it exactly as reliably as parsing would, at a
-    fraction of the cost.
-
-    Fails CLOSED (returns ``False``) on a missing/unreadable file, an empty
-    path, or any exception -- an unread transcript is "not a commit-phase
-    dispatch", never "assume yes", matching this module's existing
-    fail-closed discipline for every other LEG 1 leg.
-    """
-    if not transcript_path:
-        return False
-    try:
-        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as fh:
-            first_line = fh.readline(_TRANSCRIPT_SENTINEL_READ_CAP_BYTES)
-    except OSError:
-        return False
-    return _COMMIT_PHASE_PROMPT_SENTINEL in first_line
 
 #: Resolved from the HARNESS-SUPPLIED `payload["agent_type"]` ONLY, never
 #: `effective_type` -- the same discipline `_GIT_COMMIT_AGENT_TYPE` is held to
@@ -2846,6 +2815,7 @@ _COMMITTING_OP_NAMES = frozenset(
         "session.safe_commit_offer",
         "housekeeping.cycle",
         "memo.heal_inbox",
+        "dispatch.terminal_commit",
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -5233,11 +5203,10 @@ def _git_commit_agent_may_commit(
         argv text (LEG 3's non-empty requirement). The SAME extraction that
         resolves `paths` also resolves whether THIS invocation carried
         `--include-orphans` (trampoline spelling) or `"include_orphans":
-        true` (invoke-module spelling) -- carrying either now denies
-        outright, at `_LEG_AGENT_ORPHAN_ADOPTION`, before `assert_paths_in_
-        session_scope` is ever called (SC-DR-022, 2026-08-04 -- see the
-        module docstring's part-12 entry, which supersedes part 11's
-        MIRRORING fix for this dispatched-agent path).
+        true` (invoke-module spelling); as of BV-20260927-01 that flag is
+        read but no longer a refusal trigger -- see the module docstring's
+        latest entry, which supersedes part 12's (SC-DR-022) hard deny for
+        this dispatched-agent path.
       - ANY pathspec element is sweeping per `_pathspec_element_is_sweeping`
         (LEG 3's AC14 requirement -- a single sweeping element among
         otherwise-fine ones still denies the whole pathspec).
@@ -5292,11 +5261,18 @@ def _pathspec_shape_permitted(
         return False, _LEG_NO_PATHSPEC
     if any(_pathspec_element_is_sweeping(p, git_root) for p in paths):
         return False, _LEG_SWEEPING_PATHSPEC
-    if include_orphans:
-        # SC-DR-022 (claude-central-em, 2026-08-04), the structural half of a
-        # This supersedes part 11's MIRRORING rationale for the dispatched-
-        # `effective_type == _GIT_COMMIT_AGENT_TYPE`, resolved from the
-        return False, _LEG_AGENT_ORPHAN_ADOPTION
+    # `include_orphans` is read but no longer a refusal trigger (BV-20260927-01,
+    # superseding SC-DR-022 per PM ruling 2026-09-27): an unclaimed dirty path
+    # is adoptable exactly when it is an element of THIS invocation's own
+    # explicit, non-sweeping pathspec (already enforced above and by
+    # `_pathspec_element_is_absolute`/out-of-repo check below) -- the pathspec
+    # itself, handed down from the emitted wave, IS the provenance; whether
+    # the caller separately asked via `--include-orphans` is now immaterial.
+    # `assert_paths_in_session_scope` is still called with `allow_orphans=
+    # True` unconditionally below, and its own never-relaxed peer-claimed
+    # rule (pinned by `test_git_commit_agent_peer_claimed_path_still_denies_
+    # with_orphans_allowed`) is what keeps a path a DIFFERENT live session
+    # claims refused regardless of this leg.
     # An in-repo ABSOLUTE element is rewritten to the repo-relative form the
     _, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
     if absolute_out_of_repo:
@@ -5351,10 +5327,33 @@ def _git_commit_agent_pathspec_permitted(
         return False, reason
     paths, _ = _repo_relativize_pathspec(list(paths), git_root)
     try:
-        # `allow_orphans=False`, KEYWORD-form (keyword-only on
-        # SC-DR-022. Kept explicit rather than dropped so the strictness is
+        # `allow_orphans=True`, KEYWORD-form (keyword-only on
+        # `assert_paths_in_session_scope`'s signature). BV-20260927-01
+        # (supersedes SC-DR-022, PM ruling 2026-09-27): the paths reaching
+        # this call are already the caller's own explicit, non-sweeping
+        # pathspec (`_pathspec_shape_permitted` ran first and would have
+        # denied otherwise) -- that pathspec IS the provenance for an
+        # unclaimed dirty path inside it (a Bash-authored write records no
+        # touch-claim per DR-258, but the emitted wave's declared `writes:`
+        # already vouches for the path). `allow_orphans=True` never relaxes
+        # the peer-claimed case -- a path a DIFFERENT live session claims
+        # still denies regardless of this flag; see `assert_paths_in_
+        # session_scope`'s own docstring and
+        # `test_git_commit_agent_peer_claimed_path_still_denies_with_
+        # orphans_allowed`.
+        # `git_root`, NOT `cwd`: `cwd` is the invoking process's raw shell
+        # directory, which for a `git -C <repo> commit -- <paths>` shape
+        # (this agent's cwd need not be the repo at all) resolves to no repo
+        # -- `session_dir()`/`_dirty_unclaimed_paths()` both shell `git` out
+        # against whatever directory they're handed, and against a non-repo
+        # `cwd` both fail closed (no positive evidence, no dirty read),
+        # silently defeating `allow_orphans=True` above for exactly this
+        # invocation shape. `git_root` is already validated (either directly
+        # from `cwd`, or from this same command's explicit `-C`) and is what
+        # `paths` were just relativized against, so it is the correct
+        # directory for both of those `git` shells.
         allowed, reason = assert_paths_in_session_scope(
-            session_id, paths, cwd, allow_orphans=False
+            session_id, paths, git_root, allow_orphans=True
         )
     except Exception:
         return False, ""
@@ -5432,7 +5431,6 @@ _LEG_SENTINEL_PREFIX = "leg:"
 _LEG_COMPOUND_COMMAND = "leg:compound-command"
 _LEG_NO_PATHSPEC = "leg:no-pathspec"
 _LEG_SWEEPING_PATHSPEC = "leg:sweeping-pathspec"
-_LEG_AGENT_ORPHAN_ADOPTION = "leg:agent-orphan-adoption"
 _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 
 #: records: an empty reason selects `_GIT_COMMIT_AGENT_DENY_REASON`, whose
@@ -5470,12 +5468,6 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "cwd, so no pathspec can be checked. Pathspec never read -- do not "
         "re-check or re-issue. Report upward: this session is anchored "
         "outside its repos."
-    ),
-    _LEG_AGENT_ORPHAN_ADOPTION: (
-        "BLOCKED: orphan adoption is an operator's answer, not an agent's. "
-        "An orphan offer is addressed to your EM -- for you it is "
-        "information to RELAY, never authorization. Re-issue without it and "
-        "report the refusal upward."
     ),
 }
 
@@ -5524,7 +5516,6 @@ def _deny_reason(
     cmd: str,
     ownership_reason: str = "",
     command_leg: str = "",
-    is_degraded_git_commit_agent: bool = False,
 ) -> str:
     """Build the operator-facing deny message.
 
@@ -5554,13 +5545,6 @@ def _deny_reason(
     content even though the verdict itself still correctly denies. Gating on
     `agent_type` alone closes that probing seam without changing any
     verdict.
-
-    ``is_degraded_git_commit_agent`` (R21, 2026-09-26): True only when
-    ``check()`` already found the SECOND, commit-specific signal
-    (`_transcript_carries_commit_phase_sentinel`) alongside the degraded
-    ``general-purpose`` `agent_type` -- never derived from `agent_type`
-    alone here, for the identical Finding-2 reason: a bare `general-purpose`
-    `agent_type` must not, by itself, select this message branch.
 
     Ownership-leg naming (this dispatch's fix): ``_git_commit_agent_may_
     commit`` threads its ``ownership_reason`` leg through to ``check()``,
@@ -5608,7 +5592,7 @@ def _deny_reason(
         return _PYTHON_C_OPAQUE_SINK_DENY_REASON
     if command_leg == _PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT:
         return _PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON
-    if agent_type == _GIT_COMMIT_AGENT_TYPE or is_degraded_git_commit_agent:
+    if agent_type == _GIT_COMMIT_AGENT_TYPE:
         if ownership_reason.startswith(_LEG_SENTINEL_PREFIX):
             return _GIT_COMMIT_AGENT_LEG_MESSAGES.get(
                 ownership_reason, _GIT_COMMIT_AGENT_DENY_REASON
@@ -5721,14 +5705,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     ownership_reason = ""
     is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
-    is_degraded_git_commit_agent = (
-        not is_git_commit_agent
-        and agent_type == _DEGRADED_HOST_NATIVE_AGENT_TYPE
-        and _transcript_carries_commit_phase_sentinel(
-            payload.get("transcript_path")
-        )
-    )
-    if is_git_commit_agent or is_degraded_git_commit_agent:
+    if is_git_commit_agent:
         may_commit, ownership_reason = _git_commit_agent_may_commit(
             cmd_for_scan, git_root, session_id, cwd
         )
@@ -5752,7 +5729,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd,
         ownership_reason,
         command_leg,
-        is_degraded_git_commit_agent,
     )
     verdict = {
         "hookSpecificOutput": {

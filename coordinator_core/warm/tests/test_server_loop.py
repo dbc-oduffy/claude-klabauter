@@ -82,12 +82,18 @@ class _FakeIO:
 
 
 class _FakeVersionState:
-    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef"):
+    def __init__(
+        self, *, skewed: bool = False, server_sha: str = "deadbeef", source_stale: bool = False
+    ):
         self._skewed = skewed
         self.server_sha = server_sha
+        self._source_stale_value = source_stale
 
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
+
+    def is_source_stale(self) -> bool:
+        return self._source_stale_value
 
 
 def _frame(*, id_, method="noop", extra=None, token="client-token") -> bytes:
@@ -1266,6 +1272,45 @@ def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path
         idle.demote_if_idle = monkey_target
 
     assert calls, "a superseded generation must reach demote_if_idle"
+    assert calls[0]["token_stale"]() is True
+    assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
+
+
+def test_idle_tick_retires_on_source_staleness_alone_with_no_token_rotation(tmp_path):
+    """BV-20260927-06: a bare on-disk source edit that never rewrites the
+    engine stamp (no publish, so `_token_is_stale` stays False the whole
+    time) still retires this server via the idle watchdog -- with no
+    request ever arriving, exactly the population the reactive per-request
+    `is_skewed` check cannot see until a caller happens to dial in."""
+    skew.write_engine_stamp(tmp_path, "sha-current")
+    boot_token = skew.compute_client_token(tmp_path)
+
+    ctx = server._ServerContext(
+        name="pipe-source-stale",
+        sid="sid-x",
+        version_state=_FakeVersionState(source_stale=True),
+        engine_root=tmp_path,
+        boot_token=boot_token,
+    )
+    ctx.telemetry.record_invocation(warm=True)
+    idle.mark_invocation()
+
+    assert ctx._token_is_stale() is False
+
+    calls = []
+    monkey_target = idle.demote_if_idle
+
+    def _capture(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    idle.demote_if_idle = _capture
+    try:
+        ctx._idle_tick()
+    finally:
+        idle.demote_if_idle = monkey_target
+
+    assert calls, "source staleness alone must reach demote_if_idle"
     assert calls[0]["token_stale"]() is True
     assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
 

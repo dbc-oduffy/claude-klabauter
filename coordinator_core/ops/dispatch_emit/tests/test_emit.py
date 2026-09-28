@@ -110,35 +110,28 @@ def test_first_statement_after_meta_block_is_a_phase_call():
 
     meta_end = script.index("};\n") + len("};\n")
     remainder = expand_shared(script[meta_end:]).lstrip()
-    decls = "const _incompleteChunks = [];\n\n  const _unansweredBriefs = [];"
-    assert remainder.startswith(decls)
-    after_decl = remainder[len(decls) :].lstrip()
-    assert after_decl.startswith("phase(")
+    assert remainder.startswith("const _incompleteChunks = [];")
+    phase_idx = remainder.index("phase(")
+    rows_idx = remainder.index("const _rows = {};")
+    assert phase_idx < rows_idx
 
 
-def test_terminal_test_phase_is_last_and_preceded_by_a_commit_phase():
+def test_terminal_test_phase_is_last():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
 
     phase_titles = _extract_phase_titles(script)
 
     assert phase_titles[-1] == "Scoped test run"
-    assert phase_titles[-2].startswith("Commit wave")
 
 
-def test_every_wave_gets_one_executor_phase_and_one_commit_phase():
+def test_every_row_gets_one_execute_phase_no_commit_phase():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
 
     phase_titles = _extract_phase_titles(script)
 
-    assert len(phase_titles) == 6
-    assert phase_titles[0] == "Preflight: commit claimability"
-    assert phase_titles[1].startswith("Wave 1")
-    assert phase_titles[2].startswith("Commit wave")
-    assert phase_titles[3].startswith("Wave 2")
-    assert phase_titles[4].startswith("Commit wave")
-    assert phase_titles[5] == "Scoped test run"
+    assert phase_titles == ["Execute", "Scoped test run"]
 
 
 def test_wave_phase_carries_executor_agent_type():
@@ -147,10 +140,10 @@ def test_wave_phase_carries_executor_agent_type():
     assert "agentType: 'coordinator:executor'" in script
 
 
-def test_commit_phase_carries_git_commit_agent_type():
+def test_no_git_commit_agent_type_anywhere():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
-    assert script.count("agentType: 'coordinator:git-commit-agent'") == 3
+    assert "coordinator:git-commit-agent" not in script
 
 
 def test_terminal_phase_carries_test_runner_agent_type():
@@ -159,15 +152,15 @@ def test_terminal_phase_carries_test_runner_agent_type():
     assert "agentType: 'coordinator:test-runner'" in script
 
 
-def test_multi_row_wave_uses_parallel():
+def test_multi_row_wave_never_uses_parallel_wrap():
     waves = [
         [
             _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="parallel wave")
-    assert "await parallel([" in script
+    script = compose_script(waves, name="wf", description="two rows")
+    assert "parallel(" not in script
     assert script.count("agentType: 'coordinator:executor'") == 2
 
 
@@ -549,501 +542,6 @@ def test_single_row_wave_is_a_plain_await_agent():
     assert "await agent(" in script
 
 
-def test_preflight_phase_is_first_and_precedes_first_executor_phase():
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    phase_titles = _extract_phase_titles(script)
-
-    assert phase_titles[0] == "Preflight: commit claimability"
-    first_wave_index = next(
-        i for i, t in enumerate(phase_titles) if t.startswith("Wave 1")
-    )
-    assert first_wave_index == 1
-
-    preflight_pos = script.index("Preflight: commit claimability")
-    first_wave_pos = script.index("await agent(", script.index("Wave 1"))
-    assert preflight_pos < first_wave_pos
-
-
-def test_preflight_agent_call_carries_git_commit_agent_type_and_union_pathspec():
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "preflight:commit-claimability" in script
-    assert "coordinator_core/ops/dispatch_emit/spine_read.py" in script
-    assert "coordinator_core/ops/dispatch_emit/wave_map.py" in script
-    assert "do not stage or commit" in script.lower()
-
-
-def test_preflight_call_carries_the_commit_agents_charter_model():
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-    body_start = script.index("};\n") + len("};\n")
-    preflight_block_start = script.index("Preflight: commit claimability", body_start)
-    preflight_block_end = script.index("Wave 1", body_start)
-    preflight_block = script[preflight_block_start:preflight_block_end]
-    assert "model: 'haiku'" in preflight_block
-
-
-def test_preflight_call_binds_its_result_and_gates_the_run():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "const preflightResult = await agent(" in script
-    assert "if (/^[*_]{0,2}PREFLIGHT-BLOCKED" in script
-    assert "return { halted:" in script
-
-
-def test_preflight_probes_git_root_from_the_commit_phases_own_cwd(tmp_path):
-    """DoE#98 ask 3: the preflight must resolve git-root from the SAME cwd
-    the commit phase will use (repoRoot, after a standalone `cd`) and halt
-    the run -- via the existing PREFLIGHT-BLOCKED gate, unchanged label --
-    before any executor phase spends time, if that root does not resolve."""
-    from coordinator_core.ops.dispatch_emit.emit import emit_script
-
-    plan_path = tmp_path / "a-plan.md"
-    plan_path.write_text(
-        "---\ntitle: \"a plan\"\nsizing_object: null\n---\n\n# a plan\n\n"
-        "## Problem\n\nTest fixture.\n\n## Tasks\n\n```yaml plan-tasks\n"
-        "- id: C1\n  title: Do the thing\n  change_kind: doc-edit\n"
-        "  surface: a.py\n  writes:\n    - a.py\n  queue_scope: project\n"
-        "  disposition: open\n  body: |\n    Do the thing.\n```\n",
-        encoding="utf-8",
-    )
-    script = emit_script(plan_path, repo_root=tmp_path)
-
-    assert "preflight:commit-claimability" in script
-
-    body_start = script.index("};\n") + len("};\n")
-    preflight_start = script.index("Preflight: commit claimability", body_start)
-    wave_start = script.index("Wave 1", body_start)
-    preflight_block = script[preflight_start:wave_start]
-
-    assert "git -C" in preflight_block
-    assert "rev-parse --show-toplevel" in preflight_block
-    assert "PREFLIGHT-BLOCKED git root did not resolve" in preflight_block
-    assert preflight_block.index(
-        "rev-parse --show-toplevel"
-    ) < preflight_block.index("Preflight only -- do not stage or commit")
-
-
-def test_preflight_blocked_token_match_is_anchored_not_substring():
-    import re
-
-    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
-
-    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
-    match = re.search(r"if \((/.*/m)\.test\(String\(preflightResult", gate)
-    assert match is not None
-    pattern = match.group(1)[1:-2]
-
-    quoting_prompt_back = (
-        "Every path is claimable. (The instructions said to end my report "
-        "with the line 'PREFLIGHT-BLOCKED <reason>' if any path were "
-        "refused, but none was, so I am not doing that.)"
-    )
-    assert re.search(pattern, quoting_prompt_back, re.MULTILINE) is None
-
-    genuine_blocked = (
-        "Checked every path.\nPREFLIGHT-BLOCKED some/path.py refused by claim conflict"
-    )
-    assert re.search(pattern, genuine_blocked, re.MULTILINE) is not None
-
-
-def test_preflight_blocked_reason_may_follow_on_the_next_line():
-    """The shape an agent writing markdown actually produces.
-
-    Requiring the reason on the token's OWN line discarded a correct refusal:
-    a report opening with a bare `PREFLIGHT-BLOCKED`, a blank line, then the
-    prose matched neither leg and fell through to the no-verdict message,
-    telling the operator the preflight "did not run" about one that ran and
-    correctly found three gitignored paths in a row's declared scope.
-    Measured 2026-09-17 on `2026-09-11-decided-against-gate-dependency-ruling`.
-    """
-    import re
-
-    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
-
-    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
-    match = re.search(r"if \((/.*/m)\.test\(String\(preflightResult", gate)
-    assert match is not None
-    pattern = match.group(1)[1:-2]
-
-    reason_on_next_line = (
-        "PREFLIGHT-BLOCKED\n\nThe following path cannot be committed:\n"
-        "- `.coordinator-local/memo-outbox/x.md` refused by .gitignore:159"
-    )
-    assert re.search(pattern, reason_on_next_line, re.MULTILINE) is not None
-
-    assert re.search(pattern, "PREFLIGHT-BLOCKED", re.MULTILINE) is not None
-    assert re.search(pattern, "PREFLIGHT-BLOCKED: ignored path", re.MULTILINE) is not None
-
-    assert re.search(
-        pattern,
-        "the instructions said to end with 'PREFLIGHT-BLOCKED <reason>'",
-        re.MULTILINE,
-    ) is None
-
-
-def test_widening_blocked_did_not_loosen_the_clear_arm():
-    """The asymmetry that makes the widening safe. BLOCKED and the no-verdict
-    fallthrough both HALT, so matching BLOCKED too eagerly costs only a
-    better-aimed message. CLEAR is the only arm that lets a wave proceed to
-    writing, so it must still reject the prompt's own placeholder and any
-    non-sha.
-    """
-    import re
-
-    pattern = _clear_gate_pattern()
-    for not_a_verdict in ("PREFLIGHT-CLEAR <sha>", "PREFLIGHT-CLEAR", "PREFLIGHT-CLEAR zzzzzzz", ""):
-        assert re.search(pattern, not_a_verdict, re.MULTILINE) is None, not_a_verdict
-    real = "All 4 paths claimable.\nPREFLIGHT-CLEAR 13052ea82bdd5a6"
-    assert re.search(pattern, real, re.MULTILINE) is not None
-
-
-def _clear_gate_pattern():
-    """The CLEAR arm's regex, lifted out of the emitted JS."""
-    import re
-
-    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
-
-    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
-    match = re.search(r"if \(!(/.*/m)\.test\(String\(preflightResult", gate)
-    assert match is not None, "no negated CLEAR gate in the emitted JS"
-    return match.group(1)[1:-2]
-
-
-def test_preflight_silence_is_not_a_pass():
-    """The pass verdict must be a POSITIVE token, never the absence of output.
-
-    Until the CLEAR gate existed, the prompt told the agent not to emit a line
-    when everything was claimable, so a clean preflight and a preflight that
-    never ran were the same signal -- and `String(x ?? "")` collapsed a null
-    result, a crashed agent, and a zero-tool-call agent onto it.
-    """
-    import re
-
-    pattern = _clear_gate_pattern()
-    for report in (
-        "",
-        "agent returned null",
-        "Every path is claimable.",
-        "Checked all 12 paths. No claim conflicts, no ignore rules, no guards.",
-    ):
-        assert re.search(pattern, report, re.MULTILINE) is None, report
-
-
-def test_preflight_clear_cannot_be_satisfied_by_quoting_the_prompt():
-    """Same anti-fabrication device the commit gate uses: a real hex sha.
-
-    The prompt carries the literal placeholder ``<sha>``, which is not hex
-    however it is decorated, so echoing the instruction back cannot pass.
-    """
-    import re
-
-    pattern = _clear_gate_pattern()
-    quoting_prompt_back = (
-        "All paths are claimable. The instructions said to end my report with "
-        "the line 'PREFLIGHT-CLEAR <sha>' carrying the sha from git rev-parse "
-        "HEAD, so: PREFLIGHT-CLEAR <sha>"
-    )
-    assert re.search(pattern, quoting_prompt_back, re.MULTILINE) is None
-
-
-def test_preflight_clear_accepts_a_real_sha_bare_or_emphasised():
-    import re
-
-    pattern = _clear_gate_pattern()
-    for report in (
-        "Checked every path.\nPREFLIGHT-CLEAR f990938d67",
-        "Checked every path.\nPREFLIGHT-CLEAR f990938d67ab12cd34ef5678901234567890abcd",
-        "Checked every path.\n**PREFLIGHT-CLEAR f990938d67**",
-    ):
-        assert re.search(pattern, report, re.MULTILINE) is not None, report
-
-
-def test_preflight_prompt_asks_for_the_sha_the_clear_gate_requires():
-    """The gate is unsatisfiable unless the prompt names how to get a sha."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "git rev-parse HEAD" in script
-    assert "PREFLIGHT-CLEAR <sha>" in script
-
-
-def test_preflight_blocked_still_wins_over_clear():
-    """A BLOCKED report halts with the blocker reason, not the no-verdict one."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    blocked_gate = script.index("PREFLIGHT-BLOCKED[*_]")
-    clear_gate = script.index("!/^[*_]{0,2}PREFLIGHT-CLEAR")
-    assert blocked_gate < clear_gate
-
-
-def _provenance_block():
-    from coordinator_core.ops.dispatch_emit.emit import _PROVENANCE_HEADING
-
-    return _PROVENANCE_HEADING
-
-
-def test_provenance_no_longer_claims_peer_work_cannot_reach_the_commit():
-    """The old reassurance was true per-FILE and false per-HUNK, and it is
-    exactly the sentence that would stop an agent from looking.
-
-    `commit_paths` commits working-tree state for every path handed to it, so
-    a peer's uncommitted edit inside a DECLARED path lands under this run's
-    subject with every guard passing. Measured at `ef3bbb1663`.
-    """
-    block = _provenance_block()
-    assert "cannot sweep peer-staged work into your commit" not in block
-    assert "PER-FILE, NOT PER-HUNK" in block
-
-
-def test_provenance_requires_reading_the_diff_not_only_the_reports():
-    block = _provenance_block()
-    assert "git diff --stat" in block
-    assert "Read the diff, not just the reports" in block
-
-
-def test_diff_stat_is_not_the_sole_verification_signal():
-    """`git diff --stat` only diffs tracked content -- a brand-new untracked
-    file an executor just created never shows up in it, so treating it as
-    the sole check would silently miss report/tree divergence for anything
-    newly added."""
-    block = _provenance_block()
-    assert "not the sole verification signal" in block
-    assert "git status --porcelain -- <your pathspec>" in block
-    assert "untracked" in block.lower()
-
-
-def test_untracked_additions_named_by_a_report_are_not_treated_as_divergence():
-    """The added untracked-file leg must apply the same
-    named-in-a-report-file-vs-named-by-none discriminator the tracked-hunk
-    check already applies -- not a bare string match on 'untracked'
-    appearing somewhere in the block. DoE#99: the discriminator is now the
-    report FILE's own touched-files list, not the terse return line, and
-    "peer" additionally requires a LIVE holder -- absence alone is not
-    evidence."""
-    block = _provenance_block()
-    untracked_idx = block.index("git status --porcelain -- <your pathspec>")
-    surrounding = block[untracked_idx : untracked_idx + 800]
-    assert "report FILE" in surrounding
-    assert "LIVE holder is the peer case" in surrounding
-    assert "STOP" in surrounding
-
-
-def test_the_halt_discriminator_requires_a_live_holder_not_mere_absence():
-    """DoE#99: halting on any unreported hunk would fire on ordinary
-    under-itemised executor reports; halting on none leaves the peer case
-    silent. The discriminator is a LIVE holder, never absence from a
-    report."""
-    block = _provenance_block()
-    assert "NOT evidence of a peer by itself" in block
-    assert "LIVE holder is the peer case" in block
-    assert "session-claim-cli who-claims-path" in block
-    assert "do not halt on those" in block
-
-
-def test_the_commit_agent_reads_each_report_file_not_the_reply_line():
-    """Executor replies are `<STATUS>: <report path>`; a commit agent reading
-    only the reply cannot see which paths a report names, so every hunk looks
-    like the peer case and the wave halts."""
-    block = _provenance_block()
-    assert "READ that file" in block
-
-
-def test_partial_residue_is_withheld_not_the_peer_case():
-    """A PARTIAL item's residue on a declared path is that item's, not a
-    peer's: it drops out of the commit and never STOPs the wave."""
-    block = _provenance_block()
-    assert "returned PARTIAL, BLOCKED, refused, or died" in block
-    assert "its residue is withheld, never the peer case" in block
-
-
-def test_the_remedy_is_stop_and_report_never_clean_the_path():
-    """Reverting a peer's hunk is the destructive failure this must not invite."""
-    block = _provenance_block()
-    assert "Never revert, stash, or check out a hunk" in block
-
-
-def test_verification_must_produce_an_artifact_it_cannot_fabricate():
-    """The measured failure mode is an agent that reasons from pasted reports
-    and produces output indistinguishable from one that checked -- and whose
-    presentation is anti-correlated with having checked. Requiring verbatim
-    stat output makes the two modes produce different artifacts."""
-    block = _provenance_block()
-    assert "DIFF OBSERVED:" in block
-    assert "VERBATIM" in block
-    assert "do not build a nicer artifact" in block
-    assert "did not look" in block
-
-
-def test_the_per_hunk_clause_reaches_the_emitted_script():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    if "Pathspec provenance" in script:
-        assert "PER-FILE, NOT PER-HUNK" in script
-
-
-def test_provenance_reconciles_structured_reports_per_report_not_per_wave():
-    """A mixed wave -- some structured reports, some prose -- must reconcile
-    each report on its own rules, never treat any structured subset as
-    licence to skip reconciling the rest of the wave."""
-    block = _provenance_block()
-    assert "PER-REPORT, NEVER PER-WAVE" in block
-    assert "must never suppress reconciliation of the other two" in block
-
-
-def test_provenance_structured_claim_never_replaces_the_diff_check():
-    """A structured changed-path list may narrow what the commit agent
-    EXPECTS to see in `git diff --stat`; it must never be read as licensing
-    a reports-only derivation of the pathspec -- the exact posture the
-    'read the diff, not just the reports' paragraph exists to kill."""
-    block = _provenance_block()
-    assert "NARROWS WHAT YOU EXPECT" in block
-    assert "NEVER REPLACES THE" in block
-    assert "NOT a substitute for reading the" in block
-
-
-def test_provenance_reconciles_structured_reports_per_report_reaches_the_emitted_script():
-    """The constant-level
-    assertion above stays green even if a refactor stops threading this
-    clause through to the emitted script; pin the reaching leg too, the
-    same idiom `test_the_per_hunk_clause_reaches_the_emitted_script` uses."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    if "Pathspec provenance" in script:
-        assert "PER-REPORT, NEVER PER-WAVE" in script
-
-
-def test_provenance_structured_claim_never_replaces_the_diff_check_reaches_the_emitted_script():
-    """Same reaching-the-
-    emitted-script leg for the diff-still-governs clause."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    if "Pathspec provenance" in script:
-        assert "NARROWS WHAT YOU EXPECT" in script
-        assert "NEVER REPLACES THE" in script
-
-
-def test_provenance_partial_wave_clause_unmodified():
-    """The `abf69cd326` partial-wave clause is additive-only: this chunk must
-    not touch it."""
-    block = _provenance_block()
-    assert "A PARTIAL WAVE STILL COMMITS" in block
-    assert (
-        "Refusing the whole wave because one item of N is blocked is the "
-        "failure mode, not the safe choice."
-    ) in block
-
-
-def test_preflight_sha_is_bound_for_later_phases():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "const preflightHeadSha = " in script
-    assert "PREFLIGHT-CLEAR[*_ ]+([0-9a-f]{7,40})" in script
-
-
-def test_every_commit_phase_carries_the_staleness_check():
-    """The check belongs at the commit agent because that is the last step
-    before anything is written AND the only actor in the run that can run git.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert script.count("STALENESS CHECK") == 2
-    assert script.count("${preflightHeadSha") == 2
-    assert "git rev-parse HEAD" in script
-
-
-def test_staleness_clause_interpolates_rather_than_printing_source():
-    """`_escape_for_js_template_literal` neutralises `$` on purpose, so a
-    `${...}` written into the prompt would reach the agent as literal text."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "<<<PREFLIGHT_HEAD_SHA>>>" not in script
-    assert "\\${preflightHeadSha" not in script
-
-
-def test_escaper_still_neutralises_other_dollars_in_prompt_text():
-    """The splice is one known token to one known binding, never a general
-    unescaping -- otherwise prompt text could inject expressions."""
-    from coordinator_core.ops.dispatch_emit.emit import (
-        _escape_for_js_template_literal,
-        _interpolate_preflight_sha,
-    )
-
-    hostile = "cost was ${process.env.SECRET} and ${alert(1)}"
-    out = _interpolate_preflight_sha(_escape_for_js_template_literal(hostile))
-    unescaped = [
-        m.start()
-        for m in re.finditer(r"\$\{", out)
-        if m.start() == 0 or out[m.start() - 1] != "\\"
-    ]
-    assert not unescaped, out
-
-
-def test_a_mismatch_is_not_framed_as_a_refusal_reason():
-    """A resumed run replaying a cached verdict is EXPECTED. Framing the
-    mismatch as grounds to refuse would halt every legitimate resume."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    i = script.index("STALENESS CHECK")
-    clause = script[i:i + 900]
-    assert "is NOT by itself a reason to refuse" in clause
-    assert "Re-verify claimability" in clause
-
-
-_NOWIN = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def _git(repo, *args, check=True):
-    return _subprocess.run(
-        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
-    )
-
-
-def _gitignore_repo(tmp_path):
-    repo = tmp_path / "r"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "work/z")
-    _git(repo, "config", "user.email", "t@local")
-    _git(repo, "config", "user.name", "t")
-    (repo / ".gitignore").write_text("registry/registry.db\n", encoding="utf-8")
-    (repo / "registry").mkdir()
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "seed")
-    return repo
-
-
-@pytest.mark.spawns_process
-def test_a_gitignored_write_is_excluded_from_the_preflight_pathspec(tmp_path):
-    """Defect: a spine row declaring a gitignored `writes:` path (a derived
-    store, e.g. `registry/registry.db`) went PREFLIGHT-BLOCKED before wave 1
-    -- an ignored path can never be committed, so it must never reach the
-    preflight claimability set at all.
-    """
-    repo = _gitignore_repo(tmp_path)
-    waves = [[_wave_row("C1", ["registry/registry.db"])]]
-    script = compose_script(waves, name="wf", description="ignored write", repo_root=repo)
-    preflight_body = _preflight_body(script)
-    assert "registry/registry.db" not in preflight_body
-
-
-@pytest.mark.spawns_process
-def test_a_wave_whose_only_write_is_gitignored_gets_no_commit_phase(tmp_path):
-    """Same treatment as an all-`writes: []` wave: nothing committable, so
-    no commit phase is emitted for it."""
-    repo = _gitignore_repo(tmp_path)
-    waves = [[_wave_row("C1", ["registry/registry.db"])]]
-    script = compose_script(waves, name="wf", description="ignored write", repo_root=repo)
-    assert "commit phase omitted" in script
-    assert "gitignored" in script
-    wave_body = script[script.index("phase('Wave 1: C1')") :]
-    assert "coordinator:git-commit-agent" not in wave_body
-
-
-@pytest.mark.spawns_process
-def test_a_gitignored_write_alongside_a_real_one_still_commits_the_real_path(tmp_path):
-    repo = _gitignore_repo(tmp_path)
-    waves = [[_wave_row("C1", ["registry/registry.db", "a.py"])]]
-    script = compose_script(waves, name="wf", description="mixed write", repo_root=repo)
-    preflight_body = _preflight_body(script)
-    assert "registry/registry.db" not in preflight_body
-    assert "a.py" in preflight_body
-    assert "commit phase omitted" not in script
-
-
 def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path, monkeypatch, caplog):
     """Fail-open on git absence/timeout stays fail-open (reproducing pre-fix
     behaviour beats halting a whole run over a transient git hiccup), but
@@ -1081,43 +579,33 @@ def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path):
     assert "GITIGNORE FILTER DID NOT RUN" not in script
 
 
-def _preflight_body(script: str) -> str:
-    """The preflight phase's own `agent()` call text -- the segment between
-    its result binding and the next phase's body `phase(...)` call. The
-    phase TITLE `Preflight: commit claimability` also appears earlier, in
-    `meta.phases`, so slicing from there (rather than from the result
-    binding) would include the unrelated meta-block literal too."""
-    start = script.index("const preflightResult")
-    end = script.index("phase('Wave 1", start)
-    return script[start:end]
-
-
 def test_completed_run_returns_a_positive_record_not_undefined():
     """A finished run and a run that fell off the end must not look alike.
 
     The body used to end on `await agent(...)`, so a completed run returned
     `undefined` -- indistinguishable from a script that never reached its
     last phase. Same shape as the preflight's absent-output pass verdict.
+    Replaced by ``wake_digest.completion_return_js``'s wake-digest shape
+    (§ Design D1, task C13) -- ``completed`` now reads off ``outcome``.
     """
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "completed: _incompleteChunks.length === 0" in script
+    assert "outcome: (_halted ? 'halted' :" in script
     assert script.rstrip().endswith("};")
 
 
 def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    tail = script[script.index("completed: _incompleteChunks.length === 0"):]
+    tail = script[script.index("return {"):]
     assert "chunks: [" in tail
-    assert "waves: 2" in tail
     for wave in _two_wave_fixture():
         for row in wave:
-            assert f"'{row.id}'" in tail, row.id
+            assert f'"{row.id}"' in tail, row.id
 
 
 def test_completion_return_is_last_so_no_phase_follows_it():
     """An early completion return would silently skip the phases after it."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    completion = script.index("completed: _incompleteChunks.length === 0")
+    completion = script.index("return {")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
 
@@ -1133,9 +621,6 @@ def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const _incompleteChunks = [];" in script
     assert "_incompleteChunks.push(id)" in script
-    for wave in _two_wave_fixture():
-        for row in wave:
-            assert f"[{_js_string_literal(row.id)}].forEach((id, i) => {{" in script, row.id
     assert "incomplete_chunks: _incompleteChunks" in script
 
 
@@ -1163,22 +648,23 @@ def test_the_status_check_reads_the_contracts_status_position(reply, incomplete)
     assert bool(re.search(body, json.dumps(reply))) is incomplete
 
 
-def test_multi_row_wave_status_check_indexes_by_row_order():
-    """A parallel wave's results binding is an array in row-dispatch order;
-    the status check must index it per row, never blind-push every row id
-    on any match (which would misattribute a sibling's PARTIAL)."""
+def test_multi_row_wave_status_checked_per_row_via_its_own_promise():
+    """Each row is its own memoised promise (§ Design D4), so status
+    classification is per-row inside the shared ``_runRow`` helper, never
+    an array indexed by dispatch position (there is no shared results
+    array to misindex any more)."""
     waves = [[_wave_row("C1", ["a.py"]), _wave_row("C2", ["b.py"])]]
-    script = compose_script(waves, name="wf", description="one parallel wave")
-    assert "['C1', 'C2'].forEach((id, i) => {" in script
-    assert "wave1Results?.[i]" in script
+    script = compose_script(waves, name="wf", description="two rows")
+    assert "_rows['C1'] = _runRow('C1', []," in script
+    assert "_rows['C2'] = _runRow('C2', []," in script
 
 
-def test_commit_and_test_calls_carry_charter_haiku_while_waves_stay_sonnet():
+def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
     """A call-site ``model:`` OVERRIDES the named agent definition's own
     frontmatter, so the emitted tier must track each agentType's charter
-    rather than one constant. ``git-commit-agent`` and ``test-runner`` are
-    haiku by charter; a blanket sonnet billed a Sonnet for mechanical staging
-    and test invocation. Negative spec for `_model_opt`.
+    rather than one constant. ``test-runner`` is haiku by charter; a
+    blanket sonnet billed a Sonnet for mechanical test invocation.
+    Negative spec for `_model_opt`.
     """
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="tier check")
@@ -1187,15 +673,12 @@ def test_commit_and_test_calls_carry_charter_haiku_while_waves_stay_sonnet():
         idx = script.index(label)
         return script[idx:script.index("})", idx)]
 
-    assert "model: 'haiku'" in opts_for("commit:wave-1")
-    assert "model: 'sonnet'" not in opts_for("commit:wave-1")
-
     test_label_idx = script.find("agentType: 'coordinator:test-runner'")
     assert test_label_idx != -1, "fixture must compose the terminal test phase"
     assert "model: 'haiku'" in script[test_label_idx:script.index("})", test_label_idx)]
 
     assert "model: 'sonnet'" in opts_for("work:"), (
-        "executor waves keep their charter sonnet - only the mechanical "
+        "executor rows keep their charter sonnet - only the mechanical "
         "agents drop to haiku"
     )
 
@@ -1269,22 +752,14 @@ def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
         compose_script(waves, name="wf", description="undeclared")
 
 
-def test_all_empty_writes_wave_emits_with_no_commit_phase():
+def test_all_empty_writes_wave_emits_with_no_marker():
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
     waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
     script = compose_script(waves, name="wf", description="all-empty wave")
 
     assert _AGENT_CALL_RE.search(script) is not None
-    titles = _extract_phase_titles(script)
-    assert not any("Commit" in title for title in titles)
-    assert "commit phase omitted" in script
-    assert "writes: []" in script
-
-
-def test_all_empty_writes_wave_contributes_nothing_to_the_preflight_pathspec():
-    waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
-    script = compose_script(waves, name="wf", description="all-empty wave")
-
-    assert "every path in []" in script
+    assert parse_marker(script) is None
 
 
 def test_all_empty_writes_wave_still_dispatches_its_agent_calls():
@@ -1294,6 +769,8 @@ def test_all_empty_writes_wave_still_dispatches_its_agent_calls():
 
 
 def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
     waves = [
         [
             _wave_row("C1", []),
@@ -1301,9 +778,9 @@ def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
         ]
     ]
     script = compose_script(waves, name="wf", description="mixed wave")
-    titles = _extract_phase_titles(script)
-    assert any("Commit" in title for title in titles)
-    assert "commit phase omitted" not in script
+    request = parse_marker(script)
+    assert request is not None
+    assert [c.id for c in request.chunks] == ["C2"]
 
 
 def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
@@ -1345,11 +822,31 @@ def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_re
     assert "No terminal test phase" not in script
 
 
+def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
+    """When a falsifier stage is present, the terminal `return`'s
+    `criterion.status` must guard `_falsifierResult` the same way
+    `tests.status` guards its own stage-result var (`_testResult ? ... :
+    'not_run'`) -- on a halted run `_falsifierResult` stays `null`
+    (STOP-RULE-FIRED skips the block that assigns it), so an unguarded
+    `_falsifierResult.status` throws while assembling the wake digest."""
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
+    falsifier = {
+        "how": "run the migration",
+        "expected_when_true": "succeeds",
+        "baseline_output": "fails today",
+    }
+    script = compose_script(
+        waves, name="wf", description="halted with falsifier", falsifier=falsifier
+    )
+    assert "_falsifierResult.status)" not in script
+    assert "(_falsifierResult ? _falsifierResult.status : 'not_run')" in script
+
+
 def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
     waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
     script = compose_script(waves, name="wf", description="doc only")
     assert "Scoped test run" not in script
-    assert "coordinator:test-runner" not in script
+    assert "_rows['C1'] = _runRow('C1', [], null," in script
 
 
 def test_prime_exit_criterion_falsifier_reads_how_and_expected_when_true():
@@ -1475,7 +972,7 @@ def test_emit_script_reads_a_plan_file_and_composes_a_conformant_script(tmp_path
     assert "fixture-plan" in script
     phase_titles = _extract_phase_titles(script)
     assert phase_titles[-1] == "Scoped test run"
-    assert phase_titles[-2].startswith("Commit wave")
+    assert phase_titles[0] == "Execute"
 
 
 def test_emit_script_honors_explicit_name_and_description(tmp_path):
@@ -1507,18 +1004,6 @@ def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
     assert preamble not in baseline
 
 
-_FIXTURE_ROSTER_FRAGMENT = {
-    "schema": "review-roster-fragment",
-    "tiers": {
-        "lightweight": ["coordinator:code-reviewer"],
-        "standard": ["coordinator:code-reviewer", "coordinator:integrator"],
-        "full": [
-            "coordinator:code-reviewer",
-            "coordinator:integrator",
-            "coordinator:staff-reviewer",
-        ],
-    },
-}
 
 
 def _write_plan_with_sizing(tmp_path, tshirt: str):
@@ -1684,191 +1169,195 @@ def test_derive_review_tier_raises_on_unmapped_tshirt(tmp_path):
         derive_review_tier(plan_path, repo_root=tmp_path)
 
 
-def test_compose_script_composes_no_review_phase_when_tier_or_fragment_absent():
+_V5_ROSTER_FRAGMENT = {
+    "schema": "review-roster-fragment",
+    "schema_version": 5,
+    "execute_review": {
+        "stages": [
+            {
+                "kind": "prep",
+                "agents": [
+                    {
+                        "agentType": "coordinator:review-prep",
+                        "model": "sonnet",
+                        "effort": "low",
+                        "schema": "prep",
+                    }
+                ],
+            },
+            {
+                "kind": "review-wave",
+                "agents": [
+                    {
+                        "agentType": "coordinator:code-reviewer",
+                        "model": "opus",
+                        "effort": "low",
+                        "per": "whole-diff",
+                        "schema": "wave",
+                    }
+                ],
+            },
+            {
+                "kind": "integration",
+                "agents": [
+                    {
+                        "agentType": "coordinator:integrator",
+                        "model": "opus",
+                        "effort": "low",
+                        "schema": "integration",
+                    }
+                ],
+            },
+        ]
+    },
+}
+
+_V5_STAGE_SCHEMAS = {
+    "prep": {"type": "object"},
+    "wave": {"type": "object"},
+    "integration": {"type": "object"},
+}
+
+
+def test_compose_script_composes_no_review_phase_when_fragment_or_schemas_absent():
     waves = _two_wave_fixture()
 
     script_neither = compose_script(waves, name="wf", description="no review")
-    assert "review:" not in script_neither
-
-    script_tier_only = compose_script(
-        waves, name="wf", description="tier only", review_tier="standard"
-    )
-    assert "review:" not in script_tier_only
+    assert "No review stages composed" in script_neither
+    assert "review:coordinator" not in script_neither
 
     script_fragment_only = compose_script(
         waves,
         name="wf",
         description="fragment only",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+        review_roster_fragment=_V5_ROSTER_FRAGMENT,
     )
-    assert "review:" not in script_fragment_only
+    assert "No review stages composed" in script_fragment_only
+
+    script_schemas_only = compose_script(
+        waves,
+        name="wf",
+        description="schemas only",
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    assert "No review stages composed" in script_schemas_only
 
 
-def test_compose_script_composes_a_single_reviewer_review_phase():
+def test_compose_script_narrates_a_pre_v5_fragment_rather_than_composing_it():
+    """The v4 tier/stage review path is deleted, not degraded into: a
+    fragment on an earlier ``schema_version`` composes no review phase, just
+    a loud ``log()`` naming why."""
+    waves = _two_wave_fixture()
+    v4_fragment = {"schema": "review-roster-fragment", "schema_version": 4, "tiers": {}}
+    script = compose_script(
+        waves,
+        name="wf",
+        description="v4 fragment",
+        review_roster_fragment=v4_fragment,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    assert "No review stages composed" in script
+    assert "schema_version 4" in script
+
+
+def test_compose_script_composes_the_v5_execute_review_wave():
     waves = _two_wave_fixture()
     script = compose_script(
         waves,
         name="wf",
-        description="lightweight review",
-        review_tier="lightweight",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+        description="v5 review",
+        review_roster_fragment=_V5_ROSTER_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
     )
 
     phase_titles = _extract_phase_titles(script)
-    assert "Review" in phase_titles
-    assert "review:coordinator:code-reviewer" in script
-    assert "await parallel(" not in script.split("Review")[-1]
-
-
-def test_compose_script_composes_a_parallel_review_phase_for_multiple_reviewers():
-    waves = _two_wave_fixture()
-    script = compose_script(
-        waves,
-        name="wf",
-        description="full review",
-        review_tier="full",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
-    )
-
+    assert "Review prep" in phase_titles
+    assert "Review wave" in phase_titles
+    assert "Review integration" in phase_titles
+    assert "_reviewPrep = await" in script
+    assert "const _reviewPrep" not in script
     assert "review:coordinator:code-reviewer" in script
     assert "review:coordinator:integrator" in script
-    assert "review:coordinator:staff-reviewer" in script
-    assert script.count("agentType: 'coordinator:staff-reviewer'") == 1
 
 
-def test_compose_script_composes_a_staged_gate_fragment_without_suppressing_the_test_phase():
-    """A staged (schema_version >= 2) fragment used to be refused outright —
-    that stopgap (8d7d057f) comes out with this chunk: `compose_script` now
-    routes a staged fragment through `review_mint.roster.parse_stages` /
-    `review_mint.compose.compose` like any other, and a `gate: true` stage's
-    verdict must never suppress the terminal test phase for this
-    post-execution caller (GATE POLICY, C4's body)."""
-    waves = _two_wave_fixture()
-    staged = {
-        "schema": "review-roster-fragment",
-        "schema_version": 3,
-        "blocking_verdicts": {"coordinator:prior-art-checker": "BLOCKED-SURFACE-TO-PM"},
-        "tiers": {
-            "standard": {
-                "stages": [
-                    {"gate": True, "agents": ["coordinator:prior-art-checker"]},
-                    {"agents": ["coordinator:code-reviewer", "coordinator:staff-eng"]},
-                ]
-            }
-        },
-    }
-
-    script = compose_script(
-        waves,
-        name="wf",
-        description="staged fragment",
-        review_tier="standard",
-        review_roster_fragment=staged,
-    )
-
-    phase_titles = _extract_phase_titles(script)
-    assert "Scoped test run" in phase_titles
-    assert phase_titles.index("Scoped test run") == len(phase_titles) - 1
-    assert "review:coordinator:prior-art-checker" in script
-    assert "review:coordinator:code-reviewer" in script
-    assert "sidecar_path" in script
-    lines = script.splitlines()
-    review_span = [
-        i for i, line in enumerate(lines)
-        if line.strip().startswith("phase(") and "review" in line.lower()
-    ]
-    assert review_span, "no review phase in a script composed with a review roster"
-    end = len(lines)
-    for i in range(review_span[-1] + 1, len(lines)):
-        if lines[i].strip().startswith("phase(") and "review" not in lines[i].lower():
-            end = i
-            break
-    review_returns = [
-        line for line in lines[review_span[0]:end] if "return" in line
-    ]
-    assert not review_returns, f"review stage spliced an early return: {review_returns}"
-
-
-def test_review_calls_carry_no_model_key_so_the_agent_definition_pins_the_tier():
-    """A reviewer call site declares its tier via ``agentType``, and the agent
-    definition it names pins the model (the personas are ``model: opus`` by
-    charter). ``opts.model`` OVERRIDES that frontmatter, so emitting
-    ``model: 'sonnet'`` alongside ``agentType`` would silently run a persona
-    below its own charter — a Sonnet review wearing an Opus reviewer's name.
-    Negative spec for `_review_phase_calls`."""
-    waves = _two_wave_fixture()
-    script = compose_script(
-        waves,
-        name="wf",
-        description="full review",
-        review_tier="full",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
-    )
-
-    review_segment = script.split("phase('Review');")[-1].split("phase(")[0]
-    assert "agentType:" in review_segment, "fixture must actually compose reviewer calls"
-    assert "model:" not in review_segment, (
-        "reviewer calls must not carry model: — it overrides the agent "
-        "definition's own pinned tier"
-    )
-
-
-def test_non_reviewer_calls_still_carry_model_so_coverage_is_partial_not_zero():
-    """Dropping ``model:`` from reviewer calls must not push an emitted script
-    to ZERO modeled call sites: the Workflow model guard DENIES at zero and only
-    advises on partial coverage. Every executor/commit/test call still carries
-    it."""
-    waves = _two_wave_fixture()
-    script = compose_script(
-        waves,
-        name="wf",
-        description="full review",
-        review_tier="full",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
-    )
-
-    assert "model: '" in script, (
-        "an emitted script with zero modeled call sites would be DENIED by the "
-        "Workflow model guard"
-    )
-
-
-def test_compose_script_review_phase_precedes_terminal_test_phase():
+def test_compose_script_review_wave_is_guarded_by_halted_and_precedes_the_test_phase():
     waves = _two_wave_fixture()
     script = compose_script(
         waves,
         name="wf",
         description="ordering",
-        review_tier="standard",
-        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+        review_roster_fragment=_V5_ROSTER_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
     )
 
+    assert "if (!_halted) {" in script
     phase_titles = _extract_phase_titles(script)
-    review_index = phase_titles.index("Review")
-    assert phase_titles[review_index + 1] == "Scoped test run"
+    integration_index = phase_titles.index("Review integration")
+    assert phase_titles[integration_index + 1] == "Scoped test run"
 
 
-def test_reviewers_for_tier_raises_on_missing_tiers_key():
+def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
+    """wf_f2892741-12c regression: the v5 integration stage runs as
+    `coordinator:code-reviewer`, whose Edit is sandbox-denied outside its
+    own sidecar unless its files are registered review targets
+    (`block_confined_agent_write.py` M1). Composing the script is the one
+    EM-side, in-process point that knows the run's declared paths, so it
+    must register them here -- not leave the integration agent to discover
+    mid-run that nothing was registered for it."""
+    waves = _two_wave_fixture()
+    compose_script(
+        waves,
+        name="wf",
+        description="v5 review registers targets",
+        review_roster_fragment=_V5_ROSTER_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+        repo_root=tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+    )
+    targets_file = (
+        tmp_path
+        / ".git"
+        / "coordinator-sessions"
+        / "11111111-1111-1111-1111-111111111111"
+        / "review-targets.txt"
+    )
+    assert targets_file.is_file(), (
+        "compose_script composed a v5 review wave but registered no "
+        "review targets for the session -- the integration stage's Edit "
+        "will be sandbox-denied"
+    )
+    registered = {line.strip() for line in targets_file.read_text().splitlines() if line.strip()}
+    assert registered, "review-targets.txt was created but registered no paths"
+
+
+def test_compose_script_composes_no_review_phase_skips_target_registration(tmp_path):
+    waves = _two_wave_fixture()
+    compose_script(
+        waves,
+        name="wf",
+        description="no review, no registration",
+        repo_root=tmp_path,
+        session_id="22222222-2222-2222-2222-222222222222",
+    )
+    targets_file = (
+        tmp_path
+        / ".git"
+        / "coordinator-sessions"
+        / "22222222-2222-2222-2222-222222222222"
+        / "review-targets.txt"
+    )
+    assert not targets_file.exists()
+
+
+def test_parse_execute_review_raises_on_malformed_fragment():
     waves = _two_wave_fixture()
     with pytest.raises(ReviewRosterFragmentError):
         compose_script(
             waves,
             name="wf",
             description="malformed fragment",
-            review_tier="standard",
-            review_roster_fragment={"schema": "review-roster-fragment"},
-        )
-
-
-def test_reviewers_for_tier_raises_on_unknown_tier_key():
-    waves = _two_wave_fixture()
-    with pytest.raises(ReviewRosterFragmentError):
-        compose_script(
-            waves,
-            name="wf",
-            description="unknown tier",
-            review_tier="not-a-real-tier",
-            review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+            review_roster_fragment={"schema": "review-roster-fragment", "schema_version": 5},
+            review_stage_schemas=_V5_STAGE_SCHEMAS,
         )
 
 
@@ -1887,7 +1376,9 @@ def _mirror_repo_test_targets(tmp_path):
         (tests_dir / f"test_{stem}.py").write_text("", encoding="utf-8")
 
 
-def test_emit_script_composes_a_review_phase_when_a_fragment_is_supplied(tmp_path):
+def test_emit_script_composes_a_review_phase_when_a_v5_fragment_and_schemas_are_supplied(
+    tmp_path,
+):
     _mirror_repo_test_targets(tmp_path)
     plan_path = tmp_path / "fixture-plan.md"
     sizing_dir = tmp_path / "state" / "sizings"
@@ -1899,11 +1390,14 @@ def test_emit_script_composes_a_review_phase_when_a_fragment_is_supplied(tmp_pat
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
     script = emit_script(
-        plan_path, repo_root=tmp_path, review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT
+        plan_path,
+        repo_root=tmp_path,
+        review_roster_fragment=_V5_ROSTER_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
     )
 
     phase_titles = _extract_phase_titles(script)
-    assert "Review" in phase_titles
+    assert "Review integration" in phase_titles
     assert "review:coordinator:integrator" in script
 
 
@@ -1920,71 +1414,22 @@ def _large_wave(n: int, prefix: str = "C"):
     ]
 
 
-def test_wave_at_threshold_gets_exactly_one_commit_phase():
+def test_wave_at_threshold_emits_no_marker_split():
     waves = [_large_wave(10)]
     script = compose_script(waves, name="wf", description="at threshold")
 
     phase_titles = _extract_phase_titles(script)
-    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
-    assert commit_titles == ["Commit wave 1"]
+    assert phase_titles == ["Execute", "Scoped test run"]
 
 
-def test_wave_over_threshold_splits_into_batches_each_with_its_own_commit_phase():
+def test_wave_over_threshold_still_a_single_execute_phase():
     waves = [_large_wave(12)]
     script = compose_script(waves, name="wf", description="over threshold")
 
     phase_titles = _extract_phase_titles(script)
-    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
-    wave_titles = [t for t in phase_titles if t.startswith("Wave ")]
-
-    assert commit_titles == [
-        "Commit wave 1 (batch 1/2)",
-        "Commit wave 1 (batch 2/2)",
-    ]
-    assert len(wave_titles) == 2
-    assert phase_titles.index(wave_titles[0]) < phase_titles.index(commit_titles[0])
-    assert phase_titles.index(commit_titles[0]) < phase_titles.index(wave_titles[1])
-    assert phase_titles.index(wave_titles[1]) < phase_titles.index(commit_titles[1])
-
-
-def _phase_body_slice(script: str, phase_title: str, next_phase_title: str) -> str:
-    """Return the script body between two ``phase(...)`` calls, exclusive of
-    the second — i.e. exactly the code emitted for ``phase_title``'s own
-    phase, not anything belonging to a later phase.
-
-    Locating by the ``phase('<title>')`` call text (not by index into
-    ``_extract_phase_titles``) so a title's OWN dispatch block is what's
-    checked, rather than merely whether a row id string appears anywhere in
-    the whole script -- the substring-anywhere shape this replaces could not
-    fail even when a batch's title wrongly enumerated the whole wave (see
-    """
-    start_marker = f"phase('{phase_title}');"
-    end_marker = f"phase('{next_phase_title}');"
-    start = script.index(start_marker)
-    end = script.index(end_marker, start)
-    return script[start:end]
-
-
-def test_wave_over_threshold_batches_carry_disjoint_rows_in_order():
-    waves = [_large_wave(12)]
-    script = compose_script(waves, name="wf", description="disjoint batches")
-
-    phase_titles = _extract_phase_titles(script)
-    wave_titles = [t for t in phase_titles if t.startswith("Wave ")]
-    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
-    assert wave_titles == ["Wave 1: C1, C2, C3, C4, C5, C6, C7, C8, C9, C10 (batch 1/2)", "Wave 1: C11, C12 (batch 2/2)"]
-
-    assert "await parallel([" in script
-
-    batch_1_slice = _phase_body_slice(script, wave_titles[0], commit_titles[0])
-    batch_2_slice = _phase_body_slice(script, wave_titles[1], commit_titles[1])
-
-    for i in range(1, 11):
-        assert f"work:C{i}'" in batch_1_slice
-        assert f"work:C{i}'" not in batch_2_slice
-    for i in range(11, 13):
-        assert f"work:C{i}'" in batch_2_slice
-        assert f"work:C{i}'" not in batch_1_slice
+    assert phase_titles == ["Execute", "Scoped test run"]
+    for i in range(1, 13):
+        assert f"work:C{i}'" in script
 
 
 def test_wave_over_threshold_script_passes_run_checks():
@@ -1993,669 +1438,6 @@ def test_wave_over_threshold_script_passes_run_checks():
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []
-
-
-def test_compose_script_binds_each_waves_executor_results_and_threads_them():
-    """Each wave's `agent()`/`parallel()` call must bind a results variable,
-    and the immediately-following commit phase must reference that same
-    variable via `JSON.stringify` -- never a wave-scoped commit prompt that
-    states only the pathspec (git-commit-agent.md refuses that shape)."""
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "const wave1Results = await agent(" in script
-    assert "const wave2Results = await agent(" in script
-    assert "JSON.stringify(wave1Results, null, 2)" in script
-    assert "JSON.stringify(wave2Results, null, 2)" in script
-
-
-def test_compose_script_commit_prompt_states_provenance_and_passes_run_checks():
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "Pathspec provenance" in script
-    assert "touched-files set" in script
-
-    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
-    assert errors == []
-
-
-def test_compose_script_commit_prompt_names_every_measured_false_refusal():
-    """The provenance block must keep naming all four non-divergences.
-
-    Each corresponds to a halt measured while executing
-    `pln-the-discriminators-that-alread-1545b5` (2026-08-27), where the
-    committer read a true fact as a reason to refuse and cost a
-    `resumeFromRunId`. Asserting the emitted SCRIPT rather than the module
-    constant is deliberate: what reaches the agent is the only thing that
-    changes its behaviour, and a refactor that stops threading the block
-    through would leave a constant-level assertion green."""
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "ONE-DIRECTIONAL BY DEFAULT" in script
-    assert "state/subagent-share/**" in script
-    assert "SHARED TREE" in script
-    assert "UNCHANGED DECLARED PATHS" in script
-    assert "A PARTIAL WAVE STILL COMMITS" in script
-    assert "ALREADY COMMITTED" in script
-    assert "coordinator-invoke ceremony.commit_v2" in script
-    assert "Read fields by name" in script
-    assert "fix the JSON and re-issue" in script
-    assert "FilterUnsupported" in script
-
-
-def test_commit_prompt_names_the_repo_root_on_the_invoke_call(tmp_path):
-    """A cloud session's cwd can resolve no git root at all (e.g. anchored
-    above every repo it holds), which denies every commit attempt at
-    `block_subagent_commit`'s `leg:unresolvable-git-root` regardless of
-    pathspec. The fix is naming the root on the invoke call itself --
-    `coordinator-invoke --repo <repoRoot> ceremony.commit_v2 ...` -- which
-    `block_subagent_commit` reads directly rather than depending on a prior
-    standalone `cd` call setting the caller's cwd."""
-    from coordinator_core.ops.dispatch_emit.emit import emit_script
-
-    plan_path = tmp_path / "a-plan.md"
-    plan_path.write_text(
-        "---\ntitle: \"a plan\"\nsizing_object: null\n---\n\n# a plan\n\n"
-        "## Problem\n\nTest fixture.\n\n## Tasks\n\n```yaml plan-tasks\n"
-        "- id: C1\n  title: Do the thing\n  change_kind: doc-edit\n"
-        "  surface: a.py\n  writes:\n    - a.py\n  queue_scope: project\n"
-        "  disposition: open\n  body: |\n    Do the thing.\n```\n",
-        encoding="utf-8",
-    )
-    script = emit_script(plan_path, repo_root=tmp_path)
-
-    assert "coordinator-invoke --repo" in script
-    assert "ceremony.commit_v2" in script
-    invoke_index = script.index("coordinator-invoke --repo")
-    repo_index = script.index(str(tmp_path).replace("\\", "/"), invoke_index)
-    assert repo_index < script.index("ceremony.commit_v2", invoke_index)
-
-    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
-    assert errors == []
-
-
-def test_compose_script_commit_prompt_licenses_a_partial_wave():
-    """A wave with a non-DONE item must still commit the DONE items' work.
-
-    Measured on mise run `20260911T111541-8087eee2`: a five-item wave
-    returned four DONE and one BLOCKED, and the commit phase committed
-    nothing -- reasoning, from this prompt, that five ids in the subject
-    could not all land when one item was blocked and that committing four
-    would report false delivery. It is a coherent read of what the prompt
-    said: the subject rule demanded every dispatched id, and the provenance
-    block told it to refuse pathspec entries no report corroborates, which
-    is exactly the blocked item's paths. Four executors' output then sat
-    uncommitted on a shared checkout while HEAD moved twice underneath it,
-    and the run halted before the next wave.
-
-    The rule it should have applied is /mise-en-place § Partial wave
-    landing. The fix is prompt-side by necessity: the pathspec is derived
-    at EMIT time, before any executor has run, so the union is the only
-    thing the emitter can hand over. Narrowing it against the reports is
-    the committing agent's job, and this is where it is told so.
-    """
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "A PARTIAL WAVE STILL COMMITS" in script
-    assert "If NO item is DONE there is nothing to commit: that is the void case below" in script
-    assert "or every item BLOCKED) -> A WHOLLY VOID WAVE IS NOT A REFUSAL" in script
-    assert "its id drops out of the subject alongside" in script
-    assert "registering fewer" in script
-    assert "is the failure mode, not the safe choice" in script
-
-    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
-    assert errors == []
-
-
-def test_bookkeeping_prefix_render_is_derived_from_the_allowlist():
-    """The prompt must name the same prefixes the allowlist holds.
-
-    Hand-writing the prefix into the prompt string is how the two drift:
-    a later prefix addition would silence the halt in nobody's prompt.
-    """
-    assert emit._BOOKKEEPING_PREFIXES == (
-        ".coordinator-local/subagent-share/",
-        "state/subagent-share/",
-    )
-    for prefix in emit._BOOKKEEPING_PREFIXES:
-        assert f"`{prefix}**`" in emit._BOOKKEEPING_PREFIX_RENDER
-    assert emit._BOOKKEEPING_PREFIX_RENDER in emit._PROVENANCE_HEADING
-
-
-def test_commit_prompt_halts_on_a_reported_write_outside_the_allowlist():
-    """The eight paths stranded on `2026-08-30-who-pushes-and-when.md` were
-    chunk work under already-declared surfaces, not sidecars. The prompt has
-    to make that case a STOP while leaving the bookkeeping prefix silent --
-    a blanket flip re-buys the four measured false halts instead."""
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "DISPATCH-LAYER BOOKKEEPING" in script
-    assert "Any OTHER reported-written path absent from the pathspec IS a" in script
-    assert "you must STOP" in script
-    assert "Do NOT widen the pathspec yourself" in script
-    assert "Emit no success token." in script
-
-    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
-    assert errors == []
-
-
-def test_commit_prompt_halt_message_points_the_operator_at_the_spine():
-    """A halt that names the paths but not the remedy is a halt an operator
-    resolves by overriding. The message has to say where the widening
-    belongs."""
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "naming every such path verbatim" in script
-    assert "widen the spine row and restamp, or confirm they are bookkeeping" in script
-
-
-def test_the_four_measured_false_halts_stay_silent_under_the_new_clause():
-    """Guards the memo's caution directly: none of the four halts measured on
-    `pln-the-discriminators-that-alread-1545b5` may be re-bought.
-
-    Sidecars are allowlisted; peer-staged paths and unchanged-declared paths
-    are not reported-written by this wave's executors at all, so the STOP
-    clause cannot reach them -- and each keeps its own naming clause."""
-    waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
-
-    assert "state/subagent-share/**" in script
-    assert "do not refuse over it" in script
-    assert "SHARED TREE" in script
-    assert "UNCHANGED DECLARED PATHS" in script
-    assert "reported-written path absent from the pathspec" in script
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
-
-
-def test_commit_phase_binds_its_result_and_gates_the_next_wave():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "const commitWave1Results = await agent(" in script
-    assert "const commitWave2Results = await agent(" in script
-    assert script.count("return { halted:") == 6
-
-
-def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "if (!commitWave1Results || " in script
-    assert "test(String(commitWave1Results)))" in script
-
-    gate = _emitted_gate(script)
-    assert not gate.search("the commit agent declined; nothing landed\n")
-    assert not gate.search("")
-
-
-def _emitted_gate(script: str):
-    """Compile the gate exactly as emitted, so these tests pin BEHAVIOUR.
-
-    Asserting the regex source verbatim turns every one of these into a
-    spelling test: widening the token line to tolerate markdown emphasis
-    (2026-08-30) broke assertions that had no opinion about what the gate
-    actually accepts. What must not regress is which reports pass.
-    """
-    # The locator names COMMIT-LANDED explicitly. It used to take the FIRST
-    emitted = re.search(r"!/(\^[^/]*COMMIT-LANDED[^/]*)/m\.test", script)
-    assert emitted, "commit gate is no longer an anchored regex test"
-    return re.compile(emitted.group(1).replace("\\ ", " "), re.M)
-
-
-def test_commit_gate_accepts_the_token_line_wrapped_in_markdown_emphasis():
-    """A bolded token line is a report that COMMITTED. Measured, not supposed.
-
-    Census of 378 commit-agent outcomes across 653 workflow journals
-    (2026-08-30, state/audits/2026-08-30-what-the-commit-halts-actually-were.md):
-    of 18 halts, four were reports reading `**COMMIT-LANDED <sha>**`. All four
-    shas are in this repo's history -- 5e4a76ea70, ca1ccc6019, 5eb6df2ece,
-    ae9607e410 -- so the gate killed four runs AFTER their work had landed.
-    At 22% that is the largest single halt class, and each one cost the
-    operator a resume or a re-emit for nothing: the "workflow after workflow
-    against one plan" the PM reported.
-
-    Agents write reports in markdown and emphasise the line they were told
-    matters. The gate is the artifact that has to tolerate that; a prompt
-    asking them not to would be "the operator remembers" wearing a subagent.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert gate.search("**COMMIT-LANDED 5e4a76ea706dd35cc1045f22708f20d64b0d9a91**")
-    assert gate.search("**COMMIT-LANDED ca1ccc601968ecc57398a523bf13b24ebca6f98e**")
-    assert gate.search(
-        "prose above\n**COMMIT-LANDED ae9607e4104eab49951e22153b2cd78ecbba2108**\n"
-    )
-    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-
-
-def test_markdown_emphasis_does_not_reopen_the_quoting_fail_open():
-    """Widening for emphasis must not re-admit a refusal that quotes the token.
-
-    What closed the 2026-08-21 fail-open is the hex-sha requirement, not the
-    absence of asterisks -- so a refusal stays refused however it decorates
-    the instruction it is quoting back. This is the assertion that makes the
-    widening safe rather than merely convenient.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert not gate.search("**COMMIT-LANDED <sha>**")
-    assert not gate.search("__COMMIT-LANDED <sha>__")
-    assert not gate.search(
-        "Attempted per the brief, which said to end the report with the line "
-        "'**COMMIT-LANDED <sha>**'. Guard denied; did not land.\n"
-    )
-    assert not gate.search(
-        "I would have written **COMMIT-LANDED ca1ccc601968ecc57398a523bf13b24ebca6f98e** "
-        "had the guard allowed it.\n"
-    )
-
-
-def test_preflight_prompt_carries_the_directory_shaped_write_backstop():
-    """Preflight is where a bare directory in `writes:` has to be caught.
-
-    `pathspec.DirectoryShapedWriteError` is trailing-separator-shape only BY
-    DESIGN (staff-eng Finding 13: spine derivation must not depend on worktree
-    state), and its own docstring names the uncaught case -- a bare
-    `state/memo-outbox/sent` naming a real directory. So the emitter is
-    correct and must stay shape-only; what was missing is the on-disk
-    backstop the design defers downstream, which is this phase, because the
-    preflight agent can actually stat the path.
-
-    Measured 2026-09-17 (wf_3be09aed-437): three rows of
-    `docs/plans/2026-09-06-firstmate-tier1-survivors.md` declared bare
-    `coordinator/tests`, `coordinator/docs/wiki` and
-    `coordinator/hooks/scripts`; the plan emitted with no refusal and the
-    wave's commit agent then could not tell whether a new file under
-    `coordinator/tests` was in scope or a divergence. Uncaught, such a row
-    widens the commit from a named file to a whole tree, which is the exact
-    protection a pathspec exists to provide.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-
-    assert "DIRECTORY-SHAPED WRITE" in script
-    assert "existing DIRECTORY" in script
-    assert "A nonexistent path is FINE" in script
-
-
-def test_emitter_directory_check_stays_trailing_separator_only(tmp_path):
-    """The negative control for the test above, and the more important half.
-
-    A bare directory path must still EMIT cleanly. Tightening
-    `DirectoryShapedWriteError` to an on-disk `is_dir()` is the obvious
-    "fix" and it is a regression: it makes emit depend on the worktree, so
-    the same spine emits or refuses depending on what happens to exist on
-    the box running it. This pins that the refusal did NOT move upstream
-    when the preflight backstop was added.
-    """
-    plan_path = _plan_with_row(
-        tmp_path,
-        "- id: C1\n"
-        "  title: writes a bare directory path\n"
-        "  change_kind: code-edit\n"
-        "  surface: coordinator_core\n"
-        "  writes:\n"
-        "    - coordinator_core/ops\n",
-    )
-
-    script = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="bare dir"
-    )
-    assert "coordinator_core/ops" in script
-
-
-def test_commit_gate_accepts_the_void_token_so_a_void_wave_can_finish():
-    """A wave with nothing to commit must have a passable answer that is true.
-
-    Before COMMIT-VOID the gate had one shape, so "nothing to commit" and
-    "the commit failed" were the same event to it -- and the commit prompt's
-    own unchanged-paths rule instructed the agent into the refusal that
-    tripped it. Measured 2026-09-17 (wf_5e633cab-517): C1 ruled C2 out, the
-    plan's void condition then forbade editing C2's five files, the wave
-    refused exactly as specified, and the only way to finish the run was to
-    hand-edit the script and cite an EARLIER wave's sha as this wave's
-    delivery. This asserts the honest answer now passes.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert gate.search("COMMIT-VOID 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-    assert gate.search("**COMMIT-VOID ca1ccc601968ecc57398a523bf13b24ebca6f98e**")
-    assert gate.search(
-        "C2 was voided by C1's answer; nothing to commit.\n"
-        "COMMIT-VOID 5e4a76ea706dd35cc1045f22708f20d64b0d9a91\n"
-    )
-    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-
-
-def test_void_token_does_not_reopen_the_quoting_fail_open():
-    """The void arm extends WHO may pass, never HOW -- the load-bearing test.
-
-    COMMIT-VOID rides the identical anchoring and hex-sha requirement as its
-    sibling, so the widening cannot be the thing that re-admits a refusal
-    quoting its own instructions. The prompt naming this token carries the
-    literal placeholder ``<sha>``, which is not hex however it is decorated,
-    and a commit agent holds that prompt while it writes. Without this
-    assertion the alternation would be a second, untested doorway into the
-    2026-08-21 failure.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert not gate.search("COMMIT-VOID <sha>")
-    assert not gate.search("**COMMIT-VOID <sha>**")
-    assert not gate.search(
-        "The brief says a void wave ends with 'COMMIT-VOID <sha>', but this "
-        "wave had real work the guard refused, so I am not emitting it.\n"
-    )
-    assert not gate.search(
-        "I considered COMMIT-VOID ca1ccc601968ecc57398a523bf13b24ebca6f98e "
-        "before finding the diff.\n"
-    )
-    assert not gate.search("COMMIT-VOIDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-
-
-def test_commit_prompt_tells_a_void_wave_to_report_rather_than_refuse():
-    """The gate and the prompt have to agree, or the token is unreachable.
-
-    A passable shape nothing instructs the agent to produce is dead code: the
-    defect being fixed was precisely a rule that routed a void wave into a
-    refusal. This pins that the emitted prompt names the token, requires BOTH
-    emptiness checks (``git diff --stat`` is blind to an untracked addition,
-    which is how a "void" wave could strand a brand-new file), and forbids
-    the two dishonest escapes.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-
-    assert "COMMIT-VOID" in script
-    assert "git status --porcelain" in script
-    assert "git diff --stat" in script
-    assert "do NOT fabricate an empty or placeholder commit" in script
-    assert "as though it were yours" in script
-
-
-def test_commit_gate_tolerates_a_space_and_colon_in_place_of_the_documented_token():
-    """GH#90 item 1: a committer wrote a space instead of the documented
-    hyphen, plus a trailing colon, and the anchored gate halted a run whose
-    commit had actually landed.
-
-    The gate must accept the reported shape without relaxing the anchoring
-    or the hex-sha requirement -- ``test_markdown_emphasis_does_not_reopen_
-    the_quoting_fail_open`` and its VOID sibling already pin that a refusal
-    quoting the prompt's ``<sha>`` placeholder still fails, and this test
-    changes none of that.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert gate.search("COMMIT LANDED: 086b7e5d\n")
-    assert gate.search("COMMIT VOID: 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
-
-    partial_frag_gate = re.compile(
-        re.search(
-            r"/(\^\[\*_\]\{0,2\}\(\?:COMMIT-PARTIAL[^/]*)/m",
-            script,
-        ).group(1),
-        re.M,
-    )
-    assert partial_frag_gate.search(
-        "COMMIT PARTIAL: 5e4a76ea706dd35cc1045f22708f20d64b0d9a91 "
-        "withheld: chunks/D4.py\n"
-    )
-
-
-def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():
-    """Regression: the gate was `.includes('COMMIT-LANDED')`, and it FAILED OPEN.
-
-    Measured 2026-08-21 during a real plan execution. Subagents may not commit
-    at all (caller-identity enforced), so the commit agent refused -- and its
-    refusal quoted the instruction it had been given, "end your report with the
-    line 'COMMIT-LANDED <sha>'", back at the gate. The substring was present,
-    the gate passed, and the next wave ran over an uncommitted one.
-
-    The token is in the prompt every commit agent is holding while it writes,
-    so a substring test cannot distinguish emitting it from repeating it. This
-    pins the discriminator, not the spelling: an anchored whole-line match with
-    a real sha.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    quoting_refusal = (
-        "The commit gate denied this -- I am a subagent and `git commit` is EM-only.\n"
-        "Attempted per the brief, which said to end the report with the line "
-        "'COMMIT-LANDED <sha>'. Guard denied; did not land.\n"
-    )
-    assert not gate.search(quoting_refusal)
-
-    assert gate.search("committed the wave\nCOMMIT-LANDED a805587fd8d0\n")
-    assert not gate.search("COMMIT-LANDED <sha>\n")
-
-
-def test_commit_prompt_requires_the_landed_token_only_on_success():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "COMMIT-LANDED <sha>" in script
-    assert "do NOT emit that line" in script
-
-
-def test_commit_prompt_no_longer_promises_a_subsequent_wave():
-    """(a) The withheld-paths brief must not promise anything picks the
-    path back up later -- nothing does (wf_8dc1b0ed-32b: D4's withheld path
-    was never handled, because no later wave's pathspec is scoped to it).
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "subsequent wave" not in script
-    assert "will be handled" not in script
-    assert "Nothing downstream carries a withheld path forward" in script
-    assert "do not imply, predict, or promise that a later wave" in script
-
-
-def test_commit_gate_halts_on_a_partial_verdict_before_the_next_wave():
-    """(b) A COMMIT-PARTIAL verdict must halt the run, the same as a
-    tokenless report -- before the next wave's agent calls, not after.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    # A partial verdict never satisfies the COMMIT-LANDED gate...
-    assert not gate.search(
-        "committed D2 and D8\nCOMMIT-PARTIAL 5e4a76ea706dd35cc1045f22708f20d64b0d9a91"
-        " withheld: chunks/D4.py\n"
-    )
-    commit1_idx = script.index("const commitWave1Results = await agent(")
-    gate1_halt_idx = script.index("return { halted:", commit1_idx)
-    wave2_phase_idx = script.index("Wave 2", gate1_halt_idx + 1)
-    assert gate1_halt_idx < wave2_phase_idx
-
-    assert "landed only PART of its handed pathspec" in script
-    assert "partialMatch" in script
-    assert "withheld" in script
-
-
-def test_commit_gate_still_continues_on_a_fully_committed_wave():
-    """(c) The existing fully-landed path is unchanged: COMMIT-LANDED <sha>
-    still satisfies the gate and the run proceeds.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert gate.search("committed the wave\nCOMMIT-LANDED a805587fd8d0\n")
-
-
-def test_a_declared_but_untouched_path_is_landed_not_partial():
-    """A declared path with nothing dirty against HEAD (the memo-outbox
-    case: `memo.send` writes into the gitignored
-    `.coordinator-local/memo-outbox/`, so a `writes:` entry for it never
-    appears in this repo's tree) is NOT withheld -- there is nothing to
-    commit for it. The prompt must say so explicitly, and a report naming
-    that path alongside COMMIT-LANDED must still satisfy the gate rather
-    than being read as a reason to hold out for COMMIT-PARTIAL.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-
-    assert "WITHHELD MEANS DIRTY-AND-UNCOMMITTED, NOT MERELY DECLARED" in script
-    assert "memo-outbox" in script
-    assert "must never trigger the partial verdict" in script
-
-    gate = _emitted_gate(script)
-    # untouched memo-outbox path as clean still emits COMMIT-LANDED, and the
-    # gate passes -- the run continues, no COMMIT-PARTIAL involved.
-    assert gate.search(
-        "committed chunks/D2.py and chunks/D8.py; "
-        "state/memo-outbox/sent/D2-notify.md was declared but never appeared "
-        "in the worktree (memo.send route, gitignored) -- clean, nothing to "
-        "commit\nCOMMIT-LANDED a805587fd8d0\n"
-    )
-
-
-def test_declared_and_still_dirty_after_landing_halts_the_wave():
-    """Defect (example-retrieval-repo-4a, commit b550e655): a C3 executor reported
-    `registry/materialize.ts` changed, the wave's declared pathspec named
-    it, and the commit agent's report still read COMMIT-LANDED while the
-    file stayed dirty. HEAD then failed to import, and the residue halted
-    the NEXT plan's commit wave as unaccounted -- this wave should have
-    halted at its own boundary instead.
-
-    The gate itself has no independent git access (pure JS orchestration),
-    so the fix is the mandated post-commit `git status --porcelain` check
-    in the static prompt (`_commit_agent_call`) directing the agent to
-    treat a still-dirty declared path as withheld and fall through to
-    COMMIT-PARTIAL -- this pins both halves: the prompt states the
-    requirement, and the emitted gate still halts when a commit agent
-    that followed it reports the resulting COMMIT-PARTIAL.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-
-    # The REQUIREMENT is pinned, not the incident that produced it: this is
-    assert "POST-COMMIT VERIFICATION" in script
-    assert "git status --porcelain --" in script
-    assert "still dirty is withheld" in script
-
-    gate = _emitted_gate(script)
-    assert not gate.search(
-        "ran git status --porcelain after commit_paths returned; "
-        "chunks/D4.py was still dirty despite being declared and reported "
-        "landed\n"
-        "COMMIT-PARTIAL a805587fd8d0 withheld: chunks/D4.py\n"
-    )
-
-
-def test_commit_gate_land_nothing_halt_is_unchanged():
-    """(d) The pre-existing halt-on-nothing-landed behaviour is unchanged:
-    a null result and a tokenless report both still fail the gate.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    gate = _emitted_gate(script)
-
-    assert not gate.search("the commit agent declined; nothing landed\n")
-    assert not gate.search("")
-    assert "did not land a commit" in script
-
-
-def test_commit_gate_names_resume_path_not_just_the_failure():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "resumeFromRunId" in script
-
-
-def test_commit_gate_halt_text_forbids_the_re_emit_and_names_the_resume_call():
-    """The halt used to instruct the exact move that loses work.
-
-    Measured by doe-claude-em (2026-08-30): a commit-phase halt ends the whole
-    emitted run, and a re-emit is the reachable recovery for an EM who no
-    longer holds the run id. `spine_read`'s closed-disposition exclusion then
-    correctly drops the chunks that DID land, and the narrowed one-wave `.mjs`
-    on disk is indistinguishable from one always meant to be partial -- the
-    "workflow after workflow against one plan" the PM saw. Nothing refuses and
-    nothing warns, so the halt STRING is the only surface that can put the
-    correct move in front of the EM at the moment they need it.
-
-    Pinned here rather than at the reason constant because only what reaches
-    the emitted script changes an operator's behaviour.
-    """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-
-    assert "RECOVERY IS RESUME, NEVER RE-EMIT" in script
-    assert "A-SECOND-EMIT-AFTER-A-PARTIAL-RUN-NARROWS-SILENTLY" in script
-    assert "Workflow({scriptPath, resumeFromRunId})" in script
-    # Resume serves the longest UNCHANGED prefix from cache, so relaunching
-    assert "an unchanged call" in script and "served from cache" in script
-    assert "same-session-only" in script
-
-    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
-    assert errors == []
-
-
-def test_every_commit_phase_gets_its_own_uniquely_named_gate():
-    waves = [
-        [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])],
-        [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"])],
-        [_wave_row("C3", ["coordinator_core/ops/dispatch_emit/pathspec.py"])],
-    ]
-    script = compose_script(waves, name="wf", description="three waves")
-    bound = re.findall(r"const (commit\w+) = await agent\(", script)
-    assert len(bound) == 3
-    assert len(set(bound)) == 3, f"duplicate commit result bindings: {bound}"
-    for var in bound:
-        assert f"if (!{var} ||" in script
-
-
-def test_commit_gate_precedes_the_next_wave_phase():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    first_gate = script.index("if (!commitWave1Results ||")
-    second_wave_commit = script.index("const commitWave2Results")
-    assert first_gate < second_wave_commit
-
-
-def test_gated_script_still_passes_the_workflow_contract_checker():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert_zero_errors(script)
-
-
-def test_commit_prompt_tells_the_agent_a_claim_is_not_a_refusal_condition():
-    """Measured 2026-08-31: a wave-2 commit agent declined ALL SEVEN paths of
-    its pathspec citing a claim held by a session 13 hours idle with both
-    recorded pids dead, which had touched exactly ONE of the seven. The
-    sanctioned route then committed all seven without complaint -- because
-    `commit_paths` performs no ownership or claim check at all. The prompt
-    must name both the liveness and the per-path narrowing checks, or the
-    same halt recurs on every shared-tree run.
-
-    AMENDED 2026-08-31 (second incident, same run). This test previously
-    pinned the sentence "A CLAIM IS NOT A REFUSAL CONDITION, AND THE ROUTE
-    NEVER RAISES ONE", and that sentence was FALSE at the layer that
-    actually stops the agent. `commit_paths` checks no claims, but a
-    PreToolUse guard in front of it does, and refuses before the route is
-    reached. Two further waves halted on exactly that -- one on a dead
-    session's claim, one on an orphan record -- with the prompt telling
-    each agent that the refusal it was holding could not exist. Pinning a
-    reassurance that contradicts an observable denial is worse than pinning
-    nothing, so the assertion now pins the two-layer truth plus the
-    recovery verbs, which is what an agent needs to get unstuck alone.
-    """
-    from coordinator_core.ops.dispatch_emit import emit as _emit
-
-    prompt = _emit._COMMIT_AGENT_CONTRACT if hasattr(_emit, "_COMMIT_AGENT_CONTRACT") else None
-    if prompt is None:
-        import inspect
-
-        prompt = inspect.getsource(_emit)
-
-    assert "A CLAIM CAN REFUSE YOU, BUT ONLY A GUARD RAISES IT" in prompt
-    assert "performs NO ownership or claim check" in prompt
-    assert "PreToolUse guard sits IN FRONT of the" in prompt
-    assert "THE ROUTE NEVER RAISES ONE" not in prompt
-    assert "absent from the process table" in prompt
-    assert "touch-record.jsonl" in prompt
-    assert "refuse ONLY the claimed paths and commit the" in prompt
-    assert "who-claims-path" in prompt
-    assert "clear-claim-if-dead" in prompt
-    assert "no-op against a LIVE holder" in prompt
 
 
 def _one_wave_fixture_with_writes(writes):
@@ -2678,35 +1460,17 @@ def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_re
 
 def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_authority():
     """The self-verify clause must name the EMITTED commit/verification
-    authority (the wave's own commit phase + the terminal test-runner
-    phase) -- never the hand-dispatch "the EM" text, which is false on this
-    path."""
+    authority (this run's terminal scoped commit + its per-row `verify:`
+    calls) -- never the hand-dispatch "the EM" text, which is false on this
+    path, and never a retired per-wave commit phase."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
 
     assert "leave your changes uncommitted and unstaged" in script
-    assert "coordinator:git-commit-agent` commit phase" in script
-    assert "terminal `coordinator:test-runner` phase" in script
+    assert "terminal scoped commit" in script
+    assert "dispatch.terminal_commit" in script
     assert "Only the EM commits, once per wave" not in script
-
-
-def test_emitted_row_prompt_commit_clause_names_only_the_commit_phase():
-    """Slot (4) ("Only <X> commits, once per wave...") must name ONLY the
-    commit phase -- never the terminal test-runner phase, which does not
-    commit (Review: coordinator:code-reviewer, finding 1, EM-agreed
-    break-class fix). Asserted against `compose_script` output, not the
-    module constant, per the reviewer's brief."""
-    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
-
-    assert (
-        "Only this wave\\'s `coordinator:git-commit-agent` commit phase "
-        "commits, once per wave"
-    ) in script
-    assert (
-        "Only this wave\\'s `coordinator:git-commit-agent` commit phase and "
-        "the run\\'s terminal `coordinator:test-runner` phase commits"
-    ) not in script
+    assert "coordinator:git-commit-agent" not in script
 
 
 def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain():
@@ -2758,11 +1522,9 @@ def test_dispatch_report_path_uses_plan_stem_and_row_id_never_mise_done():
 
 def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist():
     """C3 must be safe to land alone: the report path this module renders
-    into every row prompt must already fall under one of
-    `_BOOKKEEPING_PREFIXES`, so the commit phase's own provenance heading
-    never instructs a halt on a wave's own dispatch report."""
+    into every row prompt lands under `_DISPATCH_REPORT_DIR`."""
     report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
-    assert any(report_path.startswith(prefix) for prefix in emit._BOOKKEEPING_PREFIXES)
+    assert report_path.startswith(emit._DISPATCH_REPORT_DIR)
 
 
 def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
@@ -2812,18 +1574,15 @@ def test_dispatch_report_path_refuses_windows_hazardous_row_ids():
             emit._dispatch_report_path("docs/plans/example.md", bad_id)
 
 
-def test_emitted_script_never_instructs_a_halt_on_the_dispatch_report_path():
+def test_emitted_script_names_the_rows_own_dispatch_report_path():
     """End-to-end: compose a script for a wave whose row writes nothing
-    else, and confirm the commit phase's rendered provenance heading would
-    treat the row's OWN dispatch report as dispatch-layer bookkeeping (the
-    allowlisted, silent branch) rather than as an unaccounted divergence
-    that halts the run."""
+    else, and confirm its own dispatch report path reaches the emitted
+    script (the terminal commit, not this module, judges divergence now)."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
 
     report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
     assert report_path in script
-    assert "DISPATCH-LAYER BOOKKEEPING" in script
 
 
 def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_template_literal():
@@ -2862,28 +1621,27 @@ def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule()
     assert "status (DONE | BLOCKED | PARTIAL)" in script
 
 
-def test_the_stop_rule_gate_is_emitted_after_the_commit_phase_not_before_it():
-    """Placement is the whole design -- see `emit._stop_rule_halt_gate`."""
+def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper():
+    """Placement is the whole design (§ Design D4) -- unified into the ONE
+    shared `_runRow` helper, not a per-wave halt gate any more."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
         waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
     )
 
-    gate_at = script.index("_stoppedWave1Results.length")
-    commit_at = script.index("commitWave1Results")
-    assert commit_at < gate_at
-    assert "a STOP RULE in the chunk" in script
+    assert "STOP RULE" in script
+    assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
 
 
-def test_a_wave_that_commits_nothing_still_carries_the_stop_rule_gate():
-    """The two branches that emit no commit phase must not become the hole a
-    stop rule falls through."""
+def test_a_writeless_row_still_carries_the_stop_rule_gate():
+    """A row with no writes must not become the hole a stop rule falls
+    through -- ``_runRow`` classifies every row identically regardless of
+    write-capability."""
     waves = [[_wave_row("C1", [])]]
     script = compose_script(
         waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
     )
 
-    assert "commit phase omitted" in script
     assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
 
 
@@ -2908,77 +1666,55 @@ def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
     assert not rx.search(f"{emit._STOP_RULE_TOKEN}:")
 
 
-def test_a_solitary_writes_empty_wave_emits_with_no_commit_phase_of_its_own():
-    """A `change_kind: verification` row alone in a wave used to fail the
-    whole emit. It now dispatches and simply carries no commit phase: it
-    wrote nothing, so there is nothing for a halt gate to protect."""
+def test_a_solitary_writes_empty_row_contributes_nothing_to_the_marker():
+    """A `change_kind: verification` row alone still dispatches; it wrote
+    nothing, so it contributes no chunk to the terminal-commit-request
+    marker."""
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
     waves = [
         [_wave_row("C1", [])],
         [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/emit.py"])],
     ]
     script = compose_script(waves, name="wf", description="verdict then write")
 
-    assert "Wave 1: C1" in script, "the verdict wave must still dispatch"
-    assert "Commit wave 1" not in script, "a wave that wrote nothing got a commit phase"
-    assert "Wave 2: C2" in script
-    assert "Commit wave 2" in script, "the writing wave lost its commit phase"
+    assert "_rows['C1'] = _runRow('C1', []," in script, "the verdict row must still dispatch"
+    request = parse_marker(script)
+    assert request is not None
+    assert [c.id for c in request.chunks] == ["C2"]
 
 
-def test_the_verdict_waves_paths_are_absent_from_the_preflight_claim():
-    """The preflight claims what the run will commit. A wave that commits
-    nothing contributes nothing to claim.
+def test_the_verdict_rows_paths_are_absent_from_the_marker():
+    """A row that writes nothing contributes nothing to the terminal-
+    commit-request marker."""
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
-    Writes a doc, not a `.py` path, so the assertion stays about void-wave
-    exclusion alone -- a `.py` write's own stem-derived test candidate
-    widens the claim too (see `test_compose_script_widens_the_commit_pathspec_
-    with_the_stem_test_candidate` below), which is a different assertion this
-    one must not be coupled to."""
     waves = [
         [_wave_row("C1", [])],
         [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
     ]
     script = compose_script(waves, name="wf", description="verdict then write")
-    claimed = script.split("Verify that every path in [")[1].split("]")[0]
-    assert claimed == "docs/wiki/dispatch-emit.md", (
-        "the preflight claim is not exactly the writing wave's pathspec"
-    )
+    request = parse_marker(script)
+    assert request is not None
+    assert [c.id for c in request.chunks] == ["C2"]
+    assert list(request.chunks[0].paths) == ["docs/wiki/dispatch-emit.md"]
 
 
-def test_compose_script_widens_the_commit_pathspec_with_the_stem_test_candidate():
+def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate():
     """state/bug-backlog/2026-08-26-emitted-wave-commit-legs-are-handed-a-wr-
-    c0f443ac1fdb.yaml: a wave's `writes:` names only the production module, but
-    the ACs require the executor to also write the test covering it, so its
-    reported test file used to read as stranded chunk work outside the
-    handed pathspec and halt the commit phase. The commit pathspec (and the
-    preflight claim built from the same union) must admit the stem-derived
+    c0f443ac1fdb.yaml: a row's `writes:` names only the production module, but
+    the ACs require the executor to also write the test covering it, so the
+    terminal-commit-request marker's pathspec (widened the same way the
+    executor's own verify-scope derivation is) must admit the stem-derived
     test candidate up front."""
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
     waves = [[_wave_row("C1", ["coordinator_core/ops/brand_new_thing.py"])]]
     script = compose_script(waves, name="wf", description="one wave")
 
-    preflight_claimed = script.split("Verify that every path in [")[1].split("]")[0]
-    assert "coordinator_core/ops/tests/test_brand_new_thing.py" in preflight_claimed
-
-    commit_pathspec_line = script.split("Pathspec: [")[1].split("]")[0]
-    assert "coordinator_core/ops/tests/test_brand_new_thing.py" in commit_pathspec_line
-    assert "coordinator_core/ops/brand_new_thing.py" in commit_pathspec_line
-
-
-def test_the_commit_prompt_hands_a_determinate_orphan_to_the_em():
-    """`who-claims-path` printing nothing is a third answer, not a failed
-    search: a path written through Bash records no claim at all (DR-258), and
-    `block_subagent_commit` refuses `include_orphans` from every dispatched
-    committer (SC-DR-022). A brief naming that flag as the route sent every
-    such agent into a retry the guard always denies; the route is a
-    COMMIT-PARTIAL the EM discharges."""
-    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/emit.py"])]]
-    script = compose_script(waves, name="wf", description="orphan route")
-
-    assert "DR-258" in script, "the reason a Bash-written path has no claim is unstated"
-    assert "SC-DR-022" in script, "the reason a committer cannot adopt is unstated"
-    assert "do not retry with it" in script
-    assert "who-claims-path" in script
-    assert "never relaxes a peer-claimed path" in script
-    assert "Re-issue the SAME `ceremony.commit_v2` call" not in script
+    request = parse_marker(script)
+    assert request is not None
+    assert "coordinator_core/ops/brand_new_thing.py" in request.chunks[0].paths
 
 
 def test_a_done_with_concerns_reply_answers_its_brief():

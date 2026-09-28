@@ -39,14 +39,17 @@ def _n_row_waves(n: int) -> list:
 
 
 def test_compose_script_refuses_over_the_runner_byte_cap():
-    waves = _n_row_waves(150)
+    # DAG emission (§ Design D4) dropped the per-wave commit/preflight
+    # prompt text, so a far larger row count is needed to cross the byte
+    # cap than the pre-DAG shape required.
+    waves = _n_row_waves(1500)
 
     with pytest.raises(NoWavesError) as excinfo:
         compose_script(waves, name="big", description="oversized inventory")
 
     message = str(excinfo.value)
     assert str(_WORKFLOW_SCRIPT_BYTE_CAP) in message
-    assert "150" in message
+    assert "1500" in message
     assert "split the inventory into parts of fewer rows" in message
 
 

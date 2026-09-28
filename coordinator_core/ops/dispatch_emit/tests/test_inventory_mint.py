@@ -190,6 +190,78 @@ def test_glob_footprint_refuses_at_mint_naming_the_rule():
 
 
 # ---------------------------------------------------------------------------
+# klabauter#71 F24a: a Next.js App Router path is a literal file, not a
+# glob -- its `[slug]`/`(main)` segments must not force `writes_under:`.
+# ---------------------------------------------------------------------------
+
+_APP_ROUTER_FOOTPRINT_INVENTORY = textwrap.dedent(
+    """\
+    ---
+    run_id: 20260918T000000-fixture
+    ---
+
+    ## Chunk table
+
+    | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+    |---|---|---|---|---|---|---|---|
+    | C1 | `docs/plans/fixture.md` | app router page | `src/app/(main)/players/[slug]/page.tsx` | — | scoped pytest | S | in_progress |
+    """
+)
+
+
+def test_app_router_footprint_is_literal_not_glob():
+    rows = im.parse_chunk_table(_APP_ROUTER_FOOTPRINT_INVENTORY)
+    minted = im.mint_rows(rows)
+    assert minted[0]["writes"] == [
+        "src/app/(main)/players/[slug]/page.tsx"
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/app/(main)/players/[slug]/page.tsx",
+        "src/app/[...slug]/page.tsx",
+        "src/app/[[...slug]]/page.tsx",
+        "src/app/(auth)/(inner)/page.tsx",
+        ":(literal)tests/**/*.py",
+    ],
+)
+def test_is_glob_pathspec_accepts_app_router_and_literal_shapes(path):
+    assert im.is_glob_pathspec(path) is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/**/*.py",
+        "tests/*.py",
+        "a?b.py",
+        "a[bc.py",
+        "a]bc.py",
+        "src/app/(main/page.tsx",
+    ],
+)
+def test_is_glob_pathspec_still_refuses_real_globs(path):
+    assert im.is_glob_pathspec(path) is True
+
+
+def test_as_git_pathspec_wraps_bracket_paths_in_literal_magic():
+    assert im.as_git_pathspec("src/app/(main)/players/[slug]/page.tsx") == (
+        ":(literal)src/app/(main)/players/[slug]/page.tsx"
+    )
+
+
+def test_as_git_pathspec_leaves_plain_paths_unchanged():
+    assert im.as_git_pathspec("coordinator_core/foo.py") == "coordinator_core/foo.py"
+
+
+def test_as_git_pathspec_is_idempotent_on_already_prefixed_paths():
+    already = ":(literal)src/app/(main)/page.tsx"
+    assert im.as_git_pathspec(already) == already
+
+
+# ---------------------------------------------------------------------------
 # coordinator-klabauter#25 class 4: a directory-shaped entry refuses at
 # mint, naming the rule rather than just the entry.
 # ---------------------------------------------------------------------------
@@ -614,3 +686,144 @@ def test_dispatch_emit_rejects_both_plan_path_and_inventory_path(tmp_path):
                 "output_path": str(tmp_path / "out.mjs"),
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# a Chunk-table row whose spec path is a WHOLE plan (item id names no row in
+# that plan) expands into that plan's own chunk DAG, namespaced
+# `<item-id>.<chunk-id>`; a plain row's spec (no plan-tasks spine) stays a
+# single executor (coordinator-claude#72 F25b).
+# ---------------------------------------------------------------------------
+
+_TWO_CHUNK_PLAN_FIXTURE = textwrap.dedent(
+    """\
+    ---
+    run_id: fixture-plan-a
+    ---
+
+    ## Tasks
+
+    ```yaml plan-tasks
+    - id: A1
+      title: First A step
+      writes:
+        - some/plan_a/one.py
+    - id: A2
+      title: Second A step
+      writes:
+        - some/plan_a/two.py
+      depends_on:
+        - {chunk: A1, gate_kind: output-consumption-runtime}
+    ```
+    """
+)
+
+_ONE_CHUNK_PLAN_FIXTURE = textwrap.dedent(
+    """\
+    ---
+    run_id: fixture-plan-b
+    ---
+
+    ## Tasks
+
+    ```yaml plan-tasks
+    - id: B1
+      title: Only B step
+      writes:
+        - some/plan_b/one.py
+    ```
+    """
+)
+
+
+def _write_two_plan_inventory(tmp_path):
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "fixture-plan-a.md").write_text(_TWO_CHUNK_PLAN_FIXTURE, encoding="utf-8")
+    (plan_dir / "fixture-plan-b.md").write_text(_ONE_CHUNK_PLAN_FIXTURE, encoding="utf-8")
+
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    inventory_text = textwrap.dedent(
+        """\
+        ---
+        run_id: 20260918T000000-two-plan
+        ---
+
+        ## Chunk table
+
+        | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+        |---|---|---|---|---|---|---|---|
+        | P1 | `docs/plans/fixture-plan-a.md` | whole plan A | `docs/plans/fixture-plan-a.md` | — | scoped pytest | S | in_progress |
+        | P2 | `docs/plans/fixture-plan-b.md` | whole plan B | `docs/plans/fixture-plan-b.md` | P1 | scoped pytest | S | in_progress |
+        """
+    )
+    inventory_path = inv_dir / "20260918T000000-two-plan.md"
+    inventory_path.write_text(inventory_text, encoding="utf-8")
+    return inventory_path
+
+
+def test_plan_sourced_inventory_row_expands_into_its_plan_chunk_dag(tmp_path):
+    inventory_path = _write_two_plan_inventory(tmp_path)
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+    by_id = {row["id"]: row for row in minted}
+
+    assert set(by_id) == {"P1.A1", "P1.A2", "P2.B1"}
+
+    # Intra-plan order is preserved, namespaced.
+    assert by_id["P1.A2"]["depends_on"] == [
+        {"chunk": "P1.A1", "gate_kind": "output-consumption-runtime"}
+    ]
+    assert "depends_on" not in by_id["P1.A1"]
+
+    # Inter-plan order: P2's only (root) chunk waits on EVERY chunk of the
+    # plan P2 declared a dependency on, not just its roots.
+    assert {edge["chunk"] for edge in by_id["P2.B1"]["depends_on"]} == {
+        "P1.A1",
+        "P1.A2",
+    }
+
+
+def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+    from coordinator_core.ops.dispatch_emit.wave_map import build_waves
+
+    inventory_path = _write_two_plan_inventory(tmp_path)
+    spine_text, spine_path = im.mint_spine(str(inventory_path))
+    spine_path.write_text(spine_text, encoding="utf-8")
+
+    waves = build_waves(read_spine(str(spine_path)))
+    wave_ids = [sorted(row.id for row in wave) for wave in waves]
+
+    assert wave_ids == [["P1.A1"], ["P1.A2"], ["P2.B1"]]
+
+
+def test_plain_row_spec_with_no_plan_tasks_spine_stays_a_single_executor(tmp_path):
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "fixture-plan-a.md").write_text(_TWO_CHUNK_PLAN_FIXTURE, encoding="utf-8")
+
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    inventory_text = textwrap.dedent(
+        """\
+        ---
+        run_id: 20260918T000000-plain-row
+        ---
+
+        ## Chunk table
+
+        | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+        |---|---|---|---|---|---|---|---|
+        | C1 | `docs/plans/no-such-plan.md` | plain doc row | `docs/research/notes.md` | — | scoped pytest | S | in_progress |
+        """
+    )
+    inventory_path = inv_dir / "20260918T000000-plain-row.md"
+    inventory_path.write_text(inventory_text, encoding="utf-8")
+
+    rows = im.parse_chunk_table(inventory_text)
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+
+    assert [row["id"] for row in minted] == ["C1"]
+    assert "depends_on" not in minted[0]

@@ -292,6 +292,8 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+import yaml
+
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha,
     insert_fm_field,
@@ -1543,6 +1545,23 @@ def _stamp_implemented(opts: _Opts) -> int:
                     "status_override_at attestation whose reason names the "
                     f"current body sha ({body_sha}); --override-reason does "
                     "not discharge this refusal."
+                )
+
+        # Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-
+        # inside-execute-plan.md): a SUBJECT plan (approved strictly after
+        # review_stamp.is_subject_plan's cutoff; the slate's own delivery is
+        # exempt) cannot reach `implemented` without a valid `review_stamp`
+        # whose tree is still the tree of an ancestor commit and whose spine
+        # `writes:` are not superseded by a later commit. `--override-reason`
+        # does not reach this refusal -- same standing as
+        # `_refuse_if_live_foreign_holder` above.
+        if worktree_root is not None:
+            from coordinator_core.ops.review_stamp import subject_refusal
+
+            review_refusal = subject_refusal(plan_path, worktree_root, split.fm_text)
+            if review_refusal is not None:
+                raise MutateAbort(
+                    f"{_PROG}: refusing to stamp implemented: {opts.plan}: {review_refusal}"
                 )
 
         fm_text = replace_fm_field(split.fm_text, "status", "implemented")

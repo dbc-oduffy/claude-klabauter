@@ -185,6 +185,7 @@ from coordinator_core.git import repo_root as _repo_root_mod
 from coordinator_core.git.content_hash import content_matches_index_sha
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
+from coordinator_core import env_locality as _env_locality
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session_baton.store import merge_baton, read_baton
 from coordinator_core.session.work_state import _parse_fm_dict
@@ -983,6 +984,25 @@ def _recovery_banner_text(holder_sid: str) -> str:
     )
 
 
+def _venue_blocks_cloud_claim(fm: dict[str, Any]) -> Optional[str]:
+    """`venue: workstation` (handoff.schema.json, DoE 10.8.0) means the work
+    needs a human or a workstation session at a terminal. A cloud session
+    (the documented `CLAUDE_CODE_REMOTE` contract — `env_locality.harness_rung`)
+    must never auto-claim one, whatever the claim registry says — this is
+    checked BEFORE the no-claimant fast path, not merged into the
+    live-holder contention logic below, because an unclaimed workstation-only
+    baton is exactly the case a cloud auto-claim would otherwise grab.
+    Returns the denial reason string when blocked, None when this session
+    may proceed to the ordinary claim-contention checks (workstation
+    sessions, and any handoff not carrying `venue: workstation`)."""
+    if not isinstance(fm, dict) or fm.get("venue") != "workstation":
+        return None
+    rung = _env_locality.harness_rung()
+    if rung is not None and rung.call == "cloud":
+        return "venue: workstation — needs a human or a workstation session, not this cloud session"
+    return None
+
+
 def compute_claim_grant(
     repo_root: Path, class_: str, basename: str, artifact_path: str,
     cwd: Optional[str] = None, fm: Optional[dict[str, Any]] = None,
@@ -993,7 +1013,9 @@ def compute_claim_grant(
     live -> denied, UNLESS lineage-related (handover) -> granted;
     4) different, not live or unresolvable -> granted-with-warning.
     Age is never read (R4's PM amendment: "age is not a factor, only
-    resolveable aliveness")."""
+    resolveable aliveness"). Venue check (`_venue_blocks_cloud_claim`) is a
+    fifth, prior rule: a cloud session facing `venue: workstation` is denied
+    regardless of claim state."""
     cwd_str = cwd if cwd is not None else str(repo_root)
     drop_invocation = f"pickup-assemble drop {artifact_path}"
     claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
@@ -1001,6 +1023,15 @@ def compute_claim_grant(
     def _no_claimant() -> dict[str, Any]:
         return {
             "verdict": "granted", "reason": "no competing claim", "holder": None,
+            "holder_live": False, "held_by_self": False, "claim_age_minutes": None,
+            "claim_stage": None, "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+            "recovery_banner": None,
+        }
+
+    venue_block_reason = _venue_blocks_cloud_claim(fm or {})
+    if venue_block_reason is not None:
+        return {
+            "verdict": "denied", "reason": venue_block_reason, "holder": None,
             "holder_live": False, "held_by_self": False, "claim_age_minutes": None,
             "claim_stage": None, "drop_invocation": drop_invocation, "unclean_prior_holder": False,
             "recovery_banner": None,

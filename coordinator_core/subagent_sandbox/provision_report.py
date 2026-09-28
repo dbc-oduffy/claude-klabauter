@@ -1544,6 +1544,21 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     if not cwd:
         return None
     git_root = resolve_git_root(cwd)
+    if not git_root:
+        # F6 (GH #71): `cwd` is a genuine, truthy path (not klabauter#47's
+        # falsy-cwd refusal above), but it names a directory that is not
+        # itself under any git repo -- a multi-repo container's session
+        # root, e.g., where the harness's own boot cwd is a plain directory
+        # sitting ABOVE every attached checkout rather than inside one. The
+        # dispatch's own `plan_path` (when present) already names a real
+        # file inside the intended TARGET repo -- the same signal the
+        # plan-derivable leg below already trusts for its own git_root-
+        # scoped resolution -- so resolve from there instead of refusing
+        # outright. Falls through to the pre-existing `not git_root: return
+        # None` refusal, unchanged, when no such fallback signal exists.
+        plan_path_hint = payload.get("plan_path") or None
+        if plan_path_hint:
+            git_root = resolve_git_root(os.path.dirname(str(plan_path_hint)))
     policy = load_policy(policy_path)
 
     agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)

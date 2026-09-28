@@ -332,8 +332,8 @@ def validate_run_id(run_id: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 _VERDICT_TABLE_RE: Dict[str, "re.Pattern[str]"] = {
-    "KEEP": re.compile(r'^\|[^|]*\|\s*\*\*KEEP\*\*|^\|[^|]*\|[^|]*\|\s*\*\*KEEP\*\*'),
-    "MERGE": re.compile(r'^\|[^|]*\|\s*\*\*MERGE\*\*|^\|[^|]*\|[^|]*\|\s*\*\*MERGE\*\*'),
+    "KEEP": re.compile(r'^\|[^|]*\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|)|^\|[^|]*\|[^|]*\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|)'),
+    "MERGE": re.compile(r'^\|[^|]*\|\s*(?:\*\*MERGE\*\*|MERGE\s*\|)|^\|[^|]*\|[^|]*\|\s*(?:\*\*MERGE\*\*|MERGE\s*\|)'),
 }
 _VERDICT_PROSE_RE: Dict[str, "re.Pattern[str]"] = {
     "KEEP": re.compile(r'verdict:\s*keep\b', re.IGNORECASE),
@@ -352,8 +352,8 @@ _VERDICT_PROSE_RE: Dict[str, "re.Pattern[str]"] = {
 # col-3 verdicts as illegitimate, so col-2-only was the accident, not
 # col-2-or-3. The id is always read from column 1 regardless of which column
 # carries the bolded verdict.
-_KEEP_ROW_COL2_RE = re.compile(r'^\|(?P<cid>[^|]*)\|\s*\*\*KEEP\*\*')
-_KEEP_ROW_COL3_RE = re.compile(r'^\|(?P<cid>[^|]*)\|[^|]*\|\s*\*\*KEEP\*\*')
+_KEEP_ROW_COL2_RE = re.compile(r'^\|(?P<cid>[^|]*)\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|)')
+_KEEP_ROW_COL3_RE = re.compile(r'^\|(?P<cid>[^|]*)\|[^|]*\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|)')
 
 
 def _normalize_cluster_id(cid: Any) -> str:
@@ -908,9 +908,8 @@ def _audit1_stub_coverage(
             f"{recon_path} — this is the dead-gate signature (a real roadmap never "
             f"legitimately has both sides zero at Phase 2 close). Check DATA_ROOT "
             f"rooting and the reconciliation.md verdict table format — the verdict "
-            f"cell must be BOLDED (`**KEEP**` / `**MERGE**`) in the 2nd or 3rd "
-            f"column; a bare `KEEP` matches zero rows and is the most common way "
-            f"to reach both-sides-zero. The prose fallback shape is "
+            f"cell must hold exactly `KEEP` / `MERGE` (bold optional) in the 2nd or 3rd "
+            f"column. The prose fallback shape is "
             f"`Verdict: KEEP` / `Verdict: MERGE` (case-insensitive)."
         )
     else:
@@ -985,7 +984,7 @@ def _audit1_stub_coverage(
             r.fail(
                 f"Stub-coverage{label}: {stub_count} stub(s) on disk but no KEEP "
                 f"cluster ids parsed from {recon_path}. The verdict cell must be "
-                f"BOLDED (`**KEEP**`) and the cluster id must be the FIRST column."
+                f"exactly `KEEP` (bold optional) and the cluster id must be the FIRST column."
             )
         elif missing or duplicated or unknown:
             parts = []
@@ -1469,11 +1468,28 @@ def derive_write_set(run_id: str, data_root: Path, worktree_root: Path) -> Dict[
     baton_stub_ids: Set[str] = set()
     resolved_plan_paths: Set[str] = set()
     unresolved_stub_ids: Set[str] = set()
+    # stub_id -> plan_path, for every baton that resolved to a live plan —
+    # lets a collision check cross-reference which plan(s) a blocked_by chain
+    # actually connects (F18: a chain-ordered pair is sequenced, not colliding).
+    stub_plan: Dict[str, str] = {}
+    # blocked_by edges among this run's own batons only (from -> to, "from"
+    # depends on "to"), independent of whether either endpoint resolved to a
+    # plan — resolution is applied by the caller.
+    blocked_by_edges: List[Dict[str, str]] = []
 
     for rec in all_records:
         fm = rec.get("frontmatter", {})
         stub_id = str(fm.get("stub_id") or "") or f"<untagged:{id(rec)}>"
         baton_stub_ids.add(stub_id)
+        raw_blocked_by = fm.get("blocked_by")
+        if isinstance(raw_blocked_by, list):
+            dep_ids = [str(b) for b in raw_blocked_by]
+        elif raw_blocked_by:
+            dep_ids = [str(raw_blocked_by)]
+        else:
+            dep_ids = []
+        for dep_id in dep_ids:
+            blocked_by_edges.append({"from": stub_id, "to": dep_id})
 
         hits, basis = link_plans(fm, plans)
         best = _best_plan(hits, basis)
@@ -1481,6 +1497,7 @@ def derive_write_set(run_id: str, data_root: Path, worktree_root: Path) -> Dict[
             unresolved_stub_ids.add(stub_id)
             continue
         resolved_plan_paths.add(best["path"])
+        stub_plan[stub_id] = best["path"]
 
     paths: Dict[str, List[str]] = {}
     undeclared_plans: List[str] = []
@@ -1511,7 +1528,50 @@ def derive_write_set(run_id: str, data_root: Path, worktree_root: Path) -> Dict[
         "fully_resolved_plans": sorted(fully_resolved_plans),
         "parse_failures": sorted(parse_failures),
         "baton_count": len(baton_stub_ids),
+        "stub_plan": stub_plan,
+        "blocked_by_edges": blocked_by_edges,
     }
+
+
+def _plan_pairs_are_chain_ordered(
+    plan_a: str, plan_b: str, stub_plan: Dict[str, str], blocked_by_edges: List[Dict[str, str]]
+) -> bool:
+    """True iff every baton resolving to *plan_a* is connected, by a
+    (possibly transitive) ``blocked_by`` path in EITHER direction, to every
+    baton resolving to *plan_b* — F18: batons ordered by a ``blocked_by``
+    chain touching the same file are sequenced, not colliding. Two plans with
+    no edge between their batons at all are NOT chain-ordered and still
+    collide.
+    """
+    stubs_a = [s for s, p in stub_plan.items() if p == plan_a]
+    stubs_b = [s for s, p in stub_plan.items() if p == plan_b]
+    if not stubs_a or not stubs_b:
+        return False
+
+    # Undirected adjacency over the blocked_by graph — ordering holds
+    # regardless of which endpoint is the dependant.
+    adjacency: Dict[str, Set[str]] = {}
+    for edge in blocked_by_edges:
+        adjacency.setdefault(edge["from"], set()).add(edge["to"])
+        adjacency.setdefault(edge["to"], set()).add(edge["from"])
+
+    def reachable_from(start: str) -> Set[str]:
+        seen = {start}
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            for nxt in adjacency.get(node, ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
+    for stub_a in stubs_a:
+        reachable = reachable_from(stub_a)
+        for stub_b in stubs_b:
+            if stub_b not in reachable:
+                return False
+    return True
 
 
 def _audit6_write_set_disjointness(
@@ -1527,12 +1587,28 @@ def _audit6_write_set_disjointness(
     three questions.
     """
     result = derive_write_set(run_id, data_root, worktree_root)
+    stub_plan = result["stub_plan"]
+    blocked_by_edges = result["blocked_by_edges"]
 
     collisions = {
         path: owners for path, owners in result["paths"].items() if len(owners) > 1
     }
     for path in sorted(collisions):
         owners = collisions[path]
+        # F18: owners fully chain-ordered by blocked_by are sequenced, not
+        # colliding — additive edits along a blocked_by chain never run
+        # concurrently. Any pair NOT chain-ordered still fails the whole path.
+        if all(
+            _plan_pairs_are_chain_ordered(a, b, stub_plan, blocked_by_edges)
+            for i, a in enumerate(owners)
+            for b in owners[i + 1 :]
+        ):
+            r.passed(
+                f"Write-set: {path!r} is declared by {len(owners)} live plans in "
+                f"roadmap_id={run_id} ({', '.join(owners)}) but they are "
+                f"blocked_by-chain-ordered — sequenced, not a collision."
+            )
+            continue
         r.fail(
             f"Write-set collision: {path!r} is declared by {len(owners)} live "
             f"plans in roadmap_id={run_id}: {', '.join(owners)}."

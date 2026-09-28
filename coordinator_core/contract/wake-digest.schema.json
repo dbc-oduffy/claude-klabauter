@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/wake-digest.schema.json",
+  "x-schema-version": "1.0.0",
+  "title": "Workflow wake digest",
+  "description": "The return value of an emitted Workflow script — the only thing that reaches the EM on completion. Assembled entirely from structured stage-gate outputs; never executor free text. Design D1: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "plan", "outcome", "completed", "halted", "chunks",
+    "criterion", "tests", "review", "deviations", "run_base_sha", "width",
+    "decision_required", "next_action"
+  ],
+  "properties": {
+    "schema": { "const": "wake-digest" },
+    "version": { "const": 1 },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "deliverable_id"],
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "deliverable_id": { "type": ["string", "null"] }
+      }
+    },
+    "outcome": { "type": "string", "enum": ["completed", "incomplete", "halted"] },
+    "completed": { "type": "boolean" },
+    "halted": { "type": ["string", "null"], "maxLength": 300 },
+    "chunks": { "type": "array", "items": { "type": "string" } },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observation", "sidecar"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["met", "not_met", "indeterminate", "not_run", "unstructured"]
+        },
+        "observation": { "type": ["string", "null"], "maxLength": 300 },
+        "sidecar": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "run", "failed", "build_clean", "note", "sidecar", "per_row"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "error", "not_run", "degraded", "unstructured"]
+        },
+        "run": { "type": ["integer", "null"] },
+        "failed": { "type": ["integer", "null"] },
+        "build_clean": { "type": ["boolean", "null"] },
+        "note": { "type": ["string", "null"], "maxLength": 300 },
+        "sidecar": { "type": ["string", "null"], "maxLength": 300 },
+        "per_row": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verified", "passed", "failed", "unstructured", "skipped"],
+          "properties": {
+            "verified": { "type": "integer" },
+            "passed": { "type": "integer" },
+            "failed": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["chunk", "anchor"],
+                "properties": {
+                  "chunk": { "type": "string" },
+                  "anchor": { "type": "string", "maxLength": 300 }
+                }
+              }
+            },
+            "unstructured": { "type": "array", "items": { "type": "string" } },
+            "skipped": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status", "slices", "fixes_applied", "em_may_think_differently",
+        "unresolved", "overflow", "brief_conformance", "rebuild_decision",
+        "delivery", "integration_sidecar"
+      ],
+      "properties": {
+        "status": { "type": "string", "enum": ["integrated", "not_run", "unstructured"] },
+        "slices": { "type": ["integer", "null"] },
+        "fixes_applied": { "type": ["integer", "null"] },
+        "em_may_think_differently": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/line_anchor" }
+        },
+        "unresolved": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/line_anchor" }
+        },
+        "overflow": { "type": "integer", "minimum": 0 },
+        "brief_conformance": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["items", "met", "unmet"],
+          "properties": {
+            "items": { "type": "integer" },
+            "met": { "type": "integer" },
+            "unmet": { "type": "integer" }
+          }
+        },
+        "rebuild_decision": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/line_anchor" }
+          ]
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verdict", "product_files", "claims_unbacked"],
+          "properties": {
+            "verdict": { "type": "string", "enum": ["PASS", "FAIL", "not_run", "unstructured"] },
+            "product_files": { "type": ["integer", "null"] },
+            "claims_unbacked": { "type": ["integer", "null"] }
+          }
+        },
+        "integration_sidecar": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chunk", "kind", "anchor"],
+        "properties": {
+          "chunk": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["partial", "blocked", "no_answer", "stop_rule", "not_started"]
+          },
+          "anchor": { "type": "string", "maxLength": 300 }
+        }
+      }
+    },
+    "run_base_sha": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      ]
+    },
+    "width": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rows", "max_concurrent_rows", "critical_path_rows", "runtime_cap",
+        "runtime_cap_on_emitting_host"
+      ],
+      "properties": {
+        "rows": { "type": "integer" },
+        "max_concurrent_rows": { "type": "integer" },
+        "critical_path_rows": { "type": "integer" },
+        "runtime_cap": { "const": "min(16, CPUs-2)" },
+        "runtime_cap_on_emitting_host": { "type": "integer" }
+      }
+    },
+    "decision_required": { "type": ["string", "null"], "maxLength": 300 },
+    "next_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "params"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["terminal_commit", "none"] },
+        "op": {
+          "anyOf": [
+            { "type": "null" },
+            { "const": "dispatch.terminal_commit" }
+          ]
+        },
+        "params": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["incomplete_chunks", "inline_review"],
+              "properties": {
+                "incomplete_chunks": { "type": "array", "items": { "type": "string" } },
+                "inline_review": {
+                  "anyOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["integration_stem", "slices", "fixes"],
+                      "properties": {
+                        "integration_stem": { "type": "string" },
+                        "slices": { "type": "integer" },
+                        "fixes": { "type": "integer" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "line_anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "anchor"],
+      "properties": {
+        "line": { "type": "string", "maxLength": 200 },
+        "anchor": { "type": "string", "maxLength": 300 }
+      }
+    },
+    "test_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "tests_run", "tests_failed", "sidecar_path"],
+      "properties": {
+        "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+        "tests_run": { "type": "integer" },
+        "tests_failed": { "type": "integer", "minimum": 0 },
+        "build_clean": { "type": ["boolean", "null"] },
+        "summary": { "type": "string", "maxLength": 300 },
+        "sidecar_path": { "type": "string", "maxLength": 300 }
+      }
+    },
+    "row_verification_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chunk", "status", "tests_run", "tests_failed", "typecheck_clean"],
+      "properties": {
+        "chunk": { "type": "string" },
+        "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+        "tests_run": { "type": "integer" },
+        "tests_failed": { "type": "integer", "minimum": 0 },
+        "typecheck_clean": { "type": ["boolean", "null"] },
+        "summary": { "type": "string", "maxLength": 300 },
+        "sidecar_path": { "type": "string", "maxLength": 300 }
+      }
+    },
+    "falsifier_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observation"],
+      "properties": {
+        "status": { "type": "string", "enum": ["met", "not_met", "indeterminate"] },
+        "observation": { "type": "string", "maxLength": 300 },
+        "sidecar_path": { "type": "string", "maxLength": 300 }
+      }
+    }
+  }
+}

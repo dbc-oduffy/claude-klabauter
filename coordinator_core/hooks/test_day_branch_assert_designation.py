@@ -6,7 +6,12 @@ import subprocess
 import pytest
 
 from coordinator_core.daily_branch import read_configured_day_branch
-from coordinator_core.hooks.day_branch_assert import COMPLIANT, WARN, assert_day_branch
+from coordinator_core.hooks.day_branch_assert import (
+    COMPLIANT,
+    NOT_A_REPO,
+    WARN,
+    assert_day_branch,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.spawns_process
@@ -31,6 +36,18 @@ def test_designated_branch_already_configured_is_compliant_silent(tmp_path):
           "claude/compassionate-pascal-98ncw7"])
     result = assert_day_branch(str(repo), "machine-a", "2026-09-22")
     assert result.outcome == COMPLIANT
+    assert result.message == ""
+
+
+def test_non_repo_root_is_silent_not_a_repo_not_detached_head_warn(tmp_path):
+    """F7 (GH #71): a `repo_root` with no `.git` at all (a multi-repo
+    container's session root, e.g.) must not read as a genuine "detached
+    HEAD / crash insurance NOT in force" finding -- it is silent, same as
+    COMPLIANT."""
+    non_repo = tmp_path / "container-root"
+    non_repo.mkdir()
+    result = assert_day_branch(str(non_repo), "machine-a", "2026-09-28")
+    assert result.outcome == NOT_A_REPO
     assert result.message == ""
 
 

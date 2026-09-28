@@ -194,6 +194,36 @@ def test_provision_refuses_rather_than_guessing_when_cwd_is_absent(
     )
 
 
+def test_provision_falls_back_to_plan_path_repo_when_cwd_is_not_a_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F6 (GH #71): `cwd` is a genuine, truthy, non-repo directory (a
+    multi-repo container's session root) -- provisioning must resolve the
+    target repo from the dispatch's own `plan_path` rather than refusing
+    outright, when that signal is available."""
+    container_root = tmp_path / "container-root"
+    container_root.mkdir()
+    target_repo = _init_git_repo(tmp_path / "target-repo")
+    policy_path = _write_policy(tmp_path)
+    monkeypatch.chdir(container_root)
+
+    plan_path = target_repo / "docs" / "plans" / "x.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text("# plan\n", encoding="utf-8")
+
+    payload = {
+        "agent_id": "abc123def4567890",
+        "agent_type": _TARGET_REPORT_SIDECAR_TYPE,
+        "session_id": "sess-k47-container-cwd",
+        "plan_path": str(plan_path),
+    }
+
+    result = _provision(payload, str(policy_path), str(container_root))
+    assert result is not None
+    assert (target_repo / result).is_file()
+    assert not (container_root / ".coordinator-local").exists()
+
+
 def test_provision_keys_on_the_explicit_target_repo_not_the_ambient_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

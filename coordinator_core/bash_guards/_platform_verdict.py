@@ -316,10 +316,8 @@ def platform_verdict_for_shape(
     """
     del matched_cmd, host_is_windows
     advisory_context = (
-        "BASH-SPAWN ADVISORY (non-blocking): this command matches the "
-        "`%s` shape, one of this fleet's per-process cold-start-cost "
-        "drivers on Windows; consider %s here too so behavior stays "
-        "consistent across the fleet.\n\n"
+        "BASH-SPAWN ADVISORY (non-blocking): `%s` spawns a subprocess "
+        "per iteration; use %s.\n\n"
         "  Example:  %s\n"
     ) % (shape_name, outlet_summary, outlet_example)
     return allow_advisory(_EVENT_NAME, advisory_context)

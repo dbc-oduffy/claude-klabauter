@@ -47,9 +47,40 @@ import site
 import tempfile
 from pathlib import Path
 
+import sys
+
 import pytest
 
+# BV-20260927-03: under a `rootdir = coordinator_core` invocation (this
+# file's own ``pytest.ini`` wins as configfile, confcutdir excludes the
+# repo-root conftest — see this module's docstring), nothing upstream of
+# THIS import has put the checkout root on sys.path yet. An unrelated,
+# box-wide editable install of the PUBLISHED engine elsewhere on sys.path
+# (e.g. a `.pth` pointing at `/root/klabauter`) can therefore win the
+# `coordinator_core` package resolution below, and pytest's own conftest
+# loader then raises ImportPathMismatchError. Force this checkout to win,
+# regardless of what COORDINATOR_ENGINE_ROOT says for other (non-test)
+# callers — that resolution is a separate, load-bearing concern untouched
+# here.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT in sys.path:
+    sys.path.remove(_REPO_ROOT)
+sys.path.insert(0, _REPO_ROOT)
+for _mod_name in [
+    n for n in sys.modules if n == "coordinator_core" or n.startswith("coordinator_core.")
+]:
+    _mod_file = getattr(sys.modules[_mod_name], "__file__", None) or ""
+    if _mod_file and not os.path.abspath(_mod_file).startswith(_REPO_ROOT):
+        del sys.modules[_mod_name]
+
 from coordinator_core import memo_corpus
+
+# Box-scoped, not directory-scoped: admission thresholds come from machine-local, so a
+# configured, loaded box would make every CLI-driving test hold up to `max_hold_s`
+# (docs/plans/2026-09-27-load-aware-workflow-admission.md, C4). Set at IMPORT time so a
+# `coordinator_core/pytest.ini`-rooted invocation (where the repo-root conftest never
+# loads) is covered too, and so a spawned subprocess inherits it.
+os.environ.setdefault("COORDINATOR_WORKFLOW_ADMISSION_DISABLE", "1")
 
 _REAL_UNLINK = os.unlink
 _REAL_RMDIR = os.rmdir

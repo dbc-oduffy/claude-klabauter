@@ -261,6 +261,8 @@ import re
 import subprocess
 import sys
 import traceback
+
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
@@ -2567,7 +2569,11 @@ def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> O
 
 
 def _compute_review_receipt_gate(
-    root: Path, sid: str, target_status: str, claimed_at: Optional[str]
+    root: Path,
+    sid: str,
+    target_status: str,
+    claimed_at: Optional[str],
+    plan_path: Optional[Path],
 ) -> ReviewReceiptGate:
     """The SOLE call site (AC7 leg ii) deciding whether `target_status` may
     be reached without a review receipt. No boolean/optional parameter here
@@ -2624,6 +2630,40 @@ def _compute_review_receipt_gate(
                 "(superseded/abandoned) — no review receipt required"
             ),
         )
+
+    # MK2 (DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md):
+    # a plan-bearing close whose governing plan carries a valid `review_stamp`
+    # is discharged by the stamp alone — per-reviewer dispatch receipts are no
+    # longer required. Supersession is deliberately NEVER re-run here
+    # (`supersession=False`): `/workstream-complete` can run sessions later in
+    # a shared tree, where another plan legitimately touches the same file,
+    # and re-running supersession would brick a close over an unrelated later
+    # commit. A close with no governing plan keeps today's receipt rule
+    # unchanged (falls through below).
+    if plan_path is not None:
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8")
+        except OSError:
+            plan_text = None
+        if plan_text is not None:
+            from coordinator_core.frontmatter.primitives import split_frontmatter as _split_fm
+
+            split = _split_fm(plan_text.replace("\r\n", "\n"))
+            if split is not None:
+                try:
+                    fm_data = yaml.safe_load(split.fm_text) or {}
+                except yaml.YAMLError:
+                    fm_data = {}
+                if isinstance(fm_data, dict) and fm_data.get("review_stamp"):
+                    from coordinator_core.ops.review_stamp import check as _review_stamp_check
+
+                    rs_reason = _review_stamp_check(plan_path, root, supersession=False)
+                    if rs_reason is None:
+                        return ReviewReceiptGate(
+                            applies=True,
+                            blocks=False,
+                            detail=f"review_stamp on {plan_path} satisfies the close review record",
+                        )
 
     from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
     from coordinator_core.review_trail.receipt_credit import (
@@ -6021,7 +6061,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # no history walk, no `baton_assemble` hop (constraint 8, AC12).
     review_receipt_claim_window_start = _resolve_baton_claim_window_start(root, gate)
     review_receipt_gate = _compute_review_receipt_gate(
-        root, gate.sid, "implemented", review_receipt_claim_window_start
+        root,
+        gate.sid,
+        "implemented",
+        review_receipt_claim_window_start,
+        plan_path=governing_plan.path if governing_plan else None,
     )
     if review_receipt_gate.blocks and any(
         d["id"] == "d-stamp-plan-implemented" for d in directives

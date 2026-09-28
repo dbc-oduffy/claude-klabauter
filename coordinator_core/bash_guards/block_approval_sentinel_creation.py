@@ -185,6 +185,7 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,
     _C_FLAG_INTERPRETERS,
+    _HEREDOC_OP_RE,
     _LONG_OPT_WITH_VALUE_RE,
     _MAX_INDIRECTION_DEPTH,
     _SHELL_FILE_INTERPRETERS,
@@ -271,6 +272,33 @@ def _first_operand_token(interpreter_args: List[str]) -> Optional[str]:
             continue
         return tok
     return None
+
+
+def _extract_heredoc_bodies(cmd: str) -> "list[str]":
+    """Item 33 (F3, GH #71 follow-up): mirror of the shared engine's
+    `_strip_heredoc_bodies` walk, except it COLLECTS each heredoc's body
+    text (joined with newlines) instead of discarding it. Bodies are
+    returned in the order their opening `<<DELIM` operator appears in the
+    raw command text -- the same order `_script_file_verdict` consumes them
+    in via `_next_heredoc_body`, since a single command string's heredocs
+    and the script invocations that read them from stdin appear in that
+    same left-to-right order."""
+    lines = cmd.split("\n")
+    bodies: "list[str]" = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        i += 1
+        for delim in [m.group(2) for m in _HEREDOC_OP_RE.finditer(line)]:
+            body_lines: List[str] = []
+            while i < n and lines[i].strip() != delim:
+                body_lines.append(lines[i])
+                i += 1
+            if i < n:
+                i += 1
+            bodies.append("\n".join(body_lines))
+    return bodies
 
 
 def _has_module_flag(interpreter_args: List[str]) -> bool:
@@ -528,6 +556,11 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         #: caller reaching the readable-script path before `evaluate()` --
         #: which does not happen in normal use -- fails to the safe side.
         self._cwd: Optional[str] = None
+        #: F3 (GH #71): heredoc bodies extracted from THIS call's raw
+        #: command, in left-to-right occurrence order -- see
+        #: `_extract_heredoc_bodies` and `_next_heredoc_body`.
+        self._heredoc_bodies: "list[str]" = []
+        self._heredoc_idx = 0
 
     def _collect_tainted_vars(self, tokens: "list[str]") -> "set[str]":
         """Scan every token of the (whole, not-yet-segmented) command for a
@@ -631,6 +664,8 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         (`_evaluate_legacy`) does not use segments or taint at all, so an
         empty set there costs nothing."""
         self._cwd = cwd
+        self._heredoc_bodies = _extract_heredoc_bodies(cmd)
+        self._heredoc_idx = 0
         cmd_norm = _strip_heredoc_bodies(cmd)
         tokens = _tokenize_full_command(cmd_norm)
         self._tainted_vars = self._collect_tainted_vars(tokens) if tokens else set()
@@ -816,12 +851,24 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         path_token = _first_operand_token(working[1:])
         if not path_token:
             return fallback
-        if any(
-            backgrounded or _segment_writes_target_path(prior_tokens, path_token)
-            for prior_tokens, _pipe_before, backgrounded in prior_segments
-        ):
+        if any(backgrounded for _prior_tokens, _pipe_before, backgrounded in prior_segments):
             return fallback
-        mentions = self._readable_script_mentions_target(path_token)
+        if path_token == "-":
+            # F3 (GH #71): `<interp> - <<EOF ... EOF` -- the script is read
+            # from stdin via a heredoc, not a named file, so there is no
+            # path to check against a prior writer. Consume the next
+            # heredoc body in occurrence order instead of a file read.
+            body = self._next_heredoc_body()
+            if body is None or len(body.encode("utf-8", "replace")) > _MAX_SCRIPT_READ_BYTES:
+                return fallback
+            mentions = self._text_mentions_target(body)
+        else:
+            if any(
+                _segment_writes_target_path(prior_tokens, path_token)
+                for prior_tokens, _pipe_before, _backgrounded in prior_segments
+            ):
+                return fallback
+            mentions = self._readable_script_mentions_target(path_token)
         if mentions is None:
             return fallback
         if mentions:
@@ -830,6 +877,26 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 REASON_DIRECT,
             )
         return None  # clean read -- allow this segment's indirection check
+
+    def _next_heredoc_body(self) -> Optional[str]:
+        """F3: pop the next not-yet-consumed heredoc body (left-to-right
+        occurrence order in the raw command, see `_extract_heredoc_bodies`).
+        `None` when no heredoc is left to attribute to this `<interp> -`
+        invocation -- caller falls back to the unconditional deny."""
+        if self._heredoc_idx >= len(self._heredoc_bodies):
+            return None
+        body = self._heredoc_bodies[self._heredoc_idx]
+        self._heredoc_idx += 1
+        return body
+
+    def _text_mentions_target(self, text: str) -> bool:
+        """Shared mention-plus-taint scan over arbitrary text (script file
+        contents or a heredoc body) -- factored out of
+        `_readable_script_mentions_target` so F3's heredoc-body branch
+        reuses the identical scan rather than a second, drifting copy."""
+        if self._mention_re.search(text):
+            return True
+        return any(vm.group(1) in self._tainted_vars for vm in _VAR_REF_RE.finditer(text))
 
     def _readable_script_mentions_target(self, path_token: str) -> Optional[bool]:
         """Read `path_token` (resolved against `self._cwd`) and apply this
@@ -850,11 +917,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 text = fh.read()
         except OSError:
             return None
-        if self._mention_re.search(text):
-            return True
-        if any(vm.group(1) in self._tainted_vars for vm in _VAR_REF_RE.finditer(text)):
-            return True
-        return False
+        return self._text_mentions_target(text)
 
     def _segment_denies(self, seg_tokens: "list[str]") -> bool:  # noqa: D401
         """Default-deny override: a redirect into the sentinel always

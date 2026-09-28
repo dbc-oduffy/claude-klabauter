@@ -388,3 +388,66 @@ def test_build_skew_response_shape():
 
 def test_engine_skew_constant_matches_client_module():
     assert skew.ENGINE_SKEW == client.ENGINE_SKEW == -32002
+
+
+# --- is_source_stale (BV-20260927-06): axis 2, traffic-independent -----------
+
+
+def test_is_source_stale_false_when_nothing_changed(monkeypatch, tmp_path):
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: False)
+
+    fake_now = [0.0]
+    state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
+
+    fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
+    assert state.is_source_stale() is False
+
+
+def test_is_source_stale_true_on_a_bare_source_edit_with_no_request_ever_arriving(
+    monkeypatch, tmp_path
+):
+    """THE GAP THIS CLOSES (BV-20260927-06). `is_skewed` -- axis 2's other
+    caller -- is reached only from the request path (`_serve_line`,
+    `supervisor.do_POST`), so a hand-applied source edit that never rotates
+    the engine token is invisible until the next caller happens to dial in.
+    `is_source_stale` is the identical check, reachable from a background
+    watchdog that polls with no request required -- this test calls it with
+    no `client_token` and no `is_skewed` call anywhere in the test."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+
+    hashes = iter(["hash-0", "hash-1"])
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
+    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: True)
+
+    fake_now = [0.0]
+    state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
+    assert state.is_source_stale() is False
+
+    fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
+    assert state.is_source_stale() is True
+
+
+def test_is_source_stale_never_reports_token_axis(monkeypatch, tmp_path):
+    """`is_source_stale` answers axis 2 alone -- a live token mismatch (no
+    source edit at all) must not make it True; that is `is_skewed`'s job,
+    not this one's."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+
+    state = skew.ServerVersionState(root)
+    # A stale client token, never passed to is_source_stale at all.
+    assert state.is_skewed("a-stale-client-token") is True
+    assert state.is_source_stale() is False

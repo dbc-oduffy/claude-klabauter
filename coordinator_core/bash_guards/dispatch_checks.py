@@ -5711,11 +5711,10 @@ def _check_destructive_git_revert_full(
                 # (`has_dashdash`) already routes around this branch
                 # entirely and stays on today's allowed path.
                 return _deny(
-                    "BLOCKED: 'git stash' (unscoped) is a whole-tree revert "
-                    "(SC-DR-023) -- denied from the command alone, with no "
-                    "git-status check of what it would sweep.\n\n"
-                    "Scope the stash to your own paths instead of sweeping "
-                    "every session's uncommitted work:\n"
+                    "BLOCKED: unscoped 'git stash' is a whole-tree revert "
+                    "(SC-DR-023) -- sweeps every session's uncommitted "
+                    "work.\n\n"
+                    "Scope it instead:\n"
                     '  git stash push -u -m "before-stash" -- <your-paths>'
                     + ("\n\nOr: %s" % _gr_note if _gr_note else "")
                 ), None

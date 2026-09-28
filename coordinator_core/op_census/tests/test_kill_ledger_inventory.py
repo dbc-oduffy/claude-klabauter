@@ -71,6 +71,8 @@ def test_a_file_path_is_not_read_as_an_op_name() -> None:
 
 
 def test_real_ledger_classifies_every_entry() -> None:
+    if not kli.KILL_LEDGER.exists():
+        pytest.skip(f"{kli.KILL_LEDGER} absent — .coordinator-local/ is local, uncommitted state")
     entries, heading_count = kli.build()
     assert len(entries) == heading_count
     assert not [e for e in entries if e.population == "UNCLASSIFIED"]
@@ -221,6 +223,8 @@ def test_the_real_ledger_has_no_contested_rows() -> None:
     """AC-7 of the-meter-02: `--fail-on-contested` exits 0 against the real
     ledger. A CONTESTED row here is a real ledger/registry disagreement to
     reconcile in `state/kill-ledger.md`, never by widening a marker tuple."""
+    if not kli.KILL_LEDGER.exists():
+        pytest.skip(f"{kli.KILL_LEDGER} absent — .coordinator-local/ is local, uncommitted state")
     entries, _ = kli.build(kli.KILL_LEDGER)
     contested = [f"{e.key}: {'; '.join(e.notes)}" for e in entries if e.population == "CONTESTED"]
     assert not contested, contested

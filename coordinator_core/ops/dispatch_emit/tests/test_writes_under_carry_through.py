@@ -84,7 +84,7 @@ def test_writes_under_only_wave_gets_legal_empty_static_pathspec():
     assert commit_prefixes(wave) == [("xhorizon-C1", ("cross-repo/outbox/",))]
 
 
-def test_emitted_commit_prompt_derives_prefix_files_from_the_report_not_the_union():
+def test_emitted_executor_prompt_carries_the_prefix_claim_field():
     row = _wave_row(
         "edgarcik-C8",
         writes=[],
@@ -94,23 +94,7 @@ def test_emitted_commit_prompt_derives_prefix_files_from_the_report_not_the_unio
         [[row]],
         name="wf-prefix-commit",
         description="prefix commit derives from report",
+        plan_path="docs/plans/fake-plan.md",
     )
     assert "created-under-prefix:" in script
-    assert "RUN-TIME-NAMED WRITES" in script
     assert "'state/handoffs/'" not in script
-
-
-def test_prefix_commit_rule_names_the_bound_and_refuses_outside_it():
-    row = _wave_row(
-        "edgarcik-C5",
-        writes=[],
-        writes_under=("state/handoffs/",),
-    )
-    script = compose_script(
-        [[row]],
-        name="wf-prefix-bound",
-        description="prefix-bound commit refusal",
-    )
-    assert "only where the file sits under THAT row's own prefix" in script
-    assert "STOP" in script
-    assert "never infer those files from prose" in script.lower()

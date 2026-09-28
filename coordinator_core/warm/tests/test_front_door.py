@@ -1494,6 +1494,33 @@ def test_skew_watchdog_tick_noop_when_not_stale(tmp_path: Path, monkeypatch: pyt
     assert stopped == []
 
 
+def test_skew_watchdog_tick_stops_on_source_staleness_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BV-20260927-06: a bare source edit that never rotates the engine
+    token (axis 1 stays quiet) must still retire this watchdog -- no
+    request, no client, no `_token_is_stale` involvement at all."""
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    stopped = []
+    monkeypatch.setattr(ctx, "_token_is_stale", lambda: False)
+    monkeypatch.setattr(ctx.version_state, "is_source_stale", lambda: True)
+    monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
+    ctx._skew_watchdog_tick()
+    assert stopped == [True]
+
+
+def test_skew_watchdog_tick_noop_when_neither_axis_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    stopped = []
+    monkeypatch.setattr(ctx, "_token_is_stale", lambda: False)
+    monkeypatch.setattr(ctx.version_state, "is_source_stale", lambda: False)
+    monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
+    ctx._skew_watchdog_tick()
+    assert stopped == []
+
+
 def test_ctx_shutdown_sets_the_skew_watchdog_stop_event(tmp_path: Path) -> None:
     """`ctx_shutdown` sets `_skew_watchdog_stop` as its own first action --
     the identical wiring `warm.server._ServerContext._ctx_shutdown` uses for

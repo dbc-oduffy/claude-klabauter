@@ -210,6 +210,26 @@ def test_default_mode_sprint_1_and_increasing_wave(tmp_path, capsys):
     assert rows["A"]["wave"] < rows["B"]["wave"] < rows["C"]["wave"]
 
 
+def test_disjoint_edge_free_siblings_collapse_into_the_same_wave(tmp_path, capsys):
+    """F16: wwc-02 and wwc-03 have no edge between them (and no edge to
+    anything else in the same sprint) — they must share a wave so the
+    roadmap-planning Step 2.1.6 fold rule ("same wave + disjoint scope + no
+    blocked_by -> one baton") can actually fire."""
+    edges_file = tmp_path / "isolated.txt"
+    edges_file.write_text("wwc-02\nwwc-03\nwwc-04 <- wwc-01\n", encoding="utf-8")
+
+    main([str(edges_file)])
+    out = capsys.readouterr().out
+    rows = {}
+    for ln in out.splitlines():
+        if not ln or ln.startswith("#"):
+            continue
+        parts = ln.split()
+        rows[parts[0]] = {"num": int(parts[1]), "sprint": int(parts[2]), "wave": int(parts[3])}
+
+    assert rows["wwc-02"]["wave"] == rows["wwc-03"]["wave"]
+
+
 def test_main_no_args_exits_2(capsys):
     rc = main([])
     assert rc == 2

@@ -107,7 +107,6 @@ _REPORTING_SUBAGENT_TYPES = (
     "coordinator:plan-coverage-checker",
     "coordinator:premise-checker",
     "coordinator:prior-art-checker",
-    "coordinator:review-integrator",
     "coordinator:security-audit-worker",
     "coordinator:subtractive-adjudicator",
     "coordinator:test-evidence-parser",

@@ -232,6 +232,48 @@ EXPECTED_READERS = (
     "coordinator_core.tests.test_hooks_roundtrip",
     "coordinator_core.write_guards.nudge_em_code_dispatch",
     "coordinator_core.write_guards.tests.test_windows_platform_simulation",
+    # --- C6 (2026-09-27-sizing-carries-exit-criterion-and-interaction-mode) ---
+    #
+    # `sizing_assemble.route()`'s `_validate_interaction_mode` and `main()`'s
+    # `_resolve_interaction_mode_and_source` both do a FUNCTION-LOCAL (lazy)
+    # import of `mode_resolution` -- never at module top level, so a bare
+    # `import coordinator_core.sizing_assemble` stays import-light (module
+    # docstring's "READ-ONLY, by construction" note). This static AST walk
+    # still finds the import (it walks the WHOLE tree, not just module-level
+    # statements -- see `_module_imports`'s own docstring), so the module
+    # reaches this closure regardless of laziness. `sizing_assemble` is
+    # advisory-class (it never denies -- it computes a routing decision an
+    # EM/skill acts on, the same non-denial shape as
+    # `nudge_em_code_dispatch`'s own allowlisting above) and it is not under
+    # `write_guards/`/`bash_guards/`, so it is out of
+    # `test_no_denial_shaped_guard_reaches_the_record`'s CLASS-derivation
+    # scope entirely -- it only has to appear here.
+    "coordinator_core.sizing_assemble",
+    "coordinator_core.sizing_assemble.test_interaction_mode_cli",
+    "coordinator_core.sizing_assemble.test_interaction_mode_touchpoints",
+    #
+    # KNOWN, UNREMEDIATED RESIDUAL (found integrating this chunk, not
+    # introduced by it -- see this chunk's run report / dispatch-report for
+    # the full analysis): `coordinator_core.ops.sizing_accept_exit_criterion`
+    # (C4, already landed at 107eb8f329) imports
+    # `from coordinator_core.session.mode_resolution import
+    # INTERACTION_MODES` at MODULE TOP LEVEL, and `coordinator_core.ops.
+    # __init__` eagerly imports every registered op (C4's own writes:
+    # "ops/__init__ import list"). Because most of the tree imports
+    # `coordinator_core.ops` (directly or transitively), that one top-level
+    # import reaches roughly the WHOLE `coordinator_core` package through
+    # this closure -- thousands of modules, not a deliberate, named handful.
+    # Enumerating that cascade here would make this file's own floor
+    # vacuous (exactly the failure mode its module docstring warns against:
+    # "the moment a consumer outside that set reads the file, the absence
+    # stops being an absence"), so it is NOT done. Fixing it means making
+    # C4's `INTERACTION_MODES` import lazy the same way this chunk's own
+    # `_validate_interaction_mode` is -- a change to a file outside this
+    # chunk's footprint (`coordinator_core/ops/sizing_accept_exit_
+    # criterion.py`), reported rather than silently patched. Until that
+    # lands, `test_reader_set_matches_allowlist_exactly` and
+    # `test_no_denial_shaped_guard_reaches_the_record` both stay RED for a
+    # reason this chunk's own diff does not cause and cannot cure in-scope.
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

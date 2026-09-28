@@ -264,6 +264,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.decline":                           "common_dir",
     "sizing.ship":                               "common_dir",
     "sizing.discharge_surfaced":                 "common_dir",
+    "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_spike_verdict":               "common_dir",
     "sizing.read_object_fields":                 "common_dir",
     "plan.tasks.spine_drift_check":              "common_dir",
@@ -395,6 +396,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "bug_sweep.verify_fix_files_changed":       "show_top",
     "commit.exec_bit_change":                   "common_dir",
     "ceremony.commit_v2":                       "common_dir",
+    # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
+    # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
+    # itself (D3) -- the caller's own worktree, never a params override.
+    "dispatch.terminal_commit":                 "common_dir",
+    # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
+    # and mint writes only the caller's own worktree, keyed identically to
+    # dispatch.terminal_commit (never a `params.repo_root` override).
+    "review_stamp.mint":                        "common_dir",
+    "review_stamp.check":                       "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "machine.hibernate":                        "none",
     "percolate.run_pre_ci_hooks":               "none",

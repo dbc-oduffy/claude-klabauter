@@ -7,14 +7,11 @@ import re
 from coordinator_core.ops.dispatch_emit.emit import (
     _ANY_STATUS_JS_RE,
     _BRIEF_PRECEDENCE_CLAUSE,
-    _REVIEW_PROMPT,
     PlanContext,
-    _commit_agent_call,
-    _falsifier_terminal_phase,
-    _preflight_agent_call,
+    _falsifier_agent_call_expr,
     _row_prompt,
-    _status_check_block,
-    _test_agent_call,
+    _run_row_helper_js,
+    _test_agent_call_expr,
     compose_script,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
@@ -49,11 +46,8 @@ def test_the_bare_row_prompt_carries_the_clause_too():
 def test_every_non_executor_agent_prompt_carries_the_clause():
     falsifier = {"how": "run x", "baseline_output": None, "expected_when_true": "y"}
     emitted = {
-        "commit": _commit_agent_call(["a/one.py"], "Commit wave 1", 0, ["C1"]),
-        "preflight": _preflight_agent_call(["a/one.py"], "Preflight"),
-        "test": _test_agent_call(["a/tests/test_one.py"], "Test"),
-        "falsifier": _falsifier_terminal_phase(falsifier, "Test"),
-        "review": _REVIEW_PROMPT,
+        "test": _test_agent_call_expr(["a/tests/test_one.py"]),
+        "falsifier": _falsifier_agent_call_expr(falsifier),
     }
     head = _BRIEF_PRECEDENCE_CLAUSE[:60]
     missing = [name for name, text in emitted.items() if head not in text]
@@ -105,7 +99,7 @@ def test_bounded_direction_is_still_refused_when_wrong_on_the_merits():
 
 
 def test_an_unanswered_brief_is_incomplete_and_named():
-    block = _status_check_block("wave1Results", ["C1"], "wave1Stopped")
+    block = _run_row_helper_js()
     assert "_unansweredBriefs.push(id)" in block
     assert block.index("_incompleteChunks.push(id);\n      _unansweredBriefs") > 0
 
@@ -113,5 +107,4 @@ def test_an_unanswered_brief_is_incomplete_and_named():
 def test_the_script_declares_reports_and_halts_on_unanswered_briefs():
     script = compose_script([[_row("C1")]], name="wf", description="one wave")
     assert "const _unansweredBriefs = [];" in script
-    assert "unanswered_briefs: _unansweredBriefs" in script
-    assert "DISPATCH DEFECT, NOT FAILED WORK" in script
+    assert "'unanswered briefs: ' + _unansweredBriefs.join(', ')" in script

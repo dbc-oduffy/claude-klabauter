@@ -119,6 +119,63 @@ def _normalize_path(value: str) -> str:
     return normalized
 
 
+def _reviewed_plan_parse_errors(rows: List[Dict[str, Any]], repo_root: Path) -> List[str]:
+    """A parse error, with the parser's own line/column, for every
+    `docs/plans/*.md` this ledger's rows touch whose frontmatter no longer
+    parses -- `[]` when every one parses (the overwhelmingly common case,
+    including no plan rows at all).
+
+    F24b (gh-klabauter#71): the review-integrator that used to re-YAML-parse
+    a plan after every write is retired (this op's own module docstring),
+    so nothing else re-checks a plan a reviewer just edited. `verify` is the
+    review-complete signal (`_fire_stamp_reviewed_for_plans` stamps `status:
+    reviewed` right after a clean verify) -- refusing HERE, before that
+    stamp, is the one remaining place that catches a reviewer's edit having
+    broken the plan's own frontmatter, rather than certifying review-complete
+    over a document nothing can read frontmatter off any more.
+
+    Same plan-selection rule `_fire_stamp_reviewed_for_plans` uses (`file`
+    normalized, `docs/plans/` prefix, `.md` suffix) -- restated rather than
+    shared because that function reads `new_rows` (post-stamp) and this one
+    must run BEFORE any row is stamped, over the rows as read from disk.
+    """
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    import yaml
+
+    plans = sorted(
+        {
+            _normalize_path(str(row.get("file") or ""))
+            for row in rows
+            if _normalize_path(str(row.get("file") or "")).startswith("docs/plans/")
+            and str(row.get("file") or "").endswith(".md")
+        }
+    )
+    errors: List[str] = []
+    for plan_rel in plans:
+        plan_path = repo_root / plan_rel
+        if not plan_path.is_file():
+            continue
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        split = split_frontmatter(plan_text)
+        if split is None:
+            continue
+        try:
+            yaml.safe_load(split.fm_text)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            location = f"line {mark.line + 1}, column {mark.column + 1}" if mark else "unknown location"
+            problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+            errors.append(
+                f"{plan_rel}: frontmatter no longer parses ({location}: {problem}) -- "
+                "verify refuses until it is repaired"
+            )
+    return errors
+
+
 def _find_heading(text: str, heading: str) -> Optional[int]:
     """Index of `heading` where it occurs as a REAL ATX heading line, or None.
 
@@ -461,7 +518,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     head = text[: bounds[1]] if bounds else ""
     baseline_sha256 = _extract_baseline_sha256_block(head)
 
-    failures: List[str] = []
+    failures: List[str] = list(_reviewed_plan_parse_errors(rows, repo_root))
     seen_ids = set()
     applied = em_rejected = suspended = 0
     new_rows: List[Dict[str, Any]] = []
@@ -521,6 +578,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     new_text = _stamp_frontmatter_key(new_text, "findings_ledger", stamp_value)
     sidecar_path.write_text(new_text, encoding="utf-8", newline="\n")
     declare_write(sidecar_path)
+    _fire_stamp_reviewed_for_plans(new_rows, repo_root)
     return VerifyOutcome(
         True,
         stamp={
@@ -531,6 +589,36 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
             "verified_at": verified_at,
         },
     )
+
+
+def _fire_stamp_reviewed_for_plans(rows: List[Dict[str, Any]], repo_root: Path) -> None:
+    """A verified ledger is the review-complete signal for every plan its rows
+    touched, whichever route dispatched the reviewer — `/review`'s exit is not
+    the only way in. `stamp-reviewed` is an rc-0 no-op at or past `reviewed`.
+    A rung failure goes to stderr and never fails the verify."""
+    plans = sorted(
+        {
+            _normalize_path(str(row.get("file") or ""))
+            for row in rows
+            if _normalize_path(str(row.get("file") or "")).startswith("docs/plans/")
+            and str(row.get("file") or "").endswith(".md")
+        }
+    )
+    if not plans:
+        return
+    from coordinator_core.ops import plan_status_transition
+
+    for plan_rel in plans:
+        plan_path = repo_root / plan_rel
+        if not plan_path.is_file():
+            continue
+        rc = plan_status_transition.main(["stamp-reviewed", "--plan", str(plan_path)])
+        if rc != 0:
+            print(
+                f"review-findings-ledger: stamp-reviewed failed for {plan_rel} (exit {rc}) "
+                "-- the ledger verify itself passed",
+                file=sys.stderr,
+            )
 
 
 def reject(sidecar_path: Path, finding_id: str, reason: str, *, repo_root: Path) -> str:

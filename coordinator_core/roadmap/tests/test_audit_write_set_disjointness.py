@@ -31,6 +31,7 @@ def _baton(
     governing_plan: Optional[str] = None,
     sizing_object: Optional[str] = None,
     archived: bool = False,
+    blocked_by: Optional[List[str]] = None,
 ) -> None:
     lines = [
         "---",
@@ -47,6 +48,9 @@ def _baton(
         lines.append(f"governing_plan: {governing_plan}")
     if sizing_object is not None:
         lines.append(f"sizing_object: {sizing_object}")
+    if blocked_by is not None:
+        rendered = ", ".join(f'"{b}"' for b in blocked_by)
+        lines.append(f"blocked_by: [{rendered}]")
     lines.append("---")
     lines.append("")
     subdir = "archive/handoffs" if archived else "state/handoffs"
@@ -137,6 +141,41 @@ def test_two_live_plans_declaring_one_path_collide(tmp_path: Path) -> None:
         "shared/thing.py" in line and plan_a in line and plan_b in line
         for line in r.stderr_lines
     )
+
+
+def test_blocked_by_chain_ordered_additive_edits_do_not_collide(tmp_path: Path) -> None:
+    """F18: baton-02 blocked_by baton-01, both touching shared/thing.py — a
+    sequenced additive edit, not a collision."""
+    root = _init_tree(tmp_path)
+    run_id = "roadmap-sequenced"
+    plan_a = _plan(root, "plan-01", "approved", [_plan_row("C1", ["shared/thing.py"])])
+    plan_b = _plan(root, "plan-02", "approved", [_plan_row("C1", ["shared/thing.py"])])
+    _baton(root, "baton-01", run_id, governing_plan=plan_a)
+    _baton(root, "baton-02", run_id, governing_plan=plan_b, blocked_by=["baton-01"])
+
+    result = derive_write_set(run_id, root, root)
+    assert result["paths"]["shared/thing.py"] == sorted([plan_a, plan_b])
+
+    r = _Reporter()
+    _audit6_write_set_disjointness(r, run_id, root, root)
+    assert r.exit_code == 0
+    assert r.stderr_lines == []
+    assert any("sequenced, not a collision" in line for line in r.stdout_lines)
+
+
+def test_unrelated_plans_sharing_a_path_still_collide(tmp_path: Path) -> None:
+    """No blocked_by edge at all between the owning batons — still a real
+    collision, F18 must not blanket-excuse every same-path pair."""
+    root = _init_tree(tmp_path)
+    run_id = "roadmap-unrelated"
+    plan_a = _plan(root, "plan-un-a", "approved", [_plan_row("C1", ["shared/thing.py"])])
+    plan_b = _plan(root, "plan-un-b", "approved", [_plan_row("C1", ["shared/thing.py"])])
+    _baton(root, "baton-un-a", run_id, governing_plan=plan_a)
+    _baton(root, "baton-un-b", run_id, governing_plan=plan_b)
+
+    r = _Reporter()
+    _audit6_write_set_disjointness(r, run_id, root, root)
+    assert r.exit_code == 1
 
 
 def test_sharing_only_with_a_superseded_plan_passes(tmp_path: Path) -> None:

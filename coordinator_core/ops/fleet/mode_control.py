@@ -119,6 +119,26 @@ _KNOWN_KEYS: dict = {
             "advisory itself -- see 'standard'/'informational' below."
         ),
     },
+    "interaction_mode": {
+        "value_type": "enum",
+        "enum_values": ("hands-on", "pm", "ceo"),
+        "precedence": "fleet-wins",
+        "session_pair": None,
+        "is_variant_selector": False,
+        # Only this key declares `default` in this local registry -- see
+        # `show_fleet_mode`'s `declared_default` rendering, added so a
+        # reader is told what fires when unset without inferring it from
+        # the resolver. The other two keys' `show` output predates this and
+        # is left as-is (out of this chunk's scope to widen further).
+        "default": "hands-on",
+        "description": (
+            "Names which human touchpoints a plan/sizing flow uses "
+            "(hands-on, pm, or ceo). Fleet-wins, fleet-only (no "
+            "session-scoped counterpart): the cost of this key being "
+            "wrong lands on the human who set the fleet-wide posture, so "
+            "it is their call outright. Never removes a safety guard."
+        ),
+    },
 }
 
 _BOOL_TRUE_TOKENS = frozenset({"on", "true"})
@@ -308,6 +328,9 @@ def show_fleet_mode() -> dict:
             "is_variant_selector": key_def["is_variant_selector"],
             "description": key_def["description"],
         }
+
+        if "default" in key_def:
+            entry["declared_default"] = key_def["default"]
 
         if key_def["is_variant_selector"]:
             enum_values = key_def["enum_values"]

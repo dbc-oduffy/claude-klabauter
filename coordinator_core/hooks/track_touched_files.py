@@ -296,6 +296,29 @@ def _ensure_session_record_sync(
 
 
 @register_op("hooks.track_touched_files")
+def _owning_repo_root(file_path: str, repo_root):
+    """The repo whose store records this touch: the one holding the file.
+
+    `repo_root` is the caller's cwd repo. An agent whose cwd is one repo but
+    which edits an absolute path in a sibling repo would otherwise normalize
+    to an empty path and drop the touch silently, and the sibling's
+    committer then refuses the file as an orphan. Pure `.git` walk from the
+    file's directory; no spawn, and never `CLAUDE_PROJECT_DIR` (that names
+    the caller, not the file)."""
+    if not repo_root or not os.path.isabs(file_path):
+        return repo_root
+    target = Path(file_path)
+    try:
+        target.relative_to(Path(repo_root))
+        return repo_root
+    except ValueError:
+        pass
+    for candidate in target.parents:
+        if (candidate / ".git").exists():
+            return candidate
+    return repo_root
+
+
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse bookkeeping op: append T-events for touched file paths into per-session records.
 
@@ -357,7 +380,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not session_id or not file_path:
         return no_advisory()
 
-    _effective_root = repo_root
+    _effective_root = _owning_repo_root(file_path, repo_root)
     git_root = str(_effective_root) if _effective_root else ""
     _common_dir: Path | None = None
     try:

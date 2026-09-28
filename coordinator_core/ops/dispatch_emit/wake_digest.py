@@ -1,0 +1,490 @@
+"""
+coordinator_core.ops.dispatch_emit.wake_digest — the wake-digest contract.
+
+Purpose: the single loader/generator for `coordinator_core/contract/wake-digest.schema.json`
+(§ Design D1, docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md). Everything
+that reads or emits the schema goes through this module — no caller re-parses the JSON file
+or hand-writes a `$defs` literal.
+
+Pure module: `load_schema` does exactly one file read (cached); `completion_return_js` and
+`stage_schema_literal` do no I/O of their own; `validate_digest` lazily imports `jsonschema`
+so importing this module never pulls in a validator dependency for callers that only need
+the JS generator (the emitted Workflow script itself never imports Python).
+
+completion_return_js's field table is declarative and covers exactly the schema's required
+properties, recursively (AC13) — `_required_paths` walks the schema itself so the table can
+never silently drift from the contract it renders. Every string-typed leaf is wrapped in
+`_cap(expr, n)` with `n` read from that leaf's own `maxLength`, so a cap here can never
+diverge from the schema's cap.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+from pathlib import Path
+from typing import Optional
+
+_SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wake-digest.schema.json"
+
+# The script-level arrays and flag C12 declares; completion_return_js references only
+# these (plus stage-result bindings and emitter literals) — never an executor's own reply.
+RUNTIME_VARS = (
+    "_incompleteChunks",
+    "_unansweredBriefs",
+    "_stoppedBy",
+    "_notStarted",
+    "_halted",
+    "_verifications",
+)
+
+_CAP_HELPER_JS = (
+    "function _cap(s, n) { "
+    "if (s === null || s === undefined) return null; "
+    "s = String(s); "
+    "return s.length > n ? s.slice(0, n) : s; "
+    "}"
+)
+
+
+@functools.cache
+def load_schema() -> dict:
+    """The wake-digest schema, read from disk exactly once per process."""
+    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def stage_schema_literal(name: str) -> str:
+    """One of the schema's own `$defs` entries, rendered as a JS object literal.
+
+    Used as an `agent()` call's `schema:` value so the test-runner and falsifier stages
+    are pinned to exactly the shapes this contract defines — never a hand-restated copy.
+    """
+    schema = load_schema()
+    defs = schema.get("$defs", {})
+    if name not in defs:
+        raise KeyError(f"wake-digest schema has no $defs entry {name!r}")
+    return json.dumps(defs[name], sort_keys=True)
+
+
+def _resolve_ref(root: dict, node: dict) -> dict:
+    ref = node.get("$ref")
+    if not ref:
+        return node
+    if not ref.startswith("#/"):
+        raise ValueError(f"wake-digest schema carries an unsupported $ref {ref!r}")
+    target = root
+    for part in ref[2:].split("/"):
+        target = target[part]
+    return target
+
+
+def _object_candidates(root: dict, node: dict) -> list:
+    """The object-shaped schema(s) a (possibly nullable / $ref'd) node resolves to."""
+    node = _resolve_ref(root, node)
+    if "anyOf" in node:
+        out = []
+        for cand in node["anyOf"]:
+            cand = _resolve_ref(root, cand)
+            if cand.get("type") == "null":
+                continue
+            out.extend(_object_candidates(root, cand))
+        return out
+    if "properties" in node:
+        return [node]
+    return []
+
+
+def _required_paths_for_node(root: dict, node: dict, prefix: str) -> list:
+    node = _resolve_ref(root, node)
+    if node.get("type") == "array":
+        items = node.get("items", {})
+        return _required_paths_for_node(root, items, f"{prefix}[]")
+    paths: list = []
+    for obj in _object_candidates(root, node):
+        for name in obj.get("required", []):
+            full = f"{prefix}.{name}"
+            paths.append(full)
+            paths.extend(_required_paths_for_node(root, obj["properties"][name], full))
+    return paths
+
+
+def _required_paths(schema: dict) -> list:
+    """Every required property path in the schema, recursively, dot-joined with
+    `[]` marking an array's items. Declaration order, depth-first — matches the
+    order `completion_return_js`'s field table is written in.
+    """
+    paths: list = []
+    for name in schema.get("required", []):
+        paths.append(name)
+        paths.extend(_required_paths_for_node(schema, schema["properties"][name], name))
+    return paths
+
+
+def _maxlength(schema: dict, path: str) -> int:
+    node = schema
+    for part in path.split("."):
+        arr = part.endswith("[]")
+        key = part[:-2] if arr else part
+        node = _resolve_ref(schema, node)
+        candidates = node.get("anyOf")
+        if candidates:
+            node = next(
+                (c for c in (_resolve_ref(schema, c) for c in candidates) if c.get("type") != "null"),
+                candidates[0],
+            )
+        node = node["properties"][key]
+        if arr:
+            node = _resolve_ref(schema, node)["items"]
+    node = _resolve_ref(schema, node)
+    if "anyOf" in node:
+        node = next(
+            (c for c in (_resolve_ref(schema, c) for c in node["anyOf"]) if c.get("type") != "null"),
+            node,
+        )
+    if "maxLength" not in node:
+        raise ValueError(f"wake-digest schema leaf {path!r} carries no maxLength to cap against")
+    return node["maxLength"]
+
+
+def _js_lit(value) -> str:
+    """A Python literal (str/int/bool/None/list-of-str) rendered as JS source."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_js_lit(v) for v in value) + "]"
+    raise TypeError(f"no JS literal rendering for {value!r}")
+
+
+def completion_return_js(
+    *,
+    chunks,
+    width: dict,
+    plan_path,
+    deliverable_id,
+    run_base_sha,
+    test_var: Optional[str],
+    test_absent_status: str,
+    test_absent_note,
+    verification_var: str,
+    skipped_rows,
+    falsifier_var: Optional[str],
+    review_vars: Optional[dict],
+    has_commit_request: bool,
+) -> str:
+    """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
+
+    Built from one declarative field table (`_TABLE` below) mapping every schema-required
+    path to a JS source expression. `_TABLE`'s key set is asserted equal to
+    `_required_paths(load_schema())` on every call (AC13) — the table cannot silently
+    drift from the contract it renders. Expressions reference only `RUNTIME_VARS`,
+    stage-result bindings the caller passes in (`test_var`, `verification_var`,
+    `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
+    `plan_path`, ...) — never an executor's own free-text reply.
+    """
+    schema = load_schema()
+
+    def review_field(name: str, default: str = "null") -> str:
+        if not review_vars:
+            return default
+        return review_vars.get(name, default)
+
+    prep_var = review_field("prep")
+    wave_var = review_field("wave")
+    delivery_var = review_field("delivery")
+    integration_var = review_field("integration")
+    review_status_expr = (
+        f"({integration_var} ? 'integrated' : (({prep_var} || {wave_var} || {delivery_var}) ? 'unstructured' : 'not_run'))"
+        if review_vars
+        else "'not_run'"
+    )
+
+    test_present = test_var is not None
+    tests_status_expr = (
+        f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
+        f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)}))"
+        if test_present
+        else f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : {_js_lit(test_absent_status)})"
+    )
+
+    falsifier_present = falsifier_var is not None
+
+    next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
+    next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
+    if has_commit_request:
+        params_expr = (
+            "{ incomplete_chunks: " + RUNTIME_VARS[0] + ", "
+            "inline_review: " + (
+                (
+                    "(" + integration_var + " ? { integration_stem: " + integration_var + ".integration_stem, "
+                    "slices: " + integration_var + ".slices, fixes: " + integration_var + ".fixes_applied } : null)"
+                )
+                if review_vars
+                else "null"
+            )
+            + " }"
+        )
+    else:
+        params_expr = "null"
+
+    outcome_expr = (
+        f"({RUNTIME_VARS[4]} ? 'halted' : "
+        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length) ? 'incomplete' : 'completed'))"
+    )
+    completed_expr = f"({outcome_expr} === 'completed')"
+
+    decision_required_expr = (
+        f"({RUNTIME_VARS[4]} ? {RUNTIME_VARS[4]} : "
+        + (f"({delivery_var} && {delivery_var}.verdict === 'FAIL' ? 'review delivery verdict FAIL' : " if review_vars else "(")
+        + (f"({falsifier_var} && {falsifier_var}.status === 'not_met' ? 'falsifier not met' : " if falsifier_present else "(")
+        + f"({tests_status_expr} === 'fail' || {tests_status_expr} === 'error' ? 'tests failed' : "
+        + (f"({integration_var} && {integration_var}.unresolved && {integration_var}.unresolved.length ? 'unresolved review notes' : " if review_vars else "(")
+        + (f"({integration_var} && {integration_var}.rebuild_decision ? 'rebuild decision raised' : " if review_vars else "(")
+        + (f"({integration_var} && {integration_var}.brief_conformance && {integration_var}.brief_conformance.unmet ? 'brief items unmet' : " if review_vars else "(")
+        + f"({RUNTIME_VARS[0]}.length ? 'incomplete chunks' : "
+        + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null))"
+        + ")))))))"
+    )
+
+    table = {
+        "schema": "'wake-digest'",
+        "version": "1",
+        "plan.path": _js_lit(plan_path),
+        "plan.deliverable_id": _js_lit(deliverable_id),
+        "outcome": outcome_expr,
+        "completed": completed_expr,
+        "halted": f"({RUNTIME_VARS[4]} ? _cap({RUNTIME_VARS[4]}, {_maxlength(schema, 'halted')}) : null)",
+        "chunks": _js_lit(list(chunks)),
+        "criterion.status": (
+            f"({falsifier_var} ? {falsifier_var}.status : 'not_run')" if falsifier_present else "'not_run'"
+        ),
+        "criterion.observation": (
+            f"_cap({falsifier_var}.observation, {_maxlength(schema, 'criterion.observation')})"
+            if falsifier_present
+            else "null"
+        ),
+        "criterion.sidecar": (
+            f"_cap({falsifier_var}.sidecar_path ?? null, {_maxlength(schema, 'criterion.sidecar')})"
+            if falsifier_present
+            else "null"
+        ),
+        "tests.status": tests_status_expr,
+        "tests.run": f"({test_var} ? {test_var}.tests_run : null)" if test_present else "null",
+        "tests.failed": f"({test_var} ? {test_var}.tests_failed : null)" if test_present else "null",
+        "tests.build_clean": f"({test_var} ? {test_var}.build_clean : null)" if test_present else "null",
+        "tests.note": (
+            f"({test_var} ? _cap({test_var}.summary ?? null, {_maxlength(schema, 'tests.note')}) : {_js_lit(test_absent_note)})"
+            if test_present
+            else _js_lit(test_absent_note)
+        ),
+        "tests.sidecar": (
+            f"({test_var} ? _cap({test_var}.sidecar_path ?? null, {_maxlength(schema, 'tests.sidecar')}) : null)"
+            if test_present
+            else "null"
+        ),
+        "tests.per_row.verified": f"{verification_var}.length",
+        "tests.per_row.passed": f"{verification_var}.filter(v => v && v.status === 'pass').length",
+        "tests.per_row.failed[].chunk": f"{verification_var}.filter(v => v && v.status !== 'pass').map(v => v.chunk)[0]",
+        "tests.per_row.failed[].anchor": (
+            f"_cap({verification_var}.filter(v => v && v.status !== 'pass')"
+            f".map(v => v.sidecar_path ?? null)[0], "
+            f"{_maxlength(schema, 'tests.per_row.failed[].anchor')})"
+        ),
+        "tests.per_row.unstructured": f"{RUNTIME_VARS[5]}.filter(v => v === null || v === undefined).map((v, i) => i)",
+        "tests.per_row.skipped": _js_lit(list(skipped_rows)),
+        "review.status": review_status_expr,
+        "review.slices": f"({prep_var} ? {prep_var}.slices.length : null)" if review_vars else "null",
+        "review.fixes_applied": f"({integration_var} ? {integration_var}.fixes_applied : null)" if review_vars else "null",
+        "review.em_may_think_differently[].line": (
+            f"_cap(({integration_var}?.em_may_think_differently ?? []).map(x => x.line)[0], "
+            f"{_maxlength(schema, 'review.em_may_think_differently[].line')})" if review_vars else "null"
+        ),
+        "review.em_may_think_differently[].anchor": (
+            f"_cap(({integration_var}?.em_may_think_differently ?? []).map(x => x.anchor)[0], "
+            f"{_maxlength(schema, 'review.em_may_think_differently[].anchor')})" if review_vars else "null"
+        ),
+        "review.unresolved[].line": (
+            f"_cap(({integration_var}?.unresolved ?? []).map(x => x.line)[0], "
+            f"{_maxlength(schema, 'review.unresolved[].line')})" if review_vars else "null"
+        ),
+        "review.unresolved[].anchor": (
+            f"_cap(({integration_var}?.unresolved ?? []).map(x => x.anchor)[0], "
+            f"{_maxlength(schema, 'review.unresolved[].anchor')})" if review_vars else "null"
+        ),
+        "review.overflow": f"({integration_var}?.overflow ?? 0)" if review_vars else "0",
+        "review.brief_conformance.items": (
+            f"({integration_var}?.brief_conformance?.items ?? null)" if review_vars else "null"
+        ),
+        "review.brief_conformance.met": (
+            f"({integration_var}?.brief_conformance?.met ?? null)" if review_vars else "null"
+        ),
+        "review.brief_conformance.unmet": (
+            f"({integration_var}?.brief_conformance?.unmet ?? null)" if review_vars else "null"
+        ),
+        "review.rebuild_decision.line": (
+            f"_cap({integration_var}?.rebuild_decision?.line ?? null, "
+            f"{_maxlength(schema, 'review.rebuild_decision.line')})" if review_vars else "null"
+        ),
+        "review.rebuild_decision.anchor": (
+            f"_cap({integration_var}?.rebuild_decision?.anchor ?? null, "
+            f"{_maxlength(schema, 'review.rebuild_decision.anchor')})" if review_vars else "null"
+        ),
+        "review.delivery.verdict": f"({delivery_var}?.verdict ?? 'not_run')" if review_vars else "'not_run'",
+        "review.delivery.product_files": f"({delivery_var}?.product_files ?? null)" if review_vars else "null",
+        "review.delivery.claims_unbacked": (
+            f"({delivery_var}?.claims_unbacked?.length ?? null)" if review_vars else "null"
+        ),
+        "review.integration_sidecar": (
+            f"_cap({integration_var}?.sidecar_path ?? null, {_maxlength(schema, 'review.integration_sidecar')})"
+            if review_vars
+            else "null"
+        ),
+        "deviations[].chunk": f"{RUNTIME_VARS[0]}.concat({RUNTIME_VARS[1]}).concat({RUNTIME_VARS[3]})[0]",
+        "deviations[].kind": "'not_started'",
+        "deviations[].anchor": f"_cap(null, {_maxlength(schema, 'deviations[].anchor')})",
+        "run_base_sha": _js_lit(run_base_sha),
+        "width.rows": _js_lit(width["rows"]),
+        "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
+        "width.critical_path_rows": _js_lit(width["critical_path_rows"]),
+        "width.runtime_cap": "'min(16, CPUs-2)'",
+        "width.runtime_cap_on_emitting_host": _js_lit(width["runtime_cap_on_emitting_host"]),
+        "decision_required": f"_cap({decision_required_expr}, {_maxlength(schema, 'decision_required')})",
+        "next_action.kind": next_action_kind,
+        "next_action.op": next_action_op,
+        "next_action.params": params_expr,
+        "next_action.params.incomplete_chunks": _js_lit([]),
+        "next_action.params.inline_review": "null",
+        "next_action.params.inline_review.integration_stem": "null",
+        "next_action.params.inline_review.slices": "null",
+        "next_action.params.inline_review.fixes": "null",
+    }
+
+    required_list = _required_paths(schema)
+    required = set(required_list)
+    # A composite (object/array) path is discharged by its own leaves being present in
+    # the table, not by a table entry of its own — e.g. "tests.per_row" needs no direct
+    # entry once "tests.per_row.verified" etc. are covered. Fold every such ancestor out
+    # of the coverage check.
+    composite = {
+        p for p in required_list
+        if any(other != p and other.startswith(p + ".") or other.startswith(p + "[]") for other in required_list)
+    }
+    leaves = required - composite
+    missing = leaves - set(table)
+    if missing:
+        raise AssertionError(f"completion_return_js field table missing schema paths: {sorted(missing)}")
+
+    lines = [_CAP_HELPER_JS, ""]
+    lines.append("return {")
+    lines.append(f"  schema: {table['schema']},")
+    lines.append(f"  version: {table['version']},")
+    lines.append("  plan: { path: %s, deliverable_id: %s }," % (table["plan.path"], table["plan.deliverable_id"]))
+    lines.append(f"  outcome: {table['outcome']},")
+    lines.append(f"  completed: {table['completed']},")
+    lines.append(f"  halted: {table['halted']},")
+    lines.append(f"  chunks: {table['chunks']},")
+    lines.append(
+        "  criterion: { status: %s, observation: %s, sidecar: %s },"
+        % (table["criterion.status"], table["criterion.observation"], table["criterion.sidecar"])
+    )
+    lines.append("  tests: {")
+    lines.append(f"    status: {table['tests.status']},")
+    lines.append(f"    run: {table['tests.run']},")
+    lines.append(f"    failed: {table['tests.failed']},")
+    lines.append(f"    build_clean: {table['tests.build_clean']},")
+    lines.append(f"    note: {table['tests.note']},")
+    lines.append(f"    sidecar: {table['tests.sidecar']},")
+    lines.append("    per_row: {")
+    lines.append(f"      verified: {table['tests.per_row.verified']},")
+    lines.append(f"      passed: {table['tests.per_row.passed']},")
+    lines.append(
+        "      failed: (%s !== undefined ? [{ chunk: %s, anchor: %s }] : [])."
+        % (table["tests.per_row.failed[].chunk"], table["tests.per_row.failed[].chunk"], table["tests.per_row.failed[].anchor"])
+        + "filter(x => x.chunk !== undefined),"
+    )
+    lines.append(f"      unstructured: {table['tests.per_row.unstructured']},")
+    lines.append(f"      skipped: {table['tests.per_row.skipped']},")
+    lines.append("    },")
+    lines.append("  },")
+    lines.append("  review: {")
+    lines.append(f"    status: {table['review.status']},")
+    lines.append(f"    slices: {table['review.slices']},")
+    lines.append(f"    fixes_applied: {table['review.fixes_applied']},")
+    lines.append(
+        "    em_may_think_differently: (%s !== undefined ? [{ line: %s, anchor: %s }] : [])."
+        % (
+            table["review.em_may_think_differently[].line"],
+            table["review.em_may_think_differently[].line"],
+            table["review.em_may_think_differently[].anchor"],
+        )
+        + "filter(x => x.line !== undefined && x.line !== null),"
+    )
+    lines.append(
+        "    unresolved: (%s !== undefined ? [{ line: %s, anchor: %s }] : [])."
+        % (table["review.unresolved[].line"], table["review.unresolved[].line"], table["review.unresolved[].anchor"])
+        + "filter(x => x.line !== undefined && x.line !== null),"
+    )
+    lines.append(f"    overflow: {table['review.overflow']},")
+    lines.append(
+        "    brief_conformance: (%s !== null ? { items: %s, met: %s, unmet: %s } : null),"
+        % (
+            table["review.brief_conformance.items"],
+            table["review.brief_conformance.items"],
+            table["review.brief_conformance.met"],
+            table["review.brief_conformance.unmet"],
+        )
+    )
+    lines.append(
+        "    rebuild_decision: (%s !== null ? { line: %s, anchor: %s } : null),"
+        % (table["review.rebuild_decision.line"], table["review.rebuild_decision.line"], table["review.rebuild_decision.anchor"])
+    )
+    lines.append(
+        "    delivery: { verdict: %s, product_files: %s, claims_unbacked: %s },"
+        % (table["review.delivery.verdict"], table["review.delivery.product_files"], table["review.delivery.claims_unbacked"])
+    )
+    lines.append(f"    integration_sidecar: {table['review.integration_sidecar']},")
+    lines.append("  },")
+    lines.append(
+        "  deviations: %s.map(id => ({ chunk: id, kind: %s, anchor: %s })),"
+        % (
+            f"{RUNTIME_VARS[0]}.concat({RUNTIME_VARS[1]}).concat({RUNTIME_VARS[3]})",
+            table["deviations[].kind"],
+            table["deviations[].anchor"],
+        )
+    )
+    lines.append(f"  run_base_sha: {table['run_base_sha']},")
+    lines.append(
+        "  width: { rows: %s, max_concurrent_rows: %s, critical_path_rows: %s, "
+        "runtime_cap: %s, runtime_cap_on_emitting_host: %s },"
+        % (
+            table["width.rows"],
+            table["width.max_concurrent_rows"],
+            table["width.critical_path_rows"],
+            table["width.runtime_cap"],
+            table["width.runtime_cap_on_emitting_host"],
+        )
+    )
+    lines.append(f"  decision_required: {table['decision_required']},")
+    lines.append(
+        "  next_action: { kind: %s, op: %s, params: %s },"
+        % (table["next_action.kind"], table["next_action.op"], table["next_action.params"])
+    )
+    lines.append("};")
+    return "\n".join(lines)
+
+
+def validate_digest(obj: dict) -> list:
+    """Validate `obj` against the wake-digest schema; returns a list of error strings
+    (empty when valid). Lazy `jsonschema` import — only paid by callers that validate.
+    """
+    import jsonschema
+
+    validator_cls = jsonschema.validators.validator_for(load_schema())
+    validator_cls.check_schema(load_schema())
+    validator = validator_cls(load_schema())
+    return [str(err) for err in validator.iter_errors(obj)]

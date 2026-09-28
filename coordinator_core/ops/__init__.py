@@ -211,6 +211,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'leaving the surfaced entry listed)',
     ),
     (
+        "coordinator_core.ops.sizing_accept_exit_criterion",
+        'registers "sizing.accept_exit_criterion" (2026-09-27, single-target applier for '
+        'the sizing-object `exit_criterion.accepted` field — the PM\'s verbatim acceptance '
+        'of the primary success / exit criterion at the sizing touchpoint)',
+    ),
+    (
         "coordinator_core.ops.sizing_spike_verdict",
         'registers "sizing.record_spike_verdict" (2026-08-14, single-target applier for '
         'the sizing-object `premise.spike_verdict` pointer — the missing producer for the '
@@ -352,6 +358,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "workflow.fire", "workflow.fire_status"',
     ),
     ("coordinator_core.ops.review_mint.op", 'registers "review.mint_workflow"'),
+    (
+        "coordinator_core.ops.review_stamp",
+        'registers "review_stamp.mint", "review_stamp.check"',
+    ),
     ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
     ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),
     ("coordinator_core.ops.handoff_close_origin_stub", 'registers "handoff.close_origin_stub"'),

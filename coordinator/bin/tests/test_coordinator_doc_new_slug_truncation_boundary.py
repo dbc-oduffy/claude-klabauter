@@ -37,6 +37,30 @@ class TestSlugFromTitleBoundary(unittest.TestCase):
         self.assertLessEqual(len(slug), 40)
 
 
+class TestSlugFromTitleWordBoundary(unittest.TestCase):
+    """F8 (klabauter#71): a >40-char title must not be cut mid-word."""
+
+    def test_does_not_truncate_mid_word(self):
+        title = "Onboarding docs cover every subsystem end to end thoroughly"
+        slug = _MOD._slug_from_title(title)
+        self.assertLessEqual(len(slug), 40)
+        # A mid-word cut would produce a fragment like "thorough" from
+        # "thoroughly" (or similar): the slug must end on a word that is a
+        # WHOLE token from the title, not a prefix of a longer one.
+        words = title.lower().split()
+        last_word = slug.rsplit("-", 1)[-1]
+        self.assertIn(
+            last_word, words,
+            f"_slug_from_title truncated mid-word: {slug!r} (last token {last_word!r} "
+            f"is not a whole word from the title)",
+        )
+
+    def test_single_overlong_word_still_hard_cuts(self):
+        title = "a" * 60
+        slug = _MOD._slug_from_title(title)
+        self.assertEqual(len(slug), 40)
+
+
 class TestMintArtifactIdBoundary(unittest.TestCase):
     def test_30_char_cut_on_separator_does_not_double_dash(self):
         slug = _MOD._slug_from_title(_BOUNDARY_TITLE)

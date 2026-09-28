@@ -349,6 +349,29 @@ def check_offer_git_c(
                     + _cd_note_suffix,
                 )
 
+    # F10 (GH #71): a leading `cd` into a real, attached repo root (this
+    # process's own `.git` check, not a rewrite-safety argument -- see
+    # `_offer_anchor_followers`'s own "provable-equivalence" boundary,
+    # which this branch does NOT touch) is an ordinary multi-repo-container
+    # shape, not the stall this guard exists to relieve: forcing a `-C`
+    # rewrite here would LOSE cwd tracking for the very non-git followers
+    # that made `unanchored` non-empty (`_offer_anchor_followers`'s own
+    # docstring: a non-git follower resolves relative paths against the
+    # ORIGINAL cwd once `cd` is dropped). Denying the plain `cd <repo> &&
+    # ...` outright is therefore strictly worse than leaving it alone here
+    # -- the operator keeps real cwd tracking for every follower, which no
+    # `-C` suggestion this guard could offer would preserve. Narrowly
+    # scoped to `unanchored` (git-second-segment already confirmed above)
+    # and to a target that is verifiably a repo root -- an arbitrary
+    # scratch directory gets no such pass and still denies below, unchanged.
+    if (
+        unanchored
+        and cwd
+        and os.path.isdir(os.path.join(cwd, ".git"))
+        and os.path.isdir(os.path.join(target, ".git"))
+    ):
+        return None
+
     residual_note = ""
     if unanchored:
         residual_note = (

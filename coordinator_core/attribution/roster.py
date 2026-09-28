@@ -158,7 +158,6 @@ AGENT_IDENTIFIERS = (
     "research-sweep",
     "research-synthesizer",
     "research-worker",
-    "review-integrator",
     "security-audit-worker",
     "senior-front-end",
     "staff-data-sci",

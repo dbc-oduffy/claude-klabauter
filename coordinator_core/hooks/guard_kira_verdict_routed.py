@@ -201,6 +201,27 @@ def _kira_has_verified_ledger(meta: dict) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+_KIRA_CODE_REVIEWER_AGENT_TYPE = "code-reviewer"
+_KIRA_RETIRED_INTEGRATOR_AGENT_TYPE = "review-integrator"
+
+
+def _kira_counts_as_answer(meta: dict) -> bool:
+    """MK2 twin of DoE `guard-kira-verdict-routed.py::_counts_as_answer`
+    (C5): review-integrator retired, so its own `integrated_from` stamp and
+    `## Integrator Dispositions` heading both stop being answers. The two
+    remaining answers, per `review-findings.schema.json`'s `integrated_from`
+    description: the execute-review integration pass -- a code-reviewer
+    sidecar whose findings were VERIFIED (`findings_ledger` present --
+    `review-findings-ledger verify` writes that key on a passing run only) --
+    or the rebuild-route executor, the schema's sole other writer."""
+    agent_type = _kira_normalize_agent_type(meta.get("agent_type"))
+    if agent_type == _KIRA_RETIRED_INTEGRATOR_AGENT_TYPE:
+        return False
+    if agent_type == _KIRA_CODE_REVIEWER_AGENT_TYPE:
+        return "findings_ledger" in meta
+    return True
+
+
 def _kira_find_answers(kira_filename: str, in_scope: list) -> list:
     stem = _kira_stem(kira_filename)
     answers: list = []
@@ -213,6 +234,8 @@ def _kira_find_answers(kira_filename: str, in_scope: list) -> list:
         if not isinstance(integrated, list):
             continue
         if stem not in integrated and kira_filename not in integrated:
+            continue
+        if not _kira_counts_as_answer(m):
             continue
         answers.append(f)
     return answers

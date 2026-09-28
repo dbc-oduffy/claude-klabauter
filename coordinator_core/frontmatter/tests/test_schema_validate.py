@@ -4089,7 +4089,11 @@ _QUEUE_SCHEMA_PINS = {
     #   published mirror's transformed copies (31 phantom drifts); fixed at
     #   72e3baac33, so these ten are the first honest reading. handoff is held
     #   back -- major advance, separate act.
-    'review-findings': "469897344d1927702184d9cb1b7eff26c9e16ea8",
+    # Pin moved 2026-09-27 to 96bcb8fdeda580ca5657571852bafe01034c8eb4 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   retire-review-integrator plan: sync vendored review-findings schema to
+    #   DoE HEAD 96bcb8fde
+    'review-findings': "96bcb8fdeda580ca5657571852bafe01034c8eb4",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4195,7 +4199,26 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {
+    # sizing-object: 1.23.0 folds DoE's 1.22.0 in verbatim (autonomous_discharge,
+    # its allOf rule) and adds exit_criterion/interaction_mode plus one detents
+    # enum append (exit_criterion_pending). It also DROPS claude-klabauter's own R7 leaves
+    # (first-person, repo_span) relative to claude-klabauter's own prior 1.22.0 — a
+    # narrowing that is safe because DoE never carried either value, so it moves
+    # claude-klabauter strictly toward DoE rather than away from it.
+    # doe_ref is DoE's committed HEAD for this path at authoring time.
+    'sizing-object': {
+        'doe_ref': '2c3ecef6969cf012707120baf7b680094cf2cf4f',
+        'reason': (
+            'exit_criterion/interaction_mode/exit_criterion_pending land at the '
+            'sizing stage ahead of DoE upward-vendoring 1.23.0 '
+            '(pln-sizing-engine-carries-exit-cri-af770b), same declare/gate/'
+            'converge/remove lifecycle as the review-trail worked example above.'
+        ),
+        'provenance': 'pln-sizing-engine-carries-exit-cri-af770b § C1',
+        'local_shape_hash': 'b6a39f959a9e72ffd9d60415a5f1c32718995fef7bf025da9bd353f91544e6ec',
+    },
+}
 
 _QUEUE_SCHEMA_NAMES = (
     'bug-backlog',
@@ -5149,11 +5172,18 @@ class TestHeadTrackedQueueSchemaDrift:
         )
 
     def test_sizing_object_matches_doe_head(self):
-        if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        _skip_if_probe_unavailable(
-            check_schema_drift, _SCHEMAS_DIR / 'sizing-object.schema.json', _DOE_REPO
-        )
+        # No longer HEAD-tracked: sizing-object moved to an ahead-pin at
+        # 1.23.0 (pln-sizing-engine-carries-exit-cri-af770b § C1) — it is
+        # DELIBERATELY ahead of DoE HEAD (exit_criterion, interaction_mode,
+        # exit_criterion_pending; R7's first-person/repo_span dropped), so a
+        # byte-equality check_schema_drift call here would fail by design.
+        # Coverage moved to TestAheadPinRegistryRouting via
+        # `_QUEUE_SCHEMA_AHEAD_PINS['sizing-object']`, following the
+        # review-trail worked example this file's registry comment cites:
+        # declare, gate, converge, remove. Restore this as an ordinary
+        # check_schema_drift call once DoE vendors 1.23.0 and the ahead-pin
+        # entry is removed.
+        pytest.skip('sizing-object is ahead-pinned; see TestAheadPinRegistryRouting')
 
     def test_workstream_event_matches_doe_head(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
@@ -6291,6 +6321,7 @@ class TestDescribeBehavioralCases:
             'reviewed_range',
             'reviewed_targets',
             'integrated_from',
+            'findings_ledger',
             'rebuild_recommended',
             'rebuild_rationale',
             'rebuild_scope',

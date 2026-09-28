@@ -1,0 +1,242 @@
+"""
+coordinator_core.ops.sizing_accept_exit_criterion — JSON-RPC "sizing.accept_exit_criterion".
+
+Purpose: the single addressable applier for a sizing-object's `exit_criterion.accepted`
+field (2026-09-27, docs/plans/2026-09-27-sizing-carries-exit-criterion-and-interaction-mode.md
+§ C4, § Design § Acceptance). The exit criterion moves from plan time to sizing time
+(target-design.md §11): the PM now confirms the primary success / exit criterion AT the
+sizing touchpoint, and this op is what makes that confirmation a real, addressable write
+rather than a hand-edited YAML field or an inferred fact. `_scaffold_plan` (C3) and
+`prep_gate._prime_exit` (C5) both key off `exit_criterion.accepted` being non-null; this
+op is the only writer of that sub-field.
+
+Modelled directly on `sizing_discharge_surfaced.py`'s shape (single-target applier,
+`locked_rmw`, schema-validate-before-write, `contained_path`, `main_worktree_root`) — a
+single addressable applier over a different sub-field of the same sizing-object schema.
+
+What it writes: `exit_criterion.accepted = {pm_quote, on, mode}`, and `exit_criterion.
+statement` when `statement` is given (the PM's amended criterion replacing the proposed
+one). Nothing else in the document changes.
+
+Negative-spec:
+  - Does NOT write `pm_resolution`, `surfaced_to_pm`, `detents`, or `route` — those are
+    other fields with their own writers; this op touches `exit_criterion` alone.
+  - Does NOT compose or infer `pm_quote` — it is the caller's verbatim transcription of
+    what the PM said, the same live-evidence discipline `sizing.decline`'s
+    `decision_record` and `sizing.discharge_surfaced`'s `resolved_by` both put on their
+    own required params, applied here to the PM's own words instead of a file pointer.
+  - Does NOT accept an empty `pm_quote`, a `statement` write with no statement already on
+    record and none given, or a second acceptance without `supersede` — a silent
+    overwrite of an already-accepted criterion would let a later caller displace the
+    PM's own recorded acceptance without saying so.
+  - Does NOT cascade, does NOT fan out to any other artifact, does NOT git-commit. Pure
+    single-file frontmatter-shaped (whole-document YAML) mutation, the same `locked_rmw`
+    RMW discipline as every other mutating op in this package.
+  - Does NOT mint an execute stamp and does NOT let a downstream caller reuse `pm_quote`
+    as an execution utterance (Design § Anti-scope, "No execute stamp is minted and no
+    PM words are reused") — that is this op's caller's discipline to keep, not something
+    this op enforces mechanically, since it has no visibility into what a caller does
+    with its return value.
+
+Spec backlink: pln-sizing-engine-carries-exit-cri-af770b § C4
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+from typing import Optional
+
+import yaml
+
+from coordinator_core.frontmatter.primitives import write_fm_nested_field
+from coordinator_core.frontmatter.schema_validate import (
+    format_validation_errors,
+    validate_frontmatter,
+)
+from coordinator_core.ipc import register_op
+from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.mode_resolution import INTERACTION_MODES
+
+# established per-module convention (see e.g. sizing_discharge_surfaced._SIZING_SCHEMA_PATH).
+_SIZING_SCHEMA_PATH: Path = (
+    Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+)
+
+
+def _validate_sizing_fm(fm_dict: dict) -> list:
+    return validate_frontmatter(fm_dict, _SIZING_SCHEMA_PATH)
+
+
+def _render_exit_criterion(mapping: dict) -> str:
+    dumped = yaml.safe_dump(
+        mapping,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=100000,
+    )
+    return "".join(f"  {line}\n" for line in dumped.rstrip("\n").split("\n"))
+
+
+def _err(msg: str) -> dict:
+    return {"exit_code": 1, "applied": False, "error": msg}
+
+
+@register_op("sizing.accept_exit_criterion")
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "sizing.accept_exit_criterion" handler.
+
+    Plain `def`, deliberately not `async def`: every step here is blocking (path
+    stats, `locked_rmw`), so a zero-await `async def` would make DISPATCH_TIMEOUT_SECS
+    silently unenforceable for this op (the incident remediated at 3241c7c95573).
+
+    Params:
+        sizing       (str)  — absolute or repo-relative path to the sizing-object under
+                              `state/sizings/`. Required.
+        pm_quote     (str)  — the PM's own verbatim words accepting the exit criterion.
+                              Required, non-empty. Never composed or paraphrased by
+                              this op or its caller.
+        statement    (str)  — the PM's amended criterion, replacing the proposed one in
+                              the same write. Optional; when omitted the statement
+                              already on record is kept.
+        mode         (str)  — the interaction_mode this sizing ran under at acceptance
+                              time. Optional, must be one of hands-on/pm/ceo when given.
+        supersede    (bool) — overwrite an already-accepted criterion. Without it, a
+                              second acceptance of an already-accepted criterion is
+                              refused.
+
+    Returns: {exit_code, applied, message|error}.
+
+    Exit-code contract:
+        exit_code 1 — a missing required param; an unknown `mode`; a `sizing_path`
+                      escaping state/sizings/ or absent on disk; no statement already
+                      on record and none given; an already-accepted criterion without
+                      `supersede`; an empty pm_quote; post-mutation schema validation
+                      failure; lock timeout.
+        exit_code 0, applied True  — exit_criterion.accepted (and, if given,
+                      exit_criterion.statement) was written.
+        exit_code 0, applied False — an identical acceptance was already recorded;
+                      idempotent no-op.
+    """
+    sizing_raw: str = (params.get("sizing") or "").strip()
+    pm_quote: str = (params.get("pm_quote") or "").strip()
+    statement_param: str = (params.get("statement") or "").strip()
+    mode: str = (params.get("mode") or "").strip()
+    supersede: bool = bool(params.get("supersede"))
+
+    if not sizing_raw:
+        return _err("missing required param: sizing")
+    if not pm_quote:
+        return _err(
+            "missing required param: pm_quote — this op records the PM's own verbatim "
+            "acceptance of the exit criterion; it never composes or infers one"
+        )
+    if mode and mode not in INTERACTION_MODES:
+        return _err(
+            f"mode must be one of {list(INTERACTION_MODES)!r}, got {mode!r}"
+        )
+    if repo_root is None:
+        return _err(
+            "sizing.accept_exit_criterion: repo_root is required "
+            "(no founding root available — handler called without socket-authoritative common_dir)"
+        )
+
+    worktree = main_worktree_root(repo_root)
+
+    p = Path(sizing_raw)
+    if not p.is_absolute():
+        p = worktree / p
+    p = contained_path(p, [worktree / "state" / "sizings"])
+    if p is None:
+        return _err(f"sizing escapes state/sizings/: {sizing_raw!r}")
+    if not p.is_file():
+        return _err(f"sizing-object not found on disk: {sizing_raw}")
+
+    _state: dict = {"applied": False}
+
+    def mutate(old_text: str) -> str:
+        try:
+            doc = yaml.safe_load(old_text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(f"accept_exit_criterion: YAML parse error: {exc}") from exc
+        if not isinstance(doc, dict):
+            raise MutateAbort("accept_exit_criterion: sizing-object is not a YAML mapping")
+
+        existing = doc.get("exit_criterion")
+        existing = existing if isinstance(existing, dict) else {}
+        existing_statement = str(existing.get("statement") or "").strip()
+        existing_accepted = existing.get("accepted")
+
+        new_statement = statement_param or existing_statement
+        if not new_statement:
+            raise MutateAbort(
+                f"refusing to accept on {p}: no statement is on record and none was "
+                "given — this op never composes a criterion on the PM's behalf"
+            )
+
+        new_accepted = {
+            "pm_quote": pm_quote,
+            "on": date.today().isoformat(),
+            "mode": mode or "hands-on",
+        }
+
+        if isinstance(existing_accepted, dict):
+            identical = (
+                existing_accepted.get("pm_quote") == pm_quote
+                and existing_accepted.get("mode") == new_accepted["mode"]
+                and new_statement == existing_statement
+            )
+            if identical:
+                return old_text
+            if not supersede:
+                raise MutateAbort(
+                    f"refusing to accept on {p}: exit_criterion.accepted already carries "
+                    f"a PM acceptance ({str(existing_accepted.get('pm_quote'))[:120]!r}) — "
+                    "pass supersede to replace it, so a second acceptance cannot "
+                    "silently displace the first"
+                )
+
+        rendered = _render_exit_criterion(
+            {"statement": new_statement, "accepted": new_accepted}
+        )
+        new_text = write_fm_nested_field(old_text, "exit_criterion", rendered)
+
+        try:
+            new_doc = yaml.safe_load(new_text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(
+                f"accept_exit_criterion: post-mutation YAML parse error: {exc}"
+            ) from exc
+        errors = _validate_sizing_fm(new_doc)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(
+                f"accept_exit_criterion: post-mutation schema validation failed: {details}"
+            )
+
+        _state["applied"] = True
+        return new_text
+
+    try:
+        locked_rmw(p, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"sizing-object disappeared before the lock could be acquired: {p}")
+    except LockTimeout as exc:
+        return _err(f"timed out waiting for file lock on {p}: {exc}")
+    except MutateAbort as exc:
+        return _err(str(exc.args[0]) if exc.args else "accept_exit_criterion: mutation aborted")
+
+    if _state["applied"]:
+        return {
+            "exit_code": 0,
+            "applied": True,
+            "message": f"recorded PM acceptance of the exit criterion on {sizing_raw}",
+        }
+    return {
+        "exit_code": 0,
+        "applied": False,
+        "message": f"{sizing_raw} already records this acceptance — idempotent no-op",
+    }

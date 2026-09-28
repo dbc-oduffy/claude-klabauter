@@ -1,6 +1,10 @@
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit.emit import _AGENT_MODEL_GRAMMAR
+from coordinator_core.ops.review_mint.compose import (
+    _AGENT_MODEL_GRAMMAR as _COMPOSE_AGENT_MODEL_GRAMMAR,
+)
 from coordinator_core.ops.review_mint.compose import ComposeError, compose
 from coordinator_core.ops.review_mint.roster import Stage
 
@@ -159,7 +163,7 @@ def test_run_nonce_omitted_by_default_leaves_prompt_unmodified():
     assert "\\n\\nrun_nonce:" not in block
 
 
-def test_no_model_key_anywhere():
+def test_no_model_key_anywhere_by_default():
     stages = [
         Stage(agents=["coordinator:prior-art-checker"], gate=True),
         Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
@@ -167,3 +171,47 @@ def test_no_model_key_anywhere():
     out = compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy)
     for _, block in out:
         assert "model:" not in block
+        assert "effort:" not in block
+
+
+def test_agent_opts_emits_model_and_effort_for_named_agent_only():
+    stages = [
+        Stage(agents=["coordinator:prior-art-checker"], gate=True),
+        Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
+    ]
+    agent_opts = {
+        "coordinator:prior-art-checker": {"model": "opus", "effort": "low"},
+    }
+    out = compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
+    gate_block = out[0][1]
+    assert "model: 'opus'" in gate_block
+    assert "effort: 'low'" in gate_block
+
+    parallel_block = out[1][1]
+    assert "model:" not in parallel_block
+    assert "effort:" not in parallel_block
+
+
+def test_agent_opts_unknown_key_refuses():
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    agent_opts = {"coordinator:prior-art-checker": {"reasoning": "extended"}}
+    with pytest.raises(ComposeError):
+        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
+
+
+def test_agent_opts_malformed_model_refuses():
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    agent_opts = {"coordinator:prior-art-checker": {"model": "-bad"}}
+    with pytest.raises(ComposeError):
+        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
+
+
+def test_agent_opts_malformed_effort_refuses():
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    agent_opts = {"coordinator:prior-art-checker": {"effort": "extreme"}}
+    with pytest.raises(ComposeError):
+        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
+
+
+def test_compose_agent_model_grammar_equals_emit_agent_model_grammar():
+    assert _COMPOSE_AGENT_MODEL_GRAMMAR == _AGENT_MODEL_GRAMMAR

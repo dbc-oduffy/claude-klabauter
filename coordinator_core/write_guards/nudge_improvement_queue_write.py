@@ -142,11 +142,7 @@ _JUSTIFICATION_LINE_RE = re.compile(
 #: `>+`. When `_JUSTIFICATION_LINE_RE`'s captured value is one of these, the
 _BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\d*$")
 
-_FIVE_QUESTIONS_DOC = (
-    "docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo — "
-    "this path is engine-relative and will not resolve in a consumer repo's "
-    "own checkout)"
-)
+_FIVE_QUESTIONS_DOC = "docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo)"
 
 _TRIVIAL_JUSTIFICATION_HINT = """
 [hook] Found a `justification:` line but its value was trivial ("1", "ok",
@@ -161,9 +157,8 @@ _TRIVIAL_PUNT_HINT = """
 [hook] trivial -- add the `justification:` line above instead.
 """
 
-_REASON_TEMPLATE = """No reason given for this {queue_label} entry ({file_path_norm}). Example:
-`justification: <one-sentence reason>` in the entry, then rerun.
-Always-forbidden cases: {five_q_doc}
+_REASON_TEMPLATE = """No reason given for this {queue_label} entry.
+Add `justification: <one-sentence reason>` and rerun. Forbidden cases: {five_q_doc}
 {legacy_prose_note}{hint}{override_block}"""
 
 _LEGACY_PROSE_NOTE = """This file is an unmigrated prose queue -- new entries belong in

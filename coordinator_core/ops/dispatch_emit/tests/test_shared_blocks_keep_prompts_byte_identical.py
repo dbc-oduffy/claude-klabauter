@@ -58,5 +58,9 @@ def test_a_fifty_wave_plan_fits_the_workflow_script_cap():
     inline = _compose(waves, shared=False)
     shared = _compose(waves, shared=True)
     assert len(shared.encode("utf-8")) < _WORKFLOW_SCRIPT_CAP
-    assert len(shared) < len(inline) / 2
+    # DAG emission (§ Design D4) dropped the per-wave commit/preflight
+    # prompt text that used to dominate the inline duplication cost, so
+    # sharing's win over inlining is smaller than the pre-DAG 2x bound --
+    # still a real, load-bearing reduction, just not that large one.
+    assert len(shared) < len(inline)
     assert emit._SHARED_VAR + " = [" in shared

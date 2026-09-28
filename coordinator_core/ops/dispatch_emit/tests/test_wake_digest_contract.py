@@ -1,0 +1,270 @@
+"""
+Tests for coordinator_core.ops.dispatch_emit.wake_digest (AC1, AC13).
+
+AC1: the schema file itself is a valid draft 2020-12 schema; its $defs hold test_result,
+row_verification_result, falsifier_result; stage_schema_literal round-trips each one;
+the review block's field names match D1's pinned producer names.
+
+AC13: completion_return_js's field table covers exactly the schema's required properties
+(recursively), every string leaf is wrapped in _cap with the schema's own maxLength, and
+the generated source references only RUNTIME_VARS / stage-result bindings / emitter
+literals — never an executor's own reply text.
+"""
+
+import json
+import subprocess
+from pathlib import Path
+
+import jsonschema
+import pytest
+
+from coordinator_core.ops.dispatch_emit import wake_digest as wd
+
+
+def _schema():
+    return wd.load_schema()
+
+
+def test_schema_is_valid_draft202012():
+    schema = _schema()
+    jsonschema.Draft202012Validator.check_schema(schema)
+    assert schema.get("x-schema-version") == "1.0.0"
+    assert all(
+        obj.get("additionalProperties") is False
+        for obj in _walk_objects(schema)
+    )
+
+
+def _walk_objects(node):
+    if isinstance(node, dict):
+        if node.get("type") == "object" or "properties" in node:
+            yield node
+        for v in node.values():
+            yield from _walk_objects(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_objects(v)
+
+
+def test_defs_hold_the_three_stage_schemas():
+    schema = _schema()
+    defs = schema["$defs"]
+    assert set(["test_result", "row_verification_result", "falsifier_result"]) <= set(defs)
+    for name in ("test_result", "row_verification_result", "falsifier_result"):
+        assert json.loads(wd.stage_schema_literal(name)) == defs[name]
+
+
+def test_stage_schema_literal_unknown_name_raises():
+    with pytest.raises(KeyError):
+        wd.stage_schema_literal("no_such_stage")
+
+
+def test_review_block_field_names_match_d1_pinned_names():
+    schema = _schema()
+    review = schema["properties"]["review"]["properties"]
+    assert "fixes_applied" in review
+    assert "unresolved" in review
+    assert "brief_conformance" in review
+    assert "rebuild_decision" in review
+    line_anchor = schema["$defs"]["line_anchor"]["properties"]
+    assert set(line_anchor) == {"line", "anchor"}
+    delivery = review["delivery"]["properties"]
+    assert "verdict" in delivery
+    assert "product_files" in delivery
+
+
+def test_load_schema_reads_the_file_exactly_once(monkeypatch):
+    wd.load_schema.cache_clear()
+    calls = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *a, **kw):
+        if self == wd._SCHEMA_PATH:
+            calls.append(1)
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    wd.load_schema()
+    wd.load_schema()
+    wd.load_schema()
+    assert len(calls) == 1
+    wd.load_schema.cache_clear()
+
+
+# --- AC13: completion_return_js -------------------------------------------------
+
+def _kwargs(**overrides):
+    base = dict(
+        chunks=["C1", "C2"],
+        width={
+            "rows": 2,
+            "max_concurrent_rows": 2,
+            "critical_path_rows": 1,
+            "runtime_cap_on_emitting_host": 14,
+        },
+        plan_path="docs/plans/x.md",
+        deliverable_id="dlv-x",
+        run_base_sha="a" * 40,
+        test_var="_testResult",
+        test_absent_status="not_run",
+        test_absent_note=None,
+        verification_var="_verifications",
+        skipped_rows=["C3"],
+        falsifier_var="_falsifier",
+        review_vars={
+            "prep": "_reviewPrep",
+            "wave": "_reviewWave",
+            "delivery": "_deliveryVerdict",
+            "integration": "_reviewIntegration",
+        },
+        has_commit_request=True,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_field_table_covers_every_required_schema_path():
+    # completion_return_js raises AssertionError internally if its table under-covers
+    # the schema's required paths; a clean return is the coverage proof.
+    js = wd.completion_return_js(**_kwargs())
+    assert "return {" in js
+
+
+def test_every_string_leaf_is_capped():
+    js = wd.completion_return_js(**_kwargs())
+    schema = _schema()
+    for path in ("halted", "decision_required", "tests.note", "tests.sidecar",
+                 "criterion.observation", "criterion.sidecar",
+                 "review.integration_sidecar"):
+        n = wd._maxlength(schema, path)
+        assert f"{n})" in js, f"expected a _cap(..., {n}) for {path!r}"
+
+
+def test_generated_js_references_no_executor_result_binding():
+    js = wd.completion_return_js(**_kwargs())
+    forbidden = ("agentReply", "executorReply", ".reply", ".output", "rawText")
+    for token in forbidden:
+        assert token not in js
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
+    js = wd.completion_return_js(**_kwargs())
+    harness = tmp_path / "harness.js"
+    harness.write_text(
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [];\n"
+        "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
+        "summary:'ok', sidecar_path:'s.md'};\n"
+        "let _verifications = [{chunk:'C1', status:'pass'}];\n"
+        "let _falsifier = {status:'met', observation:'ok', sidecar_path:'f.md'};\n"
+        "let _reviewPrep = {slices:[1,2]};\n"
+        "let _reviewWave = {};\n"
+        "let _deliveryVerdict = {verdict:'PASS', product_files:1, claims_unbacked:[]};\n"
+        "let _reviewIntegration = {fixes_applied:2, em_may_think_differently:[], "
+        "unresolved:[], overflow:0, brief_conformance:{items:1,met:1,unmet:0}, "
+        "rebuild_decision:null, sidecar_path:'i.md', integration_stem:'stem', slices:2};\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    digest = json.loads(result.stdout)
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
+    js = wd.completion_return_js(**_kwargs(
+        test_var=None,
+        falsifier_var=None,
+        review_vars=None,
+        has_commit_request=False,
+        skipped_rows=[],
+    ))
+    harness = tmp_path / "harness2.js"
+    harness.write_text(
+        "let _halted = 'stop rule fired', _incompleteChunks = [], "
+        "_unansweredBriefs = [], _notStarted = [];\n"
+        "let _verifications = [];\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    digest = json.loads(result.stdout)
+    assert digest["outcome"] == "halted"
+    assert digest["halted"] == "stop rule fired"
+    assert wd.validate_digest(digest) == []
+
+
+def _find_node():
+    import shutil
+    return shutil.which("node")
+
+
+# --- validate_digest --------------------------------------------------------
+
+def _base_digest(**overrides):
+    d = {
+        "schema": "wake-digest",
+        "version": 1,
+        "plan": {"path": "docs/plans/x.md", "deliverable_id": "dlv-x"},
+        "outcome": "completed",
+        "completed": True,
+        "halted": None,
+        "chunks": ["C1"],
+        "criterion": {"status": "met", "observation": "ok", "sidecar": None},
+        "tests": {
+            "status": "pass", "run": 1, "failed": 0, "build_clean": True,
+            "note": None, "sidecar": None,
+            "per_row": {"verified": 1, "passed": 1, "failed": [], "unstructured": [], "skipped": []},
+        },
+        "review": {
+            "status": "not_run", "slices": None, "fixes_applied": None,
+            "em_may_think_differently": [], "unresolved": [], "overflow": 0,
+            "brief_conformance": None, "rebuild_decision": None,
+            "delivery": {"verdict": "not_run", "product_files": None, "claims_unbacked": None},
+            "integration_sidecar": None,
+        },
+        "deviations": [],
+        "run_base_sha": "a" * 40,
+        "width": {
+            "rows": 1, "max_concurrent_rows": 1, "critical_path_rows": 1,
+            "runtime_cap": "min(16, CPUs-2)", "runtime_cap_on_emitting_host": 14,
+        },
+        "decision_required": None,
+        "next_action": {"kind": "none", "op": None, "params": None},
+    }
+    d.update(overrides)
+    return d
+
+
+def test_validate_digest_accepts_completed_digest():
+    assert wd.validate_digest(_base_digest()) == []
+
+
+def test_validate_digest_accepts_halted_digest():
+    d = _base_digest(outcome="halted", completed=False, halted="stop rule fired")
+    assert wd.validate_digest(d) == []
+
+
+def test_validate_digest_accepts_failing_digest():
+    d = _base_digest(outcome="incomplete", completed=False)
+    d["tests"]["status"] = "fail"
+    d["tests"]["failed"] = 3
+    assert wd.validate_digest(d) == []
+
+
+def test_validate_digest_rejects_over_cap_string():
+    d = _base_digest()
+    d["decision_required"] = "x" * 301
+    errs = wd.validate_digest(d)
+    assert errs
