@@ -4003,6 +4003,51 @@ def test_convert_editable_finder_converts_when_direct_url_names_the_root(
     assert pth.read_text(encoding="utf-8").strip() == str(package_root.resolve())
 
 
+def test_convert_editable_finder_writes_literal_engine_link_when_it_matches(
+    setup_mod, monkeypatch, tmp_path
+):
+    """Cloud path (root cause fix): when `engine_link` currently resolves onto
+    `package_root`, the `.pth` gets the LITERAL, unresolved link line -- never
+    `package_root.resolve()` -- so a later re-point of that link is followed
+    by every fresh interpreter without a second `.pth` rewrite."""
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "klabauter"
+    package_root.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    link = tmp_path / "engine-current"
+    link.symlink_to(package_root)
+
+    result = setup_mod.convert_editable_finder_to_plain_path(
+        "py", package_root, engine_link=str(link)
+    )
+
+    assert "converted" in result
+    assert pth.read_text(encoding="utf-8").strip() == str(link)
+
+
+def test_convert_editable_finder_ignores_engine_link_that_does_not_match(
+    setup_mod, monkeypatch, tmp_path
+):
+    """`engine_link` naming a DIFFERENT tree than `package_root` is not this
+    checkout's link -- falls back to the plain resolved path, unchanged."""
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "klabauter"
+    package_root.mkdir()
+    other = tmp_path / "some-other-tree"
+    other.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    result = setup_mod.convert_editable_finder_to_plain_path(
+        "py", package_root, engine_link=str(other)
+    )
+
+    assert "converted" in result
+    assert pth.read_text(encoding="utf-8").strip() == str(package_root.resolve())
+
+
 def test_convert_editable_finder_refuses_a_root_the_dist_info_does_not_name(
     setup_mod, monkeypatch, tmp_path
 ):

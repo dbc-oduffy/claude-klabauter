@@ -1045,7 +1045,11 @@ def _direct_url_names_root(site_packages: Path, package_name: str, package_root:
 
 
 def convert_editable_finder_to_plain_path(
-    interpreter: str, package_root: Path, package_name: str = "coordinator_core"
+    interpreter: str,
+    package_root: Path,
+    package_name: str = "coordinator_core",
+    *,
+    engine_link: str | None = None,
 ) -> str:
     """Rewrite `coordinator_core`'s PEP 660 strict-mode editable-install
     `.pth` file (`__editable__.coordinator_core-<version>.pth`, which
@@ -1061,6 +1065,21 @@ def convert_editable_finder_to_plain_path(
     other five fleet finders named in the plan's site-time tax (example-retrieval-repo,
     etc.) — those are other repos' surface; see C8's body for why the fleet
     figure does not move until all six convert.
+
+    `engine_link` — the stable symlink (`cloud_setup.py`'s
+    `ENGINE_CURRENT_LINK`) a cloud session pins `COORDINATOR_ENGINE_ROOT` at,
+    passed through unresolved (`os.environ["COORDINATOR_ENGINE_ROOT"]`) by
+    the cloud caller. Root-cause fix: writing `package_root.resolve()`
+    bakes the RESOLVED checkout path into the `.pth`, so a later re-point of
+    `engine_link` onto a fresher checkout (`coordinator_core.hooks.
+    repin_cloud_engine_root`) never reaches an interpreter that already
+    imported through this line — the resolved path it named is frozen
+    forever. Writing the LITERAL, unresolved link line instead means every
+    NEW interpreter's `import coordinator_core` follows wherever the link
+    currently points, with no `.pth` rewrite needed on re-point. Used only
+    when it currently resolves onto `package_root` (the install this call is
+    converting) — any other value is not this checkout's link and is
+    ignored, falling back to the plain resolved path exactly as before.
 
     Idempotent: a `.pth` already holding the plain path is left alone and
     reported as such rather than rewritten every run. The orphaned finder
@@ -1100,6 +1119,16 @@ def convert_editable_finder_to_plain_path(
         return f"skip: no {prefix}*.pth found under {site_packages}"
 
     plain_path = str(package_root.resolve())
+    if engine_link:
+        try:
+            if Path(engine_link).resolve() == package_root.resolve():
+                plain_path = engine_link
+        except OSError:
+            # Fail-safe, not a bug being hidden: an unresolvable `engine_link` (e.g. a
+            # permission error on an intermediate path component) just means we cannot confirm
+            # it names this checkout, so we fall through to the plain resolved path already
+            # assigned above -- the same behavior as `engine_link` never having been passed.
+            pass
     results: list[str] = []
     for pth in pth_files:
         try:
@@ -1461,7 +1490,9 @@ def provision_deps(
             # .pth conversion. Skipped for the venv-fallback branch above
             # (`resolved != candidate.path` there) — that path never runs
             # `-e .`, so there is no finder to convert.
-            conv_result = convert_editable_finder_to_plain_path(candidate.path, claude_klabauter_root)
+            conv_result = convert_editable_finder_to_plain_path(
+                candidate.path, claude_klabauter_root, engine_link=os.environ.get("COORDINATOR_ENGINE_ROOT")
+            )
             print(f"  [editable-finder] {conv_result}")
         elif not installs_engine and _installed_engine_root(candidate.path) == claude_klabauter_root.resolve():
             print(
