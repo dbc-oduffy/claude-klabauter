@@ -205,10 +205,42 @@ def _read_plan_frontmatter(plan_path: Path):
     return text, split
 
 
-def _resolve_terminal_commit(repo_root: Path, plan_id: str):
+def _receipt_session_id(plan_path: Path) -> Optional[str]:
+    """The `session_id` recorded in `<plan-stem>.workflow.mjs.emitted.json`,
+    the emit receipt `archive_plans._FIRE_SCRIPT_SUFFIXES` names as living
+    beside the plan (dispatch_emit/op.py's one producer). `None` on any
+    absence/parse failure -- this is a best-effort fallback identity, never
+    a hard requirement."""
+    receipt_path = plan_path.with_name(plan_path.stem + ".workflow.mjs.emitted.json")
+    if not receipt_path.exists():
+        return None
+    try:
+        import json
+
+        data = json.loads(receipt_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    session_id = data.get("session_id") if isinstance(data, dict) else None
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[Path] = None):
     """Newest-first walk of `_COMMIT_WALK_BOUND` commits, looking for an
     `Inline-Review: applies <stem>` trailer whose integration sidecar's
     frontmatter `plan_id` equals this plan's. One git spawn.
+
+    Repair-path fallback (example-retrieval-repo cc6525cf0, plan pln-mcp-index-start-
+    takes-a-verb-a-1fb99b): a commit already landed by the pre-fix engine
+    carries a sidecar with NO `plan_id` at all (the bug this fallback
+    exists to route around, § module docstring `mint`). When `plan_path` is
+    supplied, a candidate sidecar missing `plan_id` is still accepted if its
+    `lead_session_id` (or legacy `dispatched_by`) matches the `session_id`
+    the plan's own `<stem>.workflow.mjs.emitted.json` emit receipt recorded
+    -- the receipt is written by the SAME run that dispatched the sidecar,
+    so a session-id join is as strong an identity claim as `plan_id` itself
+    for a pre-fix commit. Narrow: only fires when the sidecar's `plan_id` is
+    absent (never overrides a *mismatched* `plan_id`), and only when a
+    receipt with a `session_id` exists.
 
     Returns (commit_sha, integration_sidecar_path, integration_data) or
     raises MintRefusal."""
@@ -220,6 +252,8 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str):
         )
     except _GitUnavailable as exc:
         raise MintRefusal(f"review-stamp: git log failed: {exc}") from exc
+
+    receipt_session_id = _receipt_session_id(plan_path) if plan_path is not None else None
 
     for line in out.splitlines():
         if not line.startswith(_HEADER_SENTINEL):
@@ -237,11 +271,18 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str):
             data = _load_sidecar(sidecar_path)
             if data is None:
                 continue
-            if str(data.get("plan_id") or "") == plan_id:
+            sidecar_plan_id = data.get("plan_id")
+            if str(sidecar_plan_id or "") == plan_id:
                 return sha, sidecar_path, data
+            if not sidecar_plan_id and receipt_session_id:
+                sidecar_session_id = data.get("lead_session_id") or data.get("dispatched_by")
+                if sidecar_session_id and sidecar_session_id == receipt_session_id:
+                    return sha, sidecar_path, data
     raise MintRefusal(
         f"review-stamp: no terminal commit found within {_COMMIT_WALK_BOUND} commits carrying "
-        f"an Inline-Review trailer whose integration sidecar's plan_id equals {plan_id!r}"
+        f"an Inline-Review trailer whose integration sidecar's plan_id equals {plan_id!r} "
+        "(and, for a pre-fix None-trailer commit, no sidecar's lead_session_id matched the "
+        "plan's own emit receipt session_id either)"
     )
 
 
@@ -260,7 +301,9 @@ def mint(plan_path: Path, repo_root: Path, *, build_test_path: Optional[str]) ->
     if not plan_id:
         raise MintRefusal(f"review-stamp: refusing to mint: {plan_path} carries no plan_id")
 
-    terminal_sha, integration_path, integration_data = _resolve_terminal_commit(repo_root, plan_id)
+    terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
+        repo_root, plan_id, plan_path
+    )
 
     prep_rel = integration_data.get("prep_sidecar")
     if not prep_rel:

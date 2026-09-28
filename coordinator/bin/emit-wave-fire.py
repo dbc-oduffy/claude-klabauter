@@ -36,7 +36,7 @@ wrong one. Both are accepted here, as they are in `recycle-check.py`.
 Usage:
 
     python3 emit-wave-fire.py --repo-root <abs> --trail-dir <abs> [--wave-index 0]
-                              [--plugin-root <abs>] [--dispositions-cli <abs>]
+                              [--plugin-root <abs>]
                               [--spine-check-cli <abs>]
                               [--engine-root <abs>] [--batons-per-fire 8]
 
@@ -79,7 +79,7 @@ def _resolve_plugin_root():
     """The doctrine-plugin content root, for the `--plugin-root` default.
 
     `workflows/plan-blitz.mjs` and everything under it (`agents/`, the CLI launchers a bare
-    `--dispositions-cli`/`--spine-check-cli` guess at) is a doctrine asset (§ Path resolution) that
+    `--spine-check-cli` guesses at) is a doctrine asset (§ Path resolution) that
     stays in DoE, never this module's own tree. Resolved through
     `coordinator_core.warm.caller_context :: resolve_caller_context` — the same ladder
     `mise-prep-entry.py`'s SEAM 2 uses — which itself falls back to
@@ -975,22 +975,6 @@ def _default_sidecar_cli(
     )
 
 
-def _default_dispositions_cli(
-    engine_root: Path | None, plugin_root: Path | None = None
-) -> str | None:
-    """`review-findings-ledger`, resolved the way rung 3 says the CALLER must.
-
-    The op ships no launcher on a stock install, so a bareword exits 127 and the
-    integrator reports the tool ABSENT — a misdiagnosis that gets escalated rather than
-    fixed, while the op runs fine from its own bin/. Resolve it here, where there is a
-    filesystem, and inject the literal. Returning None is honest: the workflow's brief
-    then says the caller omitted it, rather than letting the integrator guess.
-    """
-    return _settings_home_bin("review-findings-ledger") or _engine_bin(
-        engine_root, "review-findings-ledger", plugin_root
-    )
-
-
 def _emit_repair(args, repo_root: Path, trail_dir: Path, plugin_root: Path, engine_root, refuse) -> int:
     """Emit one repair fire, bound the same way a wave fire is — identity resolution included.
 
@@ -1040,9 +1024,6 @@ def _emit_repair(args, repo_root: Path, trail_dir: Path, plugin_root: Path, engi
         # every wave fire got it.
         "pluginAgentsAvailable": plugin_agents,
     }
-    dispositions = args.dispositions_cli or _default_dispositions_cli(engine_root, plugin_root)
-    if dispositions:
-        repair_args["dispositionsCli"] = dispositions
     spine_check_cli = args.spine_check_cli or _default_spine_check_cli(plugin_root)
     if spine_check_cli:
         repair_args["spineCheckCli"] = spine_check_cli
@@ -1074,6 +1055,131 @@ def _emit_repair(args, repo_root: Path, trail_dir: Path, plugin_root: Path, engi
     return EXIT_OK
 
 
+def _refuse_from_sizing(msg: str) -> int:
+    print(f"emit-wave-fire: REFUSED — {msg}", file=sys.stderr)
+    return EXIT_REFUSED
+
+
+def _emit_single_from_sizing(
+    args,
+    repo_root: Path,
+    trail_dir: Path,
+    plugin_root: Path,
+    engine_root: Path | None,
+    wave_number: int,
+) -> int:
+    """`--from-sizing`: one `mode: 'single'` fire built from an accepted sizing object.
+
+    § Pinned interfaces (plan 2026-09-27-four-turn-em-loop.md, task C5). No gate report, no
+    wave — the single baton comes straight off the sizing YAML. Refuses, exit 2, naming the
+    reason, on any of the four touchpoint checks below (each mode's touchpoint includes
+    accepting the exit criterion — M3 § touchpoints).
+    """
+    import yaml  # local import: only this code path needs it
+
+    if not trail_dir.is_dir():
+        return _refuse_from_sizing(
+            f"trail dir {trail_dir} does not exist. Scaffold it before emitting."
+        )
+    script_source = plugin_root / "workflows" / "plan-blitz.mjs"
+    if not script_source.is_file():
+        return _refuse_from_sizing(
+            f"no plan-blitz.mjs at {script_source} — the plugin root did not resolve. "
+            "Pass --plugin-root with the absolute path."
+        )
+
+    sizing_rel = args.from_sizing
+    sizing_path = repo_root / sizing_rel
+    if not sizing_path.is_file():
+        return _refuse_from_sizing(f"no sizing object at {sizing_path}")
+    try:
+        sizing = yaml.safe_load(sizing_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        return _refuse_from_sizing(f"{sizing_path} is not valid YAML: {exc}")
+    if not isinstance(sizing, dict):
+        return _refuse_from_sizing(f"{sizing_path} does not parse to a mapping")
+
+    exit_criterion = sizing.get("exit_criterion")
+    if not isinstance(exit_criterion, dict) or not exit_criterion.get("statement"):
+        return _refuse_from_sizing(
+            f"{sizing_rel} carries no `exit_criterion.statement` — nothing to hand off as this "
+            "plan's prime exit criterion."
+        )
+    if exit_criterion.get("accepted") is None:
+        return _refuse_from_sizing(
+            f"{sizing_rel} carries a null `exit_criterion.accepted` — every mode's touchpoint "
+            "includes accepting the exit criterion (M3 § touchpoints), and this sizing has not "
+            "been accepted yet."
+        )
+    interaction_mode = sizing.get("interaction_mode")
+    if not interaction_mode:
+        return _refuse_from_sizing(f"{sizing_rel} carries no `interaction_mode`")
+    route = sizing.get("route")
+    if route != "plan":
+        return _refuse_from_sizing(
+            f"{sizing_rel}'s route is {route!r}, not 'plan' — --from-sizing only fires the "
+            "single-plan Workflow"
+        )
+
+    baton = {
+        "id": sizing_path.stem,
+        "path": sizing_rel,
+        "sized": True,
+        "sizingObject": sizing_rel,
+        "tshirt": (sizing.get("estimate") or {}).get("tshirt"),
+        "route": route,
+        "exitCriterion": exit_criterion,
+        "interactionMode": interaction_mode,
+        "executionOpen": False,
+    }
+
+    plugin_agents, plugin_agents_why = _plugin_agents_available(
+        plugin_root, args.plugin_agents_available
+    )
+    if plugin_agents:
+        print(f"  agent identities: declared ({plugin_agents_why})", file=sys.stderr)
+    else:
+        print(f"  agent identities: OMITTED ({plugin_agents_why})", file=sys.stderr)
+
+    sidecar_cli = args.provision_sidecar_cli or _default_sidecar_cli(engine_root, plugin_root)
+    spine_check_cli = args.spine_check_cli or _default_spine_check_cli(plugin_root)
+    arming_check_cli = _default_arming_check_cli(plugin_root)
+    engine_ref = _engine_ref(repo_root, script_source)
+
+    wave_args = {
+        "repoRoot": str(repo_root),
+        "waveIndex": wave_number,
+        "trailDir": str(trail_dir),
+        "mode": "single",
+        "pluginAgentsAvailable": plugin_agents,
+        "engineRef": engine_ref,
+        "batons": [baton],
+    }
+    if sidecar_cli:
+        wave_args["provisionSidecarCli"] = sidecar_cli
+    if spine_check_cli:
+        wave_args["spineCheckCli"] = spine_check_cli
+    if arming_check_cli:
+        wave_args["armingCheckCli"] = arming_check_cli
+
+    try:
+        text = _bind(script_source, wave_args, args.live_engine_tree)
+    except ValueError as exc:
+        return _refuse_from_sizing(str(exc))
+
+    out = trail_dir / f"fire-{wave_number}-1.mjs"
+    out.write_text(text, encoding="utf-8", newline="\n")
+    _write_fire_receipt(out)
+    if args.json:
+        print(json.dumps({"waveIndex": wave_number, "fires": [
+            {"fire": 1, "scriptPath": str(out), "batons": [baton["id"]]}
+        ]}, indent=2))
+        return EXIT_OK
+    print(f"emit-wave-fire: single-plan fire for {baton['id']} (mode=single).")
+    print(f'\n  Workflow({{ scriptPath: "{out}" }})   # no args — they are bound')
+    return EXIT_OK
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="emit-wave-fire",
@@ -1081,6 +1187,15 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--repo-root", required=True, help="ABSOLUTE path to the repo being planned")
     ap.add_argument("--trail-dir", required=True, help="ABSOLUTE trail dir; also where scripts land")
+    ap.add_argument(
+        "--from-sizing",
+        help=(
+            "repo-relative path to an accepted sizing object. Emits ONE `mode: 'single'` fire "
+            "built from that sizing, skipping the wave/gate-report path entirely. Mutually "
+            "exclusive with --gate-report (§ Pinned interfaces, plan "
+            "2026-09-27-four-turn-em-loop.md)."
+        ),
+    )
     ap.add_argument(
         "--gate-report",
         help="frozen report for THIS wave (default: <trail-dir>/wave-<N>.gate-report.json, "
@@ -1110,7 +1225,6 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--plugin-root", help="resolved CLAUDE_PLUGIN_ROOT (default: this file's plugin root)")
     ap.add_argument("--engine-root", help="claude-klabauter root (default: $COORDINATOR_ENGINE_ROOT)")
-    ap.add_argument("--dispositions-cli", help="absolute review-findings-ledger invocation")
     ap.add_argument("--provision-sidecar-cli", help="absolute provision-sidecar invocation")
     ap.add_argument(
         "--spine-check-cli",
@@ -1176,6 +1290,15 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="emit the fire manifest as JSON")
     args = ap.parse_args(argv)
 
+    if args.from_sizing and args.gate_report:
+        print(
+            "emit-wave-fire: REFUSED — --from-sizing and --gate-report are mutually exclusive: "
+            "one fires a single-plan baton from an accepted sizing object, the other fires a "
+            "wave from a frozen gate report.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+
     repo_root = Path(args.repo_root).resolve()
     trail_dir = Path(args.trail_dir).resolve()
     plugin_root = Path(args.plugin_root).resolve() if args.plugin_root else _resolve_plugin_root()
@@ -1184,6 +1307,18 @@ def main(argv=None) -> int:
     engine_root = Path(_engine).resolve() if _engine.strip() else None
 
     wave_number = args.wave_number if args.wave_number is not None else args.wave_index
+
+    if args.from_sizing:
+        if plugin_root is None:
+            print(
+                "emit-wave-fire: REFUSED — no plugin root resolved (not installed and no "
+                "--plugin-root given). Pass --plugin-root with the absolute path.",
+                file=sys.stderr,
+            )
+            return EXIT_REFUSED
+        return _emit_single_from_sizing(
+            args, repo_root, trail_dir, plugin_root, engine_root, wave_number
+        )
 
     live_tree_refusal = _refuse_live_tree_on_a_stamped_engine(
         engine_root, args.live_engine_tree
@@ -1413,13 +1548,10 @@ def main(argv=None) -> int:
             "carry no environment prefix (`VAR=x cmd` is not a command here), so "
             "`review-findings-ledger` may fail CLAUDE_KLABAUTER_ROOT resolution inside a "
             "dispatched agent, where its diagnostic is not read. Resolve the CLIs "
-            "explicitly with --dispositions-cli / --provision-sidecar-cli.",
+            "explicitly with --provision-sidecar-cli.",
             file=sys.stderr,
         )
 
-    dispositions = args.dispositions_cli or _default_dispositions_cli(
-        engine_root, plugin_root
-    )
     sidecar_cli = args.provision_sidecar_cli or _default_sidecar_cli(
         engine_root, plugin_root
     )
@@ -1477,8 +1609,6 @@ def main(argv=None) -> int:
             "engineRef": engine_ref,
             "batons": batch,
         }
-        if dispositions:
-            wave_args["dispositionsCli"] = dispositions
         if sidecar_cli:
             wave_args["provisionSidecarCli"] = sidecar_cli
         if spine_check_cli:
@@ -1534,12 +1664,6 @@ def main(argv=None) -> int:
         f"emit-wave-fire: wave {wave_number} — {len(entries)} baton(s) across "
         f"{len(fires)} fire(s), at most {per} per fire."
     )
-    if not dispositions:
-        print(
-            "  WARNING: no review-findings-ledger resolved. The integrator brief "
-            "will say the caller omitted it; dispositions for this wave go unrecorded.",
-            file=sys.stderr,
-        )
     if not sidecar_cli:
         print(
             "  WARNING: no provision-sidecar resolved. Every reviewer will place its own "

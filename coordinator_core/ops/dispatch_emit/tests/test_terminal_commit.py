@@ -146,6 +146,48 @@ def test_inline_review_trailer(repo):
     assert "Inline-Review: applies stem1 -- execute-review: 3 slices, 2 fixes" in log
 
 
+def test_refuses_inline_review_missing_stem_or_slices(repo):
+    """example-retrieval-repo EM memo 2026-09-28-...-trailer-none: the digest handed
+    `inline_review` with no `integration_stem`/`slices` (post-review-
+    integrator-retirement drift), and this op rendered them as the literal
+    string 'None' in the landed trailer. Refuse instead of writing None."""
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
+    )
+    script = _write_script(repo, request)
+
+    missing_stem = _call(
+        repo,
+        {
+            "script_path": script,
+            "incomplete_chunks": [],
+            "inline_review": {"integration_stem": None, "slices": 3, "fixes": 2},
+        },
+    )
+    assert missing_stem["committed"] is False
+    assert "Inline-Review: applies" not in missing_stem["error"]
+    assert "integration_stem" in missing_stem["error"] or "slices" in missing_stem["error"]
+
+    missing_slices = _call(
+        repo,
+        {
+            "script_path": script,
+            "incomplete_chunks": [],
+            "inline_review": {"integration_stem": "stem1", "slices": None, "fixes": 2},
+        },
+    )
+    assert missing_slices["committed"] is False
+
+    # No commit landed either time -- HEAD is unmoved.
+    log = subprocess.run(
+        ["git", "log", "--oneline"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert "Inline-Review" not in log
+
+
 def test_drops_absent_untracked_path_and_reports_it(repo):
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     request = CommitRequest(

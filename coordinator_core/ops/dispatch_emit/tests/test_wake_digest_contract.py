@@ -174,6 +174,13 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     assert result.returncode == 0, result.stderr
     digest = json.loads(result.stdout)
     assert wd.validate_digest(digest) == []
+    # AC (terminal-commit trailer fix): inline_review carries a real stem
+    # (from _reviewIntegration.sidecar_path, never a since-retired
+    # `integration_stem`/`slices` field on the integration result itself)
+    # and a real slice count (from _reviewPrep.slices.length) -- the params
+    # dispatch.terminal_commit renders into the Inline-Review trailer.
+    inline_review = digest["next_action"]["params"]["inline_review"]
+    assert inline_review == {"integration_stem": "i", "slices": 2, "fixes": 2}
 
 
 @pytest.mark.spawns_process

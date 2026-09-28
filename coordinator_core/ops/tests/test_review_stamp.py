@@ -140,6 +140,105 @@ def test_mint_success(tmp_path):
     assert "review_stamp:" in plan_path.read_text(encoding="utf-8")
 
 
+def test_mint_falls_back_to_receipt_session_id_when_sidecar_has_no_plan_id(tmp_path):
+    """example-retrieval-repo cc6525cf0 repair path: a commit landed by the pre-fix
+    engine carries an integration sidecar with NO `plan_id` at all. `mint`
+    still resolves it via the plan's own `<stem>.workflow.mjs.emitted.json`
+    receipt's `session_id`, joined against the sidecar's `lead_session_id`."""
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    prep = share / "2026-09-27-prep.md"
+    _write_sidecar(
+        prep,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery.md"},
+        },
+    )
+    _write_sidecar(share / "2026-09-27-delivery.md", {"verdict": "PASS"})
+    integration = share / "2026-09-27-integration.md"
+    _write_sidecar(
+        integration,
+        {
+            # No plan_id -- the pre-fix shape this fallback repairs.
+            "lead_session_id": "sess1",
+            "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-27-prep.md",
+            "unresolved": [],
+            "confinement_violations": [],
+            "fixes_applied": 2,
+            "em_may_think_differently": [],
+            "brief_conformance": {"items": 1, "met": 1, "unmet": 0},
+        },
+    )
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    terminal_sha = _commit(
+        repo, "land review\n\nInline-Review: applies 2026-09-27-integration -- execute-review: 1 slices, 2 fixes"
+    )
+    build_test = share / "2026-09-27-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 10, "failed": 0})
+
+    receipt = plan_path.with_name("example.workflow.mjs.emitted.json")
+    receipt.write_text('{"session_id": "sess1", "plan": "example.md"}', encoding="utf-8")
+
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test))
+    assert stamp["terminal_commit_sha"] == terminal_sha
+
+
+def test_mint_fallback_never_matches_a_mismatched_plan_id(tmp_path):
+    """The receipt/session_id fallback only fires when the sidecar's
+    plan_id is ABSENT -- it must never override a sidecar that carries a
+    real, different plan_id."""
+    repo = _setup_repo(tmp_path, plan_id="pln-example-abc123")
+    plan_path = repo / "docs" / "plans" / "example.md"
+
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    prep = share / "2026-09-27-prep.md"
+    _write_sidecar(
+        prep,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery.md"},
+        },
+    )
+    _write_sidecar(share / "2026-09-27-delivery.md", {"verdict": "PASS"})
+    integration = share / "2026-09-27-integration.md"
+    _write_sidecar(
+        integration,
+        {
+            "plan_id": "pln-some-other-plan-999999",
+            "lead_session_id": "sess1",
+            "prep_sidecar": ".coordinator-local/subagent-share/sess1/2026-09-27-prep.md",
+            "unresolved": [],
+            "confinement_violations": [],
+            "fixes_applied": 2,
+            "em_may_think_differently": [],
+            "brief_conformance": {"items": 1, "met": 1, "unmet": 0},
+        },
+    )
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    _commit(
+        repo, "land review\n\nInline-Review: applies 2026-09-27-integration -- execute-review: 1 slices, 2 fixes"
+    )
+    build_test = share / "2026-09-27-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 10, "failed": 0})
+
+    receipt = plan_path.with_name("example.workflow.mjs.emitted.json")
+    receipt.write_text('{"session_id": "sess1", "plan": "example.md"}', encoding="utf-8")
+
+    with pytest.raises(m.MintRefusal):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
 def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

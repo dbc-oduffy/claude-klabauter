@@ -383,8 +383,6 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
                 engine dispatch goes to the published build) is a DIRECT
                 return, not a delegation — see the "no longer gate-blind in
                 the direction that mattered" note below for why that is safe.
-                The `.claude-klabauter-live-root` live-tree fallback rung was removed (PM
-                ruling: no fallback to a live tree — absence fails loudly).
       Rung 2:   machine-local registry candidate → delegated, same as Rung 1.
       Rung 3:   terminal self-location (__file__) → CANDIDATE, delegated the
                 same way — see "DISPATCH axis" note below.

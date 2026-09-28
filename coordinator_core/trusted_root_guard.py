@@ -171,6 +171,28 @@ def _plugin_mirror_root(env: dict) -> str:
     return content
 
 
+def _self_located_engine_root() -> str:
+    """Last-resort rung: this module's own on-disk location, no registry
+    entry required.
+
+    ``trusted_root_guard.py`` lives at ``<root>/coordinator_core/
+    trusted_root_guard.py``, so its ``__file__`` always names a valid root
+    for an installed copy — the exact fact a fresh box with no
+    machine-local registry at all (no env var, no registry.toml, nothing
+    configured) can still lean on. Sanity-checked (``coordinator/`` and
+    ``coordinator_core/`` siblings must both exist) rather than trusted
+    blindly — this is the engine's own on-disk shape, not harness-supplied
+    input. Returns "" if the layout doesn't match; never raises.
+    """
+    try:
+        candidate = Path(__file__).resolve().parent.parent
+    except Exception:
+        return ""
+    if (candidate / "coordinator_core").is_dir() and (candidate / "coordinator").is_dir():
+        return str(candidate)
+    return ""
+
+
 def _claude_klabauter_root(env: dict) -> str:
     """Read the registry-resolved claude-klabauter root — same shape as ``_doe_root``
     above, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
@@ -181,10 +203,13 @@ def _claude_klabauter_root(env: dict) -> str:
     so a missing/absent registry key degrades to "" rather than raising or
     shelling out):
         1. registry ``repos.claude_klabauter``               (canonical anchor)
-    Returns "" if the rung doesn't resolve — the caller (``is_trusted``)
+        2. this module's own on-disk location (``_self_located_engine_root``)
+           — last resort, closes the gap on a box with no registry at all;
+           see that function's docstring.
+    Returns "" if no rung resolves — the caller (``is_trusted``)
     treats an empty claude-klabauter root as "this anchor contributes nothing," never
-    as an error. No pointer-file fallback: absence must fail loudly rather
-    than carry a false sense of security (PM ruling).
+    as an error. No pointer-file fallback beyond that: absence must fail
+    loudly rather than carry a false sense of security (PM ruling).
     """
     content = ""
     settings_home_dir = _settings_home_dir_from_env(env)
@@ -193,6 +218,9 @@ def _claude_klabauter_root(env: dict) -> str:
         registry_value = _registry_key(settings_home_dir, CLAUDE_KLABAUTER_KEY)
         if registry_value:
             content = registry_value
+
+    if not content:
+        content = _self_located_engine_root()
 
     content = content.rstrip("\n")
     if content.endswith("/"):

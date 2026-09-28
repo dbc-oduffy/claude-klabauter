@@ -29,9 +29,11 @@
         "draft",
         "reviewed",
         "approved",
+        "blocked",
         "executing",
         "landed",
         "implemented",
+        "closed_partial",
         "deferred",
         "abandoned",
         "superseded"
@@ -505,5 +507,5 @@
     "review_verified"
   ],
   "additionalProperties": false,
-  "version": "4.7.0"
+  "version": "4.9.0"
 }

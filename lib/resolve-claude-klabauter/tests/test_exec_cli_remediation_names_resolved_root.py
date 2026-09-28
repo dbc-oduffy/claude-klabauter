@@ -101,6 +101,11 @@ def test_unresolvable_root_names_bootstrap_remedies_not_a_path(
     tmp_path, _registry, monkeypatch, capsys
 ):
     shim = _load_shim()
+    # Self-location (the last-resort __file__-based rung, added for the
+    # registry-free OSS box) would otherwise resolve THIS shim's own real
+    # on-disk checkout here — this test wants the genuinely-unresolvable
+    # case, so it forces that rung to miss too.
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     with pytest.raises(SystemExit) as excinfo:
         shim.exec_cli("anything.py", argv=[])
 

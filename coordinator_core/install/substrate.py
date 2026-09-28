@@ -5757,8 +5757,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Explicit claude-klabauter engine root, for a cold install with no "
             "machine-local registry yet. Outranks every discovered rung "
             "(sets COORDINATOR_ENGINE_ROOT, which coordinator_engine_root's "
-            "Rung 1 already reads ahead of the .claude-klabauter-live-root sentinel and the "
-            "machine-local registry) — see coordinator_core/engine_root.py."
+            "Rung 1 already reads ahead of the machine-local registry) — see coordinator_core/engine_root.py."
         ),
     )
     args = parser.parse_args(argv)

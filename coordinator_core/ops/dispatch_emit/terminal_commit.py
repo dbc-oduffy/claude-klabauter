@@ -285,6 +285,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         stem = inline_review.get("integration_stem")
         slices = inline_review.get("slices")
         fixes = inline_review.get("fixes")
+        if not stem or slices is None:
+            return _error(
+                "params.inline_review is missing integration_stem and/or slices -- "
+                "refusing to write an Inline-Review trailer with a None field "
+                f"(got: {inline_review!r})"
+            )
         message_lines.append(
             f"Inline-Review: applies {stem} -- execute-review: {slices} slices, "
             f"{fixes} fixes"

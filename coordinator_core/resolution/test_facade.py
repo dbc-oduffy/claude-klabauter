@@ -241,9 +241,21 @@ def test_resolve_operator_config_happy_path(tmp_path):
     }
 
 
-def test_resolve_operator_config_missing_claude_klabauter_root_registry_key_is_corrupt(tmp_path):
+def test_resolve_operator_config_missing_claude_klabauter_root_registry_key_is_corrupt(
+    tmp_path, monkeypatch
+):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / "registry.local.toml").unlink()
+
+    # Self-location (the last-resort __file__-based rung, added for the
+    # registry-free OSS box) would otherwise resolve THIS module's own real
+    # on-disk checkout here — this test wants the genuinely-missing-registry
+    # case, so it forces that rung to miss too.
+    import coordinator_core.trusted_root_guard as trusted_root_guard_module
+
+    monkeypatch.setattr(
+        trusted_root_guard_module, "_self_located_engine_root", lambda: ""
+    )
 
     with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):
         resolve_operator_config(env=env)

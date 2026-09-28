@@ -188,12 +188,22 @@ def test_bootstrap_import_succeeds_with_pointer_present():
     assert result.stdout.strip(), "expected _MANIFEST_PATH to print a non-empty path"
 
 
-def test_bootstrap_import_fails_loud_with_pointer_unreachable():
+def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable():
     """Case (b): DOE_ROOT/REPO_DOE_CLAUDE unset AND HOME/CLAUDE_HOME/
-    COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no rung can
-    resolve, proving the file rungs are load-bearing (not merely present)
+    COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no LIVE rung
+    can resolve, proving the file rungs are load-bearing (not merely present)
     rather than accidentally passing on ambient state. Must NOT delete or
-    edit the real pointer files/registry TOMLs; redirection only."""
+    edit the real pointer files/registry TOMLs; redirection only.
+
+    UPDATED (standalone-install fix, klabauter must run standalone per PM
+    ruling — every live rung is structurally dead on that published mirror):
+    this case now succeeds via the vendored fallback rung
+    (coordinator/bin/lib/_vendor/coordinator-registry.manifest.json) rather
+    than raising. The prior "fails loud with no rung reachable" contract is
+    retired — a genuinely unreachable-manifest failure is no longer
+    reproducible from this module alone; see
+    coordinator/bin/tests/test_coordinator_registry_vendored_fallback_rung.py
+    for the fallback rung's own dedicated coverage."""
     with tempfile.TemporaryDirectory() as _empty_home:
         env = dict(os.environ)
         env.pop("DOE_ROOT", None)
@@ -204,11 +214,11 @@ def test_bootstrap_import_fails_loud_with_pointer_unreachable():
         env["COORDINATOR_SETTINGS_HOME"] = os.path.join(_empty_home, ".coordinator-claude-settings")
         env.pop("MACHINE_LOCAL_IMPL", None)
         result = _run_import_subprocess(env)
-        assert result.returncode != 0, (
-            "expected import to fail loud when no rung can resolve a manifest "
-            f"(pointer files unreachable); stdout:\n{result.stdout}"
+        assert result.returncode == 0, (
+            "expected import to succeed via the vendored fallback rung when no "
+            f"live rung can resolve a manifest; stderr:\n{result.stderr}"
         )
-        assert "install-integrity" in result.stderr
+        assert "_vendor" in result.stdout
 
 
 # PRESENCE (case a passes via whatever ambient rung this dev box happens to

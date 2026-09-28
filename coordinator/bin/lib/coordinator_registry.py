@@ -379,6 +379,17 @@ if not os.path.exists(_MANIFEST_PATH):
             _MANIFEST_PATH = _mp_manifest_cand
             break
 
+# Last-resort rung: the OSS-published klabauter mirror carries no DoE-claude
+# checkout at all (PM ruling — klabauter must run standalone), so every live
+# rung above is structurally dead there. Vendored the same way
+# coordinator_core/frontmatter/schemas/ vendors DoE's offerable schemas
+# (b4c6df071): a byte-copy of the manifest pinned at _vendor/.doe-ref-pin,
+# checked ONLY after every live rung has already missed.
+if not os.path.exists(_MANIFEST_PATH):
+    _mp_vendored = os.path.join(_REGISTRY_LIB_DIR, "_vendor", "coordinator-registry.manifest.json")
+    if os.path.exists(_mp_vendored):
+        _MANIFEST_PATH = _mp_vendored
+
 try:
     with open(_MANIFEST_PATH, encoding="utf-8") as _f:
         _manifest = json.load(_f)

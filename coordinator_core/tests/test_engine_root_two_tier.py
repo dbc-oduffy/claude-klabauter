@@ -278,9 +278,15 @@ def test_shim_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys):
     )
 
 
-def test_shim_skew_advisory_silent_single_tier(_skew_fixture, capsys):
+def test_shim_skew_advisory_silent_single_tier(_skew_fixture, capsys, monkeypatch):
     _skew_fixture.write_registry(claude_klabauter=False)
     shim = _load_shim_for_test()
+    # Self-location (the last-resort __file__-based rung, added for the
+    # registry-free OSS box) would otherwise resolve THIS shim's own real
+    # on-disk checkout as a live tree here — this test wants the genuine
+    # single-tier (no live tree at all) case, so it forces that rung to
+    # miss too.
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
 
     root, cls = shim.resolve_claude_klabauter_root_with_class()
 
@@ -400,8 +406,12 @@ def test_wrapper_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys)
     assert "note:" in captured.err
 
 
-def test_wrapper_skew_advisory_silent_single_tier(_skew_fixture, capsys):
+def test_wrapper_skew_advisory_silent_single_tier(_skew_fixture, capsys, monkeypatch):
     _skew_fixture.write_registry(claude_klabauter=False)
+    # Force the shim's self-location rung (see the sibling shim-level test's
+    # comment) to miss too, so this stays the genuine single-tier case.
+    shim = claude_klabauter_root._load_shim()
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
 
     root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 

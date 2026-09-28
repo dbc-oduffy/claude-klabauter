@@ -105,6 +105,34 @@ class ClaudeKlabauterResolutionError(RuntimeError):
     """
 
 
+def _self_located_root() -> Optional[str]:
+    """Last-resort rung: resolve THIS module's own containing engine root
+    purely from where it lives on disk — no registry, env var, or operator
+    config required.
+
+    This file is installed at ``<root>/coordinator/lib/resolve-claude-klabauter/
+    _resolve_claude_klabauter.py`` (post-publish: ``<root>/coordinator/lib/
+    resolve-claude-klabauter/_resolve_claude_klabauter.py`` — same relative
+    depth, the rename is directory-name-only). ``__file__`` therefore always
+    names a valid root for an installed copy, with no machine-local registry
+    entry needed at all — the exact gap a fresh OSS box with no registry
+    hits: nothing is configured, but the running code already knows where it
+    lives.
+
+    Sanity-checked only (a ``coordinator_core/`` sibling must exist) — this
+    is the engine's own on-disk shape, not harness-supplied input, so this
+    is not a trust check. Returns ``None`` if the layout doesn't match
+    (e.g. this file was copied out on its own), never raises.
+    """
+    try:
+        candidate = Path(__file__).resolve().parents[3]
+    except IndexError:
+        return None
+    if (candidate / "coordinator_core").is_dir():
+        return str(candidate)
+    return None
+
+
 def _settings_home() -> Path:
     """Resolve the coordinator settings home (mirrors _claude_home.py's
     settings_home() precedence, replicated inline here rather than imported
@@ -183,8 +211,14 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
     ``machine-local set`` writes. Empty-string is a miss, not a hit (never
     overwrites a value already resolved from the other file).
 
-    No sentinel-file fallback rung: absence fails loudly (PM ruling — claude-klabauter
-    carries no live-lookup fallback).
+    Rung 2 (last resort): ``_self_located_root()`` — this module's own
+    ``__file__`` location, when nothing above resolved. Closes the gap on a
+    fresh box with no machine-local registry at all (env absent, no
+    registry.toml/registry.local.toml): the running code still knows where
+    it lives, and requires no operator config to say so.
+
+    No sentinel-file fallback rung beyond that: absence fails loudly (PM
+    ruling — claude-klabauter carries no live-lookup fallback).
 
     Raises ClaudeKlabauterResolutionError (with a fail-loud, distinct message) when:
       - no rung resolves anything,
@@ -213,6 +247,9 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
                 claude_klabauter_root = flat
 
     claude_klabauter_root = claude_klabauter_root.rstrip("\r\n").rstrip("/")
+
+    if not claude_klabauter_root:
+        claude_klabauter_root = _self_located_root() or ""
 
     if not claude_klabauter_root:
         raise ClaudeKlabauterResolutionError(

@@ -217,16 +217,31 @@ def completion_return_js(
     next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
     next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
     if has_commit_request:
+        # C11's integration stage result (`_reviewIntegration`) carries no
+        # `integration_stem`/`slices` of its own post-review-integrator-
+        # retirement -- only `fixes_applied`. `integration_stem` is derived
+        # here from the integration sidecar path the result DOES carry
+        # (`sidecar_path`, basename minus `.md` -- what `review_stamp._
+        # resolve_terminal_commit`'s `applies <stem>` trailer match expects,
+        # § `_find_sidecar_by_stem`); `slices` comes from the prep stage's
+        # own `.slices.length` (the same value `review.slices` above uses),
+        # never from the integration result. Example-retrieval-repo EM memo
+        # 2026-09-28-example-retrieval-repo-em-terminal-commit-inline-review-trailer-none.
+        if review_vars:
+            integration_stem_expr = (
+                "(" + integration_var + "?.sidecar_path ? "
+                "String(" + integration_var + ".sidecar_path).split('/').pop().replace(/\\.md$/, '') : null)"
+            )
+            slices_count_expr = f"({prep_var} ? {prep_var}.slices.length : null)"
+            inline_review_expr = (
+                "(" + integration_var + " ? { integration_stem: " + integration_stem_expr + ", "
+                "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied } : null)"
+            )
+        else:
+            inline_review_expr = "null"
         params_expr = (
             "{ incomplete_chunks: " + RUNTIME_VARS[0] + ", "
-            "inline_review: " + (
-                (
-                    "(" + integration_var + " ? { integration_stem: " + integration_var + ".integration_stem, "
-                    "slices: " + integration_var + ".slices, fixes: " + integration_var + ".fixes_applied } : null)"
-                )
-                if review_vars
-                else "null"
-            )
+            "inline_review: " + inline_review_expr
             + " }"
         )
     else:

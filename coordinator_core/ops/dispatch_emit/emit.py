@@ -1566,6 +1566,26 @@ def _plan_deliverable_id(plan_text: str) -> Optional[str]:
     return candidate
 
 
+def _plan_id(plan_text: str) -> Optional[str]:
+    """The plan's top-level frontmatter ``plan_id``, or ``None`` (fail-soft
+    like ``_plan_deliverable_id``). ``review_stamp._resolve_terminal_commit``
+    keys its `Inline-Review: applies <stem>` walk on the integration
+    sidecar's OWN `plan_id`, so this run's `plan_id` has to reach the
+    composed integration-stage prompt for the reviewer to record it there —
+    see its use in ``compose_script``'s review-wave composition."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    value = doc.get("plan_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _plan_context_preamble(context: PlanContext) -> str:
     """Compose the plan-context preamble spliced ahead of a row's own
     dispatch prompt (AC12/AC13), bounded to
@@ -2714,6 +2734,7 @@ def compose_script(
     plan_path: Optional[str] = None,
     plan_context: Optional[PlanContext] = None,
     deliverable_id: Optional[str] = None,
+    plan_id: Optional[str] = None,
     falsifier: Optional[dict] = None,
     session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
@@ -2983,13 +3004,30 @@ def compose_script(
                 targets_add(Path(repo_root), session_id, declared_paths)
             except LedgerError:
                 pass
+        # plan_id rides in prompt_head (spliced ahead of EVERY composed
+        # review-wave prompt, prep through integration) rather than a new
+        # compose_execute_review parameter -- review_mint/execute_review.py
+        # is out of this fix's scope, and prompt_head is already the
+        # designed seam for caller-supplied preamble text. Only the
+        # integration stage needs to ACT on it (write it into its own
+        # sidecar frontmatter), but a hidden per-stage prompt_head would be
+        # a second seam for one line; harmless no-op for prep/review-wave.
+        review_prompt_head = _BRIEF_PRECEDENCE_CLAUSE
+        if plan_id:
+            review_prompt_head += (
+                f"\n\nThis run's plan_id is {plan_id}. The integration stage "
+                "(only) MUST record it verbatim as a top-level `plan_id:` "
+                "frontmatter field in its own run-report sidecar -- "
+                "review_stamp._resolve_terminal_commit keys the terminal-"
+                "commit lookup on this field."
+            )
         for title, block in compose_execute_review(
             review,
             stage_schemas=review_stage_schemas,
             plan_path=plan_path or "",
             run_base_sha=run_base_sha or "",
             declared_paths=declared_paths,
-            prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+            prompt_head=review_prompt_head,
         ):
             phase_titles.append(title)
             guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
@@ -3306,6 +3344,7 @@ def emit_script(
     )
 
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
+    plan_id = _plan_id(plan_text) if plan_text else None
     falsifier = _prime_exit_criterion_falsifier(plan_text) if plan_text else None
 
     # Zero-spawn (git/git_state.py :: head_sha reads .git/HEAD directly) --
@@ -3327,6 +3366,7 @@ def emit_script(
         plan_path=spec_path.as_posix(),
         plan_context=plan_context,
         deliverable_id=deliverable_id,
+        plan_id=plan_id,
         falsifier=falsifier,
         session_id=session_id,
         agent_type_host=agent_type_host,

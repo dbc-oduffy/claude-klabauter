@@ -341,9 +341,8 @@ def _clone_root_from_live_path(live_path: str) -> str:
 
 _ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
 
-#: Cheap pointer rung, read ahead of the registry for the same reason
-#: `coordinator_core.engine_root`'s rung 1.5 reads `.claude-klabauter-live-root` ahead of its
-#: own rung 2: one file read, zero subprocesses, on a launch hot path.
+#: Cheap pointer rung, read ahead of the registry: one file read, zero
+#: subprocesses, on a launch hot path.
 _PUBLISHED_ENGINE_POINTER = ".claude-klabauter-root"
 
 #: Registry key naming the published engine mirror. Same key
