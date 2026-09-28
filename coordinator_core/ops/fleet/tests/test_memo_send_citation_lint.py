@@ -1,11 +1,16 @@
-"""memo.send holds a cross-repo send once when its body cites a
+"""memo.send repo-qualifies a cross-repo send's body when it cites a
 docs/state/coordinator/archive/cross-repo path without a repo qualifier —
-C3 (docs/plans/2026-09-11-memo-send-path-fail-loud.md).
+C3 (docs/plans/2026-09-11-memo-send-path-fail-loud.md), fixed at send time
+rather than held/refused (memo friction item 5,
+cross-repo/inbox/2026-09-28-example-retrieval-repo-em-memo-send-friction.md): an
+unqualified path in a memo sent from repo X means repo X, so it is
+qualified and delivered on the FIRST call, never a second identical retry.
 
 Unit tests (no spawn marker) exercise `_repo_qualifier_names` /
-`_unqualified_path_citations` directly. Op-level tests
-(`cadence` + `spawns_process`) seed a sender/receiver pair the same way
-`test_memo_send_duplicate_reply_warning.py` does and call `_memo_send`.
+`_unqualified_path_citations` / `_qualify_unqualified_citations` directly.
+Op-level tests (`cadence` + `spawns_process`) seed a sender/receiver pair
+the same way `test_memo_send_duplicate_reply_warning.py` does and call
+`_memo_send`.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import pytest
 
 from coordinator_core.ops.fleet.memo_send import (
     _memo_send,
+    _qualify_unqualified_citations,
     _repo_qualifier_names,
     _send_ack_path,
     _unqualified_path_citations,
@@ -107,6 +113,32 @@ class TestUnqualifiedPathCitations:
 
 
 # ---------------------------------------------------------------------------
+# _qualify_unqualified_citations
+# ---------------------------------------------------------------------------
+
+class TestQualifyUnqualifiedCitations:
+    def test_bare_path_gets_sender_qualified(self):
+        body = "See docs/x.md for detail."
+        out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
+        assert out == "See example-retrieval-repo:docs/x.md for detail."
+
+    def test_already_qualified_path_untouched(self):
+        body = "See claude-klabauter coordinator/bin/x for detail."
+        out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
+        assert out == body
+
+    def test_multiple_bare_paths_all_qualified(self):
+        body = "docs/x.md and state/y.md both matter."
+        out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
+        assert out == "example-retrieval-repo:docs/x.md and example-retrieval-repo:state/y.md both matter."
+
+    def test_no_candidates_returns_body_unchanged(self):
+        body = "Nothing path-shaped here."
+        out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
+        assert out == body
+
+
+# ---------------------------------------------------------------------------
 # Op-level
 # ---------------------------------------------------------------------------
 
@@ -122,8 +154,8 @@ def sender_and_receiver(tmp_path, monkeypatch):
     return sender_repo, receiver_repo
 
 
-class TestCitationLintHeldOnce:
-    def test_bare_path_held_once_then_delivers(self, sender_and_receiver):
+class TestCitationLintQualifiesInsteadOfHolding:
+    def test_bare_path_qualified_and_delivered_on_first_call(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
         _write_draft(
             sender_repo, "bare-path-topic",
@@ -131,22 +163,14 @@ class TestCitationLintHeldOnce:
         )
 
         first = _memo_send({"dry_run": False, "topic": "bare-path-topic"}, repo_root=sender_repo)
-        assert first["exit_code"] == 1
-        inbox = [
-            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
-            if p.name != ".gitkeep"
-        ]
-        assert inbox == []
-        ack = _send_ack_path(sender_repo, "citation-lint:bare-path-topic")
-        assert ack.is_file()
-
-        second = _memo_send({"dry_run": False, "topic": "bare-path-topic"}, repo_root=sender_repo)
-        assert second["exit_code"] == 0, second
+        assert first["exit_code"] == 0, first
         inbox = [
             p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
             if p.name != ".gitkeep"
         ]
         assert len(inbox) == 1
+        delivered = inbox[0].read_text(encoding="utf-8")
+        assert "claude-klabauter-engine:docs/x.md" in delivered
 
     def test_qualified_path_delivers_first_call(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
@@ -172,9 +196,11 @@ class TestCitationLintHeldOnce:
         result = _memo_send({"dry_run": False, "topic": "self-send-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 0, result
 
-    def test_both_c2_and_c3_held_together_then_delivers(self, sender_and_receiver, caplog):
-        # Both gates fire on ONE refusal and both acks land in that pass, so
-        # the retry the refusal promises actually sends.
+    def test_c2_holds_while_c3_qualifies_silently_in_the_background(self, sender_and_receiver, caplog):
+        # C2 (duplicate reply) still holds and refuses; C3 (citation lint) no
+        # longer holds — it qualifies the body and logs a notice, so the
+        # SAME first call that C2 refuses already carries the fixed body
+        # once C2's own predicate clears on retry.
         sender_repo, receiver_repo = sender_and_receiver
         _seed_prior_reply_row(
             sender_repo,
@@ -201,8 +227,7 @@ class TestCitationLintHeldOnce:
         assert _send_ack_path(sender_repo, "citation-lint:both-warnings-topic").is_file()
         refusal = caplog.text
         assert "already answered" in refusal
-        assert "not repo-qualified" in refusal
-        assert refusal.count("Nothing was written") == 1
+        assert "were not repo-qualified" in refusal
 
         second = _memo_send({"dry_run": False, "topic": "both-warnings-topic"}, repo_root=sender_repo)
         assert second["exit_code"] == 0, second
@@ -211,3 +236,5 @@ class TestCitationLintHeldOnce:
             if p.name != ".gitkeep"
         ]
         assert len(inbox) == 1
+        delivered = inbox[0].read_text(encoding="utf-8")
+        assert "claude-klabauter-engine:docs/x.md" in delivered

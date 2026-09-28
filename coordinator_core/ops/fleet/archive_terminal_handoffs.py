@@ -124,6 +124,7 @@ from coordinator_core.ops.ceremony.git_native import (
     REASON_WORKTREE_DIRTY,
     dirty_relpaths_from_porcelain,
 )
+from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE
 from coordinator_core.ops.fleet._common import (
     Move,
     _is_identical_duplicate,
@@ -810,15 +811,27 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
     if deployment_state in _TERMINAL_DEPLOYMENT_STATES:
         if deployment_state == "shipped":
             shipped_in = meta.get("shipped_in")
-            if not shipped_in or not shipped_in_resolved.get(str(shipped_in).strip(), False):
-                sha = str(shipped_in).strip() if shipped_in else ""
+            sha = str(shipped_in).strip() if shipped_in else ""
+            # The schema's shipped_in.pattern admits a resolvable SHA OR the
+            # sanctioned `substantively-shipped-no-commit:<YYYY-MM-DD>` token
+            # (handoff.schema.json, coordinator_core/shipped_in_tokens.py) —
+            # a batch produced no single landing commit, by design, not a
+            # missing/unresolvable value. Treating a schema-valid token as
+            # "names no object" retained every no-commit-token record
+            # fail-closed forever (it can never gain a resolvable sha), so
+            # the token is checked BEFORE the object-existence rail, never
+            # fed into `_batch_resolve_shipped_in`'s sha lookup.
+            is_no_commit_token = bool(sha) and _NO_COMMIT_TOKEN_RE.fullmatch(sha) is not None
+            if not sha or not (is_no_commit_token or shipped_in_resolved.get(sha, False)):
                 return (
                     False,
                     f"{_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE}: deployment_state=shipped "
                     + (
                         f"but shipped_in {sha!r} names no object in this repo "
                         "(abbreviations resolve from 7 hex; shorter, non-hex, or "
-                        "another repo's sha does not)"
+                        "another repo's sha does not; the "
+                        "substantively-shipped-no-commit:<YYYY-MM-DD> token is also "
+                        "accepted)"
                         if sha
                         else "but shipped_in is empty"
                     )

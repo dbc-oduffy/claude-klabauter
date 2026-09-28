@@ -117,6 +117,48 @@ def test_successful_emit_prints_workflow_invocation_plan_route(tmp_path, monkeyp
     assert "Workflow({" in captured.err
 
 
+def test_plan_route_defaults_out_to_plan_basename_workflow_mjs(tmp_path, monkeypatch):
+    """DoE parity (emit-dispatch-workflow.py ``--out`` help text): the plan
+    route defaults an omitted ``--out`` to ``<plan-basename>.workflow.mjs``
+    beside the plan, rather than refusing with "--out is required"."""
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    plan_path = repo_root / "docs" / "plans" / "p.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text(
+        "---\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: Do a thing\n  writes: [\"a.txt\"]\n  body: |\n"
+        "    Write a.txt.\n```\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo_root)
+    argv = ["--plan", str(plan_path)]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    expected_out = plan_path.parent / "p.workflow.mjs"
+    assert expected_out.is_file()
+
+
+def test_queue_only_flags_without_queue_are_refused(tmp_path, monkeypatch):
+    """DoE parity (review(slice A), 08fb23d21): --appetite/--where/etc given
+    without --queue/--profile is refused rather than silently ignored by the
+    plan route."""
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    plan_path = repo_root / "docs" / "plans" / "p.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text(
+        "---\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: Do a thing\n  writes: [\"a.txt\"]\n  body: |\n"
+        "    Write a.txt.\n```\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo_root)
+    out_path = repo_root / "p.workflow.mjs"
+    argv = ["--plan", str(plan_path), "--out", str(out_path), "--limit", "5"]
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
+    assert not out_path.exists()
+
+
 def test_out_must_end_workflow_mjs(tmp_path):
     """#89 K1: an --out not ending .workflow.mjs is refused before any write."""
     repo_root = tmp_path / "repo"

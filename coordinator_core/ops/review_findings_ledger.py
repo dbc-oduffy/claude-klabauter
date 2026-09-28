@@ -18,10 +18,12 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
   - `reject --sidecar <p> --finding <id> --reason <text>`: EM-only (denied to
     subagents by `bash_guards.block_subagent_findings_reject`, M3). Restores
     `before` over `after` in the target file, marks the row `em-rejected`.
-  - `targets --add <path>...`: EM-only. Registers the review target set a
-    confined reviewer may write to
+  - `targets --add <path> [<path> ...]`: EM-only. Registers the review target
+    set a confined reviewer may write to
     (`<git_root>/.git/coordinator-sessions/<session_id>/review-targets.txt`),
     read by the re-scoped `write_guards.block_confined_agent_write` (M1).
+    `--session-id` defaults from the hook-provided session-id env
+    (`resolve_session_id`'s own precedence) when omitted.
 
 Zero git spawns. All comparisons are in-process and CRLF-normalized.
 
@@ -755,11 +757,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     reject_p.add_argument("--reason", required=True)
 
     targets_p = sub.add_parser("targets", help="EM-only: register review targets for this session.")
-    targets_p.add_argument("--add", action="append", default=[], dest="add")
+    # nargs="+" so `--add a b c` registers three paths in one call — `--add`
+    # previously accepted exactly one path per flag occurrence, forcing a
+    # shell loop for a multi-path writes: list (memo friction item 2).
+    targets_p.add_argument("--add", nargs="+", action="extend", default=[], dest="add")
     targets_p.add_argument(
         "--session-id",
-        required=True,
-        help="The invoking EM session's own id (keys the same sandbox roots the write guard reads).",
+        default=None,
+        help=(
+            "The invoking EM session's own id (keys the same sandbox roots the "
+            "write guard reads). Defaults from the hook-provided session-id env "
+            "(COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID, "
+            "same precedence as coordinator_core.session.core.resolve_session_id) "
+            "when omitted."
+        ),
     )
 
     return parser
@@ -802,12 +813,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.add:
             print("review-findings-ledger: targets --add requires at least one path", file=sys.stderr)
             return 2
+        session_id = args.session_id
+        if not session_id:
+            from coordinator_core.session.core import resolve_session_id
+
+            session_id = resolve_session_id()
+            if not session_id:
+                print(
+                    "review-findings-ledger: --session-id was not given and no "
+                    "session-id env (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / "
+                    "CLAUDE_CODE_SESSION_ID) is set — pass --session-id explicitly",
+                    file=sys.stderr,
+                )
+                return 2
         try:
-            merged = targets_add(git_root, args.session_id, args.add)
+            merged = targets_add(git_root, session_id, args.add)
         except LedgerError as exc:
             print(f"review-findings-ledger: {exc}", file=sys.stderr)
             return 1
-        print(f"review-findings-ledger: OK — {len(merged)} target(s) registered for session {args.session_id}")
+        print(f"review-findings-ledger: OK — {len(merged)} target(s) registered for session {session_id}")
         return 0
 
     parser.error(f"unknown command: {args.command}")

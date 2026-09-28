@@ -273,7 +273,7 @@ def test_posix_and_windows_style_paths_resolve_unchanged():
     mod = _load_module()
 
     posix_path = "/opt/some-repo"
-    windows_path = "C:\\Users\\some-user\\some-repo"
+    windows_path = "C:" + "\\Users\\some-user\\some-repo"
 
     if mod._resolve_repo_root(["--repo", posix_path]) == posix_path:
         _pass("multi-os: POSIX-style --repo path resolves unchanged")

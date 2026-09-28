@@ -875,6 +875,36 @@ def test_a_matching_ungated_reads_entry_clears_the_reads_hit(tmp_path):
     assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
 
 
+def test_a_matching_ungated_consumes_entry_clears_the_consumes_hit(tmp_path):
+    """DoE parity (commit 92ca01682): `consumes:`/`reads_at_head:` clear
+    exactly as `reads:` does -- the schema refuses a row mixing `reads` with
+    either, so a plan authored with `consumes:` must get the same
+    external_reads_ungated relief a `reads:`-authored row gets."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n  writes: [docs/x.md]\n"
+        "  consumes: [example-retrieval-repo/coordinator_core/x.py]\n"
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/x.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: read-only, examined, nothing to land\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
+
+
+def test_a_consumes_hit_with_no_ungated_entry_is_still_a_defect(tmp_path):
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n  writes: [docs/x.md]\n"
+        "  consumes: [example-retrieval-repo/coordinator_core/x.py]\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+
+
 def test_a_reads_hit_with_no_ungated_entry_is_still_a_defect(tmp_path):
     report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_reads_spine("")))
     assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"

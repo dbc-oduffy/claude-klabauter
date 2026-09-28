@@ -397,12 +397,48 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    if not is_queue_route:
+        # Restated from DoE-claude emit-dispatch-workflow.py (review(slice A),
+        # 08fb23d21): these flags are queue-route-only and are otherwise
+        # silently ignored by the --plan/--inventory/--restamp route -- a
+        # caller who drops --queue/--profile while editing a queue invocation
+        # gets a normal emit with no signal that these did nothing.
+        queue_only_set = [
+            flag
+            for flag, value in (
+                ("--profile", args.profile),
+                ("--appetite", args.appetite if args.appetite != "standard" else None),
+                ("--profile-dir", args.profile_dir),
+                ("--where", args.where),
+                ("--where-file", args.where_file),
+                ("--limit", args.limit),
+                ("--budget-tokens", args.budget_tokens),
+            )
+            if value
+        ]
+        if queue_only_set:
+            print(
+                f"emit-dispatch-workflow: ERROR — {', '.join(queue_only_set)} "
+                f"{'is' if len(queue_only_set) == 1 else 'are'} queue-route-only and "
+                "require --queue and --profile -- without them, the plan/inventory/"
+                "restamp route runs and silently ignores them.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
     if is_queue_route and not args.profile_dir:
         try:
             args.profile_dir = _default_profile_dir(args.profile)
         except _ProfileDirUnresolved as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_USAGE
+
+    if not args.out_path and args.plan and not is_queue_route:
+        # Default --out to <plan-basename>.workflow.mjs beside the plan, the
+        # plan route's only unambiguous target -- the queue and --inventory
+        # routes have no single plan file to derive a basename from, so they
+        # keep requiring --out explicitly.
+        args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
     if not args.out_path:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)

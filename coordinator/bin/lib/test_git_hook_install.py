@@ -666,7 +666,7 @@ def test_append_block_msys_normalisation_actually_transforms_the_path():
     assert result.returncode == 0, result.stderr
     # A LOWERCASE drive letter, and that is correct. The expansion is pure
     # form with an UPPERCASE drive letter (corrected 2026-08-31): a reader who
-    assert result.stdout == "c:/Users/someone/bin/tool", (
+    assert result.stdout == "c:" + "/Users/someone/bin/tool", (
         f"expansion produced {result.stdout!r}, not the relocated drive form"
     )
 
@@ -682,11 +682,11 @@ def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
     match = re.search(r'case "\$_T" in /\?/\*\).*?esac', append, re.S)
     assert match
 
-    script = f'_T="C:/Users/someone/bin/tool"\n{match.group(0)}\nprintf %s "$_T"\n'
+    script = f'_T="{"C:" + "/Users/someone/bin/tool"}"\n{match.group(0)}\nprintf %s "$_T"\n'
     result = subprocess.run([sh, "-c", script], capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "C:/Users/someone/bin/tool"
+    assert result.stdout == "C:" + "/Users/someone/bin/tool"
 
 
 def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():

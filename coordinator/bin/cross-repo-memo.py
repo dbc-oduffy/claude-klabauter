@@ -3205,11 +3205,21 @@ def _cmd_send(args: argparse.Namespace) -> int:
     acted_item = acted[0] if isinstance(acted[0], dict) else {}
     receiver_side_path = acted_item.get("id")
     if receiver_side_path:
-        print(f"Receiver-side: {os.path.abspath(receiver_side_path)}")
+        abs_receiver_path = os.path.abspath(receiver_side_path)
+        print(f"Receiver-side: {abs_receiver_path}")
         print(
             "That commit is the channel, not a cross-repo write grant — it "
             "touches cross-repo/ only."
         )
+        # Memo friction item 7 (cross-repo/inbox/2026-09-28-example-retrieval-repo-em-
+        # memo-send-friction.md): "a memo without PM relay is dropped in a
+        # hole" — the CLI's own docstring/comments elsewhere already claimed
+        # this line existed; it never actually printed. No live-session ping
+        # primitive exists to notify the PM directly (checked
+        # coordinator_core.session.liveness — it can only ask "is session X
+        # live", not deliver to one), so this stays the one line for the
+        # sender to hand the PM, not new infrastructure.
+        print(f"Hand the PM this path for relay: {abs_receiver_path}")
     if acted_item.get("sender_unattributed"):
         # Not a failure: the memo IS delivered. But it carries no sender, so
         # the receiver cannot reply to it by message and the only route back

@@ -334,3 +334,33 @@ def test_cli_reject_and_targets(tmp_path):
         == 0
     )
     assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py", "--session-id", "s1"]) == 0
+
+
+def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
+    assert (
+        m.main(
+            ["--root", str(tmp_path), "targets", "--add", "a.py", "b.py", "c.py", "--session-id", "s1"]
+        )
+        == 0
+    )
+    target_file = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
+    assert target_file.read_text(encoding="utf-8").splitlines() == ["a.py", "b.py", "c.py"]
+
+
+def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "env-session-9")
+
+    assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py"]) == 0
+
+    target_file = tmp_path / ".git" / "coordinator-sessions" / "env-session-9" / "review-targets.txt"
+    assert target_file.is_file()
+
+
+def test_cli_targets_add_without_session_id_or_env_refuses(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py"]) == 2

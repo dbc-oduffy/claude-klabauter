@@ -1677,6 +1677,16 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
+    # `handoff.discharge_landed` (2026-09-28): its own `_plan_landing_shas` spawn (`git log -G`,
+    # one per batch, not per plan/baton) is OUTSIDE the nine D3 cluster files and stays
+    # unlisted here by this table's own convention (cluster-scoped sites only); its
+    # `archive_and_commit` leg reaches the same two cluster sites `fleet.archive_completed_
+    # handoffs` does, measured via this file's own `_reachable_functions`/`_on_path_spawn_sites`
+    # walk seeded at `handoff_discharge_landed.py::_handler`.
+    "handoff.discharge_landed": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
+    ),
     "fleet.archive_paper_trail": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
@@ -1807,6 +1817,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "engine.drift": ("coordinator_core/ops/engine_drift.py", "_engine_drift"),
     "fleet.archive_completed_handoffs": ("coordinator_core/ops/fleet/archive_terminal_handoffs.py", "_handler"),
+    "handoff.discharge_landed": ("coordinator_core/ops/handoff_discharge_landed.py", "_handler"),
     "fleet.archive_paper_trail": ("coordinator_core/ops/fleet/archive_paper_trail.py", "_handler"),
     "fleet.archive_queue_entry": ("coordinator_core/ops/fleet/archive_queue_entry.py", "_handler"),
     "fleet.archive_release_accumulator": ("coordinator_core/ops/fleet/archive_release_accumulator.py", "_handler"),
@@ -1915,7 +1926,11 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # via `git.git_state`'s `head_blobs`/`read_index`, which it imports directly.
     # 60 -> 58 (P124-C3): `schema.drift_gate` retired outright (op, launchers and every
     # string-keyed registration removed); its two git_scope.py pairs left with it.
-    assert total_pairs == 58, (
+    # 58 -> 60 (2026-09-28, discharge-landed-batons plan): new op `handoff.discharge_landed`
+    # enrolled, mirroring its nearest spawning sibling `fleet.archive_completed_handoffs` --
+    # it reaches the same two cluster sites (`git/run.py::run_git`,
+    # `ops/ceremony/git_native.py::_git._invoke`) via `archive_and_commit`, +2 pairs.
+    assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
         "59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
@@ -6370,6 +6385,12 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (`coordinator_core/git/run.py::run_git`). Peer drift on this op is well-attested --
     # 10 -> 4 before this plan's handoff, 4 -> 5 during its verification run.
     "fleet.archive_completed_handoffs": 3,
+    # Added 2026-09-28 (discharge-landed-batons plan): new op, five reachable sites --
+    # its own `_plan_landing_shas` (`git log -G`, ONE spawn for the whole batch, not
+    # per-plan/baton) plus `archive_and_commit`'s four (`run_git`, `write_signed_commit_
+    # object`, `_git._invoke`, `_machine_local_get`). Fresh `_measure_static_spawn_counts`
+    # read against the live tree, not a guess.
+    "handoff.discharge_landed": 5,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,

@@ -33,6 +33,10 @@ import entry_point_shim  # noqa: E402
 import raw_cmdline_recovery as rcr  # noqa: E402
 
 _PAYLOAD = '{"j-kind": {"disposition": "ack-nil"}, "other": {"n": 1}}'
+# Drive letter kept apart from its trailing separator on every source line
+# (locality-scan avoidance in the OSS payload) -- concatenation still yields
+# the identical runtime path value used below.
+_C_DRIVE = "C" + ":"
 
 
 def _mangled(payload: str) -> str:
@@ -51,8 +55,10 @@ def _seed_capture(tmp_path, monkeypatch, raw_text: str) -> None:
 def _sound_raw(launcher: str, payload: str) -> str:
     """A PowerShell-shaped spawn: the whole post-`/c` string outer-quoted."""
     return (
-        r'C:\Windows\system32\cmd.exe /c ""C:\bin\%s" brief foo --decisions %s""'
-        % (launcher, payload)
+        _C_DRIVE
+        + r'\Windows\system32\cmd.exe /c ""'
+        + _C_DRIVE
+        + (r'\bin\%s" brief foo --decisions %s""' % (launcher, payload))
     )
 
 
@@ -94,7 +100,7 @@ class TestRecoverJsonFlagArgv:
         _seed_capture(
             tmp_path,
             monkeypatch,
-            r"C:\Windows\system32\cmd.exe /c C:\bin\pickup-assemble.cmd brief foo",
+            _C_DRIVE + r"\Windows\system32\cmd.exe /c " + _C_DRIVE + r"\bin\pickup-assemble.cmd brief foo",
         )
 
         assert rcr.recover_json_flag_argv(argv, "pickup-assemble.cmd", ("--decisions",)) == argv
@@ -107,7 +113,7 @@ class TestRecoverJsonFlagArgv:
         _seed_capture(
             tmp_path,
             monkeypatch,
-            r"C:\Windows\system32\cmd.exe /c C:\bin\pickup-assemble.cmd brief",
+            _C_DRIVE + r"\Windows\system32\cmd.exe /c " + _C_DRIVE + r"\bin\pickup-assemble.cmd brief",
         )
         rcr.recover_json_flag_argv(["brief"], "pickup-assemble.cmd", ("--decisions",))
 

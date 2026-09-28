@@ -5767,8 +5767,9 @@ def _default_output_path(
       handoff/spinoff/recovery -> state/handoffs/YYYY-MM-DD-<slug>.md
       roadmap-baton  -> state/handoffs/YYYY-MM-DD_000000_roadmap-<stub_id>.md
                          (HHMMSS=000000 fallback; use --out to supply the full path at runtime)
-      memo             -> state/memo-outbox/<topic>.md  (the draft path memo.send
-                          resolves a topic to; never cross-repo/inbox/, which is delivery)
+      memo             -> .coordinator-local/memo-outbox/<topic>.md  (the canonical
+                          draft path memo.send resolves a topic to; never
+                          cross-repo/inbox/, which is delivery)
       plan             -> docs/plans/YYYY-MM-DD-<slug>.md
       decision         -> docs/decisions/<dr_id>-<slug>.md  (dr_id allocated by
                           _allocate_dr_number before this call — never a DR-XXX
@@ -5808,16 +5809,22 @@ def _default_output_path(
         id_slug = stub_id if stub_id else _slug(title)
         return os.path.join("state", "handoffs", f"{today}_000000_roadmap-{id_slug}.md")
     elif doc_type == "memo":
-        # `state/memo-outbox/<topic>.md` — the ONE path `memo.send` looks a draft
-        # up by, and the shape `cross-repo-memo draft` already produces. This
-        # used to return a bare `{today}-{slug}.md`, which landed the draft in
-        # the REPO ROOT under a name `memo.send <topic>` cannot resolve: wrong
-        # directory and wrong filename in one default, so every scaffolded memo
-        # had to be moved and renamed by hand before it could be sent. No date
-        # prefix — `memo.send` keys on the bare topic slug (see
-        # `ops/fleet/memo_send.py :: _OUTBOX_DIRNAME` and its module docstring).
+        # `.coordinator-local/memo-outbox/<topic>.md` — the CANONICAL outbox
+        # dir `coordinator_core.ops.fleet.memo_draft.outbox_dir` writes (its
+        # own `MUTATES = [".coordinator-local/memo-outbox/*.md"]`), and the
+        # shape `cross-repo-memo draft` already produces. `state/memo-outbox/`
+        # is the RETIRED read-fallback only (`legacy_outbox_dir`) — this used
+        # to scaffold into it directly, giving the fleet two outboxes for one
+        # verb with no way for a sender to tell which was canonical (memo
+        # friction item 6, cross-repo/inbox/2026-09-28-example-retrieval-repo-em-memo-
+        # send-friction.md). `memo.send`/`memo.list`/`memo.reconcile` all
+        # resolve/merge both dirs already (`resolve_outbox_draft_path`,
+        # `merged_outbox_drafts`), so writing the canonical one here needs no
+        # further engine change. No date prefix — `memo.send` keys on the
+        # bare topic slug (see `ops/fleet/memo_send.py :: _OUTBOX_DIRNAME`
+        # and its module docstring).
         slug = topic if topic else _slug(title)
-        return os.path.join("state", "memo-outbox", f"{slug}.md")
+        return os.path.join(".coordinator-local", "memo-outbox", f"{slug}.md")
     elif doc_type == "plan":
         slug = _slug(title)
         return os.path.join("docs", "plans", f"{today}-{slug}.md")
@@ -5908,7 +5915,7 @@ Examples:
   # Local memo skeleton (fill body, then send via cross-repo-memo):
   coordinator-doc-new --type memo --to example-retrieval-repo-em --topic rag-liveness-query \\
       --title "Query liveness predicate contract" \\
-      --out state/memo-outbox/2026-06-25-rag-liveness-query.md
+      --out .coordinator-local/memo-outbox/rag-liveness-query.md
 
   # Architecture audit record (requires --system):
   coordinator-doc-new --type audit-record --system coordinator-runtime
@@ -6838,12 +6845,24 @@ def main(argv: "list[str] | None" = None) -> int:
         # would close the comment and inject arbitrary body text.
         to_slug = args.to
         if not _SLUG_RE.match(to_slug):
-            print(
-                f"error: --to '{to_slug}' is not a valid slug. "
-                "Use lowercase alphanumeric + dashes, starting with alphanum.",
-                file=sys.stderr,
-            )
-            return 1
+            lowered = to_slug.lower()
+            if _SLUG_RE.match(lowered):
+                # Receiver identities are mixed-case in the fleet (e.g. a repo's
+                # own -em id); lowercasing is a deterministic, lossless fix — do
+                # it and say so, rather than refusing a well-formed identity.
+                print(
+                    f"coordinator-doc-new: --to '{to_slug}' lowercased to "
+                    f"'{lowered}'.",
+                    file=sys.stderr,
+                )
+                to_slug = args.to = lowered
+            else:
+                print(
+                    f"error: --to '{to_slug}' is not a valid slug. "
+                    "Use lowercase alphanumeric + dashes, starting with alphanum.",
+                    file=sys.stderr,
+                )
+                return 1
         topic_slug = args.topic
         if not _SLUG_RE.match(topic_slug):
             print(

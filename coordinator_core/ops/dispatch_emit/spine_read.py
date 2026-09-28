@@ -772,6 +772,19 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             if isinstance(chunk, str) and chunk:
                 dependents.setdefault(chunk, []).append(row.id)
 
+    # Restated from DoE-claude emit-dispatch-workflow.py's
+    # `_transitive_gate_closure` (commit aee52a6a5): a row excluded here not
+    # because it carries a gate/operator mode itself, but because it
+    # `depends_on`, directly or through a chain, a row this loop already
+    # blocked, gets NO `exclusions` entry from the classification loop above
+    # -- that loop runs once, before this propagation, and only ever sees the
+    # row's own fields. Left unreported, such a row is silently absent from
+    # both the dispatched output AND the exclusions ledger, indistinguishable
+    # from a row that never existed. `transitive_root` records, for every
+    # row blocked ONLY by this propagation, the direct predecessor edge that
+    # blocked it, so the appended entry can name the full chain back to the
+    # row that actually carries the gate/operator mode.
+    transitive_root: dict[str, str] = {}
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
@@ -779,7 +792,30 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             if dependent_id in satisfied_ids or dependent_id in blocked_ids:
                 continue
             blocked_ids.add(dependent_id)
+            transitive_root[dependent_id] = current
             frontier.append(dependent_id)
+
+    if exclusions is not None and transitive_root:
+        already_reported = {entry.get("id") for entry in exclusions}
+        for row_id in transitive_root:
+            if row_id in already_reported:
+                continue
+            chain = [row_id]
+            cur = row_id
+            while cur in transitive_root:
+                cur = transitive_root[cur]
+                chain.append(cur)
+            exclusions.append(
+                {
+                    "id": row_id,
+                    "reason": "transitive_gate_closure",
+                    "detail": (
+                        "transitively gated via depends_on -> "
+                        + " -> ".join(chain[1:])
+                        + f"; root {chain[-1]} carries the uncleared gate/operator mode"
+                    ),
+                }
+            )
 
     excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]

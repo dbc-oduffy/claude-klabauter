@@ -723,6 +723,27 @@ _ALREADY_HAPPENED_PROSE_PATTERNS = (
     re.compile(r"\bfor traceability only\b", re.IGNORECASE),
 )
 
+# "Gate discharge claim" class: only `cleared: true` clears a gate
+# (`_uncleared_execution_gate`'s own negative spec), but a gate's
+# `condition`/`closure_evidence` prose can declare discharge in shout-case
+# while `cleared` stays unset -- the boolean read alone misses that. Restated
+# from DoE-claude `emit-dispatch-workflow.py`
+# (`_GATE_DISCHARGE_CLAIM_PATTERNS`/`_prose_contradicting_fields`, commits
+# 2b3cd386e/4537df652): a `blocks: ac-closure` gate doesn't stop the
+# wave-builder from scheduling a row, so nothing else here refuses the shape
+# the OBSERVED case hit (a gate whose prose said `SATISFIED`/`CLOSED` while
+# `cleared` stayed unset). Scoped to the gate's own `condition`/
+# `closure_evidence`, not the row `body`, so ordinary prose discussing gates
+# in the abstract never matches. Shout-case only, matching
+# `_ALREADY_HAPPENED_PROSE_PATTERNS`'s `IN FLIGHT`: a status-marker idiom,
+# never ordinary narration.
+_GATE_DISCHARGE_CLAIM_PATTERNS = (
+    re.compile(r"\bGATE CLOSED\b"),
+    re.compile(r"\bGATE SATISFIED\b"),
+    re.compile(r"\bgate is (?:now )?(?:closed|satisfied|discharged)\b", re.IGNORECASE),
+    re.compile(r"\b(?:SATISFIED|CLOSED|DISCHARGED)\s+\d{4}-\d{2}-\d{2}\b"),
+)
+
 
 def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
     """Check B. Returns ``(kind, matched_text)`` for the first prose/field
@@ -732,6 +753,18 @@ def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
     dict shape) — ``body``/``external_gate``/``disposition`` verbatim, none
     of which survive into ``WaveRow``.
     """
+    for gate in raw_row.get("external_gate") or []:
+        if not isinstance(gate, dict) or gate.get("cleared") is True:
+            continue
+        for field_name in ("condition", "closure_evidence"):
+            text = gate.get(field_name)
+            if not isinstance(text, str) or not text:
+                continue
+            for pattern in _GATE_DISCHARGE_CLAIM_PATTERNS:
+                match = pattern.search(text)
+                if match:
+                    return ("gate-discharge-claim-uncleared", match.group(0))
+
     body = raw_row.get("body")
     if not isinstance(body, str) or not body:
         return None
@@ -753,22 +786,46 @@ def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
 
 
 def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
-    """Raise ``DispatchGateViolation`` if any dispatchable row in ``rows``
-    fails Check B, naming every offending row at once.
+    """Raise ``DispatchGateViolation`` if any row fails Check B, naming every
+    offending row at once.
 
     ``raw_by_id`` maps ``row.id`` to its raw ``load_rows`` dict — the shape
-    Check B reads ``body``/``external_gate``/``disposition`` off of. A row
-    with no raw entry (should not happen; ``rows`` is derived from the same
-    source) is skipped rather than raising a spurious violation for a row
-    this check cannot actually see.
+    Check B reads ``body``/``external_gate``/``disposition`` off of.
+
+    The ``gate-discharge-claim-uncleared`` class scans EVERY row in
+    ``raw_by_id``, not only the dispatchable ``rows`` list: the row it exists
+    to catch (an uncleared ``external_gate`` whose own prose claims
+    discharge) is exactly the row ``spine_read``'s Check-A exclusion has
+    already dropped out of ``rows`` before this function ever runs — the
+    silent-exclusion gap DoE's Check B was built to surface (restated from
+    DoE-claude ``guard_against_unschedulable_rows``, commits
+    2b3cd386e/4537df652). The body-prose classes below stay scoped to
+    ``rows`` (dispatchable rows only), unchanged.
+
+    A row with no raw entry (should not happen; ``rows`` is derived from the
+    same source) is skipped rather than raising a spurious violation for a
+    row this check cannot actually see.
     """
     violations: list = []
+    for raw in raw_by_id.values():
+        contradiction = _prose_contradicting_fields(raw)
+        if contradiction is None or contradiction[0] != "gate-discharge-claim-uncleared":
+            continue
+        kind, matched = contradiction
+        row_id = raw.get("id")
+        violations.append(
+            f"row {row_id}: Check B -- an external_gate's condition/"
+            f"closure_evidence ({matched!r}) asserts the gate discharged, but "
+            f"that gate carries no cleared: true. Fix: set cleared: true if the "
+            f"gate is genuinely dischargeable, or reword the prose if it is not."
+        )
+
     for row in rows:
         raw = raw_by_id.get(row.id)
         if raw is None:
             continue
         contradiction = _prose_contradicting_fields(raw)
-        if contradiction is None:
+        if contradiction is None or contradiction[0] == "gate-discharge-claim-uncleared":
             continue
         kind, matched = contradiction
         if kind == "blocked-prose-no-gate":

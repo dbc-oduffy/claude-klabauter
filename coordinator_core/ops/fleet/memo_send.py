@@ -1091,22 +1091,50 @@ def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
     return seen
 
 
-def _citation_lint_warning(paths: list) -> str:
-    """The one-shot citation-lint warning — register, not an essay: one
-    fact (N body paths are not repo-qualified), the fix, and the way
-    through. Lists at most five paths, because the author needs examples,
-    not an inventory."""
+def _citation_lint_notice(paths: list, sender_name: str) -> str:
+    """The informational (never held/refused) citation-qualify notice: an
+    unqualified path in a memo sent from `sender_name`'s repo means
+    `sender_name`, so it is qualified at send time rather than refused —
+    refusing once and then letting an unchanged retry through taught the
+    retry, not the fix (memo friction item 5). Lists at most five paths,
+    because the author needs examples, not an inventory."""
     shown = paths[:5]
     remainder = len(paths) - len(shown)
-    listed = "\n".join(f"    {p}" for p in shown)
+    listed = "\n".join(f"    {p} -> {sender_name}:{p}" for p in shown)
     more_clause = f"\n    ...and {remainder} more" if remainder > 0 else ""
     return (
-        "memo.send: %d body path(s) are not repo-qualified, so the receiver "
-        "will resolve them against its own tree.\n"
-        "%s%s\n"
-        "  Qualify as `<repo> <path>` or `<repo>:<path>`."
-        % (len(paths), listed, more_clause)
+        "memo.send: %d body path(s) were not repo-qualified; qualified as "
+        "sent-from-%s and delivered as such.\n"
+        "%s%s"
+        % (len(paths), sender_name, listed, more_clause)
     )
+
+
+def _qualify_unqualified_citations(body: str, qualifiers: frozenset, sender_name: str) -> str:
+    """Rewrite each unqualified `docs/`/`state/`/`coordinator/`/`archive/`/
+    `cross-repo/`-rooted citation in `body` to `<sender_name>:<path>` —
+    an unqualified path in a memo sent from `sender_name`'s repo means
+    `sender_name` (memo friction item 5). Leaves already-qualified
+    citations untouched. Operates left-to-right over one pass so an
+    inserted qualifier is never itself re-matched.
+    """
+    out: list = []
+    cursor = 0
+    for match in _CITATION_ROOT_RE.finditer(body):
+        candidate = match.group(0)
+        prefix = body[cursor: match.start()]
+        qualifier_match = _CITATION_QUALIFIER_PRE_RE.search(body[: match.start()])
+        already_qualified = bool(
+            qualifier_match and qualifier_match.group(1).lower() in qualifiers
+        )
+        out.append(prefix)
+        if already_qualified:
+            out.append(candidate)
+        else:
+            out.append(f"{sender_name}:{candidate}")
+        cursor = match.end()
+    out.append(body[cursor:])
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -1683,12 +1711,32 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         qualifiers = _repo_qualifier_names(all_repos)
         unqualified = _unqualified_path_citations(body, qualifiers)
         if unqualified:
-            citation_warning = _warn_once(
+            # Repo-qualify at send time rather than refuse-then-let-an-
+            # unchanged-retry-through (memo friction item 5): an unqualified
+            # path in a memo sent from this repo means THIS repo, so fix it
+            # in the already-composed `content` (the citation-lint check runs
+            # after compose, once `all_repos` is available) and deliver the
+            # qualified body. Never held/refused.
+            sender_name = str(from_id or sender_worktree.name).strip()
+            if sender_name.endswith("-em"):
+                sender_name = sender_name[: -len("-em")]
+            split = split_frontmatter(content)
+            if split is not None:
+                content = (
+                    (split.preamble or "")
+                    + "---\n"
+                    + (split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n")
+                    + "---"
+                    + _qualify_unqualified_citations(
+                        split.body_with_leading_newline, qualifiers, sender_name,
+                    )
+                )
+            notice = _warn_once(
                 sender_worktree, f"citation-lint:{topic}",
-                _citation_lint_warning(unqualified),
+                _citation_lint_notice(unqualified, sender_name),
             )
-            if citation_warning is not None:
-                held.append(citation_warning)
+            if notice is not None:
+                _LOG.warning(notice)
 
     if held:
         return build_setup_error_result(_MODE, dry_run, _held_once_refusal(held))

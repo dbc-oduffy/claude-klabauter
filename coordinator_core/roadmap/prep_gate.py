@@ -714,13 +714,17 @@ def _path_is_unresolved_placeholder(value: str) -> bool:
 def _row_declared_paths(row: Dict[str, Any]) -> List[tuple]:
     """``(field, value)`` for every path-shaped declaration on a row.
 
-    ``surface:`` rides alongside ``writes:``/``reads:`` because it is where the
-    corpus actually names cross-repo work. A gate reading only the two array
-    fields would call a plan clean on the strength of the field its author did
-    not use.
+    ``surface:`` rides alongside ``writes:``/``reads:``/``reads_at_head:``/
+    ``consumes:`` because it is where the corpus actually names cross-repo
+    work. A gate reading only the array fields would call a plan clean on the
+    strength of the field its author did not use. ``reads_at_head``/
+    ``consumes`` are read exactly as ``reads`` is here -- the schema refuses a
+    row mixing ``reads`` with either, so a row never carries more than one of
+    the three, and each is reported under its own field name (DoE parity,
+    commit 92ca01682).
     """
     out: List[tuple] = []
-    for key in ("writes", "reads"):
+    for key in ("writes", "reads", "reads_at_head", "consumes"):
         value = row.get(key)
         if isinstance(value, list):
             out.extend((key, item) for item in value if isinstance(item, str))
@@ -784,8 +788,13 @@ def _ungated_reads(row: Dict[str, Any], row_id: str) -> "tuple[dict, list]":
     """
     entries = row.get("external_reads_ungated")
     entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-    reads = row.get("reads") if isinstance(row.get("reads"), list) else []
-    reads_set = {str(v).strip() for v in reads if isinstance(v, str)}
+    # DoE parity, commit 92ca01682: reads_at_head/consumes clear exactly as
+    # reads does -- the schema refuses a row mixing reads with either, so a
+    # row never carries more than one of the three.
+    reads_set: set = set()
+    for _reads_key in ("reads", "reads_at_head", "consumes"):
+        _reads_value = row.get(_reads_key) if isinstance(row.get(_reads_key), list) else []
+        reads_set.update(str(v).strip() for v in _reads_value if isinstance(v, str))
     writes = row.get("writes") if isinstance(row.get("writes"), list) else []
     writes_set = {str(v).strip() for v in writes if isinstance(v, str)}
     writes_under = row.get("writes_under") if isinstance(row.get("writes_under"), list) else []
@@ -925,7 +934,7 @@ def _external_deps(
             # DoE's SIBLING-NAME correlation; a value with no sibling match (the
             # ROOT-EXISTENCE leg) is not cleared by this field, matching DoE's own
             # acknowledged blind spot there.
-            if reason and field == "reads":
+            if reason and field in ("reads", "reads_at_head", "consumes"):
                 sibling = _matched_sibling(value, siblings)
                 if sibling is not None:
                     key = (value.strip(), sibling.casefold())

@@ -533,6 +533,47 @@ def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
     assert ids == set()
 
 
+def test_transitively_gated_rows_are_reported_in_exclusions(tmp_path):
+    """DoE parity (emit-dispatch-workflow.py `_transitive_gate_closure`,
+    commit aee52a6a5): a row excluded only because it `depends_on`, directly
+    or through a chain, a gated row gets its own `exclusions` entry too --
+    not only the row that carries the gate itself. Without this, a
+    transitively-blocked row is correctly absent from the dispatched output
+    AND absent from the exclusions ledger, indistinguishable from a row that
+    never existed."""
+    body = """\
+- id: C1b
+  title: gated predecessor
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+- id: C3
+  title: depends directly on the gated row
+  surface: some/surface
+  depends_on:
+    - chunk: C1b
+      gate_kind: output-consumption-runtime
+- id: C7
+  title: depends on C3, two hops from the gate
+  surface: some/surface
+  depends_on:
+    - chunk: C3
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
+    exclusions: list = []
+    rows = read_spine(plan_path, exclusions=exclusions)
+
+    assert rows == []
+    by_id = {entry["id"]: entry for entry in exclusions}
+    assert by_id["C1b"]["reason"] == "external_gate"
+    assert by_id["C3"]["reason"] == "transitive_gate_closure"
+    assert "C1b" in by_id["C3"]["detail"]
+    assert by_id["C7"]["reason"] == "transitive_gate_closure"
+    assert "C3" in by_id["C7"]["detail"] and "C1b" in by_id["C7"]["detail"]
+
+
 def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
     body = """\
 - id: C1

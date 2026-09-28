@@ -34,6 +34,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "decision_record.mint_id":                "coordinator_core.ops.decision_record_mint",
     "decision_record.release_id":             "coordinator_core.ops.decision_record_mint",
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
+    "handoff.discharge_landed":               "coordinator_core.ops.handoff_discharge_landed",
     # (see op_scopes.py::_OP_KEY_SCOPE's peer_notice.* entries, both "common_dir"),
     # owning module. Registered in _REGISTRY and _OP_KEY_SCOPE/OP_CLASSIFICATION but
     # registry_map.py::OP_MODULE_MAP gap, not a deliberate omission; per this

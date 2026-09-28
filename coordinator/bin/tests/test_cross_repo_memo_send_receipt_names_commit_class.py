@@ -61,6 +61,42 @@ def test_successful_send_receipt_names_the_commit_class(monkeypatch):
     )
 
 
+def test_successful_send_prints_the_pm_relay_line(monkeypatch):
+    # Memo friction item 7: the CLI's own docstring/comments already claimed
+    # this line existed ("Hand the PM this path for relay"); it never
+    # actually printed (cross-repo/inbox/2026-09-28-example-retrieval-repo-em-memo-
+    # send-friction.md).
+    mod = _load_cli_module()
+
+    fake_cc_invoke = types.SimpleNamespace(
+        route_mutation=lambda op, payload, sender_root, legacy: {
+            "exit_code": 0,
+            "acted": [{"id": "state/memo-outbox/sent/some-topic.md"}],
+        }
+    )
+    monkeypatch.setitem(sys.modules, "cc_invoke", fake_cc_invoke)
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(_BIN_DIR.parent.parent))
+    monkeypatch.setattr(mod, "_warn_if_unregistered_sender", lambda: None)
+
+    args = argparse.Namespace(topic="some-topic")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = mod._cmd_send(args)
+
+    assert rc == 0
+    out = buf.getvalue()
+    assert "Hand the PM this path for relay:" in out
+    import os
+
+    receiver_line = next(line for line in out.splitlines() if line.startswith("Receiver-side:"))
+    receiver_path = receiver_line.split("Receiver-side:", 1)[1].strip()
+    relay_line = next(
+        line for line in out.splitlines() if line.startswith("Hand the PM this path for relay:")
+    )
+    relay_path = relay_line.split("Hand the PM this path for relay:", 1)[1].strip()
+    assert relay_path == receiver_path == os.path.abspath("state/memo-outbox/sent/some-topic.md")
+
+
 def test_sender_commit_failure_receipt_still_names_the_recovery_path(monkeypatch, capsys):
     mod = _load_cli_module()
 

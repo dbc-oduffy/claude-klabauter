@@ -157,6 +157,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.propagate_body", 'registers "handoff.propagate"'),
     ("coordinator_core.ops.handoff_phase_stamp", 'registers "handoff.stamp_phase"'),
     ("coordinator_core.ops.handoff_ship_archive", 'registers "handoff.ship_and_archive"'),
+    ("coordinator_core.ops.handoff_discharge_landed", 'registers "handoff.discharge_landed"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),

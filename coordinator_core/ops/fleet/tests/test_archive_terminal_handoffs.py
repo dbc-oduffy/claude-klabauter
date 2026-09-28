@@ -1653,6 +1653,51 @@ def test_the_unresolvable_shipped_in_refusal_names_the_sha_and_the_real_rule():
     assert "empty" in empty_reason, empty_reason
 
 
+def test_no_commit_token_shipped_in_classifies_as_shipped_not_unresolvable():
+    """`substantively-shipped-no-commit:<YYYY-MM-DD>` is a SCHEMA-VALID
+    `shipped_in` value (handoff.schema.json's own pattern admits a SHA OR
+    this token) — a batch that shipped with no single landing commit, by
+    design. `_classify_branch` must qualify it as shipped, never fall
+    through to `shipped-in-unresolvable` fail-closed retention."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _classify_branch
+
+    qualifies, reason, label, branch_b = _classify_branch(
+        {
+            "status": "claimed",
+            "deployment_state": "shipped",
+            "shipped_in": "substantively-shipped-no-commit:2026-07-27",
+        },
+        {},  # shipped_in_resolved intentionally empty — the token never
+        # reaches the sha-existence lookup, so an empty resolved-map must
+        # not matter.
+    )
+    assert qualifies is True, (reason, label)
+    assert label == "shipped"
+    assert branch_b is True
+
+
+def test_no_commit_token_shipped_in_wrong_shape_still_unresolvable():
+    """A near-miss token (no date, non-numeric date, or a stray suffix) must
+    NOT be admitted — only a byte-exact `substantively-shipped-no-commit:
+    <YYYY-MM-DD>` token matches the schema pattern; anything else stays a
+    real `shipped-in-unresolvable` refusal."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE,
+        _classify_branch,
+    )
+
+    for bad_token in (
+        "substantively-shipped-no-commit:",
+        "substantively-shipped-no-commit:2026-13-99extra",
+        "not-a-token-at-all",
+    ):
+        qualifies, reason, _label, _b = _classify_branch(
+            {"status": "claimed", "deployment_state": "shipped", "shipped_in": bad_token}, {}
+        )
+        assert qualifies is False, (bad_token, reason)
+        assert reason.startswith(_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE), (bad_token, reason)
+
+
 def test_a_common_dir_that_is_not_a_git_dir_is_a_caller_error(repo: Path):
     """A wrong `common_dir` used to answer False for every sha and surface as
     a per-baton `shipped-in-unresolvable` — a caller's bad argument wearing a

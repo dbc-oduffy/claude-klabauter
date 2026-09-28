@@ -1815,6 +1815,46 @@ def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path):
         emit.emit_script(plan_path, repo_root=tmp_path)
 
 
+def test_gate_discharge_claim_uncleared_raises(tmp_path):
+    """DoE parity (2b3cd386e/4537df652): a gate whose condition prose
+    declares discharge in shout-case while `cleared` stays unset is refused,
+    even though the row body itself carries no contradicting prose."""
+    gate = (
+        "  external_gate:\n"
+        "    - owner_repo: DoE-claude\n"
+        "      condition: GATE SATISFIED 2026-09-02\n"
+        "      requires: landed-work\n"
+    )
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body("Ordinary body prose.", external_gate=gate),
+        encoding="utf-8",
+    )
+    with pytest.raises(emit.DispatchGateViolation) as excinfo:
+        emit.emit_script(plan_path, repo_root=tmp_path)
+    assert "Check B" in str(excinfo.value)
+    assert "gate" in str(excinfo.value).lower()
+
+
+def test_gate_discharge_claim_cleared_does_not_raise(tmp_path):
+    """The same discharge-claim prose on a gate that DOES carry
+    `cleared: true` is not a Check B violation -- the prose and the field
+    agree."""
+    gate = (
+        "  external_gate:\n"
+        "    - owner_repo: DoE-claude\n"
+        "      condition: GATE SATISFIED 2026-09-02\n"
+        "      requires: landed-work\n"
+        "      cleared: true\n"
+    )
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body("Ordinary body prose.", external_gate=gate),
+        encoding="utf-8",
+    )
+    emit.emit_script(plan_path, repo_root=tmp_path)
+
+
 def test_ordinary_prose_does_not_raise(tmp_path):
     """Negative-spec: Check B is deliberately narrow. Ordinary future-
     conditional executor instruction prose ("report BLOCKED rather than...")
