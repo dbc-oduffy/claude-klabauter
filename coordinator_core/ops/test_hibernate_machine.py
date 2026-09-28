@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.hibernate_machine`: dispatching the per-platform machine-hibernate command."""
+
 from __future__ import annotations
 
 import pytest

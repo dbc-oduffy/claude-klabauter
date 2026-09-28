@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.assert_doctrine_cross_reference_counts`: the doctrine cross-reference-count gate handler."""
+
 from __future__ import annotations
 
 import subprocess

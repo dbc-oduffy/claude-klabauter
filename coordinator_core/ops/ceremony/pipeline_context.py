@@ -1,3 +1,9 @@
+"""Branch-resolution ledger for the ceremony pipeline's phase-1 receipt.
+
+Defines the canonical `BRANCH_ID_*` signal identifiers and the
+`BranchResolution`/`PipelineContext` shapes that accumulate per-branch
+evidence (D/J/F/B/X node types) before it is folded into a receipt node.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_machine_local_regeneratability`: the machine-local registry regeneratability check."""
+
 from __future__ import annotations
 
 import os

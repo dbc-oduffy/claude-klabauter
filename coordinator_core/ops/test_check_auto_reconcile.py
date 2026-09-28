@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_auto_reconcile`: the auto-reconcile response resolver."""
+
 from __future__ import annotations
 
 import json

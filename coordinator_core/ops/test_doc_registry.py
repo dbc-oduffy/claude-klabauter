@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.doc_registry`: resolving a repo's human-facing-docs/staleness-threshold configuration."""
+
 from __future__ import annotations
 
 from pathlib import Path

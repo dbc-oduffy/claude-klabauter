@@ -1,4 +1,6 @@
 
+"""Emit-section collector: renders the current git branch's own record, including machine/date hints parsed from a `work/<machine>/<date>` branch name."""
+
 from __future__ import annotations
 
 import re

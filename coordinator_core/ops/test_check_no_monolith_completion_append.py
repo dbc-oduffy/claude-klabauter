@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_no_monolith_completion_append`: the gate forbidding a skill from appending completion entries to a monolithic file."""
+
 from __future__ import annotations
 
 import os

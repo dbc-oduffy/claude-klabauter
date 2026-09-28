@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.migrate_branch_canonical_case`: migrating a branch name to its canonical case."""
+
 from __future__ import annotations
 
 import os

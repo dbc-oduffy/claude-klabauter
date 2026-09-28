@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_pcli_drift_gate`: the pcli-contract field-mirroring drift gate."""
+
 from __future__ import annotations
 
 import hashlib

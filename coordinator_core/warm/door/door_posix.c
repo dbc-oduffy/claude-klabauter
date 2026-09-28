@@ -113,6 +113,16 @@
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
 #endif
+/* `realpath()` (used by `resolve_engine_root()` to canonicalise a LITERAL
+ * symlink root fresh on every invocation) is a glibc `__USE_MISC` /
+ * `__USE_XOPEN2K8` declaration -- `_POSIX_C_SOURCE=200809L` alone does not
+ * set either without `_XOPEN_SOURCE` also defined, and this file already
+ * relies on plain `_POSIX_C_SOURCE` above. `_DEFAULT_SOURCE` sets
+ * `__USE_MISC` unconditionally and is a no-op on macOS, where realpath is
+ * always declared. */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 
 #include "door_core.h"
 #include "door_env_set.h"
@@ -461,6 +471,31 @@ static int resolve_engine_root(char **out, size_t *out_len) {
         if (!get_own_directory(own_dir, sizeof(own_dir))) return 0;
         root = read_sidecar(own_dir, &root_len);
         if (!root) return 0;
+    }
+
+    /* CANONICALISE HERE, NOT AT WRITE TIME. `root` may be a LITERAL symlink
+     * path (e.g. a cloud session's `/root/engine-current`, re-pointed after
+     * this door's sidecar was last written -- see
+     * `coordinator_core.hooks.repin_cloud_engine_root`). `realpath()` is the
+     * OS's own symlink resolution, called fresh on every invocation, so a
+     * repointed link is followed without any sidecar rewrite. This must
+     * happen before the clone-hash SHA-1 input is fixed: `election.pipe_name`
+     * / `breadcrumb.svc_dir` hash the SERVER's `Path(root).resolve()` at
+     * server-runtime, and this door must byte-match that same resolved
+     * string or it derives a different (orphaned) socket directory. Fails
+     * open to the literal `root` on any `realpath()` error (nonexistent
+     * target, ELOOP, etc.) -- `is_valid_engine_root` below still catches an
+     * unresolvable/invalid root exactly as it did before this existed. */
+    char resolved[PATH_MAX];
+    if (realpath(root, resolved) != NULL) {
+        size_t resolved_len = strlen(resolved);
+        char *canon = (char *)malloc(resolved_len + 1);
+        if (canon) {
+            memcpy(canon, resolved, resolved_len + 1);
+            free(root);
+            root = canon;
+            root_len = resolved_len;
+        }
     }
 
     if (!is_valid_engine_root(root)) {

@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.learn_lessons_roots`: resolving the fleet roots a lessons-learning pass scans."""
+
 from __future__ import annotations
 
 import io

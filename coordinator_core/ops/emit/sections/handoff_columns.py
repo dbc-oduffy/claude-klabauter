@@ -1,4 +1,6 @@
 
+"""Computes the cockpit-facing handoff columns (status, deployment_state, predecessor, shipped_in) from a record's frontmatter, including migrating a legacy `deployment_state: abandoned` into its successor-aware replacement."""
+
 from __future__ import annotations
 
 import subprocess

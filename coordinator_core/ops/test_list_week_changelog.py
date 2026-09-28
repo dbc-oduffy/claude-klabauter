@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.list_week_changelog`: the weekly-changelog commit-count helpers and CLI."""
+
 from __future__ import annotations
 
 import io

@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.check_registry_codename_leak`: the registry-codename-leak scan CLI."""
+
 from __future__ import annotations
 
 import os

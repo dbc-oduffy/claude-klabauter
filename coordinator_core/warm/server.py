@@ -1502,12 +1502,55 @@ def _handle_connection(
         io.write(data)
         io.flush()
 
+    def _answer_undelivered_read(reason: str) -> None:
+        """Best-effort ANSWER for a connection this process itself
+        accepted and enqueued (`already_entered` -- it already holds an
+        `in_flight` slot, so a live client is presumed still waiting on
+        the far end, unlike the direct-call default-False callers this
+        function also serves).
+
+        THE GAP THIS CLOSES: a bare `return` here leaves the accepted
+        socket to be reclaimed by this function's own `finally: io.close()`
+        with NOT ONE BYTE written back -- indistinguishable, from the
+        door/client's own read loop, from the server having vanished
+        mid-dispatch (`door_posix.c`'s "connection closed or read failed
+        after delivery"). That message is literally true from the door's
+        vantage point, but it need not be: this process is alive, holds
+        the fd, and can say so. A write attempt here can itself fail (the
+        peer may really be gone) -- guarded and swallowed, matching every
+        other best-effort write in this module, so a doubly-dead socket
+        degrades to today's silent close rather than raising.
+
+        Only ever reached for an ALREADY-ENTERED connection: a direct
+        (non-pooled) caller passes `already_entered=False` and is
+        unaffected, matching this function's pre-existing contract for
+        that path."""
+        if not already_entered:
+            return
+        try:
+            _write_flushed(
+                _encode(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": INTERNAL_ERROR,
+                            "message": f"warm server accepted this request but could not read it: {reason}",
+                        },
+                    }
+                )
+            )
+        except OSError:
+            pass
+
     try:
         try:
             line = io.readline()
-        except OSError:
+        except OSError as exc:
+            _answer_undelivered_read(f"{exc!r}")
             return
         if not line:
+            _answer_undelivered_read("connection closed before a request line arrived")
             return
         _serve_line(
             line,

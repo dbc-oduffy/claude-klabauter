@@ -1,4 +1,6 @@
 
+"""Reconciles a `commit_scoped()` failure report against commit history to detect when the commit actually landed despite the reported failure, so a slow-clock timeout is not misread as a no-op."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

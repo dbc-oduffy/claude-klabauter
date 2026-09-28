@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.lessons_filter`: filtering a lessons-extraction payload to undated/universal records and rejecting orphan strip-list entries."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_posix_tmpdir_fallback`: the scan flagging unguarded POSIX tmpdir fallbacks."""
+
 from __future__ import annotations
 
 import subprocess

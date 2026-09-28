@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.check_windows_ssh_binary`: the Windows SSH-binary resolution/classification check."""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,4 +1,6 @@
 
+"""Parses one `<class>: <assertion> [probe: <cmd>]` completeness-item line into its class, assertion, and optional probe command."""
+
 from __future__ import annotations
 
 import sys

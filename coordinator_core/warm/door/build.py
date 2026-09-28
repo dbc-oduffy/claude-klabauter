@@ -115,13 +115,43 @@ def _render(source: str, python_bin: Path, engine_root: Path) -> str:
     return rendered
 
 
+def _sidecar_root_string(engine_root: Path) -> str:
+    """The string `write_sidecar` records for `engine_root`.
+
+    A LITERAL symlink is recorded UNRESOLVED (`os.path.abspath`, which
+    normalises `.`/`..`/cwd-relativity but never follows a symlink) --
+    never `Path(engine_root).resolve()`, which would freeze whichever
+    target the link happened to point at on THIS build/install and go
+    stale the moment the link is repointed (incident: a cloud session's
+    `/root/engine-current`, repointed post-install by
+    `coordinator_core.hooks.repin_cloud_engine_root`, left every
+    already-installed door dialling the ORPHANED pre-repoint target
+    forever -- the sidecar is read on every invocation, but a resolved
+    value baked into it defeats that by design). The door's own C-side
+    `resolve_engine_root()` calls `realpath()` on whatever this writes,
+    fresh, every invocation -- the OS resolves the symlink at that
+    call, exactly as it would at `open()`/`exec()` time, so recording
+    the link literally is what lets a later repoint be followed with NO
+    sidecar rewrite. A non-symlink `engine_root` is unaffected: this
+    still resolves it exactly as before (`.resolve()`), so an ordinary
+    (non-cloud) install's byte-for-byte sidecar contents do not change."""
+    root = Path(engine_root)
+    if root.is_symlink():
+        return os.path.abspath(str(root))
+    return str(root.resolve())
+
+
 def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
     """Writes the engine-root sidecar next to `output_exe`, in the exact
-    format `door.c :: read_sidecar_utf8` requires: one line, the ALREADY-
-    RESOLVED path (`Path(engine_root).resolve()`), UTF-8, no BOM. This is
-    the sole place that canonicalisation happens -- door.c performs none
-    of its own, so this string is what the door's clone-hash input is,
-    byte for byte, forever until the sidecar is rewritten.
+    format `door.c :: read_sidecar_utf8` requires: one line, UTF-8, no
+    BOM -- see `_sidecar_root_string` for what that line is exactly
+    (RESOLVED for an ordinary root, LITERAL for a symlink root, so a
+    later repoint of the link is followed at read time rather than
+    frozen at write time). Canonicalisation of a non-symlink root still
+    happens here -- door.c performs none of its own for that case -- so
+    that string is what the door's clone-hash input is, byte for byte,
+    until the sidecar is next rewritten OR (symlink case) until the
+    door's own runtime `realpath()` call resolves it fresh.
 
     `newline=""` on the write is deliberate: Python's default text-mode
     write would translate a bare `\\n` to `\\r\\n` on Windows, which is
@@ -135,9 +165,9 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
     changed one lands whole via `os.replace`, retried briefly because a
     door's read holds the handle for microseconds, not across the retry.
     """
-    resolved = str(Path(engine_root).resolve())
+    root_string = _sidecar_root_string(engine_root)
     sidecar_path = output_exe.parent / SIDECAR_FILENAME
-    content = (resolved + "\n").encode("utf-8")
+    content = (root_string + "\n").encode("utf-8")
     try:
         if sidecar_path.read_bytes() == content:
             return sidecar_path

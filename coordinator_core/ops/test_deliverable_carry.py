@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.deliverable_carry`: resolving a deliverable/initiative id across a plan and its predecessor, including divergence detection."""
+
 from __future__ import annotations
 
 import datetime

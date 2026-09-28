@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_atlas_watch_drift`: the architecture-atlas staleness-drift gate."""
+
 import os
 import subprocess
 import textwrap

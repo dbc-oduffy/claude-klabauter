@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops._relative_link`: relative-path normalization and markdown-link retargeting."""
+
 from __future__ import annotations
 
 from coordinator_core.ops._relative_link import (

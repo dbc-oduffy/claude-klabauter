@@ -1,3 +1,10 @@
+"""Guard that rewrites a `cd <dir> && git ...` prefix into `git -C <dir> ...`.
+
+A leading `cd` turns a git invocation into a compound command, which trips a
+permission prompt that renders as a non-returning stall. This module detects
+that shape and either auto-rewrites it (when every follower segment is
+provably equivalent under `-C`) or denies with a suggested rewrite otherwise.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.init_anchor_injection_state`: the idempotent anchor-injection-state initializer."""
+
 from __future__ import annotations
 
 import datetime

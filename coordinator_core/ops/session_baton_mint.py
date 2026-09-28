@@ -1,4 +1,6 @@
 
+"""JSON-RPC `session_baton.mint` handler: creates or updates a session's baton record, capturing `first_prompt` once while letting `title`/`intent` be overwritten on every call."""
+
 from __future__ import annotations
 
 from typing import Optional

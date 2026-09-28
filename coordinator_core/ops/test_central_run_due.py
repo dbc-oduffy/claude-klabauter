@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.central_run_due`: the central-run due-date resolver CLI."""
+
 from __future__ import annotations
 
 import io

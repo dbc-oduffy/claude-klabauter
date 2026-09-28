@@ -82,3 +82,15 @@ def test_ordinary_comment_near_template_still_removed(tmp_path):
     assert res.changed is True
     assert "header comment" not in res.new_text
     assert "`https://example.com/${path}`" in res.new_text
+
+
+def test_vitest_environment_directive_survives_while_prose_strips(tmp_path):
+    text = (
+        "// @vitest-environment jsdom\n"
+        "// why this test exists, per some ruling\n"
+        "export const x = 1;\n"
+    )
+    res = _plan(tmp_path, "panel.test.tsx", text)
+    assert res.new_text is not None
+    assert res.new_text.startswith("// @vitest-environment jsdom\n")
+    assert "per some ruling" not in res.new_text

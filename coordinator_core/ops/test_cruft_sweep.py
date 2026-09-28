@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.cruft_sweep`: sweeping stale/cruft records, including the UUID-blocklist builder's handling of unreadable files."""
+
 from __future__ import annotations
 
 import asyncio

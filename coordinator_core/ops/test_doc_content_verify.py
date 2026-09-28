@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.doc_content_verify`: verifying doc citations against the on-disk targets they reference."""
+
 from __future__ import annotations
 
 import functools

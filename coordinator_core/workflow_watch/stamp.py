@@ -1,3 +1,10 @@
+"""Stamps a terminal workflow_watch outcome onto a completed launch record.
+
+Maps a tail-observed status (killed/stopped/completed/failed) to the
+canonical `TERMINAL_EVENT_TYPES` vocabulary and writes it via
+`coordinator_core.locked_write`, so a concurrent reader never observes a
+partially-written stamp.
+"""
 
 from __future__ import annotations
 

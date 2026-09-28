@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.measure_token_envelope`: estimating token counts for a doc surface or set of surfaces."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.audit_enabled_plugins`: the enabled-but-unjustified-plugin drift advisory."""
+
 from __future__ import annotations
 
 import json

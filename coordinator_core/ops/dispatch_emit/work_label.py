@@ -1,4 +1,6 @@
 
+"""Builds and parses the `work:<row_id>` label used to tag a dispatch-emit row back to its originating row id."""
+
 from __future__ import annotations
 
 WORK_LABEL_PREFIX = "work:"

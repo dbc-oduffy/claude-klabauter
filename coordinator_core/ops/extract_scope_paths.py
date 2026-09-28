@@ -1,4 +1,6 @@
 
+"""CLI: extracts a handoff's frontmatter `scope:` path list for shell/tool consumption."""
+
 from __future__ import annotations
 
 import os

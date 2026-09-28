@@ -1,3 +1,7 @@
+"""Renders a template tree (e.g. a DoE-root skeleton) into a launchable
+target directory, resolving the DoE root through the tiered precedence
+documented on `_resolve_doe_root` rather than a single hardcoded env var.
+"""
 
 from __future__ import annotations
 

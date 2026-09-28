@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.changelog_ops`: pins the spawn bound on citing a changelog within a commit range."""
+
 from __future__ import annotations
 
 import subprocess

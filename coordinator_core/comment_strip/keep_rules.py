@@ -40,6 +40,18 @@ _TOOLING_PATTERNS = [
     re.compile(r"^#Requires\b"),
     re.compile(r"^\.(SYNOPSIS|DESCRIPTION|PARAMETER|EXAMPLE|NOTES|LINK|INPUTS|OUTPUTS)\b", re.I | re.M),
     re.compile(r"/\*\+"),
+    # Directives a JS/TS toolchain reads. A comment-free AST proof cannot see these: dropping
+    # one changes the test environment, JSX runtime, tree-shaking or chunking, not the syntax.
+    re.compile(r"@(vitest|jest)-environment\b"),
+    re.compile(r"@jsx(ImportSource|Runtime|Frag)?\b"),
+    re.compile(r"[@#]__(PURE|NO_SIDE_EFFECTS)__"),
+    re.compile(r"\bwebpack(ChunkName|Ignore|Mode|Prefetch|Preload|Include|Exclude|Exports)\s*:"),
+    re.compile(r"@vite-ignore\b"),
+    re.compile(r"\b(biome|deno-lint|deno-fmt)-ignore\b"),
+    re.compile(r"\b(stylelint|tslint):?\s*-?(disable|enable)"),
+    re.compile(r"\bv8\s+ignore\b", re.I),
+    re.compile(r"@refresh\s+reset\b"),
+    re.compile(r"(?:^|[/*]\s*)@flow\b", re.M),
 ]
 
 _MARKER_TOKEN_RE = re.compile(r"[A-Z][A-Z0-9_\-]{7,}")

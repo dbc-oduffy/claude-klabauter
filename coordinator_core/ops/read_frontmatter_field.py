@@ -1,4 +1,6 @@
 
+"""CLI/library: reads and normalizes a single top-level frontmatter field's raw scalar value from a markdown file."""
+
 from __future__ import annotations
 
 import sys

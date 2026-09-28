@@ -1,4 +1,6 @@
 
+"""Normalizes a repo-relative link target and rewrites it relative to a given output file's own directory, for generated markdown that must not assume it renders at the repo root."""
+
 from __future__ import annotations
 
 import os

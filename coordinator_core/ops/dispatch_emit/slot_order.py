@@ -1,4 +1,6 @@
 
+"""Sort key ordering dispatch-emit records by wave slot, so `wave-N-*` directories sort numerically ahead of un-slotted records."""
+
 from __future__ import annotations
 
 import re

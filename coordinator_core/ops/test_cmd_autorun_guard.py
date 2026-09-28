@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.cmd_autorun_guard`: the Windows cmd-autorun registry guard."""
+
 from __future__ import annotations
 
 import asyncio

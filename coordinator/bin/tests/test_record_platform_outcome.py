@@ -234,6 +234,13 @@ def test_invalid_surface_rejected(tmp_path) -> None:
 
 
 def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
+    """Regression: an ambient `COORDINATOR_SETTINGS_HOME` (ubiquitous in any real
+    coordinator-plugin session) previously survived this test's env scrub. Its
+    `machine-local/.doe-root` pointer resolved to the REAL checkout, so the CLI
+    wrote a genuine record into the real repo's `state/platform-outcomes/`
+    instead of raising — the exact opposite of what this test asserts. Every
+    rung that can resolve `doe_root()` must be isolated, not just the two env
+    aliases and `CLAUDE_HOME`."""
     surface_root, _surface_sha = _setup_surface(tmp_path)
     env = dict(os.environ)
     env.pop("DOE_ROOT", None)
@@ -248,6 +255,18 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
     # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
     # premise this test exists to cover, exactly like the REPO_DOE_CLAUDE
     env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
+    # COORDINATOR_SETTINGS_HOME wins settings_home()'s FIRST rung, ahead of
+    # CLAUDE_HOME entirely — an ambient value (present in every real
+    # coordinator session) would let the settings-home `.doe-root` pointer
+    # resolve to the real checkout regardless of the CLAUDE_HOME override
+    # above. Must be isolated to a nonexistent path, not merely popped (an
+    # unset var falls back to CLAUDE_HOME, which is already isolated, but
+    # pinning it explicitly keeps this test's isolation self-contained).
+    env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "no-such-settings-home")
+    # CLAUDE_PLUGIN_ROOT is a live rung too (doe_root() falls back to it via
+    # the plugin-root candidate probe) — ambient in every real plugin-loaded
+    # session, so it must never reach this subprocess unpopped.
+    env.pop("CLAUDE_PLUGIN_ROOT", None)
     result = subprocess.run(
         [
             sys.executable, str(_CLI_PATH),
@@ -259,6 +278,10 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
     )
     assert result.returncode != 0
     assert "DOE_ROOT" in result.stderr
+    # Cheap guard: this test's whole premise is "no record gets written
+    # anywhere" — assert the surface_root's own state/ tree was never
+    # created (would-be evidence of a write landing somewhere unintended).
+    assert not (Path(surface_root) / "state").exists()
 
 
 def test_resolve_machine_env_override_wins() -> None:

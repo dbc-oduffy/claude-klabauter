@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.migrate_completion_log_legacy`: migrating a legacy completion-log format."""
+
 from __future__ import annotations
 
 import os

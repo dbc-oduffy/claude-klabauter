@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.create_github_remote`: creating and wiring a GitHub remote for a local repo."""
+
 from __future__ import annotations
 
 import asyncio

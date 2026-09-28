@@ -1,4 +1,6 @@
 
+"""Detects and clusters deliverable ids whose mint-time slugs are prefixes of one another — the same source string truncated to different lengths before hashing — so look-alike deliverables can be reconciled."""
+
 from __future__ import annotations
 
 import re

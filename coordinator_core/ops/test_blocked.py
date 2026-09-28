@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.blocked`: the blocked-handoff detection CLI."""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,3 +1,5 @@
+"""Computes doc staleness from git-log history: filters commit churn to content-changing edits (skipping whitespace/link-only diffs and mass-sweep commits) before scoring commits-since and days-since a doc last meaningfully changed."""
+
 from __future__ import annotations
 
 import re

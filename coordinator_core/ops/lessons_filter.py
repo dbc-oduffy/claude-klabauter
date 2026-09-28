@@ -1,4 +1,6 @@
 
+"""JSON-RPC ops filtering a lessons-extraction payload down to undated/universal records, and flagging strip-list entries with no corresponding routed record."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.detect_plugin_layout`: classifying a plugin root as flat or nested."""
+
 from __future__ import annotations
 
 from coordinator_core.ops.detect_plugin_layout import _handler, classify_plugin_layout

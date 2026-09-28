@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.detect_changed_dependency_manifests`: detecting dependency-manifest files changed since a given point in history."""
+
 from __future__ import annotations
 
 import os

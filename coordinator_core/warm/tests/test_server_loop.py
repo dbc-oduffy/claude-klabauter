@@ -339,6 +339,66 @@ def test_malformed_frame_does_not_kill_the_loop():
         assert io_obj.closed
 
 
+def test_pooled_connection_read_failure_still_answers_rather_than_bare_close():
+    """A connection that reached `_handle_connection` via the bounded worker
+    pool (`already_entered=True`) already holds an `in_flight` slot, so a
+    live caller is presumed still waiting on the far end. Before this fix, a
+    `readline()` `OSError` or an immediate empty read on such a connection
+    hit a bare `return`, closing the socket with zero bytes written back --
+    indistinguishable, from a native door client's own read loop, from the
+    server having vanished mid-dispatch ("connection closed or read failed
+    after delivery"). This asserts the pooled path now writes a best-effort
+    error frame before closing, in both failure shapes."""
+    in_flight = server.InFlightCounter()
+
+    class _RaisingIO(_FakeIO):
+        def readline(self) -> bytes:
+            raise OSError("simulated broken pipe on read")
+
+    for io_obj in (_RaisingIO([]), _FakeIO([b""])):
+        io_obj2 = io_obj
+        in_flight.enter()  # mirrors `_enqueue_connection`'s own pre-claim
+        server._handle_connection(
+            io_obj2,
+            version_state=_FakeVersionState(),
+            server_sha="x",
+            close_listener=lambda: None,
+            drain=lambda: None,
+            in_flight=in_flight,
+            already_entered=True,
+        )
+        assert io_obj2.written, "pooled connection must be answered, never silently dropped"
+        response = json.loads(io_obj2.written[0].decode("utf-8").strip())
+        assert response["error"]["code"] == server.INTERNAL_ERROR
+        assert io_obj2.closed
+        assert in_flight() == 0
+
+
+def test_direct_call_read_failure_stays_silent_as_before():
+    """The pre-existing, non-pooled contract (`already_entered=False`,
+    every direct caller's default) is unchanged: a read failure on a
+    connection this function did not itself enter as in-flight is still a
+    bare close, not a new write attempt."""
+    in_flight = server.InFlightCounter()
+
+    class _RaisingIO(_FakeIO):
+        def readline(self) -> bytes:
+            raise OSError("simulated broken pipe on read")
+
+    io_obj = _RaisingIO([])
+    server._handle_connection(
+        io_obj,
+        version_state=_FakeVersionState(),
+        server_sha="x",
+        close_listener=lambda: None,
+        drain=lambda: None,
+        in_flight=in_flight,
+    )
+    assert io_obj.written == []
+    assert io_obj.closed
+    assert in_flight() == 0
+
+
 def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
     """An op-level bug (any exception `dispatch` raises other than the
     `BrokenProcessPool` recovery `_pool_dispatch` already handles) must keep

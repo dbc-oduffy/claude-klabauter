@@ -1343,7 +1343,7 @@ def test_baseline_top_capped_at_three_highest_reachable():
 
 @pytest.mark.designed_red
 @pytest.mark.cadence
-def test_deep_per_item_spawn_advisory_worklist():
+def test_deep_per_item_spawn_advisory_worklist(tmp_path):
     """AC2, AC7, AC10. ADVISORY OUTPUT -- modeled on the gate's own `designed_red` burn-down
     worklist (`test_burn_down_known_preexisting_amplification_sites`), never on a gating subset
     assertion: this test emits a cost-ranked worklist and writes the audit file below, and it
@@ -1354,6 +1354,14 @@ def test_deep_per_item_spawn_advisory_worklist():
     The only assertions here are STRUCTURAL invariants of the worklist's own shape -- every row
     carries its depth, cost-descending with `None` sorted last is honored, and the report was
     actually written -- never a claim about which or how many sites are TRUE amplification.
+
+    ISOLATED OUTPUT (root-cause fix): the audit report and baseline JSON this test writes MUST
+    land under `tmp_path`, never the real checkout's `state/audits/` or `state/baselines/` --
+    those two paths are tracked files, and a bare run of this test used to rewrite them in
+    place every time, producing a permanent uncommitted diff on the real repo. Both write
+    targets below are asserted to resolve inside `tmp_path` before any write, so a future edit
+    reintroducing `_REPO_ROOT`/`_BASELINE_PATH` here fails loudly instead of silently touching
+    the tracked copies again.
     """
     rows = _advisory_worklist(max_depth=4)
 
@@ -1378,13 +1386,20 @@ def test_deep_per_item_spawn_advisory_worklist():
         assert earlier >= later, "costed rows must be cost-descending"
 
     report = _render_worklist_report(rows, max_depth=4)
-    audit_path = _REPO_ROOT / "state" / "audits" / "2026-08-25-deep-per-item-spawn-worklist.md"
+    audit_path = tmp_path / "state" / "audits" / "2026-08-25-deep-per-item-spawn-worklist.md"
+    baseline_path = tmp_path / "state" / "baselines" / "deep-per-item-spawn-worklist.json"
+    # Guard: both write targets must resolve under this test's own tmp_path, never the real
+    # checkout -- cheap to assert, and it is exactly the invariant a regression here would break.
+    assert tmp_path in audit_path.parents
+    assert tmp_path in baseline_path.parents
     audit_path.parent.mkdir(parents=True, exist_ok=True)
     audit_path.write_text(report, encoding="utf-8")
 
     # C1: the routine_signals reader's baseline, written by this same run -- see
-    # `_write_baseline`'s own docstring for the absorb-once contract.
-    _write_baseline(rows, _BASELINE_PATH)
+    # `_write_baseline`'s own docstring for the absorb-once contract. Isolated to `tmp_path`
+    # (never the real `_BASELINE_PATH` the reader consumes) so this test cannot rewrite the
+    # tracked baseline the fleet's `routine_signals` emitter reads.
+    _write_baseline(rows, baseline_path)
 
 
 # ==========================================================================

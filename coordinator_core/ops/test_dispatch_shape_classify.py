@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.dispatch_shape_classify`: classifying a dispatch's shape from its CLI arguments/environment."""
+
 from __future__ import annotations
 
 import os

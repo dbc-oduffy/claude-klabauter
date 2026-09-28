@@ -1,5 +1,7 @@
 
 
+"""CLI: resolves one pending scope-warning log entry to a fixed resolution verdict, rewriting that line of the session's scope-warnings log in place."""
+
 from __future__ import annotations
 
 GENERATES = []

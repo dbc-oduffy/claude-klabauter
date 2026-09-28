@@ -1,4 +1,6 @@
 
+"""JSON-RPC op resolving a swept baton/memo basename to the archive copy it was moved to, its parsed frontmatter, and the commit that archived it — the pickup-flow fallback probe for when a baton's session-scoped path is gone."""
+
 from __future__ import annotations
 
 import asyncio

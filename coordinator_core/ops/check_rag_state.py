@@ -1,4 +1,6 @@
 
+"""Python port of the bash `check-rag-state.sh` oracle: resolves the example-retrieval-repo content root, checks it is a trusted plugin root, and reads the persisted RAG state marker (absent/stale/fresh)."""
+
 from __future__ import annotations
 
 import os

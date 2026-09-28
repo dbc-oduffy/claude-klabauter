@@ -1,4 +1,6 @@
 
+"""Computes each deliverable's aggregate status (shipped/in-review/in-progress/planned/proposed/abandoned) from its handoff, plan, and roadmap phases, and stamps it back onto those records."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -8,6 +8,7 @@ applies plans when `--apply` is passed.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 import subprocess
@@ -15,10 +16,14 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.source_edit_gate.gate import run_gate
+from coordinator_core.win_portability import no_console_creationflags
+
 from . import lang_clike, lang_hash, lang_python
 from .keep_rules import extract_marker_tokens, is_tooling_comment
 
 _SCAN_TS_JS = Path(__file__).with_name("scan_ts.js")
+_PROTECTED_PATHS_FILE = Path(__file__).with_name("protected_paths.json")
 
 EXCLUDED_SUFFIXES = {
     ".md", ".json", ".jsonl", ".ndjson", ".lock", ".log", ".csv", ".txt",
@@ -67,6 +72,59 @@ class FileResult:
     sample_diff: list[tuple[str, str]] = field(default_factory=list)
 
 
+_PROTECTED_PATHS_CACHE: dict[str, set[str]] | None = None
+
+_SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _validate_protected_paths_shape(raw: object) -> dict:
+    """Fail closed on any shape defect: a `path -> content_hash` entry that isn't a
+    well-formed 64-hex-char sha256 digest means the file cannot be trusted to mean what
+    its keys claim, so raise rather than silently degrading to `{"sources": []}`
+    (fail-open -- see the module's own `is_protected` invariant this file backs)."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("sources"), list):
+        raise ValueError("protected_paths.json: top-level 'sources' must be a list")
+    for source in raw["sources"]:
+        if not isinstance(source, dict) or not isinstance(source.get("files"), dict):
+            raise ValueError("protected_paths.json: each source needs an object 'files' map")
+        for path, content_hash in source["files"].items():
+            if not isinstance(path, str) or not path:
+                raise ValueError(f"protected_paths.json: invalid path key {path!r}")
+            if not isinstance(content_hash, str) or not _SHA256_HEX_RE.fullmatch(content_hash):
+                raise ValueError(f"protected_paths.json: invalid sha256 hash for {path!r}")
+    return raw
+
+
+def _load_protected_paths() -> dict[str, set[str]]:
+    """Flatten protected_paths.json's per-source-commit lists into path -> {content hashes}.
+
+    Keyed by repo-relative path plus a sha256 of the file's bytes as of its restore
+    commit, never by repo name/slug -- covers repos with no `origin` remote.
+
+    Deliberately does NOT catch `OSError`/`JSONDecodeError`/shape-`ValueError` here: this
+    file is the safety list for "previously broke a test" content, so a missing, corrupt,
+    or malformed-shape file must fail the whole run closed (refuse to strip anything)
+    rather than silently substituting an empty list and re-stripping a previously-known-
+    dangerous file. Cross-repo hash-vs-source-commit verification was considered instead
+    of/alongside shape validation and rejected as the primary mechanism: the sibling repos
+    named in this file are not guaranteed checked out, and even when checked out are not
+    guaranteed to be sitting at the exact recorded commit (verified live: of the three
+    source repos in this file, only two of three commits were reachable from the sibling
+    checkouts present on this box at review time) -- a test asserting cross-repo content
+    match would be flaky on environment state, not on this file's own correctness."""
+    global _PROTECTED_PATHS_CACHE
+    if _PROTECTED_PATHS_CACHE is not None:
+        return _PROTECTED_PATHS_CACHE
+    raw = json.loads(_PROTECTED_PATHS_FILE.read_text(encoding="utf-8"))
+    raw = _validate_protected_paths_shape(raw)
+    mapping: dict[str, set[str]] = {}
+    for source in raw["sources"]:
+        for path, content_hash in source["files"].items():
+            mapping.setdefault(path, set()).add(content_hash)
+    _PROTECTED_PATHS_CACHE = mapping
+    return mapping
+
+
 def is_excluded_path(rel_path: str) -> bool:
     p = Path(rel_path)
     if p.suffix.lower() in EXCLUDED_SUFFIXES:
@@ -74,12 +132,35 @@ def is_excluded_path(rel_path: str) -> bool:
     parts = set(p.parts)
     if parts & EXCLUDED_DIR_PARTS:
         return True
+    # These five top-level directory names hold structured yaml/toml/ini config and data
+    # files (docs frontmatter, install config, the registry/records/corpus stores) rather
+    # than source -- excluded here, not because the suffix is unsafe to lex, but because
+    # stripping "comments" out of a data file risks corrupting config a consumer parses
+    # strictly, not code a proof can verify byte-equivalence against.
     if p.suffix.lower() in {".yml", ".yaml", ".toml", ".ini", ".cfg"} and p.parts and p.parts[0] in {"docs", "config", "registry", "records", "corpus"}:
         return True
     for sub in EXCLUDED_PATH_SUBSTRINGS:
         if sub in rel_path:
             return True
     return False
+
+
+def is_protected(rel_path: str, repo_root: Path) -> bool:
+    """True if `rel_path` is a restore-commit-protected file whose current on-disk
+    bytes match one of its recorded content hashes in `protected_paths.json`.
+
+    Membership is checked first (a cheap dict lookup); the file's bytes are only
+    read and hashed on a membership hit, since only a path actually listed in
+    `protected_paths.json` can ever match -- hashing every candidate unconditionally
+    is wasted work for the common case of no entry."""
+    protected_hashes = _load_protected_paths().get(rel_path.replace("\\", "/"))
+    if not protected_hashes:
+        return False
+    try:
+        current_bytes = (repo_root / rel_path).read_bytes()
+    except OSError:
+        return False
+    return hashlib.sha256(current_bytes).hexdigest() in protected_hashes
 
 
 def _collect_all_tokens_from_tree(repo_root: Path, files: list[str]) -> set[str]:
@@ -166,6 +247,108 @@ def _apply_span_removals(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
+@dataclass
+class _MergedSpan:
+    start: int
+    end: int
+    text: str
+
+
+def _merge_adjacent_line_comment_spans(text: str, spans: list) -> list:
+    """Merge contiguous standalone same-indent line-comment spans (`#`, `//`, `--`) into
+    one block span before the keep/remove decision runs, so a tooling-marker or
+    reference-token match on ONE line of a multi-line prose comment does not keep that
+    line alone while its sibling lines -- part of the same sentence -- get removed,
+    fragmenting the block into mid-sentence nonsense. A block-delimited comment
+    (`/* */`, `<# #>`) already spans multiple lines by construction and is left alone;
+    a trailing comment sharing a line with code is never merged into a following
+    standalone comment line, since the two have unrelated keep rationale."""
+    if len(spans) < 2:
+        return list(spans)
+    merged: list = []
+    i = 0
+    n = len(spans)
+    while i < n:
+        sp = spans[i]
+        # A block-delimited comment already spans its own lines; a self-contained
+        # tooling directive (`# noqa`, `@vitest-environment`, ...) is single-purpose and
+        # must never be fused with an adjacent, independently-meaningful prose comment
+        # just because the lines are neighbours -- only a run of plain (non-tooling)
+        # lines is presumed to be one continued sentence.
+        if sp.text.startswith(("/*", "<#")) or is_tooling_comment(sp.text):
+            merged.append(sp)
+            i += 1
+            continue
+        line_start = text.rfind("\n", 0, sp.start) + 1
+        prefix = text[line_start:sp.start]
+        if prefix.strip() != "":
+            merged.append(sp)
+            i += 1
+            continue
+        block_start = sp.start
+        block_end = sp.end
+        j = i + 1
+        while j < n:
+            nxt = spans[j]
+            if nxt.text.startswith(("/*", "<#")) or is_tooling_comment(nxt.text):
+                break
+            nxt_line_start = text.rfind("\n", 0, nxt.start) + 1
+            nxt_prefix = text[nxt_line_start:nxt.start]
+            if nxt_prefix != prefix or nxt_line_start != block_end + 1:
+                break
+            block_end = nxt.end
+            j += 1
+        if j > i + 1:
+            merged.append(_MergedSpan(block_start, block_end, text[block_start:block_end]))
+        else:
+            merged.append(sp)
+        i = j
+    return merged
+
+
+def _merge_adjacent_comment_candidates(text: str, candidates: list) -> list:
+    """Python-candidate analogue of `_merge_adjacent_line_comment_spans`, operating on
+    line numbers (tokenize reports one COMMENT token per physical line) rather than byte
+    offsets. Docstring candidates are untouched -- the AST already reports a docstring as
+    one whole span, so they cannot fragment this way."""
+    comments = [c for c in candidates if c.kind == "comment"]
+    others = [c for c in candidates if c.kind != "comment"]
+    if len(comments) < 2:
+        return candidates
+    lines = text.splitlines(keepends=True)
+    comments.sort(key=lambda c: c.line_start)
+    merged = []
+    i = 0
+    n = len(comments)
+    while i < n:
+        c = comments[i]
+        line = lines[c.line_start - 1]
+        hash_idx = line.find("#")
+        prefix = line[:hash_idx] if hash_idx != -1 else line
+        if prefix.strip() != "" or is_tooling_comment(c.text):
+            merged.append(c)
+            i += 1
+            continue
+        end_line = c.line_end
+        texts = [c.text]
+        j = i + 1
+        while j < n:
+            nxt = comments[j]
+            if nxt.line_start != end_line + 1 or is_tooling_comment(nxt.text):
+                break
+            nxt_line = lines[nxt.line_start - 1]
+            nxt_hash_idx = nxt_line.find("#")
+            nxt_prefix = nxt_line[:nxt_hash_idx] if nxt_hash_idx != -1 else nxt_line
+            if nxt_prefix != prefix:
+                break
+            texts.append(nxt.text)
+            end_line = nxt.line_end
+            j += 1
+        merged.append(lang_python.Candidate(c.line_start, end_line, "".join(texts), "comment"))
+        i = j
+    return others + merged
+
+
 def _plan_generic(text: str, spans_raw: list, whole_file_reference_keep: bool) -> FileResult | None:
     keep_spans: list[tuple[int, int]] = []
     remove_spans: list[tuple[int, int]] = []
@@ -245,6 +428,7 @@ def plan_file(
 
 
 def _finish_generic_lex(rel_path, lang, text, spans, referenced_tokens, whole_file_ref_keep, proof_fn=None) -> FileResult:
+    spans = _merge_adjacent_line_comment_spans(text, spans)
     remove_spans = []
     kept_tooling = 0
     kept_reference = 0
@@ -313,6 +497,7 @@ def _plan_python(
     candidates = lang_python.collect_candidates(text)
     if not candidates:
         return FileResult(rel_path, "python", False, new_text=text)
+    candidates = _merge_adjacent_comment_candidates(text, candidates)
 
     lines = text.splitlines(keepends=True)
 
@@ -549,10 +734,66 @@ def _find_ts_pkg() -> str | None:
     return None
 
 
-def strip_repo(repo_root: Path, report_path: Path | None = None, apply: bool = False) -> dict:
+def _git_status_porcelain(repo_root: Path) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo_root), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    )
+    return out.stdout
+
+
+def _refused_apply_summary(repo_root: Path, gate: str) -> dict:
+    """Minimal refusal summary -- only the keys a caller actually reads before
+    touching any bytes (`bin/strip-comments.py`'s CLI output line, plus
+    `gate`/`files_changed` for the dirty-tree test). "Not a hand-copy" refers to the keys
+    this dict OMITS relative to the full scan summary -- no file was scanned, so there is
+    nothing to report on `files`, `skipped_*`, `new_failures`, or `peer_skipped` -- not to
+    the six keys it shares (`repo`/`apply`/`files_scanned`/`files_changed`/
+    `comment_lines_removed`/`kept_reference`), which ARE duplicated literally on purpose."""
+    return {
+        "repo": str(repo_root),
+        "apply": True,
+        "gate": gate,
+        "files_scanned": 0,
+        "files_changed": 0,
+        "comment_lines_removed": 0,
+        "kept_reference": 0,
+        "proof_failures": [],
+    }
+
+
+def strip_repo(
+    repo_root: Path, report_path: Path | None = None, apply: bool = False,
+) -> dict:
+    """Scan and (with `apply=True`) rewrite a repo's tracked source files.
+
+    `apply=True` refuses outright -- before touching any bytes -- if `git status
+    --porcelain` for the whole tree is non-empty (any uncommitted tracked change,
+    anywhere, not just files this strip would write). Every written file's original
+    bytes are recorded via `read_bytes()` before the write; restoring later writes
+    those bytes back with `write_bytes` (never `read_text`/`write_text` anywhere in
+    this path), so CRLF/BOM originals round-trip byte-for-byte on refuse/fail.
+
+    On a real apply (bytes actually changed), the gate (`run_gate`) runs the
+    candidate command against the already-stripped tree, then this module's own
+    `restore_originals` callback puts the recorded original bytes back (skipping,
+    and reporting under `peer_skipped`, any file whose on-disk bytes no longer match
+    what the stripper wrote -- a concurrent peer edit is never clobbered), the gate
+    runs the base command, and on a clean diff `reapply_stripped` writes the stripped
+    bytes back.
+    """
     from coordinator_core.attribution import is_exempt_path
 
-    out = subprocess.run(["git", "-C", str(repo_root), "ls-files"], capture_output=True, text=True, check=True)
+    if apply:
+        dirty = _git_status_porcelain(repo_root)
+        if dirty.strip():
+            return _refused_apply_summary(repo_root, "refused-dirty-tree")
+
+    out = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files"], capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    )
     all_files = [f for f in out.stdout.splitlines() if f]
     candidates = [f for f in all_files if not is_exempt_path(f) and not is_excluded_path(f)]
     candidates = [f for f in candidates if Path(f).suffix.lower() in LANG_BY_SUFFIX]
@@ -561,12 +802,91 @@ def strip_repo(repo_root: Path, report_path: Path | None = None, apply: bool = F
     docstring_referenced_modules = frozenset(_collect_docstring_referenced_modules(repo_root, all_files))
 
     results: list[FileResult] = []
+    original_bytes: dict[str, bytes] = {}
+    written_bytes: dict[str, bytes] = {}
+    peer_skipped: list[str] = []
+    restored_files: set[str] = set()
+    restored_flag = {"done": False}
+
+    def _restore_originals() -> None:
+        """Idempotent and resumable: `restored_files` tracks exactly which files this
+        call (or a prior call, on retry) has already written back, so a `write_bytes`
+        raising mid-loop -- leaving `restored_flag["done"]` False -- can be safely
+        retried from where it left off. Retrying naively from the top without this
+        tracking would re-run the peer-edit check against already-restored files, whose
+        current bytes are now the *original* bytes rather than `written_bytes[rel]`,
+        and misclassify every already-restored file as a mid-run peer edit. Setting
+        `restored_flag["done"]` is the LAST step, only once every file has been either
+        restored or (correctly) recognized as peer-edited -- never a pre-emptive marker,
+        since the outer `except BaseException` retry in `strip_repo` keys off it to
+        decide whether a further restore attempt is owed."""
+        for rel, orig in original_bytes.items():
+            if rel in peer_skipped or rel in restored_files:
+                continue
+            fp = repo_root / rel
+            try:
+                current = fp.read_bytes()
+            except OSError:
+                current = None
+            if current != written_bytes.get(rel):
+                # A peer edited this file mid-run -- leave it alone, never clobber it.
+                peer_skipped.append(rel)
+                continue
+            fp.write_bytes(orig)
+            restored_files.add(rel)
+        if len(restored_files) + len(peer_skipped) == len(original_bytes):
+            restored_flag["done"] = True
+
+    def _reapply_stripped() -> None:
+        """Writes the stripped bytes back, and un-marks every file it just
+        rewrote from `restored_files` -- `run_gate`'s own confirmation path
+        (`_confirm_new_failures`) legitimately calls `restore_originals()`,
+        then `reapply_stripped()`, then `restore_originals()` again within a
+        single gate run. Without clearing `restored_files` here, that second
+        `restore_originals()` call would see every file already marked
+        restored (from the first call) and skip it as a no-op, leaving the
+        tree at candidate (stripped) bytes for what is supposed to be the
+        base-bytes confirmation run -- silently turning a real regression
+        into a false 'pre-existing, dropped' verdict."""
+        for rel, data in written_bytes.items():
+            if rel in peer_skipped:
+                continue
+            (repo_root / rel).write_bytes(data)
+            restored_files.discard(rel)
+
+    gate_info = {"gate": "skipped", "new_failures": []}
     try:
         for rel in candidates:
+            if is_protected(rel, repo_root):
+                # Protected: a restored file the strip previously broke a test on.
+                # Kept outright, never scanned-and-changed.
+                results.append(FileResult(path=rel, language="protected", changed=False, skipped_reason="protected"))
+                continue
             res = plan_file(repo_root, rel, referenced_tokens, docstring_referenced_modules)
             results.append(res)
             if apply and res.changed and res.new_text is not None:
-                (repo_root / rel).write_text(res.new_text, encoding="utf-8")
+                fp = repo_root / rel
+                original_bytes[rel] = fp.read_bytes()
+                new_bytes = res.new_text.encode("utf-8")
+                fp.write_bytes(new_bytes)
+                written_bytes[rel] = new_bytes
+
+        if apply and written_bytes:
+            file_bytes = {rel: (original_bytes[rel], written_bytes[rel]) for rel in written_bytes}
+            gate_result = run_gate(
+                str(repo_root),
+                list(written_bytes),
+                restore_originals=_restore_originals,
+                reapply_stripped=_reapply_stripped,
+                file_bytes=file_bytes,
+            )
+            gate_info = {"gate": gate_result.verdict, "new_failures": list(gate_result.new_failures)}
+    except BaseException:
+        # Exception mid-loop, or Ctrl-C during the gate's own multi-minute run, before
+        # its documented restore_originals() call landed -- still triggers a restore.
+        if apply and original_bytes and not restored_flag["done"]:
+            _restore_originals()
+        raise
     finally:
         _TsWarmProc.close_all()
 
@@ -594,6 +914,9 @@ def strip_repo(repo_root: Path, report_path: Path | None = None, apply: bool = F
             for r in results
         ],
     }
+    if apply:
+        summary.update(gate_info)
+        summary["peer_skipped"] = list(peer_skipped)
     if report_path is not None:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

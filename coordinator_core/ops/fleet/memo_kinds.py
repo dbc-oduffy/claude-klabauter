@@ -1,4 +1,6 @@
 
+"""Canonical set of valid cross-repo memo `kind` values."""
+
 from __future__ import annotations
 
 #: `_PREMISE_BEARING_KINDS` in `coordinator/bin/cross-repo-memo.py`). Distinct

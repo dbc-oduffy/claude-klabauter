@@ -1,3 +1,5 @@
+"""Gate checking a SKILL.md's inline bash-fence count against a stored baseline, so new workstream-complete mechanism grows as a script rather than accreting inline bash."""
+
 from __future__ import annotations
 
 import sys

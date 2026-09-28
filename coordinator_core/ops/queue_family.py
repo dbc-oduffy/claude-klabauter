@@ -1,3 +1,6 @@
+"""Maps a queue-family directory name (e.g. `bug-backlog`) to the
+`record_type` key `query_records` accepts, and rejects unknown families.
+"""
 
 from __future__ import annotations
 

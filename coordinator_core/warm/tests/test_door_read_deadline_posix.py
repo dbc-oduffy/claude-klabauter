@@ -430,6 +430,56 @@ def test_a_served_reply_still_round_trips(tmp_path: Path, runtime_base: Path) ->
     assert _FALLBACK_MARKER not in proc.stdout
 
 
+def test_a_repointed_symlink_engine_root_is_followed_with_no_sidecar_rewrite(
+    tmp_path: Path, runtime_base: Path
+) -> None:
+    """The cloud-repoint incident, end to end: `COORDINATOR_DOOR_ENGINE_ROOT`
+    (or the sidecar -- same `resolve_engine_root()` codepath) is a LITERAL
+    symlink, repointed onto a SECOND stub engine root between two door
+    invocations, and the door must dial the second root's socket on the
+    second call with no sidecar/env rewrite of its own -- proving the C-side
+    `realpath()` call resolves fresh on every invocation rather than trusting
+    a value fixed at the first call. Before that call existed, this would
+    keep dialling the first (now orphaned) root's socket forever -- exactly
+    the `/root/engine-current` incident this pins."""
+    _require_binary()
+    import json
+
+    first_root = _make_stub_engine_root(tmp_path / "a")
+    second_root = _make_stub_engine_root(tmp_path / "b")
+    link = tmp_path / "engine-current"
+    link.symlink_to(first_root)
+
+    first_sock = _socket_path_for(runtime_base, first_root)
+    second_sock = _socket_path_for(runtime_base, second_root)
+    _make_socket_dir(first_sock)
+    _make_socket_dir(second_sock)
+
+    reply = (
+        '{{"jsonrpc":"2.0","id":1,"result":'
+        '{{"stdout":"{0}\\n","stderr":"","exit_code":0}}}}\n'
+    )
+    first_server = _ReplyingServer(first_sock, reply.format("first").encode("utf-8"))
+    try:
+        proc = _run_door(link, runtime_base, timeout=60)
+    finally:
+        first_server.close()
+    assert proc.stdout == "first\n"
+    request = json.loads(first_server.request.decode("utf-8").strip())
+    assert request["method"] == "invoke.from_argv"
+
+    link.unlink()
+    link.symlink_to(second_root)
+
+    second_server = _ReplyingServer(second_sock, reply.format("second").encode("utf-8"))
+    try:
+        proc = _run_door(link, runtime_base, timeout=60)
+    finally:
+        second_server.close()
+    assert proc.stdout == "second\n"
+    assert _FALLBACK_MARKER not in proc.stdout
+
+
 def test_provably_undispatched_error_still_falls_through(tmp_path: Path, runtime_base: Path) -> None:
     """The one post-delivery route still allowed to fall through: an error
     code `is_provably_undispatched` recognises as proof the server never

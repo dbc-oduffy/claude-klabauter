@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.list_files_newer_than_marker`: listing files modified after a marker file's mtime."""
+
 from __future__ import annotations
 
 import os

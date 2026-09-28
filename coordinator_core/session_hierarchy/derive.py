@@ -1,3 +1,7 @@
+"""Derives session-hierarchy claim/ownership fields from a handoff's
+frontmatter and its resolved claim state, for records that predate or
+otherwise lack an explicit `claimed_by`.
+"""
 
 from __future__ import annotations
 

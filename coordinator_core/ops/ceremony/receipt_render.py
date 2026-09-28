@@ -1,4 +1,6 @@
 
+"""Renders a ceremony receipt's op_tail partitions and summary header into human-readable text."""
+
 from __future__ import annotations
 
 from typing import Any

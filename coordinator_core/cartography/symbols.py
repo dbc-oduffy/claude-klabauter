@@ -1,3 +1,9 @@
+"""AST-based symbol extraction for the cartography index.
+
+Parses a source file's top-level/class-level defs and literal assignments
+into JSON-serializable records, normalizing AST-only literal shapes
+(sets, frozensets, bytes) that `json.dumps` cannot encode directly.
+"""
 
 from __future__ import annotations
 

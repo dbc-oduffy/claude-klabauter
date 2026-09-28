@@ -314,39 +314,57 @@ def test_coordinator_initiative_create_imports_coordinator_core() -> None:
     lives in `_resolve_initiatives_dir`, called only from `create`/`attach`
     -- `--help` never reaches it (see module docstring's vacuity-trap note).
 
-    `CLAUDE_KLABAUTER_ROOT` is pointed at a nonexistent path so `coordinator-state-
-    root.py --central` fails cleanly (exit 1, "failed to resolve central
-    state root") once the `coordinator_core.win_portability` import itself
-    has already succeeded -- no `state/initiatives/` write is attempted on
-    this shared tree.
+    The subprocess `cwd` MUST be an isolated, non-git tmp directory rather
+    than this checkout's own tree: `_resolve_initiatives_dir`'s `central=False`
+    branch resolves the state root by walking UP from `cwd` to a git root
+    (`coordinator_core.state_root.coordinator_state_root`), not from
+    `CLAUDE_KLABAUTER_ROOT`/`COORDINATOR_ENGINE_ROOT` -- run with cwd left at this
+    checkout's root, the probe git-resolves to it and actually writes
+    `state/initiatives/regression-probe-xyz.yaml` into this real, shared repo
+    tree instead of failing as intended. Pointing `cwd` at a fresh
+    non-git tmp dir makes `git rev-parse --show-toplevel` fail cleanly,
+    so `coordinator_state_root` raises `StateRootError` and
+    `_resolve_initiatives_dir` prints its "failed to resolve the invoking
+    repo's state root" message -- no `state/initiatives/` write is attempted
+    anywhere.
     """
     script = os.path.join(_BIN_DIR, "coordinator-initiative.py")
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     env["COORDINATOR_ENGINE_ROOT"] = "/nonexistent-regression-probe-root"
-    proc = subprocess.run(
-        [
-            sys.executable,
-            script,
-            "create",
-            "--id",
-            "regression-probe-xyz",
-            "--label",
-            "probe",
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-        **no_console_creationflags(),
+    real_leak_target = os.path.join(
+        _BIN_DIR, "..", "..", "state", "initiatives", "regression-probe-xyz.yaml"
     )
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                script,
+                "create",
+                "--id",
+                "regression-probe-xyz",
+                "--label",
+                "probe",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=isolated_cwd,
+            timeout=30,
+            **no_console_creationflags(),
+        )
+        # Guard: the probe must never leak into this checkout's real,
+        # shared state/ tree, isolated cwd or not.
+        assert not os.path.exists(real_leak_target), (
+            f"regression probe wrote into the real shared tree: {real_leak_target}"
+        )
     combined = proc.stdout + proc.stderr
     assert "ModuleNotFoundError" not in combined, (
         "coordinator-initiative died importing coordinator_core with "
         f"sys.path[0]=bin/ and no PYTHONPATH set:\n{combined}"
     )
     assert "No module named 'coordinator_core'" not in combined
-    assert "failed to resolve central state root" in combined, (
+    assert "failed to resolve the invoking repo's state root" in combined, (
         f"probe did not reach _resolve_initiatives_dir's subprocess call:\n{combined}"
     )
 

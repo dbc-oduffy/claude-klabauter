@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.agent_worktree_sweep`: classifying and cleaning up stale agent worktrees."""
+
 from __future__ import annotations
 
 import json

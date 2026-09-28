@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.detect_onboarding_offer`: detecting whether a repo should be offered coordinator onboarding."""
+
 from __future__ import annotations
 
 import subprocess

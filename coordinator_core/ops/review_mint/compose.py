@@ -1,4 +1,6 @@
 
+"""Composes a review-stage roster into the JS call sequence (`agent()`/`parallel()` literals) a generated workflow script executes, threading the run_nonce/gate schema through gated stages only."""
+
 from __future__ import annotations
 
 from typing import Callable, List, Optional, Tuple

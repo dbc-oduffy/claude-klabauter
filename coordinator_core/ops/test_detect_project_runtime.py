@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.detect_project_runtime`: scanning a project directory for known stack markers."""
+
 from __future__ import annotations
 
 import subprocess

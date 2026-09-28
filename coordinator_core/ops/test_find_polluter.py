@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.find_polluter`: identifying which fake package-manager invocation polluted a test run."""
+
 from __future__ import annotations
 
 import os

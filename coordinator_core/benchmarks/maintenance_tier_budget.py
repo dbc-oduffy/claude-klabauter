@@ -1,3 +1,8 @@
+"""Benchmark harness measuring `git maintenance run` cost against a churned
+scratch repo, to size the maintenance-tier time budget against real object
+and ref volume rather than a freshly-initialized empty repo.
+"""
+
 from __future__ import annotations
 
 import os

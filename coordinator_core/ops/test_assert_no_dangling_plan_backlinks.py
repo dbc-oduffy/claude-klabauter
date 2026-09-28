@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.assert_no_dangling_plan_backlinks`: the gate scanning for plan/deliverable backlinks with no resolvable target."""
+
 from __future__ import annotations
 
 import os

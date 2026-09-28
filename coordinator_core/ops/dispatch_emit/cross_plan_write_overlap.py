@@ -1,4 +1,6 @@
 
+"""Detects overlapping declared `writes:` scope between the emitting plan and any live peer plan claim, so two concurrently dispatched plans can't both claim ownership of the same paths."""
+
 from __future__ import annotations
 
 from pathlib import Path

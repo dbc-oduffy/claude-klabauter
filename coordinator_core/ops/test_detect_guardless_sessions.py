@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.detect_guardless_sessions`: detecting Windows Claude sessions running without the coordinator guard wired in."""
+
 from __future__ import annotations
 
 import json

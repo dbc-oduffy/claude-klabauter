@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.session.reap`: pins that the gated fast path never calls the orphaned-claims sub-reaper."""
+
 from __future__ import annotations
 
 import asyncio

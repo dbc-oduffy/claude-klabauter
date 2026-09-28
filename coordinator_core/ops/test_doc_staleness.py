@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.doc_staleness`: computing and reporting doc staleness from git-log history."""
+
 from __future__ import annotations
 
 import os

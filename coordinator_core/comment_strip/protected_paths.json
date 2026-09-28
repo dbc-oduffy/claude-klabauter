@@ -1,0 +1,69 @@
+{
+  "sources": [
+    {
+      "repo": "example-retrieval-repo-ue-addon",
+      "commit": "c72f601",
+      "files": {
+        "example_retrieval_repo_ue_addon/embed_constants.py": "fc0495aa0143de2774df10102f0eff25d6cbf0afa18603d5e96c66ad8cb936dc",
+        "example_retrieval_repo_ue_addon/lsp/install_phases.py": "5fcad8abf58feeba2b7d170188a734a92a7ab0d4b7c6c4030f86b57164d9eab1",
+        "example_retrieval_repo_ue_addon/lsp/proxy.py": "9099b3cd65a84d8a776fcca9a6850624d6ee027913f7c69a1804ed6cd85ece98",
+        "example_retrieval_repo_ue_addon_scripts/build_engine_structural_index.sh": "c43eb68ebe073e8626a898e9ad2ed1b1a65a544b3cf197efab2470f53f806008",
+        "example_retrieval_repo_ue_addon_scripts/lib/_phases_generated.sh": "3262d3bfe7563cd837e9dee8c7c024c82c77f9250cfeeda0167cb0253aec3741",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/manifest_reader.py": "83eb0cde46de8c07778a24d82f719adf926347d486a472c8c1f8e654063cfc21",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/manifest_reader.sh": "84ac57d5c959539acce1cff4b44192eed319e3b97aff7b222adc6a5a6dd2c5d9",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/prereq_probe.py": "6530fc327f8944060dcc613774576e9c055ba5ab938ccb97e7980bcc5d604987",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/prereq_probe.sh": "d45f88541b4601bffbcbf46c0803ba552b259eba97e13464c341986aaa99d571",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/step_zero_emit.py": "0a96f1a56e4a7bfbf97227883c7bf9644b09b35fb1b1b02078638f89d8e123d0",
+        "example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/step_zero_emit.sh": "9b5b791bcbfc4a1546f9823664b1559d648201f7a38352fed68518931ad89fed",
+        "example_retrieval_repo_ue_addon_scripts/lib/dep_check.sh": "498bc129fb4091a3f5a6e32e879e976e5bb1e8fb5238c2b7a88cd9c07ad99572",
+        "example_retrieval_repo_ue_addon_scripts/migrate_paths_to_relative.py": "fd5cb7c11916a757571572b4f2f068c246994232c31c0bbd1f1aa41c62dd4690",
+        "example_retrieval_repo_ue_addon_scripts/run_ue_check_on_project.py": "3ad61360be653081254d6a868f8554f3abc9fc1fd34f85e8d412e930d1845930"
+      }
+    },
+    {
+      "repo": "example-market-data-repo",
+      "commit": "034ebde",
+      "files": {
+        "market_intel/acquisition/fleet_pacing.py": "4cbb416801699d30f9c0332e4f92709ce83a41f1868fa1b4b1878c847afeae94",
+        "market_intel/acquisition/youtube/comments.py": "988b7c10109104bcbcb31767365ba2ec7951eb4abac33e288a87851f53e105d7",
+        "market_intel/atomic_write.py": "753999cf0002543ff01151ee67757b6ada284dd0358074cfebc199def80a9a21",
+        "market_intel/bands/build_entity_name_band.py": "58e913d644536405377cfea408be920724d00b2ac4d83dccf648d8d03ce696d5",
+        "market_intel/channels/product_announcements/breadth_cli.py": "2caa09adfb68c39f9c87b07c371d1a6ef8bd159f662da65ecc653cc67cea6c0e",
+        "market_intel/contract/__init__.py": "7cbb6c52198a7aef590d2a2c9eff58dbc0e3177b479ba74846b83a71d9e1a548",
+        "market_intel/contract/anchor_kinds.py": "3964cf24301d6aa4bc2de4d38b65cb6d14bab5043cb00b970a6f785e1648bf47",
+        "market_intel/contract/category_subject.py": "e31c3a6b00583955199b83117a542a27ae220eea44544432c0ae0567c01cd98a",
+        "market_intel/contract/citation.py": "f85c19e7a5bae2d87823921aa9ab30cfaebd9c616a632b74eef877e75e9adb6e",
+        "market_intel/contract/code_comparison.py": "b2a419182060ac6f7c5e1572025a997e5e2a1faacaea41dc0252f30d030e8a89",
+        "market_intel/contract/competitors.py": "dbe6c2e346948d7e0b980beefe51341ee36da25cc21fe1a6001d965903ce8947",
+        "market_intel/contract/coverage.py": "0e96ac9589ea7a573354bde14ff015d5516c25ba26c1261377338737ed27b9ef",
+        "market_intel/contract/derived_aggregate.py": "7c1e4ef001c508a372b80afe8297e68a84c32f3d638c0ab33f563fc22ae346ff",
+        "market_intel/contract/entity.py": "ddf7aac007e19a52102973c3008e26571c2b549e030bb0ed1c1ea4f172731408",
+        "market_intel/contract/enums.py": "897801344a01e8ac9003593fec623a47ea234c7ae3c77ebf27e19c9792d4d87c",
+        "market_intel/contract/financial_metric.py": "ef53e6fa85919b58e3866058fcde579dbb3b1d14e7ef4b2920120923dc54d9ad",
+        "market_intel/contract/intelligence.py": "b11b7f04a217a510bfe0c127bf16cc13784102b32d65077455f8e4d16a269b33",
+        "market_intel/contract/platforms.py": "03d55c36101a835e054612967293fee1b226fc72f0b21b82f8388039a342956a",
+        "market_intel/contract/pointer.py": "739b8e5f9226398632a7e2c18c0501633c24e836b811c7494e158f26b0583ede",
+        "market_intel/contract/provenance.py": "218e4eb1f52b747a1363f42d6ea5a89e6bbaf171555255659f0906ebbe027b1a",
+        "market_intel/contract/social_listening.py": "10ea6a92e4427a2fe5937f1bdb04a25eeb78e29bc7584674e247c1d16f4335b4",
+        "market_intel/contract/variant.py": "3e17705b1c7b2d9f303cb15f1ddbecfd0408a6425e940828b48e01f4779d5bc2",
+        "market_intel/corpus/review_cli.py": "ea2f47d76e209c1b6dd6b922abe14ada49223cf560a9b1877886cfed017b6625",
+        "market_intel/emission/source_identity.py": "220c4425e74eab3306aed2bba0e0107094cf980135f5909ed49d9a60461944bb",
+        "market_intel/extract.py": "536e42955722296e08b35712133cfb2afcd30ce7c8e6396327a555fddc260bea",
+        "market_intel/material/batch.py": "c47055589a4d15b6baac6b8c2e06a8a1f43ad50c23db13f4539da343b3515a61",
+        "market_intel/scoring/operator.py": "94e5a37bf37880977e1f6d2b6c0e7438bff8bcdd01c32fb62cc083de2eca42d1",
+        "market_intel/serving/writer.py": "a4b06c4630250c97e12451368ef8a8ab56cbcbcef212f52c1c3ae504cbee1c34",
+        "scripts/verify_cross_drive_resolution.py": "c0cef4c95c1a0c692ce50cab6cdd2920e084195dda319d8e344ab99b1d0d4c78",
+        "tests/test_repo_paths.py": "9d3a757b861d7adf871b3384f6b2599fde4cab7ef416c1c994ba82c08fd3c248"
+      }
+    },
+    {
+      "repo": "project-rag",
+      "commit": "589b8c60e",
+      "files": {
+        "docs/research/2026-07-10-epistemology-temporality-web/spike-temporal-relevance-eval/run_ablation.py": "d7ff6278102a2a612ca5c3d1e28d3fa30f01f457c97eae416d110d7ac3239941",
+        "example_retrieval_repo_core/storage_backend.py": "22a5a7d0ffdf9d99dc977b004d55df84c48986519ab05399bc39ecd5d971eef6",
+        "project_rag_scripts/build_fixture_engine_addon.py": "378289e4717a008a71e756bb62d91ed420de82d1bfa330216ccd5545322e6fc7"
+      }
+    }
+  ]
+}

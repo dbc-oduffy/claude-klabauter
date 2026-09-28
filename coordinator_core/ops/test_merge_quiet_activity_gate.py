@@ -1,3 +1,5 @@
+"""Unit tests for `coordinator_core.ops.merge_quiet_activity_gate`: the merge-readiness gate keyed on quiet-since-last-commit duration."""
+
 from __future__ import annotations
 
 import os

@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.coordinator_render_rollup`: the rollup-rendering CLI's argument parsing and handler wiring."""
+
 from __future__ import annotations
 
 from pathlib import Path

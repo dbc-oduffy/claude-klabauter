@@ -1,4 +1,6 @@
 
+"""Emit-section collector: reads and collapses central goals state into the emitted goal records for one repo."""
+
 from __future__ import annotations
 
 import logging

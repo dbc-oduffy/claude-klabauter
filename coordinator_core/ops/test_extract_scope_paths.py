@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.extract_scope_paths`: extracting a handoff's frontmatter `scope:` path list."""
+
 from __future__ import annotations
 
 from pathlib import Path

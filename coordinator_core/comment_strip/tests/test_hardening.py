@@ -50,6 +50,38 @@ def test_shellcheck_powershell_help_and_sql_hint_kept():
     assert keep_rules.is_tooling_comment("// @preserve keep this")
 
 
+def test_js_toolchain_directives_kept():
+    for directive in (
+        "// @vitest-environment jsdom",
+        "/** @vitest-environment node */",
+        "/**\n * Renders the panel.\n * @vitest-environment jsdom\n */",
+        "/* @jest-environment jsdom */",
+        "/** @jsxImportSource preact */",
+        "/** @jsx h */",
+        "/*#__PURE__*/",
+        "/* @__PURE__ */",
+        "/* @__NO_SIDE_EFFECTS__ */",
+        '/* webpackChunkName: "admin" */',
+        "/* @vite-ignore */",
+        "// biome-ignore lint/style: generated",
+        "// deno-lint-ignore no-explicit-any",
+        "/* stylelint-disable */",
+        "/* v8 ignore next */",
+        "// @refresh reset",
+        "// @flow",
+    ):
+        assert keep_rules.is_tooling_comment(directive), directive
+
+
+def test_prose_mentioning_toolchain_words_still_strips():
+    for prose in (
+        "// the vitest environment defaults to node",
+        "// flow control for the retry loop",
+        "// pure function, no side effects",
+    ):
+        assert not keep_rules.is_tooling_comment(prose), prose
+
+
 def test_sole_body_docstring_removal_inserts_pass():
     text = (
         "class C:\n"

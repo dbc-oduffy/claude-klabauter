@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.learn_lessons_config_update`: updating a repo's lessons-learning config."""
+
 from __future__ import annotations
 
 import os

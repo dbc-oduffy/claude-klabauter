@@ -1,4 +1,6 @@
 
+"""CLI: fast-forwards local main from origin/main (or updates the local main ref when on another branch) before a new branch is created, refusing to proceed on unresolved divergence."""
+
 from __future__ import annotations
 
 import subprocess

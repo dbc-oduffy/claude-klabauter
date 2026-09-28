@@ -1,4 +1,6 @@
 
+"""Derives a filesystem/id-safe machine slug from a hostname for use in emitted artifact paths."""
+
 from __future__ import annotations
 
 import re

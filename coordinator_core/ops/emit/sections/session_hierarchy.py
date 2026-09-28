@@ -1,4 +1,6 @@
 
+"""Emit-section collector: reads `session-hierarchy.*.json` shards from central state and validates each entry, routing malformed entries to a separate bucket instead of dropping them silently."""
+
 from __future__ import annotations
 
 import glob

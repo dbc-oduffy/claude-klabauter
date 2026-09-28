@@ -1,3 +1,5 @@
+"""Flags plugins enabled in a repo's `.claude/settings.json` that aren't justified by that repo's declared project_type/stack_tags in `coordinator.local.md` — an enabled-but-unjustified-plugin drift advisory."""
+
 from __future__ import annotations
 
 import json

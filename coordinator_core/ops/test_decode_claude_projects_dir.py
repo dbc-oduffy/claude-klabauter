@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.decode_claude_projects_dir`: decoding a `~/.claude/projects/` directory name back into its repo name and path."""
+
 from __future__ import annotations
 
 from pathlib import Path

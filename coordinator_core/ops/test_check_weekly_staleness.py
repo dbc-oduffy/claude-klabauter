@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_weekly_staleness`: computing weekly-changelog staleness from its header fields."""
+
 from __future__ import annotations
 
 from datetime import date

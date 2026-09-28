@@ -1,4 +1,6 @@
 
+"""Unit tests for `coordinator_core.ops.check_claude_klabauter_doctor_sentinel`: the claude-klabauter-doctor last-run sentinel staleness check."""
+
 from __future__ import annotations
 
 import json
