@@ -27,13 +27,12 @@ anchors:
   3. the registry-resolved claude-klabauter root (2026-07-22 — the settings-home
      machine-local registry key ``repos.claude_klabauter``, the same anchor
      ``coordinator_core.engine_root.coordinator_engine_root()`` resolves for
-     in-process callers), with the durable ``<settings-home>/machine-local/
-     .claude-klabauter-live-root`` pointer file retained as a fallback rung. Absence of the
-     ``repos.claude_klabauter`` key degrades cleanly to "this anchor
-     contributes nothing" — it never raises and never widens trust on its
-     own; claude-klabauter's own bin scripts (and every consolidated caller in this
-     module's docstring) live under this root, so without this anchor every
-     one of them false-rejects its own repo as untrusted, or
+     in-process callers). Absence of the ``repos.claude_klabauter`` key
+     degrades cleanly to "this anchor contributes nothing" — it never
+     raises and never widens trust on its own; claude-klabauter's own bin scripts
+     (and every consolidated caller in this module's docstring) live under
+     this root, so without this anchor every one of them false-rejects its
+     own repo as untrusted, or
   4. the registry-resolved coordinator plugin mirror
      (``plugin.mirrors.coordinator-claude.live_path``) — the SERVED plugin
      tree, which is a different thing from the DoE authoring checkout anchor
@@ -173,19 +172,19 @@ def _plugin_mirror_root(env: dict) -> str:
 
 
 def _claude_klabauter_root(env: dict) -> str:
-    """Read the registry-resolved claude-klabauter root, registry-first with a durable
-    pointer-file fallback — same shape as ``_doe_root`` above, minus the
-    legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter has no such
-    legacy sentinel; ``coordinator_core.engine_root.coordinator_engine_root()``
-    is the in-process analog for callers that also want the ``CLAUDE_KLABAUTER_ROOT``
-    env-var rung and the machine-local CLI subprocess rung — this function
-    stays subprocess-free like ``_doe_root``, so a missing/absent registry
-    key degrades to "" rather than raising or shelling out):
+    """Read the registry-resolved claude-klabauter root — same shape as ``_doe_root``
+    above, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
+    has no such legacy sentinel; ``coordinator_core.engine_root.
+    coordinator_engine_root()`` is the in-process analog for callers that
+    also want the ``CLAUDE_KLABAUTER_ROOT`` env-var rung and the machine-local CLI
+    subprocess rung — this function stays subprocess-free like ``_doe_root``,
+    so a missing/absent registry key degrades to "" rather than raising or
+    shelling out):
         1. registry ``repos.claude_klabauter``               (canonical anchor)
-        2. <settings-home>/machine-local/.claude-klabauter-live-root       (durable file mirror)
-    Returns "" if neither rung resolves — the caller (``is_trusted``) treats
-    an empty claude-klabauter root as "this anchor contributes nothing," never as an
-    error.
+    Returns "" if the rung doesn't resolve — the caller (``is_trusted``)
+    treats an empty claude-klabauter root as "this anchor contributes nothing," never
+    as an error. No pointer-file fallback: absence must fail loudly rather
+    than carry a false sense of security (PM ruling).
     """
     content = ""
     settings_home_dir = _settings_home_dir_from_env(env)
@@ -194,14 +193,6 @@ def _claude_klabauter_root(env: dict) -> str:
         registry_value = _registry_key(settings_home_dir, CLAUDE_KLABAUTER_KEY)
         if registry_value:
             content = registry_value
-
-    if not content and settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-live-root")
-        try:
-            with open(durable, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError:
-            content = ""
 
     content = content.rstrip("\n")
     if content.endswith("/"):
@@ -325,16 +316,6 @@ def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:
         rungs.append(("registry repos.claude_klabauter", _registry_key(settings_home_dir, CLAUDE_KLABAUTER_KEY) or "<absent>"))
     else:
         rungs.append(("registry repos.claude_klabauter", "<skipped: settings-home dir resolved empty>"))
-
-    if settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-live-root")
-        try:
-            with open(durable, "r", encoding="utf-8") as f:
-                rungs.append((f"file {durable}", f.read().rstrip("\n") or "<absent>"))
-        except OSError:
-            rungs.append((f"file {durable}", "<absent>"))
-    else:
-        rungs.append(("<settings-home>/machine-local/.claude-klabauter-live-root", "<skipped: settings-home dir resolved empty>"))
 
     return rungs
 

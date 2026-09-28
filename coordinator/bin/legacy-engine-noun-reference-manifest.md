@@ -199,20 +199,20 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/gen-claude-doe-launcher.py:49` | PROSE-ONLY | `executable-surface migration moved this trampoline into claude-klabauter` |
 | `coordinator/bin/gen-claude-doe-shim.py:20` | PROSE-ONLY | `# over that claude-klabauter (engine) module — it lives in claude-klabauter post the` |
 | `coordinator/bin/gen-claude-doe-shim.py:72` | PROSE-ONLY | `claude-klabauter while `templates/` stayed in DoE-claude (DR-047` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:3` | PROSE-ONLY | `Purpose: reads repos.claude_klabauter from the machine-local registry and writes` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:4` | PROSE-ONLY | `<settings-home>/machine-local/.claude-klabauter-live-root (one line, the claude-klabauter repo root, no` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:30` | PROSE-ONLY | `2. machine-local get repos.claude_klabauter (via a direct subprocess call to` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:46` | PROSE-ONLY | `Fail-loud contract: if repos.claude_klabauter is unset/empty in both the env` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:62` | - | `GENERATES = []  # writes only <settings-home>/machine-local/.claude-klabauter-live-root, outside claude-klabauter's tracked tree` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:112` | PROSE-ONLY | `above (for the `.claude-klabauter-live-root` pointer path) for the single-file-module` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:160` | PROSE-ONLY | `# inside machine-local's own resolve_sibling_repo ladder for repos.claude_klabauter).` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:165` | PROSE-ONLY | `# Tier 2: machine-local registry (repos.claude_klabauter).` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:166` | - | `resolved = _machine_local_get("repos.claude_klabauter")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:169` | - | `"gen-claude-klabauter-root-pointer.py: cannot resolve repos.claude_klabauter "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:174` | - | `"  Remediation: machine-local set repos.claude_klabauter <path>  "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:201` | - | `"  Remediation: confirm repos.claude_klabauter in the registry is a valid "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:219` | - | `pointer_file = os.path.join(_settings_home(), "machine-local", ".claude-klabauter-live-root")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:265` | - | `fd, tmp_live = tempfile.mkstemp(prefix=".claude-klabauter-live-root.tmp.", dir=pointer_dir)` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:3` | PROSE-ONLY | `Purpose: reads repos.claude_klabauter from the machine-local registry and writes` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:4` | PROSE-ONLY | `<settings-home>/machine-local/.claude-klabauter-live-root (one line, the claude-klabauter repo root, no` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:30` | PROSE-ONLY | `2. machine-local get repos.claude_klabauter (via a direct subprocess call to` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:46` | PROSE-ONLY | `Fail-loud contract: if repos.claude_klabauter is unset/empty in both the env` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:62` | - | `GENERATES = []  # writes only <settings-home>/machine-local/.claude-klabauter-live-root, outside claude-klabauter's tracked tree` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:112` | PROSE-ONLY | `above (for the `.claude-klabauter-live-root` pointer path) for the single-file-module` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:160` | PROSE-ONLY | `# inside machine-local's own resolve_sibling_repo ladder for repos.claude_klabauter).` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:165` | PROSE-ONLY | `# Tier 2: machine-local registry (repos.claude_klabauter).` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:166` | - | `resolved = _machine_local_get("repos.claude_klabauter")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:169` | - | `"gen-claude-klabauter-live-root-pointer.py: cannot resolve repos.claude_klabauter "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:174` | - | `"  Remediation: machine-local set repos.claude_klabauter <path>  "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:201` | - | `"  Remediation: confirm repos.claude_klabauter in the registry is a valid "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:219` | - | `pointer_file = os.path.join(_settings_home(), "machine-local", ".claude-klabauter-live-root")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:265` | - | `fd, tmp_live = tempfile.mkstemp(prefix=".claude-klabauter-live-root.tmp.", dir=pointer_dir)` |
 | `coordinator/bin/install-sandbox-check.py:32` | PROSE-ONLY | `# b644d5a9 migrated THIS FILE into claude-klabauter's coordinator/bin/ while` |
 | `coordinator/bin/install-sandbox-check.py:75` | PROSE-ONLY | `migrated this trampoline into claude-klabauter while coordinator/templates/` |
 | `coordinator/bin/install-sandbox-check.py:132` | - | `"repos.claude_klabauter machine-local registry key, then re-run.",` |
@@ -1109,12 +1109,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/maximalist.py:1559` | - | `orch.phase_header("Seed repos.claude_klabauter registry key (best-effort)")` |
 | `coordinator_core/install/maximalist.py:1567` | - | `rc = _run([*ml_argv, "set", "repos.claude_klabauter", str(claude_klabauter_clone)], env=env)` |
 | `coordinator_core/install/maximalist.py:1569` | - | `_verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))` |
-| `coordinator_core/install/maximalist.py:1572` | - | `"WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-root-pointer.py "` |
+| `coordinator_core/install/maximalist.py:1572` | - | `"WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-live-root-pointer.py "` |
 | `coordinator_core/install/maximalist.py:1578` | - | `"NOTE: machine-local not yet on PATH in this shell -- repos.claude_klabauter not seeded; "` |
 | `coordinator_core/install/maximalist.py:1585` | PROSE-ONLY | `# guard anchors on `repos.doe_claude` / `repos.claude_klabauter`, so on a` |
 | `coordinator_core/install/maximalist.py:1611` | PROSE-ONLY | `# immediately after the `repos.claude_klabauter` seed above: that is the` |
 | `coordinator_core/install/maximalist.py:1613` | PROSE-ONLY | `# least `repos.doe_claude` and `repos.claude_klabauter`, which the sweep` |
-| `coordinator_core/install/maximalist.py:1664` | - | `"gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",` |
+| `coordinator_core/install/maximalist.py:1664` | - | `"gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",` |
 | `coordinator_core/install/maximalist.py:2225` | PROSE-ONLY | `- The best-effort `repos.doe_claude` / `repos.claude_klabauter`` |
 | `coordinator_core/install/sandbox_check.py:372` | - | `"location, since this executable now lives in claude-klabauter while "` |
 | `coordinator_core/install/settings_home_report.py:6` | PROSE-ONLY | `and ``machine-local/.claude-klabauter-live-root`` each land via their own install step, with` |
@@ -2592,21 +2592,21 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `bin/claude-klabauter-doctor-probe.py:3071` | - | `"""Probe claude-klabauter.root.pointer — REQUIRED=False (WARN, not hard FAIL) on absence.` |
 | `bin/claude-klabauter-doctor-probe.py:3073` | PROSE-ONLY | `Checks that the claude-klabauter-live-root pointer file exists at` |
 | `bin/claude-klabauter-doctor-probe.py:3078` | PROSE-ONLY | `bash subprocess (coordinator-claude-klabauter-root.sh) with a 5 s timeout — on Windows this` |
-| `bin/claude-klabauter-doctor-probe.py:3087` | PROSE-ONLY | `the install-time writer (gen-claude-klabauter-root-pointer.py).` |
+| `bin/claude-klabauter-doctor-probe.py:3087` | PROSE-ONLY | `the install-time writer (gen-claude-klabauter-live-root-pointer.py).` |
 | `bin/claude-klabauter-doctor-probe.py:3088` | PROSE-ONLY | `- claude_klabauter_root is None (probe 1 unresolved) -> pointer existence is still checked;` |
-| `bin/claude-klabauter-doctor-probe.py:3094` | PROSE-ONLY | `separate install-time step (gen-claude-klabauter-root-pointer.py, DoE-claude C1b).` |
+| `bin/claude-klabauter-doctor-probe.py:3094` | PROSE-ONLY | `separate install-time step (gen-claude-klabauter-live-root-pointer.py, DoE-claude C1b).` |
 | `bin/claude-klabauter-doctor-probe.py:3102` | PROSE-ONLY | `Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14` |
 | `bin/claude-klabauter-doctor-probe.py:3113` | - | `f"claude-klabauter-live-root pointer absent at {str(pointer_path)!r}. Without it, "` |
-| `bin/claude-klabauter-doctor-probe.py:3119` | - | `"Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to "` |
+| `bin/claude-klabauter-doctor-probe.py:3119` | - | `"Run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) to "` |
 | `bin/claude-klabauter-doctor-probe.py:3132` | - | `detail=f"claude-klabauter-live-root pointer present but unreadable: {exc}",` |
-| `bin/claude-klabauter-doctor-probe.py:3135` | - | `f"pointer writer (gen-claude-klabauter-root-pointer.py) to regenerate {str(pointer_path)!r}."` |
+| `bin/claude-klabauter-doctor-probe.py:3135` | - | `f"pointer writer (gen-claude-klabauter-live-root-pointer.py) to regenerate {str(pointer_path)!r}."` |
 | `bin/claude-klabauter-doctor-probe.py:3141` | - | `if claude_klabauter_root is None:` |
 | `bin/claude-klabauter-doctor-probe.py:3146` | - | `f"claude-klabauter-live-root pointer present at {str(pointer_path)!r} "` |
 | `bin/claude-klabauter-doctor-probe.py:3148` | - | `"COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve)."` |
 | `bin/claude-klabauter-doctor-probe.py:3157` | - | `resolved_str = str(claude_klabauter_root).rstrip("/\\")` |
 | `bin/claude-klabauter-doctor-probe.py:3163` | - | `same_target = pointer_resolved == claude_klabauter_root.resolve()` |
 | `bin/claude-klabauter-doctor-probe.py:3171` | - | `f"claude-klabauter-live-root pointer content {pointer_content!r} does not match "` |
-| `bin/claude-klabauter-doctor-probe.py:3175` | - | `"Re-run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) "` |
+| `bin/claude-klabauter-doctor-probe.py:3175` | - | `"Re-run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) "` |
 | `bin/claude-klabauter-doctor-probe.py:3191` | - | `f"claude-klabauter-live-root pointer present at {str(pointer_path)!r} and matches "` |
 | `bin/claude-klabauter-doctor-probe.py:3221` | PROSE-ONLY | `# and reports how far claude-klabauter's own HEAD has moved past the sha that record` |
 | `bin/claude-klabauter-doctor-probe.py:3227` | - | `_PUBLISH_PROVENANCE_PROBE = "claude-klabauter.publish.provenance"` |
@@ -2828,7 +2828,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:133` | - | `assert result.probe == "claude-klabauter.root.pointer"` |
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:139` | - | `"claude-klabauter.root.pointer must not emit BROKEN for a merely-absent pointer"` |
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:142` | - | `"claude-klabauter.root.pointer must carry required=False (WARN, not hard FAIL)"` |
-| `bin/tests/test_claude_klabauter_doctor_c14_probes.py:145` | - | `assert "gen-claude-klabauter-root-pointer" in result.remediation, (` |
+| `bin/tests/test_claude_klabauter_doctor_c14_probes.py:145` | - | `assert "gen-claude-klabauter-live-root-pointer" in result.remediation, (` |
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:157` | - | `claude_klabauter_root = tmp_path / "claude-klabauter-checkout"` |
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:158` | - | `claude_klabauter_root.mkdir()` |
 | `bin/tests/test_claude_klabauter_doctor_c14_probes.py:164` | - | `result = mod._run_probe_root_pointer(claude_klabauter_root)` |
@@ -3440,43 +3440,43 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/gen-claude-doe-shim.py:2` | - | `"""gen-claude-doe-shim.py — CLI trampoline over the claude-klabauter claude() shim` |
 | `coordinator/bin/gen-claude-doe-shim.py:128` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/gen-doe-root-pointer.py:33` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:1` | - | `"""gen-claude-klabauter-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:5` | PROSE-ONLY | `trailing junk) so that BOTH the bash resolver (coordinator-claude-klabauter-root.sh rung` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:6` | PROSE-ONLY | `1.5) and the Python transport (cc_invoke.py::_resolve_claude_klabauter_root rung 1.5) can` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:12` | PROSE-ONLY | `(bash-native consumers only). The claude-klabauter pointer, by contrast, is read by a` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:20` | PROSE-ONLY | `Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C1b` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:23` | PROSE-ONLY | `Resolution mirror: coordinator/lib/coordinator-claude-klabauter-root.sh (bash reader),` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:24` | PROSE-ONLY | `coordinator/bin/lib/cc_invoke.py::_resolve_claude_klabauter_root (Python reader).` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:26` | PROSE-ONLY | `Resolution order for the claude-klabauter clone root:` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:27` | PROSE-ONLY | `1. REPO_CLAUDE_KLABAUTER env var (operator override; also the rung-1 override` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:37` | PROSE-ONLY | `gen-claude-klabauter-root-pointer.py             — write (or refresh) the live pointer` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:38` | PROSE-ONLY | `gen-claude-klabauter-root-pointer.py --check-only — validate without mutating the live pointer` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:50` | PROSE-ONLY | `Negative-spec: does NOT clone the claude-klabauter repo, does NOT edit any registry key,` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:65` | PROSE-ONLY | `# Settings-home resolution — inline mirror of cc_invoke.py::_resolve_claude_klabauter_root.` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:153` | - | `def _resolve_claude_klabauter_root() -> str:` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:154` | - | `"""Resolve the claude-klabauter repo root: env override, then machine-local registry.` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:159` | PROSE-ONLY | `# REPO_DOE_CLAUDE tier; REPO_CLAUDE_KLABAUTER is also the rung-1 override` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:161` | - | `override = os.environ.get("REPO_CLAUDE_KLABAUTER")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:170` | - | `"(env REPO_CLAUDE_KLABAUTER unset; machine-local registry lookup failed/empty).",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:184` | - | `description="Project the claude-klabauter repo root into a cold-readable pointer file."` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:193` | - | `claude_klabauter_root = _resolve_claude_klabauter_root().rstrip("/\\")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:195` | - | `if not os.path.isdir(claude_klabauter_root):` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:197` | - | `f"gen-claude-klabauter-root-pointer.py: claude-klabauter root not found at {claude_klabauter_root!r}",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:202` | - | `"directory, or set REPO_CLAUDE_KLABAUTER=<path>  then re-run.",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:207` | - | `if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:209` | - | `f"gen-claude-klabauter-root-pointer.py: coordinator_core/ subdir absent at "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:210` | - | `f"{claude_klabauter_root!r}/coordinator_core",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:214` | - | `"  Remediation: confirm the claude-klabauter clone has coordinator_core/ populated.",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:224` | - | `fd, tmp_path = tempfile.mkstemp(prefix="gen-claude-klabauter-root-pointer.")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:227` | - | `f.write(claude_klabauter_root + "\n")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:230` | - | `if written != claude_klabauter_root:` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:232` | - | `f"gen-claude-klabauter-root-pointer.py: --check-only validation failed "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:233` | - | `f"(wrote {written!r}, expected {claude_klabauter_root!r})",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:238` | - | `f"gen-claude-klabauter-root-pointer.py: --check-only OK — would write "` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:239` | - | `f"{claude_klabauter_root!r} to {pointer_file} (not written)",` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:257` | - | `if existing == claude_klabauter_root:` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:268` | - | `f.write(claude_klabauter_root + "\n")` |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py:277` | - | `print(f"gen-claude-klabauter-root-pointer.py: wrote {claude_klabauter_root!r} to {pointer_file}", file=sys.stderr)` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:1` | - | `"""gen-claude-klabauter-live-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:5` | PROSE-ONLY | `trailing junk) so that BOTH the bash resolver (coordinator-claude-klabauter-root.sh rung` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:6` | PROSE-ONLY | `1.5) and the Python transport (cc_invoke.py::_resolve_claude_klabauter_root rung 1.5) can` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:12` | PROSE-ONLY | `(bash-native consumers only). The claude-klabauter pointer, by contrast, is read by a` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:20` | PROSE-ONLY | `Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C1b` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:23` | PROSE-ONLY | `Resolution mirror: coordinator/lib/coordinator-claude-klabauter-root.sh (bash reader),` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:24` | PROSE-ONLY | `coordinator/bin/lib/cc_invoke.py::_resolve_claude_klabauter_root (Python reader).` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:26` | PROSE-ONLY | `Resolution order for the claude-klabauter clone root:` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:27` | PROSE-ONLY | `1. REPO_CLAUDE_KLABAUTER env var (operator override; also the rung-1 override` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:37` | PROSE-ONLY | `gen-claude-klabauter-live-root-pointer.py             — write (or refresh) the live pointer` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:38` | PROSE-ONLY | `gen-claude-klabauter-live-root-pointer.py --check-only — validate without mutating the live pointer` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:50` | PROSE-ONLY | `Negative-spec: does NOT clone the claude-klabauter repo, does NOT edit any registry key,` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:65` | PROSE-ONLY | `# Settings-home resolution — inline mirror of cc_invoke.py::_resolve_claude_klabauter_root.` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:153` | - | `def _resolve_claude_klabauter_root() -> str:` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:154` | - | `"""Resolve the claude-klabauter repo root: env override, then machine-local registry.` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:159` | PROSE-ONLY | `# REPO_DOE_CLAUDE tier; REPO_CLAUDE_KLABAUTER is also the rung-1 override` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:161` | - | `override = os.environ.get("REPO_CLAUDE_KLABAUTER")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:170` | - | `"(env REPO_CLAUDE_KLABAUTER unset; machine-local registry lookup failed/empty).",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:184` | - | `description="Project the claude-klabauter repo root into a cold-readable pointer file."` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:193` | - | `claude_klabauter_root = _resolve_claude_klabauter_root().rstrip("/\\")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:195` | - | `if not os.path.isdir(claude_klabauter_root):` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:197` | - | `f"gen-claude-klabauter-live-root-pointer.py: claude-klabauter root not found at {claude_klabauter_root!r}",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:202` | - | `"directory, or set REPO_CLAUDE_KLABAUTER=<path>  then re-run.",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:207` | - | `if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:209` | - | `f"gen-claude-klabauter-live-root-pointer.py: coordinator_core/ subdir absent at "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:210` | - | `f"{claude_klabauter_root!r}/coordinator_core",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:214` | - | `"  Remediation: confirm the claude-klabauter clone has coordinator_core/ populated.",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:224` | - | `fd, tmp_path = tempfile.mkstemp(prefix="gen-claude-klabauter-live-root-pointer.")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:227` | - | `f.write(claude_klabauter_root + "\n")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:230` | - | `if written != claude_klabauter_root:` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:232` | - | `f"gen-claude-klabauter-live-root-pointer.py: --check-only validation failed "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:233` | - | `f"(wrote {written!r}, expected {claude_klabauter_root!r})",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:238` | - | `f"gen-claude-klabauter-live-root-pointer.py: --check-only OK — would write "` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:239` | - | `f"{claude_klabauter_root!r} to {pointer_file} (not written)",` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:257` | - | `if existing == claude_klabauter_root:` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:268` | - | `f.write(claude_klabauter_root + "\n")` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:277` | - | `print(f"gen-claude-klabauter-live-root-pointer.py: wrote {claude_klabauter_root!r} to {pointer_file}", file=sys.stderr)` |
 | `coordinator/bin/gen-settings-hooks.py:27` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/generate-exec-summary.py:88` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/generate-repomap.py:88` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
@@ -6183,9 +6183,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/maximalist.py:1546` | - | `elif not (claude_klabauter_clone / "coordinator_core").is_dir():` |
 | `coordinator_core/install/maximalist.py:1554` | - | `f"WARN: derived claude-klabauter clone root {claude_klabauter_clone} has no coordinator_core/ subdir -- "` |
 | `coordinator_core/install/maximalist.py:1662` | - | `claude_klabauter_pointer_args = ["--check-only"] if check_only else []` |
-| `coordinator_core/install/maximalist.py:1667` | - | `os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),` |
+| `coordinator_core/install/maximalist.py:1667` | - | `os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-live-root-pointer.py"),` |
 | `coordinator_core/install/maximalist.py:1668` | - | `*claude_klabauter_pointer_args,` |
-| `coordinator_core/install/maximalist.py:1674` | - | `"WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",` |
+| `coordinator_core/install/maximalist.py:1674` | - | `"WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b)",` |
 | `coordinator_core/install/maximalist.py:1729` | - | `_install_claude_doe_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)` |
 | `coordinator_core/install/maximalist.py:2047` | - | `_build_and_persist_receipt(Path(claude_klabauter_root))` |
 | `coordinator_core/install/maximalist.py:2122` | - | `claude_klabauter_root = str(Path(__file__).resolve().parents[2])` |
@@ -6383,14 +6383,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_gen_settings_hooks.py:139` | - | `f"Co-located (claude-klabauter) tried: {_COLOCATED_FIXTURES}. "` |
 | `coordinator_core/install/test_maximalist.py:199` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator_core/install/test_maximalist.py:200` | - | `(claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)` |
-| `coordinator_core/install/test_maximalist.py:205` | - | `claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"` |
+| `coordinator_core/install/test_maximalist.py:205` | - | `claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"` |
 | `coordinator_core/install/test_maximalist.py:206` | - | `claude_klabauter_pointer.write_text(` |
-| `coordinator_core/install/test_maximalist.py:209` | - | `'    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'` |
+| `coordinator_core/install/test_maximalist.py:209` | - | `'    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'` |
 | `coordinator_core/install/test_maximalist.py:210` | - | `'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'` |
 | `coordinator_core/install/test_maximalist.py:215` | - | `wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"` |
 | `coordinator_core/install/test_maximalist.py:223` | - | `"claude_klabauter_root": claude_klabauter_root,` |
 | `coordinator_core/install/test_maximalist.py:355` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
-| `coordinator_core/install/test_maximalist.py:365` | - | `"gen-claude-klabauter-root-pointer.py",` |
+| `coordinator_core/install/test_maximalist.py:365` | - | `"gen-claude-klabauter-live-root-pointer.py",` |
 | `coordinator_core/install/test_maximalist.py:396` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:418` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:436` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
@@ -6427,9 +6427,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_maximalist.py:1605` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:1661` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:1741` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
-| `coordinator_core/install/test_maximalist.py:1769` | - | `claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"` |
+| `coordinator_core/install/test_maximalist.py:1769` | - | `claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"` |
 | `coordinator_core/install/test_maximalist.py:1770` | - | `claude_klabauter_pointer.write_text(` |
-| `coordinator_core/install/test_maximalist.py:1775` | - | `'    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'` |
+| `coordinator_core/install/test_maximalist.py:1775` | - | `'    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'` |
 | `coordinator_core/install/test_maximalist.py:1776` | - | `'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'` |
 | `coordinator_core/install/test_maximalist.py:1920` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:1954` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
@@ -6630,15 +6630,15 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:58` | - | `_spec.loader.exec_module(resolve_claude_klabauter)` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:62` | PROSE-ONLY | `#: ``claude-klabauter`` -> ``claude-klabauter`` token rewrite; the fourth is derivable` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:66` | - | `"check-claude-klabauter-doctor-sentinel.sh": "check-claude-klabauter-doctor-sentinel.py",` |
-| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:67` | - | `"gen-claude-klabauter-root-pointer.py": "gen-claude-klabauter-root-pointer.py",` |
+| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:67` | - | `"gen-claude-klabauter-live-root-pointer.py": "gen-claude-klabauter-root-pointer.py",` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:69` | - | `"remove-claude-klabauter-precommit-hook.py": "remove-claude-klabauter-precommit-hook.py",` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:77` | PROSE-ONLY | `device, same reason, as ``test_resolve_claude_klabauter_exec_cli.py``'s copy; every` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:101` | - | `resolve_claude_klabauter._published_name_map_key(src): dst` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:104` | - | `(bin_dir / resolve_claude_klabauter.PUBLISHED_NAME_MAP_BASENAME).write_text(` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:122` | - | `assert resolve_claude_klabauter.resolve_target_path(str(bin_dir), asked) == str(bin_dir) + "/" + published` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:130` | - | `assert resolve_claude_klabauter.resolve_target_path(` |
-| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:131` | - | `str(bin_dir), "gen-claude-klabauter-root-pointer"` |
-| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:132` | - | `) == str(bin_dir) + "/" + RENAMED_FOUR["gen-claude-klabauter-root-pointer.py"]` |
+| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:131` | - | `str(bin_dir), "gen-claude-klabauter-live-root-pointer"` |
+| `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:132` | - | `) == str(bin_dir) + "/" + RENAMED_FOUR["gen-claude-klabauter-live-root-pointer.py"]` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:139` | - | `asked = "check-claude-klabauter-doctor-sentinel.sh"` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:140` | - | `assert resolve_claude_klabauter.resolve_target_path(str(bin_dir), asked) == str(bin_dir) + "/" + asked` |
 | `coordinator_core/install/test_resolve_claude_klabauter_rename_retry.py:151` | - | `(bin_dir / resolve_claude_klabauter.PUBLISHED_NAME_MAP_BASENAME).write_text(raw, encoding="utf-8")` |
@@ -6856,7 +6856,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/_codename_classes.py:220` | - | `"coordinator_claude_klabauter_root": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:231` | - | `"doe-CLAUDE-KLABAUTER": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:233` | - | `"doe-claude-klabauter": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:251` | - | `"gen-claude-klabauter-root-pointer": RENAME,` |
+| `coordinator_core/message_register/_codename_classes.py:251` | - | `"gen-claude-klabauter-live-root-pointer": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:259` | - | `"claude-klabauter": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:260` | - | `"claude-klabauter-4th-class-ref-manifest.md": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:261` | - | `"claude-klabauter-live-root": RENAME,` |
@@ -7685,8 +7685,8 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/codename_provenance_seed.py:151` | PROSE-ONLY | `# (non-word) -- the same boundary shape the bare `claude-klabauter` row already` |
 | `coordinator_core/percolate/codename_provenance_seed.py:153` | PROSE-ONLY | `# Precedence row over `claude-klabauter-live-root`, the same shape `coordinator-claude-klabauter-root.sh`` |
 | `coordinator_core/percolate/codename_provenance_seed.py:154` | PROSE-ONLY | `# below uses. Without it `claude-klabauter-live-root` wins the substring inside the literal` |
-| `coordinator_core/percolate/codename_provenance_seed.py:155` | PROSE-ONLY | `# `gen-claude-klabauter-root-pointer.py` and every published reference becomes` |
-| `coordinator_core/percolate/codename_provenance_seed.py:160` | - | `'gen-claude-klabauter-root-pointer': 'gen-claude-klabauter-root-pointer',` |
+| `coordinator_core/percolate/codename_provenance_seed.py:155` | PROSE-ONLY | `# `gen-claude-klabauter-live-root-pointer.py` and every published reference becomes` |
+| `coordinator_core/percolate/codename_provenance_seed.py:160` | - | `'gen-claude-klabauter-live-root-pointer': 'gen-claude-klabauter-root-pointer',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:161` | - | `'claude-klabauter-live-root': 'claude-klabauter-live-root',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:162` | - | `'CLAUDE_KLABAUTER_ROOT': 'CLAUDE_KLABAUTER_ROOT',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:163` | - | `'_claude_klabauter_root': '_claude_klabauter_root',` |
@@ -7719,7 +7719,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/codename_provenance_seed.py:256` | - | `'claude-klabauter-4th-class-ref-manifest.md',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:258` | - | `'claude_klabauter',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:259` | - | `'Claude-Klabauter',` |
-| `coordinator_core/percolate/codename_provenance_seed.py:260` | - | `'gen-claude-klabauter-root-pointer',` |
+| `coordinator_core/percolate/codename_provenance_seed.py:260` | - | `'gen-claude-klabauter-live-root-pointer',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:261` | - | `'claude-klabauter-live-root',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:262` | - | `'claude-klabauter',` |
 | `coordinator_core/percolate/codename_provenance_seed.py:284` | PROSE-ONLY | `# Renamed alongside CODENAME_TO_PLACEHOLDER's claude-klabauter family (§ that dict's own` |
@@ -7740,7 +7740,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/codename_provenance_seed.py:489` | PROSE-ONLY | `identical cockpit/claude-klabauter/example-voice-system collision (see that set's docstring). Deliberately` |
 | `coordinator_core/percolate/codename_provenance_seed.py:547` | PROSE-ONLY | `docs/plans/2026-08-03-klabauter-rows-relocate-into-claude-klabauter.md scrub-gap-close chunk,` |
 | `coordinator_core/percolate/engine.py:99` | - | `GENERATES = []  # writes into target_root, a caller-supplied PUBLISH DESTINATION tree (an external mirror repo), never a fixed path inside claude-klabauter's own tracked ` |
-| `coordinator_core/percolate/guards.py:1030` | - | `(`gen-claude-klabauter-root-pointer.py`): the FILENAME rename took the shorter `claude-klabauter -> claude-` |
+| `coordinator_core/percolate/guards.py:1030` | - | `(`gen-claude-klabauter-live-root-pointer.py`): the FILENAME rename took the shorter `claude-klabauter -> claude-` |
 | `coordinator_core/percolate/guards.py:1031` | - | `klabauter` row, the CONTENT rewrite took a longer `claude-klabauter-live-root -> claude-klabauter-live-` |
 | `coordinator_core/percolate/inject.py:42` | - | `GENERATES = []  # copies into a caller-supplied target_root (publish destination tree) and writes sentinel/backup files under consumer_state_home() (~/.local/st` |
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:74` | - | `"    claude_klabauter_root = _claude_klabauter_root()\n"` |
@@ -7777,8 +7777,8 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:492` | - | `"    if claude-klabauter is None:\n"` |
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:493` | - | `"        raise _ClaudeKlabauterUnresolvable()\n"` |
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:494` | - | `"    return claude-klabauter\n"` |
-| `coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py:41` | - | `Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"` |
-| `coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py:46` | - | `"""Copy the repo's real gen-claude-klabauter-root-pointer.py into a fixture tree, run the real` |
+| `coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py:41` | - | `Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"` |
+| `coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py:46` | - | `"""Copy the repo's real gen-claude-klabauter-live-root-pointer.py into a fixture tree, run the real` |
 | `coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py:97` | - | ``claude-klabauter-live-root -> claude-klabauter-live-root` depersonalize row winning the substring."""` |
 | `coordinator_core/percolate/tests/test_case_variant_expansion_reaches_transform.py:39` | - | `"the claude-klabauter Claude-Klabauter CLAUDE-KLABAUTER claude-klabauter\n"` |
 | `coordinator_core/percolate/tests/test_case_variant_expansion_reaches_transform.py:58` | - | `"key": "claude-klabauter",` |
@@ -7891,7 +7891,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_rename_map_emission.py:363` | - | `{'src': 'check-claude-klabauter-doctor-sentinel.sh',` |
 | `coordinator_core/percolate/tests/test_rename_map_emission.py:449` | - | `/ 'coordinator' / 'lib' / 'resolve-claude-klabauter' / '_resolve_claude_klabauter.py'` |
 | `coordinator_core/percolate/tests/test_rename_map_emission.py:463` | - | `'check-claude-klabauter-doctor-sentinel.sh',` |
-| `coordinator_core/percolate/tests/test_rename_map_emission.py:464` | - | `'gen-claude-klabauter-root-pointer.py',` |
+| `coordinator_core/percolate/tests/test_rename_map_emission.py:464` | - | `'gen-claude-klabauter-live-root-pointer.py',` |
 | `coordinator_core/percolate/tests/test_rename_map_emission.py:466` | - | `'remove-claude-klabauter-precommit-hook.py',` |
 | `coordinator_core/percolate/tests/test_rewrite.py:59` | - | `text = "export CLAUDE_KLABAUTER_ROOT=/tmp/x"` |
 | `coordinator_core/percolate/tests/test_rewrite.py:60` | - | `result = rewrite_stems(text, {"claude-klabauter": "widget"})` |
@@ -8248,7 +8248,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/session/claims.py:154` | - | `"_claude_klabauter_handoff_lifecycle_accessor", _HANDOFF_LIFECYCLE_ACCESSOR_PATH` |
 | `coordinator_core/session/core.py:655` | - | `"coordinator_core project root) or re-run claude-klabauter's setup "` |
 | `coordinator_core/session/core.py:729` | - | `"from the coordinator_core project root) or re-run claude-klabauter's "` |
-| `coordinator_core/session/tests/test_no_untracked_relocation.py:327` | - | `("bin", "gen-claude-klabauter-root-pointer.py", "main", "os.replace", "os.replace(tmp_live, pointer_file)", 1): "atomic tmp->final; temp source never claimed",` |
+| `coordinator_core/session/tests/test_no_untracked_relocation.py:327` | - | `("bin", "gen-claude-klabauter-live-root-pointer.py", "main", "os.replace", "os.replace(tmp_live, pointer_file)", 1): "atomic tmp->final; temp source never claimed",` |
 | `coordinator_core/session/tests/test_peer_roster.py:38` | - | `"sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),` |
 | `coordinator_core/session/tests/test_peer_roster.py:43` | - | `monkeypatch.setattr(peer_roster.os, "getcwd", lambda: "/repo/claude-klabauter")` |
 | `coordinator_core/session/tests/test_peer_roster.py:50` | - | `"sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),` |
@@ -8839,7 +8839,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_no_hardcoded_paths.py:743` | - | `"    return claude_klabauter_root.parent / \"DoE-claude\"\n",` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:826` | - | `'    claude_klabauter_root = os.path.abspath(os.path.join(here, "..", ".."))\n'` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:827` | - | `'    return os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")\n',` |
-| `coordinator_core/tests/test_no_machine_local_cli_read_spawn.py:145` | - | `"coordinator/bin/gen-claude-klabauter-root-pointer.py:139",` |
+| `coordinator_core/tests/test_no_machine_local_cli_read_spawn.py:145` | - | `"coordinator/bin/gen-claude-klabauter-live-root-pointer.py:139",` |
 | `coordinator_core/tests/test_op_classification_manifest.py:77` | - | `"invoke-claude-klabauter-install-module",` |
 | `coordinator_core/tests/test_op_classification_manifest.py:125` | - | `if verdict == "NEW-CLAUDE-KLABAUTER":` |
 | `coordinator_core/tests/test_op_classification_manifest.py:131` | - | `"""The 76 NEW-CLAUDE-KLABAUTER op-names minus the 12 named ALREADY-EXISTS ops."""` |
@@ -11021,7 +11021,7 @@ generator is shipped as a one-time snapshot, not a re-runnable-under-budget arti
 
 **Disposition of the other 21 sibling-keyed noun-named paths.** These are the paths under C4's
 "Not touched at any arm" note — the seven sibling-keyed basename families
-(`check-claude-klabauter-doctor-sentinel`, `gen-claude-klabauter-root-pointer`, `migrate-state-to-claude-klabauter`,
+(`check-claude-klabauter-doctor-sentinel`, `gen-claude-klabauter-live-root-pointer`, `migrate-state-to-claude-klabauter`,
 `remove-claude-klabauter-precommit-hook`, `claude-klabauter-4th-class-ref-manifest`, `test_resolve_claude_klabauter*`,
 `resolve-claude-klabauter/_resolve_claude_klabauter.py`) expanded to their tracked `.py` members in the two-tree name
 axis (`coordinator/`, `coordinator_core/`). Class is the dominant class of that path's lines in
@@ -11035,7 +11035,7 @@ without turning that sibling's store row, baseline, registry entry or test red.
 | `coordinator/bin/check-claude-klabauter-doctor-sentinel.sh` | CONTRACT-BOUND | DoE-claude cadence baseline invoking this script by name |
 | `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py` | CONTRACT-BOUND | DoE-claude cadence baseline (op backing the bin trampoline above) |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py` | CONTRACT-BOUND | same baseline, via the op it tests |
-| `coordinator/bin/gen-claude-klabauter-root-pointer.py` | CONTRACT-BOUND | DoE-claude install-chain step naming this script |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py` | CONTRACT-BOUND | DoE-claude install-chain step naming this script |
 | `coordinator/bin/remove-claude-klabauter-precommit-hook.py` | CONTRACT-BOUND | DoE-claude precommit-hook install/removal step |
 | `coordinator/bin/tests/test_remove_claude_klabauter_precommit_hook.py` | CONTRACT-BOUND | same install/removal step, via the script it tests |
 | `coordinator_core/ops/migrate_state_to_claude_klabauter.py` | CONTRACT-BOUND | DoE-claude state-migration registry entry |
@@ -11054,7 +11054,7 @@ without turning that sibling's store row, baseline, registry entry or test red.
 
 **Count note.** This table enumerates 19 tracked `.py` paths under the two-tree axis; AC4 names
 21. The two-path gap is the `.cmd` twins of `check-claude-klabauter-doctor-sentinel`,
-`gen-claude-klabauter-root-pointer` and `remove-claude-klabauter-precommit-hook` (3 files) plus the standalone
+`gen-claude-klabauter-live-root-pointer` and `remove-claude-klabauter-precommit-hook` (3 files) plus the standalone
 `coordinator/bin/claude-klabauter-4th-class-ref-manifest.md` (1 file) and its
 `coordinator_core/percolate/tests/fixtures/doe-input-tree/` fixture twin (1 file) — none of
 which this manifest's generator scans (`--include='*.py'` only, per § Denominator command), so

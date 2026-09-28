@@ -669,21 +669,6 @@ def test_engine_root_wins_while_both_are_set(monkeypatch: pytest.MonkeyPatch) ->
     assert _claude_klabauter_root() == "/fresh/parent"
 
 
-def test_claude_klabauter_root_pointer_file_fast_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings_home = tmp_path / "settings-home"
-    (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(
-        "/pointer/resolved/claude-klabauter\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(tmp_path / "does-not-exist.py"))
-
-    assert _claude_klabauter_root() == "/pointer/resolved/claude-klabauter"
-
-
 def test_claude_klabauter_root_none_when_fully_unresolvable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

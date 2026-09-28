@@ -1408,7 +1408,7 @@ def run(
     to the run, and covers any phase that writes env without this fix noticing.
 
     ``claude_klabauter_root`` is REQUIRED (not defaulted here) -- the phases it feeds
-    (``claude-doe`` wrapper install, ``gen-claude-klabauter-root-pointer.py``) resolve
+    (``claude-doe`` wrapper install) resolve
     real subprocess/file-copy targets, so silently defaulting to
     ``Path(__file__).resolve().parents[2]`` inside this function would make
     every direct-call test (this module's own coverage in
@@ -1634,11 +1634,6 @@ def _run_body(
     # it here, from the claude-klabauter clone that is running THIS install, closes the
     # loop from the claude-klabauter side without waiting on a coordinator-side fix.
     #
-    # This block MUST run before Step 3.5a.1b (gen-claude-klabauter-root-pointer.py) below:
-    # that advisory step resolves the claude-klabauter root via REPO_CLAUDE_KLABAUTER or
-    # `machine-local get repos.claude_klabauter`, which is exactly the read this
-    # write makes possible for the first time on a fresh machine.
-    #
     # Path derivation is deliberately NOT coordinator_core.engine_root.
     # coordinator_engine_root() -- that resolver reads the very registry key
     # this block seeds, so calling it here would just re-enact the circularity.
@@ -1652,8 +1647,7 @@ def _run_body(
         else:
             orch.skip_note(f"Seed repos.claude_klabauter registry key -- check-only (would seed: {claude_klabauter_clone})")
     elif not (claude_klabauter_clone / "coordinator_core").is_dir():
-        # Mirrors gen-claude-klabauter-root-pointer.py's own sanity guard: a bare
-        # directory-existence check on the wrong marker cannot distinguish
+        # A bare directory-existence check on the wrong marker cannot distinguish
         # "the claude-klabauter clone" from "some directory" (an unrelated 18-entry
         # bin/ sits at this repo's root alongside coordinator/bin's real 563
         # -- see the 2026-07-22 cross-repo ask this block implements). The
@@ -1677,8 +1671,7 @@ def _run_body(
                 _verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))
             else:
                 print(
-                    "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-root-pointer.py "
-                    "(Step 3.5a.1b below) may not resolve this run",
+                    "WARN: machine-local set repos.claude_klabauter failed",
                     file=sys.stderr,
                 )
         else:
@@ -1759,29 +1752,6 @@ def _run_body(
             pointer_args,
             env=env,
         )
-
-        # -- Step 3.5a.1b -- gen-claude-klabauter-root-pointer.py (advisory) --
-        # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
-        # `claude-doe` below: this script lives at
-        # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
-        # b644d5a9, not under the DoE clone's `coord_root/bin/`.
-        py_bin = shutil.which("python3") or shutil.which("python")
-        if py_bin:
-            claude_klabauter_pointer_args = ["--check-only"] if check_only else []
-            orch.run_advisory(
-                "gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
-                [
-                    py_bin,
-                    os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),
-                    *claude_klabauter_pointer_args,
-                ],
-                env=env,
-            )
-        else:
-            print(
-                "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",
-                file=sys.stderr,
-            )
 
         # -- Step 3.5a.2 -- gen-claude-doe-shim --
         # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that DoE-side

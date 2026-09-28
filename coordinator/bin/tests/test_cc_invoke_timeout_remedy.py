@@ -582,7 +582,7 @@ class TestRegistryReadTimeoutDistinguishedFromAbsentKey(unittest.TestCase):
             "  COORDINATOR_ENGINE_ROOT could not be resolved via any rung below.\n"
             "  Resolution ladder (in order):\n"
             "    1. COORDINATOR_ENGINE_ROOT environment variable\n"
-            "    2. <settings-home>/machine-local/.claude-klabauter-live-root pointer file\n"
+            "    2. <settings-home>/machine-local/.claude-klabauter-root pointer file\n"
             "    3. `machine-local get repos.claude_klabauter` registry entry\n"
             "    4. coordinator_core.invoke importable from the resolved root\n"
             "  Remediation: clone claude-klabauter as a sibling repo "

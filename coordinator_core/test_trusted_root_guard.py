@@ -151,18 +151,6 @@ def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
     assert not is_trusted(str(tmp_path / "claude-klabauter-evil" / "coordinator"), env=env)
 
 
-def test_registry_repos_claude_klabauter_durable_pointer_file_fallback(tmp_path):
-    settings_home_dir = tmp_path / "settings-home"
-    (settings_home_dir / "machine-local").mkdir(parents=True)
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    (settings_home_dir / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
-
-    home = tmp_path / "home"
-    env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
-
-    assert is_trusted(str(claude_klabauter_root / "coordinator"), env=env)
-
-
 def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
@@ -381,7 +369,9 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     doe_root = tmp_path / "DoE-claude"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
     claude_klabauter_root = tmp_path / "claude-klabauter"
-    (settings_home_dir / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
     with pytest.raises(UntrustedRootError):

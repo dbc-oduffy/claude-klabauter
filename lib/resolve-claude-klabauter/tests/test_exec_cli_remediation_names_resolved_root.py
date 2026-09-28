@@ -108,4 +108,4 @@ def test_unresolvable_root_names_bootstrap_remedies_not_a_path(
     err = capsys.readouterr().err
     assert "<engine-clone>" not in err
     assert "COORDINATOR_ENGINE_ROOT" in err
-    assert ".claude-klabauter-live-root" in err
+    assert "repos.claude_klabauter" in err

@@ -58,13 +58,12 @@ def _write_engine_stamp(root: Path) -> None:
 def _normalize_root(root: str) -> str:
     """Normalize slash direction/case for path-EQUALITY comparison only.
 
-    The wrapper's free rungs (Rung 1 `CLAUDE_KLABAUTER_ROOT` env var, Rung 1.5 the
-    `.claude-klabauter-live-root` pointer file) and the shim's own registry-key rung can
-    legitimately return the SAME path in different string forms (observed
-    on this box: pointer file holds a forward-slash path, the registry's
-    flat-quoted-key form holds a backslash path) — that is a pre-existing
-    property of the two independent sources, not a defect this chunk owns
-    or may fix (the shim is out-of-scope; see module docstring). The
+    The wrapper's free Rung 1 (`CLAUDE_KLABAUTER_ROOT` env var) and the shim's own
+    registry-key rung can legitimately return the SAME path in different
+    string forms (observed on this box: one form uses forward slashes, the
+    registry's flat-quoted-key form holds a backslash path) — that is a
+    pre-existing property of the two independent sources, not a defect this
+    chunk owns or may fix (the shim is out-of-scope; see module docstring). The
     cross-entrypoint agreement test below is about RESOLUTION agreement,
     not byte-identical string form, so it normalizes before comparing.
     """
@@ -575,14 +574,16 @@ def test_dual_boot_claude_klabauter_root_env_no_longer_wins(_dual_boot_fixture, 
     )
 
 
-def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, monkeypatch):
+def test_dual_boot_absent_klabauter_registry_resolved(tmp_path, monkeypatch):
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
 
     live_dir = tmp_path / "live"
     live_dir.mkdir()
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_dir), encoding="utf-8")
+    (ml_dir / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{live_dir}'\n"
+    )
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
@@ -595,18 +596,18 @@ def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, m
     assert cls == "live-working-tree"
 
 
-def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_override(
+def test_dual_boot_absent_klabauter_honors_machine_local_registry_dir_override(
     tmp_path, monkeypatch
 ):
-    """The rung-1.5 pointer read (AC4 fast path) must reuse the already-
-    computed, override-aware `ml_dir` (`shim._ml_dir()`) rather than
-    re-resolving `machine_local_dir()` directly — the two diverge whenever
+    """The short-circuit branch must reuse the already-computed,
+    override-aware `ml_dir` (`shim._ml_dir()`) rather than re-resolving
+    `machine_local_dir()` directly — the two diverge whenever
     `MACHINE_LOCAL_REGISTRY_DIR` is set, since only `shim._ml_dir()` honors
-    it. Proves the override genuinely reaches this rung: the settings-home
-    machine-local dir is left EMPTY (no pointer file there at all) while the
-    override dir holds the pointer — a resolution that only succeeds if the
-    override is actually consulted, not merely a value-equality assertion
-    that could pass by coincidence.
+    it. Proves the override genuinely reaches this branch: the settings-home
+    machine-local dir is left EMPTY (no registry file there at all) while the
+    override dir holds the registry entry — a resolution that only succeeds
+    if the override is actually consulted, not merely a value-equality
+    assertion that could pass by coincidence.
 
     """
     settings_home = tmp_path / "settings-home"
@@ -617,8 +618,8 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     override_ml_dir.mkdir()
     override_live_dir = tmp_path / "override-live"
     override_live_dir.mkdir()
-    (override_ml_dir / ".claude-klabauter-live-root").write_text(
-        str(override_live_dir), encoding="utf-8"
+    (override_ml_dir / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{override_live_dir}'\n"
     )
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -777,7 +778,9 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
     live_root = tmp_path / "only-live"
     _make_bin_dir_with_sentinel(live_root)
 
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{live_root}'\n"
+    )
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)

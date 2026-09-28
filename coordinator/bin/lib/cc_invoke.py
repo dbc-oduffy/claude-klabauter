@@ -443,9 +443,9 @@ def _machine_local_impl_resolver():
 def _claude_home() -> str:
     """Return the ~/.claude root, honoring CLAUDE_HOME for test isolation.
 
-    Mirrors gen-claude-klabauter-root-pointer.py::_claude_home — this is the install root
-    that hosts the machine-local Python reader (bin/_machine_local.py), distinct
-    from the settings-home used for the rung-1.5 pointer file. Delegates to
+    This is the install root that hosts the machine-local Python reader
+    (bin/_machine_local.py), distinct from the settings-home used for the
+    rung-1.5 pointer file. Delegates to
     machine_local_impl_resolve.claude_home() (shared resolver — see that
     module's docstring).
     """
@@ -579,8 +579,9 @@ def resolve_engine_root(script_file: str) -> str:
       Rung 2: self-location — ``_walk_up_to_checkout(script_file)``, the
               nearest enclosing checkout at any depth.
       Rung 3: ``_resolve_claude_klabauter_root()``'s remaining rungs — the
-              ``<settings-home>/machine-local/.claude-klabauter-live-root`` pointer file, then
-              the machine-local ``repos.claude_klabauter`` registry key.
+              ``<settings-home>/machine-local/.claude-klabauter-root`` pointer
+              file, then the machine-local ``repos.claude_klabauter`` registry
+              key.
 
     Distinct from ``resolve_colocated_claude_klabauter_root`` in rung ORDER, and the
     difference is load-bearing: that function probes self-location BEFORE the
@@ -2688,7 +2689,7 @@ def _state1_remediation_message(
         f"{root_line}"
         "  Resolution ladder (in order):\n"
         "    1. COORDINATOR_ENGINE_ROOT environment variable\n"
-        "    2. <settings-home>/machine-local/.claude-klabauter-live-root pointer file\n"
+        "    2. <settings-home>/machine-local/.claude-klabauter-root pointer file\n"
         "    3. `machine-local get repos.claude_klabauter` registry entry\n"
         "    4. coordinator_core.invoke importable from the resolved root\n"
         "  Remediation: clone claude-klabauter as a sibling repo "

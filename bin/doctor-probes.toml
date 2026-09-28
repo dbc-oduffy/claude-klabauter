@@ -38,15 +38,15 @@ id = "claude-klabauter.root.pointer"
 cluster = "registry"
 weight = "cheap"
 interactivity = "assert"
-fix = "none (on a cold box, run scripts/setup.py --claude-klabauter-live-root <path>; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative)"
-symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py", "cold box no registry", "setup.py --claude-klabauter-live-root"]
+fix = "none (on a cold box, run scripts/setup.py --claude-klabauter-live-root <path>; on a warm/registry-resolved box, gen-claude-klabauter-live-root-pointer.py is the install-time alternative)"
+symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-live-root-pointer.py", "cold box no registry", "setup.py --claude-klabauter-live-root"]
 
 
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
 required = false
 severity_if_fail = "degraded"
-remediation = "On a cold box (no registry to resolve from), run scripts/setup.py --claude-klabauter-live-root <path> to populate <settings-home>/machine-local/.claude-klabauter-live-root; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative"
+remediation = "On a cold box (no registry to resolve from), run scripts/setup.py --claude-klabauter-live-root <path> to populate <settings-home>/machine-local/.claude-klabauter-live-root; on a warm/registry-resolved box, gen-claude-klabauter-live-root-pointer.py is the install-time alternative"
 
 
 [[probe]]

@@ -138,7 +138,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         # helper family below -- same shape, previously invisible. See note below.
         "coordinator/bin/coordinator-lesson-add.py:207",
         "coordinator/bin/fan-out-dispatch.py:372",
-        "coordinator/bin/gen-claude-klabauter-root-pointer.py:139",
+        "coordinator/bin/gen-claude-klabauter-live-root-pointer.py:139",
         # The shared `_machine_local_get` helper: the per-module copies that
         # delegate to it are one site here, not one each.
         "coordinator_core/_claude_klabauter_root.py:104",
@@ -416,7 +416,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # `coordinator/bin/coordinator-doc-new.py:481`, `:523`,
 # `coordinator/bin/coordinator-lesson-add.py:109`,
 # `coordinator/bin/fan-out-dispatch.py:360`,
-# `coordinator/bin/gen-claude-klabauter-root-pointer.py:139`,
+# `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:139`,
 # `coordinator/bin/lib/cc_invoke.py:396`,
 # `coordinator/bin/lib/cli_shared.py:100`, `:148`,
 # `coordinator/bin/tests/test_claude_machine_local.py:110`,

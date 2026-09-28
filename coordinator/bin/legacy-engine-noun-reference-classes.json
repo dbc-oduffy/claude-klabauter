@@ -175,7 +175,7 @@
     "coordinator/bin/gen-claude-doe-shim.py",
     "coordinator/bin/gen-doe-root-pointer.py",
     "coordinator/bin/gen-launcher-shim.py",
-    "coordinator/bin/gen-claude-klabauter-root-pointer.py",
+    "coordinator/bin/gen-claude-klabauter-live-root-pointer.py",
     "coordinator/bin/gen-settings-hooks.py",
     "coordinator/bin/generate-exec-summary.py",
     "coordinator/bin/generate-repomap.py",

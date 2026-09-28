@@ -136,7 +136,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -2456,93 +2455,6 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return repo_root, "git-root auto-discovery"
 
 
-#: The three `resolve_claude_klabauter_root` source strings that count as
-#: operator-asserted (`census` row 7) — the only rungs allowed to write the
-#: `.claude-klabauter-live-root` pointer. Rung 4 ("git-root auto-discovery") never writes.
-_OPERATOR_ASSERTED_ROOT_SOURCES = frozenset(
-    {"--claude-klabauter-live-root flag", "COORDINATOR_ENGINE_ROOT env var", "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"}
-)
-
-
-def write_registry_independent_root_pointer(claude_klabauter_root: Path, claude_klabauter_root_source: str) -> None:
-    """Write `<settings-home>/machine-local/.claude-klabauter-live-root` directly from this
-    run's own resolved root — the SAME sentinel `_resolve_claude_klabauter ::
-    _resolve_claude_klabauter_root` (rung 2) and `coordinator_core/engine_root.py`
-    (rung 1.5) already read — placing this write OUTSIDE the registry cycle
-    (plan body § The cold entry, `docs/plans/2026-09-11-the-install-chain-
-    survives-a-genuinely-c.md` C2).
-
-    Called from `main` immediately after `resolve_claude_klabauter_root` and BEFORE
-    `register_claude_klabauter_root`: placed any later, `register_claude_klabauter_root`'s exit
-    90 on a box with no `machine-local` means it never runs on the box it
-    exists for.
-
-    Negative spec, load-bearing: never spawns a subprocess, never reads the
-    machine-local registry, never depends on `machine-local` being present.
-    Those three are what put this write outside the cycle a registry-backed
-    write would be stuck in — a test that passes with a registry present
-    proves nothing about this function.
-
-    Only writes when `claude_klabauter_root_source` is one of the three
-    operator-asserted rungs (`_OPERATOR_ASSERTED_ROOT_SOURCES`) —
-    `resolve_claude_klabauter_root`'s fourth rung, git-root auto-discovery, writes
-    NOTHING: it creates no pointer and leaves an existing one byte-identical.
-    A rung-4 guess stamping the pointer would let any warm run from any
-    clone silently overwrite an operator's pin, since the sentinel is read
-    ahead of the registry.
-
-    The write degrades ADVISORY on failure (e.g. unwritable settings home) —
-    warns, never fails the install. Always reported: one line naming the
-    pointer path, the resolved root, and the source string, or (rung 4) one
-    line naming why nothing was written and which flag would write it.
-    """
-    from coordinator_core._settings_home import settings_home
-
-    pointer_path = settings_home() / "machine-local" / ".claude-klabauter-live-root"
-
-    if claude_klabauter_root_source not in _OPERATOR_ASSERTED_ROOT_SOURCES:
-        print(
-            f"[SKIP] .claude-klabauter-live-root pointer not written — root came from "
-            f"{claude_klabauter_root_source!r} (auto-discovered, not operator-asserted). "
-            f"Pass --claude-klabauter-live-root to write it."
-        )
-        return
-
-    content = str(claude_klabauter_root)
-    try:
-        existing = pointer_path.read_text(encoding="utf-8").rstrip("\r\n")
-    except OSError:
-        existing = None
-
-    if existing == content:
-        print(f"PASS [pointer] .claude-klabauter-live-root already {pointer_path} = {content} ({claude_klabauter_root_source})")
-        return
-
-    try:
-        pointer_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(pointer_path.parent), prefix=".claude-klabauter-live-root.", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
-                tmp_file.write(content + "\n")
-            os.replace(tmp_name, pointer_path)
-        except OSError:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
-    except OSError as exc:
-        print(
-            f"[ADVISORY] could not write .claude-klabauter-live-root pointer at {pointer_path}: {exc}",
-            file=sys.stderr,
-        )
-        return
-
-    print(f"PASS [pointer] wrote {pointer_path} = {content} ({claude_klabauter_root_source})")
-
-
 def _git_current_branch(tree: Path) -> str | None:
     """The tree's checked-out local branch name, or `None` on any failure
     (git absent, not a work tree, detached HEAD) — advisory-only caller
@@ -4847,7 +4759,7 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwar
     """Install-chain step: report whether `<settings-home>` is actually
     complete, not merely whether each of its individual population steps
     (bin-forwarder install, `.percolate-identity`, machine identity
-    registry, `.claude-klabauter-live-root` pointer, etc.) exited 0 earlier in this same
+    registry, etc.) exited 0 earlier in this same
     `main()` pass.
 
     docs/plans/2026-08-17-machine-first-install-surface.md § C5: population
@@ -4993,7 +4905,6 @@ def main(argv: list[str]) -> int:
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent.parent
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
-    write_registry_independent_root_pointer(claude_klabauter_root_resolved, claude_klabauter_root_source)
 
     if not args.register_only:
         print("=== claude-klabauter setup (standalone) ===")

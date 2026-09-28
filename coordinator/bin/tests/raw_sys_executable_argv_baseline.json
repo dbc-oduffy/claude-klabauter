@@ -13,7 +13,6 @@
     "coordinator/bin/coordinator-lesson-add.py": 1,
     "coordinator/bin/emit-goal-from-artifact.py": 1,
     "coordinator/bin/fan-out-dispatch.py": 1,
-    "coordinator/bin/gen-claude-klabauter-root-pointer.py": 1,
     "coordinator/bin/handoff-archive-transition.py": 1,
     "coordinator/bin/lib/cc_invoke.py": 3,
     "coordinator/bin/lib/coordinator_registry.py": 1,

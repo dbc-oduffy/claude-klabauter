@@ -202,9 +202,8 @@ Resolution ladder (in order, first hit wins — see individual resolvers):
      coordinator_core._settings_home.settings_home(), the same bootstrap-safe
      resolver install-substrate itself uses) for the settings-home bin/; the
      same env pair, unmodified, for the ~/.claude/bin compat mirror.
-  3. CLAUDE_KLABAUTER_ROOT env var / <settings-home>/machine-local/.claude-klabauter-live-root pointer
-     / machine-local registry (`repos.claude_klabauter`) — via
-     coordinator_core.engine_root.coordinator_engine_root(), for the
+  3. CLAUDE_KLABAUTER_ROOT env var / machine-local registry (`repos.claude_klabauter`)
+     — via coordinator_core.engine_root.coordinator_engine_root(), for the
      coordinator/bin/ scan root.
   4. Unresolvable at any required rung -> clean skip, never a fail.
 

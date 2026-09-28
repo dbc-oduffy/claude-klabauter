@@ -51,10 +51,11 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
     env = {
         "COORDINATOR_SETTINGS_HOME": str(settings_home),
         "HOME": str(tmp_path / "home"),
-        "MACHINE_LOCAL_REGISTRY_DIR": str(tmp_path / "no-such-registry-dir"),
     }
     (settings_home / "machine-local").mkdir(parents=True, exist_ok=True)
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
     (settings_home / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
 
     result = resolve_operator_config(env=env)
@@ -215,7 +216,9 @@ def _happy_env(tmp_path):
     doe_root = tmp_path / "DoE-claude"
     doe_root.mkdir()
 
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
     (settings_home / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
 
     env = {
@@ -238,9 +241,9 @@ def test_resolve_operator_config_happy_path(tmp_path):
     }
 
 
-def test_resolve_operator_config_missing_claude_klabauter_root_sentinel_is_corrupt(tmp_path):
+def test_resolve_operator_config_missing_claude_klabauter_root_registry_key_is_corrupt(tmp_path):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").unlink()
+    (settings_home / "machine-local" / "registry.local.toml").unlink()
 
     with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):
         resolve_operator_config(env=env)
@@ -267,7 +270,9 @@ def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
 def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path):
     env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     not_a_dir = tmp_path / "not-a-real-directory"
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(not_a_dir) + "\n")
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{not_a_dir}'\n"
+    )
 
     with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):
         resolve_operator_config(env=env)
@@ -276,8 +281,9 @@ def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path):
 def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_corrupt(
     tmp_path,
 ):
-    env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
+    env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
         '"repos.doe_claude" = ["line-one", "line-two"]\n'
     )
 
@@ -329,22 +335,6 @@ def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_p
     assert verdict.remediation is None
 
 
-def test_probe_engine_reachability_reachable_via_durable_file_reports_its_rung(tmp_path):
-    settings_home = tmp_path / "settings-home"
-    (settings_home / "machine-local").mkdir(parents=True)
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    claude_klabauter_root.mkdir()
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
-    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
-
-    verdict = probe_engine_reachability(env=env)
-
-    assert verdict.reachable is True
-    assert verdict.rung == f"file {settings_home / 'machine-local' / '.claude-klabauter-live-root'}"
-    assert verdict.root == str(claude_klabauter_root)
-    assert verdict.remediation is None
-
-
 def test_probe_engine_reachability_unreachable_names_runnable_remediation_script(tmp_path):
     env = {
         "COORDINATOR_SETTINGS_HOME": str(tmp_path / "no-such-settings-home"),
@@ -362,11 +352,13 @@ def test_probe_engine_reachability_unreachable_names_runnable_remediation_script
     assert "/coordinator:" not in verdict.remediation
 
 
-def test_probe_engine_reachability_stale_pointer_to_missing_dir_is_unreachable(tmp_path):
+def test_probe_engine_reachability_stale_registry_value_to_missing_dir_is_unreachable(tmp_path):
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     stale_root = tmp_path / "no-longer-on-disk"
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(stale_root) + "\n")
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{stale_root}'\n"
+    )
     env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
 
     verdict = probe_engine_reachability(env=env)
@@ -386,7 +378,9 @@ def test_probe_engine_reachability_never_calls_trust_guard(tmp_path, monkeypatch
     claude_klabauter_root.mkdir()
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
     env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
 
     probe_engine_reachability(env=env)

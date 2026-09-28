@@ -15,14 +15,16 @@ delegation target switched from the classless `coordinator_claude_klabauter_root
 published-engine-vs-live-working-tree gate for free, with zero new
 resolution logic.
 
-Rungs 1 (COORDINATOR_ENGINE_ROOT env), 1.5 (`.claude-klabauter-live-root` pointer file), and 3
-(self-location from `__file__`) remain gate-BLIND by design — they return
-before the oracle is ever reached, and none of them may gain a NEW
-subprocess as part of this chunk. Rung 1.5 is the exact defect commit
-0fdfb61d6 fixed *inside* `coordinator_engine_root_with_class()` itself (the
-pointer pre-empting the DR-132 gate on every installed machine) — that fix
-lives in the two-tier wrapper Rung 2+ now calls into, and does not
-retroactively gate Rungs 1/1.5/3 here.
+Rungs 1 (COORDINATOR_ENGINE_ROOT env), 1.5 (`.claude-klabauter-root` published
+pointer file), and 3 (self-location from `__file__`) remain gate-BLIND by
+design — they return before the oracle is ever reached, and none of them may
+gain a NEW subprocess as part of this chunk. Rung 1.5 is the exact defect
+commit 0fdfb61d6 fixed *inside* `coordinator_engine_root_with_class()` itself
+(the pointer pre-empting the DR-132 gate on every installed machine) — that
+fix lives in the two-tier wrapper Rung 2+ now calls into, and does not
+retroactively gate Rungs 1/1.5/3 here. (The `.claude-klabauter-live-root` live-tree fallback
+that used to sit alongside the published pointer at Rung 1.5 was removed —
+PM ruling: no fallback to a live tree, absence fails loudly.)
 
 Tests:
   AC-call-site   Rung 2+ imports and calls `coordinator_engine_root_with_class`
@@ -191,7 +193,11 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
             settings_home = Path(tmp) / "settings-home"
             ml_dir = settings_home / "machine-local"
             ml_dir.mkdir(parents=True)
-            (ml_dir / ".claude-klabauter-live-root").write_text("/from/pointer\n", encoding="utf-8")
+            published = str(Path(tmp) / "published-engine")
+            core_dir = Path(published) / "coordinator_core"
+            core_dir.mkdir(parents=True)
+            (core_dir / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
+            (ml_dir / ".claude-klabauter-root").write_text(published + "\n", encoding="utf-8")
 
             with (
                 _no_env_claude_klabauter_root(),
@@ -201,7 +207,7 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
                 unittest.mock.patch("subprocess.run") as mock_run,
             ):
                 resolved = _mod._resolve_claude_klabauter_root()
-            self.assertEqual(resolved, "/from/pointer")
+            self.assertEqual(resolved, published)
             mock_run.assert_not_called()
 
     def test_rung3_self_location_no_new_spawn_beyond_the_registry_miss(self) -> None:
@@ -324,29 +330,31 @@ if __name__ == "__main__":
 
 
 class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
-    """DR-326: engine dispatch resolves to the PUBLISHED build, never to the
+    """DR-326: engine dispatch resolves to the PUBLISHED build, never to a
     live working tree.
 
     Regression guard for a measured defect, not a hypothetical. Before this,
-    Rung 1.5 returned `.claude-klabauter-live-root` unconditionally, so on a dual-boot box
-    `cc_invoke` answered the live working tree from EVERY caller location --
-    including ones where the DR-132 gate itself would have said
-    `claude-klabauter`. Every engine invocation therefore ran a tree whose warm
-    generation token rotates on any commit by any of 50-70 concurrent sessions.
+    Rung 1.5 returned a `.claude-klabauter-live-root` live-tree pointer unconditionally, so
+    on a dual-boot box `cc_invoke` answered the live working tree from EVERY
+    caller location -- including ones where the DR-132 gate itself would have
+    said `claude-klabauter`. Every engine invocation therefore ran a tree
+    whose warm generation token rotates on any commit by any of 50-70
+    concurrent sessions.
 
-    These tests pin the rung ORDER. Restoring `.claude-klabauter-live-root` ahead of
-    `.claude-klabauter-root` reintroduces the moving target.
+    The `.claude-klabauter-live-root` rung itself was later deleted outright (PM ruling: no
+    fallback to a live tree — absence fails loudly), so these tests now only
+    pin that the published pointer resolves, and that a stale/unstamped
+    published pointer falls all the way through the ladder rather than
+    silently landing on a live tree that no longer exists as a rung.
     """
 
     @staticmethod
-    def _settings_home(tmp: str, *, published: str | None, live: str | None) -> Path:
+    def _settings_home(tmp: str, *, published: str | None) -> Path:
         settings_home = Path(tmp) / "settings-home"
         ml_dir = settings_home / "machine-local"
         ml_dir.mkdir(parents=True)
         if published is not None:
             (ml_dir / ".claude-klabauter-root").write_text(published + chr(10), encoding="utf-8")
-        if live is not None:
-            (ml_dir / ".claude-klabauter-live-root").write_text(live + chr(10), encoding="utf-8")
         return settings_home
 
     def _resolve_with(self, settings_home: Path) -> tuple[str, unittest.mock.MagicMock]:
@@ -359,7 +367,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
         ):
             return _mod._resolve_claude_klabauter_root(), mock_run
 
-    def test_published_pointer_wins_when_both_present(self) -> None:
+    def test_published_pointer_wins_when_present(self) -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -367,7 +375,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
             core_dir = Path(published) / "coordinator_core"
             core_dir.mkdir(parents=True)
             (core_dir / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
-            settings_home = self._settings_home(tmp, published=published, live="/live/working/tree")
+            settings_home = self._settings_home(tmp, published=published)
 
             resolved, mock_run = self._resolve_with(settings_home)
 
@@ -375,60 +383,53 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
             resolved,
             published,
             "DR-326: with a published mirror installed, engine dispatch must "
-            "resolve to it and never to the live working tree.",
+            "resolve to it.",
         )
         mock_run.assert_not_called()
 
-    def test_live_pointer_answers_only_without_a_published_mirror(self) -> None:
-        """Single-tree box: the live tree is the only engine there is, and this
-        rung keeps its pre-DR-326 behaviour."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_home = self._settings_home(tmp, published=None, live="/live/working/tree")
-            resolved, mock_run = self._resolve_with(settings_home)
-
-        self.assertEqual(resolved, "/live/working/tree")
-        mock_run.assert_not_called()
-
-    def test_stale_published_pointer_falls_through_to_live(self) -> None:
+    def test_stale_published_pointer_falls_through_the_ladder(self) -> None:
         """A pointer naming a clone that no longer exists must not strand
-        dispatch on a path with no engine in it."""
+        dispatch on a path with no engine in it -- with no `.claude-klabauter-live-root`
+        rung left to fall to, it now falls through to Rung 2 (registry)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            settings_home = self._settings_home(
-                tmp,
-                published=str(Path(tmp) / "removed-clone"),
-                live="/live/working/tree",
-            )
-            resolved, mock_run = self._resolve_with(settings_home)
+            settings_home = self._settings_home(tmp, published=str(Path(tmp) / "removed-clone"))
+            with (
+                _no_env_claude_klabauter_root(),
+                unittest.mock.patch.dict(
+                    os.environ, {"COORDINATOR_SETTINGS_HOME": str(settings_home)}, clear=False
+                ),
+                unittest.mock.patch.object(_mod, "_machine_local_get", return_value=None),
+            ):
+                with self.assertRaises(RuntimeError):
+                    _mod._resolve_claude_klabauter_root()
 
-        self.assertEqual(resolved, "/live/working/tree")
-        mock_run.assert_not_called()
-
-    def test_unstamped_published_pointer_falls_through_to_live(self) -> None:
+    def test_unstamped_published_pointer_falls_through_the_ladder(self) -> None:
         """C3: a present-but-unstamped published mirror must not win at Rung
-        1.5 -- the rung admits only a STAMPED root now (`isfile(<root>/
-        coordinator_core/_engine_stamp)` strictly subsumes the prior `isdir`
-        check), so a bare mkdir with no stamp falls through to the live
-        pointer, exactly like a stale/removed clone does."""
+        1.5 -- the rung admits only a STAMPED root (`isfile(<root>/
+        coordinator_core/_engine_stamp)` strictly subsumes a bare `isdir`
+        check), so a bare mkdir with no stamp falls through the ladder."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             published = str(Path(tmp) / "published-engine-no-stamp")
             Path(published).mkdir()
-            settings_home = self._settings_home(tmp, published=published, live="/live/working/tree")
+            settings_home = self._settings_home(tmp, published=published)
 
-            resolved, mock_run = self._resolve_with(settings_home)
-
-        self.assertEqual(
-            resolved,
-            "/live/working/tree",
-            "an unstamped published mirror must not win at Rung 1.5 -- the "
-            "rung requires a stamp, not just a directory.",
-        )
-        mock_run.assert_not_called()
+            with (
+                _no_env_claude_klabauter_root(),
+                unittest.mock.patch.dict(
+                    os.environ, {"COORDINATOR_SETTINGS_HOME": str(settings_home)}, clear=False
+                ),
+                unittest.mock.patch.object(_mod, "_machine_local_get", return_value=None),
+            ):
+                with self.assertRaises(
+                    RuntimeError,
+                    msg="an unstamped published mirror must not win at Rung 1.5 -- the "
+                    "rung requires a stamp, not just a directory.",
+                ):
+                    _mod._resolve_claude_klabauter_root()
 
     def test_env_override_still_beats_the_published_pointer(self) -> None:
         """Rung 1 is the testing path -- "claude-klabauter holds live processes only for
@@ -438,7 +439,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             published = str(Path(tmp) / "published-engine")
             Path(published).mkdir()
-            settings_home = self._settings_home(tmp, published=published, live="/live/working/tree")
+            settings_home = self._settings_home(tmp, published=published)
 
             with (
                 unittest.mock.patch.dict(

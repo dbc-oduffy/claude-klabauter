@@ -153,13 +153,10 @@ def _resolve_repo_root(env: Mapping[str, Any], cwd: str) -> Optional[str]:
 
 def _resolve_claude_klabauter_root_fast() -> Optional[str]:
     try:
-        ptr = settings_home() / "machine-local" / ".claude-klabauter-live-root"
-        val = ptr.read_text(encoding="utf-8").strip()
-    except (OSError, RuntimeError):
+        root, _klass = coordinator_engine_root_with_class()
+    except Exception:
         return None
-    if val and Path(val).is_dir():
-        return val
-    return None
+    return root if root and Path(root).is_dir() else None
 
 
 def _resolve_state_root(repo_root: Optional[str]) -> str:

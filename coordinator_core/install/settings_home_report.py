@@ -2,8 +2,8 @@
 
 docs/plans/2026-08-17-machine-first-install-surface.md § C5: today the
 settings home (``~/.coordinator-claude-settings``) is populated *emergently*
--- ``bin/`` forwarders, ``.percolate-identity``, the machine-local registry,
-and ``machine-local/.claude-klabauter-live-root`` each land via their own install step, with
+-- ``bin/`` forwarders, ``.percolate-identity``, and the machine-local
+registry each land via their own install step, with
 no single verified statement that the settings home is complete. This module
 is that statement: it enumerates what a correct settings home contains and
 checks presence, not intent, so ``scripts/setup.py``'s report line and the
@@ -35,10 +35,6 @@ Input, not invention -- state precedence explicitly. DoE-claude
   Presence is checked for all six; ``.coordinator-venv/`` is DEMANDED only
   while a machine-local interpreter pin still names it -- claude-klabauter installs it
   only under ``--allow-venv-fallback``. See ``_FIXED_MEMBERS``.
-- ``coordinator-claude coordinator/docs/install/AGENT.md`` § Fail-loud
-  claude-klabauter resolution names ``<settings-home>/machine-local/.claude-klabauter-live-root`` as
-  the rung-2 pointer file a downstream repo's chain-walker reads.
-
 DoE's declaration is authoritative for those six members' PURPOSE; this
 module only checks their PRESENCE. It is additive-only -- it appends the one
 member claude-klabauter itself is responsible for installing
@@ -172,26 +168,6 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         "file",
         "DoE machine-local-registry.md §4e settings-home inventory",
         True,
-    ),
-    (
-        # Advisory, not required: engine_root.py rung 1.5 (:19-21, :173-186)
-        # treats this file's absence as a normal fallback, never an error --
-        # it is a zero-spawn perf cache for claude-klabauter's OWN root, not a location
-        # carrier (that job moved to repos.claude_klabauter per the
-        # 2026-08-05 ruling). Marking it required=True here FAILed on every
-        # box installed by the documented OSS path (scripts/setup.py never
-        # populates it -- only maximalist.py Step 3.5a.1b's
-        # gen-claude-klabauter-root-pointer.py does). Demoted to match rung 1.5's own
-        # contract (C5, 2026-09-01; ledger items 9 and 13, F-023).
-        "machine-local/.claude-klabauter-live-root (optional rung-1.5 perf cache; absence is normal)",
-        "machine-local/.claude-klabauter-live-root",
-        "file",
-        # "Fail-loud" retained the old rung-2 citation
-        # verbatim alongside "absence is normal," which reads as
-        # self-contradictory; requalified as historical.
-        "DoE docs/install/AGENT.md historically named this rung-2 fail-loud; "
-        "superseded by claude-klabauter coordinator_core/engine_root.py rung 1.5 (absence is a normal fallback)",
-        False,
     ),
     (
         f"bin/{_RM_FAMILY_FILES[0]} (resolution shim every forwarder imports)",

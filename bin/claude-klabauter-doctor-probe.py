@@ -3116,7 +3116,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
         not hard FAIL) — stale pointer, same remediation as absent.
       - Pointer absent -> DEGRADED (actionable, not hard FAIL) — remediation names the
         cold-path-valid writer, `scripts/setup.py --claude-klabauter-live-root <path>`, first, with
-        gen-claude-klabauter-root-pointer.py kept only as the warm/registry-case alternative.
+        gen-claude-klabauter-live-root-pointer.py kept only as the warm/registry-case alternative.
       - claude_klabauter_root is None (probe 1 unresolved, the cold box): pointer existence is
         still checked, and — because there is no resolved root to compare against —
         the pointer content itself is validated as a single line naming an EXISTING
@@ -3125,7 +3125,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
     Negative-spec:
       - Does NOT write the pointer file — read-only diagnostic. On a registry-resolved
-        (warm) box the writer is `gen-claude-klabauter-root-pointer.py`; on a cold box with no
+        (warm) box the writer is `gen-claude-klabauter-live-root-pointer.py`; on a cold box with no
         registry to resolve from, the cold-path-valid writer is
         `scripts/setup.py --claude-klabauter-live-root <path>` (DoE-claude C1b names the warm writer;
         this plan's C2 supplies the cold one).
@@ -3158,7 +3158,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 remediation=(
                     "On a cold box (no registry to resolve from), run "
                     f"scripts/setup.py --claude-klabauter-live-root <path> to populate {str(pointer_path)!r}. "
-                    "On a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the "
+                    "On a warm/registry-resolved box, gen-claude-klabauter-live-root-pointer.py is the "
                     "install-time alternative."
                 ),
                 required=False,
@@ -3174,7 +3174,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 detail=f"claude-klabauter-live-root pointer present but unreadable: {exc}",
                 remediation=(
                     "Check permissions on the pointer file, or re-run the install-time "
-                    f"pointer writer (gen-claude-klabauter-root-pointer.py) to regenerate {str(pointer_path)!r}."
+                    f"pointer writer (gen-claude-klabauter-live-root-pointer.py) to regenerate {str(pointer_path)!r}."
                 ),
                 required=False,
                 data={"pointer_path": str(pointer_path), "present": True},
@@ -3255,7 +3255,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                     remediation=(
                         "Run scripts/setup.py --claude-klabauter-live-root <path> to refresh "
                         f"{str(pointer_path)!r} with the current COORDINATOR_ENGINE_ROOT. "
-                        "On a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the "
+                        "On a warm/registry-resolved box, gen-claude-klabauter-live-root-pointer.py is the "
                         "install-time alternative."
                     ),
                     required=False,

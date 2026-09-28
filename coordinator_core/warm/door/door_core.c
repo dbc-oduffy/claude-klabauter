@@ -495,7 +495,6 @@ static const char *const door_stdin_reading_basenames[] = {
     "hook-run",
     "misc-session-and-guards",
     "normalize-snippet",
-    "percolate-mirror",
     "queue-triage",
     "statusline",
     "subagent-statusline",

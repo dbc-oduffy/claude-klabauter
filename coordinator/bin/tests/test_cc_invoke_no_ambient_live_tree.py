@@ -76,15 +76,20 @@ def test_rung1_and_rung3_no_longer_return_their_candidate_directly():
     )
 
 
-def test_pointer_rungs_are_the_only_surviving_direct_return():
-    """Rung 1.5 (`.claude-klabauter-root` / `.claude-klabauter-live-root` pointer files)
-    deliberately stays a direct return — its own docstring note explains why
-    that is not gate-blind in the direction that matters (it already gives
-    the gate's own answer). This is the ONE remaining exception; pinning it
-    here keeps a future edit from silently adding a second one."""
+def test_pointer_rung_is_the_only_surviving_direct_return():
+    """Rung 1.5 (`.claude-klabauter-root` published pointer file) deliberately
+    stays a direct return — its own docstring note explains why that is not
+    gate-blind in the direction that matters (it already gives the gate's own
+    answer). This is the ONE remaining exception; pinning it here keeps a
+    future edit from silently adding a second one. (The sibling `.claude-klabauter-live-root`
+    live-tree pointer that used to share this rung was deleted outright — PM
+    ruling: no fallback to a live tree.)"""
     source = inspect.getsource(_mod._resolve_claude_klabauter_root)
     assert "return _published_pointer_val" in source
-    assert "return _pointer_val" in source
+    assert "_pointer_val = _read_pointer(\".claude-klabauter-live-root\")" not in source, (
+        "the retired .claude-klabauter-live-root live-tree pointer rung must stay deleted, "
+        "not reintroduced under this or any other name."
+    )
 
 
 _DROP_PREFIXES = ("REPO_", "CLAUDE", "COORDINATOR_")

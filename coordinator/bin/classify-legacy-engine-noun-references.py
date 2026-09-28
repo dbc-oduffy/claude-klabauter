@@ -62,7 +62,7 @@ CONTRACT_BOUND_FILES = frozenset(
         "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py",
         "coordinator/lib/resolve-claude-klabauter/tests/test_dispatch_prefers_stamped_engine.py",
         "coordinator/bin/check-claude-klabauter-doctor-sentinel.sh",
-        "coordinator/bin/gen-claude-klabauter-root-pointer.py",
+        "coordinator/bin/gen-claude-klabauter-live-root-pointer.py",
         "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
         "coordinator_core/tests/test_claude_klabauter_doctor_probe_selectors.py",
         "coordinator_core/tests/test_engine_root_census.py",

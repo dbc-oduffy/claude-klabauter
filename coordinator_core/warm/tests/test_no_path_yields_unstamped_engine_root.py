@@ -189,14 +189,6 @@ def test_locator_axis_keeps_self_location_deliberately():
     assert "__file__" in source
 
 
-def test_pointer_file_rung_is_the_one_documented_direct_return(cc_invoke_mod):
-    source = inspect.getsource(cc_invoke_mod._resolve_claude_klabauter_root)
-    assert "return _published_pointer_val" in source
-    assert "return _pointer_val" in source
-    assert "_delegate_to_gate(_published_pointer_val" not in source
-    assert "_delegate_to_gate(_pointer_val" not in source
-
-
 # candidate for "which engine executes" -- it only feeds the STRUCTURAL
 
 
@@ -234,7 +226,11 @@ def test_cwd_rung_cannot_resolve_an_unstamped_tree_via_the_structural_gate(
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_dir))
 
     _register_published(registry.ml_dir, published_root)
-    (registry.ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
+    (registry.ml_dir / "registry.local.toml").write_text(
+        (registry.ml_dir / "registry.local.toml").read_text(encoding="utf-8")
+        + f"\n\"repos.claude_klabauter\" = '{live_root}'\n",
+        encoding="utf-8",
+    )
 
     root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
     assert root == str(live_root)

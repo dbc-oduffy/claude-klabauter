@@ -4,7 +4,7 @@ _resolve_claude_klabauter.py — shared resolve-claude-klabauter-bin ladder, ext
 formerly-inline-per-forwarder body.
 
 Every emitted bin forwarder used to carry its own copy (~50 lines) of the
-registry-then-sentinel resolution ladder that locates
+registry-only resolution ladder that locates
 ``<claude-klabauter-live-root>/coordinator/bin/`` and validates it before exec'ing into a
 target CLI there. With the forwarder SET now derived from a directory
 listing (rather than a hand-maintained ~10-entry tuple — see
@@ -16,7 +16,7 @@ imported by each forwarder's now-trivial ~6-line body.
 
 Contract preserved verbatim from the prior inline body (DoE-claude
 ``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``):
-registry-key-then-sentinel resolution rungs, ``coordinator/bin`` composition,
+registry-key resolution rung, ``coordinator/bin`` composition,
 the ``..``-traversal guard, on-disk existence checks for the resolved root
 and ``coordinator/bin``, an *executable* sentinel probe (``archive-stamp-cli``),
 and distinct fail-loud messages for the two on-disk failure modes (wrong/
@@ -24,12 +24,13 @@ incomplete checkout vs. stale/partial migration).
 
 Deliberately does NOT carry the ``_cc_trusted``/``.doe-root`` trust-prefix
 dance the prior template never carried either — this seam's trust posture
-differs from ``cc-root-source-guard``: ``registry.local.toml`` and
-``.claude-klabauter-live-root`` are per-machine, gitignored, operator-authored config under
-the operator's own settings-home, not a harness-supplied value an external
-actor can steer. What this module DOES check — because a typo'd or stale
-config value is a real, non-adversarial failure mode, not a trust boundary —
-is exactly the four checks enumerated above.
+differs from ``cc-root-source-guard``: ``registry.local.toml`` is a
+per-machine, gitignored, operator-authored config file under the operator's
+own settings-home, not a harness-supplied value an external actor can
+steer. What this module DOES check — because a typo'd or stale config
+value is a real, non-adversarial failure mode, not a trust boundary —
+is exactly the four checks enumerated above. No sentinel-file fallback
+rung is carried: absence fails loudly (PM ruling).
 
 Spec backlink:
     DoE-claude coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
@@ -163,8 +164,8 @@ def _ml_dir() -> Path:
 
 
 def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
-    """Resolve the claude-klabauter root path via the env-then-registry-then-
-    sentinel ladder, validating it before return.
+    """Resolve the claude-klabauter root path via the env-then-registry
+    ladder, validating it before return.
 
     Rung 0 (highest, C4 — Review: code-reviewer Finding 4, this shim's own
     error message promised this rung as a bootstrap remedy but never
@@ -182,8 +183,8 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
     ``machine-local set`` writes. Empty-string is a miss, not a hit (never
     overwrites a value already resolved from the other file).
 
-    Rung 2 (fallback): .claude-klabauter-live-root sentinel — honored when the registry key
-    above is absent or the file itself is missing.
+    No sentinel-file fallback rung: absence fails loudly (PM ruling — claude-klabauter
+    carries no live-lookup fallback).
 
     Raises ClaudeKlabauterResolutionError (with a fail-loud, distinct message) when:
       - no rung resolves anything,
@@ -211,26 +212,17 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
             if isinstance(flat, str) and flat:
                 claude_klabauter_root = flat
 
-    if not claude_klabauter_root:
-        sentinel_path = ml_dir / ".claude-klabauter-live-root"
-        try:
-            with open(sentinel_path, "r", encoding="utf-8") as f:
-                claude_klabauter_root = f.read().rstrip("\r\n")
-        except OSError:
-            claude_klabauter_root = ""
-
     claude_klabauter_root = claude_klabauter_root.rstrip("\r\n").rstrip("/")
 
     if not claude_klabauter_root:
         raise ClaudeKlabauterResolutionError(
             "ERROR: cannot resolve claude-klabauter. Bootstrap remedies (work "
             "before machine-local is configured): pass --engine-root <path> "
-            "to install-substrate, or set COORDINATOR_ENGINE_ROOT=<path>, or "
-            f"write <path> to {ml_dir}/.claude-klabauter-live-root. Post-bootstrap remedies "
-            "(once machine-local is set up): 'machine-local set "
-            f"repos.claude_klabauter <path>' (writes {ml_dir}/registry.local.toml), "
-            "or register a published engine mirror via 'machine-local set "
-            "repos.claude_klabauter <path>'\n"
+            "to install-substrate, or set COORDINATOR_ENGINE_ROOT=<path>. "
+            "Post-bootstrap remedies (once machine-local is set up): "
+            "'machine-local set repos.claude_klabauter <path>' (writes "
+            f"{ml_dir}/registry.local.toml), or register a published engine "
+            "mirror via 'machine-local set repos.claude_klabauter <path>'\n"
         )
 
     # Corrupted/typo'd-config guard, not a hostile-input guard — see module
@@ -241,15 +233,13 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
     if "/.." in claude_klabauter_root or "\\.." in claude_klabauter_root:
         raise ClaudeKlabauterResolutionError(
             f"ERROR: resolved claude-klabauter root '{claude_klabauter_root}' contains a "
-            f"'..' traversal segment — refusing; fix {ml_dir}/registry.local.toml "
-            f"or {ml_dir}/.claude-klabauter-live-root\n"
+            f"'..' traversal segment — refusing; fix {ml_dir}/registry.local.toml\n"
         )
 
     if not os.path.isdir(claude_klabauter_root):
         raise ClaudeKlabauterResolutionError(
             f"ERROR: resolved claude-klabauter root '{claude_klabauter_root}' does not exist "
-            "on disk — re-run 'machine-local set repos.claude_klabauter <path>' or fix "
-            f"{ml_dir}/.claude-klabauter-live-root\n"
+            "on disk — re-run 'machine-local set repos.claude_klabauter <path>'\n"
         )
 
     return claude_klabauter_root
@@ -389,7 +379,7 @@ def _is_publisher_only_target(target: str) -> bool:
 #
 # Negative-spec:
 #   - Does NOT spawn a subprocess or touch git — reuses ``_resolve_claude_klabauter_root``
-#     (registry-then-sentinel rungs only), the same pure-read ladder
+#     (registry-only rung), the same pure-read ladder
 #     ``resolve_claude_klabauter_root_with_class`` already runs for the live-tree leg.
 #   - Does NOT fire for ``RESOLUTION_LIVE_WORKING_TREE`` or
 #     ``RESOLUTION_UNRESOLVED`` — only the resolved-engine branch is the
@@ -940,7 +930,7 @@ def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
          CONFIRMED not-the-source-tree session, not an undeterminable one)
          -> ``(published, RESOLUTION_RESOLVED_ENGINE)``.
       2. Otherwise today's existing ladder (``_resolve_claude_klabauter_root``:
-         registry key -> ``.claude-klabauter-live-root`` sentinel) -> if it resolves,
+         registry key only) -> if it resolves,
          ``(root, RESOLUTION_LIVE_WORKING_TREE)``.
       3. Otherwise, if a published engine is registered/usable ->
          ``(published, RESOLUTION_RESOLVED_ENGINE)``.
@@ -1237,7 +1227,7 @@ def _run_target_in_process(target_path: str, argv: List[str], claude_klabauter_r
 def _resolve_publisher_root() -> str:
     """The live working checkout, for a ``PUBLISHER_ONLY_TARGETS`` member.
 
-    Single-tier on purpose — ``_resolve_claude_klabauter_root``'s registry-then-sentinel
+    Single-tier on purpose — ``_resolve_claude_klabauter_root``'s registry-only
     ladder only, never ``resolve_claude_klabauter_root_with_class``'s published-engine
     rung. See ``PUBLISHER_ONLY_TARGETS`` for why the published engine is not a
     legitimate answer for these targets at all: they are denied by the publish
@@ -1257,7 +1247,7 @@ def _resolve_publisher_root() -> str:
     BV-20260927-05 fix 4: ``COORDINATOR_ENGINE_SOURCE_ROOT`` — the LOCATOR-
     axis variable ``percolate-mirror.py``'s own ``_bootstrap_engine`` already
     honours for ITS internal dispatch — is checked FIRST, ahead of
-    ``_resolve_claude_klabauter_root``'s ``COORDINATOR_ENGINE_ROOT``/registry/sentinel
+    ``_resolve_claude_klabauter_root``'s ``COORDINATOR_ENGINE_ROOT``/registry
     ladder (all DISPATCH-axis, see that function's own DR-326 note). Before
     this, the settings-home launcher for a publisher-only target consulted
     only the dispatch ladder, so an operator who set

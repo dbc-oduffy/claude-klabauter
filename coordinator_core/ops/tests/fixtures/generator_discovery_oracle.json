@@ -157,8 +157,8 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator/bin/gen-claude-klabauter-root-pointer.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator/bin/gen-claude-klabauter-root-pointer.py",
+    "detail": "coordinator/bin/gen-claude-klabauter-live-root-pointer.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/gen-claude-klabauter-live-root-pointer.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

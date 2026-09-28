@@ -16,10 +16,6 @@ Resolution chain (rung 1 renamed by C14; the rest unchanged from the bash oracle
   1. COORDINATOR_ENGINE_ROOT env var — if already set, return it unchanged. The
      retired CLAUDE_KLABAUTER_ROOT is read at this rung only to report itself as retired
      (see `coordinator_engine_root_env`); it never supplies a value.
-  1.5. <settings-home>/machine-local/.claude-klabauter-live-root pointer file — a cheap direct-file-read,
-       checked ahead of the expensive machine-local subprocess ladder so per-invoke
-       resolution spawns zero subprocesses on Windows. Falls through to rung 2 if
-       absent/empty.
   2. `machine-local get repos.claude_klabauter` (CLI, PATH-resolved) — delegates to the
      §4c four-rung discovery ladder (explicit env override -> OS-keyed search-root
      marker autodiscovery -> path-exceptions -> registry.local.toml fallback). Does NOT
@@ -55,7 +51,7 @@ Negative-spec:
       memo with a reset seam). Both resolvers now make the SAME choice, and this
       module's was the one that turned out right — see that module's docstring
       § DECISION REVERSAL.
-    - Does NOT spawn a subprocess for Rung 1 or Rung 1.5 — only Rung 2 shells out.
+    - Does NOT spawn a subprocess for Rung 1 — only Rung 2 shells out.
     - The bash oracle's `set -uo pipefail` / BASH_VERSINFO guard notes have no meaning
       here — this is a pure-Python module. Omitted intentionally.
 """
@@ -116,7 +112,7 @@ def coordinator_engine_root() -> str:
     the source's own whitespace-strip, mirroring the bash oracle's behavior).
     Raises RuntimeError with the bash oracle's remediation text on failure.
 
-    Rung 1.5/Rung 2's answer is memoized process-scope, keyed on
+    Rung 2's answer is memoized process-scope, keyed on
     `_registry_mtime_pair` (see `_ROOT_MEMO`) — resolved once per distinct
     registry state per process, not once globally and not once per call.
     """
@@ -133,16 +129,6 @@ def coordinator_engine_root() -> str:
     cached = _ROOT_MEMO.get(memo_key)
     if cached is not None:
         return cached
-
-    pointer_path = ml_dir / ".claude-klabauter-live-root"
-    try:
-        with open(pointer_path, "r", encoding="utf-8") as f:
-            val = f.read().strip()
-        if val:
-            _ROOT_MEMO[memo_key] = val
-            return val
-    except OSError:
-        pass
 
     ml_bin = shutil.which("machine-local")
     if ml_bin is not None:
@@ -225,14 +211,14 @@ def _reset_skew_advisory() -> None:
 #: (module docstring § DECISION REVERSAL) — an explicit memo with a reset
 #: review finding 8): a warm server serves dispatches from DIFFERENT
 #: slot is the same missing-key COLLISION class C7 fixes for the two
-_GATE_MEMO: "dict[Tuple[float, float, float, Optional[str]], Tuple[str, str]]" = {}
+_GATE_MEMO: "dict[Tuple[float, float, Optional[str]], Tuple[str, str]]" = {}
 
 
 def _reset_gate_memo() -> None:
     _GATE_MEMO.clear()
 
 
-def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
+def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float]:
 
     def _mtime(p: Path) -> float:
         try:
@@ -243,7 +229,6 @@ def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
     return (
         _mtime(ml_dir / "registry.toml"),
         _mtime(ml_dir / "registry.local.toml"),
-        _mtime(ml_dir / ".claude-klabauter-live-root"),
     )
 
 
@@ -353,29 +338,16 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
       2. Cheap short-circuit: if `repos.claude_klabauter` (the published
          engine mirror key) is not registered at all, the gate's step 1/3
          (published-engine branches) can never fire — skip straight to the
-         shim's own live-tree resolution (`_resolve_claude_klabauter_root`, which
-         itself reads the `.claude-klabauter-live-root` pointer as ITS OWN rung 2) rather
+         shim's own live-tree resolution (`_resolve_claude_klabauter_root`) rather
          than paying for the full `_is_claude_klabauter_source_tree` session-root
          walk the gate would otherwise do first (2026-08-18, C4: this
          replaced the retired per-repo `_is_engine_working_repo` gate with
          a structural session-root-vs-live-root comparison; the short-circuit
          here is unaffected either way — it still skips the walk entirely).
-         THIS branch is where Rung 1.5's `.claude-klabauter-live-root` pointer fast path
-         now lives — checked here, ahead of the full gate walk, so the
-         single-tree box (no klabauter registered) keeps today's
-         byte-identical zero-subprocess fast path (AC4). Note this still
-         pays one `_load_shim()`/`exec_module` cost (the unconditional
-         `_load_shim()` call at the top of this function, before this
-         branch) — it is the gate walk, not the shim load, that is skipped
-         here. On a dual-boot box (klabauter
-         IS registered) the pointer is deliberately NOT consulted here —
-         step 3's full gate decides instead, per plan
-         `2026-08-12-arm-the-klabauter-dual-boot-the-wrapper.md` § Problem:
-         the pointer previously pre-empted the gate on every installed
-         machine, since the installer always writes it. This loses nothing
-         on the dual-boot path: the shim's `_resolve_claude_klabauter_root` already
-         reads `.claude-klabauter-live-root` as its own rung inside the gate, so a working
-         repo still resolves via the pointer from inside step 3.
+         Note this still pays one `_load_shim()`/`exec_module` cost (the
+         unconditional `_load_shim()` call at the top of this function,
+         before this branch) — it is the gate walk, not the shim load,
+         that is skipped here.
       3. Otherwise, run the full gate (`resolve_claude_klabauter_root_with_class()`),
          memoized module-scope on `(registry mtime pair, session root)` so
          a long-lived process re-invoking this on every call does not
@@ -401,16 +373,6 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
 
     published_key = shim._registry_value(ml_dir, "repos.claude_klabauter")
     if not published_key:
-        # directly — the latter does not honor `MACHINE_LOCAL_REGISTRY_DIR`,
-        pointer_path = ml_dir / ".claude-klabauter-live-root"
-        try:
-            with open(pointer_path, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-            if val:
-                return val, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
-        except OSError:
-            pass
-
         root = shim._resolve_claude_klabauter_root(ml_dir)
         return root, shim.RESOLUTION_LIVE_WORKING_TREE
 

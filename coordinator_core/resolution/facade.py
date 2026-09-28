@@ -202,9 +202,9 @@ def probe_engine_reachability(*, env: dict | None = None) -> EngineReachability:
     routing calls, out of scope here).
 
     Reuses ``trusted_root_guard._claude_klabauter_root``/``._claude_klabauter_root_rungs`` —
-    the same registry-then-durable-file resolution chain
-    ``resolve_operator_config`` walks for ``claude_klabauter_root`` — rather than
-    authoring a second resolution ladder. Never raises: unlike
+    the same registry-only resolution chain ``resolve_operator_config``
+    walks for ``claude_klabauter_root`` — rather than authoring a second resolution
+    ladder. Never raises: unlike
     ``resolve_operator_config`` this is a probe, not a corruption gate, so an
     unreachable engine is a normal, expected verdict rather than an
     ``OperatorConfigError``.
@@ -228,8 +228,8 @@ def probe_engine_reachability(*, env: dict | None = None) -> EngineReachability:
         root=None,
         remediation=(
             "engine unreachable — no resolution rung (registry "
-            "repos.claude_klabauter, <settings-home>/machine-local/.claude-klabauter-live-root) "
-            "produced a claude-klabauter root that exists on disk. Run "
+            "repos.claude_klabauter) produced a claude-klabauter root that exists on "
+            "disk. Run "
             f"'python3 {_UNREACHABLE_REMEDIATION_SCRIPT}' from a claude-klabauter "
             "checkout to register repos.claude_klabauter."
         ),

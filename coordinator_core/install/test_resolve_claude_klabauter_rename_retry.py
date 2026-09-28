@@ -60,7 +60,7 @@ _spec.loader.exec_module(resolve_claude_klabauter)
 
 RENAMED_FOUR = {
     "check-claude-klabauter-doctor-sentinel.sh": "check-claude-klabauter-doctor-sentinel.py",
-    "gen-claude-klabauter-root-pointer.py": "gen-claude-klabauter-root-pointer.py",
+    "gen-claude-klabauter-live-root-pointer.py": "gen-claude-klabauter-root-pointer.py",
     "probe-cwd-example-retrieval-repo-relevance.py": "probe-cwd-example-retrieval-repo-relevance.py",
     "remove-claude-klabauter-precommit-hook.py": "remove-claude-klabauter-precommit-hook.py",
 }
@@ -111,8 +111,8 @@ def test_renamed_target_resolves_to_its_published_spelling(tmp_path, asked, publ
 def test_bare_name_finds_the_dotted_map_entry(tmp_path):
     bin_dir = _bin_with_map(tmp_path, RENAMED_FOUR)
     assert resolve_claude_klabauter.resolve_target_path(
-        str(bin_dir), "gen-claude-klabauter-root-pointer"
-    ) == str(bin_dir) + "/" + RENAMED_FOUR["gen-claude-klabauter-root-pointer.py"]
+        str(bin_dir), "gen-claude-klabauter-live-root-pointer"
+    ) == str(bin_dir) + "/" + RENAMED_FOUR["gen-claude-klabauter-live-root-pointer.py"]
 
 
 def test_absent_map_returns_the_original_path(tmp_path):

@@ -160,7 +160,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core._claude_klabauter_root import _machine_local_get
-from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.git.repo_root import show_toplevel
@@ -213,35 +212,10 @@ def _claude_home() -> str:
     return os.path.join(os.path.expanduser("~"), ".claude")
 
 
-def _claude_klabauter_root_pointer_file() -> Optional[str]:
-    """Rung-1.5 fast path: read ``<settings-home>/machine-local/.claude-klabauter-live-root``
-    directly, no subprocess spawn.
-
-    The oracle (coordinator-claude-klabauter-root.sh, rung
-    1.5) checks this pointer file BEFORE the machine-local subprocess ladder,
-    documented as a Windows hook-latency fix (per-invoke resolution avoiding a
-    bash subprocess spawn). This port skipped straight to the subprocess-based
-    ``_machine_local_get``, always paying the spawn cost. Mirrored here as a
-    plain file read (no subprocess), falling through to rung 2 on absence.
-    """
-    try:
-        ptr = machine_local_dir() / ".claude-klabauter-live-root"
-        if ptr.is_file():
-            val = ptr.read_text(encoding="utf-8").strip()
-            if val:
-                return val
-    except OSError:
-        return None
-    return None
-
-
 def _claude_klabauter_root() -> Optional[str]:
     override = (coordinator_engine_root_env(__name__) or "").strip()
     if override:
         return override
-    val = _claude_klabauter_root_pointer_file()
-    if val:
-        return val
     val = _machine_local_get("repos.claude_klabauter")
     return val if val else None
 

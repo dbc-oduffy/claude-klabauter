@@ -132,7 +132,6 @@ _ROOTS: Tuple[_RootSpec, ...] = (
         purpose="the live claude-klabauter working tree (source, never a dispatch target)",
         channels=(
             _ChannelSpec("registry", "repos.claude_klabauter"),
-            _ChannelSpec("pointer", ".claude-klabauter-live-root"),
             _ChannelSpec("registry", "engine.working_repos.claude_klabauter"),
         ),
     ),

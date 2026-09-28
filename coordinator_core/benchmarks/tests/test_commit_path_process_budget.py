@@ -292,8 +292,8 @@ def _env(**overrides) -> dict:
     explicit `COORDINATOR_ENGINE_ROOT` (Rung 1 of `cc_invoke`'s resolution
     ladder), required because this suite's `coordinator_core/conftest.py`
     autouse fixture quarantines HOME/USERPROFILE, so nothing under a
-    spawned child's real machine-local registry or `.claude-klabauter-live-root` pointer
-    is reachable -- same shape as `test_detect_staged_rollback_spawn_
+    spawned child's real machine-local registry or `.claude-klabauter-root`
+    pointer is reachable -- same shape as `test_detect_staged_rollback_spawn_
     budget.py::_env`.
     """
     base = dict(os.environ)
