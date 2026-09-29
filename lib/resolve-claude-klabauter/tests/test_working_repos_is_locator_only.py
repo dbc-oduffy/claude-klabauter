@@ -8,15 +8,15 @@ and ``_engine_working_repo_roots`` are REMOVED from ``_resolve_claude_klabauter.
 now structural (``_is_claude_klabauter_source_tree``: is the session's own root the ONE
 path ``_resolve_claude_klabauter_root`` resolves?), never per-repo registry-key identity.
 ``engine.working_repos`` itself is UNCHANGED — it survives as a pure LOCATOR
-for other callers (``setup_chain_walker.py``'s ``engine.working_repos.doe_claude``
-rung; DoE-claude's own resolver, untouched by this chunk).
+for other callers (``setup_chain_walker.py``'s ``engine.working_repos.content_root``
+rung; coordinator-content-repo's own resolver, untouched by this chunk).
 
 PM ruling implemented here: a per-repo exemption family cannot express a
 box-wide choice; the structural check is not a family (nothing to enumerate,
 nothing to maintain per repo) and does not reintroduce working-set membership
 derived from ``repos.*`` — see the tripwire this must not re-derive,
 ``coordinator-tripwires/repos-star-is-not-engine-working-set.md``
-(``REPOS-STAR-IS-NOT-ENGINE-WORKING-SET``, DoE-claude).
+(``REPOS-STAR-IS-NOT-ENGINE-WORKING-SET``, coordinator-content-repo).
 
 Divert requires BOTH the structural gate (confirmed ``False``) AND
 ``engine.target`` being readable (AC20, ruling correction 2026-08-18) —
@@ -38,7 +38,7 @@ Covers:
   - AC20: absent ``engine.target`` never diverts, even when the structural
     gate alone would;
   - each locator caller enumerated for this chunk still finds its root:
-    ``setup_chain_walker.py``'s ``engine.working_repos.doe_claude`` rung
+    ``setup_chain_walker.py``'s ``engine.working_repos.content_root`` rung
     (a thin re-exercise; the exhaustive case matrix lives in that module's
     own test file and is unaffected by this chunk) and
     ``percolate-liveops-preflight.py``'s AFFECTED/UNAFFECTED classification,
@@ -188,29 +188,29 @@ def test_setup_chain_walker_locator_rung_still_resolves(tmp_path: Path, monkeypa
     scw = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     loader.exec_module(scw)
 
-    doe_root = tmp_path / "doe-claude-plugin-source"
-    (doe_root / ".claude-plugin").mkdir(parents=True)
-    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    (doe_root / "commands").mkdir()
+    content_root = tmp_path / "coordinator-content-repo-plugin-source"
+    (content_root / ".claude-plugin").mkdir(parents=True)
+    (content_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (content_root / "commands").mkdir()
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(
         scw,
         "registry_get",
-        lambda key: str(doe_root.parent) if key == "engine.working_repos.doe_claude" else None,
+        lambda key: str(content_root.parent) if key == "engine.working_repos.content_root" else None,
     )
     monkeypatch.setattr(scw, "_is_publish_mirror", lambda path: False)
     monkeypatch.setattr(
         scw,
         "_resolve_plugin_root_for_machine_local",
-        lambda raw: doe_root if raw == doe_root.parent else None,
+        lambda raw: content_root if raw == content_root.parent else None,
     )
 
     candidate = scw._resolve_coordinator_root_ladder(argv=[])
     assert candidate is not None
     resolved_path, rung = candidate
-    assert resolved_path == doe_root
-    assert "engine.working_repos.doe_claude" in rung
+    assert resolved_path == content_root
+    assert "engine.working_repos.content_root" in rung
 
 
 def test_percolate_liveops_preflight_locator_still_resolves_source_tree(tmp_path: Path):

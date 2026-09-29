@@ -7,7 +7,7 @@ handed that path silently never runs (see
 `coordinator/bin/lib/python_interp.py`). New call sites should route through
 that shared resolver instead of re-deriving the ladder inline. This guard
 does not forbid `sys.executable` outright (the resolver module and its one
-sanctioned inline duplicate in `claude-doe.py` both use it deliberately) --
+sanctioned inline duplicate in `claude-author.py` both use it deliberately) --
 it walks `coordinator/bin` and `coordinator/lib` with `ast`, counts list
 literals whose first element is `sys.executable`, and refuses a count ABOVE
 the recorded baseline in `raw_sys_executable_argv_baseline.json`. The count

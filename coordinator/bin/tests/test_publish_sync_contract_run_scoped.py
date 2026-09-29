@@ -108,7 +108,7 @@ def test_a_complete_module_passes_every_scoping():
 
 def test_refusal_names_the_engine_module_to_diff_against(stale_override):
     """A refusal against an OVERRIDE must name the engine module the reader has
-    to diff, not just the offending path. doe-claude-em, 2026-08-26: an AC15
+    to diff, not just the offending path. Coordinator-content-repo-em, 2026-08-26: an AC15
     refusal over `sweep_top_level_orphans` gave them the kwarg and the rung --
     enough for a five-minute diagnosis -- but not the reference path, which
     they then had to find by hand before they could port the missing bodies."""

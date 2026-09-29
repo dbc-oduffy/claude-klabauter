@@ -2,20 +2,20 @@
 test_coordinator_queue_append_enum_parity.py — help-string / schema enum-parity assertions.
 
 Spec: docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md (C23, Item 37)
-Origin: state/cross-repo/archive/2026-09-24-doe-claude-em-queue-append-help-assertions-for-claude-klabauter.md
+Origin: state/cross-repo/archive/2026-09-24-coordinator-content-repo-em-queue-append-help-assertions-for-claude-klabauter.md
 
 These two tests check that `coordinator-queue-append`'s argparse `--change-kind` and
 `--scope` help strings (the hardcoded "Valid: ..." enum lists a human maintains by hand)
 have not drifted from the DoE-resident schema enums they describe —
 `coordinator/schemas/improvement-queue.schema.json`'s `change_kind` enum and
 `coordinator/schemas/lesson-entry.schema.json`'s `scope` enum, respectively. They were
-extracted from DoE-claude's `test_plan_tasks_schema_enum_parity.py` (AC4/AC5) because
+extracted from coordinator-content-repo's `test_plan_tasks_schema_enum_parity.py` (AC4/AC5) because
 `coordinator-queue-append` is claude-klabauter-resident — subject-first placement puts CLI-behavior
 assertions here, not on the DoE-resident schema/wiki parity suite they used to live in.
 
 The schemas themselves are DoE-resident (they do not exist on the claude-klabauter tree), so this
-module resolves the sibling DoE-claude checkout via
-`coordinator_core.testing.doe_root.resolve_doe_root()` — the pattern
+module resolves the sibling coordinator-content-repo checkout via
+`coordinator_core.testing.content_root.resolve_content_root()` — the pattern
 `coordinator_core/install/test_gen_settings_hooks.py` already established for this same
 cross-repo-fixture-dependency shape — and skips the whole module when that checkout (and
 its schemas) is not present, rather than hard-failing.
@@ -29,17 +29,17 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 QUEUE_APPEND_CLI = Path(__file__).parent / "coordinator-queue-append.py"
 
-_DOE_ROOT = Path(resolve_doe_root() or "/doe-root-unresolved")
-IMPROVEMENT_QUEUE_SCHEMA = _DOE_ROOT / "coordinator" / "schemas" / "improvement-queue.schema.json"
-LESSON_ENTRY_SCHEMA = _DOE_ROOT / "coordinator" / "schemas" / "lesson-entry.schema.json"
+_CONTENT_ROOT = Path(resolve_content_root() or "/content-root-unresolved")
+IMPROVEMENT_QUEUE_SCHEMA = _CONTENT_ROOT / "coordinator" / "schemas" / "improvement-queue.schema.json"
+LESSON_ENTRY_SCHEMA = _CONTENT_ROOT / "coordinator" / "schemas" / "lesson-entry.schema.json"
 
 pytestmark = pytest.mark.skipif(
     not (IMPROVEMENT_QUEUE_SCHEMA.is_file() and LESSON_ENTRY_SCHEMA.is_file()),
-    reason=f"DoE-claude sibling checkout not found (expected schemas under {_DOE_ROOT})",
+    reason=f"coordinator-content-repo sibling checkout not found (expected schemas under {_CONTENT_ROOT})",
 )
 
 

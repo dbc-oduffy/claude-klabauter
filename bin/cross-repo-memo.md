@@ -7,7 +7,7 @@ Windows shells. Its source sits in this repo at `coordinator/bin/cross-repo-memo
 and klabauter carries the published twin downstream of it.
 
 Do not read that location as ownership. DR-210 assigns the CLI shell, the memo
-contract and the receiver-resolution loader to DoE-claude, and gives claude-klabauter only
+contract and the receiver-resolution loader to coordinator-content-repo, and gives claude-klabauter only
 the authoritative work-state-mutation ops, which then strangle the verbs one at a
 time underneath a stable command name. `send` is the verb that has reached its
 native op; it REFUSES outright when the klabauter engine is unreachable, with no
@@ -97,7 +97,7 @@ simply: delivery is committed, not left dirty.)
 
 ```sh
 cross-repo-memo --list-receivers          # resolve the current id; never type one from memory
-cross-repo-memo draft claude-klabauter-rag-boundary-note --to doe-claude-em --kind fyi --title "claude-klabauter/rag boundary: state/ reconciliation item"
+cross-repo-memo draft claude-klabauter-rag-boundary-note --to coordinator-content-repo-em --kind fyi --title "claude-klabauter/rag boundary: state/ reconciliation item"
 # write the body into the printed outbox path, then:
 cross-repo-memo send claude-klabauter-rag-boundary-note
 ```

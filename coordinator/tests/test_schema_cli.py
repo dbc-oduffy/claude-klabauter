@@ -56,7 +56,7 @@ pytestmark = [
 try:
     SCHEMAS_DIR = data_root("schemas")
 except RuntimeError:
-    SCHEMAS_DIR = Path("/doe-root-unresolved/schemas")
+    SCHEMAS_DIR = Path("/content-root-unresolved/schemas")
 
 
 def _run_describe(schema_name: str, env: dict | None = None) -> subprocess.CompletedProcess:

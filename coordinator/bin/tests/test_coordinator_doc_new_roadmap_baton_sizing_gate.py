@@ -14,9 +14,9 @@ existed.
 scaffolder is the artifact: it refuses to write a roadmap baton without an
 answer, exactly as it already does for a plan.
 
-Cross-repo ask: `cross-repo/inbox/2026-08-20-doe-claude-em-pickup-brief-
+Cross-repo ask: `cross-repo/inbox/2026-08-20-coordinator-content-repo-em-pickup-brief-
 should-emit-the-sizing-disposition.md` (follow-on ask). Sender-side fix that
-motivated it: DoE-claude `c34f05d58`.
+motivated it: coordinator-content-repo `c34f05d58`.
 
 In-process by construction — `main()` is driven through `sys.argv` rather
 than spawned, so this file stays on the fast tier and adds nothing to the

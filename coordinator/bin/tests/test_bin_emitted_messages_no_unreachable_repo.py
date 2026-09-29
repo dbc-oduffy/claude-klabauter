@@ -1,7 +1,7 @@
 """coordinator/bin/tests/test_bin_emitted_messages_no_unreachable_repo.py --
 the standalone ratchet for C3 of `docs/plans/2026-08-14-shipped-bin-messages-
 stop-pointing-at-an-unreachable-repo.md`. A `coordinator/bin` script that
-still prints a `DoE-claude` prose pointer to an OSS operator (who cannot
+still prints a `coordinator-content-repo` prose pointer to an OSS operator (who cannot
 reach that private repo) is exactly the defect this plan's C1/C2 fixed 49
 sites of -- this file is what would have caught all 49, and is what keeps
 them fixed.
@@ -47,15 +47,15 @@ BIN_ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST: dict[str, str] = {
     "verify-dist-publish-repo-sync.py": "does not ship to the OSS mirror -- no OSS operator reaches it",
     "verify-publish-targets-portable-sync.py": "does not ship to the OSS mirror -- no OSS operator reaches it",
-    "install-doe-claude-precommit-hook.cmd": (
+    "install-coordinator-content-repo-precommit-hook.cmd": (
         "does not ship to the OSS mirror -- listed for parity with the plan's "
         "§ Out of scope, never matched by the *.py walk"
     ),
-    "install-doe-claude-precommit-hook.py": (
+    "install-coordinator-content-repo-precommit-hook.py": (
         "does not ship to the OSS mirror, AND its naming is separately sanctioned: the "
-        "file's own docstring records that `doe_claude` is an explicitly KEPT slug in "
+        "file's own docstring records that `content_root` is an explicitly KEPT slug in "
         "coordinator_core.ops.check_registry_codename_leak's KEEPSET, because the OSS "
-        "clone resolver reads `repos.doe_claude`. Its filename, module path, and "
+        "clone resolver reads `repos.content_root`. Its filename, module path, and "
         "identifiers all carry the slug regardless, so a paraphrase in the prose would "
         "conceal nothing. Added 2026-08-14 after the C3 lint surfaced it -- it was in "
         "neither the plan's scope: nor its § Out of scope, a real gap in the census"
@@ -102,17 +102,17 @@ ALLOWLIST: dict[str, str] = {
 #
 # `_embedded_in_larger_identifier` (see its docstring) also has one
 # deliberate, named residual: `_IDENT_CHARS` does not include `-`, so a
-# hyphen-joined identifier compound (e.g. `install-doe-claude-precommit-
+# hyphen-joined identifier compound (e.g. `install-coordinator-content-repo-precommit-
 # hook`) is NOT recognized as "embedded in a larger identifier" and WILL
 # fire as a violation. Today this is masked only because the one in-tree
-# file that would trigger it, `install-doe-claude-precommit-hook.py`, is
+# file that would trigger it, `install-coordinator-content-repo-precommit-hook.py`, is
 # excluded wholesale via `ALLOWLIST` rather than covered by this mechanism.
 # A future `coordinator/bin` script emitting a hyphen-joined identifier
 # containing a pinned token will need its own new `ALLOWLIST` (or
 # `_EXEMPTION_PATTERNS`-shaped) entry -- it will NOT be caught generally by
 # `_embedded_in_larger_identifier`. Widening `_IDENT_CHARS` to include `-`
 # is deliberately REJECTED as the fix: hyphen is also a common flanking
-# character in ordinary prose (e.g. "the DoE-claude-side leg"), so treating
+# character in ordinary prose (e.g. "the coordinator-content-repo-side leg"), so treating
 # `-` as an identifier character would suppress genuine prose hits too --
 # trading a narrow, allowlist-covered false positive for a false-negative
 # class in exactly the prose this lint exists to catch. The wrong direction
@@ -402,20 +402,20 @@ _IDENT_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567
 
 def _embedded_in_larger_identifier(text: str, start: int, end: int) -> bool:
     """True when the `[start, end)` hit is a fragment of a LONGER identifier
-    run (`real_doe_claude_lessons_dir_untouched_guard`, `_doe_claude_probe`)
+    run (`real_content_root_lessons_dir_untouched_guard`, `_content_root_probe`)
     rather than a standalone prose mention.
 
     Such a hit is a functional identifier -- the same class
     `_EXEMPTION_PATTERNS` already exempts by shape (`repos.<key>`,
-    `REPO_DOE_CLAUDE`, `<name>-em`) -- and B7's own rules are word-anchored
+    `REPO_CONTENT_ROOT`, `<name>-em`) -- and B7's own rules are word-anchored
     for exactly this reason. `find_token_violations` searches by bare
     substring, so without this guard the sweep fires on any snake_case
     identifier that happens to CONTAIN a pinned token, which is not a
     pointer an OSS reader could mistake for something navigable. Observed
     2026-08-14 as a false positive against
-    `tests/test_harvest_doe_root_machine_local_leg.py`, whose emitted guard
-    NAME embeds `doe_claude` while its only real repo reference on the same
-    line (`repos.doe_claude`) was already correctly exempt."""
+    `tests/test_harvest_content_root_machine_local_leg.py`, whose emitted guard
+    NAME embeds `content_root` while its only real repo reference on the same
+    line (`repos.content_root`) was already correctly exempt."""
     before = text[start - 1] if start > 0 else ""
     after = text[end] if end < len(text) else ""
     return before in _IDENT_CHARS or after in _IDENT_CHARS
@@ -565,10 +565,10 @@ def test_no_bin_script_emits_an_unreachable_repo_pointer():
 
 def test_allowlist_matches_plan_out_of_scope_list():
     assert set(ALLOWLIST) == {
-        "install-doe-claude-precommit-hook.py",
+        "install-coordinator-content-repo-precommit-hook.py",
         "verify-dist-publish-repo-sync.py",
         "verify-publish-targets-portable-sync.py",
-        "install-doe-claude-precommit-hook.cmd",
+        "install-coordinator-content-repo-precommit-hook.cmd",
     }
 
 
@@ -594,14 +594,14 @@ def test_probe_string_fails_then_passes(tmp_path):
 
 
             def main() -> None:
-                sys.stderr.write("cannot resolve the DoE-claude repo root (boom)")
+                sys.stderr.write("cannot resolve the coordinator-content-repo repo root (boom)")
             '''
         ),
         encoding="utf-8",
     )
     dirty_violations = collect_violations(tmp_path)
-    assert any(v.token == "DoE-claude" for v in dirty_violations), (
-        "probe with an emitted DoE-claude prose string should fail the lint"
+    assert any(v.token == "coordinator-content-repo" for v in dirty_violations), (
+        "probe with an emitted coordinator-content-repo prose string should fail the lint"
     )
 
     clean = tmp_path / "probe-script.py"
@@ -632,40 +632,40 @@ def test_probe_string_fails_then_passes(tmp_path):
 def test_extractor_sees_print_of_whole_docstring():
     source = textwrap.dedent(
         '''
-        """Line one names DoE-claude.
+        """Line one names coordinator-content-repo.
         Line two is harmless."""
         print(__doc__)
         '''
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_extractor_respects_first_line_only_split():
     source = textwrap.dedent(
         '''
         """Harmless first line.
-        Second line names DoE-claude."""
+        Second line names coordinator-content-repo."""
         print(__doc__.splitlines()[0])
         '''
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" not in joined
+    assert "coordinator-content-repo" not in joined
 
 
 def test_extractor_treats_ambiguous_doc_usage_as_whole_emission():
     source = textwrap.dedent(
         '''
         """Harmless first line.
-        Second line names DoE-claude."""
+        Second line names coordinator-content-repo."""
         print(__doc__.strip())
         '''
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_extractor_sees_argparse_description_epilog_help():
@@ -674,33 +674,33 @@ def test_extractor_sees_argparse_description_epilog_help():
         import argparse
 
         parser = argparse.ArgumentParser(
-            description="see the DoE-claude repo",
-            epilog="also DoE-claude",
+            description="see the coordinator-content-repo repo",
+            epilog="also coordinator-content-repo",
         )
-        parser.add_argument("--x", help="points at DoE-claude too")
+        parser.add_argument("--x", help="points at coordinator-content-repo too")
         """
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert joined.count("DoE-claude") == 3
+    assert joined.count("coordinator-content-repo") == 3
 
 
 def test_extractor_sees_fstring_static_fragment():
     source = textwrap.dedent(
         """
         exc = "boom"
-        print(f"cannot resolve the DoE-claude repo root ({exc})")
+        print(f"cannot resolve the coordinator-content-repo repo root ({exc})")
         """
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_extractor_sees_variable_indirection():
     source = textwrap.dedent(
         """
-        _USAGE_TEXT = "usage: see the DoE-claude repo"
+        _USAGE_TEXT = "usage: see the coordinator-content-repo repo"
 
 
         def _print_help():
@@ -709,7 +709,7 @@ def test_extractor_sees_variable_indirection():
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_extractor_unions_branch_reassignment_of_same_name():
@@ -720,7 +720,7 @@ def test_extractor_unions_branch_reassignment_of_same_name():
         """
         def f(cond):
             if cond:
-                msg = "cannot resolve the DoE-claude repo root"
+                msg = "cannot resolve the coordinator-content-repo repo root"
             else:
                 msg = "clean text"
             print(msg)
@@ -728,7 +728,7 @@ def test_extractor_unions_branch_reassignment_of_same_name():
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_extractor_sees_fstring_literal_alongside_doc_reference():
@@ -738,20 +738,20 @@ def test_extractor_sees_fstring_literal_alongside_doc_reference():
     source = textwrap.dedent(
         '''
         """Harmless docstring, no pinned token here."""
-        print(f"see the DoE-claude repo: {__doc__}")
+        print(f"see the coordinator-content-repo repo: {__doc__}")
         '''
     )
     hits = extract_emitted_strings(source)
     joined = "\n".join(h.text for h in hits)
-    assert "DoE-claude" in joined
+    assert "coordinator-content-repo" in joined
 
 
 def test_functional_identifier_exemptions_do_not_false_positive():
     source = textwrap.dedent(
         """
-        print("set repos.doe_claude to fix this")
-        print("REPO_DOE_CLAUDE is unset")
-        print("route the memo to doe-claude-em")
+        print("set repos.content_root to fix this")
+        print("REPO_CONTENT_ROOT is unset")
+        print("route the memo to coordinator-content-repo-em")
         """
     )
     violations = []

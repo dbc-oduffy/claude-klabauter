@@ -4,7 +4,7 @@
 Purpose: Unit tests for validate-fast-and-packageability.py -- the ported
 fast-test resolution ladder (mktemp-diagnostic-capture equivalent + rc==2/
 126/other-nonzero/0 classification) and the packageability
-loud-skip-vs-silent-pass guard, both lifted out of DoE-claude's
+loud-skip-vs-silent-pass guard, both lifted out of coordinator-content-repo's
 coordinator/skills/validate/SKILL.md bash fences.
 
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (M3 chunk

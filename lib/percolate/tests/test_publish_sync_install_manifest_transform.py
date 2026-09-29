@@ -1,6 +1,6 @@
 """Regression tests for `ManifestLayoutRewrite`/`apply_manifest_layout_rewrite`
 — the declarative, row-supplied manifest layout-rewrite transform that folds
-DoE-claude's `setup/publish_sync.py` per-root override (the coordinator
+Coordinator-content-repo's `setup/publish_sync.py` per-root override (the coordinator
 install-manifest layout transform) into this engine module —
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W3-C10 / reviewer
 finding 6 (ACCEPT).

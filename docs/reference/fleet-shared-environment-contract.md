@@ -85,8 +85,8 @@ darwin or silently pulls the cu130 wheel where no darwin wheel exists.
    registry-resident, default per install class — claude-klabauter `candidate`, klabauter `main`) and
    `engine.working_repos` (retained as a pure locator; its exemption semantics are the subject of
    the item-2 exchange below, not a key-namespace question).
-2. Read `cross-repo/inbox/2026-08-16-doe-claude-em-engine-targeting-contract-reply.md` and
-   `2026-08-16-doe-claude-em-engine-targeting-item-2-we-were-wrong.md` for state only — both belong
+2. Read `cross-repo/inbox/2026-08-16-coordinator-content-repo-em-engine-targeting-contract-reply.md` and
+   `2026-08-16-coordinator-content-repo-em-engine-targeting-item-2-we-were-wrong.md` for state only — both belong
    to the peer (one-engine) workstream and are not actioned, replied to, or edited here. Net state:
    DoE agreed item 1 (`engine.target`, no objection to primitive/name/location) outright, then
    reversed item 2 to accepted the same day (their PM ruled claude-klabauter also runs the published
@@ -108,7 +108,7 @@ reusing its prefix would not be a technical collision, but it would be a naming 
 trips over — grepping `fleet.` would return unrelated op names. `fleet_env.*` is unambiguous and
 still names the tool (the fleet environment) precisely.
 
-Minting `fleet_env.*` needs **zero coordinator-team sign-off** — DoE-claude
+Minting `fleet_env.*` needs **zero coordinator-team sign-off** — coordinator-content-repo
 `coordinator/docs/wiki/machine-local-registry.md` §5a: *"Appending values under existing
 namespaces, opening a new tool-specific namespace (`mything.*`), or hand-editing per-machine paths
 in `registry.local.toml` does NOT require coordinator-team sign-off… A new namespace under

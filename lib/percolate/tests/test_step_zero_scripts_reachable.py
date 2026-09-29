@@ -35,7 +35,7 @@ own field-indexed copy):
      anyone ever widens that allowlist to include the three coordinator/scripts
      entries by mistake.
 
-Negative-spec: does NOT reach into DoE-claude's mirror or source tree (that
+Negative-spec: does NOT reach into coordinator-content-repo's mirror or source tree (that
 half of item 1 -- confirming DoE's C6 strip actually landed in the published
 `commands/install.md` -- is DoE's own closure evidence, sequenced explicitly
 AFTER their percolate round per this chunk's dispatch brief; this test's

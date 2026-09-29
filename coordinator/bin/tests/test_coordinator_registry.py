@@ -81,7 +81,7 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    assert reg.CENTRAL_RECEIVER_IDS == frozenset({"doe-claude-em"})
+    assert reg.CENTRAL_RECEIVER_IDS == frozenset({"coordinator-content-repo-em"})
 
 
 # AC-7: CENTRAL_REPO_BASENAMES retired (C1 — basename anchor abandoned; the
@@ -100,12 +100,12 @@ def test_sidecar_suffixes():
 # (see CENTRAL_RECEIVER_IDS) but is no longer the canonical return here.
 
 
-def test_repo_key_to_em_id_doe_claude_canonical():
-    assert reg.repo_key_to_em_id("repos.doe_claude") == "doe-claude-em"
+def test_repo_key_to_em_id_content_root_canonical():
+    assert reg.repo_key_to_em_id("repos.content_root") == "coordinator-content-repo-em"
 
 
 def test_central_canonical_id():
-    assert reg._central_canonical_id() == "doe-claude-em"
+    assert reg._central_canonical_id() == "coordinator-content-repo-em"
 
 
 def test_repo_key_to_em_id_example_retrieval_repo():
@@ -116,18 +116,18 @@ def test_repo_key_to_em_id_example_game_repo_alias():
     assert reg.repo_key_to_em_id("repos.example_game_workbench_repo") == "example-game-repo-em"
 
 
-_DOE_CLAUDE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_CONTENT_ROOT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def test_em_id_for_root_doe_claude_canonical():
+def test_em_id_for_root_content_root_canonical():
     assert reg.em_id_for_root(
-        _DOE_CLAUDE_ROOT, {"repos.doe_claude": _DOE_CLAUDE_ROOT}
-    ) == "doe-claude-em"
+        _CONTENT_ROOT_ROOT, {"repos.content_root": _CONTENT_ROOT_ROOT}
+    ) == "coordinator-content-repo-em"
 
 
 def test_em_id_for_root_none():
     assert reg.em_id_for_root(
-        None, {"repos.doe_claude": _DOE_CLAUDE_ROOT}
+        None, {"repos.content_root": _CONTENT_ROOT_ROOT}
     ) == "unknown-sender-em"
 
 
@@ -143,13 +143,13 @@ def test_em_id_for_root_registered_non_central_loop_step_3():
     ) == "example-game-repo-em"
 
 
-def test_doe_claude_em_alias_in_central_receiver_ids():
-    assert "doe-claude-em" in reg.CENTRAL_RECEIVER_IDS
+def test_content_root_em_alias_in_central_receiver_ids():
+    assert "coordinator-content-repo-em" in reg.CENTRAL_RECEIVER_IDS
 
 
-# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (DOE_ROOT,
-# REPO_DOE_CLAUDE, repos.doe_claude) into names no machine has ever set,
-# already-imported module) with DOE_ROOT/REPO_DOE_CLAUDE unset, covering both
+# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (CONTENT_ROOT,
+# REPO_CONTENT_ROOT, repos.content_root) into names no machine has ever set,
+# already-imported module) with CONTENT_ROOT/REPO_CONTENT_ROOT unset, covering both
 import subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
 import tempfile  # noqa: E402
@@ -174,12 +174,12 @@ def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
 
 
 def test_bootstrap_import_succeeds_with_pointer_present():
-    """Case (a): DOE_ROOT/REPO_DOE_CLAUDE unset, real ambient pointer/registry
+    """Case (a): CONTENT_ROOT/REPO_CONTENT_ROOT unset, real ambient pointer/registry
     state left intact — import must succeed via a codename-free rung (or the
     co-located rung, if this checkout happens to be co-located)."""
     env = dict(os.environ)
-    env.pop("DOE_ROOT", None)
-    env.pop("REPO_DOE_CLAUDE", None)
+    env.pop("CONTENT_ROOT", None)
+    env.pop("REPO_CONTENT_ROOT", None)
     result = _run_import_subprocess(env)
     assert result.returncode == 0, (
         f"expected import to succeed with pointer/registry state present; "
@@ -189,7 +189,7 @@ def test_bootstrap_import_succeeds_with_pointer_present():
 
 
 def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable():
-    """Case (b): DOE_ROOT/REPO_DOE_CLAUDE unset AND HOME/CLAUDE_HOME/
+    """Case (b): CONTENT_ROOT/REPO_CONTENT_ROOT unset AND HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no LIVE rung
     can resolve, proving the file rungs are load-bearing (not merely present)
     rather than accidentally passing on ambient state. Must NOT delete or
@@ -206,8 +206,8 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
     for the fallback rung's own dedicated coverage."""
     with tempfile.TemporaryDirectory() as _empty_home:
         env = dict(os.environ)
-        env.pop("DOE_ROOT", None)
-        env.pop("REPO_DOE_CLAUDE", None)
+        env.pop("CONTENT_ROOT", None)
+        env.pop("REPO_CONTENT_ROOT", None)
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = _empty_home
         env["CLAUDE_HOME"] = _empty_home
@@ -224,7 +224,7 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
 # PRESENCE (case a passes via whatever ambient rung this dev box happens to
 # prior reviews shipped BLOCKER-1 (a present-but-INERT ladder on a real OSS
 # environment (empty HOME/USERPROFILE/COORDINATOR_SETTINGS_HOME, no
-# CLAUDE_PLUGIN_ROOT, no .doe-root pointer reachable), with the manifest
+# CLAUDE_PLUGIN_ROOT, no .coordinator-content-root pointer reachable), with the manifest
 # (_mp_marketplace_cache_rung(), BLOCKER-1a) under a synthetic CLAUDE_HOME —
 # asserting import SUCCEEDS and _MANIFEST_PATH resolves inside that rung's
 import shutil  # noqa: E402
@@ -240,10 +240,10 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     real copy of coordinator_registry.py + machine_local_impl_resolve.py,
     exactly where the payload ships them (coordinator/bin -> coordinator/bin,
     NOT flattened, per setup/publish-targets.portable). Also plants the
-    flattened helper at <root>/engine-payload/lib/read_doe_root_pointer.py
+    flattened helper at <root>/engine-payload/lib/read_content_root_pointer.py
     (coordinator/lib -> lib, flattened) so the pointer rung has its
     published-shape dependency present, even though the pointer file itself
-    is deliberately absent (no ambient .doe-root on an OSS box).
+    is deliberately absent (no ambient .coordinator-content-root on an OSS box).
 
     claude_home_dir: <root>/claude-home/ — the `CLAUDE_HOME` env value, a
     `$HOME` substitute (Convention A). Its `.claude/` subdir holds ONLY the
@@ -262,8 +262,8 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     flat_helper_dir = os.path.join(root, "engine-payload", "lib")
     os.makedirs(flat_helper_dir)
     shutil.copyfile(
-        os.path.join(_REAL_COORDINATOR_LIB_DIR, "read_doe_root_pointer.py"),
-        os.path.join(flat_helper_dir, "read_doe_root_pointer.py"),
+        os.path.join(_REAL_COORDINATOR_LIB_DIR, "read_content_root_pointer.py"),
+        os.path.join(flat_helper_dir, "read_content_root_pointer.py"),
     )
 
     claude_home_dir = os.path.join(root, "claude-home")
@@ -276,7 +276,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     ) as _fh:
         _fh.write(
             '{"docTypes": [], "queueTypes": [], '
-            '"identity": {"repoAliases": [], "centralReceiverIds": ["doe-claude-em"]}}'
+            '"identity": {"repoAliases": [], "centralReceiverIds": ["coordinator-content-repo-em"]}}'
         )
 
     return payload_lib_dir, claude_home_dir
@@ -323,19 +323,19 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
         )
 
 
-# DOE_ROOT/REPO_DOE_CLAUDE/registry state is enough; the module import at the
+# CONTENT_ROOT/REPO_CONTENT_ROOT/registry state is enough; the module import at the
 import tempfile as _tempfile  # noqa: E402
 
 import pytest  # noqa: E402
 
 
-def _clear_doe_root_env(monkeypatch):
-    """Strip every env var doe_root()'s legacy chain reads, and stub the
+def _clear_content_root_env(monkeypatch):
+    """Strip every env var content_root()'s legacy chain reads, and stub the
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
 
-    DOE_ROOT/REPO_DOE_CLAUDE now run FIRST in
-    doe_root(), ahead of the codename-free rungs, so they must be cleared
+    CONTENT_ROOT/REPO_CONTENT_ROOT now run FIRST in
+    content_root(), ahead of the codename-free rungs, so they must be cleared
     here too (this function already did) for the codename-rung tests below
     to observe their own rung rather than short-circuiting on the reordered
     override.
@@ -344,31 +344,31 @@ def _clear_doe_root_env(monkeypatch):
     that could accidentally resolve on a dev box with a real marketplace
     install; stub it like every other rung so isolation holds.
     """
-    monkeypatch.delenv("DOE_ROOT", raising=False)
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: "")
+    monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: "")
     monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: "")
     monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: "")
     monkeypatch.setattr(reg, "_registry_machine_local_get", lambda key: None)
 
 
-def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
+def test_content_root_resolves_via_content_root_pointer_rung(monkeypatch):
     with _tempfile.TemporaryDirectory() as _fake_root:
-        _clear_doe_root_env(monkeypatch)
-        monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _fake_root)
-        assert reg.doe_root() == _fake_root
+        _clear_content_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: _fake_root)
+        assert reg.content_root() == _fake_root
 
 
-def test_doe_root_resolves_via_marketplace_cache_rung(monkeypatch):
+def test_content_root_resolves_via_marketplace_cache_rung(monkeypatch):
     """The real marketplace-cache install
     location resolves like the flat-layout rung: as-is, gated on
     `<cand>/state` being a directory (BLOCKER-2)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         os.makedirs(os.path.join(_fake_root, "state"))
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: _fake_root)
-        assert reg.doe_root() == _fake_root
+        assert reg.content_root() == _fake_root
 
 
 def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch):
@@ -381,30 +381,30 @@ def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch
         assert reg._mp_marketplace_cache_rung() == os.path.join(_cache_parent, "1.2.3")
 
 
-def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
+def test_content_root_resolves_via_flat_layout_probe_rung(monkeypatch):
     """The flat marketplace-clone layout is the clone root directly
     (resolve_coordinator_clone.py::resolve_clone_root() treats it the same
     way) — used as-is, no conversion. Gated (Review: staff-eng BLOCKER-2) on
     `<cand>/state` being a directory."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         os.makedirs(os.path.join(_fake_root, "state"))
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
-        assert reg.doe_root() == _fake_root
+        assert reg.content_root() == _fake_root
 
 
-def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
+def test_content_root_flat_layout_rejected_without_state_dir(monkeypatch):
     with _tempfile.TemporaryDirectory() as _fake_root:
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
         with pytest.raises(reg._DoeUnresolvable):
-            reg.doe_root()
+            reg.content_root()
 
 
-def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
+def test_content_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
     """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
-    (`<repo_root>/coordinator`), one level below the repo root doe_root()
-    must return — the plugin-root-vs-DoE-root distinction this chunk exists
+    (`<repo_root>/coordinator`), one level below the repo root content_root()
+    must return — the plugin-root-vs-content-root distinction this chunk exists
     to close. The marker lives beside the repo root, not beside the content
     root, so the normalizer must climb one level. Gated (Review: staff-eng
     BLOCKER-2) on `<repo_root>/state` being a directory."""
@@ -415,12 +415,12 @@ def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkey
         os.makedirs(os.path.join(_repo_root, "state"))
         _content_root = os.path.join(_repo_root, "coordinator")
         os.makedirs(_content_root)
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _content_root)
-        assert reg.doe_root() == _repo_root
+        assert reg.content_root() == _repo_root
 
 
-def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch):
+def test_content_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch):
     """OSS flat layout: CLAUDE_PLUGIN_ROOT already IS the repo root
     (manifest ships flat at plugin root, marker directly beside it) — no
     parent-climb, used as-is. Gated (Review: staff-eng BLOCKER-2) on
@@ -430,26 +430,26 @@ def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatc
         with open(os.path.join(_flat_root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as _f:
             _f.write("{}")
         os.makedirs(os.path.join(_flat_root, "state"))
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _flat_root)
-        assert reg.doe_root() == _flat_root
+        assert reg.content_root() == _flat_root
 
 
-def test_doe_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch):
+def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch):
     """
     CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
     .claude-plugin/plugin.json under it, since it belongs to a foreign
     plugin's content, not the plugin root itself) must NOT be accepted, and
-    an explicit correct DOE_ROOT override must win instead."""
+    an explicit correct CONTENT_ROOT override must win instead."""
     with _tempfile.TemporaryDirectory() as _foreign_root, _tempfile.TemporaryDirectory() as _correct_root:
         os.makedirs(os.path.join(_correct_root, "state"), exist_ok=True)
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _foreign_root)
-        monkeypatch.setenv("DOE_ROOT", _correct_root)
-        assert reg.doe_root() == _correct_root
+        monkeypatch.setenv("CONTENT_ROOT", _correct_root)
+        assert reg.content_root() == _correct_root
 
 
-def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
+def test_content_root_resolves_via_registry_live_path_rung(monkeypatch):
     """machine-local
     plugin.mirrors.coordinator-claude.live_path is now routed through the
     same CLAUDE_PLUGIN_ROOT-shaped normalizer (not trusted as a repo root
@@ -459,51 +459,51 @@ def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
         with open(os.path.join(_fake_root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as _f:
             _f.write("{}")
         os.makedirs(os.path.join(_fake_root, "state"))
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(
             reg,
             "_registry_machine_local_get",
             lambda key: _fake_root if key == "plugin.mirrors.coordinator-claude.live_path" else None,
         )
-        assert reg.doe_root() == _fake_root
+        assert reg.content_root() == _fake_root
 
 
-def test_doe_root_rejects_live_path_content_root_without_git(monkeypatch):
+def test_content_root_rejects_live_path_content_root_without_git(monkeypatch):
     with _tempfile.TemporaryDirectory() as _content_root:
-        _clear_doe_root_env(monkeypatch)
+        _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(
             reg,
             "_registry_machine_local_get",
             lambda key: _content_root if key == "plugin.mirrors.coordinator-claude.live_path" else None,
         )
         with pytest.raises(reg._DoeUnresolvable):
-            reg.doe_root()
+            reg.content_root()
 
 
-def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
-    _clear_doe_root_env(monkeypatch)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", "/fake/doe-claude")
-    assert reg.doe_root() == "/fake/doe-claude"
+def test_content_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
+    _clear_content_root_env(monkeypatch)
+    monkeypatch.setenv("REPO_CONTENT_ROOT", "/fake/coordinator-content-repo")
+    assert reg.content_root() == "/fake/coordinator-content-repo"
 
 
-def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
+def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
     """With a
-    live `.doe-root` pointer AND an explicit DOE_ROOT/REPO_DOE_CLAUDE
+    live `.coordinator-content-root` pointer AND an explicit CONTENT_ROOT/REPO_CONTENT_ROOT
     override both present, the explicit override must win (it is an
     operator's stated intent and cannot be present by accident); ambient
     pointer-file state must not outrank it."""
     with _tempfile.TemporaryDirectory() as _pointer_root, _tempfile.TemporaryDirectory() as _override_root:
-        _clear_doe_root_env(monkeypatch)
-        monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _pointer_root)
-        monkeypatch.setenv("DOE_ROOT", _override_root)
-        monkeypatch.setenv("REPO_DOE_CLAUDE", _override_root)
-        assert reg.doe_root() == _override_root
+        _clear_content_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: _pointer_root)
+        monkeypatch.setenv("CONTENT_ROOT", _override_root)
+        monkeypatch.setenv("REPO_CONTENT_ROOT", _override_root)
+        assert reg.content_root() == _override_root
 
 
-def test_doe_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
-    _clear_doe_root_env(monkeypatch)
+def test_content_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
+    _clear_content_root_env(monkeypatch)
     with pytest.raises(reg._DoeUnresolvable):
-        reg.doe_root()
+        reg.content_root()
 
 
 def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path):

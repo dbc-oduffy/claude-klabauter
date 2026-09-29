@@ -1,13 +1,13 @@
 # Frozen golden fixtures — DEC-3(c) fallback (DoE JS oracle capture)
 
-> Spec backlink: `DoE-claude:pln-de-polyglot-the-coordinator-mi-119303` § DEC-3(c),
+> Spec backlink: `coordinator-content-repo:pln-de-polyglot-the-coordinator-mi-119303` § DEC-3(c),
 > chunk A4. Consumes A5's per-oracle map in
 > `docs/architecture/migration-hitlist.md` § Depolyglot repoint surface (b).
 
 ## Why these files exist
 
 Six `claude-klabauter` test suites skip (not fail) when `node` is absent, because they use
-DoE-claude's `.js` files as *live differential oracles* — their Python ports are proven
+Coordinator-content-repo's `.js` files as *live differential oracles* — their Python ports are proven
 correct by shelling out to the JS at test time and diffing outputs. Deleting the `.js`
 before those suites are converted to frozen goldens silently blinds their correctness
 proof (CI stays green-with-skips). DEC-3 gates DoE-side JS deletion on claude-klabauter confirming
@@ -92,4 +92,4 @@ record rather than a raw diff-target, and why path-shaped substrings are normali
   the claude-klabauter suite's own documented expectation of this exact pre-existing drift.
 
 All captures were run against a live `node v24.18.0` on the author's machine, 2026-07-21,
-against DoE-claude HEAD at commit range starting `b22f543b`.
+against coordinator-content-repo HEAD at commit range starting `b22f543b`.

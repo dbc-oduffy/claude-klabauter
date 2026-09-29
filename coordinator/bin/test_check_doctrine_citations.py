@@ -39,21 +39,21 @@ class FixtureCorpus:
 
     def __init__(self, tmp: str):
         self.tmp = tmp
-        self.doe_root = os.path.join(tmp, "doe_root")
+        self.content_root = os.path.join(tmp, "content_root")
         self.doe_coordinator = os.path.join(tmp, "doe_coordinator")
         self.claude_klabauter = os.path.join(tmp, "claude-klabauter")
         self.corpus = os.path.join(tmp, "corpus")
         os.makedirs(self.corpus, exist_ok=True)
 
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
-            _write(os.path.join(self.doe_root, "docs", "wiki", name))
+            _write(os.path.join(self.content_root, "docs", "wiki", name))
             _write(os.path.join(self.claude_klabauter, "docs", "wiki", name))
 
-        _write(os.path.join(self.doe_root, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
+        _write(os.path.join(self.content_root, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
         _write(os.path.join(self.claude_klabauter, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))
 
         for name in INTRA_DOE_COLLISIONS:
-            _write(os.path.join(self.doe_root, "docs", "wiki", name))
+            _write(os.path.join(self.content_root, "docs", "wiki", name))
             _write(os.path.join(self.doe_coordinator, "docs", "wiki", name))
 
         _write(os.path.join(self.doe_coordinator, "docs", "wiki", "only-in-coordinator.md"))
@@ -62,7 +62,7 @@ class FixtureCorpus:
     @property
     def tree_roots(self) -> dict[str, str]:
         return {
-            "doe_root": self.doe_root,
+            "content_root": self.content_root,
             "doe_coordinator": self.doe_coordinator,
             "claude-klabauter": self.claude_klabauter,
         }
@@ -153,7 +153,7 @@ class AmbiguousCitationTests(unittest.TestCase):
                 self.assertEqual(len(findings), 1)
                 self.assertIn(name, findings[0])
                 self.assertIn("unanchored", findings[0])
-                self.assertIn("doe_root", findings[0])
+                self.assertIn("content_root", findings[0])
                 self.assertIn("claude-klabauter", findings[0])
 
     def test_each_doe_vs_claude_klabauter_collision_anchored_is_still_ambiguous(self):
@@ -168,7 +168,7 @@ class AmbiguousCitationTests(unittest.TestCase):
                 self.assertEqual(len(findings), 1)
                 self.assertIn(name, findings[0])
                 self.assertIn("ambiguous", findings[0])
-                self.assertIn("doe_root", findings[0])
+                self.assertIn("content_root", findings[0])
                 self.assertIn("claude-klabauter", findings[0])
 
     def test_plans_index_collision_bare_is_reported_unanchored(self):
@@ -191,7 +191,7 @@ class AmbiguousCitationTests(unittest.TestCase):
                 self.assertEqual(len(findings), 1)
                 self.assertIn(name, findings[0])
                 self.assertIn("unanchored", findings[0])
-                self.assertIn("doe_root", findings[0])
+                self.assertIn("content_root", findings[0])
                 self.assertIn("doe_coordinator", findings[0])
 
     def test_silence_on_a_bad_citation_is_a_test_failure(self):
@@ -471,7 +471,7 @@ class DefaultTreeResolutionFailureTests(unittest.TestCase):
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus], {}, use_default_trees=True
         )
-        self.assertTrue(any("doe_root" in line for line in findings), msg=findings)
+        self.assertTrue(any("content_root" in line for line in findings), msg=findings)
         self.assertTrue(any("unregistered shortname" in line for line in findings), msg=findings)
 
     def test_tree_override_fills_the_gap_and_suppresses_the_failure(self):
@@ -479,7 +479,7 @@ class DefaultTreeResolutionFailureTests(unittest.TestCase):
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus],
             {
-                "doe_root": self.fixture.doe_root,
+                "content_root": self.fixture.content_root,
                 "doe_coordinator": self.fixture.doe_coordinator,
                 "plugin_root": self.fixture.doe_coordinator,
             },
@@ -488,7 +488,7 @@ class DefaultTreeResolutionFailureTests(unittest.TestCase):
         self.assertEqual(unresolved, 0, msg=findings)
 
     def test_healthy_default_resolution_reports_zero_unresolved(self):
-        _module._resolve_repo_path_shortname = lambda shortname: (self.fixture.doe_root, "")
+        _module._resolve_repo_path_shortname = lambda shortname: (self.fixture.content_root, "")
         self.fixture.write_corpus_file("doc.md", "No citations here.\n")
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus], {}, use_default_trees=True
@@ -880,9 +880,9 @@ class InProcessResolveRepoPathTests(unittest.TestCase):
     def test_healthy_resolution_returns_path_with_no_error(self):
         _module._RESOLVE_REPO_PATH_MODULE = None
         rrp = _module._load_resolve_repo_path_module()
-        rrp._resolve_registry_value = lambda key: self.fixture.doe_root
-        resolved, err = _module._resolve_repo_path_shortname("doe-claude")
-        self.assertEqual(resolved, self.fixture.doe_root)
+        rrp._resolve_registry_value = lambda key: self.fixture.content_root
+        resolved, err = _module._resolve_repo_path_shortname("coordinator-content-repo")
+        self.assertEqual(resolved, self.fixture.content_root)
         self.assertEqual(err, "")
 
 

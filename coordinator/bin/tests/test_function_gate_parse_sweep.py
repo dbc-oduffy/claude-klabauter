@@ -530,7 +530,7 @@ class TestEntrypointGateDataLists:
         # fixture made the native seam resolvable, it started clean, and the
         # self-draining rule demanded its removal. Two sourced entries remain.
         sourced_f3 = {
-            "coordinator/bin/claude-doe.py",
+            "coordinator/bin/claude-author.py",
             "coordinator/bin/machine-local",
         }
         measured_2026_08_10 = {
@@ -547,7 +547,7 @@ class TestEntrypointGateDataLists:
         # Five as authored, none now. `coordinator/bin/coordinator-ensure-
         # hooks-fleet` drained 2026-08-16 -- it started CLEAN against a
         # published payload and the gate fails closed on a waiver that no
-        # longer fires, so the entry itself blocked the round (doe-claude-em,
+        # longer fires, so the entry itself blocked the round (coordinator-content-repo-em,
         # claude-klabauter `f0009090d`). `coordinator-queue-close`, `plan-tasks-resolve`
         # and `plan-tasks-stamp` drained 2026-08-19 the same way, in the round
         # that completed the `claude-klabauter-coordinator-bin` allowlist:

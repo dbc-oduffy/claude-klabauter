@@ -59,17 +59,17 @@ def _script_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "cross-repo-memo.py")
 
 
-def _sibling_doe_claude_probe() -> str:
-    """Env-independent fallback: locate the sibling DoE-claude checkout by
+def _sibling_content_root_probe() -> str:
+    """Env-independent fallback: locate the sibling coordinator-content-repo checkout by
     walking up from THIS file to the engine repo root, then probing that
     root's own parent directory for the fleet's conventional sibling-clone
-    name, `DoE-claude` (see project CLAUDE.md "sibling DoE-claude
+    name, `coordinator-content-repo` (see project CLAUDE.md "sibling coordinator-content-repo
     checkout"). Not a hand-typed absolute path -- portable to any machine
     that clones the fleet repos side-by-side.
 
-    Exists because `coordinator_core.testing.doe_root.resolve_doe_root()`
+    Exists because `coordinator_core.testing.content_root.resolve_content_root()`
     is itself CLAUDE_HOME/COORDINATOR_SETTINGS_HOME-anchored (registry +
-    `.doe-root` pointer rungs) -- on a machine where those env vars are
+    `.coordinator-content-root` pointer rungs) -- on a machine where those env vars are
     pinned to an isolated tmpdir (every test in this file does this, and a
     fully-isolated-home CI/reproducer run does it for the WHOLE process),
     that resolver returns "" even though the sibling checkout is sitting
@@ -89,51 +89,51 @@ def _sibling_doe_claude_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
     return candidate if os.path.isfile(manifest) else ""
 
 
-def _resolve_doe_root_for_tests() -> str:
-    """Best-effort DoE-claude sibling root, forwarded as DOE_ROOT to every
+def _resolve_content_root_for_tests() -> str:
+    """Best-effort coordinator-content-repo sibling root, forwarded as CONTENT_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
-    `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so any in-process
+    `os.environ` (see below `_CONTENT_ROOT_FOR_TESTS` bootstrap) so any in-process
     import of `coordinator_registry` resolves too.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back
-    to a machine-local `repos.doe_claude` lookup that is itself CLAUDE_HOME/
+    to a machine-local `repos.content_root` lookup that is itself CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME-anchored -- every test in this file points those
     at an isolated tmpdir for fixture isolation, which collaterally starves
     that fallback too. Resolving it once here and forwarding it as an
-    explicit DOE_ROOT override (coordinator_registry.py's own rung-1 override)
+    explicit CONTENT_ROOT override (coordinator_registry.py's own rung-1 override)
     keeps the manifest read working without touching what each test actually
     asserts on. Mirrors coordinator/bin/test_coordinator_queue_append.py's
     helper of the same name.
 
-    Negative-spec: `resolve_doe_root()` alone is NOT sufficient here -- it
+    Negative-spec: `resolve_content_root()` alone is NOT sufficient here -- it
     reads CLAUDE_HOME/COORDINATOR_SETTINGS_HOME internally, so it goes empty
     under a whole-process isolated-home run even though the sibling checkout
-    is present on disk; `_sibling_doe_claude_probe()` is the env-independent
+    is present on disk; `_sibling_content_root_probe()` is the env-independent
     fallback that keeps this file hermetic to ambient machine state.
     """
     try:
-        from coordinator_core.testing.doe_root import resolve_doe_root
+        from coordinator_core.testing.content_root import resolve_content_root
 
-        root = resolve_doe_root()
+        root = resolve_content_root()
     except Exception:
         root = ""
     if root and os.path.isdir(root):
         return root
-    return _sibling_doe_claude_probe()
+    return _sibling_content_root_probe()
 
 
-_DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
-# coordinator_registry.py's own rung-1 (`DOE_ROOT` env) already honors,
-# spawned. `setdefault` respects an operator's own pre-set DOE_ROOT.
-if _DOE_ROOT_FOR_TESTS:
-    os.environ.setdefault("DOE_ROOT", _DOE_ROOT_FOR_TESTS)
+_CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
+# coordinator_registry.py's own rung-1 (`CONTENT_ROOT` env) already honors,
+# spawned. `setdefault` respects an operator's own pre-set CONTENT_ROOT.
+if _CONTENT_ROOT_FOR_TESTS:
+    os.environ.setdefault("CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
 
 
 def _load_dispatcher_module():
@@ -151,17 +151,17 @@ def _python() -> str:
     return sys.executable
 
 
-def _with_doe_root(env: dict[str, str]) -> dict[str, str]:
-    """Forward DOE_ROOT into a test env dict unless the caller already set it."""
-    if "DOE_ROOT" not in env and _DOE_ROOT_FOR_TESTS:
-        env = {**env, "DOE_ROOT": _DOE_ROOT_FOR_TESTS}
+def _with_content_root(env: dict[str, str]) -> dict[str, str]:
+    """Forward CONTENT_ROOT into a test env dict unless the caller already set it."""
+    if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
+        env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
     return env
 
 
 def _run_dispatcher(args: list[str], env: dict[str, str], stdin_text: str = "") -> subprocess.CompletedProcess:
     return subprocess.run(
         [_python(), _script_path()] + args,
-        env={**os.environ, **_with_doe_root(env)},
+        env={**os.environ, **_with_content_root(env)},
         capture_output=True,
         text=True,
         input=stdin_text,
@@ -257,7 +257,7 @@ def _repo_key_for(to: str) -> str:
     """Mirror memo_send.py's convention_repo_key (strip trailing '-em', dashes->
     underscores, prefix 'repos.') for the isolated registry.toml a real-op test
     writes — the engine resolves `to` against this exact convention when no
-    `.doe-root` manifest/alias is present in the isolated fixture (there is
+    `.coordinator-content-root` manifest/alias is present in the isolated fixture (there is
     none — CLAUDE_HOME points at an isolated tmpdir with no sentinel)."""
     suffix = to[:-3] if to.endswith("-em") else to
     return "repos." + suffix.replace("-", "_")
@@ -308,7 +308,7 @@ def _run_dispatcher_in_repo(
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         [_python(), _script_path()] + args,
-        env={**os.environ, **_with_doe_root(env)},
+        env={**os.environ, **_with_content_root(env)},
         capture_output=True,
         text=True,
         input=stdin_text,
@@ -822,7 +822,7 @@ def test_compose_prints_path_default() -> None:
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
         }
-        env_with_no_editor = {**os.environ, **_with_doe_root(env)}
+        env_with_no_editor = {**os.environ, **_with_content_root(env)}
         env_with_no_editor.pop("EDITOR", None)
 
         today = datetime.date.today().isoformat()
@@ -924,8 +924,8 @@ def test_compose_open_without_editor() -> None:
         env_with_no_editor["MACHINE_LOCAL_IMPL"] = mock_impl
         env_with_no_editor["CLAUDE_HOME"] = claude_home
         env_with_no_editor["EDITOR"] = ""
-        if _DOE_ROOT_FOR_TESTS:
-            env_with_no_editor["DOE_ROOT"] = _DOE_ROOT_FOR_TESTS
+        if _CONTENT_ROOT_FOR_TESTS:
+            env_with_no_editor["CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
 
         result = subprocess.run(
             [_python(), _script_path(), "compose", topic, "--open"],

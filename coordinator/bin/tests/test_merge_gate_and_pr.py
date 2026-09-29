@@ -1,7 +1,7 @@
 """test_merge_gate_and_pr — pytest tests for merge-gate-and-pr.py.
 
 Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
-  (M3 chunk MTM-2). Source: DoE-claude
+  (M3 chunk MTM-2). Source: coordinator-content-repo
   coordinator/skills/merging-to-main/SKILL.md §§ Step 1.5, Step 1.65, Step 4.
 
 K-001 (state/kill-ledger.md): the `coverage-gate` subcommand this file used
@@ -100,15 +100,15 @@ def test_pr_body_absent_sections_render_guidance_and_drop_demo_path(monkeypatch,
 def test_pr_body_sections_match_fleet_template():
     """The composer's headings and guidance comments are constants; this pins
     them to the fleet template file they transcribe. Skips only where no
-    DoE-claude checkout resolves (the template's source repo)."""
+    coordinator-content-repo checkout resolves (the template's source repo)."""
     import pytest
 
-    from coordinator_core.testing.doe_root import doe_root_and_present
+    from coordinator_core.testing.content_root import content_root_and_present
 
-    root, present = doe_root_and_present()
+    root, present = content_root_and_present()
     template = Path(root) / "coordinator" / "templates" / "github-pull-request-template.md"
     if not present or not template.is_file():
-        pytest.skip("fleet PR template not resolvable (no DoE-claude checkout)")
+        pytest.skip("fleet PR template not resolvable (no coordinator-content-repo checkout)")
     text = template.read_text(encoding="utf-8")
     assert _h2_headings(text) == [h for h, _, _ in _mod._PR_BODY_SECTIONS]
     assert _mod._SHIP_VERDICT_PREFIX in text

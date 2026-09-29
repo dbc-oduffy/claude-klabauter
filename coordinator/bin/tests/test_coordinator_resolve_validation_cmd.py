@@ -166,8 +166,11 @@ def test_full_tier_propagates_malformed_fast_value(tmp_path, monkeypatch):
     assert result.returncode == 126
 
 
-def test_bare_python_prefers_repo_venv(tmp_path, monkeypatch, capsys):
-    # (no PATHEXT-recognized extension, no PATHEXT sibling) — the real
+def test_bare_python_ignores_repo_venv(tmp_path, monkeypatch, capsys):
+    # PM directive 2026-09-29: per-repo/shared venvs are banned fleet-wide --
+    # system interpreter only. A `.venv` present in the repo root must NOT
+    # be preferred over the ambient interpreter (supersedes the retired
+    # `test_bare_python_prefers_repo_venv`).
     if os.name == "nt":
         venv_bin = tmp_path / ".venv" / "Scripts"
         venv_bin.mkdir(parents=True)
@@ -183,11 +186,10 @@ def test_bare_python_prefers_repo_venv(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
 
     result = rvc.resolve_fast_test_cmd(str(tmp_path))
-    stderr = capsys.readouterr().err
 
     assert result.returncode == 0
-    assert result.stdout.strip() == f"{shlex.quote(str(interp))} -m pytest"
-    assert "step=interp" in stderr
+    assert result.stdout.strip() == f"{_EXP_INTERP} -m pytest"
+    assert str(interp) not in result.stdout
 
 
 def test_bare_python_falls_back_to_ambient_without_venv(tmp_path, monkeypatch):
@@ -200,8 +202,10 @@ def test_bare_python_falls_back_to_ambient_without_venv(tmp_path, monkeypatch):
     assert result.stdout.strip() == f"{_EXP_INTERP} -m pytest"
 
 
-def test_explicit_python3_is_rewritten_by_venv(tmp_path, monkeypatch):
-    # on Windows (no PATHEXT-recognized extension), so this test would pass
+def test_explicit_python3_is_not_rewritten_by_venv(tmp_path, monkeypatch):
+    # PM directive 2026-09-29: per-repo/shared venvs are banned fleet-wide --
+    # a `.venv` present must not redirect an explicit `python3` token either
+    # (supersedes the retired `test_explicit_python3_is_rewritten_by_venv`).
     if os.name == "nt":
         venv_bin = tmp_path / ".venv" / "Scripts"
         venv_bin.mkdir(parents=True)
@@ -219,7 +223,8 @@ def test_explicit_python3_is_rewritten_by_venv(tmp_path, monkeypatch):
     result = rvc.resolve_fast_test_cmd(str(tmp_path))
 
     assert result.returncode == 0
-    assert result.stdout.strip() == f"{shlex.quote(str(interp))} -m pytest"
+    assert result.stdout.strip() == f"{_EXP_INTERP} -m pytest"
+    assert str(interp) not in result.stdout
 
 
 def test_skip_with_notice(tmp_path, monkeypatch, capsys):

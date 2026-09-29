@@ -2,7 +2,7 @@
 test_coordinator_harvest_deferrals.py — selection-rule tests for
 coordinator-harvest-deferrals, covering the C5b widening (D8).
 
-Spec backlink: DoE-claude:pln-plan-line-item-resolution-mode-16787c § C5b,
+Spec backlink: coordinator-content-repo:pln-plan-line-item-resolution-mode-16787c § C5b,
 § D8 (AC18).
 
 C5b widened `coordinator-harvest-deferrals` selection from

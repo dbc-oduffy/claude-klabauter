@@ -1,16 +1,16 @@
 """Falsifying fixture for the canonical registry rung's manifest lookup in
-``coordinator_registry.py`` — the ``repos.doe_claude`` arm of the ladder.
+``coordinator_registry.py`` — the ``repos.content_root`` arm of the ladder.
 
 Sibling of ``test_coordinator_registry_flat_payload_pointer.py``, same class of
 defect one rung higher: the private tree keeps the registry manifest under
 ``coordinator/schemas/`` while the published mirror ships it flat at
 ``schemas/``. ``_mp_candidate_manifest_path()`` has always probed BOTH layouts,
 but the registry rung hardcoded the ``coordinator/`` arm, so a
-``repos.doe_claude`` naming a flat mirror — the shape a cloud container
+``repos.content_root`` naming a flat mirror — the shape a cloud container
 registers — missed the manifest that was sitting right there. The ladder then
-fell through to rungs a not-yet-written ``.doe-root`` had already starved, and
+fell through to rungs a not-yet-written ``.coordinator-content-root`` had already starved, and
 the module raised ``FileNotFoundError`` at import, which took out
-``gen-claude-doe-launcher`` and ``gen-claude-doe-shim`` and left "coordinator
+``gen-claude-author-launcher`` and ``gen-claude-author-shim`` and left "coordinator
 will NOT load in any interactive session" in the install log.
 
 Run against a git stash of the pre-fix module to confirm it fails there.
@@ -59,7 +59,7 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
         with open(
             os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w"
         ) as fh:
-            fh.write(f"schema = 1\n\"repos.doe_claude\" = '{self.flat}'\n")
+            fh.write(f"schema = 1\n\"repos.content_root\" = '{self.flat}'\n")
 
         self.home = os.path.join(self._tmp, "home")
         os.makedirs(os.path.join(self.home, ".claude"))
@@ -76,7 +76,7 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
             "import coordinator_registry as reg\n"
             "print(json.dumps({'manifest': reg._MANIFEST_PATH}))\n"
         )
-        # Scrubbed env: DOE_ROOT / REPO_DOE_CLAUDE / CLAUDE_PLUGIN_ROOT absent, so
+        # Scrubbed env: CONTENT_ROOT / REPO_CONTENT_ROOT / CLAUDE_PLUGIN_ROOT absent, so
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self.home,

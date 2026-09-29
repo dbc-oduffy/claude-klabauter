@@ -39,7 +39,7 @@ def _load_module():
     all, so an unguarded module-level `exec_module` raises at COLLECTION in
     the mirror: not one failing test but a hard collection error taking the
     whole file down, in an artifact nobody in this repo runs. Reported by
-    example-cockpit-repo-30 / doe-claude-em, 2026-09-04.
+    example-cockpit-repo-30 / coordinator-content-repo-em, 2026-09-04.
 
     Do not "simplify" this back to a bare load on the grounds that the file
     is obviously present -- it is present HERE, which is exactly the reason
@@ -138,7 +138,7 @@ def test_residual_warning_still_counts_removals_with_the_gate_open(capsys):
 
     The gate-note branch is correctly silent — the flag is no longer why a
     removal went uncarried — but the DIVERGENCE itself must still be counted
-    and named. That is the whole point of the DoE-claude memo this reporting
+    and named. That is the whole point of the coordinator-content-repo memo this reporting
     exists to answer: a round that drops changes and prints a bare PASS. With
     the gate open a dropped removal means something else (Leg A's on-disk
     skip, or one of `_filter_commit_pathspec`'s three safety filters), and an

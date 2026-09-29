@@ -13,7 +13,7 @@ Same extraction technique as
 coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py's
 ``_extract_bash_block``, applied here to all three fences instead of one.
 
-Spec backlink: DoE-claude:pln-relocate-the-install-baton-ren-05982a § C1
+Spec backlink: coordinator-content-repo:pln-relocate-the-install-baton-ren-05982a § C1
 Port backlink: docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md
 """
 
@@ -51,18 +51,18 @@ _TEMPLATE_REL = "coordinator/templates/handoffs/continue-onboarding-and-installa
 def _resolve_template_path() -> Path | None:
     """claude-klabauter does not vendor this template — it is coordinator-claude/
     DoE content (see this repo's own CLAUDE.md § What this repo is). Resolve
-    it via the DoE-claude sibling root, same as
+    it via the coordinator-content-repo sibling root, same as
     coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py; the
     bash oracle this replaces used a hardcoded relative path
     (SCRIPT_DIR/../../templates/...) that has never resolved inside this repo
     (verified: running it produces "FATAL: template not found") — that
     hardcoded assumption is not reproduced here."""
-    from coordinator_core.doe_root_pointer import read_doe_root_pointer
+    from coordinator_core.content_root_pointer import read_content_root_pointer
 
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         return None
-    candidate = Path(doe_root) / _TEMPLATE_REL
+    candidate = Path(content_root) / _TEMPLATE_REL
     return candidate if candidate.is_file() else None
 
 
@@ -85,7 +85,7 @@ def template_text():
     template_path = _resolve_template_path()
     if template_path is None:
         pytest.skip(
-            "DoE-claude root not resolvable via coordinator_core.doe_root_pointer "
+            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
             "on this machine (or the template is missing there) — this template is "
             "not vendored in claude-klabauter; not a defect in claude-klabauter."
         )

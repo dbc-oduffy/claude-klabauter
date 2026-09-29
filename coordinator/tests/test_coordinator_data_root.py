@@ -5,8 +5,8 @@ Covers all resolution rungs plus the fail-loud path:
   - co-located hit (rung 1, the dir sits beside bin/ under the same root)
   - codename-free ladder (rung 1.5, C2) — exercised for real (unstubbed) via
     env redirection, since it is the additive rung `coordinator_registry.
-    doe_root()` itself does not carry
-  - DoE-resident fallback (rung 2, delegates to coordinator_registry.doe_root())
+    content_root()` itself does not carry
+  - DoE-resident fallback (rung 2, delegates to coordinator_registry.content_root())
   - neither rung resolves -> RuntimeError naming the dir and both rungs tried
   - import-time purity: importing this module under a stripped environment
     must succeed with zero subprocess/env dependency (rung 1 only)
@@ -15,17 +15,17 @@ Rung-1 (`_colocated_root`) is exercised by monkeypatching that function
 directly on the imported module — a genuine module-level global, LOAD_GLOBAL-
 resolved at call time, so the monkeypatch is visible to `data_root()`.
 
-Rung-1.5 tests that want to isolate rung 2 (`doe_root`) neutralize
+Rung-1.5 tests that want to isolate rung 2 (`content_root`) neutralize
 `cdr._cdr_codename_free_root` directly — on this dev machine the REAL
-`.doe-root` pointer file is present and would otherwise win rung 1.5 ahead of
+`.coordinator-content-root` pointer file is present and would otherwise win rung 1.5 ahead of
 the rung-2 mock, since rung 1.5 runs first in `data_root()`.
 
-Rung-2 (`doe_root` / `_DoeUnresolvable`) is exercised by monkeypatching
+Rung-2 (`content_root` / `_DoeUnresolvable`) is exercised by monkeypatching
 `coordinator_registry` itself, NOT `cdr` — `coordinator_data_root.data_root()`
-imports `coordinator_registry.doe_root` LAZILY, inside the function body
+imports `coordinator_registry.content_root` LAZILY, inside the function body
 (see that module's "Import-time purity" negative-spec), so the names are
 resolved from the live `coordinator_registry` module at call time, not from
-`coordinator_data_root`'s own module namespace. Patching `cdr.doe_root`
+`coordinator_data_root`'s own module namespace. Patching `cdr.content_root`
 would silently no-op post-fix (AttributeError, in fact — the name no longer
 lives there at all).
 
@@ -58,7 +58,7 @@ def test_data_root_colocated_hit(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cdr, "_colocated_root", lambda: coordinator_root)
     monkeypatch.setattr(
         coordinator_registry,
-        "doe_root",
+        "content_root",
         lambda: (_ for _ in ()).throw(AssertionError("rung 2 should not run")),
     )
 
@@ -70,15 +70,15 @@ def test_data_root_colocated_hit(tmp_path, monkeypatch) -> None:
 def test_data_root_doe_resident_fallback(tmp_path, monkeypatch) -> None:
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
-    doe_root_dir = tmp_path / "DoE-claude"
-    (doe_root_dir / "coordinator" / "snippets").mkdir(parents=True)
+    content_root_dir = tmp_path / "coordinator-content-repo"
+    (content_root_dir / "coordinator" / "snippets").mkdir(parents=True)
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
-    monkeypatch.setattr(coordinator_registry, "doe_root", lambda: str(doe_root_dir))
+    monkeypatch.setattr(coordinator_registry, "content_root", lambda: str(content_root_dir))
 
     resolved = cdr.data_root("snippets")
-    assert resolved == doe_root_dir / "coordinator" / "snippets"
+    assert resolved == content_root_dir / "coordinator" / "snippets"
     assert resolved.is_dir()
 
 
@@ -90,7 +90,7 @@ def test_data_root_fail_loud_when_neither_rung_resolves(tmp_path, monkeypatch) -
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
     monkeypatch.setattr(
         coordinator_registry,
-        "doe_root",
+        "content_root",
         lambda: (_ for _ in ()).throw(_DoeUnresolvable("no registry entry")),
     )
 
@@ -106,48 +106,48 @@ def test_data_root_fail_loud_when_neither_rung_resolves(tmp_path, monkeypatch) -
 def test_data_root_fail_loud_doe_candidate_missing(tmp_path, monkeypatch) -> None:
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
-    doe_root_dir = tmp_path / "DoE-claude"
-    doe_root_dir.mkdir()
+    content_root_dir = tmp_path / "coordinator-content-repo"
+    content_root_dir.mkdir()
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
-    monkeypatch.setattr(coordinator_registry, "doe_root", lambda: str(doe_root_dir))
+    monkeypatch.setattr(coordinator_registry, "content_root", lambda: str(content_root_dir))
 
     with pytest.raises(RuntimeError) as exc_info:
         cdr.data_root("snippets")
 
     message = str(exc_info.value)
     assert "snippets" in message
-    assert str(doe_root_dir / "coordinator" / "snippets") in message
+    assert str(content_root_dir / "coordinator" / "snippets") in message
 
 
 def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypatch) -> None:
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
-    doe_root_dir = tmp_path / "flat-doe-root"
-    (doe_root_dir / "snippets").mkdir(parents=True)
+    content_root_dir = tmp_path / "flat-content-root"
+    (content_root_dir / "snippets").mkdir(parents=True)
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
-    monkeypatch.setattr(coordinator_registry, "doe_root", lambda: str(doe_root_dir))
+    monkeypatch.setattr(coordinator_registry, "content_root", lambda: str(content_root_dir))
 
     resolved = cdr.data_root("snippets")
-    assert resolved == doe_root_dir / "snippets"
+    assert resolved == content_root_dir / "snippets"
 
 
 def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypatch) -> None:
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
-    doe_root_dir = tmp_path / "both-doe-root"
-    (doe_root_dir / "coordinator" / "snippets").mkdir(parents=True)
-    (doe_root_dir / "snippets").mkdir(parents=True)
+    content_root_dir = tmp_path / "both-content-root"
+    (content_root_dir / "coordinator" / "snippets").mkdir(parents=True)
+    (content_root_dir / "snippets").mkdir(parents=True)
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
-    monkeypatch.setattr(coordinator_registry, "doe_root", lambda: str(doe_root_dir))
+    monkeypatch.setattr(coordinator_registry, "content_root", lambda: str(content_root_dir))
 
     resolved = cdr.data_root("snippets")
-    assert resolved == doe_root_dir / "coordinator" / "snippets"
+    assert resolved == content_root_dir / "coordinator" / "snippets"
 
 
 def test_f6_marketplace_cache_rung_claude_home_matches_registry_twin(tmp_path, monkeypatch) -> None:
@@ -228,7 +228,7 @@ def test_codename_free_ladder_wins_before_registry_rung_real_delegation(tmp_path
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(
         coordinator_registry,
-        "doe_root",
+        "content_root",
         lambda: (_ for _ in ()).throw(AssertionError("rung 2 should not run — rung 1.5 must win")),
     )
     monkeypatch.setenv("CLAUDE_HOME", str(empty_claude_home))
@@ -269,7 +269,7 @@ def test_c1e_plugin_root_content_root_normalized_to_repo_root(tmp_path, monkeypa
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(
         coordinator_registry,
-        "doe_root",
+        "content_root",
         lambda: (_ for _ in ()).throw(AssertionError("rung 2 should not run — rung 1.5 must win")),
     )
     monkeypatch.setenv("CLAUDE_HOME", str(empty_claude_home))

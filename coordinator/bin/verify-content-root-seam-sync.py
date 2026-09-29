@@ -1,17 +1,17 @@
-"""verify-doe-root-seam-sync.py — verify (or fix) that every cold-path `.doe-root`
+"""verify-content-root-seam-sync.py — verify (or fix) that every cold-path `.coordinator-content-root`
 literal READ in the coordinator corpus is durable-first (DR-072): it must try
 the settings-home pointer
-(`${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/machine-local/.doe-root`)
-BEFORE falling back to the legacy `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`
+(`${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/machine-local/.coordinator-content-root`)
+BEFORE falling back to the legacy `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`
 read. A site that resolves ONLY to the resettable/synced `~/.claude` tree —
 no settings-home rung at all — strands the moment C5 (untrack) lands and the
-machine gets reset, because `~/.claude/.doe-root` no longer survives reset.
+machine gets reset, because `~/.claude/.coordinator-content-root` no longer survives reset.
 
 Distinct from the sibling `verify-cc-root-source-guard-sync.py` (retired
 2026-07-23 — zero remaining resolve-sites, see docs/plans/2026-07-23-skills-
 carry-no-code-extirpation.md task M4), which verified the CLAUDE_PLUGIN_ROOT
 TRUST-GUARD (an unrelated concern — whether a resolved root is inside a
-trusted prefix) — this script verifies the `.doe-root` POINTER READ ITSELF.
+trusted prefix) — this script verifies the `.coordinator-content-root` POINTER READ ITSELF.
 Mirrors that retired script's --list/--dry-run/--fix CLI contract and
 corpus-wide grep-discovery shape (dynamic-discovery, not registry-enrolled —
 see
@@ -20,11 +20,11 @@ established rationale, which applies equally here).
 
 TWO POPULATIONS (Review: the Director of Engineering F1, docs/plans/2026-07-21-durable-coordinator-
 root-pointer.md § C3): the 198-shape sites (`CLAUDE_PLUGIN_ROOT:-` ∩
-`doe-root` on one line, e.g. `_cc_root=`) are a strict SUBSET of the
+`content-root` on one line, e.g. `_cc_root=`) are a strict SUBSET of the
 reset-critical reader population — the bare-`cat` `_cc_doe=` sibling lines
-(no `CLAUDE_PLUGIN_ROOT:-` token) and the 217-form `~/.claude/.doe-root`
+(no `CLAUDE_PLUGIN_ROOT:-` token) and the 217-form `~/.claude/.coordinator-content-root`
 PROSE occurrences must also be considered. This script's discovery regex
-(DOE_ROOT_CAT_RE below) matches on the underlying `cat "…/.doe-root"` READ
+(CONTENT_ROOT_CAT_RE below) matches on the underlying `cat "…/.coordinator-content-root"` READ
 call itself, not on `CLAUDE_PLUGIN_ROOT:-` co-occurrence — so it catches
 BOTH populations uniformly. A checker that only re-discovered the 198-shape
 would not catch a stranded bare-`cat` reader (the exact gap this script
@@ -43,17 +43,17 @@ error — not a silent "fixed" claim — if a post-fix re-scan still finds an
 unmigrated site in a file it just rewrote.
 
 Usage:
-    verify-doe-root-seam-sync.py             Verify all in-scope sites. Exit non-zero on any UNMIGRATED site.
-    verify-doe-root-seam-sync.py --list       List all in-scope consumer files (after exclusion filter).
-    verify-doe-root-seam-sync.py --dry-run    Print unified diff of the mechanical fix (alias: --diff).
-    verify-doe-root-seam-sync.py --fix        Idempotent auto-fix: rewrite unmigrated sites durable-first.
+    verify-content-root-seam-sync.py             Verify all in-scope sites. Exit non-zero on any UNMIGRATED site.
+    verify-content-root-seam-sync.py --list       List all in-scope consumer files (after exclusion filter).
+    verify-content-root-seam-sync.py --dry-run    Print unified diff of the mechanical fix (alias: --diff).
+    verify-content-root-seam-sync.py --fix        Idempotent auto-fix: rewrite unmigrated sites durable-first.
 
 Exit codes: 0 clean/fixed, 1 UNMIGRATED site(s) found (verify) or a file
 still fails re-verify after --fix, 2 usage error.
 
 Prior art (script shape mirrored): coordinator/bin/verify-cc-root-source-guard-sync.py (retired 2026-07-23)
 """
-# Spec backlink: DoE-claude:pln-durable-coordinator-root-point-37e1e6 § C3, § AC2
+# Spec backlink: coordinator-content-repo:pln-durable-coordinator-root-point-37e1e6 § C3, § AC2
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPT_DIR = SCRIPT_PATH.parent
 
-GENERATES = []  # --fix rewrites discovered `.doe-root` cat-read sites in place, but `--list` against this checkout resolves zero in-scope sites inside claude-klabauter's own tree today (all live matches are under the DoE-claude checkout) — no fixed or currently-realized claude-klabauter artifact
+GENERATES = []  # --fix rewrites discovered `.coordinator-content-root` cat-read sites in place, but `--list` against this checkout resolves zero in-scope sites inside claude-klabauter's own tree today (all live matches are under the coordinator-content-repo checkout) — no fixed or currently-realized claude-klabauter artifact
 
 # Defensive self-locate for the coordinator_registry sibling import — mirrors
 # the sys.path.insert convention every bin/ entrypoint already uses (see
@@ -76,36 +76,36 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 _HELP_TEXT = __doc__ or ""
 
 # ---------------------------------------------------------------------------
-# Exclusion list — files that legitimately keep a bare/legacy `.doe-root` cat
+# Exclusion list — files that legitimately keep a bare/legacy `.coordinator-content-root` cat
 # read and must NOT be flagged or rewritten by this script.
 # ---------------------------------------------------------------------------
 EXCLUDED_SUFFIXES = [
     # already durable-first (C1/C2) — their bare-cat line is the intentional
     # FALLBACK rung after an already-attempted settings-home read, not an
     # unmigrated site. Rewriting these would double-wrap the fallback.
-    "coordinator/lib/read-doe-root-pointer.sh",
+    "coordinator/lib/read-content-root-pointer.sh",
     "coordinator/lib/coordinator-trusted-root-guard.sh",
     "coordinator/snippets/cc-root-source-guard.md",
     # self-reference — this script's own header/body prose contains the
     # pattern as documentation, not as a live resolve-site.
-    "coordinator/bin/verify-doe-root-seam-sync.py",
-    "coordinator/bin/verify-doe-root-seam-sync.sh",
+    "coordinator/bin/verify-content-root-seam-sync.py",
+    "coordinator/bin/verify-content-root-seam-sync.sh",
     # NOTE: the sibling CLAUDE_PLUGIN_ROOT trust-guard verifier
     # (verify-cc-root-source-guard-sync.{sh,py}) used to need an entry here —
     # its INLINE_CORE_MARKERS array hardcoded the LEGACY fallback literal as
-    # fixture-DATA for an unrelated system, not a live .doe-root resolve-site.
+    # fixture-DATA for an unrelated system, not a live .coordinator-content-root resolve-site.
     # That script was retired 2026-07-23 (zero remaining resolve-sites in the
     # corpus it scanned — see docs/plans/2026-07-23-skills-carry-no-code-
     # extirpation.md task M4), so the entry is gone rather than dangling.
     # this script's OWN characterization pytest (2026-07-21 de-bash port,
     # chunk E3-a-doeroot) — the legacy-shape literals it asserts against are
     # fixture-DATA for the transform-pattern tests, not live resolve-sites.
-    "coordinator/tests/test_verify_doe_root_seam_sync.py",
+    "coordinator/tests/test_verify_content_root_seam_sync.py",
     # sibling guard's OWN test infrastructure — tests the trust-guard's
     # behavior against a synthetic/isolated pointer file; out of this
     # script's scope (a different system's test fixtures/data). Now the
     # pytest ports (2026-07-21 de-bash port, plan docs/plans/2026-07-21-
-    # bash-kill-fast-tier-pytest-port.md C1-C4) — same fixture-DATA .doe-root
+    # bash-kill-fast-tier-pytest-port.md C1-C4) — same fixture-DATA .coordinator-content-root
     # read as their bash predecessors, not a live resolve-site. __pycache__
     # compiled artifacts embed the same string constants and match the same
     # discovery grep — excluded as a whole directory so a stale/regenerated
@@ -120,25 +120,25 @@ EXCLUDED_SUFFIXES = [
     # root-pointer.md § C4) — deliberately simulates a reset (legacy pointer
     # present, settings-home absent) to prove fallback behavior; its
     # intentionally-bare legacy-only read is test setup, not a live site.
-    "coordinator/bin/tests/test-doe-root-durable-resolution.sh",
+    "coordinator/bin/tests/test-content-root-durable-resolution.sh",
 ]
 
 # ---------------------------------------------------------------------------
-# Discovery: every file containing at least one `cat "…/.doe-root"` READ.
+# Discovery: every file containing at least one `cat "…/.coordinator-content-root"` READ.
 # Matches the underlying read call, not `CLAUDE_PLUGIN_ROOT:-` co-occurrence —
 # this is what makes the discovery cover the full reset-critical population,
 # not just the 198-shape subset.
 # ---------------------------------------------------------------------------
-DOE_ROOT_CAT_RE = re.compile(r'cat "[^"]*\.doe-root"')
+CONTENT_ROOT_CAT_RE = re.compile(r'cat "[^"]*\.coordinator-content-root"')
 MARKER_RE = re.compile(r"COORDINATOR_SETTINGS_HOME")
 
-# A file's `.doe-root` cat-read LINE is UNMIGRATED iff it matches the read
+# A file's `.coordinator-content-root` cat-read LINE is UNMIGRATED iff it matches the read
 # pattern AND no settings-home durable-first marker appears on that line OR
 # within the preceding LOOKBACK_WINDOW lines of the SAME file — i.e. the read
 # resolves ONLY to the legacy `~/.claude` tree, with no settings-home rung
 # reachable ahead of it. The window (not same-line-only) is required because
 # several legitimate shapes split the durable-first read and its legacy
-# fallback across two lines (e.g. claude-doe-shim.sh.tmpl's `claude()`
+# fallback across two lines (e.g. Claude-author-shim.sh.tmpl's `claude()`
 # function body, git_hook_install.py's rung-2 loop) — a same-line-only check
 # would false-flag the second (fallback) line of an already-migrated pair.
 LOOKBACK_WINDOW = 10
@@ -171,7 +171,7 @@ def _iter_candidate_files(root: Path):
 
 
 def discover_files(roots: Path | list[Path]) -> list[str]:
-    """Discover in-scope `.doe-root` cat-read sites under one or more roots.
+    """Discover in-scope `.coordinator-content-root` cat-read sites under one or more roots.
 
     Accepts either a single Path (back-compat) or a list of Paths — the
     latter unions claude-klabauter's own coordinator/ tree with the DoE-resident
@@ -191,7 +191,7 @@ def discover_files(roots: Path | list[Path]) -> list[str]:
                 text = path.read_text(encoding="utf-8", errors="ignore")
             except (OSError, UnicodeDecodeError):
                 continue
-            if not DOE_ROOT_CAT_RE.search(text):
+            if not CONTENT_ROOT_CAT_RE.search(text):
                 continue
             fpath = str(path)
             if not is_excluded(fpath):
@@ -212,7 +212,7 @@ def file_unmigrated_lines(fpath: str) -> list[tuple[int, str]]:
 
     unmigrated = []
     for i, line in enumerate(lines):
-        if not DOE_ROOT_CAT_RE.search(line):
+        if not CONTENT_ROOT_CAT_RE.search(line):
             continue
         lineno = i + 1
         migrated = any(
@@ -226,30 +226,30 @@ def file_unmigrated_lines(fpath: str) -> list[tuple[int, str]]:
 
 # ---------------------------------------------------------------------------
 # Fix generator (verify / dryrun / fix all share this). Mirrors the
-# durable-first literal used by C1's read-doe-root-pointer.sh / C2's
+# durable-first literal used by C1's read-content-root-pointer.sh / C2's
 # cc-root-source-guard.md WARM shape, but inlines the computed default with
 # NO lib-sourcing (COLD shape — settings-home.sh:35-39 is the canonical
 # expansion cited by C3; these sites run before coordinator is on PATH and
 # cannot source a lib).
 # ---------------------------------------------------------------------------
-DURABLE = '${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/machine-local/.doe-root'
-DURABLE_HOME_ONLY = '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.doe-root'
+DURABLE = '${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/machine-local/.coordinator-content-root'
+DURABLE_HOME_ONLY = '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.coordinator-content-root'
 
-_PAT1 = re.compile(r'cat "\$\{CLAUDE_HOME:-\$\{?HOME\}?\}/\.claude/\.doe-root" 2>/dev/null')
-_PAT2 = re.compile(r'cat "\$HOME/\.claude/\.doe-root" 2>/dev/null')
-_PAT3 = re.compile(r'cat "\$HOME/\.claude/\.doe-root"\)')
+_PAT1 = re.compile(r'cat "\$\{CLAUDE_HOME:-\$\{?HOME\}?\}/\.claude/\.coordinator-content-root" 2>/dev/null')
+_PAT2 = re.compile(r'cat "\$HOME/\.claude/\.coordinator-content-root" 2>/dev/null')
+_PAT3 = re.compile(r'cat "\$HOME/\.claude/\.coordinator-content-root"\)')
 
 
 def _repl1(_m: re.Match) -> str:
-    return f'cat "{DURABLE}" 2>/dev/null || cat "${{CLAUDE_HOME:-$HOME}}/.claude/.doe-root" 2>/dev/null'
+    return f'cat "{DURABLE}" 2>/dev/null || cat "${{CLAUDE_HOME:-$HOME}}/.claude/.coordinator-content-root" 2>/dev/null'
 
 
 def _repl2(_m: re.Match) -> str:
-    return f'cat "{DURABLE_HOME_ONLY}" 2>/dev/null || cat "$HOME/.claude/.doe-root" 2>/dev/null'
+    return f'cat "{DURABLE_HOME_ONLY}" 2>/dev/null || cat "$HOME/.claude/.coordinator-content-root" 2>/dev/null'
 
 
 def _repl3(_m: re.Match) -> str:
-    return f'cat "{DURABLE_HOME_ONLY}" 2>/dev/null || cat "$HOME/.claude/.doe-root")'
+    return f'cat "{DURABLE_HOME_ONLY}" 2>/dev/null || cat "$HOME/.claude/.coordinator-content-root")'
 
 
 def transform_text(text: str) -> tuple[str, bool]:
@@ -312,22 +312,22 @@ def _resolve_scan_roots() -> list[Path]:
     DoE-resident coordinator content root (either layout — see
     coordinator_data_root.content_root_for), since
     coordinator/ content post-migration is split across both repos and a
-    `.doe-root` cat-read site can live in either half.
+    `.coordinator-content-root` cat-read site can live in either half.
 
-    If doe_root() is unresolvable (no DoE clone on this machine), the DoE
+    If content_root() is unresolvable (no DoE clone on this machine), the DoE
     half is WARN+skipped — this gate must still run standalone on a
     claude-klabauter-only checkout, not hard-fail for lacking a sibling clone.
     """
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from coordinator_data_root import content_root_for
-    from coordinator_registry import _DoeUnresolvable, doe_root
+    from coordinator_registry import _DoeUnresolvable, content_root
 
     roots = [_resolve_plugin_root()]
     try:
-        resolved = doe_root()
+        resolved = content_root()
     except _DoeUnresolvable as exc:
         print(
-            f"verify-doe-root-seam-sync.py: WARNING — coordinator doctrine repo root "
+            f"verify-content-root-seam-sync.py: WARNING — coordinator doctrine repo root "
             f"unresolvable ({exc}); skipping the DoE-resident coordinator/ "
             "tree half of the scan.",
             file=sys.stderr,
@@ -336,7 +336,7 @@ def _resolve_scan_roots() -> list[Path]:
     doe_coordinator = content_root_for(resolved)
     if doe_coordinator is None:
         print(
-            f"verify-doe-root-seam-sync.py: WARNING — no coordinator content root "
+            f"verify-content-root-seam-sync.py: WARNING — no coordinator content root "
             f"under the resolved doctrine repo root ({resolved}); skipping the "
             "DoE-resident coordinator/ tree half of the scan.",
             file=sys.stderr,
@@ -378,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_help()
             return 0
         else:
-            print(f"verify-doe-root-seam-sync.py: unknown argument '{arg}'", file=sys.stderr)
+            print(f"verify-content-root-seam-sync.py: unknown argument '{arg}'", file=sys.stderr)
             return 2
     if dry_run:
         mode = "dryrun"
@@ -435,19 +435,19 @@ def main(argv: list[str] | None = None) -> int:
         if found:
             print("", file=sys.stderr)
             print(
-                "verify-doe-root-seam-sync: FAIL — one or more .doe-root reads "
+                "verify-content-root-seam-sync: FAIL — one or more .coordinator-content-root reads "
                 "resolve ONLY to the legacy ~/.claude tree (no settings-home "
                 "durable-first rung). Run with --fix to rewrite them durable-first, "
                 "or --dry-run to preview.",
                 file=sys.stderr,
             )
             return 1
-        print("verify-doe-root-seam-sync: all in-scope .doe-root reads are durable-first. OK")
+        print("verify-content-root-seam-sync: all in-scope .coordinator-content-root reads are durable-first. OK")
         return 0
 
     if mode == "dryrun" and not found:
         print(
-            "verify-doe-root-seam-sync: nothing to fix — all in-scope .doe-root "
+            "verify-content-root-seam-sync: nothing to fix — all in-scope .coordinator-content-root "
             "reads are already durable-first."
         )
 

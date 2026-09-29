@@ -32,10 +32,10 @@ import pytest
 
 _THIS_DIR = Path(__file__).resolve().parent
 _EMITTER = _THIS_DIR / "emit-lesson-summaries.py"
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
+from coordinator_registry import _DoeUnresolvable, content_root  # noqa: E402
 
 try:
-    _SCHEMA_PATH = Path(doe_root()) / "coordinator" / "cockpit-contract" / "schema" / "lesson-summary.schema.json"
+    _SCHEMA_PATH = Path(content_root()) / "coordinator" / "cockpit-contract" / "schema" / "lesson-summary.schema.json"
 except _DoeUnresolvable:
     _SCHEMA_PATH = None
 
@@ -335,7 +335,7 @@ def test_lesson_key_regex(base_fixture):
 def test_schema_validation(base_fixture):
     titles, records, by_key = base_fixture
     if _SCHEMA_PATH is None:
-        pytest.skip("DoE-claude repo root unresolvable, skipping schema validation")
+        pytest.skip("coordinator-content-repo repo root unresolvable, skipping schema validation")
     assert _SCHEMA_PATH.is_file(), f"SCHEMA: contract schema not found at {_SCHEMA_PATH}"
     with open(_SCHEMA_PATH, encoding="utf-8") as f:
         _schema = json.load(f)

@@ -13,16 +13,16 @@ exit code changed.
 Full failing-entrypoint capture: state/audits/2026-08-14-klabauter-publish-
 round-final4.txt (grep `(rc=`).
 
-`claude-doe` is covered separately below (`TestClaudeDoeHelp`), not via the
+`claude-author` is covered separately below (`TestClaudeDoeHelp`), not via the
 `_SWEPT_HELP_ENTRYPOINTS` sweep -- its 2026-08-14 gate failure was a
 publish-mirror registry-resolution failure (`repos.example_doctrine_repo`
 unset in that sandbox, resolving to nothing), not an unrecognized-`--help`
 failure: it never got a chance to answer `--help` before DoE-clone
 resolution ran unconditionally first and failed. Fixed by answering
 `--help`/`-h` directly, ahead of any clone/registry resolution -- see
-`claude-doe.py`'s `_USAGE` and the module header. The dedicated test class
-below exercises the registry-absent condition explicitly (`REPO_DOE_CLAUDE`
-unset, `CLAUDE_DOE_MACHINE_LOCAL_BIN` pointed at a nonexistent path), since
+`claude-author.py`'s `_USAGE` and the module header. The dedicated test class
+below exercises the registry-absent condition explicitly (`REPO_CONTENT_ROOT`
+unset, `CLAUDE_AUTHOR_MACHINE_LOCAL_BIN` pointed at a nonexistent path), since
 that is the exact publish-sandbox shape the gate failure reproduced.
 
 `coordinator-safe-commit` is exercised through its exported `main`/`usage`
@@ -108,7 +108,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
 # caught by `test_candidate_population_has_no_untracked_entrypoints` below,
 # forcing an explicit disposition instead of silent non-coverage.
 _SEPARATELY_TESTED_ENTRYPOINTS = frozenset({
-    "claude-doe.py",  # TestClaudeDoeHelp, whole-argv scan, its own env staging
+    "claude-author.py",  # TestClaudeDoeHelp, whole-argv scan, its own env staging
     "coordinator-safe-commit.py",  # exercised via exported main/usage, not a bare subprocess spawn
 })
 
@@ -228,9 +228,9 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "fan-out-integrator.py",
     "find-polluter.py",
     "fix-concrete-path-citations.py",
-    "gen-claude-doe-launcher.py",
-    "gen-claude-doe-shim.py",
-    "gen-doe-root-pointer.py",
+    "gen-claude-author-launcher.py",
+    "gen-claude-author-shim.py",
+    "gen-content-root-pointer.py",
     "gen-settings-hooks.py",
     "generate-exec-summary.py",
     "generate-repomap.py",
@@ -238,8 +238,8 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "handoff-loe-summary.py",
     "harvest-exit-interviews.py",
     "identity-cli.py",
-    "install-claude-doe-wrapper.py",
-    "install-doe-claude-precommit-hook.py",
+    "install-claude-author-wrapper.py",
+    "install-coordinator-content-repo-precommit-hook.py",
     "install-health-run.py",
     "install-meta-repo-precommit-hook.py",
     "install-publish-repo-precommit-hook.py",
@@ -320,7 +320,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "verify-arch-audit-atlas-refresh.py",
     "verify-coverage.py",
     "verify-dist-publish-repo-sync.py",
-    "verify-doe-root-seam-sync.py",
+    "verify-content-root-seam-sync.py",
     "verify-no-console-flash.py",
     "verify-no-powershell-flash.py",
     "verify-orientation-cache-sync.py",
@@ -487,13 +487,13 @@ class TestHandRolledCliHelpSweep(unittest.TestCase):
 
 
 class TestClaudeDoeHelp(unittest.TestCase):
-    """`claude-doe --help`/`-h` must exit 0 WITHOUT touching DoE-clone
-    registry resolution -- see claude-doe.py's `_USAGE` / module header.
+    """`claude-author --help`/`-h` must exit 0 WITHOUT touching DoE-clone
+    registry resolution -- see claude-author.py's `_USAGE` / module header.
     """
 
     def _run(self, args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(_BIN_DIR / "claude-doe.py"), *args],
+            [sys.executable, str(_BIN_DIR / "claude-author.py"), *args],
             capture_output=True,
             text=True,
             timeout=30,
@@ -505,11 +505,11 @@ class TestClaudeDoeHelp(unittest.TestCase):
         import os
 
         env = dict(os.environ)
-        env.pop("REPO_DOE_CLAUDE", None)
+        env.pop("REPO_CONTENT_ROOT", None)
         # Simulate the publish sandbox: machine-local unresolvable, so any
         # rung that actually reaches the registry would fail loud rather
         # than silently succeeding via a real local registry on this box.
-        env["CLAUDE_DOE_MACHINE_LOCAL_BIN"] = str(
+        env["CLAUDE_AUTHOR_MACHINE_LOCAL_BIN"] = str(
             _BIN_DIR / "tests" / "__nonexistent_machine_local_for_help_test__"
         )
         return env
@@ -517,12 +517,12 @@ class TestClaudeDoeHelp(unittest.TestCase):
     def test_help_exits_zero_with_registry_absent(self):
         result = self._run(["--help"], self._registry_absent_env())
         self.assertEqual(result.returncode, 0, result.stderr[-500:])
-        self.assertIn("claude-doe", result.stdout)
+        self.assertIn("claude-author", result.stdout)
 
     def test_short_help_exits_zero_with_registry_absent(self):
         result = self._run(["-h"], self._registry_absent_env())
         self.assertEqual(result.returncode, 0, result.stderr[-500:])
-        self.assertIn("claude-doe", result.stdout)
+        self.assertIn("claude-author", result.stdout)
 
     def test_help_does_not_invoke_machine_local(self):
         env = self._registry_absent_env()

@@ -3,7 +3,7 @@
 predecessor:none-by-design lineage edge schema rule A3a-3 forces on every
 spinoff kind.
 
-Purpose: state/cross-repo/inbox/2026-09-25-doe-claude-em-doe-issues-92-95-
+Purpose: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-doe-issues-92-95-
 engine-asks.md ask 1 -- an ordered spinoff chain (architecture-audit Step 4)
 previously carried its order only in prose, because `--predecessor` is
 refused for --type spinoff (A3a-3) and --gated-open was handoff-scoped only.

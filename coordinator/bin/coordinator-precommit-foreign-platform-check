@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator-precommit-foreign-platform-check — pre-commit gate for the
 ~/.claude meta-repo: refuse a commit whose STAGED `settings.json` carries a
@@ -10,7 +11,7 @@ is the MACHINE-EXECUTABLE surface (a foreign path there silently kills every
 hook); `CLAUDE.md`/`CLAUDE.local.md` is the AGENT-READABLE surface loaded
 into every session (a foreign path there is read and trusted by an agent,
 which then reports a checked-out repo as unreachable — the 2026-07-30
-incident this leg closes: a sibling-repo map asserted `X:\\claude-unreal-
+incident this leg closes: a sibling-repo map asserted `C:\\claude-unreal-
 Example-game-repo` on a macOS machine, and an agent believed it). The prose leg uses a
 narrower, path-ASSERTION-shaped detector (`detect_foreign_platform_paths_in_
 prose`, in the engine module below) rather than the JSON-tree scan's bare
@@ -59,7 +60,7 @@ Exit contract:
       it is a single detect-only gate, not two independently-overridable
       ones.
 
-Spec backlink: docs/plans (DoE-claude) state/subagent-share/
+Spec backlink: docs/plans (coordinator-content-repo) state/subagent-share/
   32637f2b-204d-4937-89a7-c3518928e38d/coordinatorexecutor-7bb4cb37.md
   and 230990b7-b7f4-4dfd-a864-4347b81d3f9e/coordinatorexecutor-87eba508.md
   (CLAUDE.md/CLAUDE.local.md prose leg, 2026-07-30)
@@ -211,11 +212,11 @@ def main() -> int:
                 engine_ok = False
 
             if engine_ok:
-                doe_root_file = os.path.join(meta_repo, ".doe-root")
+                content_root_file = os.path.join(meta_repo, ".coordinator-content-root")
                 local_root = None
-                if os.path.isfile(doe_root_file):
+                if os.path.isfile(content_root_file):
                     try:
-                        with open(doe_root_file, "r", encoding="utf-8", newline="") as fh:
+                        with open(content_root_file, "r", encoding="utf-8", newline="") as fh:
                             local_root = fh.readline().rstrip("\r\n") or None
                     except OSError:
                         local_root = None

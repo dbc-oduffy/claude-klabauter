@@ -66,27 +66,27 @@ def _announce(monkeypatch, capsys, cli_root, dispatch_root):
 
 class TestItSpeaksOnlyWhenTheTreesDisagree:
     def test_a_split_names_both_roots_on_one_line(self, monkeypatch, capsys):
-        err = _announce(monkeypatch, capsys, r"X:\a-working-tree", r"X:\a-mirror")
+        err = _announce(monkeypatch, capsys, r"C:\a-working-tree", r"C:\a-mirror")
 
         assert err.count("\n") == 1, f"exactly one line, got: {err!r}"
-        assert r"X:\a-working-tree" in err, "the CLI root must be named"
-        assert r"X:\a-mirror" in err, "the engine root must be named"
+        assert r"C:\a-working-tree" in err, "the CLI root must be named"
+        assert r"C:\a-mirror" in err, "the engine root must be named"
 
     def test_agreement_is_silent(self, monkeypatch, capsys):
-        assert _announce(monkeypatch, capsys, r"X:\same", r"X:\same") == ""
+        assert _announce(monkeypatch, capsys, r"C:\same", r"C:\same") == ""
 
     def test_agreement_is_silent_across_separator_and_case_spelling(
         self, monkeypatch, capsys
     ):
-        assert _announce(monkeypatch, capsys, "X:/Same/Tree", r"X:\same\tree") == ""
+        assert _announce(monkeypatch, capsys, "C:/Same/Tree", r"C:\same\tree") == ""
 
     def test_realpath_class_spellings_resolve_to_the_same_tree(
         self, monkeypatch, capsys
     ):
-        canonical = r"X:\canonical-tree"
+        canonical = r"C:\canonical-tree"
         fake_names = {
-            r"X:\PROGRA~1\short-name-tree": canonical,
-            r"X:\junction-to-tree": canonical,
+            r"C:\PROGRA~1\short-name-tree": canonical,
+            r"C:\junction-to-tree": canonical,
         }
         monkeypatch.setattr(
             _mod.os.path, "realpath", lambda p: fake_names.get(p, p)
@@ -94,16 +94,16 @@ class TestItSpeaksOnlyWhenTheTreesDisagree:
         err = _announce(
             monkeypatch,
             capsys,
-            r"X:\PROGRA~1\short-name-tree",
-            r"X:\junction-to-tree",
+            r"C:\PROGRA~1\short-name-tree",
+            r"C:\junction-to-tree",
         )
         assert err == "", f"realpath-equivalent trees must not announce a split, got: {err!r}"
 
     def test_it_speaks_once_per_process(self, monkeypatch, capsys):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\cli")
-        _mod._announce_engine_cli_split(r"X:\engine")
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"C:\cli")
+        _mod._announce_engine_cli_split(r"C:\engine")
         first = capsys.readouterr().err
-        _mod._announce_engine_cli_split(r"X:\engine")
+        _mod._announce_engine_cli_split(r"C:\engine")
         second = capsys.readouterr().err
 
         assert first.strip(), "the first call must speak"
@@ -117,11 +117,11 @@ class TestItNeverTakesADispatchDown:
             raise RuntimeError("no checkout found")
 
         monkeypatch.setattr(_mod, "resolve_engine_root", _boom)
-        _mod._announce_engine_cli_split(r"X:\engine")
+        _mod._announce_engine_cli_split(r"C:\engine")
 
         assert capsys.readouterr().err == ""
 
-    @pytest.mark.parametrize("cli_root, dispatch_root", [(None, r"X:\e"), (r"X:\c", "")])
+    @pytest.mark.parametrize("cli_root, dispatch_root", [(None, r"C:\e"), (r"C:\c", "")])
     def test_an_unresolvable_root_says_nothing_rather_than_guessing(
         self, monkeypatch, capsys, cli_root, dispatch_root
     ):

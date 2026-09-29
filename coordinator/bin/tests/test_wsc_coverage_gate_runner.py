@@ -1,7 +1,7 @@
 """test_wsc_coverage_gate_runner — pytest tests for wsc-coverage-gate-runner.py.
 
 Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
-  (M3 chunk WSC-2). Source: DoE-claude
+  (M3 chunk WSC-2). Source: coordinator-content-repo
   coordinator/skills/workstream-complete/SKILL.md §§ Step 2.4 "Plan-claim
   guard", Step 2.9 "Coverage gate (chain-end path)" + "Marker write".
 

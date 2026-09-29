@@ -13,9 +13,9 @@ engine, the registry, and every coordinator surface are broken, since that is
 the box that needs it; never import `coordinator_core` here.
 
 Negative-spec: touches only the two shim files and text between the generator's
-own sentinel lines (`coordinator_core.ops.gen_claude_doe_shim.SENTINEL_BEGIN` /
+own sentinel lines (`coordinator_core.ops.gen_claude_author_shim.SENTINEL_BEGIN` /
 `SENTINEL_END`, copied below because this file cannot import them). Never edits
-an operator's own rc lines, the `.doe-root` pointer, the registry, or the plugin.
+an operator's own rc lines, the `.coordinator-content-root` pointer, the registry, or the plugin.
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ import os
 import sys
 from pathlib import Path
 
-SENTINEL_BEGIN = "# --- coordinator claude-doe shim [generated] ---"
-SENTINEL_END = "# --- end coordinator claude-doe shim ---"
-SHIM_NAMES = ("claude-doe-shim.sh", "claude-doe-shim.ps1")
+SENTINEL_BEGIN = "# --- coordinator claude-author shim [generated] ---"
+SENTINEL_END = "# --- end coordinator claude-author shim ---"
+SHIM_NAMES = ("claude-author-shim.sh", "claude-author-shim.ps1")
 
 
 def _homes() -> list[Path]:

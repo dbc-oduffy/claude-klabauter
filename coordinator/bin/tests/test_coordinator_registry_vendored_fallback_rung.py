@@ -1,7 +1,7 @@
 """Standalone-install regression: the OSS-published klabauter mirror carries
-no DoE-claude checkout at all (PM ruling — klabauter must run standalone), so
+no coordinator-content-repo checkout at all (PM ruling — klabauter must run standalone), so
 every live resolution rung in ``coordinator_registry.py`` (registry key,
-``.doe-root`` pointer, marketplace cache, flat layout, ``CLAUDE_PLUGIN_ROOT``,
+``.coordinator-content-root`` pointer, marketplace cache, flat layout, ``CLAUDE_PLUGIN_ROOT``,
 ``plugin.mirrors...live_path``) is structurally dead there. Prior to the
 vendored fallback rung this raised ``FileNotFoundError`` at import time,
 which took out every caller of ``coordinator-doc-new`` (all *_assemble

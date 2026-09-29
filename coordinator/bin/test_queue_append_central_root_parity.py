@@ -2,7 +2,7 @@
 test_queue_append_central_root_parity.py — behavioral-parity CHARACTERIZATION test.
 
 Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-queue-append-central-scope-routes-to-claude-klabauter-not-doe.md
-(sibling-filed memo that surfaced the legacy CLI's stale doe_root() routing;
+(sibling-filed memo that surfaced the legacy CLI's stale content_root() routing;
 this test lands the claude-klabauter-side correction and the regression guard against
 future re-divergence).
 
@@ -14,8 +14,8 @@ entries land, and they must agree:
      unconditionally.
   2. coordinator/bin/coordinator-queue-append `_output_path` (legacy/strangled
      CLI, State-1 fallback per DR-210) — previously routed the same decision to
-     the DoE repo via a `doe_root()` call citing a never-ratified plan
-     ([DoE-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
+     the DoE repo via a `content_root()` call citing a never-ratified plan
+     ([coordinator-content-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
      `status: draft`, AC1/AC2 `pending`, its own C3 HELD). Fixed to route to
      claude-klabauter, matching (1).
 

@@ -65,7 +65,7 @@ def probe_env(tmp_path, monkeypatch):
     doe = tmp_path / "doe"
     (doe / "coordinator").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(doe))
     _pin_locality(monkeypatch, "attended")
     return shell_dir
 
@@ -79,16 +79,16 @@ def _pin_locality(monkeypatch, call: str) -> None:
 def _shim_path(mod, shell_dir: Path) -> Path:
     import os
 
-    return shell_dir / ("claude-doe-shim.ps1" if os.name == "nt" else "claude-doe-shim.sh")
+    return shell_dir / ("claude-author-shim.ps1" if os.name == "nt" else "claude-author-shim.sh")
 
 
 def _healthy_body() -> str:
     import os
 
     return (
-        "function claude {\n  & claude-doe\n}\n"
+        "function claude {\n  & claude-author\n}\n"
         if os.name == "nt"
-        else "claude() {\n  claude-doe \"$@\"\n}\n"
+        else "claude() {\n  claude-author \"$@\"\n}\n"
     )
 
 
@@ -132,9 +132,9 @@ def test_healthy_shim_passes(probe_env):
 
 def test_no_doe_clone_skips_without_degrading(probe_env, monkeypatch):
     mod = _require_module()
-    import coordinator_core.ops.coordinator_doe_root as cdr
+    import coordinator_core.ops.coordinator_content_root as cdr
 
-    monkeypatch.setattr(cdr, "coordinator_doe_root", lambda *a, **k: None)
+    monkeypatch.setattr(cdr, "coordinator_content_root", lambda *a, **k: None)
 
     r = mod._run_probe_launch_chain()
 

@@ -43,14 +43,14 @@ Usage:
 Writes `<trail-dir>/fire-<waveIndex>-<n>.mjs` per fire and prints, for each, the exact
 `Workflow` invocation to make. Exit 0 on emit, 2 on a refusal that names its reason.
 
-Arrived from DoE-claude coordinator/skills/plan-blitz/emit-wave-fire.py
+Arrived from coordinator-content-repo coordinator/skills/plan-blitz/emit-wave-fire.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C7). Path resolution: the
 `recycle-check.py` sibling load (`_slot_order_fn`) is "engine" class (§ Path resolution) and
 needed no change — that module lands beside this one in this same chunk, so
 `Path(__file__).resolve().parent / "recycle-check.py"` still names it correctly. The
 `--plugin-root` fallback IS "doctrine asset" class and did need one: DoE's default read
 `Path(__file__).resolve().parents[2]` on the premise that this file's own tree is two levels
-under the plugin root (`skills/plan-blitz/<file>`) — exactly the DoE-claude@b644d5a9 lesson, since
+under the plugin root (`skills/plan-blitz/<file>`) — exactly the coordinator-content-repo@b644d5a9 lesson, since
 this file's tree is now `coordinator/bin/<file>` inside the ENGINE, and that same arithmetic would
 resolve to the engine checkout, not DoE's doctrine tree. `_resolve_plugin_root()` below replaces
 it, resolving through `coordinator_core.warm.caller_context :: resolve_caller_context` (the same
@@ -677,7 +677,7 @@ def _bind(
     Delegated, never reimplemented: the binding rule (where the literal goes, which
     sources are refused) is engine-owned, and a second composer here is how the two
     drift. Through 2026-09-18 the engine was reached through its own `coordinator-invoke`
-    subprocess, because this CLI lived in DoE-claude and could not import the engine
+    subprocess, because this CLI lived in coordinator-content-repo and could not import the engine
     directly. It now lives inside the engine repo itself
     (`docs/plans/2026-09-18-doe-holds-no-scripts.md`) and is served by the warm door, so
     that boundary is gone: `coordinator_core` is importable off this same tree
@@ -754,7 +754,7 @@ def _engine_env_prefix(engine_root: Path) -> str:
     sidecars, no verified `findings_ledger` stamp on any of them.
 
     The dispatching side already resolved an engine root to bind the fire with; the agent
-    running the CLI cannot. Same rung-3 reasoning as the interpreter and DOE_ROOT.
+    running the CLI cannot. Same rung-3 reasoning as the interpreter and CONTENT_ROOT.
     """
     if os.environ.get("COORDINATOR_ENGINE_ROOT"):
         return ""
@@ -774,11 +774,11 @@ _MANIFEST_RELPATHS = (
 
 
 def _registry_manifest_prefix(engine_root: Path, plugin_root: Path) -> str:
-    """`DOE_ROOT=<a root the manifest actually resolves under> `, or empty.
+    """`CONTENT_ROOT=<a root the manifest actually resolves under> `, or empty.
 
     Both CLIs load the registry manifest, and an install-less box does not have it in the
     engine tree — the schemas ship with the DOCTRINE repo, not the engine mirror. The
-    CLI's own diagnostic names `DOE_ROOT` as the remedy, but it is a remedy nobody reads:
+    CLI's own diagnostic names `CONTENT_ROOT` as the remedy, but it is a remedy nobody reads:
     the failure happens inside a dispatched reviewer, where its stderr becomes "the
     sidecar step did not work".
 
@@ -786,7 +786,7 @@ def _registry_manifest_prefix(engine_root: Path, plugin_root: Path) -> str:
     `<plugin_root>/schemas/` and then exported `plugin_root.parent`, which agree only when
     the plugin root's basename is literally `coordinator` — the private layout. Under the
     published layout, where the manifest sits flat at plugin root, that exported a root
-    the consumer cannot resolve from, AND `DOE_ROOT` is taken as-is ahead of every other
+    the consumer cannot resolve from, AND `CONTENT_ROOT` is taken as-is ahead of every other
     rung and is the state-write root. A wrong value there is worse than none: it is the
     plausible-but-wrong invocation this module exists to stop emitting.
 
@@ -800,7 +800,7 @@ def _registry_manifest_prefix(engine_root: Path, plugin_root: Path) -> str:
         return ""
     for candidate in (plugin_root.parent, plugin_root):
         if any((candidate / rel).is_file() for rel in _MANIFEST_RELPATHS):
-            return f"DOE_ROOT={shlex.quote(str(candidate))} "
+            return f"CONTENT_ROOT={shlex.quote(str(candidate))} "
     return ""
 
 
@@ -1230,7 +1230,7 @@ def main(argv=None) -> int:
         "--spine-check-cli",
         help="absolute plan-spine-check invocation (default: derived from --plugin-root). "
         "Plugin-owned tooling, so it is resolved against the PLUGIN root and never the repo "
-        "being planned — the two coincide only on DoE-claude.",
+        "being planned — the two coincide only on coordinator-content-repo.",
     )
     ap.add_argument(
         "--live-engine-tree",

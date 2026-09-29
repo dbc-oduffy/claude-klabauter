@@ -1,6 +1,6 @@
 # .percolate-ignore — bin/ contributing source root for the claude-klabauter
 # OSS mirror (row 4, `claude-klabauter-bin`, authored sibling-side in
-# DoE-claude:setup/publish-targets.portable).
+# coordinator-content-repo:setup/publish-targets.portable).
 #
 # SOURCE_DIR for this file is `claude-klabauter/bin/` itself. Patterns are
 # SOURCE_DIR-RELATIVE — they carry NO `bin/` prefix, or they double-prefix to

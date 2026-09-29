@@ -27,7 +27,7 @@ to be configured for the append-goal-event.py leg — the engine root IS require
 read-frontmatter-field's in-process import (emit-goal-from-artifact.py's own frontmatter
 reads), which every assertion below implicitly exercises.
 
-Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C7
+Spec backlink: coordinator-content-repo:pln-per-repo-okr-goal-setting-syst-80bced § C7
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Plan C, Wave E3-d)
 """
 from __future__ import annotations

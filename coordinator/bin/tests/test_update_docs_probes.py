@@ -1,6 +1,6 @@
 """test_update_docs_probes — pytest coverage for update-docs-probes.py's 4 subcommands.
 
-Spec backlink: coordinator/commands/update-docs.md (DoE-claude) — Pre-flight probe,
+Spec backlink: coordinator/commands/update-docs.md (coordinator-content-repo) — Pre-flight probe,
   Phase 9b, Phase 11i, Phase 13 steps 1-2.
 
 Coverage:
@@ -397,7 +397,7 @@ def test_retired_snippet_sync_sweep_verb_is_still_accepted(tmp_path):
     """The retired verb must keep exiting 0, not argparse's exit-2 "invalid
     choice".
 
-    The caller lives in another repo (DoE-claude `coordinator/commands/
+    The caller lives in another repo (coordinator-content-repo `coordinator/commands/
     update-docs.md` Phase 11b), so dropping the verb outright would break
     `/update-docs` for every user until DoE lands a matching edit. This test
     is the contract that keeps the two repos independently deployable while

@@ -1,7 +1,7 @@
 """test_refresh_plugin_live_install_git_leg_worktree_root_guard — pytest coverage
 for the git-managed leg's work-tree-root refusal in refresh-plugin-live-install.py.
 
-Spec backlink: cross-repo/archive/2026-08-18-doe-claude-em-refresh-git-leg-can-
+Spec backlink: cross-repo/archive/2026-08-18-coordinator-content-repo-em-refresh-git-leg-can-
 detach-an-unrelated-repo.md. The git-managed leg (`_handle_default`) trusted a
 registry-supplied `live_path` without verifying it is the ROOT of its own
 work-tree. A stale registry row pointing `live_path` at a directory nested

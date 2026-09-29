@@ -4,7 +4,7 @@ test_plan_tasks_spine_and_harvest.py — coordinator-side proving tests for the
 machine-parseable ## Tasks task-spine contract (C1) and the PM-gated deferral
 harvest (C4a/C4b/C6).
 
-Spec backlink: DoE-claude:pln-full-coverage-planning-posture-bca96f § C7
+Spec backlink: coordinator-content-repo:pln-full-coverage-planning-posture-bca96f § C7
 
 This suite is coordinator-side only (no claude-klabauter-side test — M1 is a
 collaborative consultation memo, not an engine commission per the plan's
@@ -53,13 +53,13 @@ is now closed: _candidate_search_dirs() checks each write seam's env override
 first, matching coordinator-queue-append/_output_path() and
 coordinator-lesson-promote's _outbox_root(). A follow-up review (2026-07-09,
 slice2 Finding 1) further found the fix's central/lessons legs mirrored only
-the DOE_ROOT-env leg of coordinator_registry.doe_root()'s three-step
+the CONTENT_ROOT-env leg of coordinator_registry.content_root()'s three-step
 resolution chain, missing the machine-local-registry leg — that gap is also
-now closed by calling doe_root() directly rather than re-deriving it; see
-test_harvest_doe_root_machine_local_leg.py for that regression's own test.)
+now closed by calling content_root() directly rather than re-deriving it; see
+test_harvest_content_root_machine_local_leg.py for that regression's own test.)
 This suite's own harvest invocations still cwd into a `git init`-ed fixture
 dir per test (harmless with the fix in place — it exercises the git-root
-fallback leg used only when neither an env override nor doe_root() resolve).
+fallback leg used only when neither an env override nor content_root() resolve).
 
 Run with: python3 -m pytest test_plan_tasks_spine_and_harvest.py
 """
@@ -142,7 +142,7 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     real corpus. Measured 2026-09-05: fixture-derived rows
     (`retro-migrate-old-widgets`, `central-scope-deferred-doctrine-note`,
     traceable by their `from_repo: harvest-*-test-*-em`) sitting in
-    claude-klabauter's own `state/improvement-queue/` and in DoE-claude's
+    claude-klabauter's own `state/improvement-queue/` and in coordinator-content-repo's
     `state/lessons-outbox/`, dated 09-02, 09-04 and 09-05, seven of them
     already staged in DoE's index. `COORDINATOR_WARM=0` forces the cold route,
     which is what makes the isolation these tests promise actually hold.
@@ -160,11 +160,11 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     os.makedirs(outbox_dir, exist_ok=True)
     env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
     env["COORDINATOR_WARM"] = "0"
-    # Avoid any ambient DOE_ROOT/REPO_DOE_CLAUDE/CLAUDE_KLABAUTER_ROOT bleeding writes
-    # out of the isolated tmpdir. REPO_DOE_CLAUDE is doe_root()'s rung-1b
-    # stripping only DOE_ROOT leaves the sibling repo one rung away.
-    env.pop("DOE_ROOT", None)
-    env.pop("REPO_DOE_CLAUDE", None)
+    # Avoid any ambient CONTENT_ROOT/REPO_CONTENT_ROOT/CLAUDE_KLABAUTER_ROOT bleeding writes
+    # out of the isolated tmpdir. REPO_CONTENT_ROOT is content_root()'s rung-1b
+    # stripping only CONTENT_ROOT leaves the sibling repo one rung away.
+    env.pop("CONTENT_ROOT", None)
+    env.pop("REPO_CONTENT_ROOT", None)
     env.pop("CLAUDE_KLABAUTER_ROOT", None)
     return env
 

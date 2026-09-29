@@ -9,7 +9,7 @@ def _default_template_path(shell_family: str = "bash") -> str:
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from coordinator_data_root import data_file
 
-    stem = "claude-doe-shim.ps1.tmpl" if shell_family == "powershell" else "claude-doe-shim.sh.tmpl"
+    stem = "claude-author-shim.ps1.tmpl" if shell_family == "powershell" else "claude-author-shim.sh.tmpl"
     return str(data_file("templates", "shell", stem))
 
 
@@ -17,7 +17,7 @@ def _shell_family_from_argv(argv: list[str]) -> str:
     for i, arg in enumerate(argv):
         if arg == "--shell" and i + 1 < len(argv):
             return argv[i + 1]
-    from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+    from coordinator_core.ops.gen_claude_author_shim import _default_shell_family
 
     return _default_shell_family()
 
@@ -37,13 +37,13 @@ def main(argv: "list[str] | None" = None) -> int:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(
-            f"gen-claude-doe-shim.py: engine-root resolution failed: {exc}",
+            f"gen-claude-author-shim.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         return 2
     except ImportError as exc:
         print(
-            "gen-claude-doe-shim.py: "
+            "gen-claude-author-shim.py: "
             f"coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
@@ -55,18 +55,18 @@ def main(argv: "list[str] | None" = None) -> int:
             argv = argv + ["--template", _default_template_path(_shell_family_from_argv(argv))]
         except RuntimeError as exc:
             print(
-                f"gen-claude-doe-shim.py: could not resolve a default "
+                f"gen-claude-author-shim.py: could not resolve a default "
                 f"--template: {exc}",
                 file=sys.stderr,
             )
             return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.gen_claude_doe_shim", argv)
+        code = run_op_main("coordinator_core.ops.gen_claude_author_shim", argv)
     except ImportError as exc:
         print(
-            "gen-claude-doe-shim.py: "
-            f"coordinator_core.ops.gen_claude_doe_shim not importable: {exc}",
+            "gen-claude-author-shim.py: "
+            f"coordinator_core.ops.gen_claude_author_shim not importable: {exc}",
             file=sys.stderr,
         )
         return 2

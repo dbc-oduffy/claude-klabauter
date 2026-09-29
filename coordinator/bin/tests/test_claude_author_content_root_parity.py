@@ -1,13 +1,13 @@
-"""Parity pin: `claude-doe.py`'s inline plugin-root probe must agree with its
+"""Parity pin: `claude-author.py`'s inline plugin-root probe must agree with its
 engine-side twin on every layout.
 
-Purpose: `claude-doe.py` carries a STANDALONE inline mirror of
+Purpose: `claude-author.py` carries a STANDALONE inline mirror of
 `coordinator_core.coordinator_root._resolve_plugin_root_for_machine_local`
 (`_resolve_plugin_root`) because the launcher is installed by byte copy to
-`<settings-home>/bin/claude-doe`, with no `lib/` sibling and no
+`<settings-home>/bin/claude-author`, with no `lib/` sibling and no
 `coordinator_core` on `sys.path` -- an import there would make the launcher
 unlaunchable at exactly the install shape it exists to serve. Unlike the
-interpreter ladder pinned by `test_claude_doe_inline_interp_parity.py` this is
+interpreter ladder pinned by `test_claude_author_inline_interp_parity.py` this is
 not a byte-for-byte copy: the launcher works in `str` and the engine twin
 works in `Path`, so a structural `ast` comparison cannot be the pin. This
 asserts the property that actually matters instead -- that both resolve the
@@ -17,7 +17,7 @@ Pinned against `_resolve_plugin_root_for_machine_local` specifically, NOT
 `coordinator_core.data_root.content_root_for` (claude-klabauter#6 conflict
 resolution, 2026-09-18): `content_root_for` accepts a nested `<root>/coordinator`
 candidate by `isdir` alone, with no plugin-marker probe, which is looser than
-what a machine-local/plugin-dir resolution needs -- `gen_doe_root_pointer.py`
+what a machine-local/plugin-dir resolution needs -- `gen_content_root_pointer.py`
 already fails CLOSED on a markerless nested `coordinator/` dir via this same
 engine twin, and the launcher holds to that same, stricter bar.
 
@@ -35,7 +35,7 @@ Negative spec:
     - Does NOT compare source text or AST. The two spellings differ by
       design; only the resolved answer is contractual.
     - Does NOT assert the launcher's error message, remediation wording, or
-      exit code -- `claude-doe`'s own tests own those.
+      exit code -- `claude-author`'s own tests own those.
     - Does NOT touch a real DoE root, the registry, or `$HOME`. Every layout is
       a `tmp_path` fixture.
 """
@@ -60,9 +60,9 @@ from coordinator_core.data_root import FLAT_CONTENT_ROOT_MARKER as _engine_marke
 from coordinator_data_root import FLAT_CONTENT_ROOT_MARKER as _bin_marker  # noqa: E402
 
 
-def _load_claude_doe():
-    path = _BIN_DIR / "claude-doe.py"
-    spec = importlib.util.spec_from_file_location("_claude_doe_under_test", path)
+def _load_claude_author():
+    path = _BIN_DIR / "claude-author.py"
+    spec = importlib.util.spec_from_file_location("_claude_author_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -71,8 +71,8 @@ def _load_claude_doe():
 
 
 @pytest.fixture(scope="module")
-def claude_doe():
-    return _load_claude_doe()
+def claude_author():
+    return _load_claude_author()
 
 
 def _nested_marker(tmp_path: Path) -> Path:
@@ -143,10 +143,10 @@ def _as_str(value) -> str | None:
         "unmarked-nested-coordinator-dir",
     ],
 )
-def test_launcher_and_engine_twin_agree(claude_doe, tmp_path, layout, expected_suffix) -> None:
+def test_launcher_and_engine_twin_agree(claude_author, tmp_path, layout, expected_suffix) -> None:
     root = layout(tmp_path)
 
-    launcher = claude_doe._resolve_plugin_root(str(root))
+    launcher = claude_author._resolve_plugin_root(str(root))
     engine = _as_str(engine_resolve_plugin_root(root))
 
     assert launcher == engine, {
@@ -159,8 +159,8 @@ def test_launcher_and_engine_twin_agree(claude_doe, tmp_path, layout, expected_s
         assert launcher == str(root / expected_suffix) if expected_suffix else launcher == str(root)
 
 
-def test_the_empty_root_is_not_a_plugin_root_in_either_spelling(claude_doe) -> None:
-    assert claude_doe._resolve_plugin_root("") is None
+def test_the_empty_root_is_not_a_plugin_root_in_either_spelling(claude_author) -> None:
+    assert claude_author._resolve_plugin_root("") is None
     assert engine_resolve_plugin_root(Path("")) is None
 
 
@@ -168,9 +168,9 @@ def test_both_twins_declare_the_same_marker_tuple() -> None:
     assert _engine_marker == _bin_marker == (".claude-plugin", "plugin.json")
 
 
-def test_the_flat_arm_is_gated_on_the_same_marker_in_both(claude_doe, tmp_path) -> None:
+def test_the_flat_arm_is_gated_on_the_same_marker_in_both(claude_author, tmp_path) -> None:
     root = tmp_path / "manifest-missing"
     (root / ".claude-plugin").mkdir(parents=True)
 
-    assert claude_doe._resolve_plugin_root(str(root)) is None
+    assert claude_author._resolve_plugin_root(str(root)) is None
     assert engine_resolve_plugin_root(root) is None

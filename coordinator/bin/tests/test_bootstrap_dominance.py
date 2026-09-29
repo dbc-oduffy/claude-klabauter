@@ -596,11 +596,11 @@ def test_fails_closed_on_known_bad_fixtures():
     shape2_source = (
         "def _bootstrap_engine():\n"
         "    import lib\n"
-        "    from coordinator_registry import doe_root\n"
+        "    from coordinator_registry import content_root\n"
         "\n\n"
         "def _risky_helper(x):\n"
-        "    from coordinator_registry import doe_root\n"
-        "    return doe_root()\n"
+        "    from coordinator_registry import content_root\n"
+        "    return content_root()\n"
         "\n\n"
         "def main(argv):\n"
         "    return _risky_helper(argv)\n"
@@ -614,8 +614,8 @@ def test_fails_closed_on_known_bad_fixtures():
     # flag every function that ever imports an engine module, only the ones
     # with no bootstrap call reachable on any path into them.
     shape2_fixed_source = shape2_source.replace(
-        "def _risky_helper(x):\n    from coordinator_registry import doe_root\n    return doe_root()\n",
-        "def _risky_helper(x):\n    _bootstrap_engine()\n    from coordinator_registry import doe_root\n    return doe_root()\n",
+        "def _risky_helper(x):\n    from coordinator_registry import content_root\n    return content_root()\n",
+        "def _risky_helper(x):\n    _bootstrap_engine()\n    from coordinator_registry import content_root\n    return content_root()\n",
     )
     shape2_fixed_violations = _analyze_module("shape2-fixture.py", shape2_fixed_source)
     assert shape2_fixed_violations == [], (

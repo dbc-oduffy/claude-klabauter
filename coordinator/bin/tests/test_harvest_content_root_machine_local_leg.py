@@ -1,16 +1,16 @@
 from __future__ import annotations
 """
-test_harvest_doe_root_machine_local_leg.py — regression test for the
+test_harvest_content_root_machine_local_leg.py — regression test for the
 machine-local-registry leg of coordinator-harvest-deferrals' idempotency
 dedup-scan root resolution.
 
-Spec backlink: DoE-claude:pln-full-coverage-planning-posture-bca96f § C7
+Spec backlink: coordinator-content-repo:pln-full-coverage-planning-posture-bca96f § C7
 (Review: code-reviewer slice2 Finding 1 — the harvest tool's own docstring
 claimed its dedup-scan mirrored coordinator-queue-append's/coordinator-
 lesson-promote's write-root resolution, but `_candidate_search_dirs()` only
-reproduced the DOE_ROOT-ENV leg of `coordinator_registry.doe_root()`'s
-three-step chain (DOE_ROOT env -> machine-local `repos.doe_claude` -> raise
-_DoeUnresolvable). On a machine with DOE_ROOT unset but `repos.doe_claude`
+reproduced the CONTENT_ROOT-ENV leg of `coordinator_registry.content_root()`'s
+three-step chain (CONTENT_ROOT env -> machine-local `repos.content_root` -> raise
+_DoeUnresolvable). On a machine with CONTENT_ROOT unset but `repos.content_root`
 registered in the machine-local registry — the expected steady state on any
 fully-installed machine, not an edge case — the write seams resolve their
 output root via the machine-local leg while the dedup scan looked in the
@@ -20,7 +20,7 @@ a duplicate lesson-outbox/central-queue entry.
 2026-07-25 revision (this dispatch) — TWO independent findings folded in:
 
 1. `_candidate_search_dirs()`'s central-scope improvement-queue leg was
-   scanning `coordinator_registry.doe_root()` (repos.doe_claude), but commit
+   scanning `coordinator_registry.content_root()` (repos.content_root), but commit
    5b908173 ("central scope routes to claude-klabauter, not DoE — reconcile the two
    implementations", 2026-07-23) repointed coordinator-queue-append's actual
    central-scope write (both its legacy `_output_path()` branch and the
@@ -44,15 +44,15 @@ a duplicate lesson-outbox/central-queue entry.
    checkout instead (satisfying schema.validate) forces the native seam
    present for the mutation ops too; coordinator-lesson-promote's native
    `queue.promote` op does NOT honour `LESSON_PROMOTE_OUTBOX_ROOT` (it
-   resolves `repos.doe_claude` independently, on the invoking machine's REAL
+   resolves `repos.content_root` independently, on the invoking machine's REAL
    machine-local registry, not via the `MACHINE_LOCAL_IMPL` test-isolation
    stub) — diagnosing this by hand leaked one real file into the live
-   `DoE-claude` sibling repo's `state/lessons-outbox/` before it was caught
+   `coordinator-content-repo` sibling repo's `state/lessons-outbox/` before it was caught
    and deleted. coordinator-lesson-promote now carries a
    `LESSON_PROMOTE_OUTBOX_ROOT`-forces-legacy gate mirroring
    coordinator-queue-append's pre-existing `QUEUE_APPEND_OUTPUT_ROOT` one, so
    the override is honoured regardless of native-seam state — closing that
-   escape hatch. `REPO_DOE_CLAUDE` (the ambient ammo behind `doe_root()`'s
+   escape hatch. `REPO_CONTENT_ROOT` (the ambient ammo behind `content_root()`'s
    rung 1b) is also typically exported in a login shell on a provisioned
    machine and must be stripped for real machine-local-rung isolation; the
    original test never stripped it.
@@ -63,7 +63,7 @@ guarantees rather than one test trying to prove everything at once:
   - test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes:
     an in-process, no-subprocess check that directly calls
     `_candidate_search_dirs()` (imported from the harvest CLI module) with
-    DOE_ROOT/REPO_DOE_CLAUDE/CLAUDE_KLABAUTER_ROOT unset and a fake `_machine_local.py`
+    CONTENT_ROOT/REPO_CONTENT_ROOT/CLAUDE_KLABAUTER_ROOT unset and a fake `_machine_local.py`
     stub active — this is the actual regression net for finding (1) above,
     and it is safe by construction (never spawns coordinator-queue-append or
     coordinator-lesson-promote, so it can never reach a real sibling repo).
@@ -78,7 +78,7 @@ guarantees rather than one test trying to prove everything at once:
     Proves the harvest tool's own idempotency end-to-end without depending
     on, or risking, any real machine-local registry entry.
 
-Run with: python3 -m pytest test_harvest_doe_root_machine_local_leg.py
+Run with: python3 -m pytest test_harvest_content_root_machine_local_leg.py
 """
 
 import importlib.util
@@ -105,10 +105,10 @@ _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
 
-# baseline. See module docstring finding (2) re: REPO_DOE_CLAUDE.
+# baseline. See module docstring finding (2) re: REPO_CONTENT_ROOT.
 _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION = (
-    "DOE_ROOT",
-    "REPO_DOE_CLAUDE",
+    "CONTENT_ROOT",
+    "REPO_CONTENT_ROOT",
     "CLAUDE_KLABAUTER_ROOT",
     _ENGINE_ROOT_VAR,
 )
@@ -121,9 +121,9 @@ def _yaml_files_in(directory: str) -> list[str]:
 
 
 _FAKE_MACHINE_LOCAL_TEMPLATE = """#!/usr/bin/env python3
-# Fake _machine_local.py stub for test isolation — responds to `get repos.doe_claude`
+# Fake _machine_local.py stub for test isolation — responds to `get repos.content_root`
 # and `get repos.claude_klabauter` with fixed fixture paths, exercising
-# coordinator_registry.doe_root()'s and cli_shared.claude_klabauter_root()'s real
+# coordinator_registry.content_root()'s and cli_shared.claude_klabauter_root()'s real
 # machine-local-registry rungs without touching the real registry.local.toml.
 #
 # Two call shapes are exercised against this same file: coordinator_registry's
@@ -134,14 +134,14 @@ _FAKE_MACHINE_LOCAL_TEMPLATE = """#!/usr/bin/env python3
 # same two keys for both legs to see the fixture roots.
 import sys
 
-FAKE_DOE_ROOT = {fake_doe_root!r}
+FAKE_CONTENT_ROOT = {fake_content_root!r}
 FAKE_CLAUDE_KLABAUTER_ROOT = {fake_claude_klabauter_root!r}
 
 EXIT_OK = 0
 EXIT_NOT_FOUND = 1
 
 _REGISTRY = {{
-    "repos.doe_claude": FAKE_DOE_ROOT,
+    "repos.content_root": FAKE_CONTENT_ROOT,
     "repos.claude_klabauter": FAKE_CLAUDE_KLABAUTER_ROOT,
 }}
 
@@ -164,12 +164,12 @@ if __name__ == "__main__":
 """
 
 
-def _write_stub(stub_dir: str, fake_doe_root: str, fake_claude_klabauter_root: str) -> str:
+def _write_stub(stub_dir: str, fake_content_root: str, fake_claude_klabauter_root: str) -> str:
     stub_path = os.path.join(stub_dir, "_machine_local.py")
     with open(stub_path, "w", encoding="utf-8") as fh:
         fh.write(
             _FAKE_MACHINE_LOCAL_TEMPLATE.format(
-                fake_doe_root=fake_doe_root, fake_claude_klabauter_root=fake_claude_klabauter_root
+                fake_content_root=fake_content_root, fake_claude_klabauter_root=fake_claude_klabauter_root
             )
         )
     return stub_path
@@ -191,7 +191,7 @@ def _load_harvest_module():
 def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> None:
     name = "test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes"
 
-    fake_doe_root = tempfile.mkdtemp(prefix="harvest-fake-doe-root-")
+    fake_content_root = tempfile.mkdtemp(prefix="harvest-fake-content-root-")
     fake_claude_klabauter_root = tempfile.mkdtemp(prefix="harvest-fake-claude-klabauter-live-root-")
     stub_dir = tempfile.mkdtemp(prefix="harvest-fake-machine-local-impl-")
     saved_env = {k: os.environ.get(k) for k in _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION}
@@ -199,7 +199,7 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
     saved_env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.environ.get("LESSON_PROMOTE_OUTBOX_ROOT")
     saved_env["MACHINE_LOCAL_IMPL"] = os.environ.get("MACHINE_LOCAL_IMPL")
     try:
-        stub_path = _write_stub(stub_dir, fake_doe_root, fake_claude_klabauter_root)
+        stub_path = _write_stub(stub_dir, fake_content_root, fake_claude_klabauter_root)
 
         for var in _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION:
             os.environ.pop(var, None)
@@ -211,7 +211,7 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
         dirs = module._candidate_search_dirs({})
 
         expected_queue_dir = os.path.join(fake_claude_klabauter_root, "state", "improvement-queue")
-        expected_lessons_dir = os.path.join(fake_doe_root, "state", "lessons-outbox")
+        expected_lessons_dir = os.path.join(fake_content_root, "state", "lessons-outbox")
         if expected_queue_dir not in dirs:
             raise AssertionError(
                 f"{name}: expected central-scope improvement-queue candidate "
@@ -222,9 +222,9 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
         if expected_lessons_dir not in dirs:
             raise AssertionError(
                 f"{name}: expected lessons-outbox candidate {expected_lessons_dir!r} "
-                f"(resolved via the machine-local repos.doe_claude rung) in "
+                f"(resolved via the machine-local repos.content_root rung) in "
                 f"{dirs!r} — the lessons-outbox leg is not following "
-                f"coordinator_registry.doe_root()"
+                f"coordinator_registry.content_root()"
             )
     finally:
         for var, val in saved_env.items():
@@ -232,23 +232,23 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
                 os.environ.pop(var, None)
             else:
                 os.environ[var] = val
-        shutil.rmtree(fake_doe_root, ignore_errors=True)
+        shutil.rmtree(fake_content_root, ignore_errors=True)
         shutil.rmtree(fake_claude_klabauter_root, ignore_errors=True)
         shutil.rmtree(stub_dir, ignore_errors=True)
 
 
 def _write_plan_with_central_and_doctrine_rows(plan_path: str) -> None:
     content = """---
-plan_id: "pln-doe-root-machine-local-leg-test"
+plan_id: "pln-content-root-machine-local-leg-test"
 ---
 
-# Test plan — doe_root() machine-local leg
+# Test plan — content_root() machine-local leg
 
 ## Tasks
 
 ```yaml plan-tasks
 - id: "D1"
-  title: "Central-scope deferred item (machine-local doe_root leg)"
+  title: "Central-scope deferred item (machine-local content_root leg)"
   body: "Exercises the central-scope improvement-queue write seam."
   change_kind: "doc-edit"
   surface: "docs/wiki/some-central-doc.md"
@@ -284,7 +284,7 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
     """
     name = "test_second_run_idempotent_end_to_end"
 
-    fake_doe_root = tempfile.mkdtemp(prefix="harvest-fake-doe-root-")
+    fake_content_root = tempfile.mkdtemp(prefix="harvest-fake-content-root-")
     plan_dir = tempfile.mkdtemp(prefix="harvest-machine-local-plandir-")
     try:
         plan_path = os.path.join(plan_dir, "plan.md")
@@ -294,8 +294,8 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
         for var in _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION:
             env.pop(var, None)
         env.pop("MACHINE_LOCAL_IMPL", None)
-        env["QUEUE_APPEND_OUTPUT_ROOT"] = fake_doe_root
-        outbox_dir = os.path.join(fake_doe_root, "state", "lessons-outbox")
+        env["QUEUE_APPEND_OUTPUT_ROOT"] = fake_content_root
+        outbox_dir = os.path.join(fake_content_root, "state", "lessons-outbox")
         # LESSON_PROMOTE_OUTBOX_ROOT that resolves under the system temp dir and
         os.makedirs(outbox_dir, exist_ok=True)
         env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
@@ -328,8 +328,8 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
         if "already-harvested" not in r2.stdout:
             raise AssertionError(f"{name}: second run: expected an 'already-harvested' dedup note, got: {r2.stdout!r}")
 
-        qdir = os.path.join(fake_doe_root, "state", "improvement-queue")
-        ldir = os.path.join(fake_doe_root, "state", "lessons-outbox")
+        qdir = os.path.join(fake_content_root, "state", "improvement-queue")
+        ldir = os.path.join(fake_content_root, "state", "lessons-outbox")
         q_files = _yaml_files_in(qdir)
         l_files = _yaml_files_in(ldir)
         if len(q_files) != 1:
@@ -343,7 +343,7 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
                 f"({ldir}) after two runs (idempotent), found {l_files}"
             )
     finally:
-        shutil.rmtree(fake_doe_root, ignore_errors=True)
+        shutil.rmtree(fake_content_root, ignore_errors=True)
         shutil.rmtree(plan_dir, ignore_errors=True)
 
 
@@ -400,7 +400,7 @@ def test_real_state_dir_guard_fires_under_pytest() -> None:
 
 
 def main() -> int:
-    print("test_harvest_doe_root_machine_local_leg.py")
+    print("test_harvest_content_root_machine_local_leg.py")
     print("=" * 50)
 
     if not os.path.isfile(_HARVEST_CLI):
@@ -412,14 +412,14 @@ def main() -> int:
     before_q = set(os.listdir(real_queue_dir)) if os.path.isdir(real_queue_dir) else set()
     before_l = set(os.listdir(real_lessons_dir)) if os.path.isdir(real_lessons_dir) else set()
 
-    real_doe_claude_lessons_dir = os.environ.get("REPO_DOE_CLAUDE") or os.environ.get("DOE_ROOT")
+    real_content_root_lessons_dir = os.environ.get("REPO_CONTENT_ROOT") or os.environ.get("CONTENT_ROOT")
     before_doe_l: set[str] = set()
-    if real_doe_claude_lessons_dir:
-        real_doe_claude_lessons_dir = os.path.normpath(
-            os.path.join(real_doe_claude_lessons_dir, "state", "lessons-outbox")
+    if real_content_root_lessons_dir:
+        real_content_root_lessons_dir = os.path.normpath(
+            os.path.join(real_content_root_lessons_dir, "state", "lessons-outbox")
         )
-        if os.path.isdir(real_doe_claude_lessons_dir):
-            before_doe_l = set(os.listdir(real_doe_claude_lessons_dir))
+        if os.path.isdir(real_content_root_lessons_dir):
+            before_doe_l = set(os.listdir(real_content_root_lessons_dir))
 
     print("\n-- harvest dedup-scan/write-seam root parity + end-to-end idempotency --")
     failures: list[str] = []
@@ -452,12 +452,12 @@ def main() -> int:
         )
         print(f"  FAIL: {msg}")
         failures.append(msg)
-    if real_doe_claude_lessons_dir and os.path.isdir(real_doe_claude_lessons_dir):
-        after_doe_l = set(os.listdir(real_doe_claude_lessons_dir))
+    if real_content_root_lessons_dir and os.path.isdir(real_content_root_lessons_dir):
+        after_doe_l = set(os.listdir(real_content_root_lessons_dir))
         if after_doe_l - before_doe_l:
             msg = (
-                f"real_doe_claude_lessons_dir_untouched_guard: the REAL repos.doe_claude "
-                f"sibling repo's state/lessons-outbox/ ({real_doe_claude_lessons_dir}) gained "
+                f"real_content_root_lessons_dir_untouched_guard: the REAL repos.content_root "
+                f"sibling repo's state/lessons-outbox/ ({real_content_root_lessons_dir}) gained "
                 f"unexpected file(s): {after_doe_l - before_doe_l} — this suite leaked into a "
                 f"live sibling repo"
             )

@@ -2,7 +2,7 @@
 
 Purpose: Unit tests for parallel-review-orthogonality-guard.py, the fail-fast
 lens-orthogonality guard + weekly-slice diff-freeze CLI ported from the bash
-fences in coordinator/skills/parallel-code-review/SKILL.md (DoE-claude) §
+fences in coordinator/skills/parallel-code-review/SKILL.md (coordinator-content-repo) §
 Pre-Flight Orthogonality Assertion and § Snapshot.
 
 Test coverage:
@@ -70,12 +70,12 @@ def _init_repo_with_commit(path: str) -> None:
 
 
 def _run_cli(
-    args: list[str], cwd: str | None = None, doe_root: str | None = None
+    args: list[str], cwd: str | None = None, content_root: str | None = None
 ) -> subprocess.CompletedProcess:
     env = None
-    if doe_root is not None:
+    if content_root is not None:
         env = dict(os.environ)
-        env["REPO_DOE_CLAUDE"] = doe_root
+        env["REPO_CONTENT_ROOT"] = content_root
     return subprocess.run(
         [sys.executable, _CLI, *args],
         cwd=cwd,
@@ -105,12 +105,12 @@ _GOOD_SKILL_MD = """\
 
 
 def _make_doe_fixture(tmp: str) -> str:
-    """Build a minimal DoE-claude-shaped tree and return it as a REPO_DOE_CLAUDE root.
+    """Build a minimal coordinator-content-repo-shaped tree and return it as a REPO_CONTENT_ROOT root.
 
     Same fixture shape as the op's own characterization suite
     (`coordinator_core/ops/test_verify_parallel_review_lens_orthogonality.py ::
-    _make_repo`), reached here through rung 1 of `coordinator_doe_root()` — the
-    operator override — because the guard CLI exposes no `--doe-root` argv.
+    _make_repo`), reached here through rung 1 of `coordinator_content_root()` — the
+    operator override — because the guard CLI exposes no `--content-root` argv.
 
     Only the CHUNK-mode cases use it. The static check runs FIRST and
     short-circuits, so a chunk case pointed at the live sibling repo is not
@@ -199,7 +199,7 @@ class TestGuardChunkManifest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             doe = _make_doe_fixture(tmp)
             proc = _run_cli(
-                ["guard", "--chunk-manifest", "/nonexistent-manifest.tsv"], doe_root=doe
+                ["guard", "--chunk-manifest", "/nonexistent-manifest.tsv"], content_root=doe
             )
             self.assertEqual(proc.returncode, 1)
             self.assertIn(
@@ -220,7 +220,7 @@ class TestGuardChunkManifest(unittest.TestCase):
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/b.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], doe_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
             self.assertEqual(proc.returncode, 1)
             self.assertIn("Lens-orthogonality assertion failed", proc.stderr)
             self.assertNotIn("Chunk partitions are not disjoint", proc.stderr)
@@ -232,7 +232,7 @@ class TestGuardChunkManifest(unittest.TestCase):
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/b.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], doe_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
     def test_overlapping_manifest_fails(self):
@@ -242,7 +242,7 @@ class TestGuardChunkManifest(unittest.TestCase):
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/a.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], doe_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
             self.assertEqual(proc.returncode, 1)
             self.assertIn(
                 "Chunk partitions are not disjoint by file-scope; refusing to dispatch.",

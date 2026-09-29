@@ -15,7 +15,7 @@ refusing any unregistered dest (a docs mirror, a toplevel flat mirror, a
 plain test fixture) and any virgin dest whose own row-write is what would
 populate `coordinator_core/` for the first time.
 
-SECOND narrowing (cross-repo memo 2026-08-16-doe-claude-em-engine-guards-
+SECOND narrowing (cross-repo memo 2026-08-16-coordinator-content-repo-em-engine-guards-
 block-coordinator-claude-publish.md): registration alone was still too wide
 — a REGISTERED mirror that is deliberately engine-free by design (the
 `coordinator_claude` shape: doctrine-only OSS mirror, never carries

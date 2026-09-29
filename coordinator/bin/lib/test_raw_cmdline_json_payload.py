@@ -6,7 +6,7 @@ launcher's `%*`, so `--decisions '<json>'` reaches the CLI as
 was well-formed when sent. Shape W (the `.cmd` sibling) is the rung
 `resolve-coordinator-bin.md` mandates on Windows, so the documented
 invocation shape and the JSON-argument surface were mutually exclusive there
-(cross-repo/inbox/2026-08-20-doe-claude-em-cmd-forwarder-eats-json-and-two-
+(cross-repo/inbox/2026-08-20-coordinator-content-repo-em-cmd-forwarder-eats-json-and-two-
 smaller-seams.md, item 1).
 
 `recover_windows_argv` cannot fix this: it re-tokenizes the raw tail with

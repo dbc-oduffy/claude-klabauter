@@ -1,15 +1,15 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
-install-claude-doe-wrapper.py — CLI trampoline over claude-klabauter
-coordinator_core.ops.install_claude_doe_wrapper.
+install-claude-author-wrapper.py — CLI trampoline over claude-klabauter
+coordinator_core.ops.install_claude_author_wrapper.
 
-Installs the co-located `coordinator/bin/claude-doe.py` wrapper onto
-`${CLAUDE_HOME:-$HOME}/.local/bin/claude-doe`. Collapses the bash fence at
-coordinator/commands/install.md line 892 (DoE-claude repo) into one call —
-see coordinator_core.ops.install_claude_doe_wrapper's own docstring for the
+Installs the co-located `coordinator/bin/claude-author.py` wrapper onto
+`${CLAUDE_HOME:-$HOME}/.local/bin/claude-author`. Collapses the bash fence at
+coordinator/commands/install.md line 892 (coordinator-content-repo repo) into one call —
+see coordinator_core.ops.install_claude_author_wrapper's own docstring for the
 full design rationale and negative-spec.
 
-`--wrapper-src` defaults to this trampoline's own sibling `claude-doe.py` file
+`--wrapper-src` defaults to this trampoline's own sibling `claude-author.py` file
 (this script and the wrapper it installs both live under
 `<engine_root>/coordinator/bin/`) — no engine-root resolution is needed for
 that default, since it is always co-located.
@@ -25,7 +25,7 @@ import os
 import sys
 
 def _default_wrapper_src() -> str:
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-doe.py")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-author.py")
 
 
 def _resolve_run_op_main():
@@ -41,11 +41,11 @@ def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
-        print(f"install-claude-doe-wrapper.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"install-claude-author-wrapper.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return 1
     except ImportError as exc:
         print(
-            f"install-claude-doe-wrapper.py: coordinator_core.cli_entry not importable: {exc}",
+            f"install-claude-author-wrapper.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
         return 1
@@ -55,10 +55,10 @@ def main(argv: "list[str] | None" = None) -> int:
         argv = argv + ["--wrapper-src", _default_wrapper_src()]
 
     try:
-        code = run_op_main("coordinator_core.ops.install_claude_doe_wrapper", argv)
+        code = run_op_main("coordinator_core.ops.install_claude_author_wrapper", argv)
     except ImportError as exc:
         print(
-            f"install-claude-doe-wrapper.py: coordinator_core.ops.install_claude_doe_wrapper "
+            f"install-claude-author-wrapper.py: coordinator_core.ops.install_claude_author_wrapper "
             f"not importable: {exc}",
             file=sys.stderr,
         )

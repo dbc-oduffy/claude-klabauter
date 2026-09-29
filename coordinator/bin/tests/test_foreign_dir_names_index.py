@@ -3,7 +3,7 @@ index (`foreign_dir_names_for_row`) and its version-skew probe
 (`_module_accepts_foreign_dir_names`) — chunk C2, docs/plans/2026-09-06-the-
 orphan-sweep-learns-what-a-sibling-r.md.
 
-Why the INDEX, not the sync engine (doe-claude-dc's standing caveat, carried
+Why the INDEX, not the sync engine (coordinator-content-repo-dc's standing caveat, carried
 over verbatim from this plan's Problem statement): a wrong `foreign_dir_names`
 entry is SILENT. No row sweeps that subdirectory and no row refreshes it, so a
 regression here would not surface as a loud test failure downstream in

@@ -210,8 +210,8 @@ class TestGeneratorStalenessProbe:
         _patch_compute(
             monkeypatch,
             {
-                "DoE-claude:coordinator/hooks/hooks.json": _entry(
-                    "DoE-claude:coordinator/hooks/hooks.json",
+                "coordinator-content-repo:coordinator/hooks/hooks.json": _entry(
+                    "coordinator-content-repo:coordinator/hooks/hooks.json",
                     "INDETERMINATE",
                     "generated_from_dirty_tree=true",
                 )

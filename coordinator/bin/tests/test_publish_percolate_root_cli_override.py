@@ -1,13 +1,13 @@
 """test_publish_percolate_root_cli_override.py -- BV-20260927-05 fix 3.
 
 `publish.py` used to resolve PERCOLATE_ROOT exclusively via
-`coordinator_percolate_runtime_root()` (keyed off `~/.claude/.doe-root`),
+`coordinator_percolate_runtime_root()` (keyed off `~/.claude/.coordinator-content-root`),
 ignoring a caller's own already-resolved root. `percolate-mirror.py` never
 forwarded its own `--percolate-root` to the child `publish.py` subprocess,
 so the child silently re-resolved a DIFFERENT root on a box whose
-`.doe-root` pointer names a different tree (the live defect: a cloud
+`.coordinator-content-root` pointer names a different tree (the live defect: a cloud
 PERCOLATE_ROOT override never reached `publish.py`, which loaded
-DoE-claude's `publish-targets.portable` instead of the caller's).
+Coordinator-content-repo's `publish-targets.portable` instead of the caller's).
 
 This covers, in-process, no subprocess spawn:
   1. `build_arg_parser()` accepts `--percolate-root`.

@@ -9,8 +9,8 @@ expiry -- "claude-klabauter has no `setup/` directory of its own BEFORE THIS PLA
 LANDS ONE".
 
 WHY THIS GUARD EXISTS, measured on the sibling repo 2026-08-26 rather than
-imagined here. DoE-claude DOES have a `setup/publish_sync.py`, and it won that
-seam for every DoE-rooted run while having silently forked from the engine: it
+imagined here. Coordinator-content-repo DOES have a `setup/publish_sync.py`, and it won that
+seam for every ContentRooted run while having silently forked from the engine: it
 still parsed `COORDINATOR_OVERRIDE_ORPHAN_SWEEP` as `os.environ.get(...) ==
 "1"` long after the engine grew the scoped `=<name>[,<name>...]` form, with no
 `_orphan_sweep_override` and no `exempt`/`at_risk` split. The operator-facing
@@ -33,7 +33,7 @@ that does not exist cannot fork. The moment one lands, this fails and names the
 pin that must land with it -- so whoever lands that C1 meets the obligation from
 the suite rather than from having read a brief or a cross-session exchange.
 Cross-repo tripwire, same finding, carrying the pin shape and the mutation
-check: DoE-claude
+check: coordinator-content-repo
 `coordinator/docs/wiki/coordinator-tripwires/a-per-root-override-forks-behaviourally-under-green-signature-parity.md`.
 
 NEGATIVE SPEC for the pin this test demands, inherited from the sibling's own
@@ -53,7 +53,7 @@ hard-won version -- a pin written without these is a pin that passes vacuously:
     pass.
 
 THE GENERAL RULE THIS IS AN INSTANCE OF, and the right page to read before
-writing any guard: DoE-claude
+writing any guard: coordinator-content-repo
 `coordinator/docs/wiki/coordinator-tripwires/a-green-that-never-touched-its-subject.md`
 -- "a check that cannot fail is not a check; it emits a green nothing
 produced." Its anatomy list gained the DERIVED-LOCATOR clause on 2026-08-26
@@ -114,7 +114,7 @@ def test_a_claude_klabauter_side_publish_sync_fork_arrives_with_a_behavioural_pi
         f"{_PIN_MARKER!r}, and read this module's docstring first: it carries the negative "
         "spec (compare meanings across every arm, canonicalise the container, and "
         "mutation-check the pin against the pre-fix `== \"1\"` form -- a pin that stays "
-        "green against that form is pinning nothing). Measured precedent: DoE-claude's "
+        "green against that form is pinning nothing). Measured precedent: coordinator-content-repo's "
         "copy forked exactly this way under a green signature-parity suite, and its "
         "operator-facing diagnostic then advertised a blanket sweep disarm as the remedy."
     )

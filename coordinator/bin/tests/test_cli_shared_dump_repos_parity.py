@@ -19,7 +19,7 @@ Both functions' calls into the fake kernel are checked against the SAME
 fixture registry (`_FIXTURE_REGISTRY`) so the two code paths are proven
 equivalent for:
   - present keys (ordinary case)
-  - an ABSENT key that is NOT `repos.doe_claude` (the one key with an
+  - an ABSENT key that is NOT `repos.content_root` (the one key with an
     explicit `setdefault(...)` backstop in `resolve_from_repo` --
     precisely because the authors worried about a default-on-absent gap
     for it specifically; every other `repos.*` key has no such backstop,
@@ -59,7 +59,7 @@ import cli_shared  # noqa: E402
 
 _FIXTURE_REGISTRY = {
     "repos.claude_klabauter": "/machine/claude-klabauter",
-    "repos.doe_claude": "/machine/doe-claude",
+    "repos.content_root": "/machine/coordinator-content-repo",
     "repos.some_other_repo": "/machine/some-other-repo",
 }
 
@@ -119,7 +119,7 @@ def test_cli_shared_dump_matches_per_key_get_for_present_keys(monkeypatch):
     assert dumped == per_key == _FIXTURE_REGISTRY
 
 
-def test_cli_shared_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
+def test_cli_shared_dump_and_get_agree_on_absent_non_content_root_key(monkeypatch):
     monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = cli_shared.machine_local_dump_repos()
@@ -169,7 +169,7 @@ def test_doc_new_dump_matches_per_key_get_for_present_keys(monkeypatch):
     assert dumped == per_key == _FIXTURE_REGISTRY
 
 
-def test_doc_new_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
+def test_doc_new_dump_and_get_agree_on_absent_non_content_root_key(monkeypatch):
     monkeypatch.setattr(_doc_new, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = _doc_new._machine_local_dump_repos()

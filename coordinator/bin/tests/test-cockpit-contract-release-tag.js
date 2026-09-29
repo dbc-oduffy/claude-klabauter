@@ -50,7 +50,7 @@ describe('cockpit-contract-release tag-advance seam (AC8 anti-drift guard)', () 
       `${REGEN_SCRIPT} contains a \`["git", "push", ...]\` invocation — the tag-advance seam ` +
       'must be LOCAL-ONLY. Pushing the release ref to origin is not this script\'s surface and ' +
       'must never be added here. The publishing mechanism for this ref is under active ' +
-      'discussion between claude-klabauter and DoE-claude as of 2026-07-25 and is not yet decided ' +
+      'discussion between claude-klabauter and coordinator-content-repo as of 2026-07-25 and is not yet decided ' +
       '— do not add a push call here to pre-empt that decision.'
     );
   });

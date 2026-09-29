@@ -33,7 +33,7 @@ WHAT THIS FILE PINS, in the order the defect has to be caught:
             found.
 
 WHAT THIS DOES NOT ASSERT. Not "no trampoline may use the dispatch axis" — the
-sibling installers (`install-doe-claude-`, `install-meta-repo-`,
+sibling installers (`install-coordinator-content-repo-`, `install-meta-repo-`,
 `install-publish-repo-precommit-hook`) install into OTHER repos, take their
 identity from the target rather than from `__file__`, and carry no publish-time
 rename. AC-axis passes them unchanged, and a change that moved them onto the

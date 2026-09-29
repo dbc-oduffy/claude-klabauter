@@ -305,7 +305,7 @@ class TestTimeoutExceededMessageShape(_ComputedCeilingFixture):
         `ipc._timeout_for` clamps every `ceremony.*` op to `CEREMONY_BUDGET_SECS` with
         `min()` AFTER reading `COORDINATOR_DISPATCH_TIMEOUT_SECS`, so naming that var
         here would send the reader to spend a session on a door that is welded shut --
-        the same failure the doe-claude-em wsc_tail incident already cost once with
+        the same failure the coordinator-content-repo-em wsc_tail incident already cost once with
         CC_INVOKE_TIMEOUT_SECS. Worse, it would advertise an escape hatch from a
         ratchet whose whole purpose is to have none. Since the 2026-08-21 PM ruling the
         generic branch names no knob either -- `test_names_no_timeout_knob_at_all` pins

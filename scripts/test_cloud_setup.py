@@ -277,7 +277,7 @@ def test_run_claude_klabauter_setup_argv_names_coordinator_root(monkeypatch, tmp
     idx = argv.index("--coordinator-root")
     assert argv[idx + 1] == scratch_clones["coordinator-claude"]["dest"]
     assert "--with-test-deps" in argv
-    assert "--with-fleet-env" in argv
+    assert "--with-fleet-env" not in argv
     assert report.container_optin_requested is True
     assert report.setup_exit_code == 0
     # stdin=subprocess.DEVNULL

@@ -887,15 +887,6 @@ def test_check_mode_returns_run_check_exit_code_before_flag_pair_gate(setup_mod,
     assert setup_mod.main(["--check"]) == 7
 
 
-def test_fleet_env_is_opt_in(setup_mod, monkeypatch):
-    monkeypatch.setattr(setup_mod, "_stdin_can_answer", lambda: True)
-    monkeypatch.delenv("COORDINATOR_FLEET_ENV", raising=False)
-    assert setup_mod.parse_args([]).with_fleet_env is False
-    assert setup_mod.parse_args(["--with-fleet-env"]).with_fleet_env is True
-    monkeypatch.setenv("COORDINATOR_FLEET_ENV", "1")
-    assert setup_mod.parse_args([]).with_fleet_env is True
-
-
 def test_setup_is_directly_executable():
     script = Path(__file__).resolve().parent / "setup.py"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n")
@@ -1053,10 +1044,10 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
     monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
     for name in (
         "install_bin_forwarders", "install_warm_door",
-        "install_claude_doe_launcher_chain", "register_live_plugin_root",
+        "install_claude_author_launcher_chain", "register_live_plugin_root",
         "install_lfs_pre_push_gate", "install_percolate_identity",
         "install_machine_identity", "install_host_sampler_task",
-        "install_fleet_shared_environment", "install_verify_settings_home",
+        "install_verify_settings_home",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
 
@@ -1212,14 +1203,14 @@ def test_resolve_coordinator_claude_root_flag_wins(setup_mod, monkeypatch):
 def test_resolve_coordinator_claude_root_sibling_default(setup_mod, monkeypatch):
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     # The pointer, registry, and settings-home rungs all sit above sibling-dir
-    # and all read REAL machine state (the shared `.doe-root` pointer, the
-    # registered `engine.working_repos.doe_claude` key, and
-    # `<settings-home>/machine-local/.doe-root` respectively). Stub all three
+    # and all read REAL machine state (the shared `.coordinator-content-root` pointer, the
+    # registered `engine.working_repos.content_root` key, and
+    # `<settings-home>/machine-local/.coordinator-content-root` respectively). Stub all three
     # so this case exercises the bottom rung rather than whatever this
     # particular box happens to have recorded -- without this the assertion
     # below passes or fails depending on the developer's machine, which is
     # not a property a unit test may have.
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_settings_home", lambda: None)
     args = setup_mod.Args()
@@ -1238,7 +1229,7 @@ def test_resolve_coordinator_claude_root_sibling_default_verified_exists(setup_m
     added -- the honesty gate (C1Cc) only flags the fabrication, it does not
     penalize a guess that happens to be correct."""
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_settings_home", lambda: None)
     repo_root = tmp_path / "claude-klabauter"
@@ -1266,7 +1257,7 @@ def test_check_coordinator_claude_dep_unresolved_sibling_default_prints_git_clon
     remediation and must NOT claim a --coordinator-root/COORDINATOR_CLAUDE_ROOT
     location the stranger never provided."""
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_settings_home", lambda: None)
     monkeypatch.setattr(
@@ -1302,7 +1293,7 @@ def test_check_coordinator_claude_dep_routes_on_rung_not_decorated_display(
     setup_mod, monkeypatch, capsys
 ):
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_settings_home", lambda: None)
     monkeypatch.setattr(
@@ -1338,12 +1329,12 @@ def test_resolve_coordinator_claude_root_prefers_settings_home_over_sibling(
 ):
     """The settings-home rung outranks the sibling-dir guess.
 
-    Regression guard for the exit-90 outage: `.doe-root` recorded the real
+    Regression guard for the exit-90 outage: `.coordinator-content-root` recorded the real
     checkout the whole time, the ladder never read it, and the resolver fell
     through to a sibling path that does not exist on this machine.
     """
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: None)
     recorded = tmp_path / "DoE-clone"
     recorded.mkdir()
@@ -1354,7 +1345,7 @@ def test_resolve_coordinator_claude_root_prefers_settings_home_over_sibling(
     root, source = setup_mod._resolve_coordinator_claude_root(Path("/repo/claude-klabauter"), args)
     assert root == recorded
     assert source.rung is setup_mod.CoordSourceRung.SETTINGS_HOME
-    assert source.display == "settings-home .doe-root sentinel"
+    assert source.display == "settings-home .coordinator-content-root sentinel"
 
 
 def test_explicit_override_still_outranks_settings_home(setup_mod, monkeypatch, tmp_path):
@@ -1374,13 +1365,13 @@ def test_explicit_override_still_outranks_settings_home(setup_mod, monkeypatch, 
 
 
 def test_resolve_coordinator_claude_root_registry_rung(setup_mod, monkeypatch, tmp_path):
-    """The registry rung (`engine.working_repos.doe_claude`, via
+    """The registry rung (`engine.working_repos.content_root`, via
     `_coordinator_root_from_registry`) outranks BOTH the settings-home
     sentinel and the sibling-dir default -- EM ruling: better evidence
     (a cross-fleet identity assertion) outranks weaker evidence (a local
     breadcrumb / a directory that merely sits next door)."""
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
     registered = tmp_path / "registered-checkout"
     registered.mkdir()
     monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: registered)
@@ -1391,11 +1382,11 @@ def test_resolve_coordinator_claude_root_registry_rung(setup_mod, monkeypatch, t
     root, source = setup_mod._resolve_coordinator_claude_root(Path("/repo/claude-klabauter"), args)
     assert root == registered
     assert source.rung is setup_mod.CoordSourceRung.REGISTRY
-    assert source.display == "engine.working_repos.doe_claude registry key"
+    assert source.display == "engine.working_repos.content_root registry key"
 
 
-def test_resolve_coordinator_claude_root_doe_root_pointer_rung(setup_mod, monkeypatch, tmp_path):
-    """The shared `.doe-root` pointer rung (C1Cc) outranks BOTH the registry
+def test_resolve_coordinator_claude_root_content_root_pointer_rung(setup_mod, monkeypatch, tmp_path):
+    """The shared `.coordinator-content-root` pointer rung (C1Cc) outranks BOTH the registry
     rung and the settings-home sentinel -- setup.py is the installer, so it
     must resolve before any registry is necessarily populated on a fresh
     box. Does not reverse `da7cd333a`'s ordering between the registry rung
@@ -1403,7 +1394,7 @@ def test_resolve_coordinator_claude_root_doe_root_pointer_rung(setup_mod, monkey
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     pointed = tmp_path / "pointed-checkout"
     pointed.mkdir()
-    monkeypatch.setattr(setup_mod, "_coordinator_root_from_doe_root_pointer", lambda: pointed)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: pointed)
     monkeypatch.setattr(
         setup_mod, "_coordinator_root_from_registry", lambda: tmp_path / "registered"
     )
@@ -1413,35 +1404,35 @@ def test_resolve_coordinator_claude_root_doe_root_pointer_rung(setup_mod, monkey
     args = setup_mod.Args()
     root, source = setup_mod._resolve_coordinator_claude_root(Path("/repo/claude-klabauter"), args)
     assert root == pointed
-    assert source.rung is setup_mod.CoordSourceRung.DOE_ROOT_POINTER
-    assert source.display == "shared .doe-root pointer"
+    assert source.rung is setup_mod.CoordSourceRung.CONTENT_ROOT_POINTER
+    assert source.display == "shared .coordinator-content-root pointer"
 
 
 # ---------------------------------------------------------------------------
-# `_coordinator_root_from_doe_root_pointer` direct coverage (C1Cc) — exercised
+# `_coordinator_root_from_content_root_pointer` direct coverage (C1Cc) — exercised
 # against a REDIRECTED settings-home (never the real one), per brief's two
-# required cases: (a) a planted `.doe-root` sentinel resolves, (b) no
+# required cases: (a) a planted `.coordinator-content-root` sentinel resolves, (b) no
 # pointer + no sibling dir does NOT return a fabricated path.
 # ---------------------------------------------------------------------------
 
 
-def test_doe_root_pointer_resolves_planted_sentinel(setup_mod, monkeypatch, tmp_path):
-    """Case (a): no registry, a `.doe-root` pointer planted under a
+def test_content_root_pointer_resolves_planted_sentinel(setup_mod, monkeypatch, tmp_path):
+    """Case (a): no registry, a `.coordinator-content-root` pointer planted under a
     redirected settings-home -> resolves to the pointed-to path."""
     settings_home_dir = tmp_path / "redirected-settings-home"
     machine_local_dir = settings_home_dir / "machine-local"
     machine_local_dir.mkdir(parents=True)
     checkout = tmp_path / "doe-checkout"
     _add_source_evidence(checkout)
-    (machine_local_dir / ".doe-root").write_text(str(checkout), encoding="utf-8")
+    (machine_local_dir / ".coordinator-content-root").write_text(str(checkout), encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "unrelated-home"))
-    root = setup_mod._coordinator_root_from_doe_root_pointer()
+    root = setup_mod._coordinator_root_from_content_root_pointer()
     assert root == checkout
 
 
-def test_doe_root_pointer_no_pointer_no_sibling_returns_none(setup_mod, monkeypatch, tmp_path):
+def test_content_root_pointer_no_pointer_no_sibling_returns_none(setup_mod, monkeypatch, tmp_path):
     """Case (b): no registry, no pointer file anywhere, no sibling dir on
     disk -> the pointer rung returns None (never fabricates a path)."""
     settings_home_dir = tmp_path / "redirected-settings-home-empty"
@@ -1451,7 +1442,7 @@ def test_doe_root_pointer_no_pointer_no_sibling_returns_none(setup_mod, monkeypa
     legacy_home = tmp_path / "unrelated-home-no-legacy-pointer"
     legacy_home.mkdir()
     monkeypatch.setenv("HOME", str(legacy_home))
-    root = setup_mod._coordinator_root_from_doe_root_pointer()
+    root = setup_mod._coordinator_root_from_content_root_pointer()
     assert root is None
 
 
@@ -1462,16 +1453,16 @@ def test_doe_root_pointer_no_pointer_no_sibling_returns_none(setup_mod, monkeypa
 # this suite was concerned -- the one call site (this file) that actually
 # ships. Payload-shaped fixture: a temp tree with ONLY `lib/`, no
 # `coordinator/` at all.
-def test_doe_root_pointer_resolves_via_flat_payload_lib_fallback(setup_mod, monkeypatch, tmp_path):
-    # Order-dependence guard: `_coordinator_root_from_doe_root_pointer` does a
-    # bare `from read_doe_root_pointer import ...`, which binds through
+def test_content_root_pointer_resolves_via_flat_payload_lib_fallback(setup_mod, monkeypatch, tmp_path):
+    # Order-dependence guard: `_coordinator_root_from_content_root_pointer` does a
+    # bare `from read_content_root_pointer import ...`, which binds through
     # `sys.modules` -- once ANY earlier test has imported that name (e.g. via
     # this repo's own `coordinator/lib`, which always exists on a dev box),
     # this test would silently reuse the cached module and never exercise the
     # flat-`lib/` fallback at all, whatever this fixture builds on disk. Force
     # a real re-import so the payload-shaped tree below is what actually gets
     # exercised, in isolation or in file order alike.
-    monkeypatch.delitem(sys.modules, "read_doe_root_pointer", raising=False)
+    monkeypatch.delitem(sys.modules, "read_content_root_pointer", raising=False)
     monkeypatch.delitem(sys.modules, "settings_home", raising=False)
 
     payload_root = tmp_path / "payload-repo"
@@ -1484,13 +1475,13 @@ def test_doe_root_pointer_resolves_via_flat_payload_lib_fallback(setup_mod, monk
     flat_lib_dir.mkdir()
     # Mirror the real publish row's shape (coordinator/bin/tests/
     # test_published_lib_layout.py): the flattened `lib/` ships
-    # `read_doe_root_pointer.py` AND its sibling `settings_home.py` side by
-    # side, not the pointer helper alone -- `coordinator_read_doe_root_pointer`
+    # `read_content_root_pointer.py` AND its sibling `settings_home.py` side by
+    # side, not the pointer helper alone -- `coordinator_read_content_root_pointer`
     # imports `settings_home` internally, and a fixture missing it fails
     # closed (empty settings-home) for a reason that has nothing to do with
     # the fallback branch under test.
-    (flat_lib_dir / "read_doe_root_pointer.py").write_bytes(
-        (real_coordinator_lib / "read_doe_root_pointer.py").read_bytes()
+    (flat_lib_dir / "read_content_root_pointer.py").write_bytes(
+        (real_coordinator_lib / "read_content_root_pointer.py").read_bytes()
     )
     (flat_lib_dir / "settings_home.py").write_bytes(
         (real_coordinator_lib / "settings_home.py").read_bytes()
@@ -1511,12 +1502,12 @@ def test_doe_root_pointer_resolves_via_flat_payload_lib_fallback(setup_mod, monk
     machine_local_dir.mkdir(parents=True)
     checkout = tmp_path / "doe-checkout"
     _add_source_evidence(checkout)
-    (machine_local_dir / ".doe-root").write_text(str(checkout), encoding="utf-8")
+    (machine_local_dir / ".coordinator-content-root").write_text(str(checkout), encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "unrelated-home"))
 
-    root = payload_setup_mod._coordinator_root_from_doe_root_pointer()
+    root = payload_setup_mod._coordinator_root_from_content_root_pointer()
     assert root == checkout
 
 
@@ -2414,11 +2405,11 @@ def test_register_claude_klabauter_root_preserves_existing_valid_klabauter_value
 
 
 # ---------------------------------------------------------------------------
-# register_claude_klabauter_root / _unset_doe_claude_registration — persist the
-# coordinator-claude root the run already resolved as `repos.doe_claude`,
+# register_claude_klabauter_root / _unset_content_root_registration — persist the
+# coordinator-claude root the run already resolved as `repos.content_root`,
 # last and only when unset (docs/reference/linux-cloud-dogfood-friction.md
-# F1). registry_get is patched on coordinator_core.machine_resolver, the
-# function-local import idiom test_seed_fleet_env_root_* documents below.
+# F1). registry_get is patched on coordinator_core.machine_resolver via the
+# same function-local import idiom used elsewhere in this suite.
 # ---------------------------------------------------------------------------
 
 
@@ -2437,7 +2428,7 @@ def _klabauter_repo(tmp_path: Path) -> Path:
     return repo_root
 
 
-def test_register_claude_klabauter_root_appends_unset_doe_claude_anchor_last(
+def test_register_claude_klabauter_root_appends_unset_content_root_anchor_last(
     setup_mod, tmp_path, monkeypatch, capsys
 ):
     import coordinator_core.machine_resolver as mr
@@ -2459,10 +2450,10 @@ def test_register_claude_klabauter_root_appends_unset_doe_claude_anchor_last(
         "engine.target + repos.claude_klabauter + repos.content_root ---"
     ) in out
     assert f"machine-local set repos.content_root {clone}" in out
-    assert "engine.working_repos.doe_claude" not in out
+    assert "engine.working_repos.content_root" not in out
 
 
-def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor(
+def test_register_claude_klabauter_root_never_overwrites_a_set_content_root_anchor(
     setup_mod, tmp_path, monkeypatch, capsys
 ):
     import coordinator_core.machine_resolver as mr
@@ -2471,7 +2462,7 @@ def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor
     monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
     deliberate = str(tmp_path / "operator-chosen")
     monkeypatch.setattr(
-        mr, "registry_get", lambda key: deliberate if key == "repos.doe_claude" else None
+        mr, "registry_get", lambda key: deliberate if key == "repos.content_root" else None
     )
     args = _override_args(setup_mod)
     args.coordinator_root = str(_coordinator_claude_clone(tmp_path))
@@ -2480,7 +2471,7 @@ def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor
 
     setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", _klabauter_repo(tmp_path), args)
 
-    assert "repos.doe_claude" not in capsys.readouterr().out
+    assert "repos.content_root" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -2491,7 +2482,7 @@ def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor
         {"rung": "FLAG", "is_publish_mirror_rejected": True},
     ],
 )
-def test_unset_doe_claude_registration_refuses_untrustworthy_candidates(
+def test_unset_content_root_registration_refuses_untrustworthy_candidates(
     setup_mod, tmp_path, monkeypatch, resolution_kwargs
 ):
     import coordinator_core.machine_resolver as mr
@@ -2503,10 +2494,10 @@ def test_unset_doe_claude_registration_refuses_untrustworthy_candidates(
         rung=setup_mod.CoordSourceRung[kwargs.pop("rung")], display="test", **kwargs
     )
 
-    assert setup_mod._unset_doe_claude_registration(clone, source, clone) == {}
+    assert setup_mod._unset_content_root_registration(clone, source, clone) == {}
 
 
-def test_unset_doe_claude_registration_skips_when_registry_unreadable(
+def test_unset_content_root_registration_skips_when_registry_unreadable(
     setup_mod, tmp_path, monkeypatch
 ):
     import coordinator_core.machine_resolver as mr
@@ -2518,7 +2509,7 @@ def test_unset_doe_claude_registration_skips_when_registry_unreadable(
     clone = _coordinator_claude_clone(tmp_path)
     source = setup_mod.CoordSourceResolution(rung=setup_mod.CoordSourceRung.FLAG, display="test")
 
-    assert setup_mod._unset_doe_claude_registration(clone, source, clone) == {}
+    assert setup_mod._unset_content_root_registration(clone, source, clone) == {}
 
 
 def test_discover_klabauter_root_registry_value_wins_over_sibling(
@@ -2582,42 +2573,42 @@ def test_discover_klabauter_root_rejects_candidate_without_coordinator_core(
 
 
 # ---------------------------------------------------------------------------
-# install_claude_doe_launcher_chain — the interactive `claude-doe` launch
-# chain (.doe-root pointer -> wrapper -> launcher -> rc/profile shim). Root-
+# install_claude_author_launcher_chain — the interactive `claude-author` launch
+# chain (.coordinator-content-root pointer -> wrapper -> launcher -> rc/profile shim). Root-
 # cause: scripts/setup.py never called any of the four coordinator/bin/
-# *claude-doe* generators, so a fresh clean install left coordinator SILENTLY
-# absent from every session (sizing dlv-claude-doe-launcher-generators-are-
+# *claude-author* generators, so a fresh clean install left coordinator SILENTLY
+# absent from every session (sizing dlv-claude-author-launcher-generators-are-
 # absen-bb685e). These tests are the artifact that discharges "the operator
 # remembers is not one" -- a dropped generator, or a reordering that breaks
 # the root-pointer-before-wrapper-before-shim dependency, fails here.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CLAUDE_DOE_CHAIN_ORDER = (
-    "gen-doe-root-pointer.py",
-    "install-claude-doe-wrapper.py",
-    "gen-claude-doe-launcher.py",
-    "gen-claude-doe-shim.py",
+_EXPECTED_CLAUDE_AUTHOR_CHAIN_ORDER = (
+    "gen-content-root-pointer.py",
+    "install-claude-author-wrapper.py",
+    "gen-claude-author-launcher.py",
+    "gen-claude-author-shim.py",
 )
 
 
-def test_claude_doe_chain_names_all_four_generators_in_dependency_order(setup_mod):
-    names = tuple(name for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS)
-    assert names == _EXPECTED_CLAUDE_DOE_CHAIN_ORDER
+def test_claude_author_chain_names_all_four_generators_in_dependency_order(setup_mod):
+    names = tuple(name for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
+    assert names == _EXPECTED_CLAUDE_AUTHOR_CHAIN_ORDER
 
 
-def test_claude_doe_chain_generators_exist_on_disk(setup_mod):
+def test_claude_author_chain_generators_exist_on_disk(setup_mod):
     # Regression guard: if a generator is ever renamed/removed from
     # coordinator/bin/ without updating the chain (or vice versa), this
     # fails loudly instead of silently install-chain-skipping it.
     repo_root = _SETUP_PY_PATH.parent.parent
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         assert (repo_root / "coordinator" / "bin" / name).is_file(), (
-            f"{name} is declared in _CLAUDE_DOE_CHAIN_STEPS but missing from "
+            f"{name} is declared in _CLAUDE_AUTHOR_CHAIN_STEPS but missing from "
             "coordinator/bin/ — the chain and the generator surface have drifted."
         )
 
 
-def test_claude_doe_chain_is_wired_into_main(setup_mod):
+def test_claude_author_chain_is_wired_into_main(setup_mod):
     # A defined-but-never-called step reproduces the exact silent-absence
     # defect this fix closes -- assert the function is both DEFINED and
     # INVOKED (def + call site), not merely present in the module. AST-walked
@@ -2629,10 +2620,10 @@ def test_claude_doe_chain_is_wired_into_main(setup_mod):
     tree = ast.parse(source, filename=str(_SETUP_PY_PATH))
 
     defined = any(
-        isinstance(node, ast.FunctionDef) and node.name == "install_claude_doe_launcher_chain"
+        isinstance(node, ast.FunctionDef) and node.name == "install_claude_author_launcher_chain"
         for node in ast.walk(tree)
     )
-    assert defined, "install_claude_doe_launcher_chain is not defined in scripts/setup.py"
+    assert defined, "install_claude_author_launcher_chain is not defined in scripts/setup.py"
 
     main_func = next(
         node for node in ast.walk(tree)
@@ -2641,49 +2632,49 @@ def test_claude_doe_chain_is_wired_into_main(setup_mod):
     called = any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id == "install_claude_doe_launcher_chain"
+        and node.func.id == "install_claude_author_launcher_chain"
         for node in ast.walk(main_func)
     )
-    assert called, "install_claude_doe_launcher_chain is defined but never called from main()"
+    assert called, "install_claude_author_launcher_chain is defined but never called from main()"
 
 
-def test_claude_doe_chain_manifest_declares_the_step():
+def test_claude_author_chain_manifest_declares_the_step():
     manifest_path = _SETUP_PY_PATH.parent.parent / "docs" / "install" / "agent-install-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ids = {entry.get("id") for entry in manifest.get("system_prerequisites", [])}
-    assert "claude_doe_launcher_chain" in ids
+    assert "claude_author_launcher_chain" in ids
 
 
 @pytest.fixture
 def launcher_opted_in(setup_mod, monkeypatch):
     """Tests of the chain body, past the opt-in gate the tests below pin."""
-    monkeypatch.setattr(setup_mod, "_claude_doe_launcher_opted_in", lambda args: True)
+    monkeypatch.setattr(setup_mod, "_claude_author_launcher_opted_in", lambda args: True)
 
 
 @pytest.fixture
 def launcher_box(setup_mod, tmp_path, monkeypatch):
-    """An isolated home with no registry answer: `repos.doe_claude` resolves
-    only through REPO_DOE_CLAUDE, which each test sets or leaves unset."""
+    """An isolated home with no registry answer: `repos.content_root` resolves
+    only through REPO_CONTENT_ROOT, which each test sets or leaves unset."""
     import coordinator_core.machine_resolver as mr
 
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(home))
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.setattr(mr, "registry_get", lambda key: None)
     calls = []
     monkeypatch.setattr(
         setup_mod, "run_op_main", lambda op_module, argv, cwd=None: (calls.append(op_module) or 0)
     )
-    shim = home / ".claude" / "shell" / "claude-doe-shim.sh"
+    shim = home / ".claude" / "shell" / "claude-author-shim.sh"
     return {"home": home, "shim": shim, "calls": calls}
 
 
 def _dev_clone(tmp_path, monkeypatch):
-    clone = tmp_path / "DoE-claude"
+    clone = tmp_path / "coordinator-content-repo"
     clone.mkdir()
     (clone / ".coordinator-dev-repo").write_text("")
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
     return clone
 
 
@@ -2691,9 +2682,9 @@ def _run_chain(setup_mod, tmp_path, args):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
 
 def test_launcher_chain_removes_a_shim_a_consumer_box_never_chose(
@@ -2710,14 +2701,14 @@ def test_launcher_chain_removes_a_shim_a_consumer_box_never_chose(
     assert launcher_box["calls"] == []
 
 
-def test_launcher_chain_rejects_a_doe_root_without_the_dev_sentinel(
+def test_launcher_chain_rejects_a_content_root_without_the_dev_sentinel(
     setup_mod, launcher_box, tmp_path, monkeypatch, capsys
 ):
     published = tmp_path / "coordinator-claude"
     published.mkdir()
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(published))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(published))
     args = setup_mod.Args()
-    args.with_claude_doe_launcher = True
+    args.with_claude_author_launcher = True
 
     _run_chain(setup_mod, tmp_path, args)
 
@@ -2739,11 +2730,11 @@ def test_launcher_chain_on_a_dev_box_waits_for_the_opt_in(
 def test_launcher_chain_runs_on_the_opt_in_flag(setup_mod, launcher_box, tmp_path, monkeypatch):
     _dev_clone(tmp_path, monkeypatch)
     args = setup_mod.Args()
-    args.with_claude_doe_launcher = True
+    args.with_claude_author_launcher = True
 
     _run_chain(setup_mod, tmp_path, args)
 
-    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
 
 
 def test_launcher_chain_keeps_an_earlier_choice_on_a_dev_box(
@@ -2756,15 +2747,15 @@ def test_launcher_chain_keeps_an_earlier_choice_on_a_dev_box(
     _run_chain(setup_mod, tmp_path, setup_mod.Args())
 
     assert launcher_box["shim"].exists()
-    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
 
 
-def test_with_claude_doe_launcher_is_parsed_and_kept_out_of_help(setup_mod):
-    assert setup_mod.parse_args(["--with-claude-doe-launcher", "--i-am-agent"]).with_claude_doe_launcher
-    assert "claude-doe" not in setup_mod.HELP_TEXT
+def test_with_claude_author_launcher_is_parsed_and_kept_out_of_help(setup_mod):
+    assert setup_mod.parse_args(["--with-claude-author-launcher", "--i-am-agent"]).with_claude_author_launcher
+    assert "claude-author" not in setup_mod.HELP_TEXT
 
 
-def test_install_claude_doe_launcher_chain_missing_generators_is_loud_advisory(
+def test_install_claude_author_launcher_chain_missing_generators_is_loud_advisory(
     setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
@@ -2776,29 +2767,29 @@ def test_install_claude_doe_launcher_chain_missing_generators_is_loud_advisory(
     )
 
     args = setup_mod.Args()
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     assert called["n"] == 0  # never even attempted an in-process call for a missing file
     err = capsys.readouterr().err
-    assert err.count("[ADVISORY]") >= len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
-    assert "claude-doe launcher chain incomplete" in err
+    assert err.count("[ADVISORY]") >= len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
+    assert "claude-author launcher chain incomplete" in err
     assert "will NOT load" in err
 
 
-def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
+def test_install_claude_author_launcher_chain_continues_past_a_mid_chain_failure(
     setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
     calls: list[str] = []
 
     def _fake_run_op_main(op_module, argv, cwd=None):
         calls.append(op_module)
-        if op_module == "coordinator_core.ops.install_claude_doe_wrapper":
+        if op_module == "coordinator_core.ops.install_claude_author_wrapper":
             print("boom")
             return 1
         print("ok")
@@ -2807,24 +2798,24 @@ def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
     monkeypatch.setattr(setup_mod, "run_op_main", _fake_run_op_main)
 
     args = setup_mod.Args()
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     # All four steps attempted despite the mid-chain failure -- a failure in
     # one generator must not skip the others (only runtime resolution is
     # order-dependent, not generation).
-    assert len(calls) == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+    assert len(calls) == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
     out_err = capsys.readouterr()
-    assert "PASS [claude-doe-chain]" in out_err.out
+    assert "PASS [claude-author-chain]" in out_err.out
     assert "[ADVISORY]" in out_err.err
-    assert "claude-doe launcher chain incomplete" in out_err.err
+    assert "claude-author launcher chain incomplete" in out_err.err
 
 
-def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable(
+def test_install_claude_author_launcher_chain_unresolved_content_root_is_not_applicable(
     setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
-    """An unresolved `repos.doe_claude` means the dev-clone install mode is not
+    """An unresolved `repos.content_root` means the dev-clone install mode is not
     configured -- the marketplace plugin install needs none of this chain
-    (`docs/safety.md` rows 4/5, `skills/setup/SKILL.md` on the `--doe-root`
+    (`docs/safety.md` rows 4/5, `skills/setup/SKILL.md` on the `--content-root`
     seam). So the chain reports SKIP and stops, never PASS and never the
     "coordinator will NOT load" ADVISORY, which is a dev-mode statement that
     is false on a correctly-installed OSS box.
@@ -2835,17 +2826,17 @@ def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
     calls = []
 
     def _fake_run_op_main(op_module, argv, cwd=None):
         calls.append(op_module)
-        if op_module == "coordinator_core.ops.gen_doe_root_pointer":
+        if op_module == "coordinator_core.ops.gen_content_root_pointer":
             print(
-                "doe_root_pointer: skipped (repos.doe_claude unset — "
-                "machine-local set repos.doe_claude <path>  then /coordinator:install)"
+                "content_root_pointer: skipped (repos.content_root unset — "
+                "machine-local set repos.content_root <path>  then /coordinator:install)"
             )
             return 0
         print("ok")
@@ -2855,11 +2846,11 @@ def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable
 
     args = setup_mod.Args()
     args.agent_mode = True
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     out_err = capsys.readouterr()
-    assert "PASS [claude-doe-chain]" not in out_err.out
-    assert "SKIP [claude-doe-chain]" in out_err.out
+    assert "PASS [claude-author-chain]" not in out_err.out
+    assert "SKIP [claude-author-chain]" in out_err.out
     assert "dev-clone mode not configured" in out_err.out
     # Never the dev-mode alarm, and never the incomplete-chain summary.
     assert "[ADVISORY]" not in out_err.err
@@ -2869,13 +2860,13 @@ def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable
     assert len(calls) == 1
 
 
-def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary(
+def test_install_claude_author_launcher_chain_all_pass_prints_no_incomplete_summary(
     setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
     def _fake_run_op_main(op_module, argv, cwd=None):
@@ -2885,15 +2876,15 @@ def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary
     monkeypatch.setattr(setup_mod, "run_op_main", _fake_run_op_main)
 
     args = setup_mod.Args()
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     out_err = capsys.readouterr()
-    assert out_err.out.count("PASS [claude-doe-chain]") == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+    assert out_err.out.count("PASS [claude-author-chain]") == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
     assert "incomplete" not in out_err.err
     assert "[ADVISORY]" not in out_err.err
 
 
-def test_install_claude_doe_launcher_chain_never_spawns_subprocess(
+def test_install_claude_author_launcher_chain_never_spawns_subprocess(
     setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     """P175-C6: the chain runs its four generators in-process via
@@ -2902,11 +2893,11 @@ def test_install_claude_doe_launcher_chain_never_spawns_subprocess(
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
     def _boom(*a, **k):
-        raise AssertionError("install_claude_doe_launcher_chain must not call subprocess.run")
+        raise AssertionError("install_claude_author_launcher_chain must not call subprocess.run")
 
     monkeypatch.setattr(setup_mod.subprocess, "run", _boom)
     monkeypatch.setattr(
@@ -2914,119 +2905,10 @@ def test_install_claude_doe_launcher_chain_never_spawns_subprocess(
     )
 
     args = setup_mod.Args()
-    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+    setup_mod.install_claude_author_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     out_err = capsys.readouterr()
-    assert out_err.out.count("PASS [claude-doe-chain]") == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
-
-
-# ---------------------------------------------------------------------------
-# _seed_fleet_env_root_from_klabauter — C4: seeds fleet_env.root from the
-# already-registered repos.claude_klabauter so the fleet environment lands
-# at the contract's documented location (<klabauter-root>/.fleet-env)
-# without a hand-run `machine-local set`. Same monkeypatch idiom as
-# test_install_machine_identity_* above: coordinator_core.machine_resolver
-# .registry_get and coordinator_core.install._shared.resolve_machine_local_cli
-# are imported function-local, so patching the module attribute before the
-# call is picked up at call time; subprocess.run is faked on setup.py's own
-# module global.
-# ---------------------------------------------------------------------------
-
-
-def test_seed_fleet_env_root_writes_from_klabauter_when_absent(setup_mod, tmp_path, monkeypatch):
-    import coordinator_core.machine_resolver as mr
-    from coordinator_core.install import _shared
-
-    values = {"fleet_env.root": None, "repos.claude_klabauter": str(tmp_path / "klabauter")}
-    monkeypatch.setattr(mr, "registry_get", lambda key: values.get(key))
-    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"])
-
-    calls = []
-    monkeypatch.setattr(
-        setup_mod.subprocess, "run",
-        lambda argv, **k: calls.append(argv) or setup_mod.subprocess.CompletedProcess(argv, 0),
-    )
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    claude_klabauter_root.mkdir()
-    args = setup_mod.Args()
-
-    setup_mod._seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root, args)
-
-    expected = str(tmp_path / "klabauter" / ".fleet-env")
-    assert calls == [["machine-local", "set", "fleet_env.root", expected]]
-
-
-def test_seed_fleet_env_root_never_overwrites_existing_value(setup_mod, tmp_path, monkeypatch):
-    import coordinator_core.machine_resolver as mr
-    from coordinator_core.install import _shared
-
-    values = {
-        "fleet_env.root": "/operator/chosen/.fleet-env",
-        "repos.claude_klabauter": str(tmp_path / "klabauter"),
-    }
-    monkeypatch.setattr(mr, "registry_get", lambda key: values.get(key))
-    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"])
-
-    calls = []
-    monkeypatch.setattr(setup_mod.subprocess, "run", lambda *a, **k: calls.append(a) or None)
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    claude_klabauter_root.mkdir()
-    args = setup_mod.Args()
-
-    setup_mod._seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root, args)
-
-    assert calls == []  # an operator-set (or previously-seeded) key is never re-written
-
-
-def test_seed_fleet_env_root_noop_when_klabauter_unregistered(setup_mod, tmp_path, monkeypatch):
-    import coordinator_core.machine_resolver as mr
-    from coordinator_core.install import _shared
-
-    values = {"fleet_env.root": None, "repos.claude_klabauter": None}
-    monkeypatch.setattr(mr, "registry_get", lambda key: values.get(key))
-    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"])
-
-    calls = []
-    monkeypatch.setattr(setup_mod.subprocess, "run", lambda *a, **k: calls.append(a) or None)
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    claude_klabauter_root.mkdir()
-    args = setup_mod.Args()
-
-    setup_mod._seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root, args)
-
-    assert calls == []  # nothing discoverable to seed from -- C5's ladder still resolves at read time
-
-
-def test_seed_fleet_env_root_advisory_when_machine_local_absent(setup_mod, tmp_path, monkeypatch, capsys):
-    import coordinator_core.machine_resolver as mr
-    from coordinator_core.install import _shared
-
-    values = {"fleet_env.root": None, "repos.claude_klabauter": str(tmp_path / "klabauter")}
-    monkeypatch.setattr(mr, "registry_get", lambda key: values.get(key))
-    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
-
-    called = {"n": False}
-    monkeypatch.setattr(setup_mod.subprocess, "run", lambda *a, **k: called.__setitem__("n", True))
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    claude_klabauter_root.mkdir()
-    args = setup_mod.Args()
-
-    setup_mod._seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root, args)
-
-    assert called["n"] is False  # advisory return, no subprocess attempted
-    assert "[ADVISORY]" in capsys.readouterr().out
+    assert out_err.out.count("PASS [claude-author-chain]") == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
 
 
 def test_run_health_probe_hard_inconclusive_does_not_gate_the_install(
@@ -3091,8 +2973,8 @@ def test_run_health_probe_hard_fail_still_gates_alongside_an_inconclusive(
 # install-from-published-root). `resolve_engine_root_for_install`,
 # `spawn_detached`/`_child_env`, and `SERVER_ENTRY_SCRIPT` are all imported
 # function-local in `start_warm_engine`, so patching each module's attribute
-# before the call is picked up at call time (same idiom as the
-# `_seed_fleet_env_root_from_klabauter` tests above). The verification
+# before the call is picked up at call time (same function-local import
+# idiom used elsewhere in this suite). The verification
 # child's own `subprocess.run` is faked on setup.py's own module global and
 # returns canned stdout JSON, standing in for the real child process
 # (eng-director F1's PYTHONPATH-rooted poll) without actually spawning one.
@@ -3879,7 +3761,7 @@ def test_convert_editable_finder_ignores_engine_link_that_does_not_match(
 def test_convert_editable_finder_refuses_a_root_the_dist_info_does_not_name(
     setup_mod, monkeypatch, tmp_path
 ):
-    """The memo case (2026-09-03, doe-claude-em): handed a root that is not
+    """The memo case (2026-09-03, coordinator-content-repo-em): handed a root that is not
     the installed one -- a pytest tmp dir -- the converter must leave the
     operator's `.pth` byte-identical and say why."""
     site_packages = tmp_path / "site-packages"
@@ -4145,7 +4027,7 @@ def test_a_source_key_pointed_at_the_published_mirror_does_not_count(setup_mod, 
 
 def test_channel_is_candidate_with_the_doe_source_tree(setup_mod, monkeypatch, tmp_path):
     _no_engine_source(monkeypatch)
-    doe = tmp_path / "DoE-claude"
+    doe = tmp_path / "coordinator-content-repo"
     (doe / "coordinator" / "cockpit-contract").mkdir(parents=True)
     assert "DoE source tree" in setup_mod._authoring_tree_on_box(doe)
 

@@ -95,7 +95,7 @@ def _patch_scan(monkeypatch: pytest.MonkeyPatch, report) -> None:
 def _report(status: str, **extra):
     base = {
         "status": status,
-        "doe_repo_path": "/fake/DoE-claude",
+        "doe_repo_path": "/fake/coordinator-content-repo",
         "checked": 12,
         "matched": [],
         "drifted": [],
@@ -188,7 +188,7 @@ class TestVendoredSchemaDriftProbe:
         _patch_scan(
             monkeypatch,
             _report("UNRESOLVED", doe_repo_path=None, checked=0,
-                    summary="No DoE-claude clone resolved on this machine"),
+                    summary="No coordinator-content-repo clone resolved on this machine"),
         )
 
         result = mod._run_probe_vendored_schema_drift(_REPO_ROOT)

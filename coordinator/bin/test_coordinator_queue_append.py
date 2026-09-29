@@ -49,28 +49,28 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 _REPO_ROOT_COORDINATOR_CORE = os.path.join(_REPO_ROOT, "coordinator_core")
 
 
-def _resolve_doe_root_for_tests() -> str:
-    """Best-effort DoE-claude sibling root, for tests that override CLAUDE_HOME.
+def _resolve_content_root_for_tests() -> str:
+    """Best-effort coordinator-content-repo sibling root, for tests that override CLAUDE_HOME.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back to
-    a machine-local `repos.doe_claude` lookup that is itself CLAUDE_HOME/
+    a machine-local `repos.content_root` lookup that is itself CLAUDE_HOME/
     settings-home-anchored -- a test overriding CLAUDE_HOME to a throwaway dir
     (to prove CLAUDE_HOME is unused for project scope, e.g.) collaterally
     breaks that fallback too. Resolving it once here and forwarding it as an
-    explicit DOE_ROOT env override (coordinator_registry.py's own rung 1
+    explicit CONTENT_ROOT env override (coordinator_registry.py's own rung 1
     override) keeps the manifest read working without touching what the test
     actually asserts on.
     """
     try:
-        from coordinator_core.testing.doe_root import resolve_doe_root
+        from coordinator_core.testing.content_root import resolve_content_root
 
-        root = resolve_doe_root()
+        root = resolve_content_root()
     except Exception:
         return ""
     return root if root and os.path.isdir(root) else ""
 
 
-_DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
+_CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
 
 
 def _script_path() -> str:
@@ -695,15 +695,15 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
 
     Central state routes to _claude_klabauter_root() unconditionally, per
     docs/wiki/state-placement-law.md § Taxonomy "Central/global state" (governing law:
-    DoE-claude coordinator/docs/wiki/state-placement-law.md:36). The
-    [DoE-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
+    coordinator-content-repo coordinator/docs/wiki/state-placement-law.md:36). The
+    [coordinator-content-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
     proposal to instead route this branch to DoE was never ratified: that plan is
     `status: draft`, its AC1/AC2 are `pending`, and its own C3 is HELD with recorded
     disk proof the flip never took effect on the production path — see
     _output_path()'s own negative-spec docstring.
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
-    Negative-spec: this branch does NOT route to DOE_ROOT or CLAUDE_HOME — both were
+    Negative-spec: this branch does NOT route to CONTENT_ROOT or CLAUDE_HOME — both were
     superseded by the unconditional CLAUDE_KLABAUTER_ROOT route above.
 
     Rewired (de-node cutover, 480ad8f8 / W0.5 Option B+C, 2026-07-19): schema.describe/
@@ -802,8 +802,8 @@ def test_project_scope_still_writes_cwd_relative() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
         env = {"CLAUDE_HOME": claude_home_dir, "COORDINATOR_ENGINE_ROOT": fake_claude_klabauter_root}
-        if _DOE_ROOT_FOR_TESTS:
-            env["DOE_ROOT"] = _DOE_ROOT_FOR_TESTS
+        if _CONTENT_ROOT_FOR_TESTS:
+            env["CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
 
         result = _run_cli(
             _improvement_queue_required_args(),
@@ -1865,7 +1865,7 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     schema-op branch below is why captured.json is now keyed by the op name in "capture"
     mode's on-disk shape — callers must select the "queue.append" entry.
 
-    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
+    Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     coord_dir = os.path.join(tmpdir, "coordinator_core")
     os.makedirs(coord_dir, exist_ok=True)
@@ -1980,7 +1980,7 @@ def test_routing_seam_absent_uses_legacy() -> None:
     test_routing_seam_present_uses_native and friends; the truly-empty-seam case
     for schema failure specifically is covered by test_schema_load_fails_loud_via_env_override.
 
-    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
+    Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R1 — routing: total seam absence -> fails loud, no write (State-1, post de-node cutover)"
     with _engine_root_tmpdir() as claude_klabauter_dir, \
@@ -2026,7 +2026,7 @@ def test_routing_seam_present_uses_native() -> None:
     Does NOT set QUEUE_APPEND_OUTPUT_ROOT (routing tests exercise the live routing gate,
     not the test-isolation bypass). Uses a git-initialized tmpdir as cwd.
 
-    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
+    Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R2 — routing: seam-present -> native path, stdout = result out_path (State-2)"
     with _engine_root_tmpdir() as claude_klabauter_dir, \
@@ -2225,7 +2225,7 @@ def test_output_root_bypass_skips_native() -> None:
     Without this test, moving the bypass below the route() call (or removing it) would
     not be caught.
 
-    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
+    Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     # QUEUE_APPEND_OUTPUT_ROOT bypass has no seam-present test.
     name = "Test R6 — QUEUE_APPEND_OUTPUT_ROOT bypass skips native path when seam present"

@@ -204,7 +204,7 @@ class AuthorThenExecuteReclaimIsNoOpTest(unittest.TestCase):
     ever reached on a genuine re-entry (compaction, a second Phase 1.5
     pass). Author-then-execute in one session now reaches it on the
     first execute, a path with no prior coverage anywhere -- raised by
-    doe-claude-em in cross-repo/inbox/2026-08-12-doe-claude-em-claim-at-
+    coordinator-content-repo-em in cross-repo/inbox/2026-08-12-coordinator-content-repo-em-claim-at-
     authorship-widened.md, which correctly noted it had never run.
 
     Guards `claim_artifact`'s plan-class-only re-entrant self-claim

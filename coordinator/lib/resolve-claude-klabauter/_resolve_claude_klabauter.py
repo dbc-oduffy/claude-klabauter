@@ -14,7 +14,7 @@ is installed ONCE (alongside every emitted forwarder, in the same shim
 dir — settings-home ``bin/`` and the ``~/.claude/bin`` compat mirror) and
 imported by each forwarder's now-trivial ~6-line body.
 
-Contract preserved verbatim from the prior inline body (DoE-claude
+Contract preserved verbatim from the prior inline body (coordinator-content-repo
 ``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``):
 registry-key resolution rung, ``coordinator/bin`` composition,
 the ``..``-traversal guard, on-disk existence checks for the resolved root
@@ -22,7 +22,7 @@ and ``coordinator/bin``, an *executable* sentinel probe (``archive-stamp-cli``),
 and distinct fail-loud messages for the two on-disk failure modes (wrong/
 incomplete checkout vs. stale/partial migration).
 
-Deliberately does NOT carry the ``_cc_trusted``/``.doe-root`` trust-prefix
+Deliberately does NOT carry the ``_cc_trusted``/``.coordinator-content-root`` trust-prefix
 dance the prior template never carried either — this seam's trust posture
 differs from ``cc-root-source-guard``: ``registry.local.toml`` is a
 per-machine, gitignored, operator-authored config file under the operator's
@@ -33,7 +33,7 @@ is exactly the four checks enumerated above. No sentinel-file fallback
 rung is carried: absence fails loudly (PM ruling).
 
 Spec backlink:
-    DoE-claude coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
+    coordinator-content-repo coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
     docs/plans/2026-07-23-... (M1 — forwarder-ladder extraction + derived set)
     cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
 
@@ -140,7 +140,7 @@ def _settings_home() -> Path:
     is installed standalone into a bare bin/ directory with no package
     context).
 
-    HOME guard (2026-07-28): the Windows claude-doe.cmd -> `bash -c` launch
+    HOME guard (2026-07-28): the Windows claude-author.cmd -> `bash -c` launch
     chain is a NON-LOGIN, cmd-spawned shell env that can present with
     COORDINATOR_SETTINGS_HOME/CLAUDE_HOME/HOME all empty. The prior body then
     fell back to os.path.expanduser("~"), which returns a LITERAL "~" when no
@@ -283,7 +283,7 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
 
 
 # Resolution classes returned alongside the root by
-# ``resolve_claude_klabauter_root_with_class()``. Verbatim from DoE-claude's
+# ``resolve_claude_klabauter_root_with_class()``. Verbatim from coordinator-content-repo's
 # ``coordinator/hooks/scripts/_engine_root.py`` — a conformance fixture
 # (chunk C8) drives both implementations against the same registry-state
 # cases, so the string values themselves are part of the contract, not just
@@ -984,7 +984,7 @@ def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
     cannot develop the engine while running a different copy of it, which is
     a structural fact about THIS session's root vs. the ONE resolved claude-klabauter
     root, not a per-repo exemption. Consequence, deliberate: a session in
-    any OTHER repo (doe-claude, example-retrieval-repo, ...) now diverts to the
+    any OTHER repo (coordinator-content-repo, example-retrieval-repo, ...) now diverts to the
     published engine where it may not have before, even if that repo
     happens to be listed under ``engine.working_repos.*`` (that key remains
     a pure LOCATOR for other callers — see ``setup_chain_walker.py`` — it is
@@ -1040,7 +1040,7 @@ def _is_executable(path: str) -> bool:
     that this one call site executes outside the package, and it took down
     every bareword CLI on PATH at once — ``ModuleNotFoundError:
     coordinator_core`` before the ladder's first line, including
-    ``~/.local/bin/claude-doe``, i.e. launching Claude Code itself.
+    ``~/.local/bin/claude-author``, i.e. launching Claude Code itself.
 
     A lazy import off the resolved root is not the fix either: it would make
     the sentinel probe demand a FULL, importable checkout, conflating

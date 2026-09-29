@@ -9,7 +9,7 @@ prove comma/colon-bearing deliverable text round-trips through the vendored
 schema validator and `schema_validate.parse_yaml`, and pin the newline-in-item
 rejection contract for all three flags.
 
-Spec backlink: DoE-claude:pln-workstream-store-make-the-sanc-546afa § C2
+Spec backlink: coordinator-content-repo:pln-workstream-store-make-the-sanc-546afa § C2
 
 Mirrors: coordinator/tests/test_workstream_store_collision.py (same
 importlib.machinery.SourceFileLoader idiom for the extensionless CLI script,

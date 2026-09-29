@@ -1,9 +1,9 @@
 """
-Parity pin: `claude-doe.py`'s inline interpreter-resolution ladder must stay a
+Parity pin: `claude-author.py`'s inline interpreter-resolution ladder must stay a
 byte-for-byte (modulo the private-name prefix) mirror of
 `coordinator/bin/lib/python_interp.py`.
 
-Purpose: `claude-doe.py` ships STANDALONE (see its `_machine_local_argv`
+Purpose: `claude-author.py` ships STANDALONE (see its `_machine_local_argv`
 docstring) and cannot import a sibling `lib/` module, so it carries its own
 copy of `is_console_python_basename` / `resolve_console_python` inline. A
 second hand-maintained copy of a security-relevant ladder is normally a
@@ -25,10 +25,10 @@ import ast
 from pathlib import Path
 
 BIN_DIR = Path(__file__).resolve().parents[1]
-CLAUDE_DOE_PATH = BIN_DIR / "claude-doe.py"
+CLAUDE_AUTHOR_PATH = BIN_DIR / "claude-author.py"
 PYTHON_INTERP_PATH = BIN_DIR / "lib" / "python_interp.py"
 
-# (inline name in claude-doe.py, shared name in python_interp.py)
+# (inline name in claude-author.py, shared name in python_interp.py)
 PAIRED_FUNCTIONS = [
     ("_is_console_python_basename", "is_console_python_basename"),
     ("_resolve_console_python", "resolve_console_python"),
@@ -73,12 +73,12 @@ def _normalized_body_dump(func: ast.FunctionDef, own_name: str) -> str:
     return ast.dump(func, annotate_fields=True, include_attributes=False)
 
 
-def test_claude_doe_inline_ladder_matches_shared_resolver():
-    claude_doe_tree = ast.parse(CLAUDE_DOE_PATH.read_text(encoding="utf-8"), filename=str(CLAUDE_DOE_PATH))
+def test_claude_author_inline_ladder_matches_shared_resolver():
+    claude_author_tree = ast.parse(CLAUDE_AUTHOR_PATH.read_text(encoding="utf-8"), filename=str(CLAUDE_AUTHOR_PATH))
     python_interp_tree = ast.parse(PYTHON_INTERP_PATH.read_text(encoding="utf-8"), filename=str(PYTHON_INTERP_PATH))
 
     for inline_name, shared_name in PAIRED_FUNCTIONS:
-        inline_func = _find_function(claude_doe_tree, inline_name)
+        inline_func = _find_function(claude_author_tree, inline_name)
         shared_func = _find_function(python_interp_tree, shared_name)
 
         # Drop docstrings: the inline copy's docstring intentionally explains
@@ -100,7 +100,7 @@ def test_claude_doe_inline_ladder_matches_shared_resolver():
         shared_dump = _normalized_body_dump(shared_func, shared_name)
 
         assert inline_dump == shared_dump, (
-            f"claude-doe.py::{inline_name} has drifted from "
+            f"claude-author.py::{inline_name} has drifted from "
             f"python_interp.py::{shared_name} -- these are pinned as an "
             f"intentional standalone duplicate (C6); re-sync the inline body "
             f"from the shared resolver.\n"

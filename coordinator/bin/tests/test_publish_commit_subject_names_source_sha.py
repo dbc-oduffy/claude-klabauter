@@ -1,7 +1,7 @@
 r"""Every percolate commit subject names the SOURCE commit its bytes were cut from.
 
 The publish seam had a currency signal for neither party. A mirror consumer
-executing `X:\claude-klabauter` could not tell whether a fix it had been told
+executing `C:\claude-klabauter` could not tell whether a fix it had been told
 was committed in `claude-klabauter` was live for it, and the publisher could not
 tell that "committed" would be read as "live" (example-retrieval-repo-ue-addon-em,
 2026-08-31: fix `40abe011d` stayed live as a crash for a mirror consumer whose

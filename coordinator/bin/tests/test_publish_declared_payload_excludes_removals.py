@@ -11,7 +11,7 @@ the deletion the same round explicitly performed -- and the failure is
 silent, since the round reports `REMOVE DIR:` and the manifest's own
 `removed[]` names the path, so every surface except the derivation says the
 removal happened. Measured on the `coordinator-claude` mirror 2026-08-26
-(cross-repo/inbox/2026-08-26-doe-claude-em-coordinator-claude-remeasured-
+(cross-repo/inbox/2026-08-26-coordinator-content-repo-em-coordinator-claude-remeasured-
 declared-payload-protects-the-removals.md): the retired `whoami/` package sat
 in both sets at once, 23 of that mirror's 67 outstanding removals -- the
 larger half of what opening the gate was supposed to clear.

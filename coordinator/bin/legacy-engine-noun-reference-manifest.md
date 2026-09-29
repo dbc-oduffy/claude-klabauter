@@ -4,7 +4,7 @@
 # Legacy engine-noun (`claude-klabauter`) four-class reference manifest
 
 repo SHA: `c11c703d2e7b75bbb3723b6cbcf6e01aae8dd30b`  
-DoE-claude SHA: `187d059ae1701e3d4c52ec6c2b8a0860a3a8f7c5`  
+Coordinator-content-repo SHA: `187d059ae1701e3d4c52ec6c2b8a0860a3a8f7c5`  
 Claude-klabauter SHA: `58dbe06b46ad51ed47f97ca7b4db6932b4068df8`
 
 The classified atom is the **LINE**, matching the denominator's unit exactly. A mixed line (carrying more than one class-worthy signal) takes its MOST-BINDING class, in the order **EXTERNALLY-NAMED-THING > CONTRACT-BOUND > RENAMEABLE-LOCAL > PROSE-ONLY**. A mixed line also carries a secondary-class column, so a RENAMEABLE-LOCAL identifier on an otherwise CONTRACT-BOUND/PROSE-ONLY line is never invisibly swallowed.
@@ -96,7 +96,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/app-session.py:50` | PROSE-ONLY | `Spec backlink: claude-klabauter coordinator_core/ops/app_session.py` |
 | `coordinator/bin/archive-paper-trail.py:58` | PROSE-ONLY | `Spec backlink: claude-klabauter coordinator_core/ops/fleet/archive_paper_trail.py` |
 | `coordinator/bin/archive-stamp-cli.py:148` | PROSE-ONLY | `# trigger the error fallback (claude-klabauter-em memo, 2026-07-20).` |
-| `coordinator/bin/break_glass.py:11` | PROSE-ONLY | `is claude-klabauter-resident, not DoE-claude-resident. This module therefore` |
+| `coordinator/bin/break_glass.py:11` | PROSE-ONLY | `is claude-klabauter-resident, not coordinator-content-repo-resident. This module therefore` |
 | `coordinator/bin/break_glass.py:12` | PROSE-ONLY | `lives in claude-klabauter, alongside `setup-verify.py` (one of the tools it` |
 | `coordinator/bin/check-auto-reconcile.py:83` | PROSE-ONLY | `cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md` |
 | `coordinator/bin/check-deferral-orphan-memo.py:50` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
@@ -107,22 +107,22 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/check-engine-drift.py:71` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-12-claude-klabauter-em-engine-drift-workday-start-cadence.md` |
 | `coordinator/bin/check-global-doctrine-mirror.py:182` | PROSE-ONLY | `since migrated to claude-klabauter (commit b644d5a9 here, 8a28a6ca in` |
 | `coordinator/bin/check-global-doctrine-mirror.py:184` | PROSE-ONLY | `REPO root -- self-location now resolves to `<claude-klabauter>/`, which` |
-| `coordinator/bin/check-launch-shape.py:21` | PROSE-ONLY | `where a DoE-claude clone and a claude-klabauter clone are both present and the` |
-| `coordinator/bin/check-multi-event-hook-hardcoded-event.py:85` | PROSE-ONLY | `claude-klabauter while `hooks/` stayed in DoE-claude (DR-047 contract/engine` |
+| `coordinator/bin/check-launch-shape.py:21` | PROSE-ONLY | `where a coordinator-content-repo clone and a claude-klabauter clone are both present and the` |
+| `coordinator/bin/check-multi-event-hook-hardcoded-event.py:85` | PROSE-ONLY | `claude-klabauter while `hooks/` stayed in coordinator-content-repo (DR-047 contract/engine` |
 | `coordinator/bin/check-posix-exec-assumptions.py:9` | PROSE-ONLY | `This file lives colocated inside claude-klabauter, so it imports` |
 | `coordinator/bin/check-posix-exec-assumptions.py:21` | PROSE-ONLY | `of cwd -- so this same entrypoint scans claude-klabauter when` |
 | `coordinator/bin/check-watch-state-gitignore-fleet.py:10` | PROSE-ONLY | `That gap is not theoretical: `claude-klabauter` was found on 2026-09-02 with the spool TRACKED, i.e.` |
 | `coordinator/bin/check-watch-state-gitignore-fleet.py:161` | PROSE-ONLY | `then appends a duplicate of a rule already there. Measured on `claude-klabauter`, 2026-09-02,` |
 | `coordinator/bin/check-watch-state-gitignore-fleet.py:252` | - | `print("twice on claude-klabauter, 2026-09-02. Afterwards, always confirm with:")` |
 | `coordinator/bin/classify-env-var-callers.py:169` | - | `"'the engine checkout root' and names repos.claude_klabauter as the lever. "` |
-| `coordinator/bin/claude-doe.py:342` | PROSE-ONLY | `#: `coordinator_core.engine_root`'s rung 1.5 reads `.claude-klabauter-live-root` ahead of its` |
+| `coordinator/bin/claude-author.py:342` | PROSE-ONLY | `#: `coordinator_core.engine_root`'s rung 1.5 reads `.claude-klabauter-live-root` ahead of its` |
 | `coordinator/bin/claude-ue-bootstrap.py:101` | PROSE-ONLY | `# 2026-08-12, inside claude-klabauter). Reject flag-shaped and non-existent` |
 | `coordinator/bin/close-origin-stub-on-ship.py:27` | PROSE-ONLY | `cross-repo/archive/2026-07-14-claude-klabauter-em-dr059-portship-handshake-contract.md` |
 | `coordinator/bin/coordinator-complete-entry.py:52` | PROSE-ONLY | `#          claude-klabauter coordinator_core.ops.coordinator_complete_entry)` |
 | `coordinator/bin/coordinator-doc-new.py:142` | PROSE-ONLY | `pointer file → machine-local ``repos.claude_klabauter``), so a hand-set` |
 | `coordinator/bin/coordinator-doc-new.py:529` | PROSE-ONLY | `# reviewer's own confined Bash call), and must keep working even when claude-klabauter's own` |
 | `coordinator/bin/coordinator-doc-new.py:561` | PROSE-ONLY | `wrong: five confirmed misattributions across claude-klabauter and example-retrieval-repo in` |
-| `coordinator/bin/coordinator-doc-new.py:857` | PROSE-ONLY | `(DoE-claude); coordinator_core.handoff_creation_guard (claude-klabauter) — the` |
+| `coordinator/bin/coordinator-doc-new.py:857` | PROSE-ONLY | `(coordinator-content-repo); coordinator_core.handoff_creation_guard (claude-klabauter) — the` |
 | `coordinator/bin/coordinator-doc-new.py:1294` | - | `"""Resolve the human-readable harness name (e.g. `claude-klabauter-76`) of` |
 | `coordinator/bin/coordinator-doc-new.py:1355` | PROSE-ONLY | `as `claude-klabauter-76 (7f3a...-...)`, not the repo-wide EM role string` |
 | `coordinator/bin/coordinator-doc-new.py:1365` | PROSE-ONLY | `"claude-klabauter-49" reached the wrong one of two live sessions with that` |
@@ -169,12 +169,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/coordinator-resolve-validation-cmd.py:106` | PROSE-ONLY | `coordinator_core is co-located in this same repo (claude-klabauter) —` |
 | `coordinator/bin/coordinator-safe-commit.py:646` | PROSE-ONLY | `claude-klabauter-ad: six re-points across five of twelve peers in one` |
 | `coordinator/bin/coordinator-safe-commit.py:1246` | PROSE-ONLY | `# it is wrong exactly when the hazard is real -- claude-klabauter-15 followed` |
-| `coordinator/bin/count-distill-backlog.py:58` | PROSE-ONLY | `from DoE-claude into claude-klabauter's `coordinator/bin/`, while` |
-| `coordinator/bin/count-distill-backlog.py:60` | PROSE-ONLY | `stayed in DoE-claude. Claude-klabauter ALSO has its own `archive/completed`` |
-| `coordinator/bin/count-distill-backlog.py:63` | PROSE-ONLY | `claude-klabauter's OWN backlog instead of DoE-claude's: wrong answer, zero` |
+| `coordinator/bin/count-distill-backlog.py:58` | PROSE-ONLY | `from coordinator-content-repo into claude-klabauter's `coordinator/bin/`, while` |
+| `coordinator/bin/count-distill-backlog.py:60` | PROSE-ONLY | `stayed in coordinator-content-repo. Claude-klabauter ALSO has its own `archive/completed`` |
+| `coordinator/bin/count-distill-backlog.py:63` | PROSE-ONLY | `claude-klabauter's OWN backlog instead of coordinator-content-repo's: wrong answer, zero` |
 | `coordinator/bin/cross-repo-memo.py:396` | PROSE-ONLY | `# Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-check-addressee-op-facade-repoint.md` |
 | `coordinator/bin/cross-repo-memo.py:423` | PROSE-ONLY | `# contract surface: claude-klabauter's coordinator_core/ops/fleet/_memo_resolver.py` |
-| `coordinator/bin/cross-repo-memo.py:1439` | PROSE-ONLY | `# DoE-claude, example-retrieval-repo, claude-klabauter, example-cockpit-repo,` |
+| `coordinator/bin/cross-repo-memo.py:1439` | PROSE-ONLY | `# coordinator-content-repo, example-retrieval-repo, claude-klabauter, example-cockpit-repo,` |
 | `coordinator/bin/cross-repo-memo.py:2373` | PROSE-ONLY | `cross-repo/inbox/2026-07-21-claude-klabauter-em-scoped-to-engine-fixed-gate-is-yours.md).` |
 | `coordinator/bin/cross-repo-memo.py:2431` | PROSE-ONLY | `receiver-side frontmatter (claude-klabauter bcc7cdbe). Sub-keys absent/blank` |
 | `coordinator/bin/cross-repo-memo.py:2818` | PROSE-ONLY | `# 'claude-klabauter-em') rather than hard-failing — see memo_draft.py's` |
@@ -190,15 +190,15 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/emit-artifact-shape-contract.py:89` | PROSE-ONLY | `executable migrated to claude-klabauter while schemas/ and artifact-shape-contract/` |
 | `coordinator/bin/emit-guard-enforcement-join.py:152` | - | `"source_repo": "claude-klabauter",` |
 | `coordinator/bin/fan-out-dispatch.py:86` | PROSE-ONLY | `away from this script (claude-klabauter-resident) — see coordinator_data_root.py's` |
-| `coordinator/bin/fan-out-integrator.py:56` | PROSE-ONLY | `# lives in claude-klabauter while snippets/ stayed in DoE-claude (DR-047 split), so a naive` |
+| `coordinator/bin/fan-out-integrator.py:56` | PROSE-ONLY | `# lives in claude-klabauter while snippets/ stayed in coordinator-content-repo (DR-047 split), so a naive` |
 | `coordinator/bin/fan-out-integrator.py:57` | PROSE-ONLY | `# `dirname(dirname(__file__))` walk lands inside claude-klabauter where snippets/ no longer` |
 | `coordinator/bin/find-polluter.py:15` | PROSE-ONLY | `../claude-klabauter/coordinator_core/ops/find_polluter.py` |
 | `coordinator/bin/find-polluter.py:16` | PROSE-ONLY | `Test: ../claude-klabauter/coordinator_core/ops/test_find_polluter.py (pytest,` |
 | `coordinator/bin/fleet-env.py:21` | PROSE-ONLY | `has a precedent for a path-valued key: `_machine_local_get("repos.claude_klabauter")`` |
-| `coordinator/bin/frontmatter-parse-check.py:6` | PROSE-ONLY | `claude-klabauter and DoE-claude do not parse — plans, lessons, decisions,` |
-| `coordinator/bin/gen-claude-doe-launcher.py:49` | PROSE-ONLY | `executable-surface migration moved this trampoline into claude-klabauter` |
-| `coordinator/bin/gen-claude-doe-shim.py:20` | PROSE-ONLY | `# over that claude-klabauter (engine) module — it lives in claude-klabauter post the` |
-| `coordinator/bin/gen-claude-doe-shim.py:72` | PROSE-ONLY | `claude-klabauter while `templates/` stayed in DoE-claude (DR-047` |
+| `coordinator/bin/frontmatter-parse-check.py:6` | PROSE-ONLY | `claude-klabauter and coordinator-content-repo do not parse — plans, lessons, decisions,` |
+| `coordinator/bin/gen-claude-author-launcher.py:49` | PROSE-ONLY | `executable-surface migration moved this trampoline into claude-klabauter` |
+| `coordinator/bin/gen-claude-author-shim.py:20` | PROSE-ONLY | `# over that claude-klabauter (engine) module — it lives in claude-klabauter post the` |
+| `coordinator/bin/gen-claude-author-shim.py:72` | PROSE-ONLY | `claude-klabauter while `templates/` stayed in coordinator-content-repo (DR-047` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:3` | PROSE-ONLY | `Purpose: reads repos.claude_klabauter from the machine-local registry and writes` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:4` | PROSE-ONLY | `<settings-home>/machine-local/.claude-klabauter-live-root (one line, the claude-klabauter repo root, no` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:30` | PROSE-ONLY | `2. machine-local get repos.claude_klabauter (via a direct subprocess call to` |
@@ -256,12 +256,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/lib/git_hook_install.py:162` | PROSE-ONLY | `#: 0.172s cpu, and 35 of the 36 asked for `repos.claude_klabauter` — the same` |
 | `coordinator/bin/lib/git_hook_install.py:275` | PROSE-ONLY | `Rung 3: `machine-local get repos.claude_klabauter` →` |
 | `coordinator/bin/lib/git_hook_install.py:297` | PROSE-ONLY | `RUNG 4 EXISTS BECAUSE RUNGS 1-3 ALL NAME AUTHORING TREES. `claude-klabauter`` |
-| `coordinator/bin/lib/git_hook_install.py:301` | PROSE-ONLY | `doctrine clone, no `.doe-root`, no `repos.claude_klabauter`, and` |
+| `coordinator/bin/lib/git_hook_install.py:301` | PROSE-ONLY | `doctrine clone, no `.coordinator-content-root`, no `repos.claude_klabauter`, and` |
 | `coordinator/bin/lib/git_hook_install.py:377` | - | `claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")` |
 | `coordinator/bin/lib/git_hook_install.py:408` | - | `"""Best-effort, install-time-only read of `repos.claude_klabauter` for baking` |
 | `coordinator/bin/lib/git_hook_install.py:415` | - | `claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")` |
 | `coordinator/bin/lib/git_hook_install.py:610` | PROSE-ONLY | `claude-klabauter-59 on 2026-08-25. This is not that: the caller passes` |
-| `coordinator/bin/lib/git_hook_install.py:782` | - | `'.doe-root, machine-local repos.claude_klabauter, and marketplace) — commits '` |
+| `coordinator/bin/lib/git_hook_install.py:782` | - | `'.coordinator-content-root, machine-local repos.claude_klabauter, and marketplace) — commits '` |
 | `coordinator/bin/lib/git_hook_install.py:909` | - | `'machine-local repos.claude_klabauter, and marketplace) — commits are NOT being '` |
 | `coordinator/bin/lib/handoff_lifecycle.py:7` | PROSE-ONLY | `claude-klabauter) — the on-disk corpus is MIXED. Every Python reader of these` |
 | `coordinator/bin/lib/memo_compose.py:91` | PROSE-ONLY | `Matches the shape claude-klabauter's memo.send op composes into` |
@@ -273,19 +273,19 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/lib/test_git_hook_install.py:414` | - | `"""Ordering invariant, owned by claude-klabauter-59 and stated` |
 | `coordinator/bin/memo-outbox-tracking-guard.py:6` | PROSE-ONLY | `a tenth sweep was already in progress. The mechanism that produces them is claude-klabauter's (a` |
 | `coordinator/bin/memo-outbox-tracking-guard.py:55` | PROSE-ONLY | ``D `+`??` pair. Discharged claude-klabauter's side; a reader who expects leg 2 to have caught it will` |
-| `coordinator/bin/mise-prep-entry.py:97` | PROSE-ONLY | `Landed here (`coordinator/bin/mise-prep-entry.py`, claude-klabauter) from DoE-claude` |
-| `coordinator/bin/mise-prep-run.py:42` | PROSE-ONLY | `Landed here (`coordinator/bin/mise-prep-run.py`, claude-klabauter) from DoE-claude` |
+| `coordinator/bin/mise-prep-entry.py:97` | PROSE-ONLY | `Landed here (`coordinator/bin/mise-prep-entry.py`, claude-klabauter) from coordinator-content-repo` |
+| `coordinator/bin/mise-prep-run.py:42` | PROSE-ONLY | `Landed here (`coordinator/bin/mise-prep-run.py`, claude-klabauter) from coordinator-content-repo` |
 | `coordinator/bin/normalize-consumed-frontmatter.py:54` | PROSE-ONLY | `#     (claude-klabauter, renamed from normalize_consumed_frontmatter per` |
 | `coordinator/bin/percolate-gate.py:444` | PROSE-ONLY | `# stem under any extension still gates (`/x/notes.md`, `/x/claude-klabauter`),` |
-| `coordinator/bin/percolate-gate.py:492` | PROSE-ONLY | ``/x/claude-klabauter` (nothing path-like before the `/`) and every `X:/...`` |
+| `coordinator/bin/percolate-gate.py:492` | PROSE-ONLY | ``/x/claude-klabauter` (nothing path-like before the `/`) and every `C:/...`` |
 | `coordinator/bin/percolate-liveops-preflight.py:262` | PROSE-ONLY | `# on-disk path -- e.g. `repos.claude_klabauter` and `_this_repo` here).` |
 | `coordinator/bin/percolate-preflight-scratch-publish.py:83` | PROSE-ONLY | `machine-local repos.claude_klabauter -> raise) and returns <claude_klabauter_root>/coordinator.` |
 | `coordinator/bin/percolate-preflight-scratch-publish.py:128` | - | `f"checkout root ({exc}). Set repos.claude_klabauter in the machine-local registry, "` |
 | `coordinator/bin/percolate-round.py:733` | PROSE-ONLY | `# claude-klabauter against a dispatch root of claude-klabauter).` |
 | `coordinator/bin/plan-reversibility-eligibility.py:49` | PROSE-ONLY | `touching that schema at all trips `claude-klabauter`'s byte-for-byte `check_schema_drift(ref="HEAD")`` |
-| `coordinator/bin/plan-spine-check.py:39` | PROSE-ONLY | `Landed here (`coordinator/bin/plan-spine-check.py`, claude-klabauter) from DoE-claude` |
+| `coordinator/bin/plan-spine-check.py:39` | PROSE-ONLY | `Landed here (`coordinator/bin/plan-spine-check.py`, claude-klabauter) from coordinator-content-repo` |
 | `coordinator/bin/pre_commit_corpus_artifact_guard.py:25` | PROSE-ONLY | `(claude-klabauter CLAUDE.md § Runtime conventions). Not a translation — the path leg is new,` |
-| `coordinator/bin/probe-onboarding-currency.py:20` | PROSE-ONLY | `DoE-claude into claude-klabauter while coordinator-schema-version stayed behind` |
+| `coordinator/bin/probe-onboarding-currency.py:20` | PROSE-ONLY | `coordinator-content-repo into claude-klabauter while coordinator-schema-version stayed behind` |
 | `coordinator/bin/publish.py:5807` | PROSE-ONLY | `(measured by claude-klabauter-a8, 2026-09-01).` |
 | `coordinator/bin/publish.py:5975` | PROSE-ONLY | `# 2026-08-04-claude-klabauter-em-ref-materialization-ratified-here-is-the-` |
 | `coordinator/bin/reap-integrated-review-findings.py:89` | PROSE-ONLY | `#   claude-klabauter tree: docs/decisions/DR-218-review-trail-aged-unintegrated-reap-boundary.md` |
@@ -313,9 +313,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/resolve-session-address.py:118` | PROSE-ONLY | `# A session id is a UUID. A NAME (`claude-klabauter-74`) reaches this CLI often --` |
 | `coordinator/bin/survey-consume-gate.py:24` | PROSE-ONLY | `"claude_klabauter_root": "<absolute path to a claude-klabauter checkout>",` |
 | `coordinator/bin/survey-consume-gate.py:55` | PROSE-ONLY | `mirror (`source_map` resolves `bin`/`lib` against `claude-klabauter`), and` |
-| `coordinator/bin/sweep-boot.py:11` | PROSE-ONLY | `claude-klabauter and 32 in DoE-claude, from 55 distinct sessions, one per session` |
+| `coordinator/bin/sweep-boot.py:11` | PROSE-ONLY | `claude-klabauter and 32 in coordinator-content-repo, from 55 distinct sessions, one per session` |
 | `coordinator/bin/sync-cockpit-contract.py:38` | PROSE-ONLY | `executable-surface migration moved this script into claude-klabauter while` |
-| `coordinator/bin/test_lessons_outbox_drain.py:182` | PROSE-ONLY | `# Real on-disk entries in both claude-klabauter and DoE-claude carry this shape;` |
+| `coordinator/bin/test_lessons_outbox_drain.py:182` | PROSE-ONLY | `# Real on-disk entries in both claude-klabauter and coordinator-content-repo carry this shape;` |
 | `coordinator/bin/test_queue_append_central_root_parity.py:77` | - | `"""Absolute path to the claude-klabauter repo root (two levels up from bin/)."""` |
 | `coordinator/bin/test_queue_append_central_root_parity.py:120` | PROSE-ONLY | `this test must pass identically on a fresh clone with no `repos.claude_klabauter`` |
 | `coordinator/bin/test_seed_marketplace_enabledplugins.py:4` | PROSE-ONLY | `Mirrors claude-klabauter's shipped `seed_enabled_plugins.py` test shape (9-test` |
@@ -396,18 +396,18 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_coordinator_doc_new_spinoff_marker.py:68` | - | `def _scaffold(display_name: str \| None = "claude-klabauter-51") -> str:` |
 | `coordinator/bin/tests/test_coordinator_doc_new_spinoff_resolvable_fields.py:86` | - | `_cli, "_resolve_session_display_name", return_value="claude-klabauter-51"` |
 | `coordinator/bin/tests/test_doctor_probe_ladder_parity.py:105` | PROSE-ONLY | `# have `repos.claude_klabauter` registered -- neutralize it so this test` |
-| `coordinator/bin/tests/test_doe_root_routing.py:439` | PROSE-ONLY | `so the WARN this produces names claude-klabauter's own unresolvable-root` |
-| `coordinator/bin/tests/test_doe_root_routing.py:442` | PROSE-ONLY | `remediation (repos.doe_claude or repos.claude_klabauter), not a specific` |
-| `coordinator/bin/tests/test_doe_root_routing.py:449` | - | `assert "DOE_ROOT" in err or "claude_klabauter" in err or "claude-klabauter" in err, (` |
-| `coordinator/bin/tests/test_doe_root_routing.py:450` | - | `"cold-path WARN must name a real remediation (DOE_ROOT or claude-klabauter root)"` |
+| `coordinator/bin/tests/test_content_root_routing.py:439` | PROSE-ONLY | `so the WARN this produces names claude-klabauter's own unresolvable-root` |
+| `coordinator/bin/tests/test_content_root_routing.py:442` | PROSE-ONLY | `remediation (repos.content_root or repos.claude_klabauter), not a specific` |
+| `coordinator/bin/tests/test_content_root_routing.py:449` | - | `assert "CONTENT_ROOT" in err or "claude_klabauter" in err or "claude-klabauter" in err, (` |
+| `coordinator/bin/tests/test_content_root_routing.py:450` | - | `"cold-path WARN must name a real remediation (CONTENT_ROOT or claude-klabauter root)"` |
 | `coordinator/bin/tests/test_generate_tested_platforms_manifest_path.py:16` | PROSE-ONLY | `Spec backlink: slice-3 review carried loose end, claude-klabauter` |
 | `coordinator/bin/tests/test_handoff_loe_summary.py:283` | PROSE-ONLY | `IS claude-klabauter, so `coordinator_core` is genuinely importable here."""` |
 | `coordinator/bin/tests/test_harvest_deferrals_dedup_scan_memoized.py:153` | PROSE-ONLY | `# `machine-local get repos.claude_klabauter` spawn, memoized after the` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:27` | PROSE-ONLY | `native `queue.append` op) to `cli_shared.claude_klabauter_root()` (repos.claude_klabauter)` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:125` | PROSE-ONLY | `# and `get repos.claude_klabauter` with fixed fixture paths, exercising` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:138` | PROSE-ONLY | `if sys.argv[2] == "repos.claude_klabauter":` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:179` | PROSE-ONLY | `improvement-queue leg (via cli_shared.claude_klabauter_root(), repos.claude_klabauter)` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:213` | - | `f"repos.claude_klabauter rung) in {dirs!r} — the central-scope "` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:27` | PROSE-ONLY | `native `queue.append` op) to `cli_shared.claude_klabauter_root()` (repos.claude_klabauter)` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:125` | PROSE-ONLY | `# and `get repos.claude_klabauter` with fixed fixture paths, exercising` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:138` | PROSE-ONLY | `if sys.argv[2] == "repos.claude_klabauter":` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:179` | PROSE-ONLY | `improvement-queue leg (via cli_shared.claude_klabauter_root(), repos.claude_klabauter)` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:213` | - | `f"repos.claude_klabauter rung) in {dirs!r} — the central-scope "` |
 | `coordinator/bin/tests/test_isolation_root_not_honoured_outside_tests.py:128` | - | `"claude-klabauter-em",` |
 | `coordinator/bin/tests/test_lesson_promote.py:317` | - | `skipped_result = {"skipped": True, "reason": "repos.claude_klabauter not configured"}` |
 | `coordinator/bin/tests/test_merge_gate_and_pr.py:240` | PROSE-ONLY | `# `GET /repos/dbc-example-operator/claude-klabauter/rulesets` is non-empty first.` |
@@ -422,7 +422,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_percolate_gate.py:598` | - | `'registry_set("repos.k", "/x/claude-klabauter")',` |
 | `coordinator/bin/tests/test_percolate_gate.py:637` | - | `"- shortname: claude-klabauter\n  path: /x/claude-klabauter\n",` |
 | `coordinator/bin/tests/test_plan_tasks_spine_and_harvest.py:119` | PROSE-ONLY | `# script moved to claude-klabauter; schemas/ did not) — resolve via the shared` |
-| `coordinator/bin/tests/test_plan_tasks_spine_and_harvest.py:163` | PROSE-ONLY | `claude-klabauter's own `state/improvement-queue/` and in DoE-claude's` |
+| `coordinator/bin/tests/test_plan_tasks_spine_and_harvest.py:163` | PROSE-ONLY | `claude-klabauter's own `state/improvement-queue/` and in coordinator-content-repo's` |
 | `coordinator/bin/tests/test_publish_commit_subject_names_source_sha.py:5` | PROSE-ONLY | `was committed in `claude-klabauter` was live for it, and the publisher could not` |
 | `coordinator/bin/tests/test_publish_preswap_payload_gate.py:225` | PROSE-ONLY | `"plugin-source:claude-klabauter/coordinator=bin,lib"`) lands at` |
 | `coordinator/bin/tests/test_publish_preswap_payload_gate.py:403` | PROSE-ONLY | ``source_map == "plugin-source:claude-klabauter/coordinator=bin,` |
@@ -502,7 +502,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/lib/install-substrate.py:70` | PROSE-ONLY | `inside the DoE clone; this trampoline was migrated into claude-klabauter,` |
 | `coordinator/lib/percolate/ensure_required_targets.py:411` | PROSE-ONLY | `migration moved this module into claude-klabauter while `setup/` stayed in` |
 | `coordinator/lib/percolate/resolve_target.py:5` | PROSE-ONLY | `[\|allowlist]]` form the publish.sh main loop (and, downstream, claude-klabauter's` |
-| `coordinator/lib/percolate/resolve_target.py:503` | PROSE-ONLY | `# (repos.doe_claude, repos.claude_klabauter, …) while` |
+| `coordinator/lib/percolate/resolve_target.py:503` | PROSE-ONLY | `# (repos.content_root, repos.claude_klabauter, …) while` |
 | `coordinator/lib/percolate/resolve_target.py:505` | PROSE-ONLY | `# name (plugin-source:claude-klabauter) — normalize before` |
 | `coordinator/lib/percolate/targets.py:422` | PROSE-ONLY | `# which post-split lands on claude-klabauter's root — KNOWN-WRONG for the` |
 | `coordinator/lib/percolate/tests/test_post_transform_projection_parses.py:12` | PROSE-ONLY | ``percolate-store.yaml`'s `base.depersonalize` maps BOTH `claude-klabauter` and `claude-klabauter` to` |
@@ -589,7 +589,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_arrival_check_launch_shape.py:9` | PROSE-ONLY | `install-surface wiring, outside this repo's tree entirely (claude-klabauter CLAUDE.md § Three` |
 | `coordinator/tests/test_arrival_check_watch_state_gitignore_fleet.py:124` | PROSE-ONLY | `a duplicate. Measured on `claude-klabauter` 2026-09-02; the misread lands precisely on the` |
 | `coordinator/tests/test_arrival_check_watch_state_gitignore_fleet.py:154` | PROSE-ONLY | `the file just removed and exits 0 -- measured twice on claude-klabauter 2026-09-02, both times` |
-| `coordinator/tests/test_arrival_compose_review_wave.py:28` | PROSE-ONLY | `(claude-klabauter CLAUDE.md § Three planes: doctrine stays in DoE-claude).` |
+| `coordinator/tests/test_arrival_compose_review_wave.py:28` | PROSE-ONLY | `(claude-klabauter CLAUDE.md § Three planes: doctrine stays in coordinator-content-repo).` |
 | `coordinator/tests/test_arrival_expired_plan_gates.py:201` | - | `"  - owner_repo: claude-klabauter\n"` |
 | `coordinator/tests/test_arrival_expired_plan_gates.py:202` | - | `"    condition: the done verb must ship in claude-klabauter\n"` |
 | `coordinator/tests/test_arrival_expired_plan_gates.py:207` | - | `assert "the done verb must ship in claude-klabauter" in result.stdout` |
@@ -615,7 +615,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_check_deferral_partial_strangle.py:13` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
 | `coordinator/tests/test_check_em_environment.py:34` | PROSE-ONLY | `unresolvable (no `repos.claude_klabauter` machine-local entry) as a` |
 | `coordinator/tests/test_check_engine_drift.py:12` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-12-claude-klabauter-em-engine-drift-workday-start-cadence.md` |
-| `coordinator/tests/test_check_global_doctrine_mirror_repo_root.py:6` | PROSE-ONLY | `migrated to claude-klabauter (b644d5a9 in DoE-claude, 8a28a6ca here) while` |
+| `coordinator/tests/test_check_global_doctrine_mirror_repo_root.py:6` | PROSE-ONLY | `migrated to claude-klabauter (b644d5a9 in coordinator-content-repo, 8a28a6ca here) while` |
 | `coordinator/tests/test_check_machine_local_regeneratability.py:61` | PROSE-ONLY | `# already IS the repo root. The prior form appended "..", "claude-klabauter",` |
 | `coordinator/tests/test_check_machine_local_regeneratability.py:64` | PROSE-ONLY | `# resolved correctly only on a clone that happens to be named `claude-klabauter`,` |
 | `coordinator/tests/test_check_machine_local_regeneratability.py:99` | - | `pytest.skip(f"claude-klabauter checkout not found at {_CLAUDE_KLABAUTER_ROOT!r} — cannot exercise the real op")` |
@@ -644,15 +644,15 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_dr_allocator.py:319` | PROSE-ONLY | `# claude-klabauter's Path-based test suite as the reason PathLike is` |
 | `coordinator/tests/test_dr_allocator.py:428` | PROSE-ONLY | `exactly what a vendoring consumer (e.g. Claude-klabauter) will have on` |
 | `coordinator/tests/test_emit_artifact_shape_contract_coordinator_root.py:6` | PROSE-ONLY | `migrated to claude-klabauter while coordinator/schemas/ and` |
-| `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:34` | PROSE-ONLY | `X:\\claude-klabauter` (abs-path-ok: quoted historical evidence from a closed` |
-| `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:229` | - | `("repo root: X:\\claude-klabauter\nEXIT=0", {"windows"}),` |
+| `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:34` | PROSE-ONLY | `C:\\claude-klabauter` (abs-path-ok: quoted historical evidence from a closed` |
+| `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:229` | - | `("repo root: C:\\claude-klabauter\nEXIT=0", {"windows"}),` |
 | `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:230` | - | `("repo root: /Users/example-operator/X/claude-klabauter\nEXIT=0", {"macos"}),` |
 | `coordinator/tests/test_falsifier_proves_the_platform_it_names.py:231` | - | `("repo root: /home/ci/claude-klabauter\nEXIT=0", {"linux"}),` |
 | `coordinator/tests/test_generate_exec_summary.py:16` | PROSE-ONLY | `claude-klabauter); this port exercises the DoE-side CLI trampoline` |
 | `coordinator/tests/test_generate_exec_summary.py:45` | PROSE-ONLY | `# already IS the repo root. The prior form appended "..", "claude-klabauter",` |
 | `coordinator/tests/test_generate_exec_summary.py:48` | PROSE-ONLY | `# resolved correctly only on a clone that happens to be named `claude-klabauter`,` |
 | `coordinator/tests/test_generate_exec_summary.py:69` | - | `pytest.skip(f"claude-klabauter checkout not found at {_CLAUDE_KLABAUTER_ROOT!r} — cannot exercise the real op")` |
-| `coordinator/tests/test_git_hook_install_resolve_coord_bin.py:10` | PROSE-ONLY | `out of DoE-claude's coordinator/bin/ into claude-klabauter's) shipped silently` |
+| `coordinator/tests/test_git_hook_install_resolve_coord_bin.py:10` | PROSE-ONLY | `out of coordinator-content-repo's coordinator/bin/ into claude-klabauter's) shipped silently` |
 | `coordinator/tests/test_git_hook_install_resolve_coord_bin.py:22` | PROSE-ONLY | `- the new claude-klabauter executables rung (`repos.claude_klabauter` via` |
 | `coordinator/tests/test_git_hook_install_resolve_coord_bin.py:114` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator/tests/test_git_hook_install_resolve_coord_bin.py:123` | - | `"repos.claude_klabauter": str(claude_klabauter_root),` |
@@ -705,7 +705,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_percolate_resolve_target.py:231` | - | `assert "machine-local set repos.claude_klabauter" in err.message` |
 | `coordinator/tests/test_percolate_resolve_target.py:235` | - | `"""When `plugin.mirrors.claude-klabauter.source_path` is unset but the` |
 | `coordinator/tests/test_percolate_resolve_target.py:236` | PROSE-ONLY | `already-provisioned `repos.claude_klabauter` key IS set (the standing` |
-| `coordinator/tests/test_percolate_resolve_target.py:237` | PROSE-ONLY | `fleet convention — repos.doe_claude / repos.claude_klabauter are set on` |
+| `coordinator/tests/test_percolate_resolve_target.py:237` | PROSE-ONLY | `fleet convention — repos.content_root / repos.claude_klabauter are set on` |
 | `coordinator/tests/test_percolate_resolve_target.py:245` | - | `"repos.claude_klabauter": "/abs/repos/claude-klabauter",` |
 | `coordinator/tests/test_percolate_resolve_target.py:250` | - | `assert fields[6] == "/abs/repos/claude-klabauter/coordinator=bin,lib"` |
 | `coordinator/tests/test_percolate_resolve_target.py:261` | - | `"plugin.mirrors.claude-klabauter.source_path": "/abs/plugin/claude-klabauter",` |
@@ -742,7 +742,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_records_query_repo_root.py:150` | - | `assert "claude-klabauter" not in line, f"record path resolved outside this repo: {line!r}"` |
 | `coordinator/tests/test_refresh_plugin_live_install_integration.py:68` | - | `pointer = Path(settings_home) / "machine-local" / ".claude-klabauter-live-root"` |
 | `coordinator/tests/test_refresh_source_is_live_venv.py:78` | PROSE-ONLY | `# local/.claude-klabauter-live-root` pointer resolves fine on its own; verified directly).` |
-| `coordinator/tests/test_regen_cockpit_schema_doe_root.py:6` | PROSE-ONLY | `executable migrated from DoE-claude to claude-klabauter` |
+| `coordinator/tests/test_regen_cockpit_schema_content_root.py:6` | PROSE-ONLY | `executable migrated from coordinator-content-repo to claude-klabauter` |
 | `coordinator/tests/test_relativize_prov_path.py:3` | PROSE-ONLY | `Spec backlink: cross-repo/archive/2026-07-21-claude-klabauter-em-lessons-producer-absolute-provenance-path-relativize-at-source.md` |
 | `coordinator/tests/test_repomap_wrapper_resolution.py:51` | - | `"""Resolve the engine root via `machine-local get repos.claude_klabauter` before` |
 | `coordinator/tests/test_repomap_wrapper_resolution.py:57` | - | `["machine-local", "get", "repos.claude_klabauter"],` |
@@ -774,7 +774,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_trusted_root_guard_cli.py:14` | PROSE-ONLY | ``coordinator_core.trusted_root_guard` (claude-klabauter) as part of the` |
 | `coordinator/tests/test_trusted_root_guard_cli.py:18` | PROSE-ONLY | `claude-klabauter's own test suite — DR-047: DoE owns contract, claude-klabauter owns` |
 | `coordinator/tests/test_trusted_root_guard_cli.py:53` | PROSE-ONLY | `Native module: claude-klabauter coordinator_core/trusted_root_guard.py` |
-| `coordinator/tests/test_verify_dist_publish_repo_sync_plugin_root.py:6` | PROSE-ONLY | `migrated to claude-klabauter (b644d5a9 in DoE-claude, 8a28a6ca here) while` |
+| `coordinator/tests/test_verify_dist_publish_repo_sync_plugin_root.py:6` | PROSE-ONLY | `migrated to claude-klabauter (b644d5a9 in coordinator-content-repo, 8a28a6ca here) while` |
 | `coordinator/tests/test_verify_publish_targets_portable_sync.py:223` | - | `"claude-klabauter": "claude-klabauter\|mirror\|publish-mirror:claude_klabauter\|plugin-source:claude-klabauter/coordinator_core\|coordinator_core",` |
 | `coordinator/tests/test_verify_publish_targets_portable_sync.py:316` | - | `assert vpts._source_map_routed_entries("plugin-source:claude-klabauter/coordinator=bin,lib") == (` |
 | `coordinator/tests/test_verify_publish_targets_portable_sync.py:732` | PROSE-ONLY | ``claude-klabauter` unregistered on this machine and the self-location` |
@@ -795,14 +795,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/backlog_grind_assemble/directives.py:138` | PROSE-ONLY | `#: targets — claude-klabauter `coordinator/bin/tier-u-grant-cli`. Consumed` |
 | `coordinator_core/backlog_grind_assemble/directives.py:267` | PROSE-ONLY | ``tier-u-grant-cli` (claude-klabauter `coordinator/bin/tier-u-grant-cli`` |
 | `coordinator_core/backlog_grind_assemble/readers_sweep.py:195` | PROSE-ONLY | ``claude-klabauter`'s own repo root. When the state root can't be` |
-| `coordinator_core/bash_guards/_alternative_liveness.py:1264` | PROSE-ONLY | ```git -C X:\\claude-klabauter\\coordinator_core status`` tokenizes its path as` |
+| `coordinator_core/bash_guards/_alternative_liveness.py:1264` | PROSE-ONLY | ```git -C C:\\claude-klabauter\\coordinator_core status`` tokenizes its path as` |
 | `coordinator_core/bash_guards/_alternative_liveness.py:1265` | PROSE-ONLY | ```X:claude_klabautercoordinator_core`` -- a path that cannot exist, which` |
 | `coordinator_core/bash_guards/_dialect.py:114` | PROSE-ONLY | `(confirmed this session: `ls` on ``X:`` + backslash + ``claude-klabauter`` +` |
 | `coordinator_core/bash_guards/_dialect.py:115` | PROSE-ONLY | `backslash + ``CLAUDE.md`` errors `cannot access 'X:claude_klabauterCLAUDE.md'`,` |
 | `coordinator_core/bash_guards/_override_doc.py:85` | PROSE-ONLY | `#: claude-klabauter nor its publish mirror -- it named `claude-klabauter`` |
-| `coordinator_core/bash_guards/_write_bump_applicability.py:78` | PROSE-ONLY | `the DoE-claude and claude-klabauter anchors, which would wrongly hand the` |
-| `coordinator_core/bash_guards/_write_bump_applicability.py:86` | PROSE-ONLY | `not the two named keys (`repos.doe_claude`, `repos.claude_klabauter`)` |
-| `coordinator_core/bash_guards/_write_bump_applicability.py:194` | PROSE-ONLY | `#: registered-repo entry -- mirrors `repos.doe_claude` / `repos.claude_klabauter`` |
+| `coordinator_core/bash_guards/_write_bump_applicability.py:78` | PROSE-ONLY | `the coordinator-content-repo and claude-klabauter anchors, which would wrongly hand the` |
+| `coordinator_core/bash_guards/_write_bump_applicability.py:86` | PROSE-ONLY | `not the two named keys (`repos.content_root`, `repos.claude_klabauter`)` |
+| `coordinator_core/bash_guards/_write_bump_applicability.py:194` | PROSE-ONLY | `#: registered-repo entry -- mirrors `repos.content_root` / `repos.claude_klabauter`` |
 | `coordinator_core/bash_guards/_write_bump_session_start.py:48` | PROSE-ONLY | `2. A settings-home hub, `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/` |
 | `coordinator_core/bash_guards/_write_bump_session_start.py:55` | PROSE-ONLY | ``$(coordinator-settings-home)/claude-klabauter/`, never the settings-home root or an ad-hoc` |
 | `coordinator_core/bash_guards/_write_bump_session_start.py:119` | PROSE-ONLY | `#: `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/` — the durable-data-plane` |
@@ -818,11 +818,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/bash_guards/commit_tripwires.py:760` | PROSE-ONLY | `# confirmed in commit 506748a0 (claude-klabauter, 2026-07-27): an EM detected` |
 | `coordinator_core/bash_guards/dispatch.py:833` | - | `"to whoever dispatched you and open claude-klabauter's "` |
 | `coordinator_core/bash_guards/dispatch_checks.py:4188` | PROSE-ONLY | `# and `~/X/claude-klabauter` were all ALLOWED because `~` and` |
-| `coordinator_core/bash_guards/dispatch_checks.py:5611` | PROSE-ONLY | `# claude-klabauter, a shared tree this DoE-claude EM commits into directly and` |
-| `coordinator_core/bash_guards/dispatch_checks.py:5683` | PROSE-ONLY | `(``repos.*``) tracks (claude-klabauter, DoE-claude, and every other` |
+| `coordinator_core/bash_guards/dispatch_checks.py:5611` | PROSE-ONLY | `# claude-klabauter, a shared tree this coordinator-content-repo EM commits into directly and` |
+| `coordinator_core/bash_guards/dispatch_checks.py:5683` | PROSE-ONLY | `(``repos.*``) tracks (claude-klabauter, coordinator-content-repo, and every other` |
 | `coordinator_core/bash_guards/dispatch_checks.py:9486` | PROSE-ONLY | `guard's own repo (`claude-klabauter`, "Windows is first-class" per this` |
-| `coordinator_core/bash_guards/dispatch_checks.py:11521` | PROSE-ONLY | `# actually prints -- Git Bash's `pwd` emits `X:/claude-klabauter`,` |
-| `coordinator_core/bash_guards/dispatch_checks.py:11522` | PROSE-ONLY | `# not `X:\claude-klabauter`, so the unconverted form was a` |
+| `coordinator_core/bash_guards/dispatch_checks.py:11521` | PROSE-ONLY | `# actually prints -- Git Bash's `pwd` emits `C:/claude-klabauter`,` |
+| `coordinator_core/bash_guards/dispatch_checks.py:11522` | PROSE-ONLY | `# not `C:\claude-klabauter`, so the unconverted form was a` |
 | `coordinator_core/bash_guards/tests/guard_message_corpus.py:251` | PROSE-ONLY | `session with nothing to see. Measured 2026-08-26 (claude-klabauter-e6): eight` |
 | `coordinator_core/bash_guards/tests/guard_message_corpus.py:2694` | - | `"from: \"claude-klabauter-em\"\n"` |
 | `coordinator_core/bash_guards/tests/guard_message_corpus.py:2821` | PROSE-ONLY | `claude-klabauter-49", the live incident's own shape) inside a body` |
@@ -831,8 +831,8 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/bash_guards/tests/test_block_subagent_commit.py:1953` | PROSE-ONLY | `2026-08-25 repoint (claude-klabauter-37, cross-session): the prescribed` |
 | `coordinator_core/bash_guards/tests/test_bump_outside_repo_write.py:188` | PROSE-ONLY | `claude-klabauter/`. Isolated per-test via `tmp_path`, matching every` |
 | `coordinator_core/bash_guards/tests/test_bump_outside_repo_write.py:1161` | - | `/ "-Users-example-operator-X-claude-klabauter"` |
-| `coordinator_core/bash_guards/tests/test_bx16_multiprobe_and_headtail_rewrite.py:443` | PROSE-ONLY | `the Git Bash it replaces prints `X:/claude-klabauter` -- and that is` |
-| `coordinator_core/bash_guards/tests/test_check_blanket_git_add.py:25` | PROSE-ONLY | `(claude-klabauter, DoE-claude, every other sibling repo this machine tracks` |
+| `coordinator_core/bash_guards/tests/test_bx16_multiprobe_and_headtail_rewrite.py:443` | PROSE-ONLY | `the Git Bash it replaces prints `C:/claude-klabauter` -- and that is` |
+| `coordinator_core/bash_guards/tests/test_check_blanket_git_add.py:25` | PROSE-ONLY | `(claude-klabauter, coordinator-content-repo, every other sibling repo this machine tracks` |
 | `coordinator_core/bash_guards/tests/test_check_blanket_git_add.py:611` | - | `"\"repos.claude_klabauter\" = '%s'\n"` |
 | `coordinator_core/bash_guards/tests/test_check_test_suite_invocation.py:1813` | PROSE-ONLY | `which exists in claude-klabauter alone -- every other repo silently` |
 | `coordinator_core/bash_guards/tests/test_commit_operand_scan_shattered_message.py:21` | PROSE-ONLY | `shattered residue sits BEFORE the separator. Reported by claude-klabauter-24,` |
@@ -869,14 +869,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/bash_guards/tests/test_override_doc_display_portable.py:136` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/Users/someoperator/claude-klabauter")` |
 | `coordinator_core/bash_guards/tests/test_override_doc_pointer_form.py:18` | PROSE-ONLY | `forbids landing the page under ``<settings-home>/claude-klabauter/`` -- that` |
 | `coordinator_core/bash_guards/tests/test_override_doc_pointer_form.py:20` | PROSE-ONLY | ```~/.coordinator-claude-settings/claude-klabauter/docs/reference/` |
-| `coordinator_core/bash_guards/tests/test_override_doc_pointer_form.py:41` | - | `_CRITERION_MARKERS = ("claude-klabauter", "claude-klabauter", "DoE-claude", "doe-claude-klabauter")` |
+| `coordinator_core/bash_guards/tests/test_override_doc_pointer_form.py:41` | - | `_CRITERION_MARKERS = ("claude-klabauter", "claude-klabauter", "coordinator-content-repo", "content-engine")` |
 | `coordinator_core/bash_guards/tests/test_override_doc_pointer_form.py:48` | - | `"name no repo, mechanically forbidding a claude-klabauter/ destination"` |
-| `coordinator_core/bash_guards/tests/test_override_forwarded_not_ambient.py:21` | PROSE-ONLY | `by claude-klabauter-88 and doe-claude-74 before either had spoken to the other, which is why` |
+| `coordinator_core/bash_guards/tests/test_override_forwarded_not_ambient.py:21` | PROSE-ONLY | `by claude-klabauter-88 and coordinator-content-repo-74 before either had spoken to the other, which is why` |
 | `coordinator_core/bash_guards/tests/test_override_unreachability_boundary.py:176` | PROSE-ONLY | `# claude-klabauter (this repo). The sibling checkout is resolved` |
-| `coordinator_core/bash_guards/tests/test_piped_exit_code_chain.py:69` | - | `"git -C X:/claude-klabauter commit -F m.txt \| tail -1"` |
+| `coordinator_core/bash_guards/tests/test_piped_exit_code_chain.py:69` | - | `"git -C C:/claude-klabauter commit -F m.txt \| tail -1"` |
 | `coordinator_core/bash_guards/tests/test_reviewer_executor_deny_message_parity.py:207` | - | `("machine-local get repos.claude_klabauter", "allow", "allow"),` |
 | `coordinator_core/bash_guards/tests/test_scope_orphan_census.py:4` | PROSE-ONLY | `claude-klabauter checkout, whose live `.git/coordinator-sessions/` logs are` |
-| `coordinator_core/bash_guards/tests/test_write_bump_applicability.py:422` | PROSE-ONLY | `not only `repos.doe_claude` / `repos.claude_klabauter`."""` |
+| `coordinator_core/bash_guards/tests/test_write_bump_applicability.py:422` | PROSE-ONLY | `not only `repos.content_root` / `repos.claude_klabauter`."""` |
 | `coordinator_core/bash_guards/tests/test_write_bump_applicability.py:685` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator_core/bash_guards/tests/test_write_bump_applicability.py:736` | - | `"owner": "claude-klabauter-em",` |
 | `coordinator_core/bash_guards/tests/test_write_bump_applicability.py:747` | - | `assert applicability.publish_destination_owner(str(klabauter_root)) == "claude-klabauter-em"` |
@@ -891,9 +891,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/bash_guards/tests/test_write_bump_message_foreign_paths.py:64` | - | `"/c/Users/example-operator/AppData/Local/Temp/claude/X--claude-klabauter/a-very-long-"` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:18` | PROSE-ONLY | ``/x/claude-klabauter/scratch/t.txt`.` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:73` | - | `"/x/claude-klabauter", "/x/claude-klabauter/scratch/t.txt"` |
-| `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:75` | - | `assert result == "X:\\claude-klabauter\\scratch\\t.txt"  # abs-path-ok: brief-pinned AC1 fixture (C1 brief), synthetic` |
+| `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:75` | - | `assert result == "C:\\claude-klabauter\\scratch\\t.txt"  # abs-path-ok: brief-pinned AC1 fixture (C1 brief), synthetic` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:86` | - | `"/x/claude-klabauter", "/x/claude-klabauter/scratch/t.txt"` |
-| `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:88` | - | `assert result == "X:\\claude-klabauter\\scratch\\t.txt"  # abs-path-ok: brief-pinned AC1 fixture (C1 brief), synthetic` |
+| `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:88` | - | `assert result == "C:\\claude-klabauter\\scratch\\t.txt"  # abs-path-ok: brief-pinned AC1 fixture (C1 brief), synthetic` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:126` | - | `assert shapes.resolve_relative("/x/claude-klabauter", "scratch/t.txt") == (` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:127` | - | `"/x/claude-klabauter/scratch/t.txt"` |
 | `coordinator_core/bash_guards/tests/test_write_bump_path_translation.py:133` | - | `shapes.resolve_relative("/x/claude-klabauter", "/x/other/t.txt")` |
@@ -926,12 +926,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/benchmarks/maintenance_tier_budget.py:120` | PROSE-ONLY | `claude-klabauter .git.` |
 | `coordinator_core/benchmarks/tests/test_commit_path_process_budget.py:121` | PROSE-ONLY | `because at that moment claude-klabauter's own working tree carried another` |
 | `coordinator_core/benchmarks/tests/test_commit_path_process_budget.py:278` | PROSE-ONLY | `spawned child's real machine-local registry or `.claude-klabauter-live-root` pointer` |
-| `coordinator_core/benchmarks/tests/test_op_cli_warm_hop_process_time.py:15` | PROSE-ONLY | `RE-MEASURED THIS SESSION (2026-08-26, this box, k=6, cwd=X:/claude-klabauter,` |
-| `coordinator_core/benchmarks/tests/test_op_cli_warm_hop_process_time.py:30` | PROSE-ONLY | ``X:/claude-klabauter` (this dev checkout) itself carries no` |
+| `coordinator_core/benchmarks/tests/test_op_cli_warm_hop_process_time.py:15` | PROSE-ONLY | `RE-MEASURED THIS SESSION (2026-08-26, this box, k=6, cwd=C:/claude-klabauter,` |
+| `coordinator_core/benchmarks/tests/test_op_cli_warm_hop_process_time.py:30` | PROSE-ONLY | ``C:/claude-klabauter` (this dev checkout) itself carries no` |
 | `coordinator_core/claude_md_budget.py:7` | PROSE-ONLY | `- claude-klabauter `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`` |
 | `coordinator_core/claude_md_budget.py:91` | PROSE-ONLY | `claude-depends-on-claude-klabauter direction. What this module does instead` |
 | `coordinator_core/claude_md_budget.py:112` | PROSE-ONLY | `(a roadmap-dir file under `claude-klabauter state/roadmap/boot-envelope/`,` |
-| `coordinator_core/claude_md_budget.py:190` | PROSE-ONLY | `(DoE-claude's own repo-root CLAUDE.md, claude-klabauter's, any sibling` |
+| `coordinator_core/claude_md_budget.py:190` | PROSE-ONLY | `(coordinator-content-repo's own repo-root CLAUDE.md, claude-klabauter's, any sibling` |
 | `coordinator_core/commit_ledger/store.py:54` | PROSE-ONLY | `Amendment from claude-klabauter-37, 2026-08-26, who was scoping exactly this` |
 | `coordinator_core/commit_ledger/store.py:67` | PROSE-ONLY | `undercount into a loud one. Costed by claude-klabauter-37 as roughly one git` |
 | `coordinator_core/contract/apply_base.py:614` | PROSE-ONLY | `made by a claude-klabauter session, leaving that session unable to author a` |
@@ -943,13 +943,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/contract/cockpit_schema/entities/summaries.py:641` | - | `"bare 'claude-klabauter', underscore variants). Do NOT use it as "` |
 | `coordinator_core/contract/cockpit_schema/tests/test_goal_authoring_wire_projection.py:233` | - | `"repo": "dbc-oduffy/claude-klabauter",` |
 | `coordinator_core/contract/emit_memo_schema.py:126` | - | `"2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, ruled by "` |
-| `coordinator_core/contract/emit_memo_schema.py:244` | - | `"`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "` |
+| `coordinator_core/contract/emit_memo_schema.py:244` | - | `"`repos.<key>` form (e.g. repos.content_root, repos.claude_klabauter, "` |
 | `coordinator_core/contract/emit_memo_schema.py:258` | - | `"claude-klabauter-em-central-id-canonical-order.md \"Not asked for, "` |
-| `coordinator_core/contract/emit_memo_schema.py:279` | - | `"`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "` |
+| `coordinator_core/contract/emit_memo_schema.py:279` | - | `"`repos.<key>` form (e.g. repos.content_root, repos.claude_klabauter, "` |
 | `coordinator_core/contract/emit_memo_schema.py:341` | - | `"inbox/2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, "` |
 | `coordinator_core/contract/test_emit_memo_schema.py:111` | - | `"to": "claude-klabauter",` |
-| `coordinator_core/dag.py:939` | PROSE-ONLY | `#     DoE-claude and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION` |
-| `coordinator_core/dag.py:940` | PROSE-ONLY | `#     (measured against claude-klabauter's own corpus only — the DoE-claude` |
+| `coordinator_core/dag.py:939` | PROSE-ONLY | `#     coordinator-content-repo and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION` |
+| `coordinator_core/dag.py:940` | PROSE-ONLY | `#     (measured against claude-klabauter's own corpus only — the coordinator-content-repo` |
 | `coordinator_core/data_root.py:21` | PROSE-ONLY | `2. Split-repo    — coordinator_core lives in claude-klabauter while the data` |
 | `coordinator_core/diagnostics/contained_run.py:207` | PROSE-ONLY | `Formula per CLAUDE.md (claude-klabauter root). Uses ``psutil`` for a` |
 | `coordinator_core/distill/tests/test_delete_guard.py:594` | - | `"to: claude-klabauter-em\n"` |
@@ -1016,7 +1016,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/git/commit_trailers.py:591` | PROSE-ONLY | `cross-repo case where a commit lands directly into claude-klabauter under` |
 | `coordinator_core/git/divergence.py:90` | PROSE-ONLY | `path, reproducing the claude-klabauter 506748a0 incident through the` |
 | `coordinator_core/git/index_write.py:66` | PROSE-ONLY | `#: other's marker as a `(mode, sha)` pair. Found by claude-klabauter-fd against` |
-| `coordinator_core/git/tests/test_index_write.py:126` | - | `drive_key = "X:/claude-klabauter/seed.txt"  # abs-path-ok: fixture string, not a filesystem citation` |
+| `coordinator_core/git/tests/test_index_write.py:126` | - | `drive_key = "C:/claude-klabauter/seed.txt"  # abs-path-ok: fixture string, not a filesystem citation` |
 | `coordinator_core/git/tree_spine.py:106` | PROSE-ONLY | `#: -- no ladder, no refusal. Reported by claude-klabauter-15 against three` |
 | `coordinator_core/group_em/atomic_record.py:11` | PROSE-ONLY | `dependency. That rationale is unchanged by the move to claude-klabauter; only the import surface changes,` |
 | `coordinator_core/group_em/atomic_record.py:210` | PROSE-ONLY | `for parity with the ported module's contract; claude-klabauter's own `group_em` package modules never` |
@@ -1054,7 +1054,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/group_em/tests/test_send_pass.py:325` | - | `rows = [_FakeRow("peer-sid-NEW", "claude-klabauter-e0")]` |
 | `coordinator_core/group_em/tests/test_send_pass.py:380` | - | `calls = {"rows": [_FakeRow("peer-sid", "claude-klabauter-e0")]}` |
 | `coordinator_core/group_em/tests/test_send_pass.py:386` | - | `assert first == "claude-klabauter-e0"` |
-| `coordinator_core/group_em/tests/test_watch.py:35` | PROSE-ONLY | `The counts were correct throughout -- 3 for DoE-claude, 14 for claude-klabauter --` |
+| `coordinator_core/group_em/tests/test_watch.py:35` | PROSE-ONLY | `The counts were correct throughout -- 3 for coordinator-content-repo, 14 for claude-klabauter --` |
 | `coordinator_core/group_em/tests/test_watch.py:738` | PROSE-ONLY | `# measured twice in this repo on 2026-09-01 -- `claude-klabauter-c7` listed by` |
 | `coordinator_core/group_em/tests/test_watch.py:740` | PROSE-ONLY | `# `claude-klabauter-3e` vanishing mid-workstream with nothing announced.` |
 | `coordinator_core/group_em/tests/test_watch.py:767` | - | `"claude-klabauter",` |
@@ -1081,13 +1081,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/group_em/watch.py:54` | PROSE-ONLY | `2026-09-01 in this repo -- `claude-klabauter-c7` was listed by `ListAgents`` |
 | `coordinator_core/group_em/watch.py:55` | PROSE-ONLY | `and refused a `SendMessage` seconds later, and `claude-klabauter-3e` vanished` |
 | `coordinator_core/group_em/watch.py:635` | PROSE-ONLY | `claude-klabauter-a9).` |
-| `coordinator_core/group_em/watch.py:1264` | PROSE-ONLY | `# claude-klabauter peers", X:/claude-klabauter printed "14 claude-klabauter peers".` |
+| `coordinator_core/group_em/watch.py:1264` | PROSE-ONLY | `# claude-klabauter peers", C:/claude-klabauter printed "14 claude-klabauter peers".` |
 | `coordinator_core/hooks/auto_push.py:1253` | PROSE-ONLY | `# cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md).` |
-| `coordinator_core/hooks/context_pressure_precompact.py:2` | PROSE-ONLY | `X:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py` |
+| `coordinator_core/hooks/context_pressure_precompact.py:2` | PROSE-ONLY | `C:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py` |
 | `coordinator_core/hooks/test_auto_push.py:743` | PROSE-ONLY | `# (cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md,` |
-| `coordinator_core/hooks/test_em_report_altitude.py:211` | - | `text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/DoE-claude/cross-repo/b.md."` |
-| `coordinator_core/hooks/test_em_report_altitude.py:459` | - | `text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/DoE-claude/b.md"` |
-| `coordinator_core/hooks/tests/test_subagent_review_mark.py:510` | - | `"X:/claude-klabauter/state/subagent-share/s/x.md",` |
+| `coordinator_core/hooks/test_em_report_altitude.py:211` | - | `text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-content-repo/cross-repo/b.md."` |
+| `coordinator_core/hooks/test_em_report_altitude.py:459` | - | `text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-content-repo/b.md"` |
+| `coordinator_core/hooks/tests/test_subagent_review_mark.py:510` | - | `"C:/claude-klabauter/state/subagent-share/s/x.md",` |
 | `coordinator_core/hooks/track_touched_files.py:363` | PROSE-ONLY | `claude-klabauter-c2); through ``_handler``, 5.73ms first fire against 2.60ms` |
 | `coordinator_core/install/engine_root_for_install.py:47` | PROSE-ONLY | `- Never reads `.claude-klabauter-root`/`.claude-klabauter-live-root` pointer files` |
 | `coordinator_core/install/first_run.py:573` | PROSE-ONLY | `the load-bearing ``repos.claude_klabauter`` entry itself -- that` |
@@ -1111,11 +1111,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/maximalist.py:1569` | - | `_verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))` |
 | `coordinator_core/install/maximalist.py:1572` | - | `"WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-live-root-pointer.py "` |
 | `coordinator_core/install/maximalist.py:1578` | - | `"NOTE: machine-local not yet on PATH in this shell -- repos.claude_klabauter not seeded; "` |
-| `coordinator_core/install/maximalist.py:1585` | PROSE-ONLY | `# guard anchors on `repos.doe_claude` / `repos.claude_klabauter`, so on a` |
+| `coordinator_core/install/maximalist.py:1585` | PROSE-ONLY | `# guard anchors on `repos.content_root` / `repos.claude_klabauter`, so on a` |
 | `coordinator_core/install/maximalist.py:1611` | PROSE-ONLY | `# immediately after the `repos.claude_klabauter` seed above: that is the` |
-| `coordinator_core/install/maximalist.py:1613` | PROSE-ONLY | `# least `repos.doe_claude` and `repos.claude_klabauter`, which the sweep` |
+| `coordinator_core/install/maximalist.py:1613` | PROSE-ONLY | `# least `repos.content_root` and `repos.claude_klabauter`, which the sweep` |
 | `coordinator_core/install/maximalist.py:1664` | - | `"gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",` |
-| `coordinator_core/install/maximalist.py:2225` | PROSE-ONLY | `- The best-effort `repos.doe_claude` / `repos.claude_klabauter`` |
+| `coordinator_core/install/maximalist.py:2225` | PROSE-ONLY | `- The best-effort `repos.content_root` / `repos.claude_klabauter`` |
 | `coordinator_core/install/sandbox_check.py:372` | - | `"location, since this executable now lives in claude-klabauter while "` |
 | `coordinator_core/install/settings_home_report.py:6` | PROSE-ONLY | `and ``machine-local/.claude-klabauter-live-root`` each land via their own install step, with` |
 | `coordinator_core/install/settings_home_report.py:39` | PROSE-ONLY | `claude-klabauter resolution names ``<settings-home>/machine-local/.claude-klabauter-live-root`` as` |
@@ -1144,7 +1144,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_first_run.py:811` | - | `print("/x/claude-klabauter")` |
 | `coordinator_core/install/test_first_run.py:824` | - | `assert "failed to register repos.claude_klabauter" in err` |
 | `coordinator_core/install/test_first_run.py:882` | - | `print("/x/claude-klabauter")` |
-| `coordinator_core/install/test_first_run.py:893` | - | `assert keys == {"repos.claude_klabauter", "repos.doe_claude"}` |
+| `coordinator_core/install/test_first_run.py:893` | - | `assert keys == {"repos.claude_klabauter", "repos.content_root"}` |
 | `coordinator_core/install/test_first_run.py:906` | - | `print("/x/claude-klabauter")` |
 | `coordinator_core/install/test_first_run.py:926` | - | `assert keys == {"repos.claude_klabauter"}` |
 | `coordinator_core/install/test_first_run.py:991` | - | `print("/x/claude-klabauter")` |
@@ -1221,9 +1221,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/_codename_classes.py:300` | PROSE-ONLY | `#: `claude-klabauter`/`claude-klabauter`/`CLAUDE-KLABAUTER` row is classed RENAME (this repo's own` |
 | `coordinator_core/message_register/_codename_classes.py:307` | PROSE-ONLY | `#: navigate to `claude-klabauter` any more than it can navigate to` |
 | `coordinator_core/message_register/_codename_classes.py:316` | PROSE-ONLY | `#: writes claude-klabauter's tokens TO, never a CLASSIFICATION *key* (the` |
-| `coordinator_core/message_register/_codename_classes.py:338` | PROSE-ONLY | `#: DoE-claude/doe-claude-klabauter/claude-klabauter family root set, kept as a B7 token` |
+| `coordinator_core/message_register/_codename_classes.py:338` | PROSE-ONLY | `#: coordinator-content-repo/content-engine/claude-klabauter family root set, kept as a B7 token` |
 | `coordinator_core/message_register/_codename_classes.py:346` | PROSE-ONLY | `#: cannot navigate to, and `claude-klabauter` (2026-08-30 addition) is this` |
-| `coordinator_core/message_register/_codename_classes.py:425` | - | `"(repos.doe_claude, repos.claude_klabauter) to the whole form: "` |
+| `coordinator_core/message_register/_codename_classes.py:425` | - | `"(repos.content_root, repos.claude_klabauter) to the whole form: "` |
 | `coordinator_core/message_register/_codename_classes.py:456` | PROSE-ONLY | `# identifier class as claude-klabauter's "claude-klabauter " prefix` |
 | `coordinator_core/message_register/_rules.py:77` | PROSE-ONLY | `is the defect. A RENAME-class token (the `claude-klabauter` ->` |
 | `coordinator_core/message_register/_rules.py:102` | PROSE-ONLY | ``claude-klabauter` family joined `PINNED_UNREACHABLE_TOKENS`'s root set (see` |
@@ -1243,9 +1243,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/tests/test_codename_classes.py:63` | - | `assert cc.CLASSIFICATION["claude-klabauter"] == cc.RENAME` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:77` | - | `assert "claude-klabauter" not in tokens` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:115` | - | `"see repos.claude_klabauter for the registry entry",` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:161` | PROSE-ONLY | `repos.doe_claude/repos.claude_klabauter -- the prior list only covered two` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:161` | PROSE-ONLY | `repos.content_root/repos.claude_klabauter -- the prior list only covered two` |
 | `coordinator_core/op_budget_suspension.py:37` | PROSE-ONLY | `(claude-klabauter-24, 2026-08-23, commits 060230992 / 5ffce81fc / bcba631b2):` |
-| `coordinator_core/op_budget_suspension.py:1448` | PROSE-ONLY | `# to two EMs (claude-klabauter-em and doe-claude-em, 2026-08-26) as a` |
+| `coordinator_core/op_budget_suspension.py:1448` | PROSE-ONLY | `# to two EMs (claude-klabauter-em and coordinator-content-repo-em, 2026-08-26) as a` |
 | `coordinator_core/op_census/timing.py:54` | PROSE-ONLY | `Found by a peer audit (`claude-klabauter-05`) during the C-review of the` |
 | `coordinator_core/ops/backfill_deliverable_spine.py:73` | PROSE-ONLY | `location — this executable now lives in claude-klabauter while the` |
 | `coordinator_core/ops/bootstrap_repo.py:258` | PROSE-ONLY | `to claude-klabauter") moved `check-install-divergence.py` here for good,` |
@@ -1268,26 +1268,26 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/ceremony/tests/test_commit_scoped.py:581` | PROSE-ONLY | `like the claude-klabauter 506748a0 incident, through `commit_scoped()`` |
 | `coordinator_core/ops/ceremony/tests/test_consumed_handoff_stamp.py:919` | PROSE-ONLY | `# survives verbatim (the claude-klabauter 506748a0 incident shape, closed).` |
 | `coordinator_core/ops/ceremony/tests/test_empty_private_index_refusal.py:15` | PROSE-ONLY | `the box runs through, and claude-klabauter-7a reported the collapse` |
-| `coordinator_core/ops/ceremony/tests/test_empty_private_index_refusal.py:44` | - | `EMPTY_TREE_SHA, root="X:/claude-klabauter", caller="_commit_scoped_private_index"` |
-| `coordinator_core/ops/ceremony/tests/test_empty_private_index_refusal.py:58` | - | `root="X:/claude-klabauter",` |
+| `coordinator_core/ops/ceremony/tests/test_empty_private_index_refusal.py:44` | - | `EMPTY_TREE_SHA, root="C:/claude-klabauter", caller="_commit_scoped_private_index"` |
+| `coordinator_core/ops/ceremony/tests/test_empty_private_index_refusal.py:58` | - | `root="C:/claude-klabauter",` |
 | `coordinator_core/ops/ceremony/tests/test_git_native.py:2098` | PROSE-ONLY | `Reported by claude-klabauter-15 against three live callers; the triggering` |
 | `coordinator_core/ops/ceremony/tests/test_post_commit_tail.py:564` | PROSE-ONLY | `# set survives verbatim (the claude-klabauter 506748a0 incident shape,` |
 | `coordinator_core/ops/ceremony/tests/test_push_no_upstream_publish.py:46` | - | `"ERROR: Permission to dbc-oduffy/claude-klabauter.git denied to nobody.\n"` |
 | `coordinator_core/ops/ceremony/tests/test_wsc_disposition.py:143` | PROSE-ONLY | `# Spec backlink: claude-klabauter commit 1b07cded (coordinator/bin/` |
 | `coordinator_core/ops/ceremony/wsc_disposition.py:88` | PROSE-ONLY | `# Spec backlink: cross-repo memo (claude-klabauter commit 1b07cded) fixed a` |
 | `coordinator_core/ops/check_arch_audit_staleness.py:138` | - | `return _machine_local_get("repos.claude_klabauter")` |
-| `coordinator_core/ops/check_auto_memory_drained.py:75` | PROSE-ONLY | `live slug, ``-Users-example-operator-X-claude-klabauter``, and DoE-claude's,` |
+| `coordinator_core/ops/check_auto_memory_drained.py:75` | PROSE-ONLY | `live slug, ``-Users-example-operator-X-claude-klabauter``, and coordinator-content-repo's,` |
 | `coordinator_core/ops/check_auto_reconcile.py:28` | PROSE-ONLY | `cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md` |
 | `coordinator_core/ops/check_auto_reconcile.py:78` | PROSE-ONLY | `claude-klabauter's own state/handoffs/ corpus instead of its own. See` |
 | `coordinator_core/ops/check_native_door_interpreter_handoff.py:1122` | PROSE-ONLY | `Measured (claude-klabauter-7f, 2026-09-02, this repo): ``.exe``/``.com``` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:88` | PROSE-ONLY | `(34 files in claude-klabauter, 1 in DoE-claude), fixed outright on` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:88` | PROSE-ONLY | `(34 files in claude-klabauter, 1 in coordinator-content-repo), fixed outright on` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:287` | PROSE-ONLY | `scan), so the SAME engine backs a guard in claude-klabauter's own tree and,` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:408` | PROSE-ONLY | `fleet-shaped, so `coordinator/scripts/setup.py` — granted for claude-klabauter` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:413` | PROSE-ONLY | ``repos.claude_klabauter`), derived from the repo directory basename by the` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:418` | PROSE-ONLY | `name (`claude-klabauter-2`, a CI `work/` dir) derives a different key and gets` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:488` | PROSE-ONLY | `it needs no repo key: a grant in claude-klabauter's tree can never leak into a` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:549` | PROSE-ONLY | `parsing over text-grep); claude-klabauter` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:703` | PROSE-ONLY | `# count (34 files in claude-klabauter, 1 file in DoE-claude, all fixed` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:703` | PROSE-ONLY | `# count (34 files in claude-klabauter, 1 file in coordinator-content-repo, all fixed` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:826` | - | `"or ships them, and the originals are already scanned in claude-klabauter "` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:1289` | PROSE-ONLY | `# claude-klabauter), so _scan_python_file never calls` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:1295` | PROSE-ONLY | `# and a claude-klabauter gate run can never flag another repo's` |
@@ -1298,14 +1298,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/check_surface_inline_budget.py:57` | PROSE-ONLY | `this repo (claude-klabauter) to depend on or duplicate. This module is` |
 | `coordinator_core/ops/check_weekly_staleness.py:143` | - | `return _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/coordinator_render_rollup.py:132` | PROSE-ONLY | `# Spec backlink: cross-repo memo 2026-07-22 (claude-klabauter-em),` |
-| `coordinator_core/ops/cutover_gate.py:1072` | PROSE-ONLY | `#: two repos ("doe-claude" vs "DoE-claude", "claude-klabauter" vs "claude-klabauter") are` |
+| `coordinator_core/ops/cutover_gate.py:1072` | PROSE-ONLY | `#: two repos ("coordinator-content-repo" vs "coordinator-content-repo", "claude-klabauter" vs "claude-klabauter") are` |
 | `coordinator_core/ops/cutover_gate.py:1078` | - | `_CLAUDE_KLABAUTER_ROOT_ALIASES: tuple[str, ...] = ("claude-klabauter", "claude_klabauter", "claude-klabauter")` |
 | `coordinator_core/ops/deliverable_rollup.py:147` | PROSE-ONLY | `2. ``machine-local get repos.claude_klabauter``.` |
 | `coordinator_core/ops/deliverable_rollup.py:170` | - | `val = _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/deliverable_rollup.py:218` | PROSE-ONLY | `2. machine-local get repos.claude_klabauter — non-git subprocess, env-miss only.` |
 | `coordinator_core/ops/deliverable_rollup.py:250` | - | `"non-claude-klabauter worktrees. Set COORDINATOR_ENGINE_ROOT or configure repos.claude_klabauter "` |
-| `coordinator_core/ops/discover_working_repos.py:411` | PROSE-ONLY | ```X:/claude-klabauter`` -> ``X--claude-klabauter``.` |
-| `coordinator_core/ops/dispatch_emit/emit.py:1077` | PROSE-ONLY | `#: run emitted for claude-klabauter, fired from a session standing in DoE-claude,` |
+| `coordinator_core/ops/discover_working_repos.py:411` | PROSE-ONLY | ```C:/claude-klabauter`` -> ``X--claude-klabauter``.` |
+| `coordinator_core/ops/dispatch_emit/emit.py:1077` | PROSE-ONLY | `#: run emitted for claude-klabauter, fired from a session standing in coordinator-content-repo,` |
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:9` | PROSE-ONLY | `Measured 2026-09-10: a 23-row mise run emitted for claude-klabauter and fired from` |
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:47` | - | `prompt = _row_prompt(_row(), "docs/plans/p.md", _context("/home/user/claude-klabauter"))` |
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:48` | - | `assert "Repo root: /home/user/claude-klabauter" in prompt` |
@@ -1313,11 +1313,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:70` | - | `assert "Repo root: /home/user/claude-klabauter" in call` |
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:75` | - | `["docs/plans/p.md"], "Preflight", repo_root="/home/user/claude-klabauter"` |
 | `coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py:77` | - | `assert "Repo root: /home/user/claude-klabauter" in call` |
-| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:128` | - | `Path('X:/claude-klabauter/docs/plans/p.md'), Path('X:/claude-klabauter')` |
-| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:136` | - | `got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), None)` |
-| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:143` | - | `Path('Z:/elsewhere/docs/plans/p.md'), Path('X:/claude-klabauter')` |
-| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:151` | - | `for root in (None, Path('X:/claude-klabauter'), Path('Z:/other')):` |
-| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:152` | - | `got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), root)` |
+| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:128` | - | `Path('C:/claude-klabauter/docs/plans/p.md'), Path('C:/claude-klabauter')` |
+| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:136` | - | `got = _spec_path_for_prompt(Path('C:/claude-klabauter/docs/plans/p.md'), None)` |
+| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:143` | - | `Path('Z:/elsewhere/docs/plans/p.md'), Path('C:/claude-klabauter')` |
+| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:151` | - | `for root in (None, Path('C:/claude-klabauter'), Path('Z:/other')):` |
+| `coordinator_core/ops/dispatch_emit/tests/test_row_prompt_names_its_spec.py:152` | - | `got = _spec_path_for_prompt(Path('C:/claude-klabauter/docs/plans/p.md'), root)` |
 | `coordinator_core/ops/docgen/dr_allocator.py:6` | PROSE-ONLY | `verbatim by sibling repos — claude-klabauter maintains a duplicate Python port` |
 | `coordinator_core/ops/docgen/dr_allocator.py:27` | PROSE-ONLY | `SSOT / vendoring: this module is tracked in claude-klabauter only, in two` |
 | `coordinator_core/ops/docgen/dr_allocator.py:36` | PROSE-ONLY | `repo outside claude-klabauter vendors a further copy of its own, that is` |
@@ -1327,7 +1327,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/doctor.py:23` | PROSE-ONLY | `1. Sibling resolution     — can this machine resolve claude-klabauter's own` |
 | `coordinator_core/ops/doctor.py:303` | - | `findings.append(Finding("broken", f"claude-klabauter root did not resolve: {exc}"))` |
 | `coordinator_core/ops/doctor.py:312` | - | `f"resolved claude-klabauter root '{claude_klabauter_root}' has no "` |
-| `coordinator_core/ops/doctor.py:351` | - | `return Layer("Sibling repo resolution (claude-klabauter + DoE-claude)", status, findings)` |
+| `coordinator_core/ops/doctor.py:351` | - | `return Layer("Sibling repo resolution (claude-klabauter + coordinator-content-repo)", status, findings)` |
 | `coordinator_core/ops/emit/context.py:238` | PROSE-ONLY | `repo_name          — EMITTING REPO's own slug (e.g. ``dbc-oduffy/claude-klabauter``);` |
 | `coordinator_core/ops/emit/lma_cache.py:76` | PROSE-ONLY | `Cache location: ``<coordinator-settings-home>/claude-klabauter/emit-lma-cache/<slug>.json``,` |
 | `coordinator_core/ops/emit/lma_cache.py:105` | - | `_CACHE_SUBDIR = ("claude-klabauter", "emit-lma-cache")` |
@@ -1373,12 +1373,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/fleet/backfill_memo_disposition.py:151` | - | `"reply memo: example-market-data-repo 2026-07-26-claude-klabauter-em-competitor-url-field-bilateral-gate.md"` |
 | `coordinator_core/ops/fleet/backfill_memo_disposition.py:161` | - | `"actioned_note": "reply memo: cockpit 2026-07-26-claude-klabauter-em-memo-body-projection-scope-accepted.md",` |
 | `coordinator_core/ops/fleet/backfill_memo_disposition.py:189` | - | `"reply memo: DoE 2026-07-26-claude-klabauter-em-gate3-exemplar-already-landed-no-relay-owed.md "` |
-| `coordinator_core/ops/fleet/consumer_corpus_preflight.py:7` | PROSE-ONLY | `CONSUMER trees (DoE-claude, claude-klabauter, example-retrieval-repo, example-cockpit-repo,` |
+| `coordinator_core/ops/fleet/consumer_corpus_preflight.py:7` | PROSE-ONLY | `CONSUMER trees (coordinator-content-repo, claude-klabauter, example-retrieval-repo, example-cockpit-repo,` |
 | `coordinator_core/ops/fleet/consumer_corpus_preflight.py:45` | PROSE-ONLY | `first cut of this hardening would have gated a re-vendor on claude-klabauter's` |
 | `coordinator_core/ops/fleet/consumer_corpus_preflight.py:206` | - | `"claude-klabauter": "claude_klabauter",` |
 | `coordinator_core/ops/fleet/memo_draft.py:337` | PROSE-ONLY | `'claude-klabauter-em' -> 'claude-klabauter-em'), that candidate is auto-accepted` |
 | `coordinator_core/ops/fleet/prune_bugs.py:172` | PROSE-ONLY | `# Flagged by claude-klabauter-59, not caught by this sweep's own remediation pass.` |
-| `coordinator_core/ops/fleet/tests/test_archive_and_commit_argv_budget.py:51` | - | `Path(r"X:\claude-klabauter\cross-repo\inbox")` |
+| `coordinator_core/ops/fleet/tests/test_archive_and_commit_argv_budget.py:51` | - | `Path(r"C:\claude-klabauter\cross-repo\inbox")` |
 | `coordinator_core/ops/fleet/tests/test_consumer_corpus_preflight.py:163` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator_core/ops/fleet/tests/test_consumer_corpus_preflight.py:189` | - | `assert repos["claude-klabauter"]["resolved"] is True` |
 | `coordinator_core/ops/fleet/tests/test_consumer_corpus_preflight.py:190` | - | `assert repos["claude-klabauter"]["counts_live"] == {}` |
@@ -1458,27 +1458,27 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/gate_liveness/tests/test_resolve.py:309` | PROSE-ONLY | `- owner_repo: claude-klabauter` |
 | `coordinator_core/ops/gate_liveness/tests/test_resolve.py:316` | PROSE-ONLY | `- owner_repo: claude-klabauter` |
 | `coordinator_core/ops/gate_liveness/tests/test_resolve.py:353` | PROSE-ONLY | `- owner_repo: claude-klabauter` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:140` | - | `"  Remediation: python3 <claude-klabauter>/scripts/setup.py  (installs machine-local),\n"` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:161` | - | `"  Then: python3 <claude-klabauter>/scripts/setup.py",` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:174` | - | `"  Then: python3 <claude-klabauter>/scripts/setup.py",` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:374` | - | `"<claude-klabauter>/scripts/setup.py)"` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:386` | - | `"  or set REPO_DOE_CLAUDE=<path>, then: python3 <claude-klabauter>/scripts/setup.py",` |
-| `coordinator_core/ops/gen_doe_root_pointer.py:403` | - | `"  python3 <claude-klabauter>/scripts/setup.py",` |
+| `coordinator_core/ops/gen_content_root_pointer.py:140` | - | `"  Remediation: python3 <claude-klabauter>/scripts/setup.py  (installs machine-local),\n"` |
+| `coordinator_core/ops/gen_content_root_pointer.py:161` | - | `"  Then: python3 <claude-klabauter>/scripts/setup.py",` |
+| `coordinator_core/ops/gen_content_root_pointer.py:174` | - | `"  Then: python3 <claude-klabauter>/scripts/setup.py",` |
+| `coordinator_core/ops/gen_content_root_pointer.py:374` | - | `"<claude-klabauter>/scripts/setup.py)"` |
+| `coordinator_core/ops/gen_content_root_pointer.py:386` | - | `"  or set REPO_CONTENT_ROOT=<path>, then: python3 <claude-klabauter>/scripts/setup.py",` |
+| `coordinator_core/ops/gen_content_root_pointer.py:403` | - | `"  python3 <claude-klabauter>/scripts/setup.py",` |
 | `coordinator_core/ops/generate_repomap.py:59` | - | `"re-run python3 <claude-klabauter>/scripts/setup.py (or set "` |
 | `coordinator_core/ops/handoff_backfill_claim_stamp.py:11` | PROSE-ONLY | `that "DR-242's discriminator is claude-klabauter's to own"). This op is the` |
 | `coordinator_core/ops/handoff_close_origin_stub.py:16` | PROSE-ONLY | `Spec backlink: cross-repo/archive/2026-07-14-claude-klabauter-em-wsc-close-origin-stub-join-and-session-shape-pickup-immutability.md` |
 | `coordinator_core/ops/handoff_stamp.py:880` | PROSE-ONLY | `# Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")` |
-| `coordinator_core/ops/handoff_transition.py:2549` | PROSE-ONLY | `naming convention (e.g. "DoE-claude" -> "doe_claude", "claude-klabauter"` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:3` | PROSE-ONLY | `installer for DoE-claude, dispatched from claude-klabauter.` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:25` | PROSE-ONLY | `shipped INSIDE claude-klabauter. This module does not ship inside DoE-claude —` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:26` | PROSE-ONLY | `it lives in claude-klabauter and targets a PEER repo — so there is no self-` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:46` | PROSE-ONLY | `THIS tree (claude-klabauter). Its absence at install time fires the ordinary` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:78` | PROSE-ONLY | `and execs `$_py` directly, per claude-klabauter's CLAUDE.md § Runtime` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:85` | PROSE-ONLY | `install into claude-klabauter's own live repo either — this module and` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:107` | PROSE-ONLY | `# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:109` | PROSE-ONLY | `# DoE-claude's own tree, not just claude-klabauter's.` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:179` | PROSE-ONLY | `target — this module ships in claude-klabauter and has no self-relative` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:394` | PROSE-ONLY | `exist in claude-klabauter's tree; when this installer is exercised against` |
+| `coordinator_core/ops/handoff_transition.py:2549` | PROSE-ONLY | `naming convention (e.g. "coordinator-content-repo" -> "content_root", "claude-klabauter"` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:3` | PROSE-ONLY | `installer for coordinator-content-repo, dispatched from claude-klabauter.` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:25` | PROSE-ONLY | `shipped INSIDE claude-klabauter. This module does not ship inside coordinator-content-repo —` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:26` | PROSE-ONLY | `it lives in claude-klabauter and targets a PEER repo — so there is no self-` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:46` | PROSE-ONLY | `THIS tree (claude-klabauter). Its absence at install time fires the ordinary` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:78` | PROSE-ONLY | `and execs `$_py` directly, per claude-klabauter's CLAUDE.md § Runtime` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:85` | PROSE-ONLY | `install into claude-klabauter's own live repo either — this module and` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:107` | PROSE-ONLY | `# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:109` | PROSE-ONLY | `# coordinator-content-repo's own tree, not just claude-klabauter's.` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:179` | PROSE-ONLY | `target — this module ships in claude-klabauter and has no self-relative` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:394` | PROSE-ONLY | `exist in claude-klabauter's tree; when this installer is exercised against` |
 | `coordinator_core/ops/install_meta_repo_precommit_hook.py:75` | PROSE-ONLY | `surface into this repo (`claude-klabauter/coordinator/bin/`); that literal` |
 | `coordinator_core/ops/install_meta_repo_precommit_hook.py:978` | PROSE-ONLY | `(`('/…/claude-klabauter', 'live-working-tree')` measured here), so the two` |
 | `coordinator_core/ops/install_publish_repo_precommit_hook.py:109` | PROSE-ONLY | `# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter` |
@@ -1511,7 +1511,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/queue_append.py:868` | - | `return "repos.claude_klabauter not set in machine-local registry and COORDINATOR_ENGINE_ROOT env var not set"` |
 | `coordinator_core/ops/queue_append.py:869` | - | `return "repos.claude_klabauter not set in machine-local registry"` |
 | `coordinator_core/ops/queue_append.py:1627` | - | `"'machine-local set repos.claude_klabauter /path/to/claude-klabauter'.",` |
-| `coordinator_core/ops/records_query.py:453` | PROSE-ONLY | `# served rows against on-disk handoff files: DoE-claude 550/550, claude-klabauter` |
+| `coordinator_core/ops/records_query.py:453` | PROSE-ONLY | `# served rows against on-disk handoff files: coordinator-content-repo 550/550, claude-klabauter` |
 | `coordinator_core/ops/repo_bootstrap.py:9` | PROSE-ONLY | `fence at `templates/handoffs/install-claude-klabauter.md:86` (clone claude-klabauter to a` |
 | `coordinator_core/ops/rewrite_spec_backlinks.py:62` | PROSE-ONLY | `# claude-klabauter, example-retrieval-repo, example-game-repo-control). This module's own repo` |
 | `coordinator_core/ops/rewrite_spec_backlinks.py:63` | PROSE-ONLY | `# (claude-klabauter) never qualifies its own citations -- only a citation this` |
@@ -1528,7 +1528,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:129` | - | `"see /Users/example-operator/X/claude-klabauter/coordinator/foo.py for details\n",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:135` | - | `assert subs[0].replacement == "claude-klabauter:coordinator/foo.py"` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:136` | - | `assert "claude-klabauter:coordinator/foo.py" in target.read_text(encoding="utf-8")` |
-| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:140` | - | `tmp = "line: X:\\claude-klabauter\\coordinator foreign-path-ok: documented incident evidence\n"  # abs-path-ok: synthetic test fixture` |
+| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:140` | - | `tmp = "line: C:\\claude-klabauter\\coordinator foreign-path-ok: documented incident evidence\n"  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:167` | - | `"PATH = '/Users/example-operator/X/claude-klabauter/coordinator'\n",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:197` | - | `"-see /Users/example-operator/X/claude-klabauter/coordinator/foo.py\n",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:218` | - | `"-see /Users/example-operator/X/claude-klabauter/coordinator/foo.py\n",  # abs-path-ok: synthetic test fixture` |
@@ -1555,9 +1555,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:485` | - | `line = "path: /Users/example-operator/X/claude-klabauter/coordinator  # a corrupted path\n"  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:494` | - | `line = "the corrupted path was /Users/example-operator/X/claude-klabauter/coordinator abs-path-ok: documented incident evidence\n"  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:503` | - | `line = "the corrupted path was /Users/example-operator/X/claude-klabauter/coordinator\n"  # abs-path-ok: synthetic test fixture` |
-| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:576` | - | `"drive form: X:\\claude-klabauter\\coordinator\\foo.py\n"  # abs-path-ok: synthetic test fixture` |
+| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:576` | - | `"drive form: C:\\claude-klabauter\\coordinator\\foo.py\n"  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:628` | - | `"see /Users/example-operator/X/claude-klabauter/coordinator/foo.py for details",  # abs-path-ok: synthetic test fixture` |
-| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:630` | - | `"root at X:\\claude-klabauter\\coordinator",  # abs-path-ok: synthetic test fixture` |
+| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:630` | - | `"root at C:\\claude-klabauter\\coordinator",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:635` | - | `"mixed C:\\Users/example-operator\\claude-klabauter here",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:646` | - | `marked_line = "see /Users/example-operator/X/claude-klabauter/coordinator/foo.py abs-path-ok: documented incident evidence"  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:753` | - | `"authored /Users/example-operator/X/claude-klabauter/coordinator/a.py here\n"  # abs-path-ok: synthetic test fixture` |
@@ -1640,9 +1640,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/setup_seed_health_ledger.py:128` | - | `return _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/test_check_auto_memory_drained.py:46` | - | `assert _slugify_repo_root("/home/example/repos/claude-klabauter") == (` |
 | `coordinator_core/ops/test_check_auto_memory_drained.py:47` | - | `"-home-example-repos-claude-klabauter"` |
-| `coordinator_core/ops/test_check_auto_memory_drained.py:60` | - | `"""Real Windows paths carry a drive-letter colon (``X:\\claude-klabauter``),` |
+| `coordinator_core/ops/test_check_auto_memory_drained.py:60` | - | `"""Real Windows paths carry a drive-letter colon (``C:\\claude-klabauter``),` |
 | `coordinator_core/ops/test_check_auto_memory_drained.py:62` | PROSE-ONLY | `encodes (verified on-disk: ``X--claude-klabauter``). A test path without a` |
-| `coordinator_core/ops/test_check_auto_memory_drained.py:66` | - | `assert _slugify_repo_root("X:\\claude-klabauter") == "X--claude-klabauter"` |
+| `coordinator_core/ops/test_check_auto_memory_drained.py:66` | - | `assert _slugify_repo_root("C:\\claude-klabauter") == "X--claude-klabauter"` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:153` | - | `"plugin": "claude-klabauter",` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:175` | - | `"plugin": "claude-klabauter",` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:219` | - | `"plugin": "claude-klabauter",` |
@@ -1660,13 +1660,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1979` | PROSE-ONLY | `claude-klabauter must carry a matching tracked file under every` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1983` | - | `repo = _repo_with_preserved_tree(tmp_path, "claude-klabauter", _CLAUDE_KLABAUTER_PREFIX)` |
 | `coordinator_core/ops/test_cruft_sweep.py:736` | - | `def _build_scratchpad_fixture(tmp_path, project_slug="X--claude-klabauter"):` |
-| `coordinator_core/ops/test_cruft_sweep.py:769` | - | `slug_to_root_map={"X--claude-klabauter": "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_cruft_sweep.py:769` | - | `slug_to_root_map={"X--claude-klabauter": "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_cruft_sweep.py:838` | - | `old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_DEAD_OLD / "scratchpad"` |
 | `coordinator_core/ops/test_cruft_sweep.py:857` | - | `old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_DEAD_OLD / "scratchpad"` |
 | `coordinator_core/ops/test_cruft_sweep.py:858` | - | `self_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_SELF / "scratchpad"` |
 | `coordinator_core/ops/test_doc_content_verify.py:386` | PROSE-ONLY | `against claude-klabauter shows the file landed there at commit `8a28a6ca`,` |
 | `coordinator_core/ops/test_doc_content_verify.py:402` | PROSE-ONLY | `a bare clone with no machine-local registry entry for claude-klabauter.` |
-| `coordinator_core/ops/test_install_doe_claude_precommit_hook.py:239` | PROSE-ONLY | `is not expected to exist in claude-klabauter's tree -- when this installer` |
+| `coordinator_core/ops/test_install_content_root_precommit_hook.py:239` | PROSE-ONLY | `is not expected to exist in claude-klabauter's tree -- when this installer` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:7` | PROSE-ONLY | `second append); and the graceful skip when no claude-klabauter guard script is` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:39` | - | `"""A fake claude-klabauter checkout carrying shell-init-guard.py at the mode` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:43` | - | `clone = tmp_path / "claude-klabauter"` |
@@ -1675,13 +1675,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:205` | - | `"set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:216` | - | `empty_clone = tmp_path / "claude-klabauter-empty"` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:236` | - | `clone = tmp_path / "claude-klabauter-unreadable"` |
-| `coordinator_core/ops/test_percolate_preflight_scratch_publish.py:404` | PROSE-ONLY | `# exist in either DoE-claude or claude-klabauter and was the root cause of this op` |
+| `coordinator_core/ops/test_percolate_preflight_scratch_publish.py:404` | PROSE-ONLY | `# exist in either coordinator-content-repo or claude-klabauter and was the root cause of this op` |
 | `coordinator_core/ops/test_probe_fresh_repo_noop.py:6` | PROSE-ONLY | `against claude-klabauter's own working tree, and never via a mutating git` |
 | `coordinator_core/ops/test_propagate_body.py:208` | - | `"at claude-klabauter/state/handoffs/2026-07-30-qsent-01.md:12, and "` |
-| `coordinator_core/ops/test_red_record.py:7` | PROSE-ONLY | `claude-klabauter cross-repo/archive/2026-07-25-doe-claude-em-test-red-record-contract-consult.md` |
+| `coordinator_core/ops/test_red_record.py:7` | PROSE-ONLY | `claude-klabauter cross-repo/archive/2026-07-25-coordinator-content-repo-em-test-red-record-contract-consult.md` |
 | `coordinator_core/ops/test_register_discovered_repos.py:464` | PROSE-ONLY | `# Never a resolved key like "repos.claude_klabauter" — that would be` |
 | `coordinator_core/ops/test_repo_bootstrap.py:7` | PROSE-ONLY | `the real `clone_idempotent()` — never the working claude-klabauter repo.` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:53` | - | `"X--claude-klabauter": "X:/claude-klabauter",` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:53` | - | `"X--claude-klabauter": "C:/claude-klabauter",` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:65` | - | `def _build_fixture(tmp_path, project_slug="X--claude-klabauter"):` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:118` | - | `old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SID_DEAD_OLD / "scratchpad"` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:134` | - | `scratch = tmp_path / "claude" / "X--claude-klabauter" / _SID_LIVE / "scratchpad"` |
@@ -1692,42 +1692,42 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/test_scratchpad_sweep.py:201` | - | `result = _sweep(tmp_path, project_slugs=["X--claude-klabauter"])` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:203` | - | `assert slugs == {"X--claude-klabauter"}` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:284` | - | `_build_fixture(tmp_path, project_slug="X--claude-klabauter")` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:289` | - | `slug_to_root_map={"X--claude-klabauter": "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:289` | - | `slug_to_root_map={"X--claude-klabauter": "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:294` | - | `e for e in result["entries"] if e["project_slug"] == "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:308` | - | `assert _encode_project_slug("X:\\claude-klabauter") == "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:309` | - | `assert _encode_project_slug("X:/claude-klabauter") == "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:317` | - | `lambda: ["X:/project.claude-klabauter", "X:/claude-klabauter"],` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:308` | - | `assert _encode_project_slug("C:\\claude-klabauter") == "X--claude-klabauter"` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:309` | - | `assert _encode_project_slug("C:/claude-klabauter") == "X--claude-klabauter"` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:317` | - | `lambda: ["C:/project.claude-klabauter", "C:/claude-klabauter"],` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:320` | PROSE-ONLY | `# Both encode to "X--claude-klabauter" — collision, dropped.` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:321` | - | `assert "X--claude-klabauter" not in mapping` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:327` | - | `lambda: ["X:/claude-klabauter", "X:/DoE-claude"],` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:330` | - | `assert mapping["X--claude-klabauter"] == "X:/claude-klabauter"` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:327` | - | `lambda: ["C:/claude-klabauter", "C:/coordinator-content-repo"],` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:330` | - | `assert mapping["X--claude-klabauter"] == "C:/claude-klabauter"` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:395` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:412` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:412` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:436` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:447` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:447` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:465` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:489` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:489` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:509` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:518` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:518` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:543` | - | `"project_slug": "X--claude-klabauter",` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:653` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:663` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:663` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:684` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:692` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:692` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:712` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:725` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:725` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:941` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:950` | - | `tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:950` | - | `tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:974` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:981` | - | `tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:981` | - | `tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:999` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:1012` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:1012` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:1041` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:1049` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:1049` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:1064` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:1072` | - | `slug_to_root_map={slug: "X:/claude-klabauter"},` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:1072` | - | `slug_to_root_map={slug: "C:/claude-klabauter"},` |
 | `coordinator_core/ops/test_scratchpad_sweep.py:1098` | - | `slug = "X--claude-klabauter"` |
-| `coordinator_core/ops/test_scratchpad_sweep.py:1107` | - | `tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]` |
+| `coordinator_core/ops/test_scratchpad_sweep.py:1107` | - | `tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]` |
 | `coordinator_core/ops/test_setup_chain_walker.py:618` | PROSE-ONLY | `claude-klabauter is registry/env-resolved, not sibling-directory-colocated."""` |
 | `coordinator_core/ops/test_setup_chain_walker.py:620` | - | `"id": "claude-klabauter",` |
 | `coordinator_core/ops/test_setup_chain_walker.py:632` | - | `assert scw.dep_probe("claude-klabauter", manifest_path, repo_root) == "present"` |
@@ -1746,7 +1746,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/tests/test_changelog_parity.py:568` | PROSE-ONLY | `# registry / <settings-home>/machine-local/.claude-klabauter-live-root pointer — see note below.` |
 | `coordinator_core/ops/tests/test_changelog_parity.py:582` | PROSE-ONLY | `pointer / machine-local registry entry and hard-fails with "repos.claude_klabauter is` |
 | `coordinator_core/ops/tests/test_crossrepo_closure_status.py:54` | - | `f"---\ntitle: \"{memo_id}\"\nfrom: \"sibling-em\"\nto: \"claude-klabauter-em\"\n"` |
-| `coordinator_core/ops/tests/test_cutover_gate_handler.py:324` | PROSE-ONLY | `is never re-findable by derive() (only doe-claude/claude-klabauter are ever` |
+| `coordinator_core/ops/tests/test_cutover_gate_handler.py:324` | PROSE-ONLY | `is never re-findable by derive() (only coordinator-content-repo/claude-klabauter are ever` |
 | `coordinator_core/ops/tests/test_cutover_gate_handler.py:385` | - | `"id": "claude-klabauter:sub/producer.py",` |
 | `coordinator_core/ops/tests/test_deferral_detect_orphan_memo.py:52` | - | `f"to: claude-klabauter-em\n"` |
 | `coordinator_core/ops/tests/test_fleet_machinery_sweep.py:110` | - | `self_root = tmp_path / "claude-klabauter"` |
@@ -1770,7 +1770,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/tests/test_queue_parity.py:1484` | PROSE-ONLY | `# CLAUDE_KLABAUTER_ROOT env / machine-local `repos.claude_klabauter`, mirroring` |
 | `coordinator_core/ops/tests/test_queue_promote_concurrency.py:35` | - | `_TEST_FROM_REPO = "claude-klabauter-em"` |
 | `coordinator_core/ops/tests/test_queue_scaffold_baton.py:120` | - | `'from_repo: "claude-klabauter"',` |
-| `coordinator_core/ops/tests/test_records_query.py:1388` | - | `"review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in DoE-claude's coordinator/skills/review` |
+| `coordinator_core/ops/tests/test_records_query.py:1388` | - | `"review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in coordinator-content-repo's coordinator/skills/review` |
 | `coordinator_core/ops/tests/test_records_query.py:2675` | - | `to_repo: str = "claude-klabauter",` |
 | `coordinator_core/ops/tests/test_session_resolve_address.py:33` | - | `snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}` |
 | `coordinator_core/ops/tests/test_session_resolve_address.py:45` | - | `assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", result["address"])` |
@@ -1785,13 +1785,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/tests/test_session_resolve_address.py:197` | - | `snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}` |
 | `coordinator_core/ops/tests/test_updatedocs_gates.py:580` | PROSE-ONLY | `# forever on every consumer of this ceremony except claude-klabauter — including` |
 | `coordinator_core/ops/tests/test_updatedocs_gates.py:603` | - | `"""claude-klabauter's shape: the index is under a top-level package dir."""` |
-| `coordinator_core/ops/tracker/advance_status.py:52` | PROSE-ONLY | `- No tracker README on disk anywhere in DoE-claude or claude-klabauter was found` |
+| `coordinator_core/ops/tracker/advance_status.py:52` | PROSE-ONLY | `- No tracker README on disk anywhere in coordinator-content-repo or claude-klabauter was found` |
 | `coordinator_core/ops/updatedocs_gates.py:934` | PROSE-ONLY | `every consumer of this ceremony except claude-klabauter, which is the` |
 | `coordinator_core/ops/validate_install_contract.py:100` | PROSE-ONLY | `#: with no args in THIS repo (claude-klabauter) always landed on "no manifest` |
 | `coordinator_core/ops/validate_install_contract.py:197` | PROSE-ONLY | `# by e.g. Claude-klabauter's OWN manifest, walked by a different` |
 | `coordinator_core/ops/verify_coverage.py:621` | PROSE-ONLY | `# period-correct references (claude-klabauter, 2026-08-06).` |
 | `coordinator_core/ops/verify_coverage.py:648` | PROSE-ONLY | `# way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).` |
-| `coordinator_core/ops/verify_skill_anchor_links.py:181` | PROSE-ONLY | `module migrated from DoE-claude to claude-klabauter (DOE-PORT R2-R6,` |
+| `coordinator_core/ops/verify_skill_anchor_links.py:181` | PROSE-ONLY | `module migrated from coordinator-content-repo to claude-klabauter (DOE-PORT R2-R6,` |
 | `coordinator_core/ops/verify_templates_setup_sync.py:105` | PROSE-ONLY | `the wrong repo entirely (claude-klabauter has no templates/ tree at all).` |
 | `coordinator_core/ops/workday_complete_backfill_scan.py:221` | - | `return _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/workflow_fire/fire.py:818` | PROSE-ONLY | `child's working directory (2026-08-30, claude-klabauter-em and` |
@@ -1818,8 +1818,8 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/engine.py:1937` | PROSE-ONLY | `# `claude-klabauter` at `"severity": "hard"` in `direct_deps`, pinned by` |
 | `coordinator_core/percolate/identity_permit.py:60` | PROSE-ONLY | `# separator Windows form ("C:\Users\dbc-example-operator/claude-klabauter" -- abs-path-ok:` |
 | `coordinator_core/percolate/rewrite_stem.py:193` | PROSE-ONLY | ``test_claude_klabauter.py` are snake_case whatever follows them, and `repos.claude_klabauter`` |
-| `coordinator_core/percolate/store.py:1494` | PROSE-ONLY | `#: silently smuggling a hyphenated slug (`claude-klabauter`, `DoE-claude`) past the shared` |
-| `coordinator_core/percolate/store.py:1498` | PROSE-ONLY | `#: source text (`DoE-claude/coordinator`, `X:/claude-klabauter/...`) gets glued into ONE` |
+| `coordinator_core/percolate/store.py:1494` | PROSE-ONLY | `#: silently smuggling a hyphenated slug (`claude-klabauter`, `coordinator-content-repo`) past the shared` |
+| `coordinator_core/percolate/store.py:1498` | PROSE-ONLY | `#: source text (`coordinator-content-repo/coordinator`, `C:/claude-klabauter/...`) gets glued into ONE` |
 | `coordinator_core/percolate/surface.py:238` | PROSE-ONLY | `#: ~13 distinct writers, archived to claude-klabauter` |
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:77` | - | `'            "repos.claude_klabauter not set in machine-local registry and '` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:467` | - | `assert 'claude-klabauter' not in stem_map` |
@@ -1827,7 +1827,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_identity_permit_unit.py:77` | - | `line = r"C:\Users\dbc-example-operator/claude-klabauter"  # abs-path-ok: fixture data, not a real path reference` |
 | `coordinator_core/percolate/tests/test_identity_permit_unit.py:83` | - | `line = "~/dbc-example-operator/repos/claude-klabauter"  # abs-path-ok: fixture data, not a real path reference` |
 | `coordinator_core/percolate/tests/test_identity_permit_unit.py:90` | - | `line = f"see {prefix}dbc-oduffy/claude-klabauter{suffix} for details"` |
-| `coordinator_core/percolate/tests/test_output_functional_identifier_drift.py:239` | - | `source = 'Clone DoE-claude/coordinator and claude-klabauter/coordinator_core.\n'` |
+| `coordinator_core/percolate/tests/test_output_functional_identifier_drift.py:239` | - | `source = 'Clone coordinator-content-repo/coordinator and claude-klabauter/coordinator_core.\n'` |
 | `coordinator_core/percolate/tests/test_permit_checker_parity.py:118` | - | `"Clone it from https://github.com/dbc-oduffy/claude-klabauter.git",` |
 | `coordinator_core/percolate/tests/test_permit_checker_parity.py:123` | - | `"See dbc-oduffy/claude-klabauter for the source.",` |
 | `coordinator_core/percolate/tests/test_prefilter_equivalence.py:143` | - | `"the path repos/claude-klabauter/foo is real\n",` |
@@ -1847,7 +1847,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_rewrite.py:125` | - | `assert result == "claude-klabauter"` |
 | `coordinator_core/percolate/tests/test_rewrite.py:185` | - | `text = r'return "repos.claude_klabauter\nrepos.other"'` |
 | `coordinator_core/percolate/tests/test_runtime_root.py:248` | - | `"""AC4: publishing from a claude-klabauter-shaped cwd, via a synthetic` |
-| `coordinator_core/percolate/tests/test_store.py:61` | PROSE-ONLY | `# near a drive root (e.g. X:\claude-klabauter) it raised IndexError at import` |
+| `coordinator_core/percolate/tests/test_store.py:61` | PROSE-ONLY | `# near a drive root (e.g. C:\claude-klabauter) it raised IndexError at import` |
 | `coordinator_core/percolate/tests/test_sweep_never_published_state.py:13` | PROSE-ONLY | `2026-09-02 (archived to claude-klabauter` |
 | `coordinator_core/pickup_assemble/__init__.py:1943` | PROSE-ONLY | ``/claude-klabauter/cross-repo/inbox/m.md` where the repo actually lives at` |
 | `coordinator_core/pickup_assemble/__init__.py:1944` | PROSE-ONLY | ``/Users/…/X/claude-klabauter`. Strips the leading `/<repo-basename>/` segment` |
@@ -1859,17 +1859,17 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/plugin_health/forwarder_drift.py:205` | PROSE-ONLY | `3. CLAUDE_KLABAUTER_ROOT env var / <settings-home>/machine-local/.claude-klabauter-live-root pointer` |
 | `coordinator_core/plugin_health/forwarder_drift.py:206` | PROSE-ONLY | `/ machine-local registry (`repos.claude_klabauter`) — via` |
 | `coordinator_core/plugin_health/forwarder_drift.py:748` | - | `"checkout, or a machine with no repos.claude_klabauter registered)",` |
-| `coordinator_core/plugin_health/sentinel.py:223` | PROSE-ONLY | `migration (2026-07-22, DoE-claude -> claude-klabauter).` |
+| `coordinator_core/plugin_health/sentinel.py:223` | PROSE-ONLY | `migration (2026-07-22, coordinator-content-repo -> claude-klabauter).` |
 | `coordinator_core/plugin_health/sentinel.py:265` | PROSE-ONLY | `doctor-probes.toml) into claude-klabauter; every triage/full run with no` |
 | `coordinator_core/plugin_health/sentinel.py:1930` | PROSE-ONLY | `both cheap (no subprocess) and immune to a stale/unset `repos.claude_klabauter`` |
 | `coordinator_core/plugin_health/sentinel.py:2137` | PROSE-ONLY | `Rung 2 shells out to `machine-local get repos.claude_klabauter` (a` |
 | `coordinator_core/plugin_health/tests/test_forwarder_drift.py:285` | - | `"""No repos.claude_klabauter registered anywhere (OSS consumer with no` |
 | `coordinator_core/plugin_health/tests/test_forwarder_drift.py:293` | - | `raise RuntimeError("repos.claude_klabauter is not set")` |
 | `coordinator_core/plugin_health/tests/test_forwarder_drift.py:416` | - | `raise RuntimeError("repos.claude_klabauter is not set")` |
-| `coordinator_core/plugin_health/tests/test_sentinel.py:912` | PROSE-ONLY | `# from DoE-claude's coordinator/bin/ into claude-klabauter's own coordinator/bin/,` |
+| `coordinator_core/plugin_health/tests/test_sentinel.py:912` | PROSE-ONLY | `# from coordinator-content-repo's coordinator/bin/ into claude-klabauter's own coordinator/bin/,` |
 | `coordinator_core/py_probe_sh.py:98` | PROSE-ONLY | `# foreign-identity: OUT-OF-CLASS — the "claude-klabauter-59" citation at` |
 | `coordinator_core/py_probe_sh.py:146` | PROSE-ONLY | `fail-open/fail-closed difference. (Finding raised by claude-klabauter-59's` |
-| `coordinator_core/reconcile/ac27_differential_oracle.py:15` | PROSE-ONLY | `baton in DoE-claude, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and` |
+| `coordinator_core/reconcile/ac27_differential_oracle.py:15` | PROSE-ONLY | `baton in coordinator-content-repo, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and` |
 | `coordinator_core/reconcile/ac27_differential_oracle.py:105` | - | `("repos.claude_klabauter", "claude-klabauter"),` |
 | `coordinator_core/reconcile/gate_eval.py:3138` | PROSE-ONLY | `dispatch brief, "TWO CORRECTIONS FROM claude-klabauter-d3": their readout` |
 | `coordinator_core/reconcile/tests/test_gate_eval.py:3294` | - | `"""The claude-klabauter-d3 correction: FREED requires every blocked_by id` |
@@ -1913,7 +1913,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/session/core.py:216` | PROSE-ONLY | `#: Shape test for the MSYS/MinGW drive-mount spelling (`/x/claude-klabauter`)` |
 | `coordinator_core/session/core.py:231` | PROSE-ONLY | `A session launched from Git Bash has a POSIX cwd (``/x/claude-klabauter``).` |
 | `coordinator_core/session/core.py:232` | PROSE-ONLY | ```Path("/x/claude-klabauter").resolve()`` on Windows anchors that to the` |
-| `coordinator_core/session/core.py:233` | PROSE-ONLY | `CURRENT process drive and yields ``X:\\x\\claude-klabauter`` — a path that  # abs-path-ok: illustrative example shape, not a machine-specific citation` |
+| `coordinator_core/session/core.py:233` | PROSE-ONLY | `CURRENT process drive and yields ``C:\\x\\claude-klabauter`` — a path that  # abs-path-ok: illustrative example shape, not a machine-specific citation` |
 | `coordinator_core/session/dispatch_nudge_sentinel.py:6` | PROSE-ONLY | ```tempfile.gettempdir()``. Nothing in either repo (claude-klabauter or` |
 | `coordinator_core/session/harness_registry.py:204` | PROSE-ONLY | `RULING (EM ruling, claude-klabauter-em, 2026-08-14, in response to DoE's` |
 | `coordinator_core/session/harness_registry.py:417` | PROSE-ONLY | ``name` is the harness-rendered peer label (e.g. `"claude-klabauter-57"`,` |
@@ -1930,7 +1930,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/session/tests/test_claim_index.py:804` | - | `base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]` |
 | `coordinator_core/session/tests/test_claim_index.py:809` | - | `assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-57"}` |
 | `coordinator_core/session/tests/test_core.py:2260` | PROSE-ONLY | `# cwd (`/x/claude-klabauter`). Before the `_normalize_cwd` fix that resolved to` |
-| `coordinator_core/session/tests/test_core.py:2261` | PROSE-ONLY | `# `X:\x\claude-klabauter`, the `.git` walk found nothing, and the hub came back  # abs-path-ok: illustrative example shape` |
+| `coordinator_core/session/tests/test_core.py:2261` | PROSE-ONLY | `# `C:\x\claude-klabauter`, the `.git` walk found nothing, and the hub came back  # abs-path-ok: illustrative example shape` |
 | `coordinator_core/session/tests/test_core.py:2314` | - | `for candidate in ("/x/claude-klabauter", "/x", "/usr/local/src/repo", "/tmp/t", None):` |
 | `coordinator_core/session/tests/test_harness_registry.py:486` | - | `"name": "claude-klabauter-57",` |
 | `coordinator_core/session/tests/test_harness_registry.py:494` | - | `assert record.name == "claude-klabauter-57"` |
@@ -2059,7 +2059,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/test_machine_resolver.py:404` | - | `assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"` |
 | `coordinator_core/test_machine_resolver.py:415` | - | `mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")` |
 | `coordinator_core/test_machine_resolver.py:418` | - | `assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"` |
-| `coordinator_core/test_machine_resolver.py:425` | - | `"schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.doe_claude\" = '/srv/DoE-claude'\n",` |
+| `coordinator_core/test_machine_resolver.py:425` | - | `"schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.content_root\" = '/srv/coordinator-content-repo'\n",` |
 | `coordinator_core/test_machine_resolver.py:430` | - | `mr.registry_set("repos.claude_klabauter", "/new/path")` |
 | `coordinator_core/test_machine_resolver.py:433` | - | `assert content.count('"repos.claude_klabauter"') == 1` |
 | `coordinator_core/test_machine_resolver.py:434` | - | `assert mr.registry_get("repos.claude_klabauter") == "/new/path"` |
@@ -2079,13 +2079,13 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/test_pickup_assemble.py:2276` | - | `"""Real plans write `- claude-klabauter:coordinator_core/x.py` with NO` |
 | `coordinator_core/test_pickup_assemble.py:2291` | - | `lambda key: str(sibling) if key == "repos.claude_klabauter" else None,` |
 | `coordinator_core/test_pickup_assemble.py:2294` | - | `result = pa.compute_tree_quiescence(repo, ["claude-klabauter:coordinator_core/dag.py"])` |
-| `coordinator_core/test_pickup_assemble.py:4465` | - | `"- X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4467` | - | `"  - X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4471` | - | `"X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4473` | - | `"X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4538` | - | `"X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4543` | - | `"X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-doe-claude-em-"` |
-| `coordinator_core/test_pickup_assemble.py:4545` | - | `"X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-doe-claude-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4465` | - | `"- C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4467` | - | `"  - C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4471` | - | `"C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4473` | - | `"C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4538` | - | `"C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4543` | - | `"C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-content-repo-em-"` |
+| `coordinator_core/test_pickup_assemble.py:4545` | - | `"C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-content-repo-em-"` |
 | `coordinator_core/test_pickup_assemble.py:4868` | - | `repo = tmp_path / "claude-klabauter"` |
 | `coordinator_core/test_pickup_assemble.py:4872` | - | `result = pb.brief("/claude-klabauter/cross-repo/inbox/m2.md", repo_root=repo)` |
 | `coordinator_core/test_pickup_assemble.py:4892` | - | `repo = tmp_path / "claude-klabauter"` |
@@ -2098,7 +2098,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/test_state_root.py:152` | PROSE-ONLY | `identifier transform intact; `repos.claude_klabauter` does not and is` |
 | `coordinator_core/test_state_root.py:160` | - | `"""Under the publish transform `repos.claude_klabauter` resolves the mirror` |
 | `coordinator_core/test_state_root.py:569` | PROSE-ONLY | `position, and under the publish transform `repos.claude_klabauter` names the` |
-| `coordinator_core/test_trusted_root_guard.py:182` | PROSE-ONLY | ``repos.claude_klabauter` key, mirroring the `repos.doe_claude` anchor."""` |
+| `coordinator_core/test_trusted_root_guard.py:182` | PROSE-ONLY | ``repos.claude_klabauter` key, mirroring the `repos.content_root` anchor."""` |
 | `coordinator_core/test_trusted_root_guard.py:185` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator_core/test_trusted_root_guard.py:191` | - | `f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"` |
 | `coordinator_core/test_trusted_root_guard.py:198` | - | `assert not is_trusted(str(tmp_path / "claude-klabauter-evil" / "coordinator"), env=env)` |
@@ -2124,10 +2124,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_archive_stamp_claimant_identity.py:278` | - | `repo, "h6b.md", extra="claimed_by_name: claude-klabauter-real\n",` |
 | `coordinator_core/tests/test_archive_stamp_claimant_identity.py:298` | - | `assert "claimed_by_name: claude-klabauter-real" in text` |
 | `coordinator_core/tests/test_c6_pointer_normalization.py:17` | PROSE-ONLY | `files) and the claude-klabauter corpus (~95 files), checked separately for the` |
-| `coordinator_core/tests/test_c6_pointer_normalization.py:189` | PROSE-ONLY | `# (c) Differential-oracle agreement over the real DoE-claude + claude-klabauter corpora` |
-| `coordinator_core/tests/test_deliverable_id_pattern_parity.py:79` | - | `"DoE-claude authors it (memo 2026-08-05-claude-klabauter-em-dlv-pattern-taking-it-"` |
-| `coordinator_core/tests/test_engine_root_census.py:107` | - | `"a.site", root_value="X:/claude-klabauter", sink_root=sink, now=_NOW` |
-| `coordinator_core/tests/test_engine_root_census.py:112` | - | `assert entry["root"] == "X:/claude-klabauter"` |
+| `coordinator_core/tests/test_c6_pointer_normalization.py:189` | PROSE-ONLY | `# (c) Differential-oracle agreement over the real coordinator-content-repo + claude-klabauter corpora` |
+| `coordinator_core/tests/test_deliverable_id_pattern_parity.py:79` | - | `"coordinator-content-repo authors it (memo 2026-08-05-claude-klabauter-em-dlv-pattern-taking-it-"` |
+| `coordinator_core/tests/test_engine_root_census.py:107` | - | `"a.site", root_value="C:/claude-klabauter", sink_root=sink, now=_NOW` |
+| `coordinator_core/tests/test_engine_root_census.py:112` | - | `assert entry["root"] == "C:/claude-klabauter"` |
 | `coordinator_core/tests/test_engine_root_conformance.py:34` | PROSE-ONLY | `key then ``.claude-klabauter-live-root`` sentinel only); DoE's ``_resolve_live_working_tree``` |
 | `coordinator_core/tests/test_engine_root_conformance.py:144` | - | `"NO env-var rungs at all — registry key 'repos.claude_klabauter' then the "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:145` | - | `"'.claude-klabauter-live-root' sentinel only. DoE's _resolve_live_working_tree "` |
@@ -2200,19 +2200,19 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_liveness.py:83` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `coordinator_core/tests/test_machine_local_impl_settings_home_first.py:13` | PROSE-ONLY | ```repos.claude_klabauter`` to ``None`` and degraded — a live, not theoretical,` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:112` | PROSE-ONLY | ``CLAUDE_KLABAUTER_ROOT = REPO_ROOT.parent / "claude-klabauter"` — believed at the time to` |
-| `coordinator_core/tests/test_no_hardcoded_paths.py:179` | PROSE-ONLY | `# set (DEC-4 names DoE-claude and claude-klabauter; .claude is the third anchor` |
-| `coordinator_core/tests/test_no_hardcoded_paths.py:182` | - | `_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "project-rag", ".claude"}` |
+| `coordinator_core/tests/test_no_hardcoded_paths.py:179` | PROSE-ONLY | `# set (DEC-4 names coordinator-content-repo and claude-klabauter; .claude is the third anchor` |
+| `coordinator_core/tests/test_no_hardcoded_paths.py:182` | - | `_SIBLING_REPO_TOKENS = {"coordinator-content-repo", "claude-klabauter", "project-rag", ".claude"}` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:849` | - | `"    return Path(\"/Users/someone/claude-klabauter\")\n",` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:859` | - | `assert detail == "/Users/someone/claude-klabauter"` |
 | `coordinator_core/tests/test_no_lfs_hook_on_push_path.py:85` | PROSE-ONLY | `# cross-repo consumer (claude-klabauter-59) tests against these exact` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:14` | PROSE-ONLY | ``cwd="X:/claude-klabauter"` to `subprocess.run`. `X:\claude-klabauter` is the` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:398` | PROSE-ONLY | `subprocess.run(["git", "status"], cwd="X:/claude-klabauter")` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:403` | PROSE-ONLY | `ENGINE_ROOT = r"X:\claude-klabauter"` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:14` | PROSE-ONLY | ``cwd="C:/claude-klabauter"` to `subprocess.run`. `C:\claude-klabauter` is the` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:398` | PROSE-ONLY | `subprocess.run(["git", "status"], cwd="C:/claude-klabauter")` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:403` | PROSE-ONLY | `ENGINE_ROOT = r"C:\claude-klabauter"` |
 | `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:416` | PROSE-ONLY | `with open("/Users/example-operator/X/claude-klabauter/state/x.json") as fh:` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:430` | PROSE-ONLY | `assert translate(Path("X:/claude-klabauter/docs/plans/p.md")) == "docs/plans/p.md"` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:440` | PROSE-ONLY | `"""Run: cd X:/claude-klabauter && python -m pytest coordinator_core/tests` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:445` | PROSE-ONLY | `"""Usage: python X:/claude-klabauter/tasks/probe.py"""` |
-| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:450` | PROSE-ONLY | `# On the Windows box this used to read cwd="X:/claude-klabauter"; it now` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:430` | PROSE-ONLY | `assert translate(Path("C:/claude-klabauter/docs/plans/p.md")) == "docs/plans/p.md"` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:440` | PROSE-ONLY | `"""Run: cd C:/claude-klabauter && python -m pytest coordinator_core/tests` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:445` | PROSE-ONLY | `"""Usage: python C:/claude-klabauter/tasks/probe.py"""` |
+| `coordinator_core/tests/test_no_machine_absolute_path_resolution.py:450` | PROSE-ONLY | `# On the Windows box this used to read cwd="C:/claude-klabauter"; it now` |
 | `coordinator_core/tests/test_no_machine_local_cli_read_spawn.py:335` | PROSE-ONLY | `# `bin/claude-klabauter-doctor-probe.py`'s two `repos.claude_klabauter` sites (rung-2` |
 | `coordinator_core/tests/test_no_pathspec_less_commit.py:7` | PROSE-ONLY | `THE DISCRIMINATOR, MEASURED NOT ASSUMED. `claude-klabauter-77`'s controlled negative at` |
 | `coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py:6096` | PROSE-ONLY | `# WHAT THIS NUMBER IS NOT (corrected 2026-09-03, claude-klabauter-6c): ten is` |
@@ -2226,10 +2226,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_repo_identity_picks_one_registry_key.py:126` | - | `assert coordinator_registry.em_id_for_root(str(repo), paths) == "claude-klabauter-em"` |
 | `coordinator_core/tests/test_root_channel_reconcile.py:120` | - | `_stub_registry(monkeypatch, {"repos.claude_klabauter": str(real)})` |
 | `coordinator_core/tests/test_setup_template_manifest.py:15` | PROSE-ONLY | `Negative-spec: does NOT read the real claude-klabauter checkout — claude_klabauter_root` |
-| `coordinator_core/tests/test_test_red_record.py:7` | PROSE-ONLY | `claude-klabauter cross-repo/archive/2026-07-25-doe-claude-em-test-red-record-contract-consult.md` |
+| `coordinator_core/tests/test_test_red_record.py:7` | PROSE-ONLY | `claude-klabauter cross-repo/archive/2026-07-25-coordinator-content-repo-em-test-red-record-contract-consult.md` |
 | `coordinator_core/tests/test_tracker_store.py:1487` | - | `for forbidden in ("claude-klabauter", "/Users/", "C:\\\\"):` |
 | `coordinator_core/tests/test_two_axis_env_export.py:70` | PROSE-ONLY | `the worker warms that memo with this box's real `repos.claude_klabauter`, the` |
-| `coordinator_core/tests/test_two_axis_env_export.py:71` | PROSE-ONLY | `primary answers `X:/claude-klabauter` and the stub is never called at all --` |
+| `coordinator_core/tests/test_two_axis_env_export.py:71` | PROSE-ONLY | `primary answers `C:/claude-klabauter` and the stub is never called at all --` |
 | `coordinator_core/tests/test_two_axis_env_export.py:221` | - | `assert seen["key"] == "repos.claude_klabauter"` |
 | `coordinator_core/tests/test_warm_identity_env_reads.py:126` | - | `"inspection: five wrong stamps across claude-klabauter and example-retrieval-repo in one "` |
 | `coordinator_core/tracker_holder.py:245` | - | `_CLAUDE_KLABAUTER_SOURCE_TREE_KEY = "repos.claude_klabauter"` |
@@ -2248,7 +2248,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/trusted_root_guard.py:360` | - | `rungs.append(("registry repos.claude_klabauter", "<skipped: settings-home dir resolved empty>"))` |
 | `coordinator_core/trusted_root_guard.py:363` | - | `durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-live-root")` |
 | `coordinator_core/trusted_root_guard.py:370` | - | `rungs.append(("<settings-home>/machine-local/.claude-klabauter-live-root", "<skipped: settings-home dir resolved empty>"))` |
-| `coordinator_core/trusted_root_guard.py:429` | PROSE-ONLY | `The registry-resolved anchors (``repos.doe_claude``, ``repos.claude_klabauter``)` |
+| `coordinator_core/trusted_root_guard.py:429` | PROSE-ONLY | `The registry-resolved anchors (``repos.content_root``, ``repos.claude_klabauter``)` |
 | `coordinator_core/trusted_root_guard.py:544` | - | `"re-run python3 <claude-klabauter>/scripts/setup.py -- an anchor below "` |
 | `coordinator_core/warm/client.py:502` | PROSE-ONLY | `import. Found by claude-klabauter-44.` |
 | `coordinator_core/warm/hook_http.py:201` | PROSE-ONLY | `MEASURED, not inferred. Claude-klabauter-0e probed harness 2.1.245 with each shape sent` |
@@ -2273,14 +2273,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/write_guards/check_claude_md_size.py:16` | PROSE-ONLY | `depends-on-claude-klabauter direction the tri-plane split establishes.` |
 | `coordinator_core/write_guards/guard_class_relay.py:98` | PROSE-ONLY | `# forbidden (claude-klabauter CLAUDE.md § The brightline). `detect_class_transition`` |
 | `coordinator_core/write_guards/guard_doctrine_surface_edits.py:256` | PROSE-ONLY | `session whose cwd was `claude-klabauter`: `global-doctrine/CLAUDE.md` and` |
-| `coordinator_core/write_guards/guard_doctrine_surface_edits.py:258` | PROSE-ONLY | `DoE-claude, so they resolved to two nonexistent `claude-klabauter/...`` |
+| `coordinator_core/write_guards/guard_doctrine_surface_edits.py:258` | PROSE-ONLY | `coordinator-content-repo, so they resolved to two nonexistent `claude-klabauter/...`` |
 | `coordinator_core/write_guards/guard_memory_store_cap.py:76` | PROSE-ONLY | `claude-klabauter's own store reached 213 body files against the 20-file cap` |
 | `coordinator_core/write_guards/guard_memory_store_cap.py:123` | PROSE-ONLY | `claude-klabauter ``state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md``,` |
 | `coordinator_core/write_guards/guard_settings_json_write.py:65` | PROSE-ONLY | `(`coordinator_core.install._shared.PORTABLE_HOOK_ROOT_EXPR`, claude-klabauter)` |
-| `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:4` | PROSE-ONLY | `Catches a SESSION DISPLAY NAME (``claude-klabauter-49``, ``doe-claude-3a``,` |
+| `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:4` | PROSE-ONLY | `Catches a SESSION DISPLAY NAME (``claude-klabauter-49``, ``coordinator-content-repo-3a``,` |
 | `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:10` | PROSE-ONLY | `for: a bug-backlog row said "ESTABLISHED AND FIXED BY claude-klabauter-49";` |
 | `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:21` | PROSE-ONLY | `claude-klabauter-c0 and claude-klabauter-em jointly") rather than doing` |
-| `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:84` | PROSE-ONLY | `(`claude-klabauter-49`, `doe-claude-3a`, `klabauter-7f`) — a plain` |
+| `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:84` | PROSE-ONLY | `(`claude-klabauter-49`, `coordinator-content-repo-3a`, `klabauter-7f`) — a plain` |
 | `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:85` | PROSE-ONLY | `letters-only trailing segment (`claude-klabauter-em`, a role suffix, not a` |
 | `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:115` | PROSE-ONLY | `prose (`"ESTABLISHED AND FIXED BY claude-klabauter-49"`, the live incident's` |
 | `coordinator_core/write_guards/nudge_session_display_name_as_identifier.py:209` | - | `"claude-klabauter",` |
@@ -2293,9 +2293,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/write_guards/tests/test_block_priority_ledger_edit.py:101` | - | `"file_path": "/Users/someone/X/claude-klabauter/state/priority-ledger/hnd-abc123.yaml",` |
 | `coordinator_core/write_guards/tests/test_block_priority_ledger_edit.py:117` | - | `"file_path": r"C:\Users\someone\X\claude-klabauter\state\priority-ledger\hnd-abc123.yaml",` |
 | `coordinator_core/write_guards/tests/test_block_subagent_grant_record_write.py:321` | - | `unc_common_dir = r"\\fileserver\repos\claude-klabauter\.git"` |
-| `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:764` | - | `cwd = r"X:\claude-klabauter"` |
+| `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:764` | - | `cwd = r"C:\claude-klabauter"` |
 | `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:768` | - | `cwd = "/opt/claude-klabauter"` |
-| `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:826` | - | `cwd = r"X:\claude-klabauter"` |
+| `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:826` | - | `cwd = r"C:\claude-klabauter"` |
 | `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:1262` | - | `/ "-Users-example-operator-X-claude-klabauter"` |
 | `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:1312` | - | `target = str(settings_home / "claude-klabauter" / "anchor.json")` |
 | `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:1371` | - | `target = settings_home / "claude-klabauter" / "anchor.json"` |
@@ -2303,7 +2303,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py:2182` | - | `target_dir = settings_home / "claude-klabauter"` |
 | `coordinator_core/write_guards/tests/test_guard_doctrine_surface_edits.py:462` | PROSE-ONLY | `# claude-klabauter: both resolved to nonexistent claude-klabauter paths while the` |
 | `coordinator_core/write_guards/tests/test_guard_memory_store_cap.py:402` | - | `assert len(guard._deny_reason_row_length("claude-klabauter", rows).encode()) <= 220` |
-| `coordinator_core/write_guards/tests/test_no_retired_memo_invocation_offered.py:70` | - | `deny._own_inbox_deny_message("claude-klabauter-em", "doe-claude-em"),` |
+| `coordinator_core/write_guards/tests/test_no_retired_memo_invocation_offered.py:70` | - | `deny._own_inbox_deny_message("claude-klabauter-em", "coordinator-content-repo-em"),` |
 | `coordinator_core/write_guards/tests/test_no_retired_memo_invocation_offered.py:74` | - | `deny._own_inbox_deny_message("claude-klabauter-em", None),` |
 | `coordinator_core/write_guards/tests/test_nudge_outbox_draft_frontmatter_shape.py:24` | - | `"from: \"claude-klabauter-em\"\n"` |
 | `coordinator_core/write_guards/tests/test_nudge_session_display_name_as_identifier.py:70` | - | `content = "ESTABLISHED AND FIXED BY claude-klabauter-49"` |
@@ -2324,10 +2324,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/write_guards/tests/test_validate_frontmatter_schema_deny.py:1844` | - | `"from_repo: claude-klabauter-em\n"` |
 | `coordinator_core/write_guards/tests/test_validate_frontmatter_schema_deny.py:2138` | PROSE-ONLY | `* `## Spine` instead of `## Tasks` — claude-klabauter` |
 | `coordinator_core/write_guards/tests/test_validate_frontmatter_schema_deny.py:2145` | PROSE-ONLY | `* a dangling `depends_on[].chunk` — claude-klabauter` |
-| `coordinator_core/write_guards/validate_frontmatter_schema_advisory.py:69` | PROSE-ONLY | `The reference hook lives in DoE-claude and must resolve INTO claude-klabauter` |
+| `coordinator_core/write_guards/validate_frontmatter_schema_advisory.py:69` | PROSE-ONLY | `The reference hook lives in coordinator-content-repo and must resolve INTO claude-klabauter` |
 | `coordinator_core/write_guards/validate_frontmatter_schema_advisory.py:72` | PROSE-ONLY | `lives IN claude-klabauter already, so those three imports` |
 | `scripts/cloud_setup.py:135` | - | `"klabauter": "repos.claude_klabauter",` |
-| `scripts/cloud_setup.py:528` | PROSE-ONLY | `registry keys `repos.doe_claude` and `repos.claude_klabauter`. Nothing on a` |
+| `scripts/cloud_setup.py:528` | PROSE-ONLY | `registry keys `repos.content_root` and `repos.claude_klabauter`. Nothing on a` |
 | `scripts/setup.py:1` | - | `"""scripts/setup.py — claude-klabauter standalone setup script (cross-platform).` |
 | `scripts/setup.py:4` | PROSE-ONLY | `claude-klabauter AND claude-klabauter — docs/install/agent-install-manifest.json` |
 | `scripts/setup.py:20` | PROSE-ONLY | `running from claude-klabauter, machine-local set repos.claude_klabauter AND` |
@@ -2402,7 +2402,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `scripts/test_setup.py:3512` | - | `installed_root = tmp_path / "claude-klabauter"` |
 | `scripts/test_setup.py:3533` | - | `package_root = tmp_path / "claude-klabauter"` |
 | `scripts/test_setup.py:3554` | - | `package_root = tmp_path / "claude-klabauter"` |
-| `scripts/tests/test_cloud_setup.py:436` | PROSE-ONLY | `# `repos.doe_claude` / `repos.claude_klabauter`; seeded after it, both resolve` |
+| `scripts/tests/test_cloud_setup.py:436` | PROSE-ONLY | `# `repos.content_root` / `repos.claude_klabauter`; seeded after it, both resolve` |
 | `scripts/tests/test_cloud_setup.py:491` | - | `assert f"set repos.claude_klabauter {engine}" in calls` |
 | `scripts/tests/test_cloud_setup.py:493` | - | `assert report.machine_local_keys["repos.claude_klabauter"] == str(engine)` |
 
@@ -2594,7 +2594,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `bin/claude-klabauter-doctor-probe.py:3078` | PROSE-ONLY | `bash subprocess (coordinator-claude-klabauter-root.sh) with a 5 s timeout — on Windows this` |
 | `bin/claude-klabauter-doctor-probe.py:3087` | PROSE-ONLY | `the install-time writer (gen-claude-klabauter-live-root-pointer.py).` |
 | `bin/claude-klabauter-doctor-probe.py:3088` | PROSE-ONLY | `- claude_klabauter_root is None (probe 1 unresolved) -> pointer existence is still checked;` |
-| `bin/claude-klabauter-doctor-probe.py:3094` | PROSE-ONLY | `separate install-time step (gen-claude-klabauter-live-root-pointer.py, DoE-claude C1b).` |
+| `bin/claude-klabauter-doctor-probe.py:3094` | PROSE-ONLY | `separate install-time step (gen-claude-klabauter-live-root-pointer.py, coordinator-content-repo C1b).` |
 | `bin/claude-klabauter-doctor-probe.py:3102` | PROSE-ONLY | `Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14` |
 | `bin/claude-klabauter-doctor-probe.py:3113` | - | `f"claude-klabauter-live-root pointer absent at {str(pointer_path)!r}. Without it, "` |
 | `bin/claude-klabauter-doctor-probe.py:3119` | - | `"Run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) to "` |
@@ -2778,7 +2778,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `bin/claude-klabauter-revendor-handoff-schema.py:96` | - | `"bin/claude-klabauter-revendor-schema.py."` |
 | `bin/claude-klabauter-revendor-handoff-schema.py:102` | - | `"  python3 bin/claude-klabauter-revendor-handoff-schema.py\n\n"` |
 | `bin/claude-klabauter-revendor-handoff-schema.py:104` | - | `"  python3 bin/claude-klabauter-revendor-handoff-schema.py --dry-run\n\n"` |
-| `bin/claude-klabauter-revendor-handoff-schema.py:106` | - | `"  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/DoE-claude\n\n"` |
+| `bin/claude-klabauter-revendor-handoff-schema.py:106` | - | `"  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/coordinator-content-repo\n\n"` |
 | `bin/claude-klabauter-revendor-handoff-schema.py:108` | - | `"  python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run\n"` |
 | `bin/claude-klabauter-revendor-schema.py:420` | - | `f"bin/claude-klabauter-revendor-schema.py {name}."` |
 | `bin/claude-klabauter-revendor-schema.py:1098` | - | `prog="claude-klabauter-revendor-schema.py",` |
@@ -3155,7 +3155,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/check-deferral-partial-strangle.py:103` | - | `result = cc_invoke("deferral.detect_partial_strangle", {}, claude_klabauter_root)` |
 | `coordinator/bin/check-description-length.py:29` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/check-description-length.py:38` | - | `print(f"check-description-length.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
-| `coordinator/bin/check-doctrine-citations.py:655` | - | `help="Override or add a tree root (doe_root, doe_coordinator, claude-klabauter); repeatable.",` |
+| `coordinator/bin/check-doctrine-citations.py:655` | - | `help="Override or add a tree root (content_root, doe_coordinator, claude-klabauter); repeatable.",` |
 | `coordinator/bin/check-engine-drift.py:113` | - | `from cc_invoke import _resolve_claude_klabauter_root, cc_invoke  # noqa: E402` |
 | `coordinator/bin/check-engine-drift.py:116` | - | `claude_klabauter_root = _resolve_claude_klabauter_root()` |
 | `coordinator/bin/check-engine-drift.py:119` | - | `if not claude_klabauter_root:` |
@@ -3395,7 +3395,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/detect-project-runtime.py:62` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/dirty-tree-gate.py:39` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/distill-log-append.py:105` | - | `"Append canonical row(s) to a distillation log via the claude-klabauter writer. "` |
-| `coordinator/bin/doctor-catalog-gen.py:48` | - | `GENERATES = []  # --write targets coordinator-doctor.md at the resolved wiki path, which resolves to DoE-claude's coordinator/docs/wiki/ tree (this repo has no ` |
+| `coordinator/bin/doctor-catalog-gen.py:48` | - | `GENERATES = []  # --write targets coordinator-doctor.md at the resolved wiki path, which resolves to coordinator-content-repo's coordinator/docs/wiki/ tree (this repo has no ` |
 | `coordinator/bin/draft-plan-aging.py:2` | - | `"""draft-plan-aging.py — CLI trampoline over the claude-klabauter draft-plan staleness` |
 | `coordinator/bin/draft-plan-aging.py:82` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/edit-live-hook.py:2` | - | `"""edit-live-hook.py — CLI trampoline over the claude-klabauter stage/validate/atomic-swap` |
@@ -3436,10 +3436,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/freeze-review-diff.py:159` | - | `"""Put the claude-klabauter repo root on ``sys.path`` before ``coordinator_core``` |
 | `coordinator/bin/freeze-review-diff.py:171` | - | `if str(_CLAUDE_KLABAUTER_REPO_ROOT) not in sys.path:` |
 | `coordinator/bin/freeze-review-diff.py:172` | - | `sys.path.insert(0, str(_CLAUDE_KLABAUTER_REPO_ROOT))` |
-| `coordinator/bin/gen-claude-doe-launcher.py:78` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/gen-claude-doe-shim.py:2` | - | `"""gen-claude-doe-shim.py — CLI trampoline over the claude-klabauter claude() shim` |
-| `coordinator/bin/gen-claude-doe-shim.py:128` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/gen-doe-root-pointer.py:33` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
+| `coordinator/bin/gen-claude-author-launcher.py:78` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
+| `coordinator/bin/gen-claude-author-shim.py:2` | - | `"""gen-claude-author-shim.py — CLI trampoline over the claude-klabauter claude() shim` |
+| `coordinator/bin/gen-claude-author-shim.py:128` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
+| `coordinator/bin/gen-content-root-pointer.py:33` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:1` | - | `"""gen-claude-klabauter-live-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:5` | PROSE-ONLY | `trailing junk) so that BOTH the bash resolver (coordinator-claude-klabauter-root.sh rung` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:6` | PROSE-ONLY | `1.5) and the Python transport (cc_invoke.py::_resolve_claude_klabauter_root rung 1.5) can` |
@@ -3455,7 +3455,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:65` | PROSE-ONLY | `# Settings-home resolution — inline mirror of cc_invoke.py::_resolve_claude_klabauter_root.` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:153` | - | `def _resolve_claude_klabauter_root() -> str:` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:154` | - | `"""Resolve the claude-klabauter repo root: env override, then machine-local registry.` |
-| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:159` | PROSE-ONLY | `# REPO_DOE_CLAUDE tier; REPO_CLAUDE_KLABAUTER is also the rung-1 override` |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:159` | PROSE-ONLY | `# REPO_CONTENT_ROOT tier; REPO_CLAUDE_KLABAUTER is also the rung-1 override` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:161` | - | `override = os.environ.get("REPO_CLAUDE_KLABAUTER")` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:170` | - | `"(env REPO_CLAUDE_KLABAUTER unset; machine-local registry lookup failed/empty).",` |
 | `coordinator/bin/gen-claude-klabauter-live-root-pointer.py:184` | - | `description="Project the claude-klabauter repo root into a cold-readable pointer file."` |
@@ -3524,10 +3524,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/harvest-exit-interviews.py:2` | - | `"""harvest-exit-interviews.py — CLI trampoline over claude-klabauter` |
 | `coordinator/bin/harvest-exit-interviews.py:54` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/harvest-exit-interviews.py:64` | - | `print(f"harvest-exit-interviews.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
-| `coordinator/bin/install-claude-doe-wrapper.py:38` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/install-claude-doe-wrapper.py:47` | - | `print(f"install-claude-doe-wrapper.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
-| `coordinator/bin/install-doe-claude-precommit-hook.py:51` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/install-doe-claude-precommit-hook.py:61` | - | `f"install-doe-claude-precommit-hook: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",` |
+| `coordinator/bin/install-claude-author-wrapper.py:38` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
+| `coordinator/bin/install-claude-author-wrapper.py:47` | - | `print(f"install-claude-author-wrapper.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
+| `coordinator/bin/install-coordinator-content-repo-precommit-hook.py:51` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
+| `coordinator/bin/install-coordinator-content-repo-precommit-hook.py:61` | - | `f"install-coordinator-content-repo-precommit-hook: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",` |
 | `coordinator/bin/install-health-run.py:44` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/install-health-run.py:54` | - | `print(f"install-health-run.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
 | `coordinator/bin/install-health/seed-skill-overrides.py:74` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
@@ -3965,7 +3965,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/reap-sessions.py:159` | - | `from cc_invoke import _resolve_claude_klabauter_root as _resolve_claude_klabauter_root_fn` |
 | `coordinator/bin/reap-sessions.py:163` | - | `("_resolve_claude_klabauter_root", _resolve_claude_klabauter_root_fn),` |
 | `coordinator/bin/reap-stale-subagent-sidecars.py:177` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/record-platform-outcome.py:161` | - | `GENERATES = []  # writes state/platform-outcomes/<platform>/<machine>/<surface>.yaml under _surface_root() == coordinator_registry.doe_root() (the DoE-claude re` |
+| `coordinator/bin/record-platform-outcome.py:161` | - | `GENERATES = []  # writes state/platform-outcomes/<platform>/<machine>/<surface>.yaml under _surface_root() == coordinator_registry.content_root() (the coordinator-content-repo re` |
 | `coordinator/bin/refresh-plugin-live-install.py:74` | - | `GENERATES = []  # writes live_path (a registered plugin's live checkout under the Claude plugins dir), the refresh audit log, and snapshot dirs — all under the ` |
 | `coordinator/bin/refresh-plugin-live-install.py:160` | - | `from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path` |
 | `coordinator/bin/refresh-plugin-live-install.py:162` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
@@ -3974,7 +3974,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/refresh-queries.py:91` | - | `print(f"refresh-queries.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
 | `coordinator/bin/refresh-roadmap-callout.py:37` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/refresh-roadmap-callout.py:46` | - | `print(f"refresh-roadmap-callout.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
-| `coordinator/bin/regen-cockpit-schema.py:128` | - | `global cc_invoke, claude_klabauter_root, _DoeUnresolvable, doe_root` |
+| `coordinator/bin/regen-cockpit-schema.py:128` | - | `global cc_invoke, claude_klabauter_root, _DoeUnresolvable, content_root` |
 | `coordinator/bin/regen-cockpit-schema.py:136` | - | `from cli_shared import claude_klabauter_root` |
 | `coordinator/bin/regen-cockpit-schema.py:197` | - | `env: dict[str, str] = {**os.environ, "CLAUDE_KLABAUTER_ROOT": mak_root, "COORDINATOR_ENGINE_ROOT": mak_root}` |
 | `coordinator/bin/regen-cockpit-schema.py:364` | - | `"claude-klabauter's. Until DoE performs it (or their own automated publish step "` |
@@ -4087,11 +4087,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/test_ccos3_schema_system_block.py:245` | - | `_SCHEMAS_DIR = _CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "frontmatter" / "schemas"` |
 | `coordinator/bin/test_check_doctrine_citations.py:32` | - | `DOE_VS_CLAUDE_KLABAUTER_COLLISIONS = [` |
 | `coordinator/bin/test_check_doctrine_citations.py:41` | - | `DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION = "INDEX.md"  # plans/INDEX.md` |
-| `coordinator/bin/test_check_doctrine_citations.py:52` | - | `"""Builds a temp dir with doe_root/, doe_coordinator/, claude-klabauter/ trees and` |
+| `coordinator/bin/test_check_doctrine_citations.py:52` | - | `"""Builds a temp dir with content_root/, doe_coordinator/, claude-klabauter/ trees and` |
 | `coordinator/bin/test_check_doctrine_citations.py:59` | - | `self.claude-klabauter = os.path.join(tmp, "claude-klabauter")` |
 | `coordinator/bin/test_check_doctrine_citations.py:63` | - | `for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:` |
 | `coordinator/bin/test_check_doctrine_citations.py:65` | - | `_write(os.path.join(self.claude-klabauter, "docs", "wiki", name))` |
-| `coordinator/bin/test_check_doctrine_citations.py:67` | - | `_write(os.path.join(self.doe_root, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))` |
+| `coordinator/bin/test_check_doctrine_citations.py:67` | - | `_write(os.path.join(self.content_root, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))` |
 | `coordinator/bin/test_check_doctrine_citations.py:68` | - | `_write(os.path.join(self.claude-klabauter, "docs", "plans", DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION))` |
 | `coordinator/bin/test_check_doctrine_citations.py:75` | - | `_write(os.path.join(self.claude-klabauter, "docs", "wiki", "only-in-claude-klabauter.md"))` |
 | `coordinator/bin/test_check_doctrine_citations.py:82` | - | `"claude-klabauter": self.claude-klabauter,` |
@@ -4189,7 +4189,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/test_cross_repo_memo_draft.py:94` | - | `parent = os.path.dirname(claude_klabauter_root)` |
 | `coordinator/bin/test_cross_repo_memo_draft.py:95` | - | `if parent == claude_klabauter_root:` |
 | `coordinator/bin/test_cross_repo_memo_draft.py:97` | - | `claude_klabauter_root = parent` |
-| `coordinator/bin/test_cross_repo_memo_draft.py:100` | - | `candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")` |
+| `coordinator/bin/test_cross_repo_memo_draft.py:100` | - | `candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")` |
 | `coordinator/bin/test_cross_repo_memo_draft.py:263` | - | `def _resolve_test_claude_klabauter_root() -> str \| None:` |
 | `coordinator/bin/test_cross_repo_memo_draft.py:278` | - | `return cc_invoke._resolve_claude_klabauter_root()` |
 | `coordinator/bin/test_cross_repo_memo_draft.py:394` | - | `claude_klabauter_root = _resolve_test_claude_klabauter_root()` |
@@ -4216,7 +4216,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:78` | - | `parent = os.path.dirname(claude_klabauter_root)` |
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:79` | - | `if parent == claude_klabauter_root:` |
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:81` | - | `claude_klabauter_root = parent` |
-| `coordinator/bin/test_cross_repo_memo_roundtrip.py:84` | - | `candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")` |
+| `coordinator/bin/test_cross_repo_memo_roundtrip.py:84` | - | `candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")` |
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:123` | - | `def _resolve_test_claude_klabauter_root() -> str \| None:` |
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:124` | - | `"""Same cc_invoke._resolve_claude_klabauter_root() four-rung ladder the sibling draft` |
 | `coordinator/bin/test_cross_repo_memo_roundtrip.py:138` | - | `root = cc_invoke._resolve_claude_klabauter_root()` |
@@ -4303,12 +4303,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_cc_invoke_engine_import_provenance.py:230` | - | `"resolve_colocated_claude_klabauter_root",` |
 | `coordinator/bin/tests/test_cc_invoke_engine_import_provenance.py:231` | - | `"_resolve_claude_klabauter_root",` |
 | `coordinator/bin/tests/test_cc_invoke_engine_import_provenance.py:237` | - | `"-".join(["project", "claude-klabauter"]),` |
-| `coordinator/bin/tests/test_cc_invoke_foreign_identity.py:105` | - | `monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"X:\a-root")  # abs-path-ok: synthetic fixture, never resolved on disk` |
+| `coordinator/bin/tests/test_cc_invoke_foreign_identity.py:105` | - | `monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"C:\a-root")  # abs-path-ok: synthetic fixture, never resolved on disk` |
 | `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:66` | - | `"""Static guard: `_resolve_claude_klabauter_root()`'s own source must not contain a` |
 | `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:70` | - | `source = inspect.getsource(_mod._resolve_claude_klabauter_root)` |
 | `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:72` | - | `"Rung 1 (CLAUDE_KLABAUTER_ROOT env) must not fast-path return its candidate "` |
 | `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:92` | - | `source = inspect.getsource(_mod._resolve_claude_klabauter_root)` |
-| `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:105` | - | `_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "DOE_ROOT")` |
+| `coordinator/bin/tests/test_cc_invoke_no_ambient_live_tree.py:105` | - | `_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "CONTENT_ROOT")` |
 | `coordinator/bin/tests/test_cc_invoke_probe_spawn_ordering.py:92` | - | `result = _mod.cc_invoke("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")` |
 | `coordinator/bin/tests/test_cc_invoke_probe_spawn_ordering.py:102` | - | `result = _mod.cc_invoke_bare("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")` |
 | `coordinator/bin/tests/test_cc_invoke_probe_spawn_ordering.py:125` | - | `_mod.cc_invoke("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")` |
@@ -4437,7 +4437,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_cc_invoke_py.py:2628` | - | `ROOT = "/fake/claude-klabauter"` |
 | `coordinator/bin/tests/test_cc_invoke_py.py:2773` | - | `return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _claude_klabauter_root=engine_root)` |
 | `coordinator/bin/tests/test_cc_invoke_rung_parity.py:89` | - | `return unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr")` |
-| `coordinator/bin/tests/test_cc_invoke_self_location_rung.py:84` | - | `_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "DOE_ROOT")` |
+| `coordinator/bin/tests/test_cc_invoke_self_location_rung.py:84` | - | `_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "CONTENT_ROOT")` |
 | `coordinator/bin/tests/test_cc_invoke_self_location_rung.py:230` | - | `def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_axis():` |
 | `coordinator/bin/tests/test_cc_invoke_self_location_rung.py:287` | - | `f"expected explicit CLAUDE_KLABAUTER_ROOT ({other_root!r}) to win over the "` |
 | `coordinator/bin/tests/test_cc_invoke_self_location_rung.py:336` | - | `f"expected CLAUDE_KLABAUTER_ROOT ({other_root!r}) to still win outright over "` |
@@ -4476,20 +4476,20 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_doctor_probe_ladder_parity.py:103` | - | `monkeypatch.setattr(probe, "__file__", str(bare / "bin" / "claude-klabauter-doctor-probe.py"))` |
 | `coordinator/bin/tests/test_doctor_probe_ladder_parity.py:112` | - | `root, source = probe._resolve_claude_klabauter_root()` |
 | `coordinator/bin/tests/test_doctor_probe_ladder_parity.py:144` | - | `fake_script = candidate / "bin" / "claude-klabauter-doctor-probe.py"` |
-| `coordinator/bin/tests/test_doe_root_routing.py:179` | - | `"""Central improvement-queue path lands under $(claude_klabauter_root)/state/improvement-queue.` |
-| `coordinator/bin/tests/test_doe_root_routing.py:194` | - | `fake_claude_klabauter = "/fake/claude-klabauter"` |
-| `coordinator/bin/tests/test_doe_root_routing.py:195` | - | `with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=fake_claude_klabauter):` |
-| `coordinator/bin/tests/test_doe_root_routing.py:199` | - | `assert result.startswith(os.path.join(fake_claude_klabauter, "state", "improvement-queue")), (` |
-| `coordinator/bin/tests/test_doe_root_routing.py:200` | - | `f"Expected path under {fake_claude_klabauter}/state/improvement-queue, got: {result}"` |
-| `coordinator/bin/tests/test_doe_root_routing.py:205` | - | `"""_output_path() central branch raises _ClaudeKlabauterUnresolvable when claude_klabauter_root() cannot resolve.` |
-| `coordinator/bin/tests/test_doe_root_routing.py:214` | - | `with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=None):` |
-| `coordinator/bin/tests/test_doe_root_routing.py:217` | - | `except _queue_cli._ClaudeKlabauterUnresolvable:` |
-| `coordinator/bin/tests/test_doe_root_routing.py:220` | - | `raise AssertionError("expected _ClaudeKlabauterUnresolvable to be raised")` |
-| `coordinator/bin/tests/test_doe_root_routing.py:341` | - | `def _resolvable_claude_klabauter_improvement_queue() -> str \| None:` |
-| `coordinator/bin/tests/test_doe_root_routing.py:342` | - | `"""Return the REAL, ambient claude_klabauter_root()'s improvement-queue dir, or None."""` |
-| `coordinator/bin/tests/test_doe_root_routing.py:344` | - | `root = _queue_cli._claude_klabauter_root()` |
-| `coordinator/bin/tests/test_doe_root_routing.py:455` | - | `"""Cold path: no file written (neither DoE nor claude-klabauter path), asserted` |
-| `coordinator/bin/tests/test_doe_root_routing.py:572` | - | `real_queue = _resolvable_claude_klabauter_improvement_queue()` |
+| `coordinator/bin/tests/test_content_root_routing.py:179` | - | `"""Central improvement-queue path lands under $(claude_klabauter_root)/state/improvement-queue.` |
+| `coordinator/bin/tests/test_content_root_routing.py:194` | - | `fake_claude_klabauter = "/fake/claude-klabauter"` |
+| `coordinator/bin/tests/test_content_root_routing.py:195` | - | `with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=fake_claude_klabauter):` |
+| `coordinator/bin/tests/test_content_root_routing.py:199` | - | `assert result.startswith(os.path.join(fake_claude_klabauter, "state", "improvement-queue")), (` |
+| `coordinator/bin/tests/test_content_root_routing.py:200` | - | `f"Expected path under {fake_claude_klabauter}/state/improvement-queue, got: {result}"` |
+| `coordinator/bin/tests/test_content_root_routing.py:205` | - | `"""_output_path() central branch raises _ClaudeKlabauterUnresolvable when claude_klabauter_root() cannot resolve.` |
+| `coordinator/bin/tests/test_content_root_routing.py:214` | - | `with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=None):` |
+| `coordinator/bin/tests/test_content_root_routing.py:217` | - | `except _queue_cli._ClaudeKlabauterUnresolvable:` |
+| `coordinator/bin/tests/test_content_root_routing.py:220` | - | `raise AssertionError("expected _ClaudeKlabauterUnresolvable to be raised")` |
+| `coordinator/bin/tests/test_content_root_routing.py:341` | - | `def _resolvable_claude_klabauter_improvement_queue() -> str \| None:` |
+| `coordinator/bin/tests/test_content_root_routing.py:342` | - | `"""Return the REAL, ambient claude_klabauter_root()'s improvement-queue dir, or None."""` |
+| `coordinator/bin/tests/test_content_root_routing.py:344` | - | `root = _queue_cli._claude_klabauter_root()` |
+| `coordinator/bin/tests/test_content_root_routing.py:455` | - | `"""Cold path: no file written (neither DoE nor claude-klabauter path), asserted` |
+| `coordinator/bin/tests/test_content_root_routing.py:572` | - | `real_queue = _resolvable_claude_klabauter_improvement_queue()` |
 | `coordinator/bin/tests/test_entry_point_shim_warm_route_spawns.py:187` | - | `"""`_import_engine_module` (and, via the same `_cc_invoke_resolve_claude_klabauter_root()`` |
 | `coordinator/bin/tests/test_function_gate_parse_sweep.py:48` | - | `class _RealEngineClaudeKlabauter:` |
 | `coordinator/bin/tests/test_function_gate_parse_sweep.py:61` | - | `self.engine_claude_klabauter = _RealEngineClaudeKlabauter()` |
@@ -4539,14 +4539,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/tests/test_handoff_loe_summary.py:284` | - | `root = _mod._resolve_claude_klabauter_root()` |
 | `coordinator/bin/tests/test_handoff_loe_summary.py:303` | - | `root = _mod._resolve_claude_klabauter_root()` |
 | `coordinator/bin/tests/test_harvest_deferrals_dedup_scan_memoized.py:93` | - | `"CLAUDE_KLABAUTER_ROOT",` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:113` | - | `"CLAUDE_KLABAUTER_ROOT",` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:148` | - | `def _write_stub(stub_dir: str, fake_doe_root: str, fake_claude_klabauter_root: str) -> str:` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:153` | - | `fake_doe_root=fake_doe_root, fake_claude_klabauter_root=fake_claude_klabauter_root` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:189` | - | `fake_claude_klabauter_root = tempfile.mkdtemp(prefix="harvest-fake-claude-klabauter-live-root-")` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:196` | - | `stub_path = _write_stub(stub_dir, fake_doe_root, fake_claude_klabauter_root)` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:207` | - | `expected_queue_dir = os.path.join(fake_claude_klabauter_root, "state", "improvement-queue")` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:214` | - | `f"leg is not following cli_shared.claude_klabauter_root()"` |
-| `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py:230` | - | `shutil.rmtree(fake_claude_klabauter_root, ignore_errors=True)` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:113` | - | `"CLAUDE_KLABAUTER_ROOT",` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:148` | - | `def _write_stub(stub_dir: str, fake_content_root: str, fake_claude_klabauter_root: str) -> str:` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:153` | - | `fake_content_root=fake_content_root, fake_claude_klabauter_root=fake_claude_klabauter_root` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:189` | - | `fake_claude_klabauter_root = tempfile.mkdtemp(prefix="harvest-fake-claude-klabauter-live-root-")` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:196` | - | `stub_path = _write_stub(stub_dir, fake_content_root, fake_claude_klabauter_root)` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:207` | - | `expected_queue_dir = os.path.join(fake_claude_klabauter_root, "state", "improvement-queue")` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:214` | - | `f"leg is not following cli_shared.claude_klabauter_root()"` |
+| `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py:230` | - | `shutil.rmtree(fake_claude_klabauter_root, ignore_errors=True)` |
 | `coordinator/bin/tests/test_harvest_idempotency_env_override.py:88` | - | `env.pop("CLAUDE_KLABAUTER_ROOT", None)` |
 | `coordinator/bin/tests/test_identity_file_populated_gate.py:45` | - | `class _StubClaudeKlabauter:` |
 | `coordinator/bin/tests/test_identity_file_populated_gate.py:109` | - | `monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _StubClaudeKlabauter())` |
@@ -4793,7 +4793,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/verify-coverage.py:75` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/verify-dist-publish-repo-sync.py:2` | - | `"""verify-dist-publish-repo-sync.py — CLI trampoline over claude-klabauter coordinator_core.ops.verify_dist_publish_repo_sync.` |
 | `coordinator/bin/verify-dist-publish-repo-sync.py:155` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/verify-doe-root-seam-sync.py:69` | - | `GENERATES = []  # --fix rewrites discovered `.doe-root` cat-read sites in place, but `--list` against this checkout resolves zero in-scope sites inside claude-klabauter's` |
+| `coordinator/bin/verify-content-root-seam-sync.py:69` | - | `GENERATES = []  # --fix rewrites discovered `.coordinator-content-root` cat-read sites in place, but `--list` against this checkout resolves zero in-scope sites inside claude-klabauter's` |
 | `coordinator/bin/verify-no-console-flash.py:2` | - | `"""verify-no-console-flash.py — CLI trampoline over claude-klabauter coordinator_core.ops.verify_no_console_flash.` |
 | `coordinator/bin/verify-no-console-flash.py:70` | - | `def _prepare_claude_klabauter_root() -> None:` |
 | `coordinator/bin/verify-no-console-flash.py:85` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
@@ -4959,7 +4959,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:2` | PROSE-ONLY | `_resolve_claude_klabauter.py — shared resolve-claude-klabauter-bin ladder, extracted from` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:8` | PROSE-ONLY | ```<claude-klabauter-live-root>/coordinator/bin/`` and validates it before exec'ing into a` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:18` | PROSE-ONLY | ```coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``):` |
-| `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:35` | PROSE-ONLY | `DoE-claude coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)` |
+| `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:35` | PROSE-ONLY | `coordinator-content-repo coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:43` | PROSE-ONLY | ```_resolve_claude_klabauter_root``) are NOT general-purpose public API — this module's` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:45` | PROSE-ONLY | ```resolve_claude_klabauter_root_with_class()``, the ``RESOLUTION_*`` constants, and` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:46` | PROSE-ONLY | ```resolve_claude_klabauter_bin_dir()``/``exec_cli()``. The ONE declared exception:` |
@@ -4992,7 +4992,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:248` | - | `if not os.path.isdir(claude_klabauter_root):` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:249` | - | `raise ClaudeKlabauterResolutionError(` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:255` | - | `return claude_klabauter_root` |
-| `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:259` | PROSE-ONLY | `# ``resolve_claude_klabauter_root_with_class()``. Verbatim from DoE-claude's` |
+| `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:259` | PROSE-ONLY | `# ``resolve_claude_klabauter_root_with_class()``. Verbatim from coordinator-content-repo's` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:293` | PROSE-ONLY | `# ``resolve_claude_klabauter_root_with_class()``'s divert (C5) sends any session whose` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:294` | PROSE-ONLY | `# own repo root is not the live claude-klabauter checkout to the published engine` |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py:308` | PROSE-ONLY | `# These targets therefore resolve LIVE-TREE-ONLY, via ``_resolve_claude_klabauter_root``` |
@@ -5486,9 +5486,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_list_reverse_drift_scoping.py:126` | - | `def test_no_scope_emits_all_rows(tmp_path, real_claude_klabauter_root):` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:129` | - | `result = _run_lister(reg_dir, str(tmp_path), real_claude_klabauter_root)` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:134` | - | `def test_consumer_repo_noop(tmp_path, real_claude_klabauter_root):` |
-| `coordinator/tests/test_list_reverse_drift_scoping.py:139` | - | `result = _run_lister(reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "X:/example-retrieval-repo")` |
+| `coordinator/tests/test_list_reverse_drift_scoping.py:139` | - | `result = _run_lister(reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "C:/example-retrieval-repo")` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:144` | - | `def test_own_source_repo_matches(tmp_path, real_claude_klabauter_root):` |
-| `coordinator/tests/test_list_reverse_drift_scoping.py:148` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "X:/example-game-workbench-repo"` |
+| `coordinator/tests/test_list_reverse_drift_scoping.py:148` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "C:/example-game-workbench-repo"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:154` | - | `def test_meta_repo_checks_all(tmp_path, real_claude_klabauter_root):` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:158` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", f"{tmp_path}/.claude"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:165` | - | `def test_meta_repo_windows_drive_form(tmp_path, real_claude_klabauter_root):` |
@@ -5496,7 +5496,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_list_reverse_drift_scoping.py:175` | - | `def test_own_repo_msys_form_matches(tmp_path, real_claude_klabauter_root):` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:181` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "/x/example-game-workbench-repo"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:187` | - | `def test_consumer_scopes_out_cmdless_plugin_no_misconfig(tmp_path, real_claude_klabauter_root):` |
-| `coordinator/tests/test_list_reverse_drift_scoping.py:192` | - | `result = _run_lister(reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "X:/example-retrieval-repo")` |
+| `coordinator/tests/test_list_reverse_drift_scoping.py:192` | - | `result = _run_lister(reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "C:/example-retrieval-repo")` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:196` | - | `def test_meta_repo_cmdless_plugin_misconfig(tmp_path, real_claude_klabauter_root):` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:202` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", f"{tmp_path}/.claude"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:207` | - | `def test_scope_repo_missing_arg(tmp_path, real_claude_klabauter_root):` |
@@ -5506,9 +5506,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_list_reverse_drift_scoping.py:222` | - | `def test_production_metarepo_cross_drive(tmp_path, real_claude_klabauter_root):` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:229` | - | `reg_dir, "/c/Users/example-operator", real_claude_klabauter_root, "--scope-repo", "C:/Users/example-operator/.claude"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:235` | - | `def test_backslash_source_path_matches(tmp_path, real_claude_klabauter_root):` |
-| `coordinator/tests/test_list_reverse_drift_scoping.py:242` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "X:/example-game-workbench-repo"` |
+| `coordinator/tests/test_list_reverse_drift_scoping.py:242` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "C:/example-game-workbench-repo"` |
 | `coordinator/tests/test_list_reverse_drift_scoping.py:248` | - | `def test_trailing_backslash_scope_matches(tmp_path, real_claude_klabauter_root):` |
-| `coordinator/tests/test_list_reverse_drift_scoping.py:253` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "X:\\example-game-workbench-repo\\"` |
+| `coordinator/tests/test_list_reverse_drift_scoping.py:253` | - | `reg_dir, str(tmp_path), real_claude_klabauter_root, "--scope-repo", "C:\\example-game-workbench-repo\\"` |
 | `coordinator/tests/test_new_project_scaffold.py:48` | - | `from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402` |
 | `coordinator/tests/test_new_project_scaffold.py:50` | - | `_resolve_claude_klabauter_root = None  # type: ignore[assignment]` |
 | `coordinator/tests/test_new_project_scaffold.py:53` | - | `CLAUDE_KLABAUTER_ROOT_RESOLVED = _resolve_claude_klabauter_root() if _resolve_claude_klabauter_root else ""` |
@@ -6174,7 +6174,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/forwarder_self_heal.py:270` | - | `agent_bin = claude_klabauter_root / "coordinator" / "bin"` |
 | `coordinator_core/install/forwarder_self_heal.py:294` | - | `door_root = claude_klabauter_root if is_engine_root(claude_klabauter_root) else None` |
 | `coordinator_core/install/maximalist.py:1091` | - | `claude_klabauter_root: str,` |
-| `coordinator_core/install/maximalist.py:1167` | - | `wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])` |
+| `coordinator_core/install/maximalist.py:1167` | - | `wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])` |
 | `coordinator_core/install/maximalist.py:1278` | - | `claude_klabauter_root: str,` |
 | `coordinator_core/install/maximalist.py:1317` | - | `check_only, non_interactive, coord_root, doe_clone, claude_home_dir, claude_klabauter_root,` |
 | `coordinator_core/install/maximalist.py:1330` | - | `claude_klabauter_root: str,` |
@@ -6186,11 +6186,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/maximalist.py:1667` | - | `os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-live-root-pointer.py"),` |
 | `coordinator_core/install/maximalist.py:1668` | - | `*claude_klabauter_pointer_args,` |
 | `coordinator_core/install/maximalist.py:1674` | - | `"WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b)",` |
-| `coordinator_core/install/maximalist.py:1729` | - | `_install_claude_doe_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)` |
+| `coordinator_core/install/maximalist.py:1729` | - | `_install_claude_author_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)` |
 | `coordinator_core/install/maximalist.py:2047` | - | `_build_and_persist_receipt(Path(claude_klabauter_root))` |
 | `coordinator_core/install/maximalist.py:2122` | - | `claude_klabauter_root = str(Path(__file__).resolve().parents[2])` |
 | `coordinator_core/install/maximalist.py:2130` | - | `claude_klabauter_root=claude_klabauter_root,` |
-| `coordinator_core/install/maximalist.py:2165` | - | `"<claude-klabauter-live-root>/coordinator/bin/claude-doe.py to a "` |
+| `coordinator_core/install/maximalist.py:2165` | - | `"<claude-klabauter-live-root>/coordinator/bin/claude-author.py to a "` |
 | `coordinator_core/install/settings_home_report.py:156` | - | `"(retired claude-klabauter-side; see scripts/setup.py module docstring)",` |
 | `coordinator_core/install/settings_home_report.py:164` | - | `"claude-klabauter INSTALL.md § Dependency provisioning item 5 (--allow-venv-fallback)",` |
 | `coordinator_core/install/settings_home_report.py:191` | - | `"superseded by claude-klabauter coordinator_core/engine_root.py rung 1.5 (absence is a normal fallback)",` |
@@ -6387,7 +6387,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_maximalist.py:206` | - | `claude_klabauter_pointer.write_text(` |
 | `coordinator_core/install/test_maximalist.py:209` | - | `'    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'` |
 | `coordinator_core/install/test_maximalist.py:210` | - | `'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'` |
-| `coordinator_core/install/test_maximalist.py:215` | - | `wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"` |
+| `coordinator_core/install/test_maximalist.py:215` | - | `wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-author.py"` |
 | `coordinator_core/install/test_maximalist.py:223` | - | `"claude_klabauter_root": claude_klabauter_root,` |
 | `coordinator_core/install/test_maximalist.py:355` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:365` | - | `"gen-claude-klabauter-live-root-pointer.py",` |
@@ -6404,7 +6404,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_maximalist.py:634` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:662` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:694` | - | `str(stub_env["claude_klabauter_root"]),` |
-| `coordinator_core/install/test_maximalist.py:797` | - | `(stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "claude-doe.py").unlink()` |
+| `coordinator_core/install/test_maximalist.py:797` | - | `(stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "claude-author.py").unlink()` |
 | `coordinator_core/install/test_maximalist.py:802` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:815` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
 | `coordinator_core/install/test_maximalist.py:941` | - | `claude_klabauter_root=str(stub_env["claude_klabauter_root"]),` |
@@ -6682,12 +6682,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/test_substrate.py:517` | - | `substrate, "coordinator_engine_root_with_class", lambda: (str(claude_klabauter_root), "live-working-tree")` |
 | `coordinator_core/install/test_wrap_hook_command_guarded.py:181` | - | `claude_klabauter_root = Path(__file__).resolve().parents[2]` |
 | `coordinator_core/install/test_wrap_hook_command_guarded.py:182` | - | `colocated = claude_klabauter_root / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:53` | - | `claude_klabauter_root = str(tmp_path / "claude-klabauter")` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:54` | - | `coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:86` | - | `claude_klabauter_root=claude_klabauter_root,` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:140` | - | `claude_klabauter_root = str(tmp_path / "claude-klabauter")` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:141` | - | `coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")` |
-| `coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py:161` | - | `claude_klabauter_root=claude_klabauter_root,` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:53` | - | `claude_klabauter_root = str(tmp_path / "claude-klabauter")` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:54` | - | `coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:86` | - | `claude_klabauter_root=claude_klabauter_root,` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:140` | - | `claude_klabauter_root = str(tmp_path / "claude-klabauter")` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:141` | - | `coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")` |
+| `coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py:161` | - | `claude_klabauter_root=claude_klabauter_root,` |
 | `coordinator_core/install/tests/test_door_image_currency.py:208` | - | `def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeypatch):` |
 | `coordinator_core/install/tests/test_door_image_needs_an_engine_entrypoint.py:91` | - | `root, "check-claude-klabauter-doctor-sentinel"` |
 | `coordinator_core/install/tests/test_engine_root_for_install.py:64` | - | `monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)` |
@@ -6732,7 +6732,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:40` | - | `_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]` |
 | `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:54` | - | `src = _CLAUDE_KLABAUTER_ROOT / relpath` |
 | `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:73` | - | `source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(` |
-| `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:76` | - | `assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])' in source, (` |
+| `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:76` | - | `assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])' in source, (` |
 | `coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py:90` | - | `source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(` |
 | `coordinator_core/install/tests/test_live_source_tree_forwarders.py:60` | - | `resolver_stem="_resolve_claude_klabauter",` |
 | `coordinator_core/install/tests/test_live_source_tree_forwarders.py:94` | - | `assert "from _resolve_claude_klabauter import exec_cli" in body, (` |
@@ -6855,19 +6855,19 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/_codename_classes.py:219` | - | `"coordinator-claude-klabauter-root.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:220` | - | `"coordinator_claude_klabauter_root": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:231` | - | `"doe-CLAUDE-KLABAUTER": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:233` | - | `"doe-claude-klabauter": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:233` | - | `"content-engine": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:251` | - | `"gen-claude-klabauter-live-root-pointer": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:259` | - | `"claude-klabauter": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:260` | - | `"claude-klabauter-4th-class-ref-manifest.md": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:261` | - | `"claude-klabauter-live-root": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:265` | - | `"migrate-state-to-claude-klabauter.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:276` | - | `"claude_klabauter": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:557` | - | `ids = ("doe_claude", "claude_klabauter", "project_rag", "example_game_workbench_repo")` |
+| `coordinator_core/message_register/_codename_classes.py:557` | - | `ids = ("content_root", "claude_klabauter", "project_rag", "example_game_workbench_repo")` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:78` | - | `assert "claude-klabauter" not in tokens` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:86` | - | `"""`doe-claude-klabauter` glues a REDACTION half (`doe-claude`) and a RENAME half` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:101` | - | `assert cc.CLASSIFICATION["doe-claude-klabauter"] == cc.REDACTION` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:102` | - | `assert "doe-claude-klabauter" not in cc.redaction_tokens(), (` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:103` | - | `"doe-claude-klabauter reappeared in redaction_tokens() -- this regresses the "` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:86` | - | `"""`content-engine` glues a REDACTION half (`coordinator-content-repo`) and a RENAME half` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:101` | - | `assert cc.CLASSIFICATION["content-engine"] == cc.REDACTION` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:102` | - | `assert "content-engine" not in cc.redaction_tokens(), (` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:103` | - | `"content-engine reappeared in redaction_tokens() -- this regresses the "` |
 | `coordinator_core/op_budget_suspension.py:761` | - | `"SUPERSEDED 2026-09-02 -- claude-klabauter owns the v2 and is building it. "` |
 | `coordinator_core/op_budget_suspension.py:768` | - | `"JOB survives; only claude-klabauter\'s ownership of it does not. Job was "` |
 | `coordinator_core/op_budget_suspension.py:779` | - | `"operator asking a question on demand. The corpus is claude-klabauter\'s own "` |
@@ -6886,7 +6886,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/check_arch_audit_staleness.py:207` | - | `claude_klabauter_root = _claude_klabauter_root()` |
 | `coordinator_core/ops/check_arch_audit_staleness.py:208` | - | `if claude_klabauter_root is None:` |
 | `coordinator_core/ops/check_arch_audit_staleness.py:215` | - | `return str(Path(claude_klabauter_root) / "state")` |
-| `coordinator_core/ops/check_generator_output_staleness.py:293` | - | `"""A peer(DoE-claude)-owned artifact claude-klabauter only reads, never writes."""` |
+| `coordinator_core/ops/check_generator_output_staleness.py:293` | - | `"""A peer(coordinator-content-repo)-owned artifact claude-klabauter only reads, never writes."""` |
 | `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py:78` | - | `def _claude_klabauter_root() -> Path:` |
 | `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py:84` | - | `raw = os.environ.get("COORDINATOR_CLAUDE_KLABAUTER_DOCTOR_STALE_SEC", "")` |
 | `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py:115` | - | `return f"[health] claude-klabauter-doctor: ADVISORY (non-gating){probe_clause}{hint_clause} Run python bin/claude-klabauter-doctor-probe.py --triage for details."` |
@@ -6962,7 +6962,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/emit/sections/routine_signals.py:102` | - | `return str(Path(claude_klabauter_root) / "state")` |
 | `coordinator_core/ops/emit/tests/conftest.py:85` | - | `"run python bin/claude-klabauter-revendor-cockpit-contract.py to populate "` |
 | `coordinator_core/ops/emit/tests/test_doe_drift.py:115` | - | `"""AC_Q-b: fixture lives in the DoE clone, not co-vendored in claude-klabauter's _vendor/."""` |
-| `coordinator_core/ops/emit/tests/test_doe_drift.py:120` | - | `"""Fixture is read from repos.doe_claude (not claude-klabauter's _vendor/)."""` |
+| `coordinator_core/ops/emit/tests/test_doe_drift.py:120` | - | `"""Fixture is read from repos.content_root (not claude-klabauter's _vendor/)."""` |
 | `coordinator_core/ops/emit/tests/test_doe_drift.py:132` | - | `"""The fixture MUST NOT be co-vendored in claude-klabauter's _vendor/ tree.` |
 | `coordinator_core/ops/emit/tests/test_emit_context_dag_memo.py:140` | - | `expected_worktree = _FAKE_CENTRAL.parent  # /fake/state — the claude-klabauter working tree` |
 | `coordinator_core/ops/emit/tests/test_emit_context_dag_memo.py:174` | - | `"worktree_root must be central_state_root.parent (the claude-klabauter working tree)"` |
@@ -7085,7 +7085,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/gate_liveness/tests/test_reconcile.py:48` | - | `_git("config", "user.email", "gate-liveness-test@claude-klabauter.test")` |
 | `coordinator_core/ops/generate_exec_summary.py:80` | - | `from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state` |
 | `coordinator_core/ops/generate_exec_summary.py:142` | - | `return _guarded_claude_klabauter_state()` |
-| `coordinator_core/ops/install_doe_claude_precommit_hook.py:321` | - | `"or coordinator/bin/remove-claude-klabauter-precommit-hook.py if this gate was retired",` |
+| `coordinator_core/ops/install_content_root_precommit_hook.py:321` | - | `"or coordinator/bin/remove-claude-klabauter-precommit-hook.py if this gate was retired",` |
 | `coordinator_core/ops/install_health_run.py:162` | - | `("ensure-python3-exe-shim", lambda plugin_root, claude_klabauter_root: ensure_python3_exe_shim.main([])),` |
 | `coordinator_core/ops/install_health_run.py:163` | - | `("check-windows-ssh-binary", lambda plugin_root, claude_klabauter_root: check_windows_ssh_binary.main([])),` |
 | `coordinator_core/ops/install_health_run.py:166` | - | `lambda plugin_root, claude_klabauter_root: seed_skill_overrides.main(` |
@@ -7169,7 +7169,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/queue_append.py:973` | - | `+ _claude_klabauter_root_unresolved_detail()` |
 | `coordinator_core/ops/queue_append.py:975` | - | `base = os.path.join(claude_klabauter_root, output_dir)` |
 | `coordinator_core/ops/queue_append.py:1622` | - | `except _ClaudeKlabauterUnresolvable as exc:` |
-| `coordinator_core/ops/queue_promote.py:62` | - | `GENERATES = []  # writes only into DoE-claude's central state/lessons-outbox/, never claude-klabauter's own tree` |
+| `coordinator_core/ops/queue_promote.py:62` | - | `GENERATES = []  # writes only into coordinator-content-repo's central state/lessons-outbox/, never claude-klabauter's own tree` |
 | `coordinator_core/ops/register_coordinator_mirror.py:46` | - | `GENERATES = []  # writes an idempotent TOML section into machine-local registry.local.toml, outside claude-klabauter's repo tree` |
 | `coordinator_core/ops/render_posture_overlay.py:103` | - | `GENERATES = []  # merges into a caller-supplied target file (a consumer repo's .claude/em-context.md), never a fixed claude-klabauter artifact` |
 | `coordinator_core/ops/session/guard_hook_generation_self_probe.py:142` | - | `GENERATES = []  # writes only a per-machine sentinel and kill-switch marker under settings-home, outside claude-klabauter's own tracked tree` |
@@ -7269,8 +7269,8 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/test_check_weekly_staleness.py:136` | - | `assert cws._resolve_state_root() == str(Path("/claude-klabauter/root") / "state")` |
 | `coordinator_core/ops/test_check_weekly_staleness.py:139` | - | `def test_resolve_state_root_meta_repo_unresolvable_claude_klabauter_returns_none(` |
 | `coordinator_core/ops/test_check_weekly_staleness.py:145` | - | `monkeypatch.setattr(cws, "_claude_klabauter_root", lambda: None)` |
-| `coordinator_core/ops/test_completion_ops.py:498` | - | `_register_repos(monkeypatch, tmp_path, doe_claude=sibling, claude_klabauter=repo)` |
-| `coordinator_core/ops/test_completion_ops.py:559` | - | `_register_repos(monkeypatch, tmp_path, doe_claude=sibling, claude_klabauter=repo)` |
+| `coordinator_core/ops/test_completion_ops.py:498` | - | `_register_repos(monkeypatch, tmp_path, content_root=sibling, claude_klabauter=repo)` |
+| `coordinator_core/ops/test_completion_ops.py:559` | - | `_register_repos(monkeypatch, tmp_path, content_root=sibling, claude_klabauter=repo)` |
 | `coordinator_core/ops/test_coordinator_render_rollup.py:84` | - | `{"id": "claude-klabauter-strangler", "label": "Claude-Klabauter Strangler", "status": "active"}` |
 | `coordinator_core/ops/test_coordinator_render_rollup.py:91` | - | `assert out.out == "advances initiative Claude-Klabauter Strangler (claude-klabauter-strangler)\n"` |
 | `coordinator_core/ops/test_coordinator_render_rollup.py:137` | - | `{"id": "claude-klabauter-strangler", "label": "Claude-Klabauter Strangler", "status": "active"}` |
@@ -7554,10 +7554,10 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/tests/test_queue_parity.py:1358` | - | `monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1404` | - | `monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1496` | - | `class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:` |
-| `coordinator_core/ops/tests/test_queue_parity.py:1502` | - | `def test_outbox_root_is_doe_rooted_not_claude_klabauter_rooted(self, tmp_path, monkeypatch):` |
+| `coordinator_core/ops/tests/test_queue_parity.py:1502` | - | `def test_outbox_root_is_content_rooted_not_claude_klabauter_rooted(self, tmp_path, monkeypatch):` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1518` | - | `claude_klabauter_root = tmp_path / "claude-klabauter-live-root"` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1520` | - | `claude_klabauter_root.mkdir()` |
-| `coordinator_core/ops/tests/test_queue_parity.py:1521` | - | `assert doe_root != claude_klabauter_root` |
+| `coordinator_core/ops/tests/test_queue_parity.py:1521` | - | `assert content_root != claude_klabauter_root` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1524` | - | `monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1538` | - | `assert not result.startswith(str(claude_klabauter_root)), (` |
 | `coordinator_core/ops/tests/test_queue_parity.py:1539` | - | `f"_outbox_root() must NOT resolve under claude-klabauter's root; got: {result}"` |
@@ -7613,7 +7613,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/tracker/tests/test_push_suggestion.py:1070` | - | `tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"` |
 | `coordinator_core/ops/tracker/tests/test_render_status.py:78` | - | `_git("config", "user.email", "render-status-test@claude-klabauter.test")` |
 | `coordinator_core/ops/validate_install_contract.py:215` | - | `"python_import\|command_succeeds\|claude_klabauter_seam_resolvable) — a "` |
-| `coordinator_core/ops/verify_subagent_sandbox_preamble_sync.py:102` | - | `GENERATES = []  # writes into a fixed list of DoE-claude coordinator/agents/*.md consumer files under coord_root (COORDINATOR_CONTENT_ROOT) -- a different repo,` |
+| `coordinator_core/ops/verify_subagent_sandbox_preamble_sync.py:102` | - | `GENERATES = []  # writes into a fixed list of coordinator-content-repo coordinator/agents/*.md consumer files under coord_root (COORDINATOR_CONTENT_ROOT) -- a different repo,` |
 | `coordinator_core/ops/workday_complete_backfill_scan.py:217` | - | `def _claude_klabauter_root() -> Optional[str]:` |
 | `coordinator_core/ops/workday_complete_backfill_scan.py:248` | - | `claude_klabauter_root = _claude_klabauter_root()` |
 | `coordinator_core/ops/workday_complete_backfill_scan.py:249` | - | `if claude_klabauter_root is None:` |
@@ -7805,14 +7805,14 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_depersonalize.py:180` | - | `text = "_CLAUDE_KLABAUTER_HANDOFF_SCHEMA = 1\n"` |
 | `coordinator_core/percolate/tests/test_depersonalize.py:204` | - | `"claude-klabauter",` |
 | `coordinator_core/percolate/tests/test_depersonalize.py:215` | - | `"        self.engine_claude_klabauter = _RealEngineClaudeKlabauter()\n"` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:1` | - | `"""Regression pin, SUPERSEDED policy (2026-08-13 PM ruling): `doe-claude-klabauter`` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:71` | - | `_FIXTURE_FILENAME = "DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md"` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:73` | - | `"DR backlink:   docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-"` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:1` | - | `"""Regression pin, SUPERSEDED policy (2026-08-13 PM ruling): `content-engine`` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:71` | - | `_FIXTURE_FILENAME = "DR-047-content-engine-boundary-redraw-contract-vs-e.md"` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:73` | - | `"DR backlink:   docs/decisions/DR-047-content-engine-boundary-redraw-"` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:112` | - | `assert "claude-klabauter" not in out.lower(), (` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:113` | - | `f"target {target_name!r}: bare 'claude-klabauter' codename survived the sweep: {out!r}"` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:162` | - | `cites_claude_klabauter_family = any("claude-klabauter" in key for key in combined_keys)` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:170` | - | `f"target {target_name!r} cites both 'claude-klabauter' and 'doe' substitute "` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:172` | - | `f"(missing a 'doe-claude-klabauter'-shaped compound entry): {out!r}"` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:172` | - | `f"(missing a 'content-engine'-shaped compound entry): {out!r}"` |
 | `coordinator_core/percolate/tests/test_guard_kind_enum_matches_dispatch.py:83` | - | `"bin/claude-klabauter-revendor-schema.py."` |
 | `coordinator_core/percolate/tests/test_guards.py:162` | - | `(tmp_path / 'claude-klabauter-commit-anchors').write_text('#!/usr/bin/env python3\nprint(1)\n')` |
 | `coordinator_core/percolate/tests/test_guards.py:165` | - | `{'globs': ['claude-klabauter-commit-anchors'], 'shebang_prefixes': ['#!/usr/bin/env python3']},` |
@@ -8041,7 +8041,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/plugin_health/sentinel.py:1710` | - | `def probe_p22(claude_klabauter_root: Path) -> List[ProbeNote]:` |
 | `coordinator_core/plugin_health/sentinel.py:1743` | - | `bin_dir = claude_klabauter_root / "coordinator" / "bin"` |
 | `coordinator_core/plugin_health/sentinel.py:1909` | - | `def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> List[ProbeNote]:` |
-| `coordinator_core/plugin_health/sentinel.py:1934` | - | `wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"` |
+| `coordinator_core/plugin_health/sentinel.py:1934` | - | `wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-author.py"` |
 | `coordinator_core/plugin_health/sentinel.py:2131` | - | `def _this_claude_klabauter_root() -> Path:` |
 | `coordinator_core/plugin_health/sentinel.py:2132` | - | `"""Self-relative claude-klabauter-live-root resolution for probe_p23 — this module lives` |
 | `coordinator_core/plugin_health/sentinel.py:2278` | - | `_run_probe("P-22", lambda: probe_p22(_this_claude_klabauter_root()))` |
@@ -8087,7 +8087,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:243` | - | `_write_claude_klabauter_oracle(coordinator_lib, "resolve-coordinator-clone.py")` |
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:248` | - | `"Written by claude-klabauter's `coordinator/bin/claude-klabauter-doctor-probe.py`; reached via "` |
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:269` | - | `agent_bin = tmp_path / "claude-klabauter-bin"` |
-| `coordinator_core/plugin_health/tests/test_fleet_reachability.py:272` | - | `_write_doe_fence(doe_root, "skills", "SKILL.md", "Run `coordinator/bin/claude-klabauter-doctor-probe.py` first.")` |
+| `coordinator_core/plugin_health/tests/test_fleet_reachability.py:272` | - | `_write_doe_fence(content_root, "skills", "SKILL.md", "Run `coordinator/bin/claude-klabauter-doctor-probe.py` first.")` |
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:277` | - | `assert result.missing == ["claude-klabauter-doctor-probe"]` |
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:289` | - | `agent_bin = tmp_path / "claude-klabauter-bin"` |
 | `coordinator_core/plugin_health/tests/test_fleet_reachability.py:311` | - | `agent_bin = tmp_path / "claude-klabauter-bin"` |
@@ -8157,7 +8157,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/plugin_health/tests/test_sentinel.py:923` | - | `"""`_claude_klabauter_bin_root()` is a pure `__file__`-relative resolution of THIS` |
 | `coordinator_core/plugin_health/tests/test_sentinel.py:926` | - | `assert S._claude_klabauter_bin_root() == expected` |
 | `coordinator_core/plugin_health/tests/test_sentinel.py:929` | - | `"_claude_klabauter_bin_root() resolves to, or this test would pass vacuously"` |
-| `coordinator_core/plugin_health/tests/test_sentinel.py:933` | - | `def test_default_manifest_path_ignores_doe_root_and_uses_claude_klabauter_bin_root(monkeypatch, tmp_path):` |
+| `coordinator_core/plugin_health/tests/test_sentinel.py:933` | - | `def test_default_manifest_path_ignores_content_root_and_uses_claude_klabauter_bin_root(monkeypatch, tmp_path):` |
 | `coordinator_core/plugin_health/tests/test_sentinel.py:945` | - | `assert resolved == S._claude_klabauter_bin_root() / "doctor-probes.toml"` |
 | `coordinator_core/plugin_health/tests/test_sentinel.py:949` | - | `def test_default_manifest_path_none_bin_dir_sibling_still_resolves_claude_klabauter_native(monkeypatch):` |
 | `coordinator_core/plugin_health/tests/test_sentinel.py:954` | - | `assert resolved == S._claude_klabauter_bin_root() / "doctor-probes.toml"` |
@@ -8187,24 +8187,24 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/resolution/test_facade.py:73` | - | `"claude_klabauter_root": str(claude_klabauter_root),` |
 | `coordinator_core/resolution/test_facade.py:200` | - | `root = str(claude_klabauter_root / "coordinator")` |
 | `coordinator_core/resolution/test_facade.py:240` | - | `(claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)` |
-| `coordinator_core/resolution/test_facade.py:251` | - | `return env, settings_home, claude_klabauter_root, doe_root` |
-| `coordinator_core/resolution/test_facade.py:255` | - | `env, settings_home, claude_klabauter_root, doe_root = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:251` | - | `return env, settings_home, claude_klabauter_root, content_root` |
+| `coordinator_core/resolution/test_facade.py:255` | - | `env, settings_home, claude_klabauter_root, content_root = _happy_env(tmp_path)` |
 | `coordinator_core/resolution/test_facade.py:261` | - | `"claude_klabauter_bin": str(claude_klabauter_root / "coordinator" / "bin"),` |
 | `coordinator_core/resolution/test_facade.py:262` | - | `"claude_klabauter_root": str(claude_klabauter_root),` |
 | `coordinator_core/resolution/test_facade.py:267` | - | `def test_resolve_operator_config_missing_claude_klabauter_root_sentinel_is_corrupt(tmp_path):` |
-| `coordinator_core/resolution/test_facade.py:268` | - | `env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:268` | - | `env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
 | `coordinator_core/resolution/test_facade.py:271` | - | `with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):` |
-| `coordinator_core/resolution/test_facade.py:276` | - | `env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
-| `coordinator_core/resolution/test_facade.py:284` | - | `env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
-| `coordinator_core/resolution/test_facade.py:294` | - | `env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:276` | - | `env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:284` | - | `env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:294` | - | `env, settings_home, claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
 | `coordinator_core/resolution/test_facade.py:298` | - | `with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):` |
-| `coordinator_core/resolution/test_facade.py:305` | - | `env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:305` | - | `env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
 | `coordinator_core/resolution/test_facade.py:314` | - | `def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path):` |
-| `coordinator_core/resolution/test_facade.py:320` | - | `env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:320` | - | `env, settings_home, claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
 | `coordinator_core/resolution/test_facade.py:321` | - | `shutil.rmtree(claude_klabauter_root / "coordinator" / "bin")` |
 | `coordinator_core/resolution/test_facade.py:323` | - | `with pytest.raises(OperatorConfigError, match="claude_klabauter_bin"):` |
-| `coordinator_core/resolution/test_facade.py:330` | - | `env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
-| `coordinator_core/resolution/test_facade.py:340` | - | `env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:330` | - | `env, _settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
+| `coordinator_core/resolution/test_facade.py:340` | - | `env, _settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)` |
 | `coordinator_core/roadmap/audit.py:234` | - | `def _claude_klabauter_root_pointer_file() -> Optional[str]:` |
 | `coordinator_core/roadmap/audit.py:256` | - | `def _claude_klabauter_root() -> Optional[str]:` |
 | `coordinator_core/roadmap/audit.py:260` | - | `val = _claude_klabauter_root_pointer_file()` |
@@ -8302,7 +8302,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/session_ledger/aggregate_chain_loe.py:226` | - | `del coordinator_root  # unused: native seam self-resolves DoE/claude-klabauter roots` |
 | `coordinator_core/snippet_sync/tests/test_registry.py:193` | - | `"""Regression for the claude-klabauter-consolidation drop: a example-game-workbench-repo` |
 | `coordinator_core/state_root.py:177` | - | `"""Rule 1 helper: DoE doctrine state root. Fail-loud; no claude-klabauter fallback."""` |
-| `coordinator_core/state_root.py:182` | - | `"repos.doe_claude is not set. Does NOT fall back to claude-klabauter for the "` |
+| `coordinator_core/state_root.py:182` | - | `"repos.content_root is not set. Does NOT fall back to claude-klabauter for the "` |
 | `coordinator_core/state_root.py:189` | - | `def _claude_klabauter_state() -> str:` |
 | `coordinator_core/state_root.py:190` | - | `"""Rule 2/4/5 helper: claude-klabauter engine state root. Raises StateRootError on` |
 | `coordinator_core/state_root.py:206` | - | `claude_klabauter_root, resolution_class = coordinator_engine_root_with_class()` |
@@ -8372,16 +8372,16 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/test_trusted_root_guard.py:216` | - | `"""No registry key and no durable pointer file — the claude-klabauter anchor` |
 | `coordinator_core/test_trusted_root_guard.py:263` | - | `assert is_trusted(str(claude_klabauter_root), env=env)` |
 | `coordinator_core/test_trusted_root_guard.py:447` | - | `assert "claude_klabauter_root resolved to:" in err` |
-| `coordinator_core/testing/doe_root.py:63` | - | `env_override = os.environ.get("CLAUDE_KLABAUTER_TEST_DOE_ROOT")` |
+| `coordinator_core/testing/content_root.py:63` | - | `env_override = os.environ.get("CLAUDE_KLABAUTER_TEST_CONTENT_ROOT")` |
 | `coordinator_core/tests/_home_resolution_lint_baseline.py:174` | - | `("coordinator_core/trusted_root_guard.py", 453, 'if os.name == "nt" and claude_klabauter_root.endswith("/"):'),` |
 | `coordinator_core/tests/test_bootstrap_carveout_pinned_to_accessor.py:235` | - | `assert "_ENGINE_ROOT_OLD_VAR: claude_klabauter_root" not in src, (` |
 | `coordinator_core/tests/test_ceremony_brief_budget.py:436` | - | `"claude_klabauter_bin": "/fake/settings-home/bin",` |
 | `coordinator_core/tests/test_deliverable_id_pattern_parity.py:97` | - | `("dlv-handoff-spinoff-hardening-claude-klabauter-accommo-11603c", True),` |
 | `coordinator_core/tests/test_docstring_shell_paste_hazard.py:272` | - | `'_cc_claude_klabauter="${REPO_CLAUDE_KLABAUTER:-${CLAUDE_KLABAUTER_ROOT:-<pointer-file lookups>}}"'),` |
 | `coordinator_core/tests/test_engine_root_census.py:3` | PROSE-ONLY | `regression detector for the retired `CLAUDE_KLABAUTER_ROOT` fallback.` |
-| `coordinator_core/tests/test_engine_root_census.py:201` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/somewhere")` |
-| `coordinator_core/tests/test_engine_root_census.py:221` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/somewhere")` |
-| `coordinator_core/tests/test_engine_root_census.py:240` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/old")` |
+| `coordinator_core/tests/test_engine_root_census.py:201` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/somewhere")` |
+| `coordinator_core/tests/test_engine_root_census.py:221` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/somewhere")` |
+| `coordinator_core/tests/test_engine_root_census.py:240` | - | `monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/old")` |
 | `coordinator_core/tests/test_engine_root_conformance.py:3` | PROSE-ONLY | `conformance fixture as the fidelity oracle for claude-klabauter's two DR-132` |
 | `coordinator_core/tests/test_engine_root_conformance.py:8` | PROSE-ONLY | ```coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::` |
 | `coordinator_core/tests/test_engine_root_conformance.py:9` | PROSE-ONLY | `resolve_claude_klabauter_root_with_class()``, and` |
@@ -8640,7 +8640,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_install_substrate_uninstall_legs.py:1198` | - | `agent_bin = fake_claude_klabauter_root / "coordinator" / "bin"` |
 | `coordinator_core/tests/test_install_substrate_uninstall_legs.py:1216` | - | `lambda: (str(fake_claude_klabauter_root), "live-working-tree"),` |
 | `coordinator_core/tests/test_ipc_scope_touch_self_report.py:536` | - | `monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)` |
-| `coordinator_core/tests/test_launch_chain_survives_the_install.py:96` | - | `"from _resolve_claude_klabauter import exec_cli\nexec_cli(\"claude-doe.py\")\n",` |
+| `coordinator_core/tests/test_launch_chain_survives_the_install.py:96` | - | `"from _resolve_claude_klabauter import exec_cli\nexec_cli(\"claude-author.py\")\n",` |
 | `coordinator_core/tests/test_liveness.py:68` | - | `script = claude_klabauter_root / "coordinator" / "lib" / "coordinator_session.py"` |
 | `coordinator_core/tests/test_liveness.py:71` | - | `monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))` |
 | `coordinator_core/tests/test_liveness.py:79` | - | `"""CLAUDE_KLABAUTER_ROOT resolvable but the successor file doesn't exist under it ->` |
@@ -8836,9 +8836,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_no_direct_retired_root_env_reads.py:390` | - | `"    for _var in (\"COORDINATOR_ENGINE_ROOT\", \"CLAUDE_KLABAUTER_ROOT\"):\n"` |
 | `coordinator_core/tests/test_no_direct_retired_root_env_reads.py:418` | - | `assert leg3_hits[0][1] == "CLAUDE_KLABAUTER_ROOT"` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:742` | - | `"    claude_klabauter_root = Path(__file__).resolve().parents[2]\n"` |
-| `coordinator_core/tests/test_no_hardcoded_paths.py:743` | - | `"    return claude_klabauter_root.parent / \"DoE-claude\"\n",` |
+| `coordinator_core/tests/test_no_hardcoded_paths.py:743` | - | `"    return claude_klabauter_root.parent / \"coordinator-content-repo\"\n",` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:826` | - | `'    claude_klabauter_root = os.path.abspath(os.path.join(here, "..", ".."))\n'` |
-| `coordinator_core/tests/test_no_hardcoded_paths.py:827` | - | `'    return os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")\n',` |
+| `coordinator_core/tests/test_no_hardcoded_paths.py:827` | - | `'    return os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")\n',` |
 | `coordinator_core/tests/test_no_machine_local_cli_read_spawn.py:145` | - | `"coordinator/bin/gen-claude-klabauter-live-root-pointer.py:139",` |
 | `coordinator_core/tests/test_op_classification_manifest.py:77` | - | `"invoke-claude-klabauter-install-module",` |
 | `coordinator_core/tests/test_op_classification_manifest.py:125` | - | `if verdict == "NEW-CLAUDE-KLABAUTER":` |
@@ -8956,12 +8956,12 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/trusted_root_guard.py:182` | - | `def _claude_klabauter_root(env: dict) -> str:` |
 | `coordinator_core/trusted_root_guard.py:183` | - | `"""Read the registry-resolved claude-klabauter root, registry-first with a durable` |
 | `coordinator_core/trusted_root_guard.py:350` | - | `def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:` |
-| `coordinator_core/trusted_root_guard.py:351` | - | `"""Diagnostics-only sibling of ``_doe_root_rungs`` for ``_claude_klabauter_root``` |
+| `coordinator_core/trusted_root_guard.py:351` | - | `"""Diagnostics-only sibling of ``_content_root_rungs`` for ``_claude_klabauter_root``` |
 | `coordinator_core/trusted_root_guard.py:391` | - | `claude_klabauter_root = _claude_klabauter_root(env)` |
 | `coordinator_core/trusted_root_guard.py:409` | - | `f"  claude_klabauter_root resolved to: {claude_klabauter_root!r}"` |
 | `coordinator_core/trusted_root_guard.py:410` | - | `+ _flag(claude_klabauter_root, "every rung below returned nothing")` |
 | `coordinator_core/trusted_root_guard.py:412` | - | `for label, val in _claude_klabauter_root_rungs(env):` |
-| `coordinator_core/trusted_root_guard.py:415` | - | `if not home or not settings_home_dir or not doe_root or not claude_klabauter_root:` |
+| `coordinator_core/trusted_root_guard.py:415` | - | `if not home or not settings_home_dir or not content_root or not claude_klabauter_root:` |
 | `coordinator_core/trusted_root_guard.py:480` | - | `claude_klabauter_root = _norm(_claude_klabauter_root(env))` |
 | `coordinator_core/trusted_root_guard.py:483` | - | `if os.name == "nt" and claude_klabauter_root.endswith("/"):` |
 | `coordinator_core/trusted_root_guard.py:484` | - | `claude_klabauter_root = claude_klabauter_root[:-1]` |
@@ -9096,7 +9096,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `scripts/setup.py:3785` | - | `env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)` |
 | `scripts/setup.py:3786` | - | `env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)` |
 | `scripts/setup.py:3800` | - | `cwd=str(claude_klabauter_root_resolved),` |
-| `scripts/setup.py:3925` | - | `def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:` |
+| `scripts/setup.py:3925` | - | `def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:` |
 | `scripts/setup.py:3967` | - | `env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)` |
 | `scripts/setup.py:3968` | - | `env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)` |
 | `scripts/setup.py:3986` | - | `cwd=str(claude_klabauter_root_resolved),` |
@@ -9130,7 +9130,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `scripts/setup.py:4611` | - | `probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)` |
 | `scripts/setup.py:4625` | - | `install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)` |
 | `scripts/setup.py:4626` | - | `install_warm_door(repo_root, claude_klabauter_root_resolved, args)` |
-| `scripts/setup.py:4628` | - | `install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)` |
+| `scripts/setup.py:4628` | - | `install_claude_author_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)` |
 | `scripts/setup.py:4629` | - | `register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)` |
 | `scripts/setup.py:4632` | - | `install_percolate_identity(repo_root, claude_klabauter_root_resolved)` |
 | `scripts/setup.py:4633` | - | `install_machine_identity(repo_root, claude_klabauter_root_resolved, args)` |
@@ -9247,11 +9247,11 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `scripts/test_setup.py:2199` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `scripts/test_setup.py:2200` | - | `claude_klabauter_root.mkdir()` |
 | `scripts/test_setup.py:2217` | - | `setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", repo_root, _override_args(setup_mod))` |
-| `scripts/test_setup.py:2249` | - | `def test_register_claude_klabauter_root_appends_unset_doe_claude_anchor_last(` |
+| `scripts/test_setup.py:2249` | - | `def test_register_claude_klabauter_root_appends_unset_content_root_anchor_last(` |
 | `scripts/test_setup.py:2260` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `scripts/test_setup.py:2261` | - | `claude_klabauter_root.mkdir()` |
 | `scripts/test_setup.py:2263` | - | `setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", _klabauter_repo(tmp_path), args)` |
-| `scripts/test_setup.py:2274` | - | `def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor(` |
+| `scripts/test_setup.py:2274` | - | `def test_register_claude_klabauter_root_never_overwrites_a_set_content_root_anchor(` |
 | `scripts/test_setup.py:2287` | - | `claude_klabauter_root = tmp_path / "claude-klabauter"` |
 | `scripts/test_setup.py:2288` | - | `claude_klabauter_root.mkdir()` |
 | `scripts/test_setup.py:2290` | - | `setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", _klabauter_repo(tmp_path), args)` |
@@ -9286,7 +9286,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 
 ## RENAMEABLE-LOCAL (229)
 
-Every row below passed the sibling-consumer check (source spelling against DoE-claude's `setup/` + `coordinator/`, published spelling against claude-klabauter minus `.fleet-env*`) clean. Grouped into file-disjoint slices, one per surface directory, so the identifier follow-on is a transcription.
+Every row below passed the sibling-consumer check (source spelling against coordinator-content-repo's `setup/` + `coordinator/`, published spelling against claude-klabauter minus `.fleet-env*`) clean. Grouped into file-disjoint slices, one per surface directory, so the identifier follow-on is a transcription.
 
 ### Slice: `coordinator/` (142 lines, 35 files)
 
@@ -9443,7 +9443,7 @@ Every row below passed the sibling-consumer check (source spelling against DoE-c
 | `coordinator_core/install/test_maximalist.py:1512` | - | `def test_seed_claude_klabauter_check_only_does_not_invoke_machine_local(stub_env, monkeypatch):` |
 | `coordinator_core/install/test_maximalist.py:1544` | - | `def test_seed_claude_klabauter_machine_local_absent_degrades_to_note(stub_env, monkeypatch, capsys):` |
 | `coordinator_core/install/test_maximalist.py:1571` | - | `def test_seed_claude_klabauter_missing_coordinator_core_warns_and_skips(stub_env, monkeypatch, tmp_path, capsys):` |
-| `coordinator_core/message_register/_codename_classes.py:312` | - | `_PINNED_FAMILY_ROOTS = frozenset({"doeclaude", "doeclaude_klabauter", "projectclaude_klabauter"})` |
+| `coordinator_core/message_register/_codename_classes.py:312` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "doeclaude_klabauter", "projectclaude_klabauter"})` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:26` | - | `def test_fires_on_claude_klabauter_prose():` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:33` | - | `def test_stays_silent_on_repos_claude_klabauter_functional_identifier():` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:47` | - | `def test_stays_silent_on_bare_repos_claude_klabauter_only():` |
@@ -9457,7 +9457,7 @@ Every row below passed the sibling-consumer check (source spelling against DoE-c
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:587` | - | `fixture = 'python "%~dp0Claude-Klabauter-doctor-probe.py" %*\n'` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:669` | - | `def _claude_klabauter_percolate_store_path() -> Path:` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:704` | - | `store_path = _claude_klabauter_percolate_store_path()` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:98` | - | `def test_glued_compound_doe_claude_klabauter_scrubs_claude_klabauter_and_preserves_doe_claude(` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:98` | - | `def test_glued_compound_doe_claude_klabauter_scrubs_claude_klabauter_and_preserves_content_root(` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:126` | - | `def test_every_target_row_citing_both_doe_family_and_claude_klabauter_substitutes_the_glued_compound(` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:164` | - | `if not (cites_claude_klabauter_family and cites_doe_family):` |
 | `coordinator_core/percolate/tests/test_permit_checker_parity.py:100` | - | `def _claude_klabauter_permits_name_occurrences(` |
@@ -9622,7 +9622,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/classify-engine-root-residue.py`
 - `coordinator/bin/classify-env-var-callers.py`
 - `coordinator/bin/classify-resolver-callers.py`
-- `coordinator/bin/claude-doe.py`
+- `coordinator/bin/claude-author.py`
 - `coordinator/bin/close-origin-stub-on-ship.py`
 - `coordinator/bin/close-out-and-stamp.py`
 - `coordinator/bin/compose-review-wave.py`
@@ -9681,9 +9681,9 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/find-polluter.py`
 - `coordinator/bin/fleet-env-bind.py`
 - `coordinator/bin/fleet-env.py`
-- `coordinator/bin/gen-claude-doe-launcher.py`
-- `coordinator/bin/gen-claude-doe-shim.py`
-- `coordinator/bin/gen-doe-root-pointer.py`
+- `coordinator/bin/gen-claude-author-launcher.py`
+- `coordinator/bin/gen-claude-author-shim.py`
+- `coordinator/bin/gen-content-root-pointer.py`
 - `coordinator/bin/gen-launcher-shim.py`
 - `coordinator/bin/gen-settings-hooks.py`
 - `coordinator/bin/generate-exec-summary.py`
@@ -9699,8 +9699,8 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/handoff-loe-summary.py`
 - `coordinator/bin/harvest-exit-interviews.py`
 - `coordinator/bin/identity-cli.py`
-- `coordinator/bin/install-claude-doe-wrapper.py`
-- `coordinator/bin/install-doe-claude-precommit-hook.py`
+- `coordinator/bin/install-claude-author-wrapper.py`
+- `coordinator/bin/install-coordinator-content-repo-precommit-hook.py`
 - `coordinator/bin/install-health-run.py`
 - `coordinator/bin/install-health/seed-skill-overrides.py`
 - `coordinator/bin/install-meta-repo-precommit-hook.py`
@@ -9861,7 +9861,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/tests/test_delegate_to_gate_root_identity.py`
 - `coordinator/bin/tests/test_denied_package_importers_are_locator_axis.py`
 - `coordinator/bin/tests/test_doctor_probe_ladder_parity.py`
-- `coordinator/bin/tests/test_doe_root_routing.py`
+- `coordinator/bin/tests/test_content_root_routing.py`
 - `coordinator/bin/tests/test_entry_point_shim_warm_route.py`
 - `coordinator/bin/tests/test_entry_point_shim_warm_route_spawns.py`
 - `coordinator/bin/tests/test_fleet_env_bind_cli.py`
@@ -9871,7 +9871,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/tests/test_handoff_loe_summary.py`
 - `coordinator/bin/tests/test_harvest_deferrals_dedup_scan_memoized.py`
 - `coordinator/bin/tests/test_harvest_deferrals_evidence_scan_hoisted.py`
-- `coordinator/bin/tests/test_harvest_doe_root_machine_local_leg.py`
+- `coordinator/bin/tests/test_harvest_content_root_machine_local_leg.py`
 - `coordinator/bin/tests/test_identity_file_populated_gate.py`
 - `coordinator/bin/tests/test_install_doc_payload_gate_wiring.py`
 - `coordinator/bin/tests/test_installed_hook_gate_scripts_resolve.py`
@@ -9929,7 +9929,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/verify-arch-audit-atlas-refresh.py`
 - `coordinator/bin/verify-coverage.py`
 - `coordinator/bin/verify-dist-publish-repo-sync.py`
-- `coordinator/bin/verify-doe-root-seam-sync.py`
+- `coordinator/bin/verify-content-root-seam-sync.py`
 - `coordinator/bin/verify-no-console-flash.py`
 - `coordinator/bin/verify-no-powershell-flash.py`
 - `coordinator/bin/verify-orientation-cache-sync.py`
@@ -10131,7 +10131,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/tests/test_records_query_repo_root.py`
 - `coordinator/tests/test_refresh_queries_files_scope.py`
 - `coordinator/tests/test_refresh_source_is_live_venv.py`
-- `coordinator/tests/test_regen_cockpit_schema_doe_root.py`
+- `coordinator/tests/test_regen_cockpit_schema_content_root.py`
 - `coordinator/tests/test_regeneratability_declared_keys.py`
 - `coordinator/tests/test_render_posture_overlay.py`
 - `coordinator/tests/test_repomap_wrapper_resolution.py`
@@ -10296,7 +10296,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/distill/tests/test_wiki_log_migrate.py`
 - `coordinator_core/distill/wiki_log_migrate.py`
 - `coordinator_core/doctor_envelope.py`
-- `coordinator_core/doe_root_pointer.py`
+- `coordinator_core/content_root_pointer.py`
 - `coordinator_core/engine_root_census.py`
 - `coordinator_core/engine_version.py`
 - `coordinator_core/environment_story/stories.py`
@@ -10469,7 +10469,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/commit_anchors.py`
 - `coordinator_core/ops/completion_ops.py`
 - `coordinator_core/ops/coordinator_complete_entry.py`
-- `coordinator_core/ops/coordinator_doe_root.py`
+- `coordinator_core/ops/coordinator_content_root.py`
 - `coordinator_core/ops/coordinator_render_rollup.py`
 - `coordinator_core/ops/coordinator_setup_state.py`
 - `coordinator_core/ops/crossrepo_closure_status.py`
@@ -10559,8 +10559,8 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/fleet/tests/test_retired_central_receiver_suggestion.py`
 - `coordinator_core/ops/fleet_machinery_sweep.py`
 - `coordinator_core/ops/fold_execution_record.py`
-- `coordinator_core/ops/gen_claude_doe_shim.py`
-- `coordinator_core/ops/gen_doe_root_pointer.py`
+- `coordinator_core/ops/gen_claude_author_shim.py`
+- `coordinator_core/ops/gen_content_root_pointer.py`
 - `coordinator_core/ops/generate_exec_summary.py`
 - `coordinator_core/ops/generate_repomap.py`
 - `coordinator_core/ops/goal_append.py`
@@ -10576,7 +10576,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/handoff_ship_archive.py`
 - `coordinator_core/ops/handoff_transition.py`
 - `coordinator_core/ops/initiatives_serve.py`
-- `coordinator_core/ops/install_doe_claude_precommit_hook.py`
+- `coordinator_core/ops/install_content_root_precommit_hook.py`
 - `coordinator_core/ops/install_health_run.py`
 - `coordinator_core/ops/install_meta_repo_precommit_hook.py`
 - `coordinator_core/ops/install_publish_repo_precommit_hook.py`
@@ -10657,7 +10657,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/test_doc_content_verify.py`
 - `coordinator_core/ops/test_emit_artifact_shape_contract.py`
 - `coordinator_core/ops/test_generate_exec_summary.py`
-- `coordinator_core/ops/test_install_doe_claude_precommit_hook.py`
+- `coordinator_core/ops/test_install_content_root_precommit_hook.py`
 - `coordinator_core/ops/test_install_meta_repo_hook_engine_root_refusal.py`
 - `coordinator_core/ops/test_install_shell_init_guard_seam.py`
 - `coordinator_core/ops/test_migrate_state_to_claude_klabauter.py`
@@ -10884,7 +10884,7 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/test_state_root.py`
 - `coordinator_core/testing/_fixtures.py`
 - `coordinator_core/testing/collect.py`
-- `coordinator_core/testing/doe_root.py`
+- `coordinator_core/testing/content_root.py`
 - `coordinator_core/testing/fake_engine_root.py`
 - `coordinator_core/testing/full_runner.py`
 - `coordinator_core/testing/golden.py`
@@ -11026,19 +11026,19 @@ generator is shipped as a one-time snapshot, not a re-runnable-under-budget arti
 `resolve-claude-klabauter/_resolve_claude_klabauter.py`) expanded to their tracked `.py` members in the two-tree name
 axis (`coordinator/`, `coordinator_core/`). Class is the dominant class of that path's lines in
 the tables above (a path is never itself a single class; this is the disposition the C8 un-key
-memo needs, not a re-statement of every line). "Sibling file that keys it" names the DoE-claude
+memo needs, not a re-statement of every line). "Sibling file that keys it" names the coordinator-content-repo
 and/or klabauter surface identified by review F1 as the reason this plan cannot rename the family
 without turning that sibling's store row, baseline, registry entry or test red.
 
 | path | dominant class | sibling file that keys it |
 |---|---|---|
-| `coordinator/bin/check-claude-klabauter-doctor-sentinel.sh` | CONTRACT-BOUND | DoE-claude cadence baseline invoking this script by name |
-| `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py` | CONTRACT-BOUND | DoE-claude cadence baseline (op backing the bin trampoline above) |
+| `coordinator/bin/check-claude-klabauter-doctor-sentinel.sh` | CONTRACT-BOUND | coordinator-content-repo cadence baseline invoking this script by name |
+| `coordinator_core/ops/check_claude_klabauter_doctor_sentinel.py` | CONTRACT-BOUND | coordinator-content-repo cadence baseline (op backing the bin trampoline above) |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py` | CONTRACT-BOUND | same baseline, via the op it tests |
-| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py` | CONTRACT-BOUND | DoE-claude install-chain step naming this script |
-| `coordinator/bin/remove-claude-klabauter-precommit-hook.py` | CONTRACT-BOUND | DoE-claude precommit-hook install/removal step |
+| `coordinator/bin/gen-claude-klabauter-live-root-pointer.py` | CONTRACT-BOUND | coordinator-content-repo install-chain step naming this script |
+| `coordinator/bin/remove-claude-klabauter-precommit-hook.py` | CONTRACT-BOUND | coordinator-content-repo precommit-hook install/removal step |
 | `coordinator/bin/tests/test_remove_claude_klabauter_precommit_hook.py` | CONTRACT-BOUND | same install/removal step, via the script it tests |
-| `coordinator_core/ops/migrate_state_to_claude_klabauter.py` | CONTRACT-BOUND | DoE-claude state-migration registry entry |
+| `coordinator_core/ops/migrate_state_to_claude_klabauter.py` | CONTRACT-BOUND | coordinator-content-repo state-migration registry entry |
 | `coordinator_core/ops/test_migrate_state_to_claude_klabauter.py` | CONTRACT-BOUND | same registry entry, via the op it tests |
 | `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py` | CONTRACT-BOUND | klabauter `cc_invoke.py`'s `_resolve_claude_klabauter_root` alias import (test_shared_bin_resolver_reachability.py) |
 | `coordinator/lib/resolve-claude-klabauter/tests/test_dispatch_prefers_stamped_engine.py` | CONTRACT-BOUND | same alias, via the dispatch path it tests |
@@ -11046,7 +11046,7 @@ without turning that sibling's store row, baseline, registry entry or test red.
 | `coordinator/lib/resolve-claude-klabauter/tests/test_exec_cli_no_live_tree_fallback.py` | CONTRACT-BOUND | same alias, via `_SHIM_PATH` |
 | `coordinator/lib/resolve-claude-klabauter/tests/test_resolves_from_published_mirror.py` | EXTERNALLY-NAMED-THING | klabauter published-mirror resolution target |
 | `coordinator/lib/resolve-claude-klabauter/tests/test_working_repos_is_locator_only.py` | CONTRACT-BOUND | same alias, via `.claude-klabauter-live-root` locator semantics |
-| `coordinator_core/install/test_resolve_claude_klabauter.py` | CONTRACT-BOUND | klabauter/DoE-claude install-chain `resolve_claude_klabauter` contract |
+| `coordinator_core/install/test_resolve_claude_klabauter.py` | CONTRACT-BOUND | klabauter/coordinator-content-repo install-chain `resolve_claude_klabauter` contract |
 | `coordinator_core/install/test_resolve_claude_klabauter_currency_signal.py` | CONTRACT-BOUND | same install-chain contract, currency-signal leg |
 | `coordinator_core/install/test_resolve_claude_klabauter_exec_cli.py` | CONTRACT-BOUND | same install-chain contract, exec-CLI leg |
 | `coordinator_core/install/test_resolve_claude_klabauter_publisher_only.py` | CONTRACT-BOUND | same install-chain contract, publisher-only leg |

@@ -10,7 +10,7 @@ hands back whichever module `sys.path` already resolved — possibly the stale
 published mirror, which is the thing under test.
 
 That makes the guard the only link in the chain that does not trust
-`sys.path`, and it buys a failure mode with it (doe-claude-dc, 2026-09-12):
+`sys.path`, and it buys a failure mode with it (coordinator-content-repo-dc, 2026-09-12):
 the regex keys on the literal spelling `CONTRACT_VERSION = "..."`. Make that a
 computed value, move it to a constants module, or switch the quoting, and
 `_source_contract_version()` silently returns None — at which point the guard

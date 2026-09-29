@@ -481,7 +481,7 @@ def _fleet_corpus_gate_reasons(incoming_text: str) -> tuple[list[str], list[str]
     A pre-flight FINDING (off-enum records, or an unclassified registry key) is
     a genuine gating reason: advancing a major narrow while live fleet records
     still carry a value the incoming schema would reject is exactly the defect
-    this wiring closes (cross-repo/inbox/2026-07-31-doe-claude-em-consumer-
+    this wiring closes (cross-repo/inbox/2026-07-31-coordinator-content-repo-em-consumer-
     corpus-preflight-blind-to-half-the-fleet.md).
 
     A pre-flight FAILURE (an unreadable registry, or its own oracle — the
@@ -1155,7 +1155,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PATH",
         help=(
             "Override the DoE clone path. Default: resolve via the machine-local registry "
-            "(repos.doe_claude). Reuses resolve_doe_clone() — never re-implements registry parsing."
+            "(repos.content_root). Reuses resolve_doe_clone() — never re-implements registry parsing."
         ),
     )
     p.add_argument(

@@ -34,7 +34,7 @@ def _run_cli(args: list[str], env: dict[str, str | None] | None = None) -> subpr
 
     A None value in `env` UNSETS that key for the child process rather than
     setting it to the empty string — load-bearing for ambient vars like
-    REPO_DOE_CLAUDE (exported into every login shell per the install surface):
+    REPO_CONTENT_ROOT (exported into every login shell per the install surface):
     an explicitly-empty-string override is NOT equivalent to "absent" for every
     downstream consumer (the real `machine-local` binary treats them
     differently), so a real absence must be a real dict-key removal.
@@ -63,7 +63,7 @@ def _wiki_root_with(tmpdir: str, *names: str) -> str:
     Returns the directory path, suitable for LESSON_PROMOTE_WIKI_ROOT — this is the
     A7-validation-isolation counterpart to LESSON_PROMOTE_OUTBOX_ROOT: it lets tests
     exercise --target-wiki validation against a known, disposable inventory instead
-    of depending on a real DoE-claude checkout being present on the test runner.
+    of depending on a real coordinator-content-repo checkout being present on the test runner.
     """
     wiki_dir = os.path.join(tmpdir, "wiki-inventory")
     os.makedirs(wiki_dir, exist_ok=True)
@@ -380,7 +380,7 @@ def test_multiline_body_roundtrip() -> None:
                 f"(trailing newline indicates | clip chomping instead of |- strip chomping)"))
 
 
-# _DoeUnresolvable by unsetting DOE_ROOT/REPO_DOE_CLAUDE and pointing
+# _DoeUnresolvable by unsetting CONTENT_ROOT/REPO_CONTENT_ROOT and pointing
 # MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
 
 
@@ -519,7 +519,7 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
     `MACHINE_LOCAL_IMPL` was the single lever over the registry rung; that rung
     now reads the registry IN-PROCESS (`machine_local_impl_resolve.
     registry_get()`, CLI spawn only as fallback), and the ladder beneath it has
-    since grown five codename-free rungs (`.doe-root` pointer, marketplace
+    since grown five codename-free rungs (`.coordinator-content-root` pointer, marketplace
     cache, flat layout, CLAUDE_PLUGIN_ROOT, plugin-mirror live_path) that the
     helper never touched. On a real dev box those resolve, so the CLI reached
     the wiki-inventory check and exited 2 on a target-wiki miss — the test was
@@ -529,8 +529,8 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
     ladder `coordinator_registry`'s import-time manifest bootstrap rides, so a
     subprocess with every rung dead fails at import with an install-integrity
     error (exit 1) long before validation. There is no environment shape where
-    "manifest bootstrap resolves" and "runtime doe_root() does not" diverge.
-    Patching `doe_root` directly is what keeps the exit-3 branch and its
+    "manifest bootstrap resolves" and "runtime content_root() does not" diverge.
+    Patching `content_root` directly is what keeps the exit-3 branch and its
     remediation text covered.
     """
     import importlib.machinery
@@ -552,10 +552,10 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
         with (
             _mock.patch.dict(os.environ, {"LESSON_PROMOTE_OUTBOX_ROOT": outbox}),
             _mock.patch.object(
-                cli_mod, "doe_root",
+                cli_mod, "content_root",
                 side_effect=cli_mod._DoeUnresolvable(
-                    "repos.doe_claude not set in machine-local registry and "
-                    "REPO_DOE_CLAUDE env var not set"
+                    "repos.content_root not set in machine-local registry and "
+                    "REPO_CONTENT_ROOT env var not set"
                 ),
             ),
             _mock.patch.object(
@@ -574,7 +574,7 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
 
         if rc != 3:
             raise AssertionError(f"{name}: " + (f"expected exit 3; got {rc}. stderr: {captured_err.getvalue()!r}"))
-        if "machine-local set repos.doe_claude" not in captured_err.getvalue():
+        if "machine-local set repos.content_root" not in captured_err.getvalue():
             raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
         if os.path.isdir(outbox) and os.listdir(outbox):
             raise AssertionError(f"{name}: " + ("outbox has entries but the write should have been skipped"))
@@ -586,8 +586,8 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     Rewired (de-node cutover, 480ad8f8 / W0.5 Option B+C, 2026-07-19): this test used
     to force a totally seam-absent CLAUDE_KLABAUTER_ROOT (`_force_legacy_route_env`) to route the
     OUTER queue.promote op to legacy_fn(), while `_force_doe_unresolvable_env()` made
-    legacy_fn()'s own doe_root() call raise `_DoeUnresolvable` — pinning the CLI's
-    distinctive "machine-local set repos.doe_claude" remediation text, which only the
+    legacy_fn()'s own content_root() call raise `_DoeUnresolvable` — pinning the CLI's
+    distinctive "machine-local set repos.content_root" remediation text, which only the
     legacy_fn() handler prints (the native op's {skipped:true} path returns a
     different, shorter reason string with no remediation line — see
     coordinator_core/ops/queue_promote.py's `_DoeUnresolvable` handler).
@@ -627,12 +627,12 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
             cli_mod, "_describe_schema_node",
             return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
         ),
-        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         _mock.patch.object(cli_mod, "_current_repo_root", return_value="/fake/repo"),
         _mock.patch.object(
             cli_mod, "_write_entry",
             side_effect=cli_mod._DoeUnresolvable(
-                "repos.doe_claude not set in machine-local registry and REPO_DOE_CLAUDE env var not set"
+                "repos.content_root not set in machine-local registry and REPO_CONTENT_ROOT env var not set"
             ),
         ),
         _mock.patch("sys.stderr", captured_err),
@@ -649,14 +649,14 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
         raise AssertionError(f"{name}: " + (f"expected exit 3; got {rc}. stderr: {captured_err.getvalue()!r}"))
     if "Lesson outbox entry written" in captured_out.getvalue():
         raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable DoE root: {captured_out.getvalue()!r}"))
-    if "machine-local set repos.doe_claude" not in captured_err.getvalue():
+    if "machine-local set repos.content_root" not in captured_err.getvalue():
         raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
 
 
-def test_native_route_carries_the_validated_doe_root() -> None:
+def test_native_route_carries_the_validated_content_root() -> None:
     """claude-klabauter#33 — the native queue.promote op must write under the DoE
-    root the CLI resolved (DOE_ROOT honoured), the same one --target-wiki was
-    validated against, so the CLI hands it over as the `doe_root` param."""
+    root the CLI resolved (CONTENT_ROOT honoured), the same one --target-wiki was
+    validated against, so the CLI hands it over as the `content_root` param."""
     import importlib.machinery
     import importlib.util as _importlib_util
     import io as _io
@@ -680,9 +680,9 @@ def test_native_route_carries_the_validated_doe_root() -> None:
             cli_mod, "_describe_schema_node",
             return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
         ),
-        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         _mock.patch.object(cli_mod, "_current_repo_root", return_value="/fake/repo"),
-        _mock.patch.object(cli_mod, "doe_root", return_value="/doe/from/env", create=True),
+        _mock.patch.object(cli_mod, "content_root", return_value="/doe/from/env", create=True),
         _mock.patch.dict(os.environ, {}, clear=False) as env,
         _mock.patch("sys.stdout", _io.StringIO()),
     ):
@@ -695,7 +695,7 @@ def test_native_route_carries_the_validated_doe_root() -> None:
         ])
 
     assert rc == 0
-    assert seen.get("doe_root") == "/doe/from/env"
+    assert seen.get("content_root") == "/doe/from/env"
 
 
 def test_skill_edit_target_wiki_bypasses_wiki_normalization() -> None:

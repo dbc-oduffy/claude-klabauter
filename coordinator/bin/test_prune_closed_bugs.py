@@ -17,7 +17,7 @@ archive) and the dry-run-only early exit (Call 2 skipped when --dry-run is passe
 Runs bash-free: `python3 test_prune_closed_bugs.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § KD-4 / AC6
+Spec backlink: coordinator-content-repo:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § KD-4 / AC6
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

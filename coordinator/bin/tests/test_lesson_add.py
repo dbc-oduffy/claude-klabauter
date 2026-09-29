@@ -16,7 +16,7 @@ Converted from a hand-rolled unittest runner to collectable pytest functions.
 
 Run: python3 -m pytest coordinator/bin/tests/test_lesson_add.py
 
-Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C3
+Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C3
 """
 from __future__ import annotations
 

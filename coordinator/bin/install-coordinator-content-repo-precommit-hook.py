@@ -20,13 +20,13 @@ def main(argv: "list[str] | None" = None) -> int:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(
-            f"install-doe-claude-precommit-hook: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"install-coordinator-content-repo-precommit-hook: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
         return 1
     except ImportError as exc:
         print(
-            "install-doe-claude-precommit-hook: "
+            "install-coordinator-content-repo-precommit-hook: "
             f"coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
@@ -34,12 +34,12 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         code = run_op_main(
-            "coordinator_core.ops.install_doe_claude_precommit_hook", (sys.argv[1:] if argv is None else argv)
+            "coordinator_core.ops.install_content_root_precommit_hook", (sys.argv[1:] if argv is None else argv)
         )
     except ImportError as exc:
         print(
-            "install-doe-claude-precommit-hook: "
-            f"coordinator_core.ops.install_doe_claude_precommit_hook not importable: {exc}",
+            "install-coordinator-content-repo-precommit-hook: "
+            f"coordinator_core.ops.install_content_root_precommit_hook not importable: {exc}",
             file=sys.stderr,
         )
         return 1

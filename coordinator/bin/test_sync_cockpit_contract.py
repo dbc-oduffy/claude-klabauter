@@ -18,7 +18,7 @@ module's own `_CANONICAL` was a `__file__`-relative walk to
 `coordinator/../cockpit-contract/schema/...` that the 2026-07-22
 executable-surface migration (DR-047) left behind when it moved this test
 into this repo while `cockpit-contract/` (contract data) stayed in
-DoE-claude. `sync-cockpit-contract.py` itself was already fixed at migration
+Coordinator-content-repo. `sync-cockpit-contract.py` itself was already fixed at migration
 time via `_default_canonical()` -> `coordinator_data_root.data_root()`; only
 this test's copy of the path was never migrated. Fixed by resolving the same
 way the production script does, instead of re-deriving the path here.

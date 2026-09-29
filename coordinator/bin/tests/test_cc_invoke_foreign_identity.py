@@ -41,42 +41,42 @@ pytestmark = pytest.mark.cadence
 class TestTheSplitAnnouncementGate:
 
     def test_silent_for_a_reader_who_owns_neither_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"C:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-third-repo",
+            lambda: r"C:\a-third-repo",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is False
+            _mod._reader_owns_one_of_the_split_trees(r"C:\a-dispatch-root") is False
         )
 
     def test_present_for_a_reader_who_owns_the_cli_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"C:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-cli-root",
+            lambda: r"C:\a-cli-root",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
+            _mod._reader_owns_one_of_the_split_trees(r"C:\a-dispatch-root") is True
         )
 
     def test_present_for_a_reader_who_owns_the_dispatch_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"C:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-dispatch-root",
+            lambda: r"C:\a-dispatch-root",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
+            _mod._reader_owns_one_of_the_split_trees(r"C:\a-dispatch-root") is True
         )
 
     def test_fails_open_when_the_readers_own_repo_is_unresolvable(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"C:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel", lambda: None
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
+            _mod._reader_owns_one_of_the_split_trees(r"C:\a-dispatch-root") is True
         )
 
     def test_fails_open_on_any_unexpected_exception(self, monkeypatch):
@@ -85,7 +85,7 @@ class TestTheSplitAnnouncementGate:
 
         monkeypatch.setattr(_mod, "resolve_engine_root", _boom)
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
+            _mod._reader_owns_one_of_the_split_trees(r"C:\a-dispatch-root") is True
         )
 
     def test_require_dispatch_engine_on_path_skips_the_announce_call_when_ungated(
@@ -98,7 +98,7 @@ class TestTheSplitAnnouncementGate:
             _mod, "_announce_engine_cli_split", lambda root: called.append(root)
         )
         monkeypatch.setattr(_mod, "_front_insert_on_path", lambda root: root)
-        monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"X:\a-root")
+        monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"C:\a-root")
         fake_report = type(
             "Report", (), {"verdict": "explicit-not-divergent", "imported_file": None, "engine_root": None}
         )()
@@ -106,7 +106,7 @@ class TestTheSplitAnnouncementGate:
 
         result = _mod.require_dispatch_engine_on_path()
 
-        assert result == r"X:\a-root"
+        assert result == r"C:\a-root"
         assert called == [], "the gate said no; the announcer must not have been called"
 
 

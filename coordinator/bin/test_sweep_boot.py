@@ -3,7 +3,7 @@
 sweep-boot.py used to trampoline `session.boot_sweep`. That op is KILLED, not
 suspended (30017ms measured against a 2000ms bar, 8 of 8 calls ending in
 caller_timeout), so the dial could only ever refuse — 49 times in 28 hours in
-this repo, 32 in DoE-claude, once per session boot, each refusal arriving
+this repo, 32 in coordinator-content-repo, once per session boot, each refusal arriving
 through a warm client that blocks up to 15s for a respawn first.
 
 The dispatch is gone and nothing replaces it: across the same 28 hours in which

@@ -59,7 +59,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
-                            [--allow-venv-fallback] [--with-test-deps] [--with-fleet-env]
+                            [--allow-venv-fallback] [--with-test-deps]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -111,9 +111,9 @@ Negative-spec:
   script.
   Does NOT hardcode CLAUDE_KLABAUTER_ROOT — resolves via flag -> env -> repo-root ladder.
   Does NOT hardcode the coordinator-claude sibling-dir — resolves via
-  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared .doe-root
-  pointer -> engine.working_repos.doe_claude registry key -> settings-home
-  .doe-root sentinel -> sibling-dir default, so a packaging installer (e.g.
+  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared .coordinator-content-root
+  pointer -> engine.working_repos.content_root registry key -> settings-home
+  .coordinator-content-root sentinel -> sibling-dir default, so a packaging installer (e.g.
   example-os-repo) can inject the location instead of relying on side-by-side git
   clone placement. The sibling-dir default is the only rung that guesses, and
   it is existence-gated: an unverified guess comes back flagged in the source
@@ -181,14 +181,14 @@ EXIT_REPO_IDENTITY_UNRESOLVED = 95
 
 # Exit-code 96: a DESIGNED REFUSAL, not a failure. The installer must provision
 # the predictable set of interpreters declared consumers actually resolve to --
-# including the bare `python3` DoE-claude's `hooks.json` registers hooks under --
+# including the bare `python3` coordinator-content-repo's `hooks.json` registers hooks under --
 # and one of them is externally-managed (PEP 668), so provisioning it would
 # require an override this installer will never pass. Refusing IS the correct
 # outcome; the remediation names a supported interpreter.
 #
-# WHY A RESERVED CODE RATHER THAN STDERR PROSE: DoE-claude's settings-home
+# WHY A RESERVED CODE RATHER THAN STDERR PROSE: coordinator-content-repo's settings-home
 # post-condition (the declare half of the 4b declare/prove split, memo
-# 2026-08-17-doe-claude-em-coordinator-install-entry-resolve-from-manifest.md
+# 2026-08-17-coordinator-content-repo-em-coordinator-install-entry-resolve-from-manifest.md
 # § Question 2) is phrased outcome-conditional -- provisioned, OR a designed
 # refusal -- and both conform. A test can only tell those apart from a genuine
 # break if the discriminator is machine-readable: prose drifts, so a test pinned
@@ -285,10 +285,6 @@ Options:
                                       fall back from.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
-  --with-fleet-env                   Also build the fleet-wide Python environment (the private fleet's
-                                      ML/RAG stack: multi-GB download, many minutes). Off by default: the
-                                      installer provisions the engine only. COORDINATOR_FLEET_ENV=1 is
-                                      equivalent.
   --register-only                    Skip Step Zero + dep check; run registration + verification only
   --check                            Verify the install, one PASS/FAIL line per item (forwarders, door,
                                       guards, repos.* pointers, statusline); exits 1 on any FAIL
@@ -369,8 +365,7 @@ class Args:
         self.allow_venv_fallback = False
         self.container_optin = False
         self.with_test_deps = False
-        self.with_fleet_env = os.environ.get("COORDINATOR_FLEET_ENV") == "1"
-        self.with_claude_doe_launcher = False
+        self.with_claude_author_launcher = False
         self.register_only = False
         self.check = False
         self.preflight = False
@@ -404,13 +399,11 @@ def parse_args(argv: list[str]) -> Args:
             args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
-        elif tok == "--with-fleet-env":
-            args.with_fleet_env = True
-        elif tok == "--with-claude-doe-launcher":
+        elif tok == "--with-claude-author-launcher":
             # The DoE-developer opt-in that lets this installer shadow the
             # operator's `claude` command. Deliberately absent from HELP_TEXT:
             # an OSS reader has no DoE clone and must never meet the concept.
-            args.with_claude_doe_launcher = True
+            args.with_claude_author_launcher = True
         elif tok == "--register-only":
             args.register_only = True
         elif tok == "--check":
@@ -1885,7 +1878,7 @@ def _coordinator_root_from_settings_home() -> "Path | None":
 
     The settings home is the standing read surface for every resolved path (it
     is durable and Anthropic-independent, unlike `~/.claude`), and it already
-    carries `machine-local/.doe-root` naming the DoE dev clone. This rung reads
+    carries `machine-local/.coordinator-content-root` naming the DoE dev clone. This rung reads
     it so the resolver stops guessing a sibling directory that was never where
     the checkout lives on this machine.
 
@@ -1910,7 +1903,7 @@ def _coordinator_root_from_settings_home() -> "Path | None":
     try:
         from coordinator_core._settings_home import settings_home
 
-        sentinel = settings_home() / "machine-local" / ".doe-root"
+        sentinel = settings_home() / "machine-local" / ".coordinator-content-root"
     except Exception as exc:
         # Kept non-fatal (print + None, not a re-raise): letting an
         # ImportError/misconfiguration propagate here would abort the rest
@@ -1919,14 +1912,14 @@ def _coordinator_root_from_settings_home() -> "Path | None":
         # identical to "no sentinel recorded yet" — see finding for the
         # narrower alternative considered (letting it surface) and why this
         # print-and-continue was picked instead.
-        print(f"[ADVISORY] settings-home resolution failed ({exc}); cannot read .doe-root sentinel.", file=sys.stderr)
+        print(f"[ADVISORY] settings-home resolution failed ({exc}); cannot read .coordinator-content-root sentinel.", file=sys.stderr)
         return None
     try:
         if not sentinel.is_file():
             return None
         recorded = sentinel.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        print(f"[ADVISORY] could not read .doe-root sentinel at {sentinel} ({exc}).", file=sys.stderr)
+        print(f"[ADVISORY] could not read .coordinator-content-root sentinel at {sentinel} ({exc}).", file=sys.stderr)
         return None
     if not recorded:
         return None
@@ -1936,14 +1929,14 @@ def _coordinator_root_from_settings_home() -> "Path | None":
     return candidate
 
 
-def _coordinator_root_from_doe_root_pointer() -> "Path | None":
-    """Read the shared `.doe-root` pointer file via
-    `read_doe_root_pointer.py::coordinator_read_doe_root_pointer()` — private
-    dev-clone layout at `coordinator/lib/read_doe_root_pointer.py`, published
-    payload layout (flattened, see C1F) at `lib/read_doe_root_pointer.py` —
+def _coordinator_root_from_content_root_pointer() -> "Path | None":
+    """Read the shared `.coordinator-content-root` pointer file via
+    `read_content_root_pointer.py::coordinator_read_content_root_pointer()` — private
+    dev-clone layout at `coordinator/lib/read_content_root_pointer.py`, published
+    payload layout (flattened, see C1F) at `lib/read_content_root_pointer.py` —
     the durable settings-home sentinel first
-    (`${settings-home}/machine-local/.doe-root`), then the legacy cold-readable
-    fallback (`${CLAUDE_HOME:-$HOME}/.claude/.doe-root`).
+    (`${settings-home}/machine-local/.coordinator-content-root`), then the legacy cold-readable
+    fallback (`${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`).
 
     Ranked ahead of BOTH the registry rung and the settings-home-only rung
     below (2026-08-07, C1Cc). This does NOT reverse `da7cd333a`'s decision: it
@@ -1954,10 +1947,10 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     The ordering was previously
     justified as "setup.py runs before a registry is necessarily populated on
     a fresh box," but nothing in THIS installer ever writes the
-    `.doe-root` sentinel either (checked every install-chain step:
+    `.coordinator-content-root` sentinel either (checked every install-chain step:
     `install_bin_forwarders`,
     `install_percolate_identity`, `install_machine_identity` — none write
-    `.doe-root`), so that justification buys nothing on the fresh-box path it
+    `.coordinator-content-root`), so that justification buys nothing on the fresh-box path it
     names. The real justification: a pointer written by coordinator-claude's
     OWN installer is stronger evidence than a key written by an arbitrary
     peer installer (the registry rung), which in turn is stronger than a
@@ -1970,7 +1963,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     stdlib-only and dependency-free (mirrors the `sys.path.insert` pattern
     C1's landed ladder uses for the same helper — see
     `coordinator/bin/lib/coordinator_registry.py::
-    _mp_doe_root_pointer_rung`), so importing it here does not violate this
+    _mp_content_root_pointer_rung`), so importing it here does not violate this
     script's bootstrap-before-deps-provisioned discipline.
 
     Returns None when the pointer is empty, does not resolve to a directory,
@@ -1979,7 +1972,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     the resolver to a dead or wrong path. Fails open (prints an advisory,
     returns None) if the helper itself is unimportable."""
     lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "lib"
-    if not (lib_dir / "read_doe_root_pointer.py").is_file():
+    if not (lib_dir / "read_content_root_pointer.py").is_file():
         # Published payload flattens: the mirror ships the helper at
         # "<repo root>/lib" with no "coordinator/" segment. Probed as a
         # fallback — private tree wins first.
@@ -1988,12 +1981,12 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     if added:
         sys.path.insert(0, str(lib_dir))
     try:
-        from read_doe_root_pointer import coordinator_read_doe_root_pointer
+        from read_content_root_pointer import coordinator_read_content_root_pointer
     except Exception as exc:
         # Swallows: helper missing at both probed dirs, import error inside
         # the helper itself — advisory-only, callers fall through to the
         # remaining rungs (see docstring: fails open).
-        print(f"[ADVISORY] could not import read_doe_root_pointer helper ({exc}); skipping .doe-root pointer rung.", file=sys.stderr)
+        print(f"[ADVISORY] could not import read_content_root_pointer helper ({exc}); skipping .coordinator-content-root pointer rung.", file=sys.stderr)
         return None
     finally:
         if added:
@@ -2002,9 +1995,9 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
             except ValueError:
                 pass
     try:
-        recorded = coordinator_read_doe_root_pointer()
+        recorded = coordinator_read_content_root_pointer()
     except Exception as exc:
-        print(f"[ADVISORY] .doe-root pointer read failed ({exc}).", file=sys.stderr)
+        print(f"[ADVISORY] .coordinator-content-root pointer read failed ({exc}).", file=sys.stderr)
         return None
     if not recorded:
         return None
@@ -2015,7 +2008,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
 
 
 def _coordinator_root_from_registry() -> "Path | None":
-    """Read `engine.working_repos.doe_claude` — the DR-132-ratified registry
+    """Read `engine.working_repos.content_root` — the DR-132-ratified registry
     namespace each repo's own installer writes as an identity assertion for
     "where is a coordinator-claude WORKING checkout" — via
     `coordinator_core.machine_resolver.registry_get` (never a `machine-local`
@@ -2048,12 +2041,12 @@ def _coordinator_root_from_registry() -> "Path | None":
     try:
         from coordinator_core.machine_resolver import registry_get
 
-        registry_val = registry_get("engine.working_repos.doe_claude")
+        registry_val = registry_get("engine.working_repos.content_root")
         if not registry_val:
             return None
         return _resolve_plugin_root_for_machine_local(Path(registry_val))
     except Exception as exc:
-        print(f"[ADVISORY] registry resolution failed ({exc}); skipping engine.working_repos.doe_claude rung.", file=sys.stderr)
+        print(f"[ADVISORY] registry resolution failed ({exc}); skipping engine.working_repos.content_root rung.", file=sys.stderr)
         return None
 
 
@@ -2079,7 +2072,7 @@ class CoordSourceRung(Enum):
 
     FLAG = auto()
     ENV = auto()
-    DOE_ROOT_POINTER = auto()
+    CONTENT_ROOT_POINTER = auto()
     REGISTRY = auto()
     SETTINGS_HOME = auto()
     SIBLING_DIR_DEFAULT = auto()
@@ -2110,8 +2103,8 @@ class CoordSourceResolution:
 def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path, CoordSourceResolution]:
     """Resolve the coordinator-claude sibling root and describe the source
     used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared
-    .doe-root pointer (durable + legacy) -> engine.working_repos.doe_claude
-    registry key -> settings-home .doe-root sentinel -> sibling-dir default
+    .coordinator-content-root pointer (durable + legacy) -> engine.working_repos.content_root
+    registry key -> settings-home .coordinator-content-root sentinel -> sibling-dir default
     (now honesty-gated, see below). Shared by `check_coordinator_claude_dep`
     and `register_claude_klabauter_root` so both resolve the SAME candidate root
     regardless of whether the (hard) dep-check ran (e.g. --skip-dep-check) —
@@ -2123,17 +2116,17 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     docstring for why identity (`.rung`) and presentation (`.display`) are
     kept apart (defect-class fix 2026-08-08).
 
-    Pointer rung (2026-08-07, C1Cc): `_coordinator_root_from_doe_root_pointer`
+    Pointer rung (2026-08-07, C1Cc): `_coordinator_root_from_content_root_pointer`
     outranks the registry rung specifically for this installer — see that
     function's docstring for why (setup.py runs before a registry is
     necessarily populated). It does NOT reverse the ordering `da7cd333a`
     established between the registry rung and the settings-home sentinel
     rung; those two keep their relative order below it.
 
-    Registry rung (2026-08-07, DR-132): `engine.working_repos.doe_claude` is
+    Registry rung (2026-08-07, DR-132): `engine.working_repos.content_root` is
     the generic, cross-fleet answer to "where is a coordinator-claude WORKING
     checkout" — each repo's own installer writes it as an identity assertion.
-    It outranks the `.doe-root` sentinel (a locally-recorded breadcrumb) and
+    It outranks the `.coordinator-content-root` sentinel (a locally-recorded breadcrumb) and
     the sibling-dir default (merely a directory that happens to sit next
     door): better evidence outranks weaker evidence. Explicit operator
     overrides (flag/env) still outrank everything, including the registry.
@@ -2180,15 +2173,15 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     elif os.environ.get("COORDINATOR_CLAUDE_ROOT"):
         candidate, rung, display = Path(os.environ["COORDINATOR_CLAUDE_ROOT"]), CoordSourceRung.ENV, "COORDINATOR_CLAUDE_ROOT env"
     else:
-        doe_root_pointer_root = _coordinator_root_from_doe_root_pointer()
+        content_root_pointer_root = _coordinator_root_from_content_root_pointer()
         registry_root = _coordinator_root_from_registry()
         settings_home_root = _coordinator_root_from_settings_home()
-        if doe_root_pointer_root is not None:
-            candidate, rung, display = doe_root_pointer_root, CoordSourceRung.DOE_ROOT_POINTER, "shared .doe-root pointer"
+        if content_root_pointer_root is not None:
+            candidate, rung, display = content_root_pointer_root, CoordSourceRung.CONTENT_ROOT_POINTER, "shared .coordinator-content-root pointer"
         elif registry_root is not None:
-            candidate, rung, display = registry_root, CoordSourceRung.REGISTRY, "engine.working_repos.doe_claude registry key"
+            candidate, rung, display = registry_root, CoordSourceRung.REGISTRY, "engine.working_repos.content_root registry key"
         elif settings_home_root is not None:
-            candidate, rung, display = settings_home_root, CoordSourceRung.SETTINGS_HOME, "settings-home .doe-root sentinel"
+            candidate, rung, display = settings_home_root, CoordSourceRung.SETTINGS_HOME, "settings-home .coordinator-content-root sentinel"
         else:
             candidate = repo_root.parent / "coordinator-claude"
             rung, display = CoordSourceRung.SIBLING_DIR_DEFAULT, "sibling-dir default"
@@ -2259,7 +2252,7 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
     manifest check runs second and is scoped by `_CLAUDE_KLABAUTER_MANIFEST_REPO_ID`
     rather than mere file presence for the same reason.
 
-    Spec backlink: cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-
+    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-content-repo-em-klabauter-
     location-belongs-in-the-registry-not-a-pointer-file.md
     """
     agents_md = repo_root / "AGENTS.md"
@@ -2395,7 +2388,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     #     a real source clone from a publish mirror, which also ships
     #     plugin.json — the mirror-rejection check above is what actually
     #     closes that gap; this shape check is the positive-evidence floor for
-    #     everything else), or (b) a DoE dev-clone (e.g. DoE-claude), where the
+    #     everything else), or (b) a DoE dev-clone (e.g. Coordinator-content-repo), where the
     #     coordinator plugin source lives under a coordinator/ subdir and the
     #     _DEV_CLONE_*_MARKERS constants mark it (NOT coordinator/CLAUDE.md,
     #     which DoE retired -- see the negative-spec on those constants).
@@ -2531,17 +2524,17 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
     return None
 
 
-#: The registry key `coordinator_core.trusted_root_guard._doe_root` reads first
+#: The registry key `coordinator_core.trusted_root_guard._content_root` reads first
 #: (DR-071's canonical coordinator-root anchor) — the value behind
-#: `resolve_operator_config`'s `doe_root`.
-_DOE_CLAUDE_ANCHOR_KEY = "repos.content_root"
+#: `resolve_operator_config`'s `content_root`.
+_CONTENT_ROOT_ANCHOR_KEY = "repos.content_root"
 
 
-def _unset_doe_claude_registration(
+def _unset_content_root_registration(
     coord_path: Path, coord_source: CoordSourceResolution, plugin_root: Path | None
 ) -> dict[str, str]:
     """Persist the coordinator-claude root this run already resolved, as
-    `repos.doe_claude`, when that key is currently unset.
+    `repos.content_root`, when that key is currently unset.
 
     `_resolve_coordinator_claude_root` finds the clone and the dep check
     prints it, but otherwise the key is only written by coordinator-claude's
@@ -2549,7 +2542,7 @@ def _unset_doe_claude_registration(
     registrar hook. On a box where neither has run — an engine-first install,
     or a host that cannot restart Claude Code so no plugin hook ever fires —
     every baton/handoff op then dies in `resolve_operator_config` with
-    "'doe_root' resolved to a corrupt value ''", blaming operator config for a
+    "'content_root' resolved to a corrupt value ''", blaming operator config for a
     value this installer was holding (docs/reference/
     linux-cloud-dogfood-friction.md F1).
 
@@ -2562,7 +2555,7 @@ def _unset_doe_claude_registration(
         somewhere deliberate outranks a resolution ladder that may have
         bottomed out at a sibling-dir guess. An unreadable registry counts as
         set — this never writes on a value it could not see.
-      - Never writes `engine.working_repos.doe_claude`: that namespace is
+      - Never writes `engine.working_repos.content_root`: that namespace is
         DoE's own identity assertion, which claude-klabauter only reads
         (`coordinator_core.ops.setup_chain_walker.
         _COORDINATOR_ROOT_LADDER_REMEDIATION`; DR-132). The cfc55599
@@ -2582,17 +2575,17 @@ def _unset_doe_claude_registration(
     try:
         from coordinator_core.machine_resolver import registry_get
 
-        existing = registry_get(_DOE_CLAUDE_ANCHOR_KEY)
+        existing = registry_get(_CONTENT_ROOT_ANCHOR_KEY)
     except Exception as exc:
         print(
-            f"[ADVISORY] could not read {_DOE_CLAUDE_ANCHOR_KEY} ({exc}); "
+            f"[ADVISORY] could not read {_CONTENT_ROOT_ANCHOR_KEY} ({exc}); "
             "leaving it unregistered.",
             file=sys.stderr,
         )
         return {}
     if (existing or "").strip():
         return {}
-    return {_DOE_CLAUDE_ANCHOR_KEY: str(coord_path)}
+    return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)}
 
 
 def register_claude_klabauter_root(
@@ -2640,7 +2633,7 @@ def register_claude_klabauter_root(
         The installer never moves the checkout: when its branch disagrees
         with the declared channel, an advisory names the `git switch`.
         Per the agreed cross-repo contract
-        (cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-location-
+        (cross-repo/inbox/2026-08-05-coordinator-content-repo-em-klabauter-location-
         belongs-in-the-registry-not-a-pointer-file.md), the registry
         carries the published engine's location and an absent key makes a
         consumer fall open to the live-tree rung — writing a claude_klabauter
@@ -2689,8 +2682,8 @@ def register_claude_klabauter_root(
     mirror (inert) rather than mirror-without-target (a false positive on
     the DR-132 gate). The probe added alongside this chunk
     (`bin/claude-klabauter-doctor-probe.py`) is the backstop for that residue, not a
-    substitute for the ordering. `repos.doe_claude`, when
-    `_unset_doe_claude_registration` yields it, is appended after every
+    substitute for the ordering. `repos.content_root`, when
+    `_unset_content_root_registration` yields it, is appended after every
     identity key, so it never moves where a partial failure lands.
 
     `engine.working_repos.*` is DoE's key-namespace (schema authored on their
@@ -2727,7 +2720,7 @@ def register_claude_klabauter_root(
     # then wins, the second never runs, and the read at the tail of this
     # function (`provision_stamped_engine`) raises UnboundLocalError on the
     # mirror while passing here. That crash took out the whole DoE install
-    # leg once already (cross-repo/inbox/2026-08-26-doe-claude-em-engine-
+    # leg once already (cross-repo/inbox/2026-08-26-coordinator-content-repo-em-engine-
     # setup-unboundlocal.md); the short-circuit in this file's own copy is
     # what hid it. Pin: coordinator_core/percolate/tests/
     # test_published_setup_identity_dispatch.py.
@@ -2838,7 +2831,7 @@ def register_claude_klabauter_root(
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
 
-    key_values.update(_unset_doe_claude_registration(coord_path, coord_source, plugin_root))
+    key_values.update(_unset_content_root_registration(coord_path, coord_source, plugin_root))
 
     keys = tuple(key_values)
     keys_desc = " + ".join(keys)
@@ -3472,14 +3465,14 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
 def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Make plain `claude` resolve the LIVE coordinator clone, not a copy of it.
 
-    `install_claude_doe_launcher_chain` above gives `claude-doe` a live surface
+    `install_claude_author_launcher_chain` above gives `claude-author` a live surface
     via `--plugin-dir`. This gives plain `claude` the same one, by pointing the
     installed-plugin record at the clone instead of a cache copy -- see
     `coordinator_core.install.live_plugin_registration` for the shape, the
     measurement, and why it is not a symlink.
 
     ADVISORY, matching every sibling phase in this block: a box whose plugin
-    record cannot be read still has a working `claude-doe`, so this prints and
+    record cannot be read still has a working `claude-author`, so this prints and
     returns rather than failing the install.
     """
     coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
@@ -3891,7 +3884,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     # BOTH names, same value, for the duration of the rename window. Exporting
     # only the retired name hands every child an environment where the variable
     # IS set and the new readers have stopped reading it -- a resolution failure
-    # several rungs downstream rather than at the pin. Requested by doe-claude-em
+    # several rungs downstream rather than at the pin. Requested by coordinator-content-repo-em
     # 2026-08-20: their PM ruled that DoE drops its CLAUDE_KLABAUTER_ROOT fallback, and
     # this dual export is what makes that removal safe rather than breaking
     # every DoE process launched through this forwarder.
@@ -3969,41 +3962,41 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     return False
 
 
-#: Dependency-ordered claude-doe launcher chain: (label, CLI relpath under
+#: Dependency-ordered claude-author launcher chain: (label, CLI relpath under
 #: coordinator/bin/ -- kept only for the on-disk-presence guard and the
 #: "Re-run manually" hint, never loaded or executed (call shape (b),
 #: docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
 #: claims.md) --, extra argv, the op module `run_op_main` calls in-process).
 #: Order matters -- the root pointer must exist before anything that
 #: resolves through it at RUNTIME (the wrapper's `--print-plugin-dir` reads
-#: it, transitively, via the doe-root ladder), and the wrapper/launcher (the
+#: it, transitively, via the content-root ladder), and the wrapper/launcher (the
 #: artifacts the shim's rc block invokes BY PATH) must be installed before
 #: the shim (which wires the rc/profile sentinel that dot-sources/invokes
 #: them). See docs/reference/coordinator-plugin-load-chain.md § 4 for the
 #: full artifact -> generator -> source-of-truth table this constant mirrors.
-_CLAUDE_DOE_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
-    ("doe-root pointer", "gen-doe-root-pointer.py", ("--graceful-skip-unresolved",),
-     "coordinator_core.ops.gen_doe_root_pointer"),
-    ("claude-doe wrapper", "install-claude-doe-wrapper.py", (),
-     "coordinator_core.ops.install_claude_doe_wrapper"),
-    ("claude-doe launcher", "gen-claude-doe-launcher.py", (),
-     "coordinator_core.ops.gen_claude_doe_launcher"),
-    ("claude-doe shim (rc/profile sentinel)", "gen-claude-doe-shim.py", (),
-     "coordinator_core.ops.gen_claude_doe_shim"),
+_CLAUDE_AUTHOR_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    ("content-root pointer", "gen-content-root-pointer.py", ("--graceful-skip-unresolved",),
+     "coordinator_core.ops.gen_content_root_pointer"),
+    ("claude-author wrapper", "install-claude-author-wrapper.py", (),
+     "coordinator_core.ops.install_claude_author_wrapper"),
+    ("claude-author launcher", "gen-claude-author-launcher.py", (),
+     "coordinator_core.ops.gen_claude_author_launcher"),
+    ("claude-author shim (rc/profile sentinel)", "gen-claude-author-shim.py", (),
+     "coordinator_core.ops.gen_claude_author_shim"),
 )
 
 
 def _doe_chain_default_wrapper_src(repo_root: Path) -> str:
-    """Port of install-claude-doe-wrapper.py's `_default_wrapper_src` one-
+    """Port of install-claude-author-wrapper.py's `_default_wrapper_src` one-
     liner (docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
     claims.md, call shape (b)): the wrapper it installs is always co-located
-    at `coordinator/bin/claude-doe.py`, no engine-root resolution needed."""
-    return str(repo_root / "coordinator" / "bin" / "claude-doe.py")
+    at `coordinator/bin/claude-author.py`, no engine-root resolution needed."""
+    return str(repo_root / "coordinator" / "bin" / "claude-author.py")
 
 
 def _doe_chain_data_root_helpers():
     """Scoped `coordinator/bin/lib` sys.path add to import `coordinator_data_root`,
-    mirroring `_mp_doe_root_pointer_rung`'s add-then-remove pattern above (this
+    mirroring `_mp_content_root_pointer_rung`'s add-then-remove pattern above (this
     module's own bootstrap-before-deps-provisioned discipline): the path is
     removed again once the import lands, never left shadowing anything setup.py
     itself imports."""
@@ -4023,25 +4016,25 @@ def _doe_chain_data_root_helpers():
 
 
 def _doe_chain_default_template_dir() -> str:
-    """Port of gen-claude-doe-launcher.py's `_default_template_dir` one-liner."""
+    """Port of gen-claude-author-launcher.py's `_default_template_dir` one-liner."""
     data_root, _data_file = _doe_chain_data_root_helpers()
     return os.path.join(str(data_root("templates")), "bin")
 
 
 def _doe_chain_shell_family_from_argv(extra_argv: "tuple[str, ...]") -> str:
-    """Port of gen-claude-doe-shim.py's `_shell_family_from_argv` one-liner."""
+    """Port of gen-claude-author-shim.py's `_shell_family_from_argv` one-liner."""
     for i, arg in enumerate(extra_argv):
         if arg == "--shell" and i + 1 < len(extra_argv):
             return extra_argv[i + 1]
-    from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+    from coordinator_core.ops.gen_claude_author_shim import _default_shell_family
 
     return _default_shell_family()
 
 
 def _doe_chain_default_template_path(shell_family: str) -> str:
-    """Port of gen-claude-doe-shim.py's `_default_template_path` one-liner."""
+    """Port of gen-claude-author-shim.py's `_default_template_path` one-liner."""
     _data_root, data_file = _doe_chain_data_root_helpers()
-    stem = "claude-doe-shim.ps1.tmpl" if shell_family == "powershell" else "claude-doe-shim.sh.tmpl"
+    stem = "claude-author-shim.ps1.tmpl" if shell_family == "powershell" else "claude-author-shim.sh.tmpl"
     return str(data_file("templates", "shell", stem))
 
 
@@ -4050,13 +4043,13 @@ def _doe_chain_build_argv(cli_name: str, extra_argv: "tuple[str, ...]", repo_roo
     each trampoline's own default-argv one-liner to the call site (spike
     verdict call shape (b)) instead of loading the trampoline file."""
     argv = list(extra_argv)
-    if cli_name == "install-claude-doe-wrapper.py" and "--wrapper-src" not in argv:
+    if cli_name == "install-claude-author-wrapper.py" and "--wrapper-src" not in argv:
         argv = argv + ["--wrapper-src", _doe_chain_default_wrapper_src(repo_root)]
-    elif cli_name == "gen-claude-doe-launcher.py" and (
+    elif cli_name == "gen-claude-author-launcher.py" and (
         "--template-dir" not in argv and "-h" not in argv and "--help" not in argv
     ):
         argv = argv + ["--template-dir", _doe_chain_default_template_dir()]
-    elif cli_name == "gen-claude-doe-shim.py" and (
+    elif cli_name == "gen-claude-author-shim.py" and (
         "--template" not in argv and "-h" not in argv and "--help" not in argv
     ):
         shell_family = _doe_chain_shell_family_from_argv(tuple(argv))
@@ -4065,16 +4058,16 @@ def _doe_chain_build_argv(cli_name: str, extra_argv: "tuple[str, ...]", repo_roo
 
 
 def _doe_dev_clone_root() -> Path | None:
-    """The DoE dev clone `repos.doe_claude` names, or None when it names nothing
+    """The DoE dev clone `repos.content_root` names, or None when it names nothing
     that carries the `.coordinator-dev-repo` sentinel. The sentinel is the
     fleet-wide dev-vs-OSS discriminant: a published coordinator-claude clone
     never carries it, and a path that does not exist cannot."""
-    raw = os.environ.get("REPO_DOE_CLAUDE", "")
+    raw = os.environ.get("REPO_CONTENT_ROOT", "")
     if not raw:
         try:
             from coordinator_core.machine_resolver import registry_get
 
-            raw = registry_get("repos.doe_claude") or ""
+            raw = registry_get("repos.content_root") or ""
         except Exception:  # noqa: BLE001 — unreadable registry reads as "no dev clone"
             raw = ""
     if not raw.strip():
@@ -4083,10 +4076,10 @@ def _doe_dev_clone_root() -> Path | None:
     return root if (root / ".coordinator-dev-repo").is_file() else None
 
 
-def _rendered_claude_doe_shims() -> list[Path]:
+def _rendered_claude_author_shims() -> list[Path]:
     """Every rendered `claude()` shim on this box. The rc block only sources a
     shim that exists, so these files are the whole of the hijack."""
-    from coordinator_core.ops.gen_claude_doe_shim import _resolve_claude_home_base, _shim_filename
+    from coordinator_core.ops.gen_claude_author_shim import _resolve_claude_home_base, _shim_filename
 
     shell_dir = Path(_resolve_claude_home_base()) / ".claude" / "shell"
     return [
@@ -4096,48 +4089,48 @@ def _rendered_claude_doe_shims() -> list[Path]:
     ]
 
 
-def _claude_doe_launcher_opted_in(args: Args) -> bool:
+def _claude_author_launcher_opted_in(args: Args) -> bool:
     """Whether this run may wire the `claude()` shim, removing any shim a
     non-opted box was given.
 
     The shim shadows the operator's bare `claude`, so it is wired only on a
-    box that CHOSE it: `--with-claude-doe-launcher`, or a shim already present
+    box that CHOSE it: `--with-claude-author-launcher`, or a shim already present
     from an earlier choice — and in both cases only beside a real DoE dev
     clone. A shim on a box with no dev clone was never chosen (a consumer
     install used to receive one) and is deleted, which returns `claude` to the
     real binary on the next shell start. The rc block stays: it sources the
     shim only if the file exists, so it is inert without it."""
-    shims = _rendered_claude_doe_shims()
+    shims = _rendered_claude_author_shims()
     if _doe_dev_clone_root() is None:
         for shim in shims:
             try:
                 shim.unlink()
-                print(f"REMOVED [claude-doe-chain] {shim} — `claude` is the real binary again from the next shell")
+                print(f"REMOVED [claude-author-chain] {shim} — `claude` is the real binary again from the next shell")
             except OSError as exc:
                 print(f"[ADVISORY] could not remove {shim} ({exc}); `claude --vanilla` bypasses it.", file=sys.stderr)
-        if args.with_claude_doe_launcher:
+        if args.with_claude_author_launcher:
             print(
-                "[ADVISORY] --with-claude-doe-launcher needs repos.doe_claude to name a DoE dev clone "
+                "[ADVISORY] --with-claude-author-launcher needs repos.content_root to name a DoE dev clone "
                 "(one carrying .coordinator-dev-repo); launcher not wired.",
                 file=sys.stderr,
             )
         else:
-            print("SKIP [claude-doe-chain] not applicable — the plugin install needs none of it")
+            print("SKIP [claude-author-chain] not applicable — the plugin install needs none of it")
         return False
-    if not (args.with_claude_doe_launcher or shims):
-        print("SKIP [claude-doe-chain] not opted in (--with-claude-doe-launcher wires the dev-clone `claude()` shim)")
+    if not (args.with_claude_author_launcher or shims):
+        print("SKIP [claude-author-chain] not opted in (--with-claude-author-launcher wires the dev-clone `claude()` shim)")
         return False
     return True
 
 
-def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Best-effort install-chain step: runs the four `coordinator/bin/*claude-doe*`
-    generators that render/wire the interactive `claude-doe` launch chain
-    (`.doe-root` pointer -> `claude-doe` wrapper -> `claude-doe.{cmd,ps1}`
+def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: runs the four `coordinator/bin/*claude-author*`
+    generators that render/wire the interactive `claude-author` launch chain
+    (`.coordinator-content-root` pointer -> `claude-author` wrapper -> `claude-author.{cmd,ps1}`
     launcher -> the rc/profile sentinel that dot-sources/invokes them --
     see docs/reference/coordinator-plugin-load-chain.md § 4).
 
-    Root-cause fix, 2026-08-15 (sizing dlv-claude-doe-launcher-generators-are-
+    Root-cause fix, 2026-08-15 (sizing dlv-claude-author-launcher-generators-are-
     absen-bb685e): `scripts/setup.py`/the manifest never called any of these
     four generators, so a fresh clean install left claude-klabauter installed and
     coordinator SILENTLY absent from every session -- no doctrine, no hooks,
@@ -4167,9 +4160,9 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
     this function.
     """
     print()
-    print("--- Install: claude-doe launcher chain (coordinator/bin/*claude-doe*) ---")
+    print("--- Install: claude-author launcher chain (coordinator/bin/*claude-author*) ---")
 
-    if not _claude_doe_launcher_opted_in(args):
+    if not _claude_author_launcher_opted_in(args):
         return
 
     # In-process, not four subprocess.run children (spike verdict, call shape
@@ -4183,7 +4176,7 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
         "CLAUDE_KLABAUTER_ROOT": str(claude_klabauter_root_resolved),
         "COORDINATOR_ENGINE_ROOT": str(claude_klabauter_root_resolved),
     }):
-        for label, cli_name, extra_argv, op_module in _CLAUDE_DOE_CHAIN_STEPS:
+        for label, cli_name, extra_argv, op_module in _CLAUDE_AUTHOR_CHAIN_STEPS:
             cli = repo_root / "coordinator" / "bin" / cli_name
             if not cli.is_file():
                 any_failed = True
@@ -4220,8 +4213,8 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
                 continue
 
             output = (out_buf.getvalue() + err_buf.getvalue()).strip()
-            # `gen-doe-root-pointer.py
-            # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.doe_claude
+            # `gen-content-root-pointer.py
+            # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.content_root
             # not yet resolved), so returncode alone can't distinguish "wrote it"
             # from "gave up". Detect the `<label>: skipped` contract row and treat
             # it as its own ADVISORY outcome — never PASS — with the explanation
@@ -4231,32 +4224,32 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
             skipped = any(
                 line.strip().endswith(": skipped") or ": skipped (" in line
                 for line in output.splitlines()
-                if line.strip().startswith("doe_root_pointer:")
+                if line.strip().startswith("content_root_pointer:")
             )
             if not args.agent_mode and output and not skipped:
                 print(output)
             if skipped:
                 # NOT APPLICABLE, not incomplete. This whole chain wires the
                 # dev-clone install mode: every step of it exists to point a
-                # `claude()` shell function at a DoE-claude working clone via
-                # `.doe-root`. `docs/safety.md` rows 4 and 5 already say so --
+                # `claude()` shell function at a coordinator-content-repo working clone via
+                # `.coordinator-content-root`. `docs/safety.md` rows 4 and 5 already say so --
                 # "only present in the maximalist/dev install mode", "not the
                 # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
                 # coordinator-claude and claude-klabauter installs never take the
-                # `--doe-root` seam at all.
+                # `--content-root` seam at all.
                 #
-                # An unresolved `repos.doe_claude` IS that discriminant: there is
+                # An unresolved `repos.content_root` IS that discriminant: there is
                 # no DoE clone to point at, so the remaining three generators have
                 # nothing to render and the marketplace plugin loads without them.
                 # Reporting it as an incomplete chain told a correctly-installed
                 # OSS box that coordinator would not load -- shouting a dev-mode
                 # requirement at an install that does not have one, which a Linux
                 # cloud dogfood read as a hard break and worked around by hand.
-                print(f"SKIP [claude-doe-chain] {label} — dev-clone mode not configured on this box")
+                print(f"SKIP [claude-author-chain] {label} — dev-clone mode not configured on this box")
                 print(
-                    "SKIP [claude-doe-chain] remaining launcher-chain steps — the claude() shim "
+                    "SKIP [claude-author-chain] remaining launcher-chain steps — the claude() shim "
                     "wires the dev-clone install mode only; the marketplace plugin install needs "
-                    "none of it. To opt in: machine-local set repos.doe_claude <path>  then re-run.",
+                    "none of it. To opt in: machine-local set repos.content_root <path>  then re-run.",
                 )
                 return
             if code != 0:
@@ -4268,11 +4261,11 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
                 )
                 print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
                 continue
-            print(f"PASS [claude-doe-chain] {label}")
+            print(f"PASS [claude-author-chain] {label}")
 
     if any_failed:
         print(
-            "[ADVISORY] claude-doe launcher chain incomplete — see the per-step ADVISORY lines above. "
+            "[ADVISORY] claude-author launcher chain incomplete — see the per-step ADVISORY lines above. "
             "A session started on this box may look like vanilla Claude Code with no error.",
             file=sys.stderr,
         )
@@ -4665,110 +4658,6 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     register_host_sampler_task(repo_root)
 
 
-def _seed_fleet_env_root_from_klabauter(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """C4: seed `fleet_env.root` from the already-registered `repos.claude_klabauter`
-    (`register_claude_klabauter_root` ran earlier in this same `main()` pass — see call order
-    in `main`) so the fleet environment lands at the contract's documented location
-    (`<klabauter-root>/.fleet-env`, `docs/reference/fleet-shared-environment-contract.md`
-    § "The environment's location") without requiring a hand-run `machine-local set`.
-
-    Seeds, never overwrites: an operator-set (or previously-seeded) `fleet_env.root`
-    is left untouched — this function only fills the key when it reads absent, which
-    is the normal day-one state this contract already names (§ "The day-one absent-key
-    property"). No new fallback rung: `coordinator_core/install/fleet_env_resolve.py`'s
-    ladder is unchanged; this only populates rung 1's registry candidate before that
-    ladder ever runs, so it need not fall to rung 2 (`<settings-home>/.fleet-env`).
-
-    ADVISORY, non-fatal (same shape as `install_machine_identity`) — a missing
-    `machine-local` CLI or an unregistered `repos.claude_klabauter` (no discoverable
-    klabauter checkout on this box) both leave the key unset rather than erroring;
-    `ensure_fleet_env`'s own C5 fallback still resolves a usable root in that case.
-    """
-    from coordinator_core.install._shared import resolve_machine_local_cli
-    from coordinator_core.machine_resolver import registry_get
-
-    if registry_get("fleet_env.root"):
-        return  # operator-set or already seeded — never overwritten here.
-    klabauter_root = registry_get("repos.claude_klabauter")
-    if not klabauter_root:
-        return  # no discoverable klabauter checkout yet — nothing to seed from.
-
-    fleet_env_root = str(Path(klabauter_root) / ".fleet-env")
-
-    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
-    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
-    machine_local_argv = resolve_machine_local_cli(str(plugin_root) if plugin_root else None)
-    if machine_local_argv is None:
-        print("[ADVISORY] machine-local not found — cannot seed fleet_env.root.")
-        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}")
-        return
-
-    try:
-        proc = subprocess.run(
-            machine_local_argv + ["set", "fleet_env.root", fleet_env_root],
-            timeout=15,
-            # See register_claude_klabauter_root for why a std-stream kwarg is mandatory here.
-            capture_output=True,
-            text=True,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[ADVISORY] fleet_env.root seeding failed to launch: {exc}", file=sys.stderr)
-        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}", file=sys.stderr)
-        return
-    if proc.returncode != 0:
-        print(f"[ADVISORY] fleet_env.root seeding failed (exit {proc.returncode}).", file=sys.stderr)
-        _print_child_detail(proc)
-        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}", file=sys.stderr)
-        return
-    print(f"PASS [fleet-env] seeded fleet_env.root = {fleet_env_root} (from repos.claude_klabauter)")
-
-
-def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Install-chain step: provision the fleet shared Python environment
-    (`coordinator_core.install.fleet_env.ensure_fleet_env`, C4/C6).
-
-    Seeds `fleet_env.root` from `repos.claude_klabauter` first (C4 —
-    `_seed_fleet_env_root_from_klabauter`), so a fresh install lands the
-    environment at the contract's documented location on the FIRST run
-    instead of falling to C5's settings-home rung and requiring a hand
-    fix-up. Runs before `ensure_fleet_env()` unconditionally — seeding is a
-    fast registry read/write, never gated behind the provisioning outcome.
-
-    ADVISORY, non-fatal (mirrors
-    `install_host_sampler_task`'s shape) — the environment is multi-GB and this
-    step can hit no network, no disk, or a read-only install location; a
-    provisioning failure must fall through to a printed [ADVISORY], never
-    fail the rest of setup. Re-run remediation names a runnable script
-    (cold-path convention), not a slash command, since no session exists at
-    this point in the install chain.
-    """
-    print()
-    print("--- Install: fleet shared Python environment ---")
-    print(
-        "NOTICE: downloads roughly 2 GB of packages (torch, transformers, CUDA wheels) and can take "
-        "10+ minutes with little output.",
-        flush=True,
-    )
-
-    if str(claude_klabauter_root_resolved) not in sys.path:
-        sys.path.insert(0, str(claude_klabauter_root_resolved))
-    from coordinator_core.install.fleet_env import FleetEnvError, ensure_fleet_env
-
-    _seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root_resolved, args)
-
-    try:
-        status = ensure_fleet_env()
-    except FleetEnvError as exc:
-        print(f"[ADVISORY] fleet environment provisioning failed: {exc}", file=sys.stderr)
-        print(
-            f"  Re-run manually: {sys.executable} -m coordinator_core.install.fleet_env",
-            file=sys.stderr,
-        )
-        return
-    print(f"fleet shared environment: {status}")
-
-
 def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwarders_failed: bool = False) -> None:
     """Install-chain step: report whether `<settings-home>` is actually
     complete, not merely whether each of its individual population steps
@@ -5021,7 +4910,7 @@ def main(argv: list[str]) -> int:
         # coordinator_core/install/tests/test_door_bare_name_ordering.py.
         forwarders_failed = install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
-        install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        install_claude_author_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
@@ -5029,11 +4918,6 @@ def main(argv: list[str]) -> int:
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
-        if args.with_fleet_env:
-            install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)
-        else:
-            print()
-            print("[SKIP] fleet shared environment (multi-GB ML/RAG stack) -- pass --with-fleet-env or set COORDINATOR_FLEET_ENV=1 to build it.")
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
 
     print()

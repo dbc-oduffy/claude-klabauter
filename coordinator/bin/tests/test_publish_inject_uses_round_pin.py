@@ -11,7 +11,7 @@ called `_git_materialize_ref(git_root)` with the default ref.
 The consequence was not merely a wasted ~40s full-tree extraction per round.
 The injected CI-harness payload shipped from a LATER commit than the sha the
 round pinned, printed as `Provenance: <root> shipped from <sha>`, and promised
-to doe-claude-em as reproducible (C6). One publish, two commits, one provenance
+to coordinator-content-repo-em as reproducible (C6). One publish, two commits, one provenance
 line. Observed 2026-08-19: three distinct SHAs materialized for a single git
 toplevel inside one round.
 

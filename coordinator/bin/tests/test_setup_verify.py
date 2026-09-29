@@ -1,6 +1,6 @@
 """test_setup_verify — pytest tests for coordinator/bin/setup-verify.py.
 
-Spec backlink: DoE-claude coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6
+Spec backlink: coordinator-content-repo coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6
   Probes 2/3) — this CLI is the ported destination for that skill's genuine
   imperative bash logic (layout detection, visited-set init, paired-flag
   validation, hooks.json presence check, SKILL.md frontmatter parse,
@@ -192,7 +192,7 @@ def _make_plugin_root_with_bootstrap_exec_hooks(
     """hooks.json in the BOOTSTRAP-EXEC shape: `command` is the bare interpreter
     and the real script path rides in `args[]`.
 
-    This is the shape DoE-claude's hooks.json actually carries. Scanning
+    This is the shape coordinator-content-repo's hooks.json actually carries. Scanning
     `command` alone matched zero of its 27 entries on machine-b 2026-08-17 and
     the probe reported "verified nothing" — a second forever-blind pass, arriving
     through a different door than the extension-alternation one the module's

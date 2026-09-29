@@ -2015,7 +2015,7 @@ def _run_probe_launch_chain() -> _ProbeResult:
        is plain claude.exe.
     2. WRONG-DIALECT shim — a `.ps1` shim holding bash bytes. `maximalist` hardcoded
        the `.sh` template while the destination filename follows the shell family, so
-       a native-Windows install wrote bash into `claude-doe-shim.ps1`. The profile
+       a native-Windows install wrote bash into `claude-author-shim.ps1`. The profile
        block is present and correct in this shape, which is what makes it nastier
        than (1): every other check reports a healthy install.
 
@@ -2042,7 +2042,7 @@ def _run_probe_launch_chain() -> _ProbeResult:
     """
     shell_dir = _launch_chain_claude_home() / ".claude" / "shell"
     is_windows = os.name == "nt"
-    shim = shell_dir / ("claude-doe-shim.ps1" if is_windows else "claude-doe-shim.sh")
+    shim = shell_dir / ("claude-author-shim.ps1" if is_windows else "claude-author-shim.sh")
     data: dict[str, Any] = {"shim_path": str(shim), "platform": os.name}
 
     try:
@@ -2067,31 +2067,31 @@ def _run_probe_launch_chain() -> _ProbeResult:
         )
 
     try:
-        from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-        doe_root = coordinator_doe_root()
+        content_root = coordinator_content_root()
     except Exception:
-        doe_root = None
-    if not doe_root:
+        content_root = None
+    if not content_root:
         return _ProbeResult(
             probe=_LAUNCH_CHAIN_PROBE,
             status=_INFO,
             detail="no DoE clone resolves — not the source-clone launch shape",
             remediation=(
-                "Optional: check out the DoE-claude sibling repo (or set REPO_DOE_CLAUDE) "
+                "Optional: check out the coordinator-content-repo sibling repo (or set REPO_CONTENT_ROOT) "
                 "to enable the launch-chain watch on this machine."
             ),
             required=False,
             skipped=True,
             data=data,
         )
-    data["doe_root"] = str(doe_root)
+    data["content_root"] = str(content_root)
 
     fix = (
-        f"python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell "
+        f"python3 <engine-clone>/coordinator/bin/gen-claude-author-shim.py --shell "
         f"{'powershell' if is_windows else 'bash'} --template "
-        f"{doe_root}/coordinator/templates/shell/"
-        f"claude-doe-shim.{'ps1' if is_windows else 'sh'}.tmpl"
+        f"{content_root}/coordinator/templates/shell/"
+        f"claude-author-shim.{'ps1' if is_windows else 'sh'}.tmpl"
     )
 
     if not shim.is_file():
@@ -2195,7 +2195,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
     `_write_doctor_sentinel`'s `vendor_drift` sentinel key.
 
     Spec backlink: coordinator_core/frontmatter/schema_drift_watch.py module docstring;
-    cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md.
+    cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md.
     """
     try:
         if claude_klabauter_root is None:
@@ -2254,7 +2254,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_INFO,
                 detail=summary,
                 remediation=(
-                    "Optional: check out the DoE-claude sibling repo (or set REPO_DOE_CLAUDE) "
+                    "Optional: check out the coordinator-content-repo sibling repo (or set REPO_CONTENT_ROOT) "
                     "to enable the vendored-schema drift watch on this machine."
                 ),
                 required=False,
@@ -2290,7 +2290,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_DEGRADED,
                 detail=summary,
                 remediation=(
-                    "Vendored-schema drift is UNKNOWN, not clean. Verify the DoE-claude "
+                    "Vendored-schema drift is UNKNOWN, not clean. Verify the coordinator-content-repo "
                     "clone is a readable git repo whose HEAD carries coordinator/schemas/, "
                     "then re-run the drift probe."
                 ),
@@ -3127,7 +3127,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
       - Does NOT write the pointer file — read-only diagnostic. On a registry-resolved
         (warm) box the writer is `gen-claude-klabauter-live-root-pointer.py`; on a cold box with no
         registry to resolve from, the cold-path-valid writer is
-        `scripts/setup.py --claude-klabauter-live-root <path>` (DoE-claude C1b names the warm writer;
+        `scripts/setup.py --claude-klabauter-live-root <path>` (coordinator-content-repo C1b names the warm writer;
         this plan's C2 supplies the cold one).
       - Does NOT emit BROKEN/hard-fail on absence on a warm box — a missing pointer
         degrades per-invoke latency there, it does not break correctness (the ladder
@@ -5827,7 +5827,7 @@ def _manifest_broken_envelope(detail: str, remediation: str) -> dict[str, Any]:
 # Health sentinel — state/doctor-last-run.json
 #
 # Relocated from skills/doctor/SKILL.md Step 1.5 (that SKILL.md step is being
-# retired) so DoE-claude's /workday-start consumer (coordinator_core.ops.
+# retired) so coordinator-content-repo's /workday-start consumer (coordinator_core.ops.
 # check_claude_klabauter_doctor_sentinel) keeps seeing a fresh sentinel.
 #
 # Two decisions already made (do not re-decide):
@@ -5976,8 +5976,8 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
     on an older sentinel already on disk.
 
     `vendor_drift` is exactly such an additive key (2026-07-26, cross-repo
-    ratification — see cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
-    It is a DOCUMENTED PUBLIC key — external consumers (DoE-claude) MAY gate a
+    ratification — see cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md).
+    It is a DOCUMENTED PUBLIC key — external consumers (coordinator-content-repo) MAY gate a
     commit-time check on it directly, unlike the rest of this sentinel's contents
     which are claude-klabauter-internal cadence output. See _sentinel_vendor_drift's docstring
     for its exact shape and the absent-probe-row UNKNOWN default, and

@@ -39,30 +39,30 @@ _mod = _load_module()
 # ---------------------------------------------------------------------------
 
 _GROUPS = {
-    "X:/claude-klabauter": [
+    "C:/claude-klabauter": [
         "claude-klabauter-publish-repo-toplevel",
         "claude-klabauter-bin",
         "claude-klabauter",
     ],
-    "X:/other-mirror": ["other-thing"],
+    "C:/other-mirror": ["other-thing"],
 }
 
 
 def test_selector_accepts_worktree_root_verbatim():
-    assert _mod._select_mirror("X:/claude-klabauter", _GROUPS) == "X:/claude-klabauter"
+    assert _mod._select_mirror("C:/claude-klabauter", _GROUPS) == "C:/claude-klabauter"
 
 
 def test_selector_accepts_bare_mirror_name():
-    assert _mod._select_mirror("claude-klabauter", _GROUPS) == "X:/claude-klabauter"
+    assert _mod._select_mirror("claude-klabauter", _GROUPS) == "C:/claude-klabauter"
 
 
 def test_selector_accepts_underscore_separator_form():
-    assert _mod._select_mirror("claude_klabauter", _GROUPS) == "X:/claude-klabauter"
+    assert _mod._select_mirror("claude_klabauter", _GROUPS) == "C:/claude-klabauter"
 
 
 def test_selector_accepts_any_member_target_name():
     """A caller who knows only a row name must not have to learn the path."""
-    assert _mod._select_mirror("claude-klabauter-bin", _GROUPS) == "X:/claude-klabauter"
+    assert _mod._select_mirror("claude-klabauter-bin", _GROUPS) == "C:/claude-klabauter"
 
 
 def test_selector_unknown_returns_none():
@@ -99,9 +99,9 @@ class _RecordingLockCtx:
 
 
 _ROW_DESTS = {
-    "claude-klabauter-publish-repo-toplevel": "X:/claude-klabauter",
-    "claude-klabauter-bin": "X:/claude-klabauter/bin",
-    "claude-klabauter": "X:/claude-klabauter/coordinator",
+    "claude-klabauter-publish-repo-toplevel": "C:/claude-klabauter",
+    "claude-klabauter-bin": "C:/claude-klabauter/bin",
+    "claude-klabauter": "C:/claude-klabauter/coordinator",
 }
 _ROW_FILES = {
     "claude-klabauter-publish-repo-toplevel": "README.md",
@@ -119,10 +119,10 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         "claude-klabauter",
     ]
     monkeypatch.setattr(
-        _mod, "_mirror_groups", lambda root, target_filter="": {"X:/claude-klabauter": targets}
+        _mod, "_mirror_groups", lambda root, target_filter="": {"C:/claude-klabauter": targets}
     )
-    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
-    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "C:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "C:/claude-klabauter")
     monkeypatch.setattr(
         _mod._round,
         "_round_held_lock",
@@ -148,7 +148,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
     # Nested dests, like the real mirror: the toplevel row's dest IS the repo
     # root, so only deepest-prefix attribution keeps the other rows' files out
     # of its scan.
-    monkeypatch.setattr(_mod, "_row_paths", lambda r, target_filter="": {n: ("X:/src", _ROW_DESTS[n]) for n in targets})
+    monkeypatch.setattr(_mod, "_row_paths", lambda r, target_filter="": {n: ("C:/src", _ROW_DESTS[n]) for n in targets})
     monkeypatch.setattr(_mod._round, "_resolve_central_state", lambda: None)
 
     publish_calls = []
@@ -483,7 +483,7 @@ class _TimeoutLockCtx:
 
     def __enter__(self):
         raise _mod._round._RoundLockTimeout(
-            "Could not acquire lock for X:/claude-klabauter within 0.0s "
+            "Could not acquire lock for C:/claude-klabauter within 0.0s "
             "(held by: pid=4242 holder='peer:percolate-round' "
             "acquired_at=2026-08-30T00:00:00+00:00)"
         )
@@ -506,10 +506,10 @@ def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypat
         "claude-klabauter",
     ]
     monkeypatch.setattr(
-        _mod, "_mirror_groups", lambda root, target_filter="": {"X:/claude-klabauter": targets}
+        _mod, "_mirror_groups", lambda root, target_filter="": {"C:/claude-klabauter": targets}
     )
-    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
-    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "C:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "C:/claude-klabauter")
     monkeypatch.setattr(
         _mod._round,
         "_round_held_lock",
@@ -533,7 +533,7 @@ def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypat
     assert rc == _mod._round._EXIT_LOCK_BUSY
     assert elapsed < 1.0
     err = capsys.readouterr().err
-    assert "X:/claude-klabauter" in err
+    assert "C:/claude-klabauter" in err
     assert "pid=4242" in err
 
 
@@ -619,5 +619,5 @@ def test_each_row_scans_the_dest_copies_of_its_own_manifest_files(tmp_path, monk
         ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
     )
 
-    root = Path(os.path.realpath("X:/claude-klabauter"))
+    root = Path(os.path.realpath("C:/claude-klabauter"))
     assert scanned == {t: [str(root / _ROW_FILES[t])] for t in targets}, scanned

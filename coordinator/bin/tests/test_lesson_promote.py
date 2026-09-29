@@ -11,7 +11,7 @@ Converted from a hand-rolled unittest runner to collectable pytest functions.
 
 Run: python3 -m pytest coordinator/bin/tests/test_lesson_promote.py
 
-Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C4
+Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567b § C4
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ _loader.exec_module(_cli_mod)
 
 # ---------------------------------------------------------------------------
 # Isolation — every test in this file drives main() through a mocked
-# _cc_route, but main()'s klabauter#33 DOE_ROOT-gate (coordinator-lesson-
+# _cc_route, but main()'s klabauter#33 CONTENT_ROOT-gate (coordinator-lesson-
 # promote.py, immediately above the _cc_route("queue.promote", ...) call)
 # fires on ambient env alone, before _cc_route is ever reached, and routes
 # straight to the real legacy write path instead. None of the tests below
@@ -63,8 +63,8 @@ _loader.exec_module(_cli_mod)
 @pytest.fixture(autouse=True)
 def _clear_ambient_resolution_env(monkeypatch):
     for var in (
-        "DOE_ROOT",
-        "REPO_DOE_CLAUDE",
+        "CONTENT_ROOT",
+        "REPO_CONTENT_ROOT",
         _cli_mod._OUTBOX_ROOT_ENV,
         _cli_mod._WIKI_ROOT_ENV,
     ):
@@ -100,7 +100,7 @@ def test_native_out_path_printed():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", captured_out),
     ):
@@ -121,7 +121,7 @@ def test_native_route_op_is_queue_promote():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
@@ -150,33 +150,33 @@ def test_native_from_repo_explicit_in_params():
     )
 
 
-def test_native_doe_root_explicit_in_params():
-    """claude-klabauter#33: the CLI's own resolved doe_root() is passed explicitly
+def test_native_content_root_explicit_in_params():
+    """claude-klabauter#33: the CLI's own resolved content_root() is passed explicitly
     in params so the native queue.promote op's write lands under the SAME
-    DoE-claude root --target-wiki validation already checked, instead of the op
-    re-resolving on its own (which has no DOE_ROOT rung — see
-    coordinator_core.ops.coordinator_doe_root's docstring)."""
+    coordinator-content-repo root --target-wiki validation already checked, instead of the op
+    re-resolving on its own (which has no CONTENT_ROOT rung — see
+    coordinator_core.ops.coordinator_content_root's docstring)."""
     fake_result = {"out_path": "/fake/path.yaml"}
 
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
-        unittest.mock.patch.object(_cli_mod, "doe_root", return_value="/fake/resolved-doe-root"),
+        unittest.mock.patch.object(_cli_mod, "content_root", return_value="/fake/resolved-content-root"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
         _cli_mod.main(_MINIMAL_ARGV)
 
     params = mock_route.call_args[0][1]
-    assert params.get("doe_root") == "/fake/resolved-doe-root", (
-        "the CLI-resolved doe_root() value must be threaded into queue.promote's params"
+    assert params.get("content_root") == "/fake/resolved-content-root", (
+        "the CLI-resolved content_root() value must be threaded into queue.promote's params"
     )
 
 
-def test_native_doe_root_omitted_from_params_when_unresolvable():
-    """claude-klabauter#33: when the CLI's own doe_root() is unresolvable, the
-    'doe_root' key is omitted from params entirely (never a garbage/None value)
+def test_native_content_root_omitted_from_params_when_unresolvable():
+    """claude-klabauter#33: when the CLI's own content_root() is unresolvable, the
+    'content_root' key is omitted from params entirely (never a garbage/None value)
     — the native op falls back to its own resolution, which then reports the
     skip through the existing {skipped: True, reason} contract."""
     fake_result = {"out_path": "/fake/path.yaml"}
@@ -187,16 +187,16 @@ def test_native_doe_root_omitted_from_params_when_unresolvable():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
-        unittest.mock.patch.object(_cli_mod, "doe_root", side_effect=_raise_unresolvable),
+        unittest.mock.patch.object(_cli_mod, "content_root", side_effect=_raise_unresolvable),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
         _cli_mod.main(_MINIMAL_ARGV)
 
     params = mock_route.call_args[0][1]
-    assert "doe_root" not in params, (
-        "doe_root must be OMITTED (not set to None/garbage) when unresolvable"
+    assert "content_root" not in params, (
+        "content_root must be OMITTED (not set to None/garbage) when unresolvable"
     )
 
 
@@ -207,7 +207,7 @@ def test_native_success_echoes_write_destination():
     fake_result = {
         "out_path": "/fake/doe/state/lessons-outbox/2026-09-19T00-00-00Z-x.yaml",
         "entry_id": "fake-id",
-        "from_repo": "doe-claude",
+        "from_repo": "coordinator-content-repo",
         "change_kind": "doctrine-edit",
         "target_wiki": "docs/wiki/test-wiki.md",
     }
@@ -216,7 +216,7 @@ def test_native_success_echoes_write_destination():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", captured_out),
     ):
@@ -229,9 +229,9 @@ def test_native_success_echoes_write_destination():
     )
 
 
-def test_native_skip_remediation_names_doe_root_and_machine_local():
+def test_native_skip_remediation_names_content_root_and_machine_local():
     """claude-klabauter#33: a native skipped:true result must print a
-    Remediation block naming both levers (machine-local + DOE_ROOT), matching
+    Remediation block naming both levers (machine-local + CONTENT_ROOT), matching
     the legacy_fn / --target-wiki validation skip messages — previously this
     branch printed only a bare warn line with no remediation guidance at all."""
     skipped_result = {"skipped": True, "reason": "doe root unresolvable"}
@@ -240,7 +240,7 @@ def test_native_skip_remediation_names_doe_root_and_machine_local():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", captured_err),
     ):
@@ -249,8 +249,8 @@ def test_native_skip_remediation_names_doe_root_and_machine_local():
     assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
     err = captured_err.getvalue()
     assert "Remediation:" in err, "native skip must print a Remediation block"
-    assert "machine-local set repos.doe_claude" in err
-    assert "DOE_ROOT=" in err
+    assert "machine-local set repos.content_root" in err
+    assert "CONTENT_ROOT=" in err
 
 
 def test_native_params_contain_required_fields():
@@ -259,7 +259,7 @@ def test_native_params_contain_required_fields():
     target_wiki must be a REAL entry in the central wiki inventory: change_kind
     "wiki-append" is one of the WIKI_TARGETING_CHANGE_KINDS (2026-07-23 A7/A9 scope
     fix), so main() runs `_validate_target_wiki` against the actual resolved
-    DoE-claude wiki inventory (unmocked here) before ever reaching `_cc_route` —
+    coordinator-content-repo wiki inventory (unmocked here) before ever reaching `_cc_route` —
     a fabricated path like the prior "docs/wiki/target.md" is rejected with exit 2
     (argparse SystemExit), never reaching the params assertions below. computed-
     skills.md is the same stable, long-lived doc the sibling test
@@ -279,7 +279,7 @@ def test_native_params_contain_required_fields():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
@@ -314,7 +314,7 @@ def test_legacy_fn_called_when_seam_absent(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -340,7 +340,7 @@ def test_legacy_fn_returns_int_exit_code(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -365,7 +365,7 @@ def test_legacy_fn_outbox_schema(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -420,7 +420,7 @@ def test_skipped_emits_warn_to_stderr():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", captured_err),
         unittest.mock.patch("sys.stdout", io.StringIO()),
@@ -447,7 +447,7 @@ def test_skipped_no_path_on_stdout():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", io.StringIO()),
         unittest.mock.patch("sys.stdout", captured_out),
@@ -468,7 +468,7 @@ def test_skipped_without_reason_key():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", captured_err),
         unittest.mock.patch("sys.stdout", io.StringIO()),
@@ -479,8 +479,8 @@ def test_skipped_without_reason_key():
     # Assert the default fallback string is
     # used when reason key is absent; "warn:" alone is nearly unconditional.
     # C1 (2026-07-06): lesson-promote now routes central writes to DoE, so the
-    # default fallback is "DOE_ROOT unresolvable" (was "CLAUDE_KLABAUTER_ROOT unresolvable").
-    assert "DOE_ROOT unresolvable" in captured_err.getvalue(), (
+    # default fallback is "CONTENT_ROOT unresolvable" (was "CLAUDE_KLABAUTER_ROOT unresolvable").
+    assert "CONTENT_ROOT unresolvable" in captured_err.getvalue(), (
         "default fallback string must appear when reason key absent"
     )
 
@@ -561,38 +561,38 @@ def test_no_retired_transport():
 
 
 class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
-    """klabauter#33's DOE_ROOT-gate (immediately above the _cc_route("queue.promote",
+    """klabauter#33's CONTENT_ROOT-gate (immediately above the _cc_route("queue.promote",
     ...) call in main()) reads os.environ directly and, when it fires, calls
     legacy_fn() straight through, skipping _cc_route entirely. Every test in this
     module mocks _cc_route but none of them controlled that env before
-    _clear_ambient_resolution_env existed, so a DOE_ROOT already present in the
-    process this suite runs under (a live DoE-claude dev shell, say) would fire
+    _clear_ambient_resolution_env existed, so a CONTENT_ROOT already present in the
+    process this suite runs under (a live coordinator-content-repo dev shell, say) would fire
     the gate ahead of any test's own mocking and land a real write.
 
     The class-scoped fixture below stands in for that inherited-before-pytest
     state: class scope is instantiated ahead of the module's function-scoped
     _clear_ambient_resolution_env, so by the time the test body (and that
-    isolation fixture) run, DOE_ROOT is already sitting in os.environ exactly as
+    isolation fixture) run, CONTENT_ROOT is already sitting in os.environ exactly as
     it would be if the invoking shell had exported it.
     """
 
     @classmethod
     @pytest.fixture(scope="class", autouse=True)
     def _inherited_shell_export(cls, tmp_path_factory):
-        ambient_root = tmp_path_factory.mktemp("ambient-doe-claude")
-        prior_doe_root = os.environ.get("DOE_ROOT")
-        prior_repo_doe_claude = os.environ.get("REPO_DOE_CLAUDE")
-        os.environ["DOE_ROOT"] = str(ambient_root)
-        os.environ.pop("REPO_DOE_CLAUDE", None)
+        ambient_root = tmp_path_factory.mktemp("ambient-coordinator-content-repo")
+        prior_content_root = os.environ.get("CONTENT_ROOT")
+        prior_repo_content_root = os.environ.get("REPO_CONTENT_ROOT")
+        os.environ["CONTENT_ROOT"] = str(ambient_root)
+        os.environ.pop("REPO_CONTENT_ROOT", None)
         try:
             yield ambient_root
         finally:
-            if prior_doe_root is None:
-                os.environ.pop("DOE_ROOT", None)
+            if prior_content_root is None:
+                os.environ.pop("CONTENT_ROOT", None)
             else:
-                os.environ["DOE_ROOT"] = prior_doe_root
-            if prior_repo_doe_claude is not None:
-                os.environ["REPO_DOE_CLAUDE"] = prior_repo_doe_claude
+                os.environ["CONTENT_ROOT"] = prior_content_root
+            if prior_repo_content_root is not None:
+                os.environ["REPO_CONTENT_ROOT"] = prior_repo_content_root
 
     def test_route_is_still_exercised(self, _inherited_shell_export):
         fake_result = {"out_path": "/fake/path.yaml"}
@@ -600,7 +600,7 @@ class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
         with (
             unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
             unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-            unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+            unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
             unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
             unittest.mock.patch("sys.stdout", captured_out),
         ):
@@ -614,7 +614,7 @@ class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
         outbox = _inherited_shell_export / "state" / "lessons-outbox"
         written = list(outbox.glob("*.yaml")) if outbox.is_dir() else []
         assert written == [], (
-            f"no write may land under an inherited-ambient DOE_ROOT; found {written}"
+            f"no write may land under an inherited-ambient CONTENT_ROOT; found {written}"
         )
 
 
@@ -649,7 +649,7 @@ def test_nested_wiki_page_validates_as_target(tmp_path, monkeypatch):
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
@@ -683,7 +683,7 @@ def test_allow_new_wiki_accepted_with_wiki_append(tmp_path, monkeypatch):
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):

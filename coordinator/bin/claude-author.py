@@ -2,19 +2,19 @@
 # Unix shebang — load-bearing, not decoration. Unlike its peers in this
 # directory, this file is installed by BYTE COPY (shutil.copyfile via
 # coordinator_core.install.wrapper_onto_path) as an extension-less, exec-bit
-# POSIX target at <settings-home>/bin/claude-doe. The peers that lack a shebang
+# POSIX target at <settings-home>/bin/claude-author. The peers that lack a shebang
 # at source (doctor.py, cross-repo-memo.py) are fine because their installed
 # copies are GENERATED trampolines whose content is authored with one. Nothing
 # injects a shebang into a byte copy, so without this line execve returns
 # ENOEXEC, the shell falls back to parsing Python as sh, and no session can
 # launch. Guard: coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py
-# claude-doe — persistent launch wrapper for the DoE-maximalist coordinator delivery shape.
+# claude-author — persistent launch wrapper for the DoE-maximalist coordinator delivery shape.
 #
 # Purpose: resolve the DoE clone, validate its coordinator/ sub-directory, then exec claude
 # with --plugin-dir pointing at that coordinator dir so skills/agents resolve live-external.
 #
 # 2026-07-22: ported from bash to naked Python 3 (mega-gate wave, plan row 6) — extensionless
-# entrypoint, name UNCHANGED (callers depend on the bare `claude-doe` invocation; do not rename,
+# entrypoint, name UNCHANGED (callers depend on the bare `claude-author` invocation; do not rename,
 # do not add an extension). Behavior preserved byte-for-byte: exit codes, stdout/stderr text,
 # env-var contract, argument parsing. Per review finding F7, the rung-3 fallback below now calls
 # `resolve-coordinator-clone.py` directly (never a fresh reference to the retired
@@ -24,11 +24,11 @@
 # 2026-07-20: the wrapper previously also regenerated the settings.json hook block on every
 # launch (self-heal for harness clobber bugs #22659/#28966/#28847) via gen-settings-hooks.sh:
 # a sha256(hooks.json)-vs-stored-sentinel-hash comparison, ORed with a grep -qF total-absence
-# catch, gated a per-launch call to gen-settings-hooks.sh (docs/plans/2026-07-12-claude-doe-settings-hooks-sentinel.md).
+# catch, gated a per-launch call to gen-settings-hooks.sh (docs/plans/2026-07-12-claude-author-settings-hooks-sentinel.md).
 # That call was removed — measured ~1.3s added to EVERY session boot, and it no-op'd on the
 # normal (unclobbered) path. Hook seeding is now an install-time-only concern; see whichever
 # install-flow doc currently owns gen-settings-hooks.py invocation (not this wrapper). The
-# sentinel/regen test suite (coordinator/bin/tests/test-claude-doe-sentinel.sh) was retired
+# sentinel/regen test suite (coordinator/bin/tests/test-claude-author-sentinel.sh) was retired
 # in full the same day — every case there covered this mechanism. To resurrect either the
 # mechanism or its tests, `git log --follow` that path from before 2026-07-20 rather than
 # re-deriving the cases from scratch.
@@ -37,12 +37,12 @@
 # and `main`'s first check), BEFORE any of the resolution rungs below run —
 # `--help` must never require external state (a registered DoE clone, a
 # reachable machine-local registry) to answer. Closes the klabauter publish-
-# round ENTRYPOINT gate failure: the publish sandbox scrubs `repos.doe_claude`
+# round ENTRYPOINT gate failure: the publish sandbox scrubs `repos.content_root`
 # to the placeholder `repos.example_doctrine_repo`, which resolves to nothing,
 # so rung 2 below used to fail before `--help` ever got a chance to short-
-# circuit. This prints claude-doe's OWN usage text (the flags THIS wrapper
+# circuit. This prints claude-author's OWN usage text (the flags THIS wrapper
 # adds) and does not forward to the wrapped `claude` binary's own --help —
-# a working local install's `claude-doe --help` output therefore changed:
+# a working local install's `claude-author --help` output therefore changed:
 # it used to print the wrapped `claude` binary's help (forwarded post-
 # resolution), it now prints this wrapper's own usage unconditionally. See
 # `coordinator/bin/tests/test_hand_rolled_cli_help_sweep.py`.
@@ -52,38 +52,38 @@
 #   (--plugin-dir skill leg). The hook-delivery leg formerly documented here no longer applies.
 #
 # Resolution order for DoE clone root:
-#   0. --doe-root <path> / --doe-root=<path> argv flag (highest — explicit
+#   0. --content-root <path> / --content-root=<path> argv flag (highest — explicit
 #      caller override, consumed, never forwarded to claude). Argv seam per
 #      DoE DR-087 — lets the DoE shim pass a pointer-derived root through
-#      argv instead of injecting it into the REPO_DOE_CLAUDE rung-1
+#      argv instead of injecting it into the REPO_CONTENT_ROOT rung-1
 #      authority slot (a value that CAN diverge from the registry). A
 #      missing value, an explicitly-empty value (either form), or a value
 #      that itself looks like a flag (starts with "--") all fail loud with
 #      exit 2 rather than silently falling through to a lower rung. If
-#      --doe-root is repeated (either form, in any combination), the LAST
+#      --content-root is repeated (either form, in any combination), the LAST
 #      occurrence wins — same last-wins convention as most CLI argv parsers;
 #      not itself validated as an error.
-#   1. REPO_DOE_CLAUDE env var (explicit operator override)
-#   2. machine-local get repos.doe_claude  (registry — CANONICAL)
+#   1. REPO_CONTENT_ROOT env var (explicit operator override)
+#   2. machine-local get repos.content_root  (registry — CANONICAL)
 #   2.5. machine-local get plugin.mirrors.coordinator-claude.live_path
 #        (registry — FALLBACK; plan C6/AC9 registry-namespace collision
 #        resolution, only fires when rung 2 returned nothing)
 #   3. Fallback: resolve-coordinator-clone --clone-root (EXTENSIONLESS python3
 #        shim at the fixed out-of-tree path CLAUDE_HOME|HOME|USERPROFILE/.claude/
-#        bin/ — NOT a `.py`; see rung 3 below). Reads the cold `.doe-root` pointer plus
-#        the flat-layout OSS rung, so a wiped repos.doe_claude registry key still
+#        bin/ — NOT a `.py`; see rung 3 below). Reads the cold `.coordinator-content-root` pointer plus
+#        the flat-layout OSS rung, so a wiped repos.content_root registry key still
 #        resolves the clone durably.
 #   4. fail-loud with remediation
 #
 # Recast (thin caller): docs/plans/2026-07-09-resolver-unification-v3split-01.md § C3 —
-# rungs 1-2 (env, repos.doe_claude registry key) are UNCHANGED.
+# rungs 1-2 (env, repos.content_root registry key) are UNCHANGED.
 #
-# Registry-namespace collision resolution (plan C6/AC9, § C6): repos.doe_claude
+# Registry-namespace collision resolution (plan C6/AC9, § C6): repos.content_root
 # and plugin.mirrors.coordinator-claude.live_path are RELATED but not identical
-# facts — repos.doe_claude is the clone ROOT, while live_path is the live PLUGIN
+# facts — repos.content_root is the clone ROOT, while live_path is the live PLUGIN
 # dir one level below it (<clone>/coordinator). This is a non-destructive
-# READ-ORDER fix, not a schema restructure — repos.doe_claude stays canonical
-# (rung 2), and rung 2.5 below reads live_path as a fallback when repos.doe_claude
+# READ-ORDER fix, not a schema restructure — repos.content_root stays canonical
+# (rung 2), and rung 2.5 below reads live_path as a fallback when repos.content_root
 # is unset, NORMALIZING it back to the clone root (strips the trailing
 # "coordinator" segment — see rung 2.5) so a machine that only set live_path still
 # resolves to the same clone root rung 2 would have returned.
@@ -101,17 +101,17 @@
 # Guard: coordinator/tests/test_cold_path_remediation_is_runnable.py.
 #
 # Environment overrides (for testing / sandbox runs):
-#   CLAUDE_DOE_DRY_RUN=1        — dry-run: prints the resolved exec line and exits without
+#   CLAUDE_AUTHOR_DRY_RUN=1        — dry-run: prints the resolved exec line and exits without
 #                                  execing claude. Side-effect-free. Same effect as --dry-run.
-#   CLAUDE_DOE_PRINT_PLUGIN_DIR=1 — print ONLY the resolved coordinator --plugin-dir and exit,
+#   CLAUDE_AUTHOR_PRINT_PLUGIN_DIR=1 — print ONLY the resolved coordinator --plugin-dir and exit,
 #                                  without execing claude. Side-effect-free. Same effect as
 #                                  --print-plugin-dir. This is the machine-readable seam the
 #                                  Windows launchers use to fetch the plugin dir via bash so
 #                                  the interactive claude TUI is launched NATIVELY (not through
 #                                  bash -c, which corrupts the Windows console input mode).
-#   CLAUDE_DOE_MACHINE_LOCAL_BIN — override path to machine-local binary; when set, bypasses
+#   CLAUDE_AUTHOR_MACHINE_LOCAL_BIN — override path to machine-local binary; when set, bypasses
 #                                  the PATH lookup entirely (testing only)
-#   CLAUDE_DOE_NO_EXEC=1        — resolve and validate as normal, but skip the terminal
+#   CLAUDE_AUTHOR_NO_EXEC=1        — resolve and validate as normal, but skip the terminal
 #                                  `exec claude`; exits 0 instead. Testing seam for exercising
 #                                  clone resolution without launching the real binary.
 
@@ -326,7 +326,7 @@ def _clone_root_from_live_path(live_path: str) -> str:
 
     live_path points at the live PLUGIN dir — the coordinator/ subdirectory
     (<clone>/coordinator) that --plugin-dir consumes — NOT the clone root, which
-    is what repos.doe_claude holds and what the caller then appends "/coordinator"
+    is what repos.content_root holds and what the caller then appends "/coordinator"
     to. Strip one trailing "coordinator" segment when present (the standard nested
     DoE layout); a value without it (a flat OSS layout where the plugin IS the
     repo root) is returned unchanged. Separator-agnostic (Windows live_path values
@@ -432,10 +432,10 @@ def _resolve_stamped_engine_root() -> str | None:
     header is consumed by `coordinator_core.warm.front_door_routing ::
     resolve_route`, which passes the identity through `warm.engine_root ::
     resolve_engine_root` and keeps it only if `is_engine_root` holds. A consumer
-    clone (DoE-claude, example-retrieval-repo, ...) carries no `_engine_stamp` and can never
+    clone (coordinator-content-repo, example-retrieval-repo, ...) carries no `_engine_stamp` and can never
     satisfy that, so the previously-exported value routed every fire to
     `root_unstamped`. The contract question -- engine clone or consumer clone,
-    with no consumer->engine hop in between -- was raised by doe-claude-em on
+    with no consumer->engine hop in between -- was raised by coordinator-content-repo-em on
     2026-08-27 and answered on 2026-08-30
     (`state/memo-outbox/sent/clone-root-names-the-engine-and-our-exporter-does-not.md`):
     it names the ENGINE clone. This is that answer.
@@ -513,7 +513,7 @@ def _resolve_plugin_root(coord_path: str) -> str | None:
     `isdir` alone the way `coordinator_core.data_root.content_root_for` does
     for its own, looser, ~45-call-site "content root" question — a nested
     `coordinator/` dir with no plugin payload in it is not a clone this
-    launcher can resolve `--plugin-dir` against, and `gen_doe_root_pointer.py`
+    launcher can resolve `--plugin-dir` against, and `gen_content_root_pointer.py`
     already fails CLOSED on exactly that shape via the same engine twin this
     function mirrors (claude-klabauter#6 conflict resolution, 2026-09-18).
     """
@@ -530,27 +530,27 @@ def _resolve_plugin_root(coord_path: str) -> str | None:
     return None
 
 
-def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
+def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
     """Resolution order documented in the module header. Returns the clone
     root path, or None with a fail-loud message already written to stderr.
     """
-    if cli_doe_root:
-        return cli_doe_root
+    if cli_content_root:
+        return cli_content_root
 
-    repo_doe_claude = os.environ.get("REPO_DOE_CLAUDE", "")
-    if repo_doe_claude:
-        return repo_doe_claude
+    repo_content_root = os.environ.get("REPO_CONTENT_ROOT", "")
+    if repo_content_root:
+        return repo_content_root
 
-    # machine-local resolves the registry (repos.doe_claude) which in turn gives us
+    # machine-local resolves the registry (repos.content_root) which in turn gives us
     # DOE_CLONE — so machine-local itself cannot be resolved FROM DOE_CLONE here
     # (that would be circular: it's the very lookup that produces DOE_CLONE).
     # Mirrors install.md's own canonical resolution snippet: override,
     # then PATH — no co-located-sibling guess, since machine-local is installed as
     # its own persistent PATH artifact by install/substrate.py, independent of
     # wherever this wrapper happens to live.
-    # CLAUDE_DOE_MACHINE_LOCAL_BIN bypasses the PATH
+    # CLAUDE_AUTHOR_MACHINE_LOCAL_BIN bypasses the PATH
     # lookup so tests can inject a mock or absent binary deterministically.
-    ml_bin_override = os.environ.get("CLAUDE_DOE_MACHINE_LOCAL_BIN", "")
+    ml_bin_override = os.environ.get("CLAUDE_AUTHOR_MACHINE_LOCAL_BIN", "")
     if ml_bin_override:
         ml_bin = ml_bin_override
         # Windows-safe invocation prefix — see _machine_local_argv (avoids the
@@ -580,13 +580,13 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
         # and cannot import coordinator_core (see `_machine_local_argv`'s own
         # docstring, same constraint, same reason).
         if ml_argv == [ml_bin] and not (os.path.isfile(ml_bin) and _ml_bin_invocable(ml_bin)):
-            sys.stderr.write(f"claude-doe: machine-local not found at {ml_bin} and not on PATH\n")
+            sys.stderr.write(f"claude-author: machine-local not found at {ml_bin} and not on PATH\n")
             sys.stderr.write("  Remediation: python3 <engine-clone>/scripts/setup.py\n")
             return None
     else:
         found = shutil.which("machine-local")
         if not found:
-            sys.stderr.write("claude-doe: machine-local not found on PATH\n")
+            sys.stderr.write("claude-author: machine-local not found on PATH\n")
             sys.stderr.write("  Remediation: python3 <engine-clone>/scripts/setup.py\n")
             return None
         ml_bin = found
@@ -596,7 +596,7 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     resolved = ""
     try:
         result = subprocess.run(
-            [*ml_argv, "get", "repos.doe_claude"],
+            [*ml_argv, "get", "repos.content_root"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -613,7 +613,7 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
 
     # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path (plan
     # C6/AC9 registry-namespace collision resolution — see file header).
-    # Only fires when rung 2 (repos.doe_claude, canonical) returned nothing.
+    # Only fires when rung 2 (repos.content_root, canonical) returned nothing.
     resolved_fallback = ""
     try:
         result_fb = subprocess.run(
@@ -641,9 +641,9 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     # deriving a cwd-relative path). This wrapper is installed STANDALONE (see
     # file header), so it cannot assume a co-located resolver lib; the fixed-path
     # shim is position-independent by design and solves that chicken-and-egg. The
-    # shim reads the COLD `.doe-root` pointer (settings-home/machine-local/.doe-root
-    # or ~/.claude/.doe-root) as well as the flat-layout OSS rung, so a WIPED
-    # `repos.doe_claude` registry key — which the install-dogfood churn clears
+    # shim reads the COLD `.coordinator-content-root` pointer (settings-home/machine-local/.coordinator-content-root
+    # or ~/.claude/.coordinator-content-root) as well as the flat-layout OSS rung, so a WIPED
+    # `repos.content_root` registry key — which the install-dogfood churn clears
     # intermittently — still resolves the clone here. Only reached when the
     # registry rungs above yielded nothing, preserving rungs 1-2 exactly as before.
     #
@@ -684,14 +684,14 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     # (get failed vs. registered-but-empty) as the observable interface, now
     # emitted after the fallback rung has also been exhausted.
     if ml_get_failed:
-        sys.stderr.write("claude-doe: machine-local get repos.doe_claude failed\n")
-        sys.stderr.write("  Remediation: set REPO_DOE_CLAUDE=<path>, or python3 <engine-clone>/scripts/setup.py\n")
+        sys.stderr.write("claude-author: machine-local get repos.content_root failed\n")
+        sys.stderr.write("  Remediation: set REPO_CONTENT_ROOT=<path>, or python3 <engine-clone>/scripts/setup.py\n")
     else:
         sys.stderr.write(
-            "claude-doe: repos.doe_claude and plugin.mirrors.coordinator-claude.live_path "
+            "claude-author: repos.content_root and plugin.mirrors.coordinator-claude.live_path "
             "are both empty — DoE clone not registered\n"
         )
-        sys.stderr.write("  Remediation: machine-local set repos.doe_claude <path>\n")
+        sys.stderr.write("  Remediation: machine-local set repos.content_root <path>\n")
     return None
 
 
@@ -700,7 +700,7 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
 _VANILLA_HINT = "  To start Claude Code without coordinator: claude --vanilla\n"
 
 _USAGE = """\
-claude-doe [--vanilla] [--doe-root <path>] [--dry-run] [--print-plugin-dir] [claude args...]
+Claude-author [--vanilla] [--content-root <path>] [--dry-run] [--print-plugin-dir] [claude args...]
 
 Launch wrapper for the DoE-maximalist coordinator delivery shape: resolves
 the DoE clone (see resolution order in this file's module header), then
@@ -712,8 +712,8 @@ Wrapper-only flags (consumed here, never forwarded to claude):
   --vanilla               Launch the real `claude` binary with no coordinator
                            plugin and no resolution at all; remaining args are
                            forwarded unchanged.
-  --doe-root <path>       Explicit DoE clone root override (highest-priority
-                           resolution rung; also accepts --doe-root=<path>).
+  --content-root <path>       Explicit DoE clone root override (highest-priority
+                           resolution rung; also accepts --content-root=<path>).
   --dry-run               Print the resolved exec line and exit 0 without
                            launching claude.
   --print-plugin-dir      Print only the resolved --plugin-dir value and
@@ -722,8 +722,8 @@ Wrapper-only flags (consumed here, never forwarded to claude):
 
 --help/-h is answered here, directly, before any DoE-clone registry lookup
 runs -- it must never require external state (a registered DoE clone, a
-reachable machine-local registry) to answer. This is claude-doe's OWN usage
-text, not the wrapped `claude` binary's --help output: run `claude-doe
+reachable machine-local registry) to answer. This is claude-author's OWN usage
+text, not the wrapped `claude` binary's --help output: run `claude-author
 <real claude args> --help` is not forwarded; if you need the wrapped
 binary's own help text, resolve --print-plugin-dir yourself and invoke
 `claude --plugin-dir <dir> --help` directly.
@@ -737,7 +737,7 @@ def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
         # P_OVERLAY spawn, which does NOT replace this process: it starts
         # `claude` as a separate process and terminates the parent
         # IMMEDIATELY, without waiting. That unblocks every caller up the
-        # launch chain (python3 -> claude-doe.cmd -> the PowerShell `claude`
+        # launch chain (python3 -> claude-author.cmd -> the PowerShell `claude`
         # shim), so the interactive shell returns to its PROMPT while the
         # claude TUI is still live on the same console — two readers draining
         # one console input buffer. Keystrokes misroute between the TUI and
@@ -757,7 +757,7 @@ def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
         #
         # Negative-spec: do NOT "restore" os.execv on Windows as a
         # process-count optimisation — the extra frame is load-bearing.
-        # Guard: coordinator/tests/test_claude_doe_launch_waits.py.
+        # Guard: coordinator/tests/test_claude_author_launch_waits.py.
         #
         # Negative-spec: do NOT add `timeout=` to this call, and do not count it
         # as an unbounded spawn during a timeout-dial sweep. `subprocess.run`'s
@@ -808,20 +808,20 @@ def main(argv: list[str]) -> int:
     if "--vanilla" in argv:
         claude_bin = _resolve_claude_bin()
         if not claude_bin:
-            sys.stderr.write("claude-doe: claude: command not found\n")
+            sys.stderr.write("claude-author: claude: command not found\n")
             return 127
         exec_prefix = _claude_exec_argv(claude_bin)
         return _launch(exec_prefix, [*exec_prefix, *(a for a in argv if a != "--vanilla")])
 
     # -------------------------------------------------------------------
-    # Parse --doe-root / --dry-run from args BEFORE clone resolution (both
+    # Parse --content-root / --dry-run from args BEFORE clone resolution (both
     # consumed here, never forwarded to claude); all other args pass through.
-    # --doe-root takes rung 0 precedence over every env/registry rung below
+    # --content-root takes rung 0 precedence over every env/registry rung below
     # (see module header "Resolution order").
     # -------------------------------------------------------------------
-    dry_run = os.environ.get("CLAUDE_DOE_DRY_RUN", "0") == "1"
-    print_plugin_dir = os.environ.get("CLAUDE_DOE_PRINT_PLUGIN_DIR", "0") == "1"
-    cli_doe_root = ""
+    dry_run = os.environ.get("CLAUDE_AUTHOR_DRY_RUN", "0") == "1"
+    print_plugin_dir = os.environ.get("CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", "0") == "1"
+    cli_content_root = ""
     passthrough_args: list[str] = []
 
     i = 0
@@ -831,33 +831,33 @@ def main(argv: list[str]) -> int:
             dry_run = True
         elif arg == "--print-plugin-dir":
             print_plugin_dir = True
-        elif arg == "--doe-root":
+        elif arg == "--content-root":
             # Reject a missing value, an
             # explicitly-empty value, and a following token that itself looks
-            # like a flag (a typo'd "--doe-root --dry-run" would otherwise
+            # like a flag (a typo'd "--content-root --dry-run" would otherwise
             # silently swallow --dry-run as the path value). All three fail
             # loud with the same message + exit 2 as the original missing-
             # value case, since each is the same underlying ambiguity: no
             # usable path was actually supplied.
             if i + 1 >= len(argv) or not argv[i + 1] or argv[i + 1].startswith("--"):
-                sys.stderr.write("claude-doe: --doe-root requires a path argument\n")
+                sys.stderr.write("claude-author: --content-root requires a path argument\n")
                 return 2
-            cli_doe_root = argv[i + 1]
+            cli_content_root = argv[i + 1]
             i += 1
-        elif arg.startswith("--doe-root="):
-            value = arg[len("--doe-root="):]
+        elif arg.startswith("--content-root="):
+            value = arg[len("--content-root="):]
             if not value:
                 # Explicit empty equals-form value
-                # (--doe-root=) must fail loud rather than silently falling
-                # through to REPO_DOE_CLAUDE/registry via Python truthiness.
-                sys.stderr.write("claude-doe: --doe-root requires a path argument\n")
+                # (--content-root=) must fail loud rather than silently falling
+                # through to REPO_CONTENT_ROOT/registry via Python truthiness.
+                sys.stderr.write("claude-author: --content-root requires a path argument\n")
                 return 2
-            cli_doe_root = value
+            cli_content_root = value
         else:
             passthrough_args.append(arg)
         i += 1
 
-    doe_clone = _resolve_doe_clone(cli_doe_root)
+    doe_clone = _resolve_doe_clone(cli_content_root)
     if doe_clone is None:
         sys.stderr.write(_VANILLA_HINT)
         return 1
@@ -866,7 +866,7 @@ def main(argv: list[str]) -> int:
     # Validate clone and coordinator sub-directory
     # -------------------------------------------------------------------
     if not os.path.isdir(doe_clone):
-        sys.stderr.write(f'claude-doe: coordinator plugin source not found at "{doe_clone}"\n')
+        sys.stderr.write(f'claude-author: coordinator plugin source not found at "{doe_clone}"\n')
         sys.stderr.write(_VANILLA_HINT)
         return 1
 
@@ -879,7 +879,7 @@ def main(argv: list[str]) -> int:
     doe_coordinator = resolved_plugin_root if resolved_plugin_root is not None else os.path.join(doe_clone, "coordinator")
     if not os.path.isdir(doe_coordinator):
         sys.stderr.write(
-            f'claude-doe: no coordinator content root under "{doe_clone}" — neither '
+            f'claude-author: no coordinator content root under "{doe_clone}" — neither '
             f'"{os.path.join(doe_clone, "coordinator")}" (nested dev-clone payload) nor '
             f'"{os.path.join(doe_clone, ".claude-plugin", "plugin.json")}" (flat OSS/marketplace marker)\n'
         )
@@ -915,12 +915,12 @@ def main(argv: list[str]) -> int:
         print(doe_coordinator)
         return 0
 
-    if os.environ.get("CLAUDE_DOE_NO_EXEC", "0") == "1":
+    if os.environ.get("CLAUDE_AUTHOR_NO_EXEC", "0") == "1":
         return 0
 
     claude_bin = _resolve_claude_bin()
     if not claude_bin:
-        sys.stderr.write("claude-doe: claude: command not found\n")
+        sys.stderr.write("claude-author: claude: command not found\n")
         return 127
 
     exec_prefix = _claude_exec_argv(claude_bin)
@@ -966,9 +966,9 @@ def main(argv: list[str]) -> int:
     #
     # `resolve_route` passes the header identity through `warm.engine_root ::
     # resolve_engine_root`, which keeps it only if it carries a valid
-    # `coordinator_core/_engine_stamp`. `doe_clone` is the DoE-claude CONSUMER
+    # `coordinator_core/_engine_stamp`. `doe_clone` is the coordinator-content-repo CONSUMER
     # clone -- the doctrine repo -- which carries no stamp, so every fire since
-    # the flip answered `root_unstamped` and reached no op. doe-claude-em
+    # the flip answered `root_unstamped` and reached no op. Coordinator-content-repo-em
     # measured that from the outside on 2026-08-27 and asked which clone the
     # header names; the answer, and the reasoning, is
     # `state/memo-outbox/sent/clone-root-names-the-engine-and-our-exporter-does-not.md`:
@@ -976,9 +976,9 @@ def main(argv: list[str]) -> int:
     # Resolution and its fail-closed rule: `_resolve_stamped_engine_root` above.
     #
     # Negative-spec, per DR-087, and unchanged by the correction: this must never
-    # be derived from the settings-home `.doe-root` pointer that
-    # `claude-doe-shim.sh.tmpl` reads. That pointer is a demoted mirror, and
-    # exporting from it promotes it to rung-1 `REPO_DOE_CLAUDE` authority. It is
+    # be derived from the settings-home `.coordinator-content-root` pointer that
+    # `claude-author-shim.sh.tmpl` reads. That pointer is a demoted mirror, and
+    # exporting from it promotes it to rung-1 `REPO_CONTENT_ROOT` authority. It is
     # also simply the wrong repo now -- it names the consumer clone.
     #
     # `setdefault` for the same reason as the line above: an operator who
@@ -1005,7 +1005,7 @@ def main(argv: list[str]) -> int:
         os.environ.setdefault("COORDINATOR_CLONE_ROOT", _engine_root)
 
     # The http-hook override-channel CANARY, mirroring the two Windows legs
-    # (`claude-doe-launcher.ps1.tmpl` and `.cmd.tmpl`, which already carry it).
+    # (`claude-author-launcher.ps1.tmpl` and `.cmd.tmpl`, which already carry it).
     # A `type: "http"` registration reaches the caller's environment only
     # through interpolated headers, and an `httpHookAllowedEnvVars` setting can
     # veto a name by EMPTYING its header rather than by erroring. An emptied

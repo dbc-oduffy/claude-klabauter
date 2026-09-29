@@ -2,7 +2,7 @@
 merge-release-notes-derive.py (ported /merging-to-main Step 5.5 logic:
 tag-history release attribution walk).
 
-Spec backlink: DoE-claude coordinator/skills/merging-to-main/SKILL.md
+Spec backlink: coordinator-content-repo coordinator/skills/merging-to-main/SKILL.md
   Step 5.5 item 3 (pre-port original, ported verbatim into this CLI).
 
 Coverage:

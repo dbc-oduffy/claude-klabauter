@@ -33,7 +33,7 @@ def doc_new():
 
 
 def test_mixed_case_to_is_lowercased_with_a_notice(doc_new, monkeypatch, capsys):
-    # DoE-claude-em is mixed-case per the receiver's own fleet identity; the
+    # coordinator-content-repo-em is mixed-case per the receiver's own fleet identity; the
     # CLI used to hard-refuse this with "not a valid slug" (memo friction
     # item 1 — cross-repo/inbox/2026-09-28-example-retrieval-repo-em-memo-send-friction.md).
     monkeypatch.setattr(
@@ -44,7 +44,7 @@ def test_mixed_case_to_is_lowercased_with_a_notice(doc_new, monkeypatch, capsys)
             "--type",
             "memo",
             "--to",
-            "DoE-claude-em",
+            "coordinator-content-repo-em",
             "--topic",
             "a-topic",
             "--kind",
@@ -59,7 +59,7 @@ def test_mixed_case_to_is_lowercased_with_a_notice(doc_new, monkeypatch, capsys)
 
     stderr = capsys.readouterr().err
     assert "not a valid slug" not in stderr
-    assert "'DoE-claude-em' lowercased to 'doe-claude-em'" in stderr
+    assert "'coordinator-content-repo-em' lowercased to 'coordinator-content-repo-em'" in stderr
 
 
 def test_all_lowercase_to_is_unaffected(doc_new, monkeypatch, capsys):
@@ -71,7 +71,7 @@ def test_all_lowercase_to_is_unaffected(doc_new, monkeypatch, capsys):
             "--type",
             "memo",
             "--to",
-            "doe-claude-em",
+            "coordinator-content-repo-em",
             "--topic",
             "a-topic",
             "--kind",

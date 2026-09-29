@@ -99,9 +99,9 @@ def _make_multi_row_root(tmp_path: Path, rows: list[tuple[str, str]]) -> Path:
 
 
 _MIRROR_ROWS = [
-    ("claude-klabauter", "X:/claude-klabauter"),
-    ("claude-klabauter-bin", "X:/claude-klabauter/bin"),
-    ("claude-klabauter-docs-install", "X:/claude-klabauter/docs/install"),
+    ("claude-klabauter", "C:/claude-klabauter"),
+    ("claude-klabauter-bin", "C:/claude-klabauter/bin"),
+    ("claude-klabauter-docs-install", "C:/claude-klabauter/docs/install"),
 ]
 
 
@@ -128,7 +128,7 @@ def test_branch0_gate_routes_a_multi_row_mirror_to_coordinator_publish(tmp_path)
 
 
 def test_branch0_gate_route_names_a_partial_match_explicitly(tmp_path):
-    rows = _MIRROR_ROWS + [("other-mirror-lib", "X:/other-mirror/lib")]
+    rows = _MIRROR_ROWS + [("other-mirror-lib", "C:/other-mirror/lib")]
     percolate_root = _make_multi_row_root(tmp_path, rows)
     rc, out = _run_cli(
         ["branch0-gate", "klabauter", "--percolate-root", str(percolate_root)]
@@ -145,8 +145,8 @@ def test_branch0_gate_does_not_route_across_separate_destinations(tmp_path):
     `coordinator-publish` job, so no route is offered — the operator gets the
     registered-names line and picks."""
     rows = [
-        ("shared-name-alpha", "X:/mirror-one"),
-        ("shared-name-beta", "X:/mirror-two"),
+        ("shared-name-alpha", "C:/mirror-one"),
+        ("shared-name-beta", "C:/mirror-two"),
     ]
     percolate_root = _make_multi_row_root(tmp_path, rows)
     rc, out = _run_cli(
@@ -178,20 +178,20 @@ def test_branch0_gate_typo_falls_through_to_registered_names(tmp_path):
 
 
 def test_shares_one_destination_is_path_segment_aware():
-    assert _mod._shares_one_destination(["X:/m", "X:/m/a", "X:/m/b/c"]) is True
-    assert _mod._shares_one_destination(["X:/mirror", "X:/mirror-two"]) is False
-    assert _mod._shares_one_destination([r"X:\m", "X:/m/a"]) is True
+    assert _mod._shares_one_destination(["C:/m", "C:/m/a", "C:/m/b/c"]) is True
+    assert _mod._shares_one_destination(["C:/mirror", "C:/mirror-two"]) is False
+    assert _mod._shares_one_destination([r"C:\m", "C:/m/a"]) is True
     assert _mod._shares_one_destination([]) is False
 
 
 def test_shares_one_destination_is_case_insensitive():
-    assert _mod._shares_one_destination(["X:/Foo", "x:/foo/a"]) is True
-    assert _mod._shares_one_destination(["X:/Mirror", "x:/MIRROR-two"]) is False
+    assert _mod._shares_one_destination(["C:/Foo", "x:/foo/a"]) is True
+    assert _mod._shares_one_destination(["C:/Mirror", "x:/MIRROR-two"]) is False
 
 
 def test_shares_one_destination_does_not_conflate_sharp_s():
-    assert _mod._shares_one_destination(["X:/a\u00df", "X:/ass/sub"]) is False
-    assert _mod._shares_one_destination(["X:/a\u00df", "X:/A\u00df/sub"]) is True
+    assert _mod._shares_one_destination(["C:/a\u00df", "C:/ass/sub"]) is False
+    assert _mod._shares_one_destination(["C:/a\u00df", "C:/A\u00df/sub"]) is True
 
 
 def test_branch0_gate_configured_with_hook_dirs_absent(tmp_path):
@@ -404,9 +404,9 @@ def _gating_panel(out: str) -> str:
 def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
     target_file = tmp_path / "docstrings.py"
     target_file.write_text(
-        "renders `X:/a` as `X:\\a`\n"
+        "renders `C:/a` as `C:\\a`\n"
         "drive letter (`\"C:/foo\"`, `\"C:foo\"`)\n"
-        "POSIX `/x` or Windows `X:\\x` / `X:/x`\n"
+        "POSIX `/x` or Windows `C:\\x` / `C:/x`\n"
         "``~/.claude/projects/<slug>/`` naming\n"
         "``~/.claude/projects/<mangled-repo-path>/<session-id>.jsonl``\n"
         '_real_git(["config", "user.email", "t@t.example"], repo)\n'
@@ -424,7 +424,7 @@ def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
 
 def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
     lines = [
-        "moved to `X:/claude-klabauter`",
+        "moved to `C:/claude-klabauter`",
         'registry_set("repos.k", "/x/claude-klabauter")',
         "see ~/.claude/projects/X--claude-klabauter/memory",
         "#   240204332+real-handle@users.noreply.github.com",
@@ -466,7 +466,7 @@ def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
         "contact someone@company.com for access",
         "author someone@github.com owns it",
         "remote git@gitlab.internal-corp.io:team/repo.git",
-        "clone into X:/real-internal-path",
+        "clone into C:/real-internal-path",
         'registry_set("repos.k", "/x/real-internal-path")',
     ]
     target_file = tmp_path / "leaks.py"
@@ -768,12 +768,12 @@ def test_resolve_root_explain_prints_path_and_rung(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "coordinator_core.percolate.runtime_root.coordinator_percolate_runtime_root_explained",
-        lambda: (str(resolved), "doe-root-pointer"),
+        lambda: (str(resolved), "content-root-pointer"),
     )
 
     rc, out, err = _run_cli_capturing_stderr(["resolve-root", "--explain"])
     assert rc == 0
-    assert out.strip() == f"{resolved}\tdoe-root-pointer"
+    assert out.strip() == f"{resolved}\tcontent-root-pointer"
     assert err == ""
 
 

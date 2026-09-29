@@ -106,7 +106,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
 # THE BAKED INTERPRETER PATH IS NORMALIZED OUT BEFORE HASHING (2026-08-25, gen
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "c9e2d335b405ad795a7cb2623addf3c2d868037a66f3cc14318f17677d84e5b4"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "dab7511ca97cfcda167b65da660c7a8cc5ef3abf06ef03a30f22c05b81529c1e"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -148,7 +148,7 @@ def test_interpreter_rung_costs_no_unconditional_subshell():
     one scheduler quantum on this box, and DR-344 makes a process-time figure
     inside the quantum a non-result.
 
-    The `.doe-root` rung's own `$(cat ...)` is deliberately NOT counted — it
+    The `.coordinator-content-root` rung's own `$(cat ...)` is deliberately NOT counted — it
     sits behind `[ -f "$SCRIPT" ] ||` and never runs on a box whose earlier
     SCRIPT rungs resolve. Counting it would credit this fix with removing a
     process that was already conditional, and overstating a saving is the
@@ -990,3 +990,64 @@ def test_ensure_hook_skipped_no_root_is_loud_on_stderr(tmp_path, monkeypatch, ca
         "reproduces the exact bug this test guards against"
     )
     assert "WARNING" in captured.err
+
+
+def _run_shim(body, home, tmp_path):
+    hook = tmp_path / "hook"
+    hook.write_text(body, encoding="utf-8")
+    hook.chmod(0o755)
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(home / "nosettings")}
+    return subprocess.run([str(hook)], env=env, capture_output=True, text=True)
+
+
+def test_shim_resolves_the_installed_cache_root_at_run_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    cbin = home / ".claude/plugins/cache/coordinator-claude/coordinator/4.3.0/bin"
+    cbin.mkdir(parents=True)
+    (cbin / "coordinator-prepare-commit-msg").write_text(
+        "#!/usr/bin/env python3\nprint('cache-ran')\n", encoding="utf-8"
+    )
+    body = _shim_body("/dead/baked/bin", "coordinator-prepare-commit-msg", 'exec "$_PY" "$SCRIPT" "$@"')
+    r = _run_shim(body, home, tmp_path)
+    assert r.returncode == 0 and "cache-ran" in r.stdout
+
+
+def test_shim_exits_zero_when_no_root_resolves(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    home.mkdir()
+    body = _shim_body("/dead/baked/bin", "coordinator-prepare-commit-msg", 'exec "$_PY" "$SCRIPT" "$@"')
+    r = _run_shim(body, home, tmp_path)
+    assert r.returncode == 0 and "not found" in r.stderr
+
+
+def test_append_to_a_shebangless_hook_gains_a_shebang(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_coord_bin", lambda b, s: str(tmp_path))
+    monkeypatch.setattr(ghi, "_helper_present", lambda d, s: True)
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    hooks = tmp_path / "repo" / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "prepare-commit-msg").write_text("echo foreign\n", encoding="utf-8")
+    ghi.ensure_prepare_commit_msg_hook(str(tmp_path), root=str(tmp_path / "repo"))
+    assert (hooks / "prepare-commit-msg").read_text().startswith("#!/bin/sh\necho foreign")
+
+
+def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_coord_bin", lambda b, s: str(tmp_path))
+    monkeypatch.setattr(ghi, "_helper_present", lambda d, s: True)
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    reg = tmp_path / "fleet" / "registered"
+    other = tmp_path / "fleet" / "unregistered"
+    for r in (reg, other):
+        (r / ".git" / "hooks").mkdir(parents=True)
+    stale = '#!/bin/sh\nexec "$HOME/.claude/plugins/coordinator-claude/coordinator/bin/coordinator-prepare-commit-msg" "$@"\n'
+    (other / ".git" / "hooks" / "prepare-commit-msg").write_text(stale, encoding="utf-8")
+    monkeypatch.setattr(ghi, "_merged_flat_registry", lambda: {"repos.registered": str(reg)})
+    ghi.ensure_hooks_fleet(str(tmp_path))
+    healed = (other / ".git" / "hooks" / "prepare-commit-msg").read_text()
+    assert ghi._hook_gen_stamp_line() in healed

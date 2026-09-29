@@ -23,12 +23,12 @@ _CLI_REL = "coordinator/templates/bin/coordinator-settings-home"
 
 
 def _resolve_cli() -> Path | None:
-    from coordinator_core.doe_root_pointer import read_doe_root_pointer
+    from coordinator_core.content_root_pointer import read_content_root_pointer
 
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         return None
-    candidate = Path(doe_root) / _CLI_REL
+    candidate = Path(content_root) / _CLI_REL
     return candidate if candidate.is_file() else None
 
 
@@ -48,7 +48,7 @@ def _run_cli(fake_home: Path, subcmd: str | None = None, extra_env: dict[str, st
     cli = _resolve_cli()
     if cli is None:
         pytest.skip(
-            "DoE-claude root not resolvable via coordinator_core.doe_root_pointer "
+            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
             "on this machine (or the resolver is missing there) — the CLI this "
             "test targets is not vendored in claude-klabauter; not a defect in "
             "claude-klabauter."

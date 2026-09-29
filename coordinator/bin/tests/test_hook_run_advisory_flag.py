@@ -4,7 +4,7 @@ An advisory hook (e.g. the example-retrieval-repo search-steering nudge) must ne
 harass an agent for using Grep/Glob just because its op is not yet published
 on this clone's engine -- METHOD_NOT_FOUND alone cannot tell the caller that,
 because the op isn't there to say so (state/cross-repo/inbox/
-2026-09-25-doe-claude-em-advisory-hooks-fail-silent.md). The caller declares
+2026-09-25-coordinator-content-repo-em-advisory-hooks-fail-silent.md). The caller declares
 it instead, with `--advisory` immediately before the op name. Guards (no
 flag) keep the existing loud did-not-run envelope -- pinned separately by
 `test_hook_run_engine_down_passes_loudly.py`, not weakened here.

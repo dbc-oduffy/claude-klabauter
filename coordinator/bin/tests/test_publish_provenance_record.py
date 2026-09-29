@@ -183,7 +183,7 @@ def test_a_row_absent_from_this_round_keeps_its_last_published_sha(monkeypatch, 
                 "rows": {
                     "absent-next-round": {
                         "published": True,
-                        "toplevels": {"X:\repo": "a" * 40},
+                        "toplevels": {"C:\repo": "a" * 40},
                     }
                 },
             }
@@ -200,7 +200,7 @@ def test_a_row_absent_from_this_round_keeps_its_last_published_sha(monkeypatch, 
     record = json.loads(record_path.read_text(encoding="utf-8"))
     carried = record["rows"]["absent-next-round"]
     assert carried["published"] is True
-    assert carried["toplevels"] == {"X:\repo": "a" * 40}
+    assert carried["toplevels"] == {"C:\repo": "a" * 40}
     assert record["rows_in_last_round"] == ["some-other-row"]
 
 
@@ -218,7 +218,7 @@ def test_a_row_that_fails_after_publishing_keeps_the_earlier_success(monkeypatch
                 "rows": {
                     "row": {
                         "published": True,
-                        "toplevels": {"X:\repo": "b" * 40},
+                        "toplevels": {"C:\repo": "b" * 40},
                         "published_at": "2026-08-26T13:19:02+00:00",
                     }
                 },
@@ -236,7 +236,7 @@ def test_a_row_that_fails_after_publishing_keeps_the_earlier_success(monkeypatch
     entry = json.loads(record_path.read_text(encoding="utf-8"))["rows"]["row"]
     assert entry["published"] is False
     assert "toplevels" not in entry
-    assert entry["last_published"]["toplevels"] == {"X:\repo": "b" * 40}
+    assert entry["last_published"]["toplevels"] == {"C:\repo": "b" * 40}
     assert entry["last_published"]["at"] == "2026-08-26T13:19:02+00:00"
 
 

@@ -199,8 +199,8 @@ def _write_bare_engine_mirror_gate_tree(root: Path) -> None:
         bin_lib_dir / "machine_local_impl_resolve.py",
     )
     shutil.copy2(
-        real_coordinator_lib_dir / "read_doe_root_pointer.py",
-        coordinator_lib_dir / "read_doe_root_pointer.py",
+        real_coordinator_lib_dir / "read_content_root_pointer.py",
+        coordinator_lib_dir / "read_content_root_pointer.py",
     )
     shutil.copy2(
         real_coordinator_lib_dir / "settings_home.py",
@@ -229,7 +229,7 @@ class TestFunctionGateSyntheticManifestRung:
         """Fail-closed proof (deliverable #3, direction 2): if the manifest
         rung this fix stages does NOT resolve to anything (simulated here by
         monkeypatching `_synthetic_registry_manifest_overrides` to point
-        `COORDINATOR_SETTINGS_HOME` at an empty directory with no `.doe-root`
+        `COORDINATOR_SETTINGS_HOME` at an empty directory with no `.coordinator-content-root`
         pointer at all -- the same negative control
         `test_gate_fires_when_manifest_fixture_is_absent` uses at the engine
         level), the REAL `coordinator_registry.py` still fails its own
@@ -542,7 +542,7 @@ def _write_bare_engine_mirror_entrypoint_tree(root: Path) -> None:
     CLI uses (e.g. `coordinator-doc-new`) -- so `--help` still triggers the
     import before argparse ever runs, exactly like the real CLIs this
     fixture stands in for. Never ships `coordinator/schemas/coordinator-
-    registry.manifest.json` itself -- that artifact is DoE-claude's,
+    registry.manifest.json` itself -- that artifact is coordinator-content-repo's,
     delivered only via a coordinator-claude plugin install."""
     bin_dir = root / "coordinator" / "bin"
     bin_lib_dir = bin_dir / "lib"
@@ -558,8 +558,8 @@ def _write_bare_engine_mirror_entrypoint_tree(root: Path) -> None:
         bin_lib_dir / "machine_local_impl_resolve.py",
     )
     shutil.copy2(
-        real_coordinator_lib_dir / "read_doe_root_pointer.py",
-        coordinator_lib_dir / "read_doe_root_pointer.py",
+        real_coordinator_lib_dir / "read_content_root_pointer.py",
+        coordinator_lib_dir / "read_content_root_pointer.py",
     )
     shutil.copy2(
         real_coordinator_lib_dir / "settings_home.py",
@@ -606,7 +606,7 @@ class TestEntrypointGateSyntheticManifestRung:
         """Fail-closed proof (direction 2, the one that matters): if the
         manifest rung this fix stages does NOT resolve to anything
         (monkeypatched here to point `COORDINATOR_SETTINGS_HOME` at an empty
-        directory with no `.doe-root` pointer at all -- same negative
+        directory with no `.coordinator-content-root` pointer at all -- same negative
         control `TestFunctionGateSyntheticManifestRung` uses above), the
         REAL `coordinator_registry.py` inside the entrypoint's own subprocess
         still fails its own manifest-not-found check and the gate reports

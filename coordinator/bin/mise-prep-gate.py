@@ -12,7 +12,7 @@ git, no corpus-wide sweep. Argument parsing, target expansion and `--json`/`--ta
 rendering live in `coordinator_core.roadmap.prep_gate_cli`; this file owns nothing but
 the door.
 
-DoE-claude's own `coordinator/bin/mise-prep-gate.py` calls this file's module-level API
+Coordinator-content-repo's own `coordinator/bin/mise-prep-gate.py` calls this file's module-level API
 directly (`GateError`, `_resolve_engine_root`, `prep_gate`, `corpus_inputs`, `fleet_siblings`,
 `_targets`, `main`, `_tally`, `_authoring_fix_lines`, `_is_settings_home_path`, the
 `EXIT_*`/`PREPPED`/`NOT_PREPPED`/`ENGINE_ERROR`/`FLEET_REPOS`/`REQUIRES_VALUES` constants,

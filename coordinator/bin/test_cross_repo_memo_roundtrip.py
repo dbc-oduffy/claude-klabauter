@@ -61,7 +61,7 @@ def _python() -> str:
     return sys.executable
 
 
-def _sibling_doe_claude_probe() -> str:
+def _sibling_content_root_probe() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     claude_klabauter_root = here
     for _ in range(8):
@@ -73,33 +73,33 @@ def _sibling_doe_claude_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
     return candidate if os.path.isfile(manifest) else ""
 
 
-def _resolve_doe_root_for_tests() -> str:
+def _resolve_content_root_for_tests() -> str:
     try:
-        from coordinator_core.testing.doe_root import resolve_doe_root
+        from coordinator_core.testing.content_root import resolve_content_root
 
-        root = resolve_doe_root()
+        root = resolve_content_root()
     except Exception:
         root = ""
     if root and os.path.isdir(root):
         return root
-    return _sibling_doe_claude_probe()
+    return _sibling_content_root_probe()
 
 
-_DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
-if _DOE_ROOT_FOR_TESTS:
-    os.environ.setdefault("DOE_ROOT", _DOE_ROOT_FOR_TESTS)
+_CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
+if _CONTENT_ROOT_FOR_TESTS:
+    os.environ.setdefault("CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
 
 
-def _with_doe_root(env: dict) -> dict:
-    if "DOE_ROOT" not in env and _DOE_ROOT_FOR_TESTS:
-        env = {**env, "DOE_ROOT": _DOE_ROOT_FOR_TESTS}
+def _with_content_root(env: dict) -> dict:
+    if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
+        env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
     return env
 
 
@@ -195,7 +195,7 @@ def _run_dispatcher_in_repo(
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         [_python(), _script_path()] + args,
-        env={**os.environ, **_with_doe_root(env)},
+        env={**os.environ, **_with_content_root(env)},
         capture_output=True,
         text=True,
         input=stdin_text,

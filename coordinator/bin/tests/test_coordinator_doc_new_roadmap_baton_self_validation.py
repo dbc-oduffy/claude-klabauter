@@ -19,7 +19,7 @@ together (2026-08-01):
    nothing written) when the generated frontmatter fails the schema its own
    `kind`/path resolves to.
 
-3. AC13 (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
+3. AC13 (coordinator-content-repo:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
    roadmap-baton batons minted from ``state/roadmap/<id>/`` carried
    ``stub_id``/``deliverable_id`` but NO ``handoff_id`` at all -- a distinct
    class of record any fleet-side ``handoff_id`` join would silently miss
@@ -33,8 +33,8 @@ Loaded by file path (``importlib.machinery.SourceFileLoader``) since
 module -- same load idiom as test_coordinator_doc_new_predecessor.py.
 
 Spec backlink: cross-repo memo
-2026-08-01-doe-claude-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
-Spec backlink (AC13): DoE-claude:pln-baton-spine-information-integr-d3e1d7 § A5
+2026-08-01-coordinator-content-repo-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
+Spec backlink (AC13): coordinator-content-repo:pln-baton-spine-information-integr-d3e1d7 § A5
 """
 from __future__ import annotations
 
@@ -209,7 +209,7 @@ class ScaffoldSelfValidationTest(unittest.TestCase):
 
 
 class RoadmapBatonMintsHandoffIdTest(unittest.TestCase):
-    """AC13 (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
+    """AC13 (coordinator-content-repo:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
     minted roadmap batons must carry `handoff_id`, matching every other
     handoff-family doc_type -- this was the reported break-class defect
     (neither of example-market-data-repo's roadmap batons carries `handoff_id` at

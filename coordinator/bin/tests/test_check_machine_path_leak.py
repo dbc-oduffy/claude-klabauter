@@ -12,7 +12,7 @@ Covers:
     AC7 regression — /Users/thislaptop/... directory-source marketplace entry → exit 1
     AC6 pass case  — clean settings.json with only a git-URL marketplace source → exit 0
     Soft warn      — working-repos.yaml with $HOME path → WARN on stderr, exit 0
-    Hard blocks    — /home/<name>/, C:/Users/, X:\\ backslash → exit 1
+    Hard blocks    — /home/<name>/, C:/Users/, C:\\ backslash → exit 1
     Non-target     — non-sentinel filename ignored → exit 0 + "nothing to check"
 
 Spec backlink: docs/plans/2026-06-23-machine-path-leak-guard.md [DEAD-CITATION: plan file never committed to this repo]
@@ -99,7 +99,7 @@ def test_working_repos_yaml_home_path_warns_but_exits_zero():
     path: "{home}/dev/my-project"
     description: "local project path"
   machine-a-catalog:
-    path: "X:\\\\Projects\\\\machine-a-project"
+    path: "C:\\\\Projects\\\\machine-a-project"
     description: "intentional Machine-a catalog entry"
 """.format(home=current_home))
         env = dict(os.environ)
@@ -155,10 +155,10 @@ def test_settings_json_backslash_windows_path_exits_nonzero():
         f = _write(tmp, "settings.json", """{
   "extraKnownMarketplaces": {
     "local-machine-a": {
-      "source": { "source": "directory", "path": "X:\\\\projects\\\\my-plugin" }
+      "source": { "source": "directory", "path": "C:\\\\projects\\\\my-plugin" }
     }
   }
 }
 """)
         rc, _, _ = _run_guard(f)
-        assert rc != 0, "guard exited 0 (should block X:\\projects\\ path)"
+        assert rc != 0, "guard exited 0 (should block C:\\projects\\ path)"

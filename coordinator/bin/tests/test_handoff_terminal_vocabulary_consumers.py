@@ -132,7 +132,7 @@ _CONSUMERS: list[tuple[str, bool]] = [
     # `git show 3d25072e8~1:coordinator/bin/test_migrate_provenance_stamp.py`.
     ("coordinator/bin/test_prune_closed_bugs.py", False),  # bug-backlog status, not handoff
     ("coordinator/bin/tests/test_archive_stamp_cli_chain_supersede_archive.py", False),  # argv-shape test; continued_into is a path param, not a vocabulary enumeration
-    ("coordinator/bin/tests/test_doe_root_routing.py", False),  # queue status enum {open, closed, deferred}, not handoff
+    ("coordinator/bin/tests/test_content_root_routing.py", False),  # queue status enum {open, closed, deferred}, not handoff
     # Re-triaged 2026-09-20, NOT silently dropped: test-initiative-shape.mjs was
     # deleted along with five sibling .js/.mjs tests that `require()` the Node
     # oracle `coordinator/bin/lib/schema.js`, retired in the 2026-07-24 de-node

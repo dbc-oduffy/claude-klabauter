@@ -812,7 +812,7 @@ def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monke
 
 
 # ---------------------------------------------------------------------------
-# cross-repo/inbox/2026-08-14-doe-claude-em-percolate-round-non-tty-confirm-
+# cross-repo/inbox/2026-08-14-coordinator-content-repo-em-percolate-round-non-tty-confirm-
 # crashes.md + ...-depersonalize-corrupts-python-identifiers.md § 4: the
 # Step 3 confirm must ride an explicit invocation token (not a bare
 # isatty() check), else a cron/nested-agent caller could auto-proceed.
@@ -1112,7 +1112,7 @@ def test_real_run_failure_returns_fail(tmp_path, monkeypatch):
 
 
 def test_real_run_partial_row_failure_exits_nonzero_with_verdict(tmp_path, monkeypatch):
-    """Regression for the doe-claude-em-reported defect: a Step 4 real run
+    """Regression for the coordinator-content-repo-em-reported defect: a Step 4 real run
     that reports some rows failed (`Rows succeeded: 3/5`, `Rows FAILED: ...`
     on stderr, `STATUS: PARTIAL` on stderr) must never let the round exit 0
     or end silently — assert BOTH the exit code AND the printed verdict,

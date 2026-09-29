@@ -14,10 +14,10 @@ if _LIB_DIR not in sys.path:
 
 import coordinator_registry as reg  # noqa: E402
 
-#: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` rung — which on a configured
+#: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` rung — which on a configured
 _REAL_LIB_DIR = os.path.join(os.path.dirname(_BIN_DIR), "lib")
 _REAL_HELPER_SRCS = (
-    os.path.join(_REAL_LIB_DIR, "read_doe_root_pointer.py"),
+    os.path.join(_REAL_LIB_DIR, "read_content_root_pointer.py"),
     os.path.join(_REAL_LIB_DIR, "settings_home.py"),
 )
 
@@ -47,7 +47,7 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
         settings_home = os.path.join(self._tmp, "settings-home")
         os.makedirs(os.path.join(settings_home, "machine-local"))
         with open(
-            os.path.join(settings_home, "machine-local", ".doe-root"),
+            os.path.join(settings_home, "machine-local", ".coordinator-content-root"),
             "w",
             encoding="utf-8",
         ) as fh:
@@ -60,7 +60,7 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
             reg, "_COORDINATOR_LIB_DIR_FLAT", None
         )
         # CLAUDE_HOME is pinned into the fixture alongside settings-home so the
-        # helper's LEGACY rung (`${CLAUDE_HOME:-$HOME}/.claude/.doe-root`) can
+        # helper's LEGACY rung (`${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`) can
         claude_home = os.path.join(self._tmp, "claude-home")
         os.makedirs(os.path.join(claude_home, ".claude"))
 
@@ -95,7 +95,7 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
             )
         reg._COORDINATOR_LIB_DIR_FLAT = self._flat_lib_dir
 
-        resolved = reg._mp_doe_root_pointer_rung()
+        resolved = reg._mp_content_root_pointer_rung()
         self.assertEqual(resolved, self._plugin_root)
 
 

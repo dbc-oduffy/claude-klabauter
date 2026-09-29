@@ -9,7 +9,7 @@ This test file is the ONLY place in this pair permitted to import
 `coordinator_core` — it is the parity oracle. `machine_local_impl_resolve.py`
 itself MUST NOT (see that module's docstring, HARD CONSTRAINT).
 
-Spec backlink: state/dispatch-briefs/2026-08-20-doe-root-rung-2-stops-
+Spec backlink: state/dispatch-briefs/2026-08-20-content-root-rung-2-stops-
 spawning/C1.md.
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ machine_slug = "tracked-machine"
 should_be_absent = "nope"
 
 [repos]
-doe_claude = "X:/DoE-claude"  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
+Content_root = "C:/coordinator-content-repo"  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
 
 [repos.backslash_repo]
 """
@@ -158,11 +158,11 @@ def test_parity_repos_key_normalizes_backslash_form(monkeypatch, tmp_path):
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
-        r'"repos.doe_claude" = "X:\\DoE-claude\\worktree"' + "\n",
+        r'"repos.content_root" = "C:\\coordinator-content-repo\\worktree"' + "\n",
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
-    mine = mlir.registry_get("repos.doe_claude")
-    theirs = machine_resolver.registry_get("repos.doe_claude")
+    mine = mlir.registry_get("repos.content_root")
+    theirs = machine_resolver.registry_get("repos.content_root")
     assert mine == theirs
 
 
@@ -174,15 +174,15 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
-        '"repos.doe_claude" = "/x/DoE-claude"\n',
+        '"repos.content_root" = "/x/coordinator-content-repo"\n',
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
-    mine = mlir.registry_get("repos.doe_claude")
-    assert mine == "X:/DoE-claude"
+    mine = mlir.registry_get("repos.content_root")
+    assert mine == "C:/coordinator-content-repo"
 
     # PINNED DIVERGENCE (see module docstring's "Two divergences... ACCEPTED"
-    theirs = machine_resolver.registry_get("repos.doe_claude")
-    assert theirs == "/x/DoE-claude"
+    theirs = machine_resolver.registry_get("repos.content_root")
+    assert theirs == "/x/coordinator-content-repo"
     assert mine != theirs
 
 

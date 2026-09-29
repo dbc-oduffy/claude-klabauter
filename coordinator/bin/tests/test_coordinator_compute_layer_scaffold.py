@@ -3,7 +3,7 @@ coordinator/bin/coordinator-compute-layer-scaffold.py's `--repo` DR-279
 refusal (finding 6, coordinator:code-reviewer review of
 docs/plans/2026-08-13-compute-layer-scaffolder.md chunk C4), plus the four
 manifest-vs-directive conformance tests and the spec-backlink assertion the
-2026-08-20 doe-claude-em scaffolder review named as unemitted (item 1 and
+2026-08-20 coordinator-content-repo-em scaffolder review named as unemitted (item 1 and
 item 4 of that memo's four review comments;
 state/handoffs/2026-08-30-cross-repo-contract-surfaces-and-agent-f.md
 member 5).

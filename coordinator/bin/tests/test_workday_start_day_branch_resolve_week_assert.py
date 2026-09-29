@@ -1,6 +1,6 @@
 """test_workday_start_day_branch_resolve_week_assert.py — coverage for
 workday-start-day-branch-resolve.py's `day-branch-assert` subcommand (C6,
-AC-6 of DoE-claude docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md).
+AC-6 of coordinator-content-repo docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md).
 
 Pins three things:
     1. The subcommand is actually wired into the CLI dispatch table — a
@@ -15,7 +15,7 @@ Pins three things:
        message came from a real `banner()` call, and checking the CLI prints
        that exact string unchanged.
 
-Spec backlink: DoE-claude docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md
+Spec backlink: coordinator-content-repo docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md
     § C6
 """
 

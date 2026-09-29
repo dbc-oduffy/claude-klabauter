@@ -3,7 +3,7 @@ from __future__ import annotations
 test_harvest_idempotency_env_override.py — regression test for the
 scan-root/write-root env-precedence mismatch in coordinator-harvest-deferrals.
 
-Spec backlink: DoE-claude:pln-full-coverage-planning-posture-bca96f § C7
+Spec backlink: coordinator-content-repo:pln-full-coverage-planning-posture-bca96f § C7
 (idempotency-guarantee fix, dispatched as a same-day follow-up fix chunk)
 
 Defect (confirmed, reproduced): coordinator-harvest-deferrals'
@@ -84,7 +84,7 @@ def test_second_run_idempotent_with_env_override_and_mismatched_cwd(stamped_engi
         env = dict(os.environ)
         env["QUEUE_APPEND_OUTPUT_ROOT"] = output_root
         env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(output_root, "state", "lessons-outbox")
-        env.pop("DOE_ROOT", None)
+        env.pop("CONTENT_ROOT", None)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]

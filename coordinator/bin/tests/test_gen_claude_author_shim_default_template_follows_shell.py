@@ -11,7 +11,7 @@ _BIN_DIR = Path(__file__).resolve().parents[1]
 
 def _load_cli():
     loader = importlib.machinery.SourceFileLoader(
-        "gen_claude_doe_shim_cli", str(_BIN_DIR / "gen-claude-doe-shim.py")
+        "gen_claude_author_shim_cli", str(_BIN_DIR / "gen-claude-author-shim.py")
     )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -26,25 +26,25 @@ class TestDefaultTemplateFollowsShell(unittest.TestCase):
     def test_bash_family_resolves_the_sh_template(self):
         self.assertEqual(
             os.path.basename(self.cli._default_template_path("bash")),
-            "claude-doe-shim.sh.tmpl",
+            "claude-author-shim.sh.tmpl",
         )
 
     def test_powershell_family_resolves_the_ps1_template(self):
         self.assertEqual(
             os.path.basename(self.cli._default_template_path("powershell")),
-            "claude-doe-shim.ps1.tmpl",
+            "claude-author-shim.ps1.tmpl",
         )
 
     def test_omitted_family_keeps_the_bash_default(self):
         self.assertEqual(
             os.path.basename(self.cli._default_template_path()),
-            "claude-doe-shim.sh.tmpl",
+            "claude-author-shim.sh.tmpl",
         )
 
     def test_unrecognized_family_falls_through_to_bash(self):
         self.assertEqual(
             os.path.basename(self.cli._default_template_path("fish")),
-            "claude-doe-shim.sh.tmpl",
+            "claude-author-shim.sh.tmpl",
         )
 
 
@@ -59,7 +59,7 @@ class TestShellFamilyFromArgv(unittest.TestCase):
         )
 
     def test_defaults_to_the_engines_family_when_absent(self):
-        from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+        from coordinator_core.ops.gen_claude_author_shim import _default_shell_family
 
         self.assertEqual(
             self.cli._shell_family_from_argv(["--check-only"]),
@@ -67,7 +67,7 @@ class TestShellFamilyFromArgv(unittest.TestCase):
         )
 
     def test_trailing_flag_without_a_value_defaults_to_the_engines_family(self):
-        from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+        from coordinator_core.ops.gen_claude_author_shim import _default_shell_family
 
         self.assertEqual(
             self.cli._shell_family_from_argv(["--shell"]),

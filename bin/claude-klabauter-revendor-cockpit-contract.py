@@ -224,7 +224,7 @@ def _parse_args() -> argparse.Namespace:
         metavar="PATH",
         help=(
             "Override the DoE clone path. Default: resolve via machine-local registry "
-            "(repos.doe_claude in registry.local.toml / registry.toml). "
+            "(repos.content_root in registry.local.toml / registry.toml). "
             "Reuses resolve_doe_clone() — never re-implements registry parsing (AC2)."
         ),
     )

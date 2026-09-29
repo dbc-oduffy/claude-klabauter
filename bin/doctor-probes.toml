@@ -382,13 +382,13 @@ id = "claude-klabauter.launch.shim_chain"
 cluster = "install"
 weight = "cheap"
 interactivity = "assert"
-fix = "none (re-render the shim with gen-claude-doe-shim.py, passing the template that matches --shell)"
-symptom_keywords = ["vanilla claude session", "no coordinator skills", "plugin not loading", "shim disabled", "commented out shim", "claude-doe-shim.ps1 bash", "wrong shell dialect", "claude() not defined", "--plugin-dir missing"]
+fix = "none (re-render the shim with gen-claude-author-shim.py, passing the template that matches --shell)"
+symptom_keywords = ["vanilla claude session", "no coordinator skills", "plugin not loading", "shim disabled", "commented out shim", "claude-author-shim.ps1 bash", "wrong shell dialect", "claude() not defined", "--plugin-dir missing"]
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_launch_chain"
 required = false
 severity_if_fail = "degraded"
-remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell powershell --template <doe-root>/coordinator/templates/shell/claude-doe-shim.ps1.tmpl (use --shell bash and the .sh.tmpl on POSIX). Then open a NEW shell -- an already-open one holds the old profile."
+remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-claude-author-shim.py --shell powershell --template <content-root>/coordinator/templates/shell/claude-author-shim.ps1.tmpl (use --shell bash and the .sh.tmpl on POSIX). Then open a NEW shell -- an already-open one holds the old profile."
 
 
 [[probe]]

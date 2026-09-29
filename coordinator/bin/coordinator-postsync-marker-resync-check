@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator-postsync-marker-resync-check — post-merge / post-checkout gate
 for the ~/.claude meta-repo: self-heal this machine's hook-generation
@@ -217,11 +218,11 @@ def main() -> int:
         except (OSError, ValueError):
             return 0
 
-        doe_root_file = os.path.join(meta_repo, ".doe-root")
+        content_root_file = os.path.join(meta_repo, ".coordinator-content-root")
         local_root = None
-        if os.path.isfile(doe_root_file):
+        if os.path.isfile(content_root_file):
             try:
-                with open(doe_root_file, "r", encoding="utf-8", newline="") as fh:
+                with open(content_root_file, "r", encoding="utf-8", newline="") as fh:
                     local_root = fh.readline().rstrip("\r\n") or None
             except OSError:
                 local_root = None

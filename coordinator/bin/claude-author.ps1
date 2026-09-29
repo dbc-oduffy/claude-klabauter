@@ -8,7 +8,7 @@
 
 $ErrorActionPreference = 'Stop'
 $_here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$_entry = Join-Path $_here 'claude-doe.py'
+$_entry = Join-Path $_here 'claude-author.py'
 $_pybin = '__PYTHON_BIN__'
 
 # __PYTHON_BIN__ occurrence, so such a test compares the baked path against itself,
@@ -58,6 +58,6 @@ if ($_pyl) {
     & $_pyl.Source -3 $_entry @args
     exit $LASTEXITCODE
 }
-[Console]::Error.WriteLine('[claude-doe] ERROR: no Python interpreter found (python.exe / py -3).')
-[Console]::Error.WriteLine('[claude-doe] Install Python: https://www.python.org/downloads/windows/')
+[Console]::Error.WriteLine('[claude-author] ERROR: no Python interpreter found (python.exe / py -3).')
+[Console]::Error.WriteLine('[claude-author] Install Python: https://www.python.org/downloads/windows/')
 exit 127

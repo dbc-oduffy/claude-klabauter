@@ -39,7 +39,7 @@ _OVERRIDE_RELATIVE_PATHS = (
 
 def _declared_roots() -> "list[Path]":
     roots: "list[Path]" = []
-    pointer = publish._read_doe_root_pointer()
+    pointer = publish._read_content_root_pointer()
     if pointer:
         roots.append(Path(pointer))
     return roots
@@ -58,7 +58,7 @@ def test_no_resolvable_override_would_refuse_a_round():
     overrides = _resolvable_overrides()
     if not overrides:
         pytest.skip(
-            "no percolate root resolves on this box (`.doe-root` unset or absent) — "
+            "no percolate root resolves on this box (`.coordinator-content-root` unset or absent) — "
             "nothing to compare against; this is a machine fact, not a pass"
         )
     refusing = {

@@ -8,19 +8,19 @@ Spec backlink: state/audits/2026-08-15-fleet-composed-op-spawn-census.md row
 
 Defect (measured): `_harvest()`'s per-row loop called `_candidate_search_
 dirs(row)` once per candidate row, which in turn called `_repo_root()` (a
-`git rev-parse --show-toplevel` subprocess spawn), `_resolved_doe_root()`,
+`git rev-parse --show-toplevel` subprocess spawn), `_resolved_content_root()`,
 and `_resolved_claude_klabauter_root()` (each capable of its own machine-local-
 registry/marketplace-cache subprocess spawn) FRESH every time — 3 resolution
 calls x N candidate rows for an answer that cannot change within one
 process's lifetime.
 
-Fix: memoize all three (`_repo_root_cache` / `_resolved_doe_root_cache` /
+Fix: memoize all three (`_repo_root_cache` / `_resolved_content_root_cache` /
 `_resolved_claude_klabauter_root_cache`), mirroring the pre-existing `_CLI_CMD_CACHE`
 pattern already used for CLI resolution in this same module.
 
 This test is in-process (no subprocess spawn of the real write seams) and
 counts REAL `subprocess.run` invocations reachable from `_repo_root()` /
-`_resolved_doe_root()` / `_resolved_claude_klabauter_root()` — it does NOT assert on
+`_resolved_content_root()` / `_resolved_claude_klabauter_root()` — it does NOT assert on
 `_harvest()`'s own per-row WRITE dispatch (`_run_queue_append`/
 `_run_lesson_promote`), which is deliberately left one-spawn-per-row (see
 budget-manifest.json's `bin.coordinator_harvest_deferrals_dedup_scan_root_
@@ -28,21 +28,21 @@ resolution` rationale for why that isolation is load-bearing).
 
 HONEST-COUNTER FIX (opro-03 C-08, `state/audits/2026-08-19-opro-03-c08-
 budgeted-op-spawn-trace.md` § 5): a prior version of this test substituted
-`doe_root`/`_claude_klabauter_root` with fakes and counted CALLS TO THE FAKES, so
+`content_root`/`_claude_klabauter_root` with fakes and counted CALLS TO THE FAKES, so
 `resolution_calls_for_5_candidate_rows` measured call SHAPE (how many times
 `_candidate_search_dirs` reaches each resolver, post-memoization), never a
 real spawn — the fakes' own bodies, which is where any subprocess would
-actually happen, never ran. This version calls the REAL `doe_root()` /
+actually happen, never ran. This version calls the REAL `content_root()` /
 `_claude_klabauter_root()` (no substitution) with every resolver env override
-(`REPO_DOE_CLAUDE`/`DOE_ROOT`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
+(`REPO_CONTENT_ROOT`/`CONTENT_ROOT`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
 `LESSON_PROMOTE_OUTBOX_ROOT`) explicitly cleared — the steady state on an
 installed machine where none of those overrides is set — and counts real
 `subprocess.run` calls via a global patch on the `subprocess` module object
 (catches every module's `subprocess.run(...)`, not just one function
 reference). Clearing the env overrides is required for hermeticity: with
 them ambiently set (as this repo's own dev environment has
-`REPO_DOE_CLAUDE` set), `doe_root()`'s rung 1b would short-circuit before
-ever reaching its `machine-local get repos.doe_claude` spawn, undercounting
+`REPO_CONTENT_ROOT` set), `content_root()`'s rung 1b would short-circuit before
+ever reaching its `machine-local get repos.content_root` spawn, undercounting
 the steady-state figure this budget exists to protect.
 
 Exact-equality assertion, deliberately: a spawn-COUNT budget's whole point is
@@ -88,8 +88,8 @@ def _manifest_spawn_budget() -> dict:
 
 
 _ENV_OVERRIDES_TO_CLEAR = (
-    "REPO_DOE_CLAUDE",
-    "DOE_ROOT",
+    "REPO_CONTENT_ROOT",
+    "CONTENT_ROOT",
     "CLAUDE_KLABAUTER_ROOT",
     "QUEUE_APPEND_OUTPUT_ROOT",
     "LESSON_PROMOTE_OUTBOX_ROOT",
@@ -100,16 +100,16 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
     """5 candidate rows must cost exactly the manifest's
     `resolution_calls_for_5_candidate_rows` total REAL `subprocess.run`
     SPAWNS reachable from the three underlying resolution primitives
-    (`_repo_root`/`doe_root`/`_claude_klabauter_root`), not 5x that count. Only
+    (`_repo_root`/`content_root`/`_claude_klabauter_root`), not 5x that count. Only
     `_claude_klabauter_root()` still spawns in the steady state (see the trailing
     comment block below) — `resolution_calls_for_5_candidate_rows` is 1,
     not 3 or 2.
 
-    Calls the REAL `doe_root()`/`_claude_klabauter_root()` (no substitution) with
+    Calls the REAL `content_root()`/`_claude_klabauter_root()` (no substitution) with
     every resolver env override cleared — the steady state on an installed
     machine (see module docstring's HONEST-COUNTER FIX). This machine's own
-    dev environment has `REPO_DOE_CLAUDE` set ambiently, which would
-    short-circuit `doe_root()` before its spawning rung; clearing it here is
+    dev environment has `REPO_CONTENT_ROOT` set ambiently, which would
+    short-circuit `content_root()` before its spawning rung; clearing it here is
     what makes the count observe the real spawn instead of skipping it.
     """
     module = _load_harvest_module()

@@ -19,7 +19,7 @@ cannot import the engine in-process must take that spawn, so a miss here is
 This test does NOT assert warmth works. It asserts the failure mode when it
 cannot be reached, which is the only thing the reported crash was about.
 
-Reported: cross-repo/inbox/2026-08-31-doe-claude-em-engine-cc-invoke-warm-import-crash.md
+Reported: cross-repo/inbox/2026-08-31-coordinator-content-repo-em-engine-cc-invoke-warm-import-crash.md
 Baton: state/handoffs/2026-08-31-fleet-python-import-topology-the-editabl.md § D
 
 Run: pytest coordinator/bin/tests/test_cc_invoke_warm_reach_degrades_without_engine.py -q

@@ -254,7 +254,7 @@ def test_block_extent_matches_markers_only_on_their_own_line():
 # hashing it would make this pass only on the box that last updated the constant.
 
 _EXPECTED_APPEND_BLOCK_CHECKSUM = (
-    "68e499fdddc203a9bac77c3636c177fed580fac6e655028d97a5eb0bb3737333"
+    "64aa9b7a31de871ddb97933906ee9dcfd2e77cfd35bbcea06c3ec0a4442c530c"
 )
 
 

@@ -5,7 +5,7 @@ and "this round declared nothing".
 The two produce the same empty pathspec, and the round's no-op branch stated
 the second on evidence for the first: `real run reported no changed files;
 nothing to commit`. Four consecutive publishes copied files to dest, committed
-none, and reported `Rows succeeded: 6/6, Warnings: 0` (DoE-claude, filed as
+none, and reported `Rows succeeded: 6/6, Warnings: 0` (coordinator-content-repo, filed as
 state/bug-backlog/2026-08-28-the-publish-stager-drops-a-declared-path-under-a-
 gitignore-negation.yaml).
 

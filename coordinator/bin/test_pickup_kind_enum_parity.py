@@ -28,12 +28,12 @@ FileNotFoundError, not a genuine drift):
   - Leg 3 (SKILL.md) was retired from this repo's tree by the 2026-07-20
     plugin-surface retirement (docs/plans/2026-07-20-retire-claude-klabauter-plugin-surface.md)
     — discovery-resolved surfaces (skills, plugins, hooks) now live only in
-    coordinator-claude (DoE-claude). This repo can no longer observe that leg
+    coordinator-claude (coordinator-content-repo). This repo can no longer observe that leg
     at a co-located path. Rather than hardcode an absolute path to a sibling
     clone (machine-dependent, breaks on any machine without that clone), the
     path is resolved the same way every other doctrine CLI in this repo
-    resolves the DoE root — `coordinator_registry.doe_root()`
-    (DOE_ROOT env -> REPO_DOE_CLAUDE env -> machine-local repos.doe_claude).
+    resolves the DoE root — `coordinator_registry.content_root()`
+    (CONTENT_ROOT env -> REPO_CONTENT_ROOT env -> machine-local repos.content_root).
     When unresolvable, this leg is skipped (not silently passed) via
     pytest.skip with the reason on the record — an honest "cannot observe"
     rather than a false green.
@@ -68,7 +68,7 @@ def _pickup_skill_path() -> str:
     )
     if os.path.exists(local):
         return local
-    return os.path.join(reg.doe_root(), "coordinator", "skills", "pickup", "SKILL.md")
+    return os.path.join(reg.content_root(), "coordinator", "skills", "pickup", "SKILL.md")
 
 
 def _parse_valid_kinds_from_cli(path: str) -> set[str]:
@@ -147,7 +147,7 @@ def test_pickup_pinned_enum_matches_cli_valid_kinds() -> None:
     The SKILL.md leg is skipped (not silently passed) in two cases, each
     logged with its reason rather than reached by a quiet fallthrough:
 
-      - This machine has no resolvable DoE clone (coordinator_registry.doe_root()
+      - This machine has no resolvable DoE clone (coordinator_registry.content_root()
         raises reg._DoeUnresolvable) — genuinely cross-repo since the
         2026-07-20 plugin surface retirement moved skills/ out of this tree.
       - DoE commit 2dc344fa ("C5: collapse pickup SKILL.md to the thin

@@ -7,7 +7,7 @@ real entry points instead of comparing one table to another (state/audits/
 2026-08-03-percolate-table-shaped-test-blind-spot.md).
 
 Incident this closes the general class of (not the specific field break):
-a percolate-root override's own `publish_sync.py` (e.g. DoE-claude's
+a percolate-root override's own `publish_sync.py` (e.g. Coordinator-content-repo's
 `setup/publish_sync.py`) can drift out of contract with OUR `sync_mirror`
 signature the moment we add a keyword argument here, and that only
 surfaced in the field as a FATAL at mirror dispatch:
@@ -50,7 +50,7 @@ so the exclusion does not stand alone: its intentionality is pinned by
 `test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs`, and the
 live leg by the two call-site tests that arm it and starve it.
 
-WHAT THIS TEST WOULD NOT HAVE CAUGHT: the field break was in DoE-claude's
+WHAT THIS TEST WOULD NOT HAVE CAUGHT: the field break was in coordinator-content-repo's
 `setup/publish_sync.py`, a sibling repo's file this repo cannot import or
 assert against (§ dispatch brief). No test living here can pin a file that
 does not exist in this tree. What this test pins is OUR side of that

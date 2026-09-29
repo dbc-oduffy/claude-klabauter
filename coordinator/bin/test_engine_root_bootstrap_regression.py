@@ -479,7 +479,7 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
 
 
 def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout() -> None:
-    """AC (cross-repo/inbox/2026-08-17-doe-claude-em-mirror-entrypoints-missing-
+    """AC (cross-repo/inbox/2026-08-17-coordinator-content-repo-em-mirror-entrypoints-missing-
     coordinator_core.md): `coordinator-ensure-hooks-fleet` and
     `gate-validate-invocable` both used to resolve their engine root with a
     scheme correct ONLY in this tree's layout (`<root>/coordinator/bin` — a

@@ -95,7 +95,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Dry-run — report what would change without writing anything:\n"
             "  python3 bin/claude-klabauter-revendor-handoff-schema.py --dry-run\n\n"
             "  # Override the DoE clone path:\n"
-            "  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/DoE-claude\n\n"
+            "  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/coordinator-content-repo\n\n"
             "  # Any other vendored schema (incl. every pin-tracked one):\n"
             "  python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run\n"
         ),
@@ -105,7 +105,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PATH",
         help=(
             "Override the DoE clone path. Default: resolve via machine-local registry "
-            "(repos.doe_claude in registry.local.toml / registry.toml). "
+            "(repos.content_root in registry.local.toml / registry.toml). "
             "Reuses resolve_doe_clone() — never re-implements registry parsing."
         ),
     )

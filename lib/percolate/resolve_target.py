@@ -180,7 +180,7 @@ def resolve_machine_local_bin(root: Path) -> Optional[str]:
     # the CLI, so it is a rung in its own right rather than something only a
     # PATH lookup happens to find. Without it, resolution depends on which repo
     # `root` points at: when a caller passes the DoE clone (publish.py does),
-    # neither <root>/bin nor <root>/coordinator/bin exists — DoE-claude tracks
+    # neither <root>/bin nor <root>/coordinator/bin exists — coordinator-content-repo tracks
     # no files under coordinator/bin — so every filesystem rung missed and
     # resolution fell through to PATH. The settings-home bin dir is NOT on PATH
     # on all platforms, so that fall-through returned None, which the caller
@@ -524,7 +524,7 @@ def _resolve_source_sigil(
         if strict:
             if ps_base is None:
                 # repos.* keys are underscore-normalized fleet-wide
-                # (repos.doe_claude, repos.claude_klabauter, …) while
+                # (repos.content_root, repos.claude_klabauter, …) while
                 # plugin-source sigils use the repo's hyphenated directory
                 # name (plugin-source:claude-klabauter) — normalize before
                 # the lookup, not the sigil itself.

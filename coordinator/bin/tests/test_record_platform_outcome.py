@@ -3,7 +3,7 @@ for the C1 platform-outcome schema).
 
 Invokes the CLI as a real subprocess (`sys.executable <path> --surface ... --command
 ... --exit-code ...`) against a scratch git repo standing in for the surface-providing
-repo (`DOE_ROOT` env override), and asserts the emitted record:
+repo (`CONTENT_ROOT` env override), and asserts the emitted record:
   1. lands at the schema's RECORD LOCATION convention:
      <surface_root>/state/platform-outcomes/<platform>/<machine>/<surface>.yaml
   2. is schema-valid against `coordinator/schemas/platform-outcome.schema.json` —
@@ -17,7 +17,7 @@ registry `coordinator.machine_slug` -> live hostname fallback).
 
 Converted from a hand-rolled unittest runner to top-level pytest functions.
 
-Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C2
+Spec backlink: coordinator-content-repo:pln-platform-verified-is-a-distinc-a076aa § C2
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
-#            CONTRACT and, per DR-047, stayed in DoE-claude when bin/ moved
+#            CONTRACT and, per DR-047, stayed in coordinator-content-repo when bin/ moved
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _COORDINATOR_DIR = _BIN_DIR.parent
@@ -63,7 +63,7 @@ def _load_cli(path: Path, module_name: str):
 
 _cli = _load_cli(_CLI_PATH, "record_platform_outcome")
 
-# own DOE_ROOT/REPO_DOE_CLAUDE/machine-local rungs against this process's
+# own CONTENT_ROOT/REPO_CONTENT_ROOT/machine-local rungs against this process's
 _REAL_MANIFEST_PATH = Path(sys.modules["coordinator_registry"]._MANIFEST_PATH)
 _REAL_SCHEMAS_DIR = _REAL_MANIFEST_PATH.parent
 _SCHEMA_PATH = _REAL_SCHEMAS_DIR / "platform-outcome.schema.json"
@@ -142,9 +142,9 @@ def _setup_surface(tmp_path):
     surface_root = str(tmp_path / "surface-repo")
     os.makedirs(surface_root)
     surface_sha = _init_scratch_repo(surface_root)
-    # _run_cli() points DOE_ROOT at surface_root, which coordinator_registry's
-    # own import-time manifest bootstrap also reads (DOE_ROOT wins over the
-    # ambient REPO_DOE_CLAUDE alias by design — same precedence as doe_root()).
+    # _run_cli() points CONTENT_ROOT at surface_root, which coordinator_registry's
+    # own import-time manifest bootstrap also reads (CONTENT_ROOT wins over the
+    # ambient REPO_CONTENT_ROOT alias by design — same precedence as content_root()).
     schemas_dir = Path(surface_root) / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
     shutil.copy(_REAL_MANIFEST_PATH, schemas_dir / _REAL_MANIFEST_PATH.name)
@@ -153,7 +153,7 @@ def _setup_surface(tmp_path):
 
 def _run_cli(surface_root, *, surface: str, command: str, exit_code: int) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["DOE_ROOT"] = surface_root
+    env["CONTENT_ROOT"] = surface_root
     env["COORDINATOR_MACHINE"] = "test-machine"
     # coordinator.machine_slug can never leak in and override COORDINATOR_MACHINE
     # (it wouldn't — COORDINATOR_MACHINE wins rung 1 — but keep the env clean).
@@ -233,37 +233,37 @@ def test_invalid_surface_rejected(tmp_path) -> None:
     assert "invalid --surface" in result.stderr
 
 
-def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
+def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
     """Regression: an ambient `COORDINATOR_SETTINGS_HOME` (ubiquitous in any real
     coordinator-plugin session) previously survived this test's env scrub. Its
-    `machine-local/.doe-root` pointer resolved to the REAL checkout, so the CLI
+    `machine-local/.coordinator-content-root` pointer resolved to the REAL checkout, so the CLI
     wrote a genuine record into the real repo's `state/platform-outcomes/`
     instead of raising — the exact opposite of what this test asserts. Every
-    rung that can resolve `doe_root()` must be isolated, not just the two env
+    rung that can resolve `content_root()` must be isolated, not just the two env
     aliases and `CLAUDE_HOME`."""
     surface_root, _surface_sha = _setup_surface(tmp_path)
     env = dict(os.environ)
-    env.pop("DOE_ROOT", None)
-    # REPO_DOE_CLAUDE is the ambient alias doe_root() also checks (d5e22cb2) —
+    env.pop("CONTENT_ROOT", None)
+    # REPO_CONTENT_ROOT is the ambient alias content_root() also checks (d5e22cb2) —
     # MACHINE_LOCAL_IMPL stub below, defeating the "fully unresolvable" premise
-    env.pop("REPO_DOE_CLAUDE", None)
+    env.pop("REPO_CONTENT_ROOT", None)
     stub = str(tmp_path / "_machine_local_stub.py")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")
     env["MACHINE_LOCAL_IMPL"] = stub
-    # CLAUDE_HOME must also be isolated: doe_root()'s codename-free rungs
+    # CLAUDE_HOME must also be isolated: content_root()'s codename-free rungs
     # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
-    # premise this test exists to cover, exactly like the REPO_DOE_CLAUDE
+    # premise this test exists to cover, exactly like the REPO_CONTENT_ROOT
     env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
     # COORDINATOR_SETTINGS_HOME wins settings_home()'s FIRST rung, ahead of
     # CLAUDE_HOME entirely — an ambient value (present in every real
-    # coordinator session) would let the settings-home `.doe-root` pointer
+    # coordinator session) would let the settings-home `.coordinator-content-root` pointer
     # resolve to the real checkout regardless of the CLAUDE_HOME override
     # above. Must be isolated to a nonexistent path, not merely popped (an
     # unset var falls back to CLAUDE_HOME, which is already isolated, but
     # pinning it explicitly keeps this test's isolation self-contained).
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "no-such-settings-home")
-    # CLAUDE_PLUGIN_ROOT is a live rung too (doe_root() falls back to it via
+    # CLAUDE_PLUGIN_ROOT is a live rung too (content_root() falls back to it via
     # the plugin-root candidate probe) — ambient in every real plugin-loaded
     # session, so it must never reach this subprocess unpopped.
     env.pop("CLAUDE_PLUGIN_ROOT", None)
@@ -277,7 +277,7 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
         **no_console_creationflags(),
     )
     assert result.returncode != 0
-    assert "DOE_ROOT" in result.stderr
+    assert "CONTENT_ROOT" in result.stderr
     # Cheap guard: this test's whole premise is "no record gets written
     # anywhere" — assert the surface_root's own state/ tree was never
     # created (would-be evidence of a write landing somewhere unintended).

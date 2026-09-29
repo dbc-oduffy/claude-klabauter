@@ -188,10 +188,10 @@ def _import_checker_and_seam():
         sys.path.insert(0, _COORDINATOR_CORE_ROOT)
     from coordinator_core import _settings_home
     from coordinator_core.install import check_install_singularity
-    from coordinator_core.ops import coordinator_doe_root
+    from coordinator_core.ops import coordinator_content_root
 
     importlib.reload(_settings_home)
-    return _settings_home, check_install_singularity, coordinator_doe_root
+    return _settings_home, check_install_singularity, coordinator_content_root
 
 
 def _norm(p):
@@ -204,14 +204,14 @@ def test_agreement_pin_claude_home_only(monkeypatch, tmp_path):
     <CLAUDE_HOME>/.claude (mod separator normalization)."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    settings_home, checker, doe_root_mod = _import_checker_and_seam()
+    settings_home, checker, content_root_mod = _import_checker_and_seam()
 
     expected = os.path.join(str(tmp_path), ".claude")
     assert _norm(mlir.claude_home()) == _norm(expected)
     assert _norm(checker._claude_base_dir()) == _norm(expected)
     assert _norm(str(settings_home.claude_config_dir())) == _norm(expected)
 
-    claude_dir = doe_root_mod._cf_claude_config_dir_or_none()
+    claude_dir = content_root_mod._cf_claude_config_dir_or_none()
     assert _norm(claude_dir) == _norm(expected)
     assert _norm(os.path.join(claude_dir, "plugins", "coordinator-claude")) == _norm(
         os.path.join(expected, "plugins", "coordinator-claude")
@@ -229,11 +229,11 @@ def test_agreement_pin_claude_config_dir_set(monkeypatch, tmp_path):
     home_substitute = tmp_path / "home-substitute"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("CLAUDE_HOME", str(home_substitute))
-    settings_home, checker, doe_root_mod = _import_checker_and_seam()
+    settings_home, checker, content_root_mod = _import_checker_and_seam()
 
     assert _norm(mlir.claude_home()) == _norm(str(config_dir))
     assert _norm(str(settings_home.claude_config_dir())) == _norm(str(config_dir))
-    assert _norm(doe_root_mod._cf_claude_config_dir_or_none()) == _norm(str(config_dir))
+    assert _norm(content_root_mod._cf_claude_config_dir_or_none()) == _norm(str(config_dir))
     assert _norm(checker._claude_base_dir()) == _norm(
         os.path.join(str(home_substitute), ".claude")
     )
@@ -246,7 +246,7 @@ def test_agreement_pin_planted_violation_self_check(monkeypatch, tmp_path):
     exists to catch."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    settings_home, checker, doe_root_mod = _import_checker_and_seam()
+    settings_home, checker, content_root_mod = _import_checker_and_seam()
 
     monkeypatch.setattr(mlir, "claude_home", lambda: os.environ["CLAUDE_HOME"])
     expected = os.path.join(str(tmp_path), ".claude")

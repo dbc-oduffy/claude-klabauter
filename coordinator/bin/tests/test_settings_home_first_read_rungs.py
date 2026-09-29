@@ -77,7 +77,7 @@ def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(m
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
-    result = _rrp._resolve_registry_value("repos.doe_claude")
+    result = _rrp._resolve_registry_value("repos.content_root")
 
     assert result == ""
     captured = capsys.readouterr()
@@ -88,39 +88,39 @@ def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(m
 
 _FAKE_ML_SCRIPT = """#!/usr/bin/env python3
 import sys
-print({doe_root!r})
+print({content_root!r})
 sys.exit(0)
 """
 
 
-def _plant_fake_machine_local(base_dir: str, doe_root: str) -> None:
+def _plant_fake_machine_local(base_dir: str, content_root: str) -> None:
     bin_dir = os.path.join(base_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
     script_path = os.path.join(bin_dir, "machine-local")
     with open(script_path, "w", encoding="utf-8") as fh:
-        fh.write(_FAKE_ML_SCRIPT.format(doe_root=doe_root))
+        fh.write(_FAKE_ML_SCRIPT.format(content_root=content_root))
     os.chmod(script_path, 0o755)
     if os.name == "nt":
         py_twin = script_path + ".py"
         with open(py_twin, "w", encoding="utf-8") as fh:
-            fh.write(_FAKE_ML_SCRIPT.format(doe_root=doe_root))
+            fh.write(_FAKE_ML_SCRIPT.format(content_root=content_root))
         cmd_path = script_path + ".cmd"
         with open(cmd_path, "w", encoding="utf-8") as fh:
             fh.write(f'@"{sys.executable}" "{py_twin}" %*\n')
 
 
 def _build_doe_fixture(root: str, tag: str) -> str:
-    doe_root = os.path.join(root, f"doe-{tag}")
-    manifest_dir = os.path.join(doe_root, "coordinator", "schemas")
+    content_root = os.path.join(root, f"doe-{tag}")
+    manifest_dir = os.path.join(content_root, "coordinator", "schemas")
     os.makedirs(manifest_dir)
     with open(
         os.path.join(manifest_dir, "coordinator-registry.manifest.json"), "w", encoding="utf-8"
     ) as fh:
         fh.write(
             '{"docTypes": [], "queueTypes": [], '
-            '"identity": {"repoAliases": [], "centralReceiverIds": ["doe-claude-em"]}}'
+            '"identity": {"repoAliases": [], "centralReceiverIds": ["coordinator-content-repo-em"]}}'
         )
-    return doe_root
+    return content_root
 
 
 def _run_registry_import_subprocess(env: dict) -> "subprocess.CompletedProcess[str]":
@@ -165,7 +165,7 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
-        # DOE_ROOT/REPO_DOE_CLAUDE in the first place (unlike os.environ.copy()).
+        # CONTENT_ROOT/REPO_CONTENT_ROOT in the first place (unlike os.environ.copy()).
 
         result = _run_registry_import_subprocess(env)
         assert result.returncode == 0, f"stderr:\n{result.stderr}"

@@ -29,7 +29,7 @@ def _block(mod) -> str:
 
 
 def test_removes_the_shim_and_the_rc_block_and_keeps_the_operators_lines(unstick, tmp_path, capsys):
-    shim = tmp_path / ".claude" / "shell" / "claude-doe-shim.sh"
+    shim = tmp_path / ".claude" / "shell" / "claude-author-shim.sh"
     shim.parent.mkdir(parents=True)
     shim.write_text("claude() { :; }\n")
     zshrc = tmp_path / ".zshrc"
