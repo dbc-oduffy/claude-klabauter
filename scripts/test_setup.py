@@ -882,9 +882,25 @@ def test_flag_pair_violation_accept_only(setup_mod):
     assert setup_mod.main(["--accept-missing-deps-risk"]) == setup_mod.EXIT_FLAG_PAIR_VIOLATION
 
 
-def test_check_mode_exits_zero_before_flag_pair_gate(setup_mod):
-    # --check short-circuits before the flag-pair gate is even reached.
-    assert setup_mod.main(["--check"]) == 0
+def test_check_mode_returns_run_check_exit_code_before_flag_pair_gate(setup_mod, monkeypatch):
+    monkeypatch.setattr(setup_mod, "run_check", lambda root: 7)
+    assert setup_mod.main(["--check"]) == 7
+
+
+def test_fleet_env_is_opt_in(setup_mod, monkeypatch):
+    monkeypatch.setattr(setup_mod, "_stdin_can_answer", lambda: True)
+    monkeypatch.delenv("COORDINATOR_FLEET_ENV", raising=False)
+    assert setup_mod.parse_args([]).with_fleet_env is False
+    assert setup_mod.parse_args(["--with-fleet-env"]).with_fleet_env is True
+    monkeypatch.setenv("COORDINATOR_FLEET_ENV", "1")
+    assert setup_mod.parse_args([]).with_fleet_env is True
+
+
+def test_setup_is_directly_executable():
+    script = Path(__file__).resolve().parent / "setup.py"
+    assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n")
+    if os.name != "nt":
+        assert os.access(script, os.X_OK)
 
 
 def test_help_mode_exits_zero(setup_mod):
@@ -2440,9 +2456,9 @@ def test_register_claude_klabauter_root_appends_unset_doe_claude_anchor_last(
     out = capsys.readouterr().out
     assert (
         "--- Registration (claude-klabauter): "
-        "engine.target + repos.claude_klabauter + repos.doe_claude ---"
+        "engine.target + repos.claude_klabauter + repos.content_root ---"
     ) in out
-    assert f"machine-local set repos.doe_claude {clone}" in out
+    assert f"machine-local set repos.content_root {clone}" in out
     assert "engine.working_repos.doe_claude" not in out
 
 

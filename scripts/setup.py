@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """scripts/setup.py — claude-klabauter standalone setup script (cross-platform).
 
 AUTHORITATIVE REGISTRATION SURFACE for the agent-install contract of BOTH
@@ -58,7 +59,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
-                            [--allow-venv-fallback] [--with-test-deps]
+                            [--allow-venv-fallback] [--with-test-deps] [--with-fleet-env]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -284,8 +285,13 @@ Options:
                                       fall back from.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
+  --with-fleet-env                   Also build the fleet-wide Python environment (the private fleet's
+                                      ML/RAG stack: multi-GB download, many minutes). Off by default: the
+                                      installer provisions the engine only. COORDINATOR_FLEET_ENV=1 is
+                                      equivalent.
   --register-only                    Skip Step Zero + dep check; run registration + verification only
-  --check                            Smoke-test that the script is present and executable; exits 0
+  --check                            Verify the install, one PASS/FAIL line per item (forwarders, door,
+                                      guards, repos.* pointers, statusline); exits 1 on any FAIL
   --preflight                        Read-only OSS Step Zero probe: python, git, uv, gh, node, pwsh,
                                       clone_auth (coordinator_core.install.prereq_probe). Prints one
                                       pass/warn/fail line per probe; mutates nothing. Exit 0 if no
@@ -363,6 +369,7 @@ class Args:
         self.allow_venv_fallback = False
         self.container_optin = False
         self.with_test_deps = False
+        self.with_fleet_env = os.environ.get("COORDINATOR_FLEET_ENV") == "1"
         self.with_claude_doe_launcher = False
         self.register_only = False
         self.check = False
@@ -397,6 +404,8 @@ def parse_args(argv: list[str]) -> Args:
             args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
+        elif tok == "--with-fleet-env":
+            args.with_fleet_env = True
         elif tok == "--with-claude-doe-launcher":
             # The DoE-developer opt-in that lets this installer shadow the
             # operator's `claude` command. Deliberately absent from HELP_TEXT:
@@ -2525,7 +2534,7 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
 #: The registry key `coordinator_core.trusted_root_guard._doe_root` reads first
 #: (DR-071's canonical coordinator-root anchor) — the value behind
 #: `resolve_operator_config`'s `doe_root`.
-_DOE_CLAUDE_ANCHOR_KEY = "repos.doe_claude"
+_DOE_CLAUDE_ANCHOR_KEY = "repos.content_root"
 
 
 def _unset_doe_claude_registration(
@@ -4736,6 +4745,11 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
     """
     print()
     print("--- Install: fleet shared Python environment ---")
+    print(
+        "NOTICE: downloads roughly 2 GB of packages (torch, transformers, CUDA wheels) and can take "
+        "10+ minutes with little output.",
+        flush=True,
+    )
 
     if str(claude_klabauter_root_resolved) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root_resolved))
@@ -4831,6 +4845,28 @@ _PREFLIGHT_PROBE_NAMES = (
 )
 
 
+def run_check(claude_klabauter_root: Path) -> int:
+    """`--check`: verify the install and print one PASS/FAIL line per item; exit 1 on any FAIL."""
+    if str(claude_klabauter_root) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root))
+    from coordinator_core._settings_home import claude_config_dir, settings_home
+    from coordinator_core.install import setup_check
+    from coordinator_core.machine_resolver import registry_get
+
+    identity = resolve_repo_identity(claude_klabauter_root)
+    if identity == "claude-klabauter":
+        keys = ["repos.claude_klabauter", "engine.working_repos.claude_klabauter"]
+    else:
+        keys = ["repos.claude_klabauter"]
+    print("=== setup.py --check ===")
+    items = setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
+    for item in items:
+        print(item.line())
+    code = setup_check.exit_code(items)
+    print("check: all items verified" if code == 0 else "check: FAILED -- re-run scripts/setup.py")
+    return code
+
+
 def run_preflight() -> int:
     """`--preflight`: the OSS install path's own Step Zero prerequisite gate.
 
@@ -4876,15 +4912,13 @@ def run_preflight() -> int:
 
 
 def main(argv: list[str]) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     try:
         args = parse_args(argv)
     except ArgError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    if args.check:
-        print("check mode: setup.py is present and executable")
-        return 0
 
     if args.help:
         print(HELP_TEXT, end="")
@@ -4905,6 +4939,8 @@ def main(argv: list[str]) -> int:
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent.parent
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
+    if args.check:
+        return run_check(claude_klabauter_root_resolved)
 
     if not args.register_only:
         print("=== claude-klabauter setup (standalone) ===")
@@ -4993,7 +5029,11 @@ def main(argv: list[str]) -> int:
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
-        install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)
+        if args.with_fleet_env:
+            install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)
+        else:
+            print()
+            print("[SKIP] fleet shared environment (multi-GB ML/RAG stack) -- pass --with-fleet-env or set COORDINATOR_FLEET_ENV=1 to build it.")
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
 
     print()

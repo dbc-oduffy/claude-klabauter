@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """scripts/cloud_setup.py — the cloud provisioning entrypoint for the engine.
 
 Purpose: this is the single decision-carrying artifact behind the bash pasted into a
@@ -71,6 +72,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -288,7 +290,16 @@ NETWORK_MAX_ATTEMPTS = 3
 #: `--cloud` install time; do not treat this number as load-bearing evidence
 #: of anything.
 RAG_INSTALL_TIMEOUT_S = 2400
+#: Foreground budget for the retrieval install. Past it the install is NOT
+#: killed for good: it is restarted detached (`RAG_INSTALL_DEFERRED_LOG`) and
+#: the rest of the pipeline proceeds, so the settings writes always land inside
+#: the platform's setup-script budget. Provisional, not measured.
+RAG_INSTALL_BUDGET_S = 420
+RAG_INSTALL_DEFERRED_LOG = Path("/root/example-retrieval-repo-cloud-install.log")
 MACHINE_LOCAL_TIMEOUT_S = 60
+
+#: Session-start probe (stdlib-only) that names a placeholder PATH in-session.
+PATH_PROBE_REL = ("scripts", "cloud_path_probe.py")
 
 RETRIEVAL_ROOT_ENV = "COORDINATOR_RETRIEVAL_ROOT"
 
@@ -415,6 +426,11 @@ class Report:
     #: up with a `prepare-commit-msg` hook file. See `install_hooks_fleet`.
     hooks_fleet: dict | None = None
     rag_install: dict | None = None
+    #: Verdicts of `pin_hook_interpreter`, `register_path_probe_hook` and
+    #: `follow_engine_link_in_pth`.
+    hook_interpreter: dict | None = None
+    path_probe: dict | None = None
+    engine_pth: dict | None = None
     mcp_registration: dict | None = None
     #: The headersHelper this run armed: the helper path and the daemon-start
     #: argv baked into it. See `arm_retrieval_connect_helper`.
@@ -508,6 +524,10 @@ def run_step(name: str, fn, report: Report) -> None:
     else:
         elapsed = time.monotonic() - started
         report.steps.append(StepResult(name, True, "ok", elapsed))
+    # `main` opts in: a run killed mid-pipeline leaves the report as evidence of
+    # the last step that finished. Not a dataclass field, so it never serializes.
+    if getattr(report, "checkpoint", False):
+        _write_report_best_effort(report)
 
 
 def _network_retry(name: str, attempt_fn) -> None:
@@ -1373,6 +1393,7 @@ def run_claude_klabauter_setup(report: Report) -> None:
         coordinator_root,
         "--i-assert-no-other-consumer",
         "--with-test-deps",
+        "--with-fleet-env",
     ]
     # `container_optin_requested` and `setup_exit_code` are two separate
     # first-hand facts, never conflated into one: this process knows it PASSED
@@ -2654,6 +2675,36 @@ def _resolve_rag_project_root(report: Report) -> str:
     return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
 
 
+def _defer_rag_install(argv: list[str], report: Report) -> None:
+    """Restart the retrieval installer detached, its output to a log file.
+
+    The foreground attempt hit `RAG_INSTALL_BUDGET_S` and was killed by
+    `subprocess.run`; the installer is resumable (pip/uv caches are warm), so
+    the rerun continues rather than repeats. Recorded as `deferred` with the
+    log path, and never raised: the pipeline's remaining steps are the ones the
+    budget exists to protect.
+    """
+    RAG_INSTALL_DEFERRED_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(RAG_INSTALL_DEFERRED_LOG, "ab") as log:
+        proc = subprocess.Popen(
+            argv,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    report.rag_install["deferred"] = {
+        "reason": f"foreground install exceeded {RAG_INSTALL_BUDGET_S}s",
+        "pid": proc.pid,
+        "log": str(RAG_INSTALL_DEFERRED_LOG),
+    }
+    _safe_print(
+        f"[cloud_setup] cloud install: exceeded {RAG_INSTALL_BUDGET_S}s; continuing in the "
+        f"background (pid {proc.pid}), log {RAG_INSTALL_DEFERRED_LOG}."
+    )
+
+
 def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     """Run example-retrieval-repo's installer in ITS cloud pre-boot mode.
 
@@ -2732,19 +2783,23 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     # only to interpolate into the raise below discarded those lines on exactly
     # the runs where they mattered, leaving the setup log reading "OK" for a box
     # whose daemon does not boot. Review: coordinator:code-reviewer (P1).
-    result = subprocess.run(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=RAG_INSTALL_TIMEOUT_S,
-        # stdin explicitly closed, not inherited; see _git_clone's comment. The
-        # installer's own --non-interactive is not relied on alone: a prompt
-        # gated on isatty rather than on the flag would otherwise block for the
-        # whole RAG_INSTALL_TIMEOUT_S ceiling.
-        stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    try:
+        result = subprocess.run(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=min(RAG_INSTALL_BUDGET_S, RAG_INSTALL_TIMEOUT_S),
+            # stdin explicitly closed, not inherited; see _git_clone's comment. The
+            # installer's own --non-interactive is not relied on alone: a prompt
+            # gated on isatty rather than on the flag would otherwise block for the
+            # whole budget.
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        _defer_rag_install(argv, report)
+        return
     _safe_print(result.stdout.rstrip())
     report.rag_install["exit_code"] = result.returncode
     if result.returncode != 0:
@@ -3618,6 +3673,9 @@ def reclaim_uv_cache(report: Report) -> None:
     if report.rag_install is None:
         verdict["skipped"] = "retrieval install did not run"
         return
+    if report.rag_install.get("deferred"):
+        verdict["skipped"] = "retrieval install still running in the background"
+        return
     if not cache_dir.is_dir():
         verdict["skipped"] = "no uv cache on disk"
         return
@@ -3646,6 +3704,126 @@ def reclaim_uv_cache(report: Report) -> None:
         "[cloud_setup] uv cache reclaim: freed "
         f"{verdict['bytes_before'] - verdict['bytes_after']} byte(s)"
     )
+
+
+def _absolute_python3() -> str:
+    """An absolute `python3` resolved off the image, else this interpreter."""
+    search = _image_search_path(_image_default_path().split(":"))
+    found = shutil.which("python3", path=search)
+    if found and os.path.isabs(found):
+        return found
+    return sys.executable
+
+
+def _rewrite_bare_python3(hooks: object, interpreter: str) -> int:
+    """Point every hook whose `command` is bare `python3` at `interpreter`.
+
+    Returns the number rewritten. Walks the `{event: [{hooks: [{command}]}]}`
+    shape shared by `hooks.json` and `settings.json`.
+    """
+    changed = 0
+    if not isinstance(hooks, dict):
+        return 0
+    for groups in hooks.values():
+        for group in groups if isinstance(groups, list) else []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                if isinstance(hook, dict) and hook.get("command") == "python3":
+                    hook["command"] = interpreter
+                    changed += 1
+    return changed
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), newline="\n")
+    tmp_path.replace(path)
+
+
+def pin_hook_interpreter(report: Report) -> None:
+    """Register hook commands by absolute interpreter, resolved here.
+
+    A registered `python3` is looked up on the session's PATH; a PATH that
+    resolves nothing then silences the very hook plane that would report it.
+    Rewrites bare `python3` commands in the coordinator clone's `hooks.json`
+    and in `settings.json`, in place, idempotently.
+    """
+    interpreter = _absolute_python3()
+    verdict: dict = {"interpreter": interpreter, "rewritten": {}}
+    report.hook_interpreter = verdict
+    targets = [
+        Path(CLONES["coordinator-claude"]["dest"]).joinpath(*PLUGIN_HOOKS_REL),
+        _claude_home() / "settings.json",
+    ]
+    for path in targets:
+        if not path.is_file():
+            verdict["rewritten"][str(path)] = "absent"
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        hooks = data.get("hooks")
+        count = _rewrite_bare_python3(hooks, interpreter)
+        if count:
+            _atomic_write_json(path, data)
+        verdict["rewritten"][str(path)] = count
+
+
+def register_path_probe_hook(report: Report) -> None:
+    """Add the SessionStart PATH-placeholder probe to `settings.json` hooks.
+
+    Merge, never clobber; a probe already registered is left alone. The
+    command carries an absolute interpreter so it runs on a broken PATH.
+    """
+    probe = ENGINE_CURRENT_LINK.joinpath(*PATH_PROBE_REL)
+    command = f"{shlex.quote(_absolute_python3())} {shlex.quote(str(probe))}"
+    settings_path = _claude_home() / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.is_file() else {}
+    groups = settings.setdefault("hooks", {}).setdefault("SessionStart", [])
+    already = any(
+        PATH_PROBE_REL[-1] in str(h.get("command", ""))
+        for g in groups
+        if isinstance(g, dict)
+        for h in g.get("hooks", [])
+        if isinstance(h, dict)
+    )
+    if not already:
+        groups.append({"hooks": [{"type": "command", "command": command, "timeout": 10}]})
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(settings_path, settings)
+    report.path_probe = {"command": command, "already_registered": already}
+
+
+def follow_engine_link_in_pth(report: Report) -> None:
+    """Make the interpreter's `coordinator_core` path follow `ENGINE_CURRENT_LINK`.
+
+    A plain-path `.pth` naming the frozen clone binds `coordinator_core` to that
+    tree in every interpreter, so once the SessionStart repin points the link at
+    a fresher checkout the dispatch root and the bound engine diverge and the
+    guard plane cannot evaluate. Rewrites only a `.pth` whose whole content is
+    the frozen clone path; anything else is left alone.
+    """
+    frozen = str(Path(CLONES["klabauter"]["dest"]))
+    verdict: dict = {"link": str(ENGINE_CURRENT_LINK), "rewritten": [], "left": []}
+    report.engine_pth = verdict
+    if not (ENGINE_CURRENT_LINK.is_symlink() and ENGINE_CURRENT_LINK.exists()):
+        verdict["skipped"] = "engine link is not a live symlink"
+        return
+    dirs: list[str] = []
+    try:
+        import site
+
+        dirs += site.getsitepackages() + [site.getusersitepackages()]
+    except Exception:  # noqa: BLE001 - a site probe failure is a recorded empty scan
+        pass
+    dirs.append(sysconfig.get_path("purelib"))
+    for directory in dict.fromkeys(dirs):
+        for pth in sorted(Path(directory).glob("__editable__.coordinator_core-*.pth")):
+            try:
+                if pth.read_text(encoding="utf-8").strip() == frozen:
+                    pth.write_text(str(ENGINE_CURRENT_LINK) + "\n", encoding="utf-8")
+                    verdict["rewritten"].append(str(pth))
+                else:
+                    verdict["left"].append(str(pth))
+            except OSError as e:
+                verdict["left"].append(f"{pth}: {e}")
 
 
 def _record_session_surfaces_best_effort(report: Report) -> None:
@@ -3699,6 +3877,7 @@ def main() -> int:
     print(f"[cloud_setup] {reason}")
 
     report = Report()
+    report.checkpoint = True
 
     # FIRST, cheap disk hygiene ahead of every clone/install step below: a
     # volume already filled by a prior wave's leaked pytest trees fails those
@@ -3721,6 +3900,13 @@ def main() -> int:
     run_step("apply settings-manifest env", lambda: apply_settings_manifest_env(report), report)
     run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
     run_step("register live plugin record", register_live_plugin_record, report)
+    # Early pin: image-default dirs already resolve `python3`/`git`, so a run
+    # killed during the long retrieval install still leaves a usable PATH. The
+    # late pin below re-derives it once the language-server dir exists.
+    run_step("pin session PATH (early)", lambda: pin_session_path(report), report)
+    run_step("pin hook interpreter", lambda: pin_hook_interpreter(report), report)
+    run_step("register PATH probe hook", lambda: register_path_probe_hook(report), report)
+    run_step("engine .pth follows link", lambda: follow_engine_link_in_pth(report), report)
     run_step("install global doctrine", lambda: install_global_doctrine(report), report)
     run_step("verify global doctrine", lambda: verify_global_doctrine(report), report)
 
