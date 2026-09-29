@@ -610,7 +610,9 @@ def _refuse_engine_root_as_dest(
     `candidate`) IS the flow's staging branch, so a round committing and
     pushing there is the percolate -> candidate step itself (PM ruling
     2026-09-19: publish runs atop the git-tracked engine repo, never a second
-    clone). `main`/`master` stay refused whatever `track_ref` says.
+    clone). A clone left on another branch is switched onto `track_ref` first; one
+    git will not switch (dirty tree) is refused. `main`/`master` stay refused
+    whatever `track_ref` says.
     """
     try:
         from coordinator_core.engine_root import is_published_engine_mirror
@@ -625,9 +627,29 @@ def _refuse_engine_root_as_dest(
         # Same normalization as publish.py::_expected_local_branch.
         track_branch = track_ref[len("origin/") :] if track_ref.startswith("origin/") else track_ref
         tracks_default_branch = track_branch in ("main", "master")
-        on_track_branch = _checked_out_branch(dest_root) == track_branch
-        if on_track_branch and not tracks_default_branch:
-            return
+        if not tracks_default_branch:
+            if _checked_out_branch(dest_root) == track_branch:
+                return
+            # Off-track is routine (a human or session left the clone on `main`), not a
+            # hazard in itself: the hazard is committing there. Move it onto the track
+            # branch; a switch git refuses (dirty tree, missing branch) falls through
+            # to the refusal below.
+            try:
+                switched = subprocess.run(
+                    ["git", "-C", dest_root, "switch", "--quiet", track_branch],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                switched = False
+            if switched and _checked_out_branch(dest_root) == track_branch:
+                print(
+                    f"resolve-publish-target: switched {dest_root} onto its track_ref "
+                    f"branch '{track_branch}'",
+                    file=sys.stderr,
+                )
+                return
     raise ResolveError(
         f"resolve-publish-target: {key} resolves to '{dest_root}', which is this "
         "box's DEPLOYED ENGINE MIRROR (the registered repos.claude_klabauter "
