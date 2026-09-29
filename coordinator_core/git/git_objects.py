@@ -95,11 +95,17 @@ def _obj_path(gitdir: Path, sha: str) -> Path:
     return Path(gitdir, "objects", sha[:2], sha[2:])
 
 
-def write_object(gitdir: Path, kind: bytes, payload: bytes) -> str:
+def write_object(
+    gitdir: Path, kind: bytes, payload: bytes, *, created: Optional[set] = None
+) -> str:
+    """`created`, when given, receives `sha` iff this call placed a new LOOSE object.
+    Not proof of novelty on its own -- the object may already sit in a pack."""
     body = kind + b" " + str(len(payload)).encode("ascii") + b"\x00" + payload
     sha = hashlib.sha1(body).hexdigest()
     path = _obj_path(gitdir, sha)
     if not path.exists():
+        if created is not None:
+            created.add(sha)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + f".tmp{os.getpid()}")
         tmp.write_bytes(zlib.compress(body))
@@ -456,6 +462,14 @@ def _read_pack_object_at(
 
     content = _zlib_decompress_bounded(pack_bytes, pos, usize)
     return type_num, content
+
+
+def packed_contains(common_dir: Path, sha: str) -> bool:
+    """Index-only membership: no pack bytes are read or inflated."""
+    return any(
+        _pack_index_find(pidx, sha) is not None
+        for _idx_path, _pack_path, pidx in _pack_indexes(Path(common_dir), revalidate=False)
+    )
 
 
 def _search_packs_for_sha(

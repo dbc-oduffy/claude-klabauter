@@ -99,7 +99,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
@@ -894,11 +894,17 @@ def _ungated_reads(row: Dict[str, Any], row_id: str) -> "tuple[dict, list]":
     # row never carries more than one of the three.
     reads_set: set = set()
     for _reads_key in ("reads", "reads_at_head", "consumes"):
-        _reads_value = row.get(_reads_key) if isinstance(row.get(_reads_key), list) else []
+        _reads_value = row.get(_reads_key)
+        if not isinstance(_reads_value, list):
+            _reads_value = []
         reads_set.update(str(v).strip() for v in _reads_value if isinstance(v, str))
-    writes = row.get("writes") if isinstance(row.get("writes"), list) else []
+    writes = row.get("writes")
+    if not isinstance(writes, list):
+        writes = []
     writes_set = {str(v).strip() for v in writes if isinstance(v, str)}
-    writes_under = row.get("writes_under") if isinstance(row.get("writes_under"), list) else []
+    writes_under = row.get("writes_under")
+    if not isinstance(writes_under, list):
+        writes_under = []
     writes_under_prefixes = [str(v) for v in writes_under if isinstance(v, str)]
 
     index: Dict[tuple, Dict[str, Any]] = {}
@@ -1375,7 +1381,7 @@ _SCHEMA_FIELDS_OWNED_ELSEWHERE = ("prime_exit_criterion",)
 _SCHEMA_STAMP_FIELD_PREFIX = "mise_prepped"
 
 
-def _is_stamp_field_error(error: Dict[str, Any]) -> bool:
+def _is_stamp_field_error(error: Mapping[str, Any]) -> bool:
     """True when every field an error names belongs to the mise-prep stamp quartet.
 
     THIS GATE MUST NOT REFUSE OVER THE STAMP IT IS ABOUT TO WRITE. The quartet

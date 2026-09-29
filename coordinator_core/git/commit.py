@@ -87,6 +87,7 @@ from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.git_objects import (
     _ref_exists_loose_or_packed,
     cas_ref,
+    packed_contains,
     read_object,
     write_object,
 )
@@ -266,7 +267,9 @@ class StagedRollbackRefused(CommitRefused):
     exempted from refusal."""
 
 
-def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
+def _worktree_blob(
+    gitdir: Path, root: Path, rel: str, data: bytes, created: Optional[set] = None
+) -> str:
     """The blob sha `git add` would have produced for `rel`, in process.
 
     `git add` does not record raw bytes -- it runs git's checkin filters, and
@@ -309,7 +312,7 @@ def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
     if disposition == checkin_attrs.BINARY:
         # `-text` -- no checkin conversion at all, so the raw bytes are
         # always what git would have hashed. Zero cost, no CR check needed.
-        return write_object(gitdir, b"blob", data)
+        return write_object(gitdir, b"blob", data, created=created)
     if disposition == checkin_attrs.TEXT:
         # `text` / `text=auto` / `eol=lf` / `eol=crlf` -- checkin always
         # normalizes CRLF -> LF (checkin_attrs.py's own point: the two `eol=`
@@ -322,7 +325,7 @@ def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
         # wrong shas (see module docstring), so it is refused to the
         # batched fallback rather than guessed.
         if bytes([13]) not in data:
-            return write_object(gitdir, b"blob", data)
+            return write_object(gitdir, b"blob", data, created=created)
         raise FilterUnsupported(
             f"{rel}: a text/eol attribute ({disposition}) pins this path's "
             "checkin conversion and its content contains CR bytes -- "
@@ -342,14 +345,14 @@ def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
     # bytes as-is and so do we.
     if bytes([13]) in data:
         if _repo_autocrlf_true(root):
-            return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data))
+            return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data), created=created)
         raise FilterUnsupported(
             f"{rel}: contains CR bytes -- checkin normalization for this path "
             "is not reproduced in process, and the raw bytes hash to a blob "
             "git disagrees with. Refused rather than silently committing "
             "different content."
         )
-    return write_object(gitdir, b"blob", data)
+    return write_object(gitdir, b"blob", data, created=created)
 
 
 def hash_worktree_blobs_via_spawn(
@@ -1048,6 +1051,8 @@ def commit_paths(
     staged = parse_index_identity(repo, wanted=set(path_list))
 
     assembled: Dict[str, object] = {}
+    # Blobs this call placed as new loose objects: the rollback check's novelty oracle.
+    created_blobs: set = set()
     index_updates: Dict[str, object] = {}
     staged_preferred = []
     staged_passed_over: list = []
@@ -1099,7 +1104,7 @@ def commit_paths(
             except OSError as exc:
                 raise CommitRefused(f"cannot read {p}: {exc}") from exc
             try:
-                blob = _worktree_blob(gitdir, root, p, data)
+                blob = _worktree_blob(gitdir, root, p, data, created_blobs)
             except FilterUnsupported:
                 # COLLECT, don't explode. A refusal is "this module cannot
                 # compute this path's blob", not "this commit fails" -- the
@@ -1277,6 +1282,12 @@ def commit_paths(
                 head_entry = spine.get(head_dir, {}).get(head_name)
                 if head_entry is not None and head_entry[1] in added_blobs:
                     continue
+            if val is not _ABSENT and val[1] in created_blobs and not packed_contains(
+                resolve_git_common_dir(repo), val[1]
+            ):
+                # No ancestor can have held a blob the object store never
+                # contained, so a novel blob is not a rollback -- skip the walk.
+                continue
             candidates[p] = rollback_check.ABSENT if val is _ABSENT else val[1]
         if candidates:
             findings = rollback_check.find_exact_blob_rollbacks(

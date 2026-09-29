@@ -243,3 +243,24 @@ def test_safe_commit_offer_pin_passes_detect_rollback(tmp_path):
 
     src = inspect.getsource(safe_commit_offer)
     assert "detect_rollback=True" in src
+
+
+def test_novel_content_skips_the_history_walk(tmp_path, monkeypatch):
+    """A blob the object store never held cannot restore an ancestor's version,
+    so a fresh edit never pays for the first-parent walk; a restored blob still does."""
+    repo = _repo(tmp_path)
+    _commit(repo, "p.txt", "v0\n", "v0")
+    _commit(repo, "p.txt", "v1\n", "v1")
+    walked = []
+    real = gcommit.rollback_check.find_exact_blob_rollbacks
+    monkeypatch.setattr(
+        gcommit.rollback_check,
+        "find_exact_blob_rollbacks",
+        lambda *a, **k: walked.append(dict(a[2])) or real(*a, **k),
+    )
+    _commit(repo, "p.txt", "brand new\n", "fresh", detect_rollback=True)
+    assert walked == []
+    _commit(repo, "p.txt", "v2\n", "v2")
+    with pytest.raises(StagedRollbackRefused):
+        _commit(repo, "p.txt", "v0\n", "restore", detect_rollback=True)
+    assert [list(w) for w in walked] == [["p.txt"]]
