@@ -68,6 +68,7 @@ import dataclasses
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -426,6 +427,14 @@ class Report:
     #: up with a `prepare-commit-msg` hook file. See `install_hooks_fleet`.
     hooks_fleet: dict | None = None
     rag_install: dict | None = None
+    #: Verdict of `land_example_retrieval_repo_repo_bundle`: per mounted repo, whether the
+    #: published structural-index bundle was pulled before the daemon could be
+    #: armed. Advisory only — a failure here is recorded, never raised; see
+    #: that function's docstring.
+    rag_bundle_pull: dict | None = None
+    #: `env.EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` written into `settings.json` by
+    #: `land_example_retrieval_repo_repo_bundle`, or the write's own failure.
+    session_focus_env: dict | None = None
     #: Verdicts of `pin_hook_interpreter`, `register_path_probe_hook` and
     #: `follow_engine_link_in_pth`.
     hook_interpreter: dict | None = None
@@ -2808,6 +2817,8 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
             f"{RETRIEVAL_REPO_SLUG} installer exited {result.returncode}; its combined output is above"
         )
 
+    _fold_install_timing_into_report(rag_root, report)
+
     # coordinator-content-repo#85 row 5. `--cloud` mode installs a pinned, narrow pre-boot
     # requirements set for the DAEMON, then `<repo> --no-deps` (the deliberate
     # lean/heavy boundary this project's own installer draws — never widened
@@ -2830,6 +2841,244 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
         "its test/dev dependencies (pytest, ...) are NOT installed. To run its "
         f"tests, install them post-boot with CPU torch:\n  {remediation_cmd}"
     )
+
+
+def _fold_install_timing_into_report(rag_root: Path, report: Report) -> None:
+    """Fold `<rag_root>/.<slug>/install-timing.json` into `report.rag_install["timing"]`
+    as sub-steps of the cloud-install step, if the installer left one.
+
+    Tolerant, not asserted: the file is example-retrieval-repo's own (example-retrieval-repo#3cec1bea),
+    an older checkout simply does not write it, and a malformed one must not turn
+    a successful install into a failed step. Both cases are recorded as a
+    detail string rather than raised.
+    """
+    timing_path = rag_root / f".{RETRIEVAL_REPO_SLUG}" / "install-timing.json"
+    if not timing_path.is_file():
+        report.rag_install["timing"] = f"absent: {timing_path} not found"
+        return
+    try:
+        data = json.loads(timing_path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 - a malformed timing file is recorded, not fatal
+        report.rag_install["timing"] = f"unreadable ({type(e).__name__}: {e}): {timing_path}"
+        return
+    report.rag_install["timing"] = data
+    report.rag_install["timing_source"] = str(timing_path)
+
+
+def _mounted_github_checkouts(report: Report) -> list[tuple[Path, str]]:
+    """Every checkout under `retrieval_search_roots()` with a GitHub `origin`
+    remote, as `(checkout_dir, "owner/name")` pairs.
+
+    Walks ALL search roots, not just the first that yields a hit (unlike
+    `_resolve_rag_project_root`, which picks one project to install against):
+    a bundle pull is advisory per-repo, so every mounted repo gets its own
+    attempt rather than only the one chosen as the daemon's project root.
+    Skips a directory this script itself clones (`CLONES`) UNLESS it is also
+    the resolved example-retrieval-repo checkout — the retrieval repo's own bundle is a
+    legitimate pull target, the coordinator/engine clones are not.
+    """
+    own_clone_dirs = {Path(c["dest"]).resolve() for c in CLONES.values()}
+    rag_root = None
+    resolved = report.rag_roots.get(RETRIEVAL_REPO_SLUG)
+    if resolved:
+        rag_root = Path(resolved).resolve()
+    seen: set[Path] = set()
+    found: list[tuple[Path, str]] = []
+    for root in retrieval_search_roots():
+        if not root.is_dir():
+            continue
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
+            continue
+        for cand in children:
+            if not cand.is_dir() or not (cand / ".git").exists():
+                continue
+            resolved_cand = cand.resolve()
+            if resolved_cand in seen:
+                continue
+            if resolved_cand in own_clone_dirs and resolved_cand != rag_root:
+                continue
+            seen.add(resolved_cand)
+            owner_repo = _github_owner_repo(cand)
+            if owner_repo:
+                found.append((cand, owner_repo))
+    return found
+
+
+def _github_owner_repo(checkout: Path) -> str | None:
+    """`"owner/name"` for `checkout`'s `origin` remote, or None when it has
+    none or the remote is not GitHub."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(checkout), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:  # noqa: BLE001 - no origin resolvable is not fatal here
+        return None
+    if result.returncode != 0:
+        return None
+    url = result.stdout.strip()
+    match = re.search(r"github\.com[:/]+([^/]+)/(.+?)(?:\.git)?/?$", url)
+    if not match:
+        return None
+    return f"{match.group(1)}/{match.group(2)}"
+
+
+#: Wall-clock ceiling for one `pull-repo-bundle` invocation. A network
+#: transfer (module docstring's "Scope: engine ops, not bulk transfer"), so
+#: this is sized for a large index bundle over a slow link, not the 500ms bar.
+RAG_BUNDLE_PULL_TIMEOUT_S = 600
+
+
+def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
+    """Pull each mounted repo's published structural-index bundle BEFORE
+    anything can start the retrieval daemon.
+
+    example-retrieval-repo-em#2026-09-29 (`state/cross-repo/inbox/2026-09-29-example-retrieval-repo-
+    em-cloud-setup-pull-bundle-before-daemon.md`): a session boots with the
+    daemon holding the store before a bundle can land, so the pull must run
+    from THIS process — the one leg in the whole pipeline with a live proxy
+    and token in its environment (only tool shells get them; the daemon,
+    started later via the headersHelper, gets Claude Code's own bare env) —
+    and before `arm_retrieval_connect_helper` bakes in the daemon-start argv.
+    Ordering pinned by `scripts/tests/test_cloud_setup_step_order.py`.
+
+    Advisory, never fatal: a failed pull leaves the daemon to build its own
+    index from scratch post-boot (slower, not broken), and this step's own
+    docstring's caller (the memo) says so explicitly. Each repo's verdict is
+    recorded individually; one failure does not stop the loop or fail the step.
+
+    Also sets `EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` in the settings.json env block this
+    script writes for the session — to the `repos.*` MACHINE-LOCAL KEY naming
+    the project root the install used (`_resolve_rag_project_root`), never a
+    filesystem path: example-retrieval-repo's `boot_fallback_ambiguous` resolver
+    (`example_retrieval_repo_mcp/audit.py :: _resolve_focus_repo`) requires the `repos.`
+    key shape and reports `focus_repo_unknown` for a bare path, which is
+    worse than leaving the var unset. Left unset when no key this script
+    registered names that root (`_focus_repo_machine_local_key`). Unset,
+    three-plus mounted repos leave example-retrieval-repo's tools answering
+    `boot_fallback_ambiguous` (memo, "Also noted").
+    """
+    if retrieval_half_skipped(report):
+        print("[cloud_setup] repo bundle pull: skipped — retrieval half not installed.")
+        return
+    rag_root = report.rag_roots.get(RETRIEVAL_REPO_SLUG)
+    install = report.rag_install
+    if not rag_root or install is None or install.get("exit_code") != 0:
+        print("[cloud_setup] repo bundle pull: skipped — retrieval install did not succeed.")
+        return
+    cli = Path(rag_root) / f"{RETRIEVAL_MODULE_PREFIX}_cli.py"
+    if not cli.is_file():
+        report.rag_bundle_pull = {"skipped": f"{cli} not found"}
+        print(f"[cloud_setup] repo bundle pull: skipped — {cli} not found.")
+        return
+
+    verdicts: dict[str, str] = {}
+    for checkout, owner_repo in _mounted_github_checkouts(report):
+        argv = [
+            sys.executable,
+            str(cli),
+            "pull-repo-bundle",
+            "--project-root",
+            str(checkout),
+            "--repo",
+            owner_repo,
+            "--replace",
+            "--no-roll-forward",
+        ]
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=RAG_BUNDLE_PULL_TIMEOUT_S,
+                stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as e:  # noqa: BLE001 - advisory; recorded, never raised
+            verdicts[owner_repo] = f"error: {type(e).__name__}: {e}"
+            continue
+        tail = (result.stdout or "").strip().splitlines()[-1:] or [""]
+        detail = tail[0]
+        if result.returncode == 0:
+            verdicts[owner_repo] = f"ok: {detail}"
+        else:
+            verdicts[owner_repo] = f"failed (exit {result.returncode}): {detail or result.stderr.strip()}"
+        _safe_print(f"[cloud_setup] repo bundle pull {owner_repo}: {verdicts[owner_repo]}")
+    report.rag_bundle_pull = verdicts or {"skipped": "no mounted checkout has a GitHub origin"}
+
+    focus_root = report.rag_install.get("project_root") if report.rag_install else None
+    focus_key = _focus_repo_machine_local_key(focus_root, report) if focus_root else None
+    if focus_key:
+        _set_plugin_settings_env(SESSION_FOCUS_ENV, focus_key, report)
+    elif focus_root:
+        print(
+            "[cloud_setup] session focus: no registered repos.* key names "
+            f"{focus_root!r} — leaving {SESSION_FOCUS_ENV} unset rather than write a "
+            "path example-retrieval-repo's resolver cannot use."
+        )
+
+
+def _focus_repo_machine_local_key(project_root: str, report: Report) -> str | None:
+    """The `repos.*` machine-local key that names `project_root`, or None.
+
+    example-retrieval-repo's own `boot_fallback_ambiguous` resolver
+    (`example_retrieval_repo_mcp/audit.py :: _resolve_focus_repo` / `_resolve_repo_key`)
+    requires `EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` to be a `repos.` machine-local key —
+    the value it then resolves through machine-local and `projects.json` — NOT
+    a filesystem path. A path gets `focus_repo_unknown`, worse than leaving
+    the var unset. So this reuses the exact keys THIS script already wrote
+    into `report.machine_local_keys` (`seed_trust_anchor_keys`,
+    `register_machine_local_repo_keys`) rather than deriving a new one: only a
+    key this process itself registered is guaranteed resolvable the same way
+    by a session's own `machine-local get`.
+    """
+    try:
+        target = Path(project_root).resolve()
+    except OSError:
+        return None
+    for key, value in report.machine_local_keys.items():
+        if not key.startswith("repos."):
+            continue
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            if Path(value).resolve() == target:
+                return key
+        except OSError:
+            continue
+    return None
+
+
+def _set_plugin_settings_env(key: str, value: str, report: Report) -> None:
+    """Merge one `env.<key>` write into `$CLAUDE_HOME/settings.json`, the same
+    file and merge discipline `register_plugin_settings` uses.
+
+    Best-effort: an unreadable existing file is recorded rather than raised —
+    this step's own value (the repo-bundle pull) must not be lost because the
+    settings file the daemon-focus var also wants happens to be malformed.
+    """
+    try:
+        claude_home = _claude_home()
+        claude_home.mkdir(parents=True, exist_ok=True)
+        settings_path = claude_home / "settings.json"
+        settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        if not isinstance(settings, dict):
+            settings = {}
+        env_block = settings.setdefault("env", {})
+        env_block[key] = value
+        tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
+        tmp_path.replace(settings_path)
+        report.session_focus_env = {key: value}
+        print(f"[cloud_setup] session focus: env.{key}={value!r}")
+    except Exception as e:  # noqa: BLE001 - advisory write, never fatal
+        report.session_focus_env = {"error": f"{type(e).__name__}: {e}"}
 
 
 def _claude_json_path() -> Path:
@@ -3939,6 +4188,16 @@ def main() -> int:
         report,
     )
     run_step(f"{RETRIEVAL_REPO_SLUG} cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
+    # BEFORE anything that can start the daemon (in particular the connect-
+    # helper step below): this process is the one leg with proxy/token access,
+    # and the daemon blocks the very landing it needs once it holds the store.
+    # See `land_example_retrieval_repo_repo_bundle`'s docstring; order pinned by
+    # scripts/tests/test_cloud_setup_step_order.py.
+    run_step(
+        "land example-retrieval-repo repo bundle",
+        lambda: land_example_retrieval_repo_repo_bundle(report),
+        report,
+    )
     # Directly after the one step that fills the cache, so no later step runs
     # on a volume still carrying it.
     run_step("reclaim uv cache", lambda: reclaim_uv_cache(report), report)
