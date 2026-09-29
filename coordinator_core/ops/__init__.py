@@ -158,6 +158,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_phase_stamp", 'registers "handoff.stamp_phase"'),
     ("coordinator_core.ops.handoff_ship_archive", 'registers "handoff.ship_and_archive"'),
     ("coordinator_core.ops.handoff_discharge_landed", 'registers "handoff.discharge_landed"'),
+    ("coordinator_core.ops.dispatch_emit.terminal_commit", 'registers "dispatch.terminal_commit"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
@@ -362,6 +363,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.review_stamp",
         'registers "review_stamp.mint", "review_stamp.check"',
+    ),
+    (
+        "coordinator_core.ops.review_mint.wave_bookkeeping",
+        'registers "review_mint.bookkeep_wave"',
     ),
     ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
     ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),

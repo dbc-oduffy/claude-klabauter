@@ -114,11 +114,18 @@ class ReviewAgent:
 @dataclass(frozen=True)
 class ExecuteReview:
     """Roster-v5 ``execute_review`` block, resolved: prep (one agent),
-    review-wave (one or more agents) and integration (exactly one agent)."""
+    review-wave (one or more agents) and integration (AT MOST one agent).
+
+    ``integration`` is ``None`` on the zero-integration-stage path (the
+    2026-09-28 no-integration-pass sequence, step b' —
+    ``docs/plans/2026-09-28-*`` PM order): each review-wave reviewer applies
+    its own findings in place instead of a dedicated integration pass. A
+    fragment declaring exactly one ``integration`` stage still resolves it
+    here, unchanged from before."""
 
     prep: ReviewAgent
     review_wave: List[ReviewAgent]
-    integration: ReviewAgent
+    integration: Optional[ReviewAgent]
 
 
 def parse_stages(
@@ -304,9 +311,11 @@ def parse_execute_review(
     ``fragment["execute_review"]["stages"]`` holds, in any order, exactly
     one ``kind: "prep"`` stage resolving to exactly one agent, one or more
     ``kind: "review-wave"`` stages resolving to at least one agent between
-    them, and exactly one ``kind: "integration"`` stage resolving to
-    exactly one agent -- DoE's ask (D1 § Contract): "At most one
-    ``integration`` stage may exist and it holds exactly one agent."
+    them, and AT MOST one ``kind: "integration"`` stage resolving to
+    exactly one agent when present -- DoE's ask (D1 § Contract): "At most
+    one ``integration`` stage may exist and it holds exactly one agent."
+    Zero ``integration`` stages is the 2026-09-28 no-integration-pass path
+    (step b'): ``ExecuteReview.integration`` is ``None`` in that case.
 
     Each stage entry either carries ``agentType`` (plus required ``model``
     and ``effort``) or ``accepts_signals`` (carrying neither -- it inherits
@@ -381,12 +390,12 @@ def parse_execute_review(
         raise RosterFragmentError(
             "execute_review 'review-wave' stage(s) resolve to no agents"
         )
-    if integration_stage_count != 1:
+    if integration_stage_count not in (0, 1):
         raise RosterFragmentError(
-            "execute_review fragment must declare exactly one 'integration' "
+            "execute_review fragment must declare at most one 'integration' "
             f"stage, got {integration_stage_count}"
         )
-    if len(integration_agents) != 1:
+    if integration_stage_count == 1 and len(integration_agents) != 1:
         raise RosterFragmentError(
             "execute_review 'integration' stage must hold exactly one "
             f"agent, got {len(integration_agents)}"
@@ -395,7 +404,7 @@ def parse_execute_review(
     return ExecuteReview(
         prep=prep_agents[0],
         review_wave=wave_agents,
-        integration=integration_agents[0],
+        integration=integration_agents[0] if integration_stage_count == 1 else None,
     )
 
 

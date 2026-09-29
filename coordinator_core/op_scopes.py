@@ -407,6 +407,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.terminal_commit (never a `params.repo_root` override).
     "review_stamp.mint":                        "common_dir",
     "review_stamp.check":                       "common_dir",
+    # review_mint.bookkeep_wave — MUTATING: writes only the caller's own
+    # worktree, keyed identically to review_stamp.mint/dispatch.terminal_commit
+    # (never a `params.repo_root` override). 2026-09-28 PM order step b'.
+    "review_mint.bookkeep_wave":                "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "machine.hibernate":                        "none",
     "percolate.run_pre_ci_hooks":               "none",

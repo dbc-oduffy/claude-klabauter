@@ -1019,6 +1019,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.ship_and_archive": OpClass.MUTATING,
+    # handoff.discharge_landed — MUTATING: stamps shipped_in/deployment_state on every baton of
+    # the landed target plans and git-mvs them to archive/handoffs/ in one commit.
+    "handoff.discharge_landed": OpClass.MUTATING,
     # handoff.close_origin_stub — MUTATING: closes a shipped roadmap-stub's origin
     # handoff by composing handoff.stamp (shipped_in) + handoff.transition ship verb
     # in-process, joining on (roadmap_id, stub_id) via a walk_forward DFS over ancestor
@@ -2136,6 +2139,27 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # review_stamp.check — COMPUTE_ONLY: pure read (tree/ancestry/supersession
     # git reads), no write of any kind.
     "review_stamp.check": OpClass.COMPUTE_ONLY,
+    # review_mint.bookkeep_wave — MUTATING: writes ONE bookkeeping record
+    # sidecar under the caller's own worktree's `.coordinator-local/
+    # subagent-share/<session_id>/` and stamps `plan_id` onto every wave
+    # sidecar it is given. 2026-09-28 PM order, step b' (zero-integration-
+    # stage path); called by `dispatch.terminal_commit` before it builds the
+    # terminal commit, never by the emitted script itself.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Writes the bookkeeping record file and rewrites each wave
+    #      sidecar's frontmatter in place (plan_id stamp).
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The bookkeeping record and every wave sidecar it stamps.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      `review_stamp.mint` reads the record it writes.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: DoE-claude docs/plans/2026-09-26-retire-review-integrator.md;
+    # 2026-09-28 PM order step b' (engine tolerates zero execute-review
+    # integration stages).
+    "review_mint.bookkeep_wave": OpClass.MUTATING,
     # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
     # is a zero-spawn read, but the act half is an outward-facing publish.
     "push.outstanding": OpClass.MUTATING,

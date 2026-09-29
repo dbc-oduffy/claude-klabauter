@@ -46,6 +46,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.completion_record_integrity import HollowCompletionRecordError
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.ceremony import completion_entry
 from coordinator_core.win_portability import no_console_creationflags
@@ -186,11 +187,16 @@ def test_fill_prose_replaces_sentinel(repo: Path) -> None:
 def test_fill_chain_terminal_flips_false_to_true(repo: Path) -> None:
     abs_path, rel_path = _scaffold(repo)
 
+    # chain_terminal=True is now a finalize signal (2026-09-28 EM
+    # correction: ANY hollow check failing at finalize is refused) -- prose
+    # must be supplied in the SAME call, matching the production shape
+    # (this module has no way to author prose in a later call other than
+    # passing it here).
     filled = completion_entry.fill_completion_entry_residues(
-        repo, rel_path, "", chain_terminal=True, sid=""
+        repo, rel_path, "<!-- ONE paragraph -->\nShipped it.", chain_terminal=True, sid=""
     )
 
-    assert filled == {"prose": False, "chain_terminal": True, "authored_by": False}
+    assert filled == {"prose": True, "chain_terminal": True, "authored_by": False}
     split = split_frontmatter(abs_path.read_text())
     assert split is not None
     # The scaffold authors chain_terminal with a trailing inline comment, and the
@@ -272,3 +278,110 @@ def test_fill_frontmatter_safe(repo: Path) -> None:
     assert read_fm_field(split.fm_text, "commits").split()[0] == "[]"
     assert "agent_dispatches: null" in split.fm_text
     assert "opus_dispatches: null" in split.fm_text
+
+
+# ---------------------------------------------------------------------------
+# fill_completion_entry_residues -- hollow-record refusal (2026-09-28)
+# ---------------------------------------------------------------------------
+
+
+def test_chain_terminal_fill_refuses_on_placeholder_prose_alone(repo: Path) -> None:
+    """2026-09-28 EM correction: ANY of the checks failing at finalize is
+    refused, not only the all-three shape. Plan landed, prose left as a
+    placeholder alone is enough."""
+    slug = "2026-09-27-single-axis-refusal-test"
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / f"{slug}.md").write_text(
+        "---\nstatus: implemented\n---\nbody\n", encoding="utf-8"
+    )
+    abs_path, rel_path = _scaffold(repo, title="Single axis refusal test")
+    text = abs_path.read_text()
+    text = text.replace("---\n", f'---\nchain: "{slug}"\n', 1)
+    abs_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(HollowCompletionRecordError):
+        completion_entry.fill_completion_entry_residues(
+            repo, rel_path, "", chain_terminal=True, sid="sess-hollow"
+        )
+
+
+def test_chain_terminal_fill_never_gates_on_empty_commits(repo: Path) -> None:
+    """This module has NO mechanism to ever populate `commits:` itself
+    (a separate op's job) -- gating chain_terminal finalize on commits would
+    make it permanently unsatisfiable through this module. Prose authored
+    and plan landed, commits still `[]` -- must NOT refuse."""
+    slug = "2026-09-27-commits-excluded-test"
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / f"{slug}.md").write_text(
+        "---\nstatus: landed\n---\nbody\n", encoding="utf-8"
+    )
+    abs_path, rel_path = _scaffold(repo, title="Commits excluded test")
+    text = abs_path.read_text()
+    text = text.replace("---\n", f'---\nchain: "{slug}"\n', 1)
+    abs_path.write_text(text, encoding="utf-8")
+    assert 'commits: []' in abs_path.read_text()
+
+    filled = completion_entry.fill_completion_entry_residues(
+        repo, rel_path, "<!-- ONE paragraph -->\nShipped it.", chain_terminal=True, sid="sess-1"
+    )
+    assert filled["chain_terminal"] is True
+    assert 'commits: []' in abs_path.read_text()
+
+
+def test_chain_terminal_fill_refuses_a_fully_hollow_record(repo: Path) -> None:
+    """The chain_terminal flip IS this ceremony's own finalize signal.
+    Refusing it when the record would still fail every integrity check --
+    unfilled prose placeholder, `commits: []`, and a governing plan that
+    never landed -- pins the exact defect shape (2026-09-20-doe-holds-no-
+    scripts-188007.md: exactly this combination, and nothing refused it)."""
+    slug = "2026-09-27-hollow-fill-refusal-test"
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / f"{slug}.md").write_text(
+        "---\nstatus: executing\n---\nbody\n", encoding="utf-8"
+    )
+    abs_path, rel_path = _scaffold(repo, title="Hollow fill refusal test")
+    # Splice a chain: field in directly -- scaffold_completion_entry's own
+    # `chain=` kwarg accepts any string verbatim; use the governing plan slug
+    # so `hollow_reasons`' chain->plan lookup resolves the file above.
+    text = abs_path.read_text()
+    text = text.replace("---\n", f'---\nchain: "{slug}"\n', 1)
+    abs_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(HollowCompletionRecordError):
+        completion_entry.fill_completion_entry_residues(
+            repo, rel_path, "", chain_terminal=True, sid="sess-hollow"
+        )
+
+    # Refused BEFORE the write landed -- chain_terminal is still false on disk.
+    split = split_frontmatter(abs_path.read_text())
+    assert split is not None
+    raw = read_fm_field(split.fm_text, "chain_terminal")
+    assert raw is not None
+    assert raw.split()[0] == "false"
+
+
+def test_chain_terminal_fill_passes_when_not_fully_hollow(repo: Path) -> None:
+    """Same finalize signal, but the record carries real commits and a
+    landed governing plan -- the refusal must not fire on a genuinely
+    ready record."""
+    slug = "2026-09-27-hollow-fill-pass-test"
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / f"{slug}.md").write_text(
+        "---\nstatus: implemented\n---\nbody\n", encoding="utf-8"
+    )
+    abs_path, rel_path = _scaffold(repo, title="Hollow fill pass test")
+    text = abs_path.read_text()
+    text = text.replace("---\n", f'---\nchain: "{slug}"\n', 1)
+    text = text.replace("commits: []", 'commits:\n  - "deadbeef"')
+    abs_path.write_text(text, encoding="utf-8")
+
+    filled = completion_entry.fill_completion_entry_residues(
+        repo, rel_path, "shipped the thing.", chain_terminal=True, sid="sess-ready"
+    )
+
+    assert filled["chain_terminal"] is True
+    split = split_frontmatter(abs_path.read_text())
+    assert split is not None
+    raw = read_fm_field(split.fm_text, "chain_terminal")
+    assert raw is not None
+    assert raw.split()[0] == "true"

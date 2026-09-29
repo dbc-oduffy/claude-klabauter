@@ -146,6 +146,116 @@ def test_inline_review_trailer(repo):
     assert "Inline-Review: applies stem1 -- execute-review: 3 slices, 2 fixes" in log
 
 
+def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo):
+    """2026-09-28 PM follow-up: `bookkeep_wave` has no production caller
+    until this wiring exists. End-to-end, no manual `bookkeep_wave` call in
+    this test: a zero-stage digest's `inline_review` shape (carrying
+    `wave_sidecar_paths`/`prep_sidecar`/`plan_id`, exactly what
+    `wake_digest.py`'s zero-stage branch now builds) goes straight into
+    `dispatch.terminal_commit`, which runs the mechanical bookkeeping step
+    itself, lands the record in the SAME commit, and
+    `review_stamp.mint` succeeds against it afterward."""
+    import hashlib
+
+    from coordinator_core.ops import review_stamp
+    from coordinator_core.ops.review_mint.wave_bookkeeping import (
+        review_wave_bookkeeping_stem,
+    )
+
+    session_id = "11111111-2222-3333-4444-555555555555"
+    plan_id = "pln-terminal-commit-e2e-abc123"
+
+    share = repo / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True)
+
+    prep_rel = f".coordinator-local/subagent-share/{session_id}/2026-09-28-prep.md"
+    (repo / prep_rel).write_text(
+        "---\n"
+        "agent_type: coordinator:test-runner\n"
+        "run_base_sha: deadbeef\n"
+        "product_files: [coordinator_core/foo.py]\n"
+        "foreign_claims: []\n"
+        "slices: [{id: A}]\n"
+        "whole_diff_sidecars:\n"
+        f"  delivery: .coordinator-local/subagent-share/{session_id}/2026-09-28-delivery.md\n"
+        "---\nprep\n",
+        encoding="utf-8",
+    )
+    (share / "2026-09-28-delivery.md").write_text(
+        "---\nagent_type: coordinator:delivery-verifier\nverdict: PASS\n---\ndelivery\n",
+        encoding="utf-8",
+    )
+
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+    baseline_hash = hashlib.sha256(b"x = 1\n").hexdigest()
+    wave_path = share / "2026-09-28-wave-code-reviewer.md"
+    wave_path.write_text(
+        "---\n"
+        "agent_type: coordinator:code-reviewer\n"
+        "applied: 1\n"
+        "baseline_sha256:\n"
+        f"  coordinator_core/foo.py: {baseline_hash}\n"
+        "---\n"
+        "## Findings\n\n### Finding 1\nSomething.\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
+        "```\n",
+        encoding="utf-8",
+    )
+    wave_sidecar_rel = f".coordinator-local/subagent-share/{session_id}/2026-09-28-wave-code-reviewer.md"
+
+    build_test = share / "2026-09-28-test-runner.md"
+    build_test.write_text(
+        "---\nagent_type: coordinator:test-runner\nstatus: pass\nrun: 1\nfailed: 0\n---\nbuild/test\n",
+        encoding="utf-8",
+    )
+
+    stem = review_wave_bookkeeping_stem(plan_id, session_id)
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=("coordinator_core/foo.py",)),),
+        session_id=session_id,
+    )
+    script = _write_script(repo, request)
+
+    out = _call(
+        repo,
+        {
+            "script_path": script,
+            "incomplete_chunks": [],
+            "session_id": session_id,
+            "inline_review": {
+                "integration_stem": stem,
+                "slices": 1,
+                "fixes": 1,
+                "prep_sidecar": prep_rel,
+                "plan_id": plan_id,
+                "wave_sidecar_paths": [wave_sidecar_rel],
+            },
+        },
+    )
+    assert out["committed"] is True, out
+
+    record_path = share / f"{stem}.md"
+    assert record_path.is_file()
+    log = subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert f"{stem}.md" in log, "the bookkeeping record did not land in the terminal commit"
+
+    plan_path = repo / "docs" / "plans" / "example.md"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text(f"---\nplan_id: {plan_id}\n---\n# Example\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "add plan"], repo)
+
+    stamp = review_stamp.mint(plan_path, repo, build_test_path=str(build_test))
+    assert stamp["fixes_applied"] == 1
+    assert stamp["unresolved"] == []
+
+
 def test_refuses_inline_review_missing_stem_or_slices(repo):
     """example-retrieval-repo EM memo 2026-09-28-...-trailer-none: the digest handed
     `inline_review` with no `integration_stem`/`slices` (post-review-

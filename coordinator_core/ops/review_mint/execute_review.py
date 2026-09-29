@@ -136,8 +136,17 @@ def compose_execute_review(
     declared_paths: List[str],
     prompt_head: str = "",
 ) -> List[Tuple[str, str]]:
-    """Compose the roster-v5 ``execute_review`` wave into three
-    ``(phase_title, block)`` entries: prep, review-wave, integration.
+    """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
+    block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
+    is not ``None`` -- integration.
+
+    ``review.integration is None`` is the 2026-09-28 no-integration-pass path
+    (step b'): no integration call is emitted at all. Each review-wave
+    reviewer applies its own findings in place (the DoE
+    ``2026-09-26-retire-review-integrator.md`` contract); the caller
+    (``dispatch_emit/emit.py``) is responsible for the post-wave mechanical
+    bookkeeping step (``review_mint.wave_bookkeeping``) on that path -- this
+    module stays pure (no I/O, no bookkeeping) exactly as before.
 
     Every call carries its roster ``model``/``effort`` (``None`` for a
     signal-resolved persona -- it inherits its own frontmatter opts,
@@ -275,36 +284,37 @@ def compose_execute_review(
         )
     phases.append((wave_phase, "\n".join(wave_lines)))
 
-    # -- 3. integration -----------------------------------------------------
-    integration_phase = "Review integration"
-    integration_prompt = (
-        f"{prompt_head}\n\n"
-        f"Integrate this run's review wave into one residue pass. This run's "
-        f"declared paths are already registered as your session's confined-"
-        f"reviewer review targets -- Edit on any of them is sanctioned, not "
-        f"confined to your own sidecar. Read every review-wave sidecar's "
-        f"Findings Ledger, apply every outstanding finding in place in the "
-        f"named file (nits included; the sole exemption is a finding you "
-        f"believe is wrong, said out loud and defended), then write and "
-        f"verify your own residue ledger.\n"
-        f"plan_path: {plan_path}\n"
-        f"run_base_sha: {run_base_sha}"
-    ).strip()
-    integration_call = _agent_call_literal(
-        review.integration.agent_type,
-        integration_prompt,
-        integration_phase,
-        schema=True,
-        as_arrow=False,
-        agent_opts=_agent_opts_for(review.integration),
-        schema_literal=_schema_literal(review.integration.schema, stage_schemas),
-    )
-    phases.append(
-        (
+    # -- 3. integration (only when the fragment declares one stage) --------
+    if review.integration is not None:
+        integration_phase = "Review integration"
+        integration_prompt = (
+            f"{prompt_head}\n\n"
+            f"Integrate this run's review wave into one residue pass. This run's "
+            f"declared paths are already registered as your session's confined-"
+            f"reviewer review targets -- Edit on any of them is sanctioned, not "
+            f"confined to your own sidecar. Read every review-wave sidecar's "
+            f"Findings Ledger, apply every outstanding finding in place in the "
+            f"named file (nits included; the sole exemption is a finding you "
+            f"believe is wrong, said out loud and defended), then write and "
+            f"verify your own residue ledger.\n"
+            f"plan_path: {plan_path}\n"
+            f"run_base_sha: {run_base_sha}"
+        ).strip()
+        integration_call = _agent_call_literal(
+            review.integration.agent_type,
+            integration_prompt,
             integration_phase,
-            f"  phase({_js_string_literal(integration_phase)});\n"
-            f"  const _reviewIntegration = await {integration_call};",
+            schema=True,
+            as_arrow=False,
+            agent_opts=_agent_opts_for(review.integration),
+            schema_literal=_schema_literal(review.integration.schema, stage_schemas),
         )
-    )
+        phases.append(
+            (
+                integration_phase,
+                f"  phase({_js_string_literal(integration_phase)});\n"
+                f"  const _reviewIntegration = await {integration_call};",
+            )
+        )
 
     return phases

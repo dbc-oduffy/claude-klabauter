@@ -364,9 +364,23 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
         if _kira_has_verified_ledger(kira_meta):
             continue
 
-        answers = _kira_find_answers(kira_file, in_scope)
-        if answers:
-            continue
+        # 2026-09-28 PM order (step b'): the `integrated_from` route is the
+        # rebuild-executor route ONLY -- Kira's own verdict must have
+        # recommended a rebuild for a sibling sidecar naming her stem to
+        # count as an answer. A non-rebuild verdict is routed exclusively by
+        # a verified ledger on Kira's OWN sidecar (the check just above);
+        # `_kira_find_answers` is never even consulted otherwise, closing
+        # the prior gap where any sidecar naming Kira in `integrated_from`
+        # satisfied routing regardless of what her verdict actually said.
+        rebuild_recommended = kira_meta.get("rebuild_recommended")
+        is_rebuild = rebuild_recommended is True or (
+            isinstance(rebuild_recommended, str)
+            and rebuild_recommended.strip().lower() == "true"
+        )
+        if is_rebuild:
+            answers = _kira_find_answers(kira_file, in_scope)
+            if answers:
+                continue
 
         unstamped_count = len(
             _kira_unstamped_integrators(in_scope, plan=kira_meta.get("plan"))

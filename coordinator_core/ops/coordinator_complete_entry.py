@@ -137,6 +137,10 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 from coordinator_core.chain_attribution import bulk_grep_attributed_shas
+from coordinator_core.completion_record_integrity import (
+    REASON_PLACEHOLDER,
+    hollow_reasons_for_fields,
+)
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.launchable import resolve_launchable, which_path_ordered
 from coordinator_core.ops._git_root_util import git_root
@@ -1503,6 +1507,42 @@ def main(argv: List[str]) -> int:
         # close has no seed and falls through to the computed walk, which
         # itself degrades to `[]`.
         commits = seeded_commits if seeded_commits else _resolve_session_commits(repo_root, sid, yyyymmdd)
+
+    if for_date is not None:
+        # `--for-date` is the explicit backfill/finalize leg -- reconstructing
+        # the record of a session that has already ENDED (module Negative-
+        # spec / _parse_args' own gate) -- the one call shape where this CLI
+        # is asserting the workstream is DONE rather than still in flight.
+        # Refuse ANY of the empty-commits/plan-landed checks failing
+        # (2026-09-28 EM correction: a single failing axis is already
+        # defective, not only the all-three shape).
+        #
+        # REASON_PLACEHOLDER is deliberately EXCLUDED from this gate: this
+        # CLI has NO `--prose` flag on ANY call shape (live close or
+        # backfill) -- prose is always deferred to hand-authorship, and
+        # `resolve_effective_entry_path`'s own stand-down means a SECOND
+        # `--for-date` call against a chain that already has an entry never
+        # even reaches this code path (it stands down onto the existing
+        # entry and returns before `_write_entry` runs) -- so there is no
+        # call shape through this CLI where prose could ever be authored at
+        # the same moment `_write_entry` runs. Gating on it here would make
+        # every first-time backfill unsatisfiable by construction, forever.
+        # Commits and plan-landed status ARE within this call's own control
+        # (`--commits` / `--governing-plan-slug`'s plan doc), so those stay
+        # gated.
+        prospective_fm = {"chain": chain_slug or None, "commits": commits}
+        reasons = [
+            r
+            for r in hollow_reasons_for_fields(prospective_fm, "", Path(repo_root))
+            if r != REASON_PLACEHOLDER
+        ]
+        if reasons:
+            print(
+                f"ERROR: {entry_path}: refusing to finalize a hollow completion record -- "
+                f"failed: {', '.join(reasons)}",
+                file=sys.stderr,
+            )
+            return 1
 
     wrote = _write_entry(
         entry_path,

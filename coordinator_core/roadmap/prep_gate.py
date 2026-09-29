@@ -121,6 +121,14 @@ NOT_PREPPED = "NOT-PREPPED"
 #: consumer's string comparison or exit-code mapping shifts under them.
 REFUSED = "REFUSED"
 
+#: A target whose engine call raised something no predicate turns into a DEFECT
+#: (a version-skewed engine, a renamed symbol). Computed PER PLAN here (not only
+#: at the CLI batch boundary `prep_gate_cli.py` already guarded) so a caller
+#: that gates one plan at a time — `coordinator/bin/mise-prep-gate.py :: prep_gate`
+#: among them — sees the same ENGINE-ERROR / author-fix distinction the batch
+#: door already made. Routes to PM/engineering, never to the plan author.
+ENGINE_ERROR = "ENGINE-ERROR"
+
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
@@ -260,6 +268,43 @@ def repo_nested_names(repo_root: Path, root_names: frozenset) -> Dict[str, tuple
     return {child: tuple(sorted(parents)) for child, parents in nested.items()}
 
 
+def repo_gitignored_roots(repo_root: Path) -> frozenset:
+    """Top-level names ``repo_root``'s own ``.gitignore`` declares untracked —
+    the GITIGNORE-ROOT exemption for the ROOT-EXISTENCE leg.
+
+    Bug 8b41ec70da55 (example-cockpit-repo): a row reading
+    ``node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`` was flagged as a
+    nameless cross-repo write only because ``pnpm install`` had not run in the
+    checkout being scanned — a first segment absent from ``root_names`` for
+    install-state reasons, not because it names another team's tree. The
+    verdict must not depend on install state, so the discriminant is read off
+    the tree's own ``.gitignore`` rather than the directory listing — a
+    first segment the repo itself declares it does not track is a
+    build/install artifact of THIS repo.
+
+    Literal top-level lines only (no glob expansion, no ``!`` negation, no
+    nested-``.gitignore`` walk): the exemption exists for the specific
+    "an installed dependency directory is declared ignored at the root"
+    shape, and widening it to interpret gitignore glob syntax would let an
+    author suppress this leg with a pattern that also happens to match a
+    genuine sibling path.
+    """
+    gitignore = repo_root / ".gitignore"
+    try:
+        lines = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return frozenset()
+    roots: set = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("!"):
+            continue
+        normalized = stripped.replace("\\", "/").strip("/")
+        if normalized and "/" not in normalized:
+            roots.add(normalized)
+    return frozenset(roots)
+
+
 # ---------------------------------------------------------------------------
 # Verdict primitives
 # ---------------------------------------------------------------------------
@@ -304,9 +349,24 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         executable_body,
         read_spine,
     )
-    from coordinator_core.ops.dispatch_emit.wave_map import WaveCycleError, build_waves
+    from coordinator_core.ops.dispatch_emit.wave_map import (
+        WaveCycleError,
+        _compute_held_out,
+        _predecessors,
+        build_waves,
+    )
 
-    if "```yaml plan-tasks" not in text:
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    # A raw substring test over the UNBLANKED body falls through to `read_spine()`
+    # for a plan whose only ```yaml plan-tasks``` token lives inside an HTML
+    # comment -- `coordinator-doc-new` scaffolds every new plan with exactly this
+    # shape as documentation. `load_rows`/`locate_fenced_block` already blank
+    # comments before matching, so the same reader used for EXTERNAL_DEPS'
+    # `raw_spine_rows` decides presence here too, instead of a second, cheaper,
+    # comment-blind guess.
+    if load_rows(text).status is LocateStatus.ABSENT:
         return _defect(
             "spine-absent",
             "no ```yaml plan-tasks block — a plan with no spine declares no scope to schedule",
@@ -315,12 +375,21 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         rows = read_spine(plan_path)
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
-    undeclared = [row.id for row in rows if row.writes is UNDECLARED]
+    # A row held out of the emit already -- because an earlier row's `epistemic-premise`
+    # depends_on edge decides its writes, directly OR transitively through a chain of
+    # non-epistemic-premise edges -- declares nothing a fire-time driver must resolve, since
+    # `dispatch_emit.emit`/`build_waves` never requires its writes either. Ported from DoE-claude
+    # `coordinator/bin/mise-prep-gate.py`'s `_spine` (code-reviewer Finding 1,
+    # 2026-09-08-hoexec-close/mise-prep-gate.md): a direct-edge-only check misses route 2 of
+    # `_compute_held_out`'s walk, so the full transitive predecessor graph is passed here too.
+    held = _compute_held_out(rows, _predecessors(rows))
+    undeclared = [row.id for row in rows if row.writes is UNDECLARED and row.id not in held]
     if undeclared:
         return _defect(
             "writes-undeclared",
             f"rows with no writes: {', '.join(undeclared)} "
-            "(a row that writes nothing declares `writes: []`)",
+            "(a row that writes nothing declares `writes: []`; a row whose files an earlier "
+            "row decides declares an epistemic-premise `depends_on` edge instead)",
         )
     try:
         waves = build_waves(rows)
@@ -434,27 +503,49 @@ def _writes_shape_refused_at_emit(
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 
     root = repo_root or Path.cwd()
-    findings: List[str] = []
+    # Two kinds, not one: a TRAILING SEPARATOR (`/` or `\`) is `pathspec.py`'s own
+    # `DirectoryShapedWriteError` shape and is refused earliest, at spine-derivation
+    # time -- its own kind (`writes-directory-shaped`) names that specifically. A
+    # glob or a BARE path that merely happens to name an existing directory on this
+    # worktree is caught later, at the emitted workflow's claimability preflight
+    # (claude-klabauter#45 class B) -- `writes-unreadable-at-emit`. Distinguished
+    # because the fix line is the same for both but the failure surface differs,
+    # and a caller keying on `kind` must be able to tell which check actually fired.
+    directory_shaped: List[str] = []
+    unreadable: List[str] = []
     for row in rows:
         if row.writes is UNDECLARED:
             continue
         for value in row.writes:
             text = str(value)
             if any(ch in text for ch in _GLOB_CHARS):
-                findings.append(f"{row.id} ({text!r}, glob pathspec)")
+                unreadable.append(f"{row.id} ({text!r}, glob pathspec)")
                 continue
-            if text.endswith("/") or text.endswith("\\") or (root / text).is_dir():
-                findings.append(f"{row.id} ({text!r}, directory-shaped)")
-    if not findings:
-        return None
-    return _defect(
-        "writes-unreadable-at-emit",
-        f"rows with a glob or directory-shaped writes: entry: {', '.join(findings)} — "
-        "the dispatch path refuses both shapes (inventory_mint.py and pathspec.py at emit; "
-        "an existing directory at the emitted workflow's preflight). "
-        "Fix: name a concrete file, or declare `writes_under: <dir>/` if the row chooses "
-        "the filename at run time.",
+            if text.endswith("/") or text.endswith("\\"):
+                directory_shaped.append(f"{row.id} ({text!r}, directory-shaped)")
+            elif (root / text).is_dir():
+                unreadable.append(f"{row.id} ({text!r}, directory-shaped)")
+    fix = (
+        "Fix: name the files this row actually writes, or declare `writes_under: <dir>/` "
+        "if the row chooses the filename at run time. Do not strip the trailing separator "
+        "and leave a bare directory name — that clears this check and then strands the "
+        "wave at the same directory-shaped write, one step later."
     )
+    if directory_shaped:
+        return _defect(
+            "writes-directory-shaped",
+            f"rows with a directory-shaped writes: entry (trailing separator): "
+            f"{', '.join(directory_shaped)} — pathspec.py refuses this at spine-derivation "
+            f"time. {fix}",
+        )
+    if unreadable:
+        return _defect(
+            "writes-unreadable-at-emit",
+            f"rows with a glob or an existing-directory writes: entry: {', '.join(unreadable)} "
+            "— the dispatch path refuses both shapes (inventory_mint.py at emit; an existing "
+            f"directory at the emitted workflow's preflight). {fix}",
+        )
+    return None
 
 
 def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Optional[Exception]]":
@@ -535,6 +626,7 @@ def _path_leaves_repo(
     siblings: Sequence[str],
     created_roots: frozenset = frozenset(),
     nested_names: Optional[Dict[str, tuple]] = None,
+    gitignored_roots: frozenset = frozenset(),
 ) -> Optional[str]:
     """Why ``value`` names something outside this repo, or None.
 
@@ -624,6 +716,15 @@ def _path_leaves_repo(
         return None
     first = normalized.split("/")[0]
     if first and first in created_roots:
+        return None
+    if first and first in gitignored_roots:
+        # GITIGNORE-ROOT (bug 8b41ec70da55): a first segment the SCANNED repo's
+        # own `.gitignore` declares untracked is a build/install artifact of
+        # THIS repo (an uninstalled `node_modules/`, e.g.), not a nameless path
+        # into a sibling's tree -- and the verdict must not depend on whether
+        # that dependency happens to be installed in the checkout being
+        # scanned. See `repo_gitignored_roots` for why this reads the tree's
+        # own declaration rather than a directory listing.
         return None
     if first and first not in root_names:
         # STALE-PREFIX candidate (ported from DoE-claude ``mise-prep-gate.py``
@@ -850,11 +951,36 @@ def _matched_sibling(value: str, siblings: Sequence[str]) -> Optional[str]:
     return None
 
 
+def _gate_covers_reason(value: str, siblings: Sequence[str], gates: List[Dict[str, Any]]) -> bool:
+    """Does ANY of ``gates`` actually cover the sibling ``value`` names?
+
+    Finding 1 (code-reviewer, 2026-09-08-hoexec-close/mise-prep-gate.md): a row
+    writing into ``claude-klabauter`` carrying an ``external_gate`` naming a
+    DIFFERENT sibling (``example-retrieval-repo``) used to silence the undeclared-path
+    defect on the strength of gate PRESENCE alone. Attaching an unrelated gate
+    must be no better than attaching none. Correlated by ``owner_repo``,
+    case-folded, against the SIBLING-NAME match — the same identity
+    ``_matched_sibling`` already gives ``_ungated_reads``'s correlation, not a
+    second independent guess at it.
+
+    A ROOT-EXISTENCE hit (no sibling name — a nameless path into an
+    unidentified tree) cannot be correlated this way, since there is no
+    ``owner_repo`` to compare against; ANY gate still clears it there, matching
+    this leg's own acknowledged blind spot on that shape.
+    """
+    sibling = _matched_sibling(value, siblings)
+    if sibling is None:
+        return bool(gates)
+    target = sibling.casefold()
+    return any(str(g.get("owner_repo") or "").strip().casefold() == target for g in gates)
+
+
 def _external_deps(
     rows: List[Dict[str, Any]],
     root_names: frozenset,
     siblings: Sequence[str],
     nested_names: Optional[Dict[str, tuple]] = None,
+    gitignored_roots: frozenset = frozenset(),
 ) -> Dict[str, Any]:
     """The three-way split, at the granularity each leg earns.
 
@@ -926,7 +1052,7 @@ def _external_deps(
                 )
                 continue
             reason = _path_leaves_repo(
-                field, value, root_names, siblings, created_roots, nested_names
+                field, value, root_names, siblings, created_roots, nested_names, gitignored_roots
             )
             # external_reads_ungated clears a reads: hit only — never writes:/surface: —
             # per the APM ruling this field exists to serve. Keyed on (path,
@@ -940,7 +1066,7 @@ def _external_deps(
                     key = (value.strip(), sibling.casefold())
                     if key in ungated_index:
                         reason = None
-            if reason and not gates:
+            if reason and not _gate_covers_reason(value, siblings, gates):
                 # One line per DISTINCT fact, with a count. This leg reports a first
                 # SEGMENT, so a row writing eleven files under one new directory
                 # produced eleven byte-identical lines and one plan produced 35
@@ -1432,6 +1558,7 @@ def evaluate_plan(
     siblings: Sequence[str],
     repo_root: Optional[Path] = None,
     nested_names: Optional[Dict[str, tuple]] = None,
+    gitignored_roots: frozenset = frozenset(),
 ) -> Dict[str, Any]:
     """The whole bar over one plan. Returns a report; writes nothing.
 
@@ -1449,28 +1576,60 @@ def evaluate_plan(
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     fm = plan_frontmatter(text)
     parse_error = frontmatter_parse_error(text)
-    prime_exit = _prime_exit(fm, repo_root)
-    classes = {
-        "SPINE": _spine(plan_path, text, repo_root),
-        "CENSUS": _census(fm),
-        "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings, nested_names),
-        "PRIME_EXIT": prime_exit,
-        "SCHEMA": _schema(fm, prime_exit, parse_error),
-    }
-    if any(v["status"] == "REFUSE" for v in classes.values()):
+    try:
+        prime_exit = _prime_exit(fm, repo_root)
+        classes = {
+            "SPINE": _spine(plan_path, text, repo_root),
+            "CENSUS": _census(fm),
+            "EXTERNAL_DEPS": _external_deps(
+                raw_spine_rows(text), root_names, siblings, nested_names, gitignored_roots
+            ),
+            "PRIME_EXIT": prime_exit,
+            "SCHEMA": _schema(fm, prime_exit, parse_error),
+        }
+    except Exception as exc:  # noqa: BLE001 - defense in depth, see ENGINE_ERROR
+        # A predicate raising anything OTHER than its own documented exception
+        # (SpineReadError et al, already turned into a DEFECT above) is a
+        # version-skewed engine, not an authoring gap -- reported as its own
+        # status ("ERROR") so the verdict below routes it to ENGINE_ERROR
+        # rather than NOT_PREPPED, the same distinction the CLI batch loop
+        # already makes at `prep_gate_cli.py :: _engine_error_report`.
+        kind = type(exc).__name__
+        detail = f"{kind}: {exc}".strip().splitlines()[0][:300]
+        classes = {
+            "SPINE": {"status": "ERROR", "kind": "engine-error", "detail": detail, "withheld": []}
+        }
+    if any(v["status"] == "ERROR" for v in classes.values()):
+        verdict = ENGINE_ERROR
+    elif any(v["status"] == "REFUSE" for v in classes.values()):
         verdict = REFUSED
     elif any(v["status"] == "DEFECT" for v in classes.values()):
         verdict = NOT_PREPPED
     else:
         verdict = PREPPED
     withheld = sorted({r for v in classes.values() for r in v["withheld"]})
+    status = str(fm.get("status") or "").strip()
+    terminal = status in _terminal_statuses()
     return {
         "path": plan_path.as_posix(),
         "verdict": verdict,
         "withheld_rows": withheld,
         "classes": classes,
-        "message": refusal_message(plan_path, verdict, classes, withheld),
+        "terminal": terminal,
+        "message": refusal_message(plan_path, verdict, classes, withheld, terminal=terminal, status=status),
     }
+
+
+def _terminal_statuses() -> frozenset:
+    """Plan statuses meaning "already ran" -- prep is a pre-execution property.
+
+    Imported, never hand-listed: the plans this bar reports as owing nothing
+    must be exactly the ones the archive op moves out of `docs/plans/`, or the
+    two readers disagree about which plans are still live.
+    """
+    from coordinator_core.lifecycle_constants import PLAN_ARCHIVABLE_STATUS
+
+    return frozenset(PLAN_ARCHIVABLE_STATUS)
 
 
 #: The converter this gate routes a NOT-PREPPED author to. It is a SIBLING of this
@@ -1522,8 +1681,51 @@ def _only_schema_defect(classes: Dict[str, Any]) -> bool:
     return failing == ["SCHEMA"]
 
 
+#: `EXTERNAL_DEPS`'s two declaration paths, the repair menu `_authoring_fix_lines`
+#: offers for it. Kept as one place so the CLI's per-class refusal detail and this
+#: catalogue cannot name a field the other has renamed out from under it.
+def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
+    """Repair lines for a SET of failing class names -- a catalogue, not a
+    per-report message. Used where a caller wants the standing repair menu for
+    a class (e.g. to check its wording stays current) independent of any one
+    plan's report.
+
+    `EXTERNAL_DEPS` names both live declaration paths: `external_gate` for a
+    row whose write/read genuinely leaves the repo, `external_reads_ungated`
+    (APM ruling) for a row that only EXAMINES a sibling path and never lands
+    into it, and `writes_under: [<segment>/]` for a row that CREATES a new
+    top-level directory rather than depending on one.
+    """
+    lines: List[str] = []
+    if "EXTERNAL_DEPS" in failing_classes:
+        lines.append(
+            "  fix: declare `external_gate` on the row for a path that genuinely leaves "
+            "this repo, or `external_reads_ungated` (path/owner_repo/reason) for a row "
+            "that only reads a sibling path without landing into it; a row CREATING a "
+            "new top-level directory declares `writes_under: [<segment>/]` instead of a "
+            "gate"
+        )
+    if "CENSUS" in failing_classes:
+        lines.append(
+            "  fix: declare `census: []` if this plan rests on no counted premise, or "
+            "one entry per counted claim with question/command/result all filled in"
+        )
+    if "PRIME_EXIT" in failing_classes:
+        lines.append(
+            "  fix: declare `prime_exit_criterion.statement` and `.derived_from` "
+            "(a sizing object or goal KR, never a self-declaration)"
+        )
+    return lines
+
+
 def refusal_message(
-    plan_path: Path, verdict: str, classes: Dict[str, Any], withheld: Sequence[str]
+    plan_path: Path,
+    verdict: str,
+    classes: Dict[str, Any],
+    withheld: Sequence[str],
+    *,
+    terminal: bool = False,
+    status: str = "",
 ) -> str:
     """ONE message enumerating every missing declaration at once.
 
@@ -1532,19 +1734,57 @@ def refusal_message(
     changed. Register: one fact per line, the terse alternative where one exists,
     and no override key — there is no way to pass this bar except by declaring
     what it names.
+
+    Prep is a pre-execution property, and `terminal` (a plan whose `status:` is
+    already archivable, see `_terminal_statuses`) says so instead of a fix line:
+    reported 2026-09-11 by example-store-repo-fb — four agents, ~900k tokens, authoring
+    census rows and exit criteria for 28 plans that had already shipped, because
+    every reader took the NOT-PREPPED count as a work queue. The verdict itself
+    stays unchanged on purpose — the whole-corpus denominator measures bar
+    ADOPTION — only the refusal stops reading as work owed.
     """
     name = plan_path.name
+    if verdict == ENGINE_ERROR:
+        lines = [f"mise-prep: {ENGINE_ERROR} — {name}"]
+        for key, value in classes.items():
+            if value["status"] != "ERROR":
+                continue
+            lines.append(f"  {key:<14} {value['detail']}")
+        lines.append("  route: PM/engineering — an engine defect, not an authoring gap.")
+        return "\n".join(lines)
     if verdict == PREPPED:
         tail = f" ({len(withheld)} row(s) withheld: {', '.join(withheld)})" if withheld else ""
         return f"mise-prep: PREPPED — {name}{tail}"
     lines = [f"mise-prep: {verdict} — {name}"]
     for key in CLASS_ORDER:
-        value = classes[key]
-        if value["status"] == "PASS":
+        value = classes.get(key)
+        if value is None or value["status"] == "PASS":
             continue
         lines.append(f"  {key:<14} {value['detail']}")
     if verdict == REFUSED:
         lines.append("  route: PM, not the plan author.")
+    elif terminal:
+        lines.append(
+            f"  status: {status} — this plan has already run; nothing is owed here "
+            "(prep is a pre-execution property)."
+        )
+    elif any(
+        v["status"] == "DEFECT" and v["kind"] == "prime-exit-underived" for v in classes.values()
+    ):
+        # No admissible value exists for THIS plan: `derived_from`'s pattern admits
+        # only a sizing object, a blitz-trail artifact, or a goal KR, and a
+        # pre-sizing-regime plan has none of the three. mise-prep-upgrade DOES
+        # derive this field when a sizing object exists, so pointing the author at
+        # it here would have them run it, see "0 would change", and reach for the
+        # nearest goal KR next -- an answer that does not actually support the
+        # statement. Named here rather than left for the author to discover.
+        lines.append(
+            "  fix: mise-prep-upgrade would report 0 would change for this field — it "
+            "derives derived_from only from an existing sizing object. Do not point it "
+            "at the nearest goal KR unless that KR genuinely derives this statement; "
+            "raise a schema question about what a pre-sizing-regime plan should cite "
+            "instead"
+        )
     elif _only_schema_defect(classes):
         # The converter DERIVES missing declarations from the plan's own body.
         # It cannot repair a value that is present and the wrong SHAPE, so for
@@ -1600,6 +1840,63 @@ def gate_plan(worktree_root: Path, plan_path: Path, *, text: Optional[str] = Non
         siblings=fleet_siblings(worktree_root),
         repo_root=worktree_root,
         nested_names=repo_nested_names(worktree_root, root_names),
+        gitignored_roots=repo_gitignored_roots(worktree_root),
+    )
+
+
+class CorpusInputs:
+    """The per-corpus facts every predicate reads, resolved ONCE per repo root
+    rather than once per plan — the same reasoning `gate_plan` already gives for
+    computing them per call. A caller gating many plans in the same repo root
+    (a directory walk, a corpus tally) derives this once and reuses it, instead
+    of re-``iterdir``-ing the repo root once per plan.
+    """
+
+    __slots__ = ("repo_root", "root_names", "siblings", "nested_names", "gitignored_roots")
+
+    def __init__(
+        self,
+        repo_root: Path,
+        root_names: frozenset,
+        siblings: tuple,
+        nested_names: Dict[str, tuple],
+        gitignored_roots: frozenset = frozenset(),
+    ):
+        self.repo_root = repo_root
+        self.root_names = root_names
+        self.siblings = siblings
+        self.nested_names = nested_names
+        self.gitignored_roots = gitignored_roots
+
+
+def corpus_inputs(repo_root: Path) -> CorpusInputs:
+    """``CorpusInputs`` for ``repo_root`` — the read-once twin of ``gate_plan``'s
+    own per-call derivation, for a caller gating more than one plan standing in
+    the same repo.
+    """
+    root_names = repo_root_names(repo_root)
+    return CorpusInputs(
+        repo_root=repo_root,
+        root_names=root_names,
+        siblings=fleet_siblings(repo_root),
+        nested_names=repo_nested_names(repo_root, root_names),
+        gitignored_roots=repo_gitignored_roots(repo_root),
+    )
+
+
+def gate_plan_with_corpus(plan_path: Path, corpus: CorpusInputs, *, text: Optional[str] = None) -> Dict[str, Any]:
+    """``evaluate_plan`` against an already-resolved ``CorpusInputs`` — the
+    plan-first, corpus-second calling shape a directory walk wants, alongside
+    ``gate_plan``'s repo-root-first, per-call shape.
+    """
+    return evaluate_plan(
+        plan_path,
+        text=text,
+        root_names=corpus.root_names,
+        gitignored_roots=corpus.gitignored_roots,
+        siblings=corpus.siblings,
+        repo_root=corpus.repo_root,
+        nested_names=corpus.nested_names,
     )
 
 

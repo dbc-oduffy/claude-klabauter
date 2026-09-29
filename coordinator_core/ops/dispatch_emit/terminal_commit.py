@@ -65,6 +65,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     parse_marker,
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -217,6 +218,47 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
 
+    # Zero-integration-stage path (2026-09-28 PM order, step b'): a
+    # `bookkeeping` inline_review carries `wave_sidecar_paths`/`prep_sidecar`/
+    # `plan_id` (the one-stage `inline_review` never does -- its
+    # `integration_stem` names a real integration sidecar an agent already
+    # wrote). Run the mechanical bookkeeping step FIRST, before the commit is
+    # built, so the record it writes lands in the SAME commit as the code it
+    # reviews -- the only seam that can call it, since the emitted script has
+    # no JS-callable "invoke a Python op" primitive
+    # (review_mint/wave_bookkeeping.py's own module docstring).
+    bookkeeping_record_path: Optional[str] = None
+    if inline_review is not None and all(
+        inline_review.get(k) for k in ("wave_sidecar_paths", "prep_sidecar", "plan_id")
+    ):
+        if not session_id:
+            return _error(
+                "params.inline_review names a bookkeeping stem (wave_sidecar_paths/"
+                "prep_sidecar/plan_id present) but params.session_id is missing or "
+                "not canonical-UUID-shaped -- bookkeep_wave needs it to place the record"
+            )
+        wave_sidecar_paths = [
+            worktree_root / p for p in inline_review["wave_sidecar_paths"] if isinstance(p, str)
+        ]
+        try:
+            record = bookkeep_wave(
+                wave_sidecar_paths,
+                repo_root=worktree_root,
+                session_id=session_id,
+                plan_id=inline_review["plan_id"],
+                prep_sidecar=inline_review["prep_sidecar"],
+                record_stem=inline_review["integration_stem"],
+            )
+        except Exception as exc:  # noqa: BLE001 -- surfaced, never silently dropped
+            return _error(f"review_mint.bookkeep_wave failed: {exc}")
+        record_path_abs = Path(record["sidecar_path"])
+        try:
+            bookkeeping_record_path = str(
+                record_path_abs.relative_to(worktree_root)
+            ).replace("\\", "/")
+        except ValueError:
+            bookkeeping_record_path = None
+
     known_ids = {chunk.id for chunk in request.chunks}
     unknown_incomplete = incomplete_chunks - known_ids
     if unknown_incomplete:
@@ -242,6 +284,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         chunk_paths = list(chunk.paths) + own_prefix_files
         all_paths.extend(chunk_paths)
         prefix_files.extend(own_prefix_files)
+
+    if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
+        all_paths.append(bookkeeping_record_path)
 
     if not all_paths:
         return {"committed": False, "nothing_to_commit": True}

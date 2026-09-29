@@ -455,8 +455,25 @@ def test_parse_execute_review_two_integration_stages_refuses():
             ],
         }
     )
-    with pytest.raises(RosterFragmentError, match="exactly one 'integration' stage"):
+    with pytest.raises(RosterFragmentError, match="at most one 'integration' stage"):
         parse_execute_review(fragment)
+
+
+def test_parse_execute_review_zero_integration_stages_yields_none():
+    """2026-09-28 PM order step b': the engine tolerates ZERO integration
+    stages -- ExecuteReview.integration is None, prep/review-wave unchanged."""
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"] = [
+        s for s in fragment["execute_review"]["stages"] if s["kind"] != "integration"
+    ]
+    review = parse_execute_review(fragment)
+    assert review.integration is None
+    assert review.prep.agent_type == "coordinator:test-runner"
+    assert [a.agent_type for a in review.review_wave] == [
+        "coordinator:code-reviewer",
+        "coordinator:overengineering-reviewer",
+        "coordinator:delivery-verifier",
+    ]
 
 
 def test_parse_execute_review_two_agent_integration_stage_refuses():

@@ -184,6 +184,37 @@ def test_review_wave_composes_only_from_a_v5_fragment_with_stage_schemas():
     assert "if (!_halted) {" in v5
 
 
+_V5_FRAGMENT_ZERO_STAGE = {
+    "schema": "review-roster-fragment",
+    "schema_version": 5,
+    "execute_review": {
+        "stages": [
+            s for s in _V5_FRAGMENT["execute_review"]["stages"] if s["kind"] != "integration"
+        ]
+    },
+}
+
+
+def test_zero_integration_stage_emits_no_integrate_dispatch_and_points_inline_review_at_the_record():
+    """2026-09-28 PM order step b': the engine tolerates zero integration
+    stages -- no `_reviewIntegration` call in the emitted script, and the
+    wake digest's `inline_review` points at the mechanical bookkeeping
+    record by its compose-time-deterministic stem."""
+    waves = [[_row("C1", ["a.py"])]]
+    script = compose_script(
+        waves,
+        name="wf",
+        description="zero-stage review",
+        review_roster_fragment=_V5_FRAGMENT_ZERO_STAGE,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+        plan_id="pln-zero-stage-abc123",
+    )
+    assert "review:coordinator:code-reviewer" in script
+    assert "const _reviewIntegration" not in script
+    assert "review-wave-bookkeeping" in script
+    assert "integration_stem: 'pln-zero-stage-abc123.review-wave-bookkeeping'" in script
+
+
 def test_review_stages_feed_the_digests_review_block():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 

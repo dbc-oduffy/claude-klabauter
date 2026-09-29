@@ -57,17 +57,29 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from coordinator_core.roadmap.prep_gate import (
+    ENGINE_ERROR,
     NOT_PREPPED,
     PREPPED,
     REFUSED,
+    _terminal_statuses,
     gate_plan,
 )
+
+#: Re-exported for back-compat with callers that imported the CLI-local
+#: constant before it moved to ``prep_gate.py`` (``gate_plan`` now produces it
+#: per-plan too, so both doors must share the one definition). A target whose
+#: engine call raised something other than the plan-authoring defects
+#: ``gate_plan`` already turns into a DEFECT (e.g. a version-skewed
+#: ``coordinator_core``, a renamed symbol) routes to PM/engineering, never to
+#: the plan author, so it must not collapse into NOT_PREPPED's exit code or be
+#: silently dropped from a batch.
 
 #: Exit codes, one per verdict plus usage. ``EXIT_REFUSED`` is reserved and
 EXIT_PREPPED = 0
 EXIT_NOT_PREPPED = 1
 EXIT_REFUSED = 2
 EXIT_USAGE = 3
+EXIT_ENGINE_ERROR = 4
 
 
 class GateCLIError(RuntimeError):
@@ -110,17 +122,59 @@ def _targets(args: List[str], repo_root: Path) -> List[Path]:
     return out
 
 
+def _engine_error_report(plan_path: Path, exc: Exception) -> Dict[str, Any]:
+    """A ``gate_plan``-shaped report for a target whose engine call raised
+    something ``gate_plan`` itself did not turn into a DEFECT.
+
+    Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py ::
+    _engine_error_report``: defense in depth for ``main()``'s per-target
+    loop below. ``gate_plan``/``_spine`` already isolate the named
+    ``read_spine()``/``build_waves()`` boundary into a DEFECT, but the batch
+    itself must not depend on every other helper never raising unexpectedly
+    either — one plan's engine failure must not discard every sibling
+    plan's verdict in the same invocation.
+    """
+    kind = type(exc).__name__
+    detail = f"{kind}: {exc}".strip().splitlines()[0][:300]
+    classes = {"SPINE": {"status": "DEFECT", "kind": "engine-error", "detail": detail, "withheld": []}}
+    message = "\n".join(
+        [
+            f"mise-prep: {ENGINE_ERROR} — {plan_path.name}",
+            f"  SPINE          {detail}",
+            "  route: PM/engineering — an engine defect, not an authoring gap.",
+        ]
+    )
+    return {
+        "path": str(plan_path),
+        "verdict": ENGINE_ERROR,
+        "withheld_rows": [],
+        "classes": classes,
+        "message": message,
+    }
+
+
 def _tally(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-    counts: Dict[str, int] = {PREPPED: 0, NOT_PREPPED: 0, REFUSED: 0}
+    counts: Dict[str, int] = {PREPPED: 0, NOT_PREPPED: 0, REFUSED: 0, ENGINE_ERROR: 0}
     kinds: Dict[str, int] = {}
+    not_prepped_terminal = 0
     for report in reports:
         counts[report["verdict"]] = counts.get(report["verdict"], 0) + 1
+        if report["verdict"] == NOT_PREPPED and report.get("terminal"):
+            # A NOT-PREPPED plan whose status: is already archivable already ran
+            # -- see `prep_gate.py :: _terminal_statuses` -- and reads as adoption
+            # noise, not a work queue, if folded into the bare NOT_PREPPED count.
+            not_prepped_terminal += 1
         for key, value in report["classes"].items():
             if value["status"] == "PASS":
                 continue
             kind = f"{key}/{value['kind']}"
             kinds[kind] = kinds.get(kind, 0) + 1
-    return {"verdicts": counts, "defect_kinds": kinds, "total": len(reports)}
+    return {
+        "verdicts": counts,
+        "defect_kinds": kinds,
+        "total": len(reports),
+        "not_prepped_terminal": not_prepped_terminal,
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -159,12 +213,28 @@ def main(argv: "list[str] | None" = None) -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
 
-    reports = [gate_plan(repo_root, target) for target in targets]
+    reports: List[Dict[str, Any]] = []
+    for target in targets:
+        try:
+            reports.append(gate_plan(repo_root, target))
+        except Exception as exc:  # pragma: no cover - defense in depth, see _engine_error_report
+            reports.append(_engine_error_report(target, exc))
 
     if args.json:
         print(json.dumps({"reports": reports, "tally": _tally(reports)}, indent=2))
     elif args.tally:
         tally = _tally(reports)
+        # The population is named because a bare percentage reads as a verdict on live work:
+        # this gate reads no `status:`, so the denominator includes shipped and abandoned plans.
+        print(f"over {tally['total']} plan(s) under the given target(s), every status counted "
+              "— no verdict here reads `status:`, so a shipped or abandoned plan is in the "
+              "denominator.")
+        if tally.get("not_prepped_terminal"):
+            print(f"{tally['not_prepped_terminal']} of the NOT-PREPPED plan(s) are already "
+                  f"terminal ({', '.join(sorted(_terminal_statuses()))}) — nothing is owed on "
+                  "them, and they are not a backfill queue.")
+        print("For the certifiable queue — fireable plans only — run "
+              "<plugin-root>/skills/plan-blitz/mise-prep-entry.py.")
         for verdict, count in tally["verdicts"].items():
             share = 100.0 * count / tally["total"] if tally["total"] else 0.0
             print(f"{count:5d}  {share:5.1f}%  {verdict}")
@@ -175,6 +245,11 @@ def main(argv: "list[str] | None" = None) -> int:
         for report in reports:
             print(report["message"])
 
+    if any(r["verdict"] == ENGINE_ERROR for r in reports):
+        # Checked first, same precedence reasoning as gate_plan's own verdict assembly: an
+        # engine defect means the batch could not fully compute, so it outranks a
+        # REFUSED/NOT_PREPPED verdict another target did compute.
+        return EXIT_ENGINE_ERROR
     if any(r["verdict"] == REFUSED for r in reports):
         return EXIT_REFUSED
     if any(r["verdict"] == NOT_PREPPED for r in reports):

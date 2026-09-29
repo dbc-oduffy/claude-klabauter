@@ -14,6 +14,35 @@ against the reviewed tree.
     delivery verdict, a missing/non-pass build/test record, any unresolved
     finding, any confinement violation, any foreign claim, or zero product
     files. Writes nothing else in the plan.
+  - `mint(..., repair=True)` (CLI: `mint --repair`): EXPLICIT, never-default
+    repair path for a run that landed after the review-integrator
+    retirement (commit 3d44bfb122) but before step b' shipped
+    `review_mint.wave_bookkeeping` -- its integration sidecar predates the
+    fields `mint` reads (no `prep_sidecar`), or no sidecar resolves at all
+    (a pre-fix `Inline-Review: applies None` trailer). Terminal-commit
+    resolution is UNCHANGED (`_resolve_terminal_commit`, including its
+    None-trailer/receipt-session fallback); repair only widens what happens
+    once resolution comes up short:
+      1. still tries the normal walk first;
+      2. if it resolves a sidecar that lacks `prep_sidecar`, or resolves
+         nothing at all, repair locates the run's session_id (the resolved
+         sidecar's `lead_session_id`, else the plan's own
+         `<stem>.workflow.mjs.emitted.json` receipt `session_id`), then its
+         `.coordinator-local/subagent-share/<session_id>/` dir;
+      3. within that dir it heuristically discovers a prep-shaped sidecar
+         (carries `product_files` + `whole_diff_sidecars`) and this run's
+         wave sidecars (reviewer-agent_type sidecars, excluding the prep
+         sidecar, the resolved integration sidecar, and any `*.blocks.md`
+         companion file), then calls
+         `review_mint.wave_bookkeeping.bookkeep_wave` over them to build a
+         fresh bookkeeping record in the same shape `mint` already reads;
+      4. mints against that record exactly as it would a normal one -- the
+         same refusal predicates apply unchanged (FAIL delivery, non-pass
+         build/test, unresolved findings, confinement violations, foreign
+         claims, zero product files), plus a repair-specific refusal when
+         no prep sidecar or zero wave sidecars are discoverable.
+    A run whose sidecar already carries `prep_sidecar` is unaffected by
+    `--repair` -- it takes the normal path even with the flag set.
   - `check(plan_path, repo_root, supersession=...)`: returns `None` when the
     existing stamp is still valid, or a one-line refusal string. Tree
     equality and ancestry are always checked; the supersession check (a
@@ -224,7 +253,9 @@ def _receipt_session_id(plan_path: Path) -> Optional[str]:
     return session_id if isinstance(session_id, str) and session_id else None
 
 
-def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[Path] = None):
+def _resolve_terminal_commit(
+    repo_root: Path, plan_id: str, plan_path: Optional[Path] = None, *, repair: bool = False
+):
     """Newest-first walk of `_COMMIT_WALK_BOUND` commits, looking for an
     `Inline-Review: applies <stem>` trailer whose integration sidecar's
     frontmatter `plan_id` equals this plan's. One git spawn.
@@ -254,6 +285,11 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[
         raise MintRefusal(f"review-stamp: git log failed: {exc}") from exc
 
     receipt_session_id = _receipt_session_id(plan_path) if plan_path is not None else None
+    share_root = repo_root / ".coordinator-local" / "subagent-share"
+    receipt_share_dir_exists = bool(
+        repair and receipt_session_id and (share_root / receipt_session_id).is_dir()
+    )
+    repair_candidate_sha: Optional[str] = None
 
     for line in out.splitlines():
         if not line.startswith(_HEADER_SENTINEL):
@@ -265,6 +301,14 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[
             if not m:
                 continue
             stem = m.group(1)
+            if receipt_share_dir_exists and repair_candidate_sha is None:
+                # Repair-only, weakest fallback: a trailer whose stem names no
+                # readable sidecar at all (the example-retrieval-repo cc6525cf0 shape,
+                # literally `applies None`). Newest-first walk, so the FIRST
+                # such commit seen is the newest one -- accepted only when the
+                # plan's own emit-receipt session has a real subagent-share
+                # dir, i.e. some evidence a run actually happened for it.
+                repair_candidate_sha = sha
             sidecar_path = _find_sidecar_by_stem(repo_root, stem)
             if sidecar_path is None:
                 continue
@@ -278,6 +322,8 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[
                 sidecar_session_id = data.get("lead_session_id") or data.get("dispatched_by")
                 if sidecar_session_id and sidecar_session_id == receipt_session_id:
                     return sha, sidecar_path, data
+    if repair and repair_candidate_sha is not None:
+        return repair_candidate_sha, None, {}
     raise MintRefusal(
         f"review-stamp: no terminal commit found within {_COMMIT_WALK_BOUND} commits carrying "
         f"an Inline-Review trailer whose integration sidecar's plan_id equals {plan_id!r} "
@@ -286,10 +332,100 @@ def _resolve_terminal_commit(repo_root: Path, plan_id: str, plan_path: Optional[
     )
 
 
-def mint(plan_path: Path, repo_root: Path, *, build_test_path: Optional[str]) -> Dict[str, Any]:
+#: Repair-only heuristic (§ module docstring `mint(..., repair=True)`): a
+#: sidecar carrying both fields is shaped like a prep sidecar even with no
+#: `prep_sidecar:` pointer anywhere left to follow it by.
+_PREP_SHAPE_FIELDS = ("product_files", "whole_diff_sidecars")
+
+
+def _repair_discover_prep_sidecar(share_dir: Path) -> Optional[Path]:
+    for path in sorted(share_dir.glob("*.md")):
+        if path.name.endswith(".blocks.md"):
+            continue
+        data = _load_sidecar(path)
+        if data and all(field in data for field in _PREP_SHAPE_FIELDS):
+            return path
+    return None
+
+
+def _repair_discover_wave_sidecars(share_dir: Path, exclude: set) -> List[Path]:
+    """Reviewer-shaped sidecars under `share_dir`, oldest-name-first,
+    excluding `exclude` (the prep sidecar and, when one resolved, the
+    integration sidecar) and any `*.blocks.md` companion file. Repair-only
+    heuristic -- see `_repair_discover_prep_sidecar`."""
+    waves: List[Path] = []
+    for path in sorted(share_dir.glob("*.md")):
+        if path.name.endswith(".blocks.md") or path in exclude:
+            continue
+        data = _load_sidecar(path)
+        if data is None:
+            continue
+        agent_type = str(data.get("agent_type") or "")
+        if "review" not in agent_type:
+            continue
+        waves.append(path)
+    return waves
+
+
+def _repair_build_bookkeeping_record(
+    repo_root: Path,
+    plan_id: str,
+    integration_path: Optional[Path],
+    integration_data: Dict[str, Any],
+    plan_path: Path,
+):
+    """`--repair`'s core: assemble a bookkeeping record shaped exactly like
+    `mint`'s normal read, via `review_mint.wave_bookkeeping.bookkeep_wave`
+    over this run's wave sidecars. Raises `MintRefusal` when the session_id,
+    its subagent-share dir, a prep-shaped sidecar, or any wave sidecar
+    cannot be discovered."""
+    session_id = (
+        integration_data.get("lead_session_id")
+        or integration_data.get("dispatched_by")
+        or _receipt_session_id(plan_path)
+    )
+    if not session_id:
+        raise MintRefusal(
+            "review-stamp: --repair could not determine a session_id to locate wave sidecars "
+            "(no lead_session_id/dispatched_by on the resolved sidecar and no emit receipt)"
+        )
+    share_dir = repo_root / ".coordinator-local" / "subagent-share" / session_id
+    if not share_dir.is_dir():
+        raise MintRefusal(f"review-stamp: --repair found no subagent-share dir for session {session_id!r}")
+
+    prep_path = _repair_discover_prep_sidecar(share_dir)
+    if prep_path is None:
+        raise MintRefusal(f"review-stamp: --repair could not locate a prep-shaped sidecar under {share_dir}")
+    prep_rel = str(prep_path.relative_to(repo_root)).replace("\\", "/")
+
+    exclude = {prep_path}
+    if integration_path is not None:
+        exclude.add(integration_path)
+    wave_paths = _repair_discover_wave_sidecars(share_dir, exclude)
+    if not wave_paths:
+        raise MintRefusal(f"review-stamp: --repair found no wave sidecars under {share_dir}")
+
+    from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave, review_wave_bookkeeping_stem
+
+    record_stem = review_wave_bookkeeping_stem(plan_id, session_id) + ".repair"
+    record = bookkeep_wave(
+        wave_paths,
+        repo_root=repo_root,
+        session_id=session_id,
+        plan_id=plan_id,
+        prep_sidecar=prep_rel,
+        record_stem=record_stem,
+    )
+    return Path(record["sidecar_path"]), record
+
+
+def mint(
+    plan_path: Path, repo_root: Path, *, build_test_path: Optional[str], repair: bool = False
+) -> Dict[str, Any]:
     """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
     Returns the written stamp dict. Raises `MintRefusal` on any refusal
-    condition; writes nothing in that case."""
+    condition; writes nothing in that case. `repair=True` is the explicit,
+    never-default repair path for a pre-b' run -- see module docstring."""
     if not build_test_path:
         raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
     build_test_sidecar = Path(build_test_path)
@@ -302,12 +438,26 @@ def mint(plan_path: Path, repo_root: Path, *, build_test_path: Optional[str]) ->
         raise MintRefusal(f"review-stamp: refusing to mint: {plan_path} carries no plan_id")
 
     terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
-        repo_root, plan_id, plan_path
+        repo_root, plan_id, plan_path, repair=repair
     )
 
     prep_rel = integration_data.get("prep_sidecar")
     if not prep_rel:
-        raise MintRefusal(f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar")
+        if not repair:
+            if integration_path is None:
+                raise MintRefusal(
+                    f"review-stamp: refusing to mint: no terminal commit resolved for plan_id {plan_id!r}"
+                )
+            raise MintRefusal(f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar")
+        integration_path, integration_data = _repair_build_bookkeeping_record(
+            repo_root, plan_id, integration_path, integration_data, plan_path
+        )
+        prep_rel = integration_data.get("prep_sidecar")
+        if not prep_rel:
+            raise MintRefusal(
+                "review-stamp: --repair assembled a bookkeeping record with no prep_sidecar -- "
+                f"see {integration_path}"
+            )
     prep_path = repo_root / prep_rel
     prep_data = _load_sidecar(prep_path)
     if prep_data is None:
@@ -478,6 +628,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     mint_p.add_argument("--plan", required=True)
     mint_p.add_argument("--build-test", required=False, default=None)
     mint_p.add_argument("--repo-root", required=False, default=None)
+    mint_p.add_argument(
+        "--repair",
+        action="store_true",
+        help="Explicit, never-default repair path for a pre-b' run whose sidecar predates "
+        "wave_bookkeeping's fields (see module docstring mint(..., repair=True)).",
+    )
 
     check_p = sub.add_parser("check", help="Check an existing review_stamp.")
     check_p.add_argument("--plan", required=True)
@@ -509,7 +665,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.verb == "mint":
         try:
-            stamp = mint(plan_path, repo_root, build_test_path=args.build_test)
+            stamp = mint(
+                plan_path, repo_root, build_test_path=args.build_test, repair=bool(getattr(args, "repair", False))
+            )
         except MintRefusal as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -535,7 +693,7 @@ from coordinator_core.ipc import register_op  # noqa: E402 — after CLI-safe mo
 def _mint_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = Path(params["plan"])
     root = repo_root or Path(params.get("repo_root") or ".")
-    stamp = mint(plan_path, root, build_test_path=params.get("build_test"))
+    stamp = mint(plan_path, root, build_test_path=params.get("build_test"), repair=bool(params.get("repair", False)))
     return {"status": "minted", "review_stamp": stamp}
 
 

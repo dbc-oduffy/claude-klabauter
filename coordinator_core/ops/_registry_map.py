@@ -272,6 +272,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "review.mint_workflow":                   "coordinator_core.ops.review_mint.op",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",
     "review_stamp.check":                     "coordinator_core.ops.review_stamp",
+    "review_mint.bookkeep_wave":              "coordinator_core.ops.review_mint.wave_bookkeeping",
     "strategic.generate":                     "coordinator_core.ops.strategic_generate",
     "strategic.emit":                         "coordinator_core.ops.strategic_emit",
     "handoff.close_origin_stub":              "coordinator_core.ops.handoff_close_origin_stub",

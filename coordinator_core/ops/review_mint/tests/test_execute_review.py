@@ -186,6 +186,30 @@ def test_integration_prompt_tells_the_agent_its_edit_is_sanctioned():
         assert marker in integration_block, f"integration prompt missing: {marker!r}"
 
 
+def test_zero_integration_stage_emits_no_integrate_dispatch():
+    """2026-09-28 PM order step b': a fragment with no 'integration' stage
+    composes prep + review-wave only -- no `_reviewIntegration` call, no
+    third phase, at all."""
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"] = [
+        s for s in fragment["execute_review"]["stages"] if s["kind"] != "integration"
+    ]
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    assert review.integration is None
+    phases = compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["coordinator_core/ops/review_mint/execute_review.py"],
+        prompt_head="BRIEF PRECEDENCE CLAUSE",
+    )
+    titles = [title for title, _ in phases]
+    assert titles == ["Review prep", "Review wave"]
+    for _, block in phases:
+        assert "_reviewIntegration" not in block
+
+
 def test_unknown_schema_name_raises_roster_fragment_error():
     review = parse_execute_review(_v5_fragment())
     bad_schemas = dict(_STAGE_SCHEMAS)

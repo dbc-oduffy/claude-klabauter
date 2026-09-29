@@ -505,3 +505,260 @@ def test_check_process_time_bounded(tmp_path):
     m.check(plan_path, repo, supersession=True)
     elapsed_ms = (time.perf_counter() - start) * 1000
     assert elapsed_ms <= 200, f"review_stamp.check took {elapsed_ms:.1f}ms, budget is 200ms"
+
+
+def test_mint_refuses_when_integration_sidecar_lacks_prep_sidecar(tmp_path):
+    """One-stage path, today's failure (2026-09-28 PM order fixture ask): an
+    integration sidecar the terminal commit's trailer names that carries no
+    `prep_sidecar` field refuses mint with a clear, named reason -- unchanged
+    by the zero-integration-stage work, since a one-stage fragment still
+    resolves an `ExecuteReview.integration` agent and its sidecar unchanged."""
+    repo = _setup_repo(tmp_path)
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    _write_sidecar(
+        share / "2026-09-27-integration-noprep.md",
+        {
+            "plan_id": "pln-example-abc123",
+            # No prep_sidecar -- today's failure this fixture pins.
+            "unresolved": [],
+            "confinement_violations": [],
+            "fixes_applied": 0,
+        },
+    )
+    _commit(
+        repo,
+        "land\n\nInline-Review: applies 2026-09-27-integration-noprep -- execute-review: 0 slices, 0 fixes",
+    )
+    build_test = share / "2026-09-27-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="carries no prep_sidecar"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_path):
+    """claude-klabauter-shaped case (docs/plans/2026-09-28-batch-discharge-landed-
+    batons.md, terminal e7c93434ca): the trailer resolves a real sidecar via
+    the existing plan_id/session fallback, but that sidecar predates
+    wave_bookkeeping and carries no `prep_sidecar`. `--repair` discovers the
+    run's prep-shaped sidecar and wave sidecars in the same subagent-share
+    dir and mints against a freshly assembled bookkeeping record."""
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    session_id = "sess1"
+    share = repo / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+
+    prep_rel = f".coordinator-local/subagent-share/{session_id}/2026-09-28-prep.md"
+    _write_sidecar(
+        repo / prep_rel,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {
+                "delivery": f".coordinator-local/subagent-share/{session_id}/2026-09-28-delivery.md"
+            },
+        },
+    )
+    _write_sidecar(share / "2026-09-28-delivery.md", {"verdict": "PASS"})
+
+    # A pre-fix "integrator" sidecar: it resolves via the trailer, and even
+    # carries lead_session_id, but has NO prep_sidecar/unresolved shape --
+    # exactly the claude-klabauter real-world coordinator-code-reviewer sidecar shape.
+    integration = share / "2026-09-28-integration-old.md"
+    _write_sidecar(
+        integration,
+        {
+            "agent_type": "coordinator:code-reviewer",
+            "lead_session_id": session_id,
+            "findings_ledger": {"rows": 1, "applied": 1},
+        },
+    )
+
+    import hashlib
+
+    wave_text = (
+        "---\n"
+        "agent_type: coordinator:code-reviewer\n"
+        "applied: 2\n"
+        "baseline_sha256:\n"
+        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        "---\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
+        "```\n"
+    )
+    (share / "2026-09-28-wave-code-reviewer.md").write_text(wave_text, encoding="utf-8")
+
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+    terminal_sha = _commit(
+        repo, "land\n\nInline-Review: applies 2026-09-28-integration-old -- execute-review: 1 slices, 2 fixes"
+    )
+    build_test = share / "2026-09-28-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+
+    receipt = plan_path.with_name("example.workflow.mjs.emitted.json")
+    receipt.write_text(f'{{"session_id": "{session_id}", "plan": "example.md"}}', encoding="utf-8")
+
+    # Without --repair: unchanged refusal.
+    with pytest.raises(m.MintRefusal, match="carries no prep_sidecar"):
+        m.mint(plan_path, repo, build_test_path=str(build_test), repair=False)
+
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test), repair=True)
+    assert stamp["terminal_commit_sha"] == terminal_sha
+    assert stamp["delivery"]["verdict"] == "PASS"
+    assert stamp["fixes_applied"] == 2
+    assert stamp["unresolved"] == []
+
+
+def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path):
+    """example-retrieval-repo-shaped case (cc6525cf0, trailer `applies None`): no
+    sidecar resolves for the stem at all. `--repair` falls back to the
+    plan's own emit-receipt session_id to find the terminal commit, then
+    the same prep/wave discovery as above."""
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    session_id = "sess1"
+    share = repo / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+
+    prep_rel = f".coordinator-local/subagent-share/{session_id}/2026-09-28-prep.md"
+    _write_sidecar(
+        repo / prep_rel,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {
+                "delivery": f".coordinator-local/subagent-share/{session_id}/2026-09-28-delivery.md"
+            },
+        },
+    )
+    _write_sidecar(share / "2026-09-28-delivery.md", {"verdict": "PASS"})
+
+    import hashlib
+
+    wave_text = (
+        "---\n"
+        "agent_type: coordinator:code-reviewer\n"
+        "applied: 1\n"
+        "baseline_sha256:\n"
+        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        "---\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
+        "```\n"
+    )
+    (share / "2026-09-28-wave-code-reviewer.md").write_text(wave_text, encoding="utf-8")
+
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+    # The literal pre-fix shape: a trailer whose value is the string "None",
+    # naming no real sidecar stem at all.
+    terminal_sha = _commit(repo, "land\n\nInline-Review: applies None -- execute-review: 1 slices, 1 fixes")
+    build_test = share / "2026-09-28-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+
+    receipt = plan_path.with_name("example.workflow.mjs.emitted.json")
+    receipt.write_text(f'{{"session_id": "{session_id}", "plan": "example.md"}}', encoding="utf-8")
+
+    with pytest.raises(m.MintRefusal, match="no terminal commit found"):
+        m.mint(plan_path, repo, build_test_path=str(build_test), repair=False)
+
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test), repair=True)
+    assert stamp["terminal_commit_sha"] == terminal_sha
+    assert stamp["delivery"]["verdict"] == "PASS"
+    assert stamp["fixes_applied"] == 1
+
+
+def test_mint_repair_never_fires_when_flag_is_unset(tmp_path):
+    """`repair` defaults False -- an ordinary caller (no flag) gets the
+    unchanged refusal even though a repairable shape exists."""
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test))
+    assert stamp["terminal_commit_sha"] == terminal_sha
+
+
+def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_path):
+    """End-to-end, zero-integration-stage path (2026-09-28 PM order step b'):
+    `review_stamp.mint` reads the mechanical bookkeeping record
+    (`review_mint.wave_bookkeeping.bookkeep_wave`'s one write) exactly as it
+    would read a one-stage integration sidecar -- same field names, no
+    `review_stamp.py` code change needed. The 'missing prep_sidecar is
+    today's failure' concern (fixture above) is MOOT on this path: the
+    bookkeeping step always supplies `prep_sidecar` itself (it is a required
+    parameter of `bookkeep_wave`), so this shape can never be built without
+    one."""
+    import hashlib
+
+    from coordinator_core.ops.review_mint.wave_bookkeeping import (
+        bookkeep_wave,
+        review_wave_bookkeeping_stem,
+    )
+
+    repo = _setup_repo(tmp_path)
+    session_id = "sess1"
+    share = repo / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+
+    prep_rel = f".coordinator-local/subagent-share/{session_id}/2026-09-28-prep.md"
+    _write_sidecar(
+        repo / prep_rel,
+        {
+            "run_base_sha": "deadbeef",
+            "product_files": ["coordinator_core/foo.py"],
+            "foreign_claims": [],
+            "slices": [{"id": "A"}],
+            "whole_diff_sidecars": {
+                "delivery": f".coordinator-local/subagent-share/{session_id}/2026-09-28-delivery.md"
+            },
+        },
+    )
+    _write_sidecar(share / "2026-09-28-delivery.md", {"verdict": "PASS"})
+
+    wave_text = (
+        "---\n"
+        "agent_type: coordinator:code-reviewer\n"
+        "applied: 2\n"
+        "baseline_sha256:\n"
+        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        "---\n"
+        "## Findings\n\n### Finding 1\nSomething.\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
+        "```\n"
+    )
+    wave_path = share / "2026-09-28-wave-code-reviewer.md"
+    wave_path.write_text(wave_text, encoding="utf-8")
+
+    (repo / "coordinator_core").mkdir(exist_ok=True)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+
+    plan_id = "pln-example-abc123"
+    stem = review_wave_bookkeeping_stem(plan_id, session_id)
+    bookkeep_wave(
+        [wave_path],
+        repo_root=repo,
+        session_id=session_id,
+        plan_id=plan_id,
+        prep_sidecar=prep_rel,
+        record_stem=stem,
+    )
+
+    terminal_sha = _commit(repo, f"land\n\nInline-Review: applies {stem} -- execute-review: 1 slices, 2 fixes")
+    build_test = share / "2026-09-28-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+
+    plan_path = repo / "docs" / "plans" / "example.md"
+    stamp = m.mint(plan_path, repo, build_test_path=str(build_test))
+    assert stamp["terminal_commit_sha"] == terminal_sha
+    assert stamp["delivery"]["verdict"] == "PASS"
+    assert stamp["build_test"]["verdict"] == "pass"
+    assert stamp["unresolved"] == []
+    assert stamp["fixes_applied"] == 2

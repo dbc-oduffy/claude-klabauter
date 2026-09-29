@@ -227,7 +227,19 @@ def completion_return_js(
         # own `.slices.length` (the same value `review.slices` above uses),
         # never from the integration result. Example-retrieval-repo EM memo
         # 2026-09-28-example-retrieval-repo-em-terminal-commit-inline-review-trailer-none.
-        if review_vars:
+        #
+        # Zero-integration-stage path (2026-09-28 PM order, step b' -- no
+        # `_reviewIntegration` binding exists at all): `inline_review` points
+        # at the mechanical bookkeeping record instead
+        # (`review_mint.wave_bookkeeping.bookkeep_wave`'s one write), named by
+        # a stem the emitter already knows at compose time
+        # (`review_vars["bookkeeping_stem"]`, a JS string literal) -- no
+        # runtime sidecar_path derivation needed since the record's location
+        # is deterministic, not agent-chosen. `slices`/`fixes` are computed
+        # here from the review-wave results directly (the same source the
+        # bookkeeping step itself reads), since the record does not exist
+        # yet at the point this script computes its own return value.
+        if review_vars and review_vars.get("integration"):
             integration_stem_expr = (
                 "(" + integration_var + "?.sidecar_path ? "
                 "String(" + integration_var + ".sidecar_path).split('/').pop().replace(/\\.md$/, '') : null)"
@@ -236,6 +248,35 @@ def completion_return_js(
             inline_review_expr = (
                 "(" + integration_var + " ? { integration_stem: " + integration_stem_expr + ", "
                 "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied } : null)"
+            )
+        elif review_vars and review_vars.get("bookkeeping_stem"):
+            # Zero-stage `inline_review` carries everything
+            # `review_mint.wave_bookkeeping.bookkeep_wave` needs (PM
+            # follow-up, 2026-09-28): `dispatch.terminal_commit` runs
+            # `bookkeep_wave` FIRST on this path (keyed off
+            # `integration_stem` being a bookkeeping stem, i.e. no matching
+            # sidecar of its own), using these very params, before it builds
+            # the commit -- so the record lands in the same commit as the
+            # code it reviews.
+            stem_lit = review_vars["bookkeeping_stem"]
+            plan_id_lit = review_vars.get("plan_id_literal", "null")
+            prep_stem_lit = review_vars.get("prep_label_stem_literal")
+            prep_sidecar_expr = (
+                f"({prep_var} && {prep_var}.share_dir ? "
+                f"{prep_var}.share_dir + '/' + {prep_stem_lit} + '.md' : null)"
+                if prep_stem_lit
+                else "null"
+            )
+            wave_sidecar_paths_expr = (
+                f"({wave_var} ? {wave_var}.map(r => r && r.sidecar_path).filter(Boolean) : [])"
+            )
+            inline_review_expr = (
+                "(" + wave_var + " ? { integration_stem: " + stem_lit + ", "
+                "slices: " + wave_var + ".length, "
+                "fixes: " + wave_var + ".reduce((n, r) => n + ((r && r.applied) || 0), 0), "
+                "prep_sidecar: " + prep_sidecar_expr + ", "
+                "plan_id: " + plan_id_lit + ", "
+                "wave_sidecar_paths: " + wave_sidecar_paths_expr + " } : null)"
             )
         else:
             inline_review_expr = "null"

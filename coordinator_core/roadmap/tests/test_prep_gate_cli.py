@@ -2,12 +2,13 @@
 coordinator_core/roadmap/tests/test_prep_gate_cli.py — the door-served CLI half
 of the mise-prep bar.
 
-Subject: `coordinator_core.roadmap.prep_gate_cli._targets`'s sidecar exclusion
-(2026-09-18-doe-holds-no-scripts, leg 2), restated to the letter from DoE-claude
-`coordinator/bin/mise-prep-gate.py :: _is_plan_sidecar`. A directory expansion
-must skip a review/coverage sidecar (compound stem) the same way DoE's own
-script does, or a corpus walk reports NOT-PREPPED for hundreds of files that
-were never plans.
+Subject: `coordinator_core.roadmap.prep_gate_cli`, restated to the letter from
+DoE-claude `coordinator/bin/mise-prep-gate.py` where a shape has an engine
+equivalent to be restated against: directory expansion that skips a
+review/coverage sidecar (compound stem, `_is_plan_sidecar`), `--tally`,
+`--json`, the `EXIT_*` route codes including `EXIT_ENGINE_ERROR`, and batch
+resilience (one crashing target must not lose a sibling target's verdict in
+the same invocation).
 
 Zero spawns; every case builds its own `tmp_path` tree.
 """
@@ -16,7 +17,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.roadmap import prep_gate_cli as cli
+from coordinator_core.roadmap.tests.test_prep_gate import (
+    _CLEAN_FM,
+    _CLEAN_SPINE,
+    _write_plan,
+)
 
 
 def _touch(path: Path) -> Path:
@@ -53,3 +61,93 @@ def test_a_sidecar_named_explicitly_is_still_gated(tmp_path):
     targets = cli._targets(["docs/plans/2026-06-27-foo.md.prior-art-check.md"], tmp_path)
 
     assert targets == [sidecar]
+
+
+# ---------------------------------------------------------------------------
+# --json / --tally / EXIT_* / batch resilience
+# ---------------------------------------------------------------------------
+
+
+def _prepped(root: Path, slug: str) -> Path:
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    return _write_plan(root, slug=slug, frontmatter=_CLEAN_FM, spine=_CLEAN_SPINE)
+
+
+def _not_prepped(root: Path, slug: str) -> Path:
+    return _write_plan(root, slug=slug, frontmatter="census: []\n")
+
+
+def test_exit_status_distinguishes_prepped_from_not_prepped(tmp_path, capsys):
+    _prepped(tmp_path, "2026-09-28-a.md")
+    code = cli.main(["docs/plans", "--repo-root", str(tmp_path)])
+    assert code == cli.EXIT_PREPPED
+
+    _not_prepped(tmp_path, "2026-09-28-b.md")
+    code = cli.main(["docs/plans", "--repo-root", str(tmp_path)])
+    assert code == cli.EXIT_NOT_PREPPED
+    capsys.readouterr()
+
+
+def test_json_emits_reports_and_tally(tmp_path, capsys):
+    _prepped(tmp_path, "2026-09-28-a.md")
+    code = cli.main(["docs/plans", "--repo-root", str(tmp_path), "--json"])
+    out = capsys.readouterr().out
+    payload = __import__("json").loads(out)
+    assert code == cli.EXIT_PREPPED
+    assert payload["reports"][0]["verdict"] == "PREPPED"
+    assert payload["tally"]["verdicts"]["PREPPED"] == 1
+
+
+def test_tally_reports_counts_and_share(tmp_path, capsys):
+    _prepped(tmp_path, "2026-09-28-a.md")
+    _not_prepped(tmp_path, "2026-09-28-b.md")
+    cli.main(["docs/plans", "--repo-root", str(tmp_path), "--tally"])
+    out = capsys.readouterr().out
+    assert "PREPPED" in out
+    assert "NOT-PREPPED" in out
+    assert "TOTAL" in out
+
+
+def test_one_crashing_plans_engine_error_does_not_lose_a_siblings_verdict(tmp_path, monkeypatch, capsys):
+    """DoE parity (`test_one_crashing_plans_engine_error_does_not_lose_a_siblings_verdict`).
+
+    A target whose `gate_plan` call raises something other than the
+    plan-authoring defects `gate_plan` itself turns into a DEFECT must not
+    sink the whole batch — every sibling target still gets its own verdict,
+    and the crashing one gets ENGINE_ERROR instead of vanishing.
+    """
+    good = _prepped(tmp_path, "2026-09-28-a.md")
+    bad = _write_plan(tmp_path, slug="2026-09-28-b.md", frontmatter=_CLEAN_FM, spine=_CLEAN_SPINE)
+
+    real_gate_plan = cli.gate_plan
+
+    def _flaky(root, target, *a, **kw):
+        if target == bad:
+            raise RuntimeError("boom — a version-skewed engine symbol")
+        return real_gate_plan(root, target, *a, **kw)
+
+    monkeypatch.setattr(cli, "gate_plan", _flaky)
+
+    code = cli.main(["docs/plans", "--repo-root", str(tmp_path), "--json"])
+    out = capsys.readouterr().out
+    payload = __import__("json").loads(out)
+
+    verdicts = {r["path"]: r["verdict"] for r in payload["reports"]}
+    assert verdicts[str(good)] == "PREPPED"
+    assert verdicts[str(bad)] == cli.ENGINE_ERROR
+    assert code == cli.EXIT_ENGINE_ERROR
+    assert payload["tally"]["verdicts"][cli.ENGINE_ERROR] == 1
+
+
+def test_exit_status_engine_error_outranks_not_prepped(tmp_path, monkeypatch, capsys):
+    _not_prepped(tmp_path, "2026-09-28-a.md")
+    bad = _write_plan(tmp_path, slug="2026-09-28-b.md", frontmatter=_CLEAN_FM, spine=_CLEAN_SPINE)
+
+    def _raises(root, target, *a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "gate_plan", _raises)
+
+    code = cli.main(["docs/plans", "--repo-root", str(tmp_path)])
+    capsys.readouterr()
+    assert code == cli.EXIT_ENGINE_ERROR

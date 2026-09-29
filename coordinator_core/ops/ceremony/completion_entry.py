@@ -65,12 +65,18 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict
 
+from coordinator_core.completion_record_integrity import (
+    REASON_EMPTY_COMMITS,
+    HollowCompletionRecordError,
+    hollow_reasons_for_fields,
+)
 from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     rebuild,
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
 TailResult = Dict[str, Any]
@@ -328,7 +334,47 @@ def fill_completion_entry_residues(
             return text
 
         new_split = split._replace(body_with_leading_newline=body)
-        return rebuild(new_split, fm)
+        new_text = rebuild(new_split, fm)
+
+        if filled["chain_terminal"]:
+            # chain_terminal flipping true IS this ceremony's own "this is
+            # the terminal entry for the chain" signal -- the one call shape
+            # here that finalizes the record rather than merely nudging it
+            # forward. Refuse ANY of the placeholder/plan-landed checks
+            # failing (2026-09-28 EM correction: a placeholder alone, or an
+            # unlanded plan alone, is already defective -- not only the
+            # all-three shape).
+            #
+            # REASON_EMPTY_COMMITS is deliberately EXCLUDED from this gate:
+            # this module (`scaffold_completion_entry`/
+            # `fill_completion_entry_residues`) has NO mechanism of its own
+            # to ever populate `commits:` -- every scaffold it writes emits
+            # `commits: []` unconditionally, and this file's own module
+            # docstring says commits are filled by `completion.
+            # reconcile_commits` (killed 2026-08-23, per
+            # `coordinator_complete_entry.py`'s own Negative-spec) --  a
+            # SEPARATE op operating on this same on-disk file. Gating on
+            # commits here would make `chain_terminal` unsatisfiable through
+            # this module by construction, for every entry it ever
+            # scaffolds, regardless of how genuinely complete the workstream
+            # is. Placeholder and plan-landed ARE within this call's own
+            # control (prose is a direct parameter; chain/plan status is
+            # read fresh off disk), so those two stay gated.
+            new_parsed = parse_frontmatter(new_text)
+            reasons = [
+                r
+                for r in hollow_reasons_for_fields(
+                    new_parsed.get("frontmatter") or {}, new_parsed.get("body") or "", worktree_root
+                )
+                if r != REASON_EMPTY_COMMITS
+            ]
+            if reasons:
+                raise HollowCompletionRecordError(
+                    f"{completion_entry_path}: refusing to finalize a hollow completion "
+                    f"record -- failed: {', '.join(reasons)}"
+                )
+
+        return new_text
 
     try:
         locked_rmw(entry_abs, _mutate, repo_root=worktree_root)

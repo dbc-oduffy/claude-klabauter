@@ -82,6 +82,65 @@ def test_guard_passes_when_kira_carries_her_own_verified_ledger(tmp_path):
     assert out == {}
 
 
+def test_guard_fires_when_integrated_from_names_kira_but_no_rebuild_was_recommended(tmp_path):
+    """2026-09-28 PM order: rebuild_recommended is the ONLY route to the EM.
+    A sibling sidecar naming Kira's stem in `integrated_from` must NOT
+    satisfy routing on its own -- only a verified ledger on Kira's own
+    sidecar, or (when her verdict recommended a rebuild) that same
+    integrated_from route, ever clears the guard."""
+    (tmp_path / ".git").mkdir()
+    session_id = "sess-rri-m4-no-rebuild"
+    share_dir = tmp_path / ".coordinator-local" / "subagent-share" / session_id
+    share_dir.mkdir(parents=True)
+    (share_dir / "coordinatoroverengineering-reviewer.a1.md").write_text(
+        "---\n"
+        "agent_type: coordinator:overengineering-reviewer\n"
+        "spawned_at: 2026-09-27T00:00:00Z\n"
+        "findings_count: 2\n"
+        "rebuild_recommended: false\n"
+        "---\n"
+        "body\n"
+    )
+    (share_dir / "executor.b2.md").write_text(
+        "---\n"
+        "agent_type: coordinator:executor\n"
+        "spawned_at: 2026-09-27T00:00:01Z\n"
+        "integrated_from: [coordinatoroverengineering-reviewer.a1]\n"
+        "---\n"
+        "body\n"
+    )
+
+    out = _guard_kira_verdict_routed({"cwd": str(tmp_path), "session_id": session_id})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_guard_clears_via_integrated_from_only_when_kira_recommended_rebuild(tmp_path):
+    (tmp_path / ".git").mkdir()
+    session_id = "sess-rri-m4-rebuild"
+    share_dir = tmp_path / ".coordinator-local" / "subagent-share" / session_id
+    share_dir.mkdir(parents=True)
+    (share_dir / "coordinatoroverengineering-reviewer.a1.md").write_text(
+        "---\n"
+        "agent_type: coordinator:overengineering-reviewer\n"
+        "spawned_at: 2026-09-27T00:00:00Z\n"
+        "findings_count: 2\n"
+        "rebuild_recommended: true\n"
+        "---\n"
+        "body\n"
+    )
+    (share_dir / "executor.b2.md").write_text(
+        "---\n"
+        "agent_type: coordinator:executor\n"
+        "spawned_at: 2026-09-27T00:00:01Z\n"
+        "integrated_from: [coordinatoroverengineering-reviewer.a1]\n"
+        "---\n"
+        "body\n"
+    )
+
+    out = _guard_kira_verdict_routed({"cwd": str(tmp_path), "session_id": session_id})
+    assert out == {}
+
+
 def test_verified_ledger_stamp_on_kira_sidecar_satisfies_routing():
     """RRI-M4: a verified `findings_ledger` on Kira's OWN sidecar routes the
     verdict directly, with no separate integrator sidecar required."""

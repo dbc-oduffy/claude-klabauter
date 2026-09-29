@@ -1084,7 +1084,12 @@ class TestResolveSessionCommits:
 
     def test_since_window_equals_backfilled_date_on_for_date_run(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        fake = _RecordingGitRunner(rc=0, out="")
+        # Non-empty git-log output: this test is about the `--since=` window
+        # passed to the runner, not about commit content -- an empty walk
+        # result would (correctly, 2026-09-28) be refused by the
+        # completion_record_integrity finalize gate (REASON_EMPTY_COMMITS)
+        # before this assertion is ever reached.
+        fake = _RecordingGitRunner(rc=0, out="deadbeef1234\n")
         monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
 
         rc, _, _ = _run(

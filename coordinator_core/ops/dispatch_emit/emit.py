@@ -316,6 +316,7 @@ from coordinator_core.executor_return_contract import (
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
+from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
 
@@ -3070,7 +3071,7 @@ def compose_script(
         # sidecar frontmatter), but a hidden per-stage prompt_head would be
         # a second seam for one line; harmless no-op for prep/review-wave.
         review_prompt_head = _BRIEF_PRECEDENCE_CLAUSE
-        if plan_id:
+        if plan_id and review.integration is not None:
             review_prompt_head += (
                 f"\n\nThis run's plan_id is {plan_id}. The integration stage "
                 "(only) MUST record it verbatim as a top-level `plan_id:` "
@@ -3088,12 +3089,44 @@ def compose_script(
         ):
             phase_titles.append(title)
             guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
-        review_vars = {
-            "prep": "_reviewPrep",
-            "wave": "_reviewWave",
-            "delivery": "_deliveryVerdict",
-            "integration": "_reviewIntegration",
-        }
+        if review.integration is not None:
+            review_vars = {
+                "prep": "_reviewPrep",
+                "wave": "_reviewWave",
+                "delivery": "_deliveryVerdict",
+                "integration": "_reviewIntegration",
+            }
+        else:
+            # Zero-integration-stage path (2026-09-28 PM order, step b'):
+            # each review-wave reviewer applies its own findings in place --
+            # no `_reviewIntegration` binding exists. `bookkeeping_stem` is
+            # the deterministic (compose-time-known) name of the mechanical
+            # bookkeeping record `review_mint.wave_bookkeeping.bookkeep_wave`
+            # writes post-run; wake_digest's `inline_review` points at it by
+            # this same stem (wake_digest.py's zero-stage `inline_review_expr`
+            # branch). Never derived from a runtime `sidecar_path` -- there is
+            # no agent call left to choose one.
+            # `prep_sidecar` -- DoE's `review-prep-result` $def carries no
+            # `sidecar_path` field of its own (every OTHER wave/integration
+            # $def does), so unlike `wave`'s `sidecar_path` (self-reported,
+            # trusted) this is a DERIVED, DISCLOSED ASSUMPTION: the prep
+            # agent's own sidecar sits at `<its share_dir>/<slug(its own
+            # review: label)>.md`, mirroring the deterministic-naming
+            # convention `_agent_call_literal`'s `label:` already gives every
+            # non-slice review-wave call. If DoE's step (a)/(c) add a real
+            # `sidecar_path` to `review-prep-result`, prefer that field
+            # instead of this derivation.
+            prep_label_stem = re.sub(
+                r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}"
+            )
+            review_vars = {
+                "prep": "_reviewPrep",
+                "wave": "_reviewWave",
+                "delivery": "_deliveryVerdict",
+                "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
+                "plan_id_literal": _js_string_literal(plan_id or ""),
+                "prep_label_stem_literal": _js_string_literal(prep_label_stem),
+            }
 
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None
