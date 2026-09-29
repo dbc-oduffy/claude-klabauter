@@ -68,7 +68,7 @@ Function-to-oracle map:
                                                                  archive/handoffs/ deployment_state
                                                                  (+ continued_into/closed_reason),
                                                                  added 2026-07-26 after a
-                                                                 DoE-claude cross-repo memo
+                                                                 coordinator-content-repo cross-repo memo
                                                                  reported 13 archived handoffs
                                                                  hand-edited out of stuck
                                                                  deployment_state: in_flight
@@ -171,7 +171,7 @@ Negative-spec:
       already natively ported there (field-level merge, mkdir lock, atomic
       write — see that module's docstring), so this module no longer needs a
       `bash -c "source coordinator-session.sh && cs_session_shape_set ..."`
-      subprocess bridge. Retired the DoE-root-pointer bash-lib resolution
+      subprocess bridge. Retired the content-root-pointer bash-lib resolution
       (`_bash_lib_path`) and the subprocess wrapper (`_session_shape_set_bridge`)
       that carried it.
 """
@@ -867,7 +867,7 @@ def stamp_shipped_in(
     """Resolve the most recent git SHA touching the handoff's scope: paths, then insert
     `shipped_in: <SHA8>` into the frontmatter via the native handoff.stamp op.
 
-    kind: REQUIRED, keyword-only, no default (DR-096, DoE-claude 2026-07-26 ruling —
+    kind: REQUIRED, keyword-only, no default (DR-096, coordinator-content-repo 2026-07-26 ruling —
     "kind must be REQUIRED at the seam, not defaulted silently. A caller that does not
     say which kind it is writing is exactly how this field acquired five meanings.").
     This function is the SINGLE choke point that owns the `shipped_in` value grammar —
@@ -1189,7 +1189,7 @@ def stamp_shipped_in(
         # the skip branch keys on the value alone, so it never sees the missing
         # discriminant. Filling the kind beside an IDENTICAL value changes no
         # provenance — a different value still needs force, and says so rather
-        # than exiting 0 in silence (DoE-claude, 2026-09-11: a terminal record
+        # than exiting 0 in silence (coordinator-content-repo, 2026-09-11: a terminal record
         # left unarchivable while the matching verb reported success).
         current_kind = _read_current_shipped_in_kind(handoff_path)
         if current_kind is None and prior_value and prior_value == _final_stamp_value(resolved):
@@ -1998,7 +1998,7 @@ def _record_claimant_identity_best_effort(
     an ambient resolution answers a question nobody asked and answers it confidently.
     Ungated it produced a record whose id was right and whose name pointed at an
     uninvolved live peer — a wrong answer to "who holds this baton" that reads exactly
-    like a right one. Reported cross-repo by doe-claude-em 2026-08-30 and reproduced
+    like a right one. Reported cross-repo by coordinator-content-repo-em 2026-08-30 and reproduced
     same-repo on that memo's own claim stamp.
 
     Two legs, cheapest first, and the SECOND is what makes this correct rather than
@@ -2748,7 +2748,7 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
     byte-parity port of the node oracle's stamp-implemented verb — see that
     module's docstring for the full status-transition matrix). Calls it
-    directly in-process; no subprocess, no node dependency, no DoE-root
+    directly in-process; no subprocess, no node dependency, no content-root
     resolution. Returns the port's own exit code verbatim.
 
     A pure pass-through of the verb's exit code: it prints nothing of its
@@ -2866,7 +2866,7 @@ def cs_repair_archived_deployment_state(
     archived (``archive/handoffs/``) — a narrow, separate door onto a path
     every other lifecycle verb (ship/claim/supersede/repark/stamp)
     deliberately cannot reach, sibling of ``cs_repair_archived_shipped_in``
-    above. Added 2026-07-26 after a DoE-claude cross-repo memo reported 13
+    above. Added 2026-07-26 after a coordinator-content-repo cross-repo memo reported 13
     archived handoffs hand-edited out of stuck ``deployment_state: in_flight``
     because ``ship-handoff``'s ``state/handoffs/``-only containment refuses
     ``archive/handoffs/`` paths.
@@ -2883,7 +2883,7 @@ def cs_repair_archived_deployment_state(
     handoff-archived.schema.json's own ``allOf`` rules) BEFORE any write, so
     a repair through this verb can never reproduce the exact
     continued-without-continued_into defect a hand-edit produced (10 of the
-    13 DoE-claude hand-edits did exactly this).
+    13 coordinator-content-repo hand-edits did exactly this).
 
     ``continued_into`` is ALSO resolution-and-existence checked (2026-07-26):
     it must resolve to a real file under the worktree (searched by path and

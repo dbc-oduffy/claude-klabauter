@@ -271,8 +271,8 @@ def test_external_old_repo_entry_does_not_dispose_future_disappearance(tmp_path:
     silently explain away a later, unrelated disappearance of a
     same-stemmed oracle FROM claude-klabauter's own tree. This is the exact shape of
     the one production `docs/install/relocation-ledger.json` entry
-    (`old_repo: "coordinator-claude (DoE-claude)"`), which records a
-    DoE-claude -> claude-klabauter adoption, not a claude-klabauter-internal move -- so its
+    (`old_repo: "coordinator-claude (coordinator-content-repo)"`), which records a
+    coordinator-content-repo -> claude-klabauter adoption, not a claude-klabauter-internal move -- so its
     stem must never dispose an unrelated future disappearance of
     `validate-install-contract` from claude-klabauter's own tree."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
@@ -283,7 +283,7 @@ def test_external_old_repo_entry_does_not_dispose_future_disappearance(tmp_path:
         ledger_path,
         [
             _moved_entry(
-                old_repo="coordinator-claude (DoE-claude)",
+                old_repo="coordinator-claude (coordinator-content-repo)",
                 old_path="bin/validate-install-contract.sh",
                 new_repo="claude_klabauter",
                 new_path="coordinator/bin/validate-install-contract.py",

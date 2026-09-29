@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import shlex
 
-from coordinator_core.bash_guards.dispatch_checks import (
+from coordinator_core.bash_guards.find_exec_rewrite import (
     _FIND_EXEC_BATCH_EQUIVALENT_VERBS,
     _FIND_EXEC_TRANSLATABLE_VERBS,
     _bt_find_exec_batch_rewrite,

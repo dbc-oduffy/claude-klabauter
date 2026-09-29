@@ -3,7 +3,7 @@ coordinator_core.testing.golden — shared committed-fixture ("golden") helper f
 freezing external-oracle differential parity suites off their live dependency.
 
 Purpose: several of claude-klabauter's parity suites (test_dag_js_parity.py and siblings) diff
-Claude-klabauter's native port **live** against a DoE-claude JS oracle at test time, skipping
+Claude-klabauter's native port **live** against a coordinator-content-repo JS oracle at test time, skipping
 cleanly whenever node or the oracle checkout is absent. That skip-on-missing shape is
 a silent-green hazard: the moment DoE deletes the oracle `.js` it no longer needs,
 Claude-klabauter's "correctness proof" for the ported hub evaporates while the suite keeps

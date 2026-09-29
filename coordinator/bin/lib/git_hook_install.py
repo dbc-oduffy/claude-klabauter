@@ -1115,9 +1115,9 @@ def ensure_hooks_fleet(
                 git_dir = _resolve_git_hooks_dir(root)
                 hook_path = os.path.join(git_dir, "hooks", label) if git_dir else None
                 # launch this directly" (PATHEXT-suffixed-sibling test for an
-                landed = bool(
-                    hook_path and os.path.isfile(hook_path) and os.access(hook_path, os.X_OK)
-                )
+                landed = bool(hook_path and os.path.isfile(hook_path))
+                if os.name != "nt":
+                    landed = landed and os.access(hook_path, os.X_OK)
                 if not landed:
                     owned_missing.append(f"{key} {label}: not present/executable after install")
 

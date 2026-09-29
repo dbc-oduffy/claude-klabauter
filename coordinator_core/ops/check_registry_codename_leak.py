@@ -62,7 +62,7 @@ KEEPSET: Sequence[str] = (
     "data_science",
     "coordinator",
     "experiments",
-    "doe_claude",
+    "content_root",
     "example_doctrine_repo",
     "fleet_root",
     "claude_klabauter",

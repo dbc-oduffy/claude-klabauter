@@ -13,7 +13,7 @@ behavior) — this file does not duplicate it, only confirms this chunk's own
 reconciliation left that module's op contract intact.
 
 `runtime_tripwire_stop_watcher` coverage here is ported behavior parity
-against DoE-claude's own synchronous, disk-observable invariants (module's
+against coordinator-content-repo's own synchronous, disk-observable invariants (module's
 own docstring: "loop guard, single-instance PID lock, dispatch-file scan,
 threshold computation, wake-condition recheck, lock cleanup ... fully
 verifiable and ARE verified"), plus the not-an-op / stood-down shape
@@ -57,7 +57,7 @@ def test_stop_watcher_module_registers_no_op():
     """No `register_op` call at import time -- this module keeps its
     original CLI shape (`main()` / `--watch` re-exec), per its own
     module-docstring rationale. A stray `register_op` here would silently
-    create a `hooks.runtime_tripwire_stop_watcher` op nothing in DoE-claude's
+    create a `hooks.runtime_tripwire_stop_watcher` op nothing in coordinator-content-repo's
     own `hooks.json` (stood-down roster) ever calls."""
     assert not hasattr(sw, "register_op")
 

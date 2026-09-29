@@ -85,7 +85,7 @@ Four things live in this module, not one:
    built entirely from `directives.build_tier_u_grant_flow` /
    `build_tier_u_grant_check`.
 
-Spec backlink: DoE-claude DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3a.
 
 Negative-spec:

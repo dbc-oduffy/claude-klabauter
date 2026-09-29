@@ -2,7 +2,7 @@
 op: run the full cold-hook bash-guard chain against a native-door payload.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/preuse-bash-dispatch.py`. That
+from coordinator-content-repo `coordinator/hooks/scripts/preuse-bash-dispatch.py`. That
 script's whole job was PLUMBING: resolve a SIBLING claude-klabauter checkout
 (`_engine_root.resolve_claude_klabauter_root_with_provenance`), place it on
 `sys.path`, arm the lazy-ops channel, then call

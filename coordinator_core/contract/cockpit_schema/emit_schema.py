@@ -61,8 +61,8 @@ level (verified against `schema/*.json` at port time) — a future
 self-referential entity would need `_resolve_refs` extended with a
 recursion guard before this emitter could safely handle it.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-Source: coordinator/cockpit-contract/scripts/emit-schema.ts (DoE-claude)
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Source: coordinator/cockpit-contract/scripts/emit-schema.ts (coordinator-content-repo)
 Negative-spec: this module does NOT own `ENTITY_SCHEMAS` (the name→model
 registry) — that is the stage-2 (T4e-d) agent's job, wiring
 `coordinator_core/contract/cockpit_schema/__init__.py`. `main()` below
@@ -140,7 +140,7 @@ GENERATES: list = []
 # MINOR bump 3.3.0 -> 3.4.0 (C6a): adds four DERIVED HandoffSummary fields
 # (pm_priority/pm_priority_origin/pm_priority_source_id/suggested_priority)
 # and rides the already-landed owner-casing clause amendment (claude-klabauter
-# 4a73368b, DoE-claude 39a65721), which shipped without its own bump so it
+# 4a73368b, coordinator-content-repo 39a65721), which shipped without its own bump so it
 # would ride this one. MINOR, not MAJOR, is deliberate: example-cockpit-repo's
 # checkSchemaVersion() hard-throws on a MAJOR mismatch in either direction
 # but tolerates emission-minor-greater-than-vendored on the same major (with
@@ -156,7 +156,7 @@ GENERATES: list = []
 # adds `docs_staleness` (REQUIRED-WITH-NULL, D9) to `ExecSummary` — per-doc
 # staleness verdicts from `coordinator_core.ops.doc_staleness`. Additive
 # only: no existing required field changed, narrowed, or removed, same
-# class as D19-D28/D32 §9 (DoE-claude coordinator/cockpit-contract/
+# class as D19-D28/D32 §9 (coordinator-content-repo coordinator/cockpit-contract/
 # DECISIONS.md) — cockpit confirmed this class in their 2026-07-28 reply.
 # The plan's original target was "3.3.0 -> 3.4.0"; disk had already moved
 # to 3.5.0 via the unrelated priority-ledger bump above by the time this
@@ -171,7 +171,7 @@ GENERATES: list = []
 # "spinoff-roadmap-creator", "spinoff-goal"), stays in the Literal for
 # archived-record read-compatibility, same reasoning as "spike-result".
 # Same additive class as the 3.5.0->3.6.0 bump above.
-# Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
+# Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
 #
 # MINOR bump 3.8.0 -> 3.9.0 (C3a, baton-kind vocabulary publish): adds
 # `baton_class` (REQUIRED-WITH-NULL, D9) to `HandoffSummary` (entities/
@@ -194,21 +194,21 @@ GENERATES: list = []
 # not dropped from the emission, and a spike result is not a baton, so it
 # has no class. Legacy pre-rename kinds are NOT null — they canonicalise
 # through the alias map, so an archived "spinoff-roadmap" emits "intention".
-# Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
+# Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
 #
 # MINOR bump 3.9.0 -> 3.10.0 (D42 synthesized widen, cockpit-contract half):
 # adds "synthesized" to `Derivation` (provenance.py) — an agent-derived fact,
 # as distinct from fetched (raw), structured (parsed), aggregated (rolled_up),
 # or multi-source-derived (computed). Member-only additive on an existing
 # enum: no member removed, no required field changed, so MINOR, same class as
-# D22/D23/D28. DoE-claude ratified this in cockpit-contract DECISIONS.md D42
+# D22/D23/D28. Coordinator-content-repo ratified this in cockpit-contract DECISIONS.md D42
 # (2026-08-03) and routed the emitter work here under the D31
 # emitter-ownership boundary; the artifact-shape-contract half landed first
 # (ops/emit_artifact_shape_contract.py, its own 3.1.0 row), leaving this
 # emitter as the unexecuted second half — which the cross-package parity test
 # (contract/cockpit_schema/tests/test_provenance_parity.py) then caught as a
 # divergence. DoE's bilateral version-bump assent for this bump is on record
-# in cross-repo/inbox/2026-08-05-doe-claude-em-cockpit-derivation-synthesized-
+# in cross-repo/inbox/2026-08-05-coordinator-content-repo-em-cockpit-derivation-synthesized-
 # half-landed.md; DoE re-runs regen-cockpit-schema.py on their side once this
 # lands, regenerating all 58 inlined enum sites plus the standalone envelope
 # from this one literal.
@@ -253,7 +253,7 @@ GENERATES: list = []
 # re-emit: HandoffSummary's shape moved while the constant did not, which is
 # the guard doing its job rather than a defect — a bundle whose version says
 # nothing changed is the failure it exists to prevent. It fired for
-# doe-claude-em when they went to run their C6b regen; reported to us by memo
+# coordinator-content-repo-em when they went to run their C6b regen; reported to us by memo
 # rather than worked around, and this bump is the discharge.
 #
 # D39 source-first release sequence, unchanged from 3.11.0: claude-klabauter widens and
@@ -324,7 +324,7 @@ GENERATES: list = []
 # Both consumers assented in advance and were verified from their own records,
 # not inferred: example-cockpit-repo ratified a DROP 2026-08-22 superseding their
 # DR-021 KEEP (their panel was deleted 2026-07-29 — write-only for seven
-# weeks); DoE-claude verified zero readers in their tree and returned an
+# weeks); coordinator-content-repo verified zero readers in their tree and returned an
 # explicit GO with conditions. Nothing leaves the fleet.
 #
 # DoE's binding conditions: emit as MAJOR; land as ONE commit followed by the
@@ -359,8 +359,8 @@ GENERATES: list = []
 # it" split. Claude-klabauter's own vendored copy under
 # `coordinator_core/ops/emit/_vendor/cockpit-contract/` is NOT refreshed by
 # this bump, same as every bump above: it pulls from DoE's tagged release.
-# Spec backlinks: DoE-claude docs/decisions/DR-192-cockpit-competitor-summary-category-gains-first-party.md,
-#   state/cross-repo/inbox/2026-09-03-doe-claude-em-cockpit-category-first-party-widen.md
+# Spec backlinks: coordinator-content-repo docs/decisions/DR-192-cockpit-competitor-summary-category-gains-first-party.md,
+#   state/cross-repo/inbox/2026-09-03-coordinator-content-repo-em-cockpit-category-first-party-widen.md
 # MINOR bump 4.1.0 -> 4.2.0: adds `roadmap_id` to HandoffSummary. Written into
 # this changelog after the fact (2026-09-04, f5a08be1f3's follow-up): the bump
 # landed in 9e91bb19d4 with its rationale in the commit message and the memo
@@ -397,10 +397,10 @@ GENERATES: list = []
 # `roadmap_id` now emits byte-identical to `forked_from`.
 #
 # A new version, not a re-cut of 4.2.0: 4.2.0's required shape was already
-# committed and named in the memo already delivered to DoE-claude, and the
+# committed and named in the memo already delivered to coordinator-content-repo, and the
 # version-desync guard refused the reshape without a bump — one version number
 # must not carry two shapes. 4.2.0 is superseded in place rather than rewritten.
-# Both bumps are discharged by ONE DoE regen at 4.4.0 (doe-claude-18, 2026-09-04:
+# Both bumps are discharged by ONE DoE regen at 4.4.0 (coordinator-content-repo-18, 2026-09-04:
 # their tree is still at 4.1.0, committed clean at 59bd273b2, so the single 4.4.0
 # regen covers 4.2.0 and 4.3.0 and those two memos resolve as superseded).
 #
@@ -417,7 +417,7 @@ GENERATES: list = []
 # (ops/emit/sections/cross_repo_memos.py) omits the key rather than writing null.
 # But the Python annotation does not predict the wire shape; the entity's house
 # style does. A producer following D9's present-as-null habit would emit a payload
-# failing this contract's own published schema. Caught by doe-claude-18 reading the
+# failing this contract's own published schema. Caught by coordinator-content-repo-18 reading the
 # emitted bytes rather than this changelog's prose, which said "nullable" until
 # 2026-09-04; recorded DoE-side as D48's third shape, with D9 amended in place.
 #
@@ -454,7 +454,7 @@ GENERATES: list = []
 # strict reader's failure mode was silent row loss).
 #
 # Same D39 source-first sequence as every bump above: claude-klabauter regenerates, DoE
-# commits the bundle and advances the release tag, claude-klabauter re-vendors. DoE-claude
+# commits the bundle and advances the release tag, claude-klabauter re-vendors. Coordinator-content-repo
 # and example-cockpit-repo warned by memo BEFORE this edit ships, not after.
 #
 # `fact_window` (FactWindow | None) on DayRollup and WeekRollup (entities/
@@ -479,7 +479,7 @@ GENERATES: list = []
 # MINOR bump 4.7.0 -> 4.8.0 (2026-09-22): widens CrossRepoMemoSummary's `kind`
 # enum by one member, `friction` (entities/cross_repo_memo_summary.py). Shape
 # is otherwise untouched — no new field, no nullability change, no
-# `required[]` movement. Closes DoE-claude
+# `required[]` movement. Closes coordinator-content-repo
 # state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-bug-
 # degrades-silently.yaml: the sender-side vocabulary
 # (`coordinator_core.ops.fleet.memo_kinds.VALID_KINDS`) had no value for a
@@ -1224,7 +1224,7 @@ def assert_no_orphaned_schema(
     untouched, byte-identical to its last-emitted state. `schema_dir` is the
     directory the `cockpit-contract-release` tag publishes, so a consumer
     re-vendoring pulls a well-formed, valid-looking schema for an entity that no
-    longer exists. Nothing in the file marks it stale. Found by DoE-claude during
+    longer exists. Nothing in the file marks it stale. Found by coordinator-content-repo during
     the 4.0.0 `file_attribution` drop; the blast radius is the whole consumer set,
     in the one window a major guarantees they are all pulling.
 

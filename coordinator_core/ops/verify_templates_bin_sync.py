@@ -58,7 +58,7 @@ Port of: verify-templates-bin-sync.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-20-eager-agent-calibration.md § Chunk 1
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Repointed + direction-reversed per cross-repo memo:
-  cross-repo/archive/2026-08-03-doe-claude-em-templates-bin-sync-gate-watches-the-pre-migration-home.md
+  cross-repo/archive/2026-08-03-coordinator-content-repo-em-templates-bin-sync-gate-watches-the-pre-migration-home.md
 
 Negative-spec:
     - CLAUDE_HOME resolution in the FALLBACK path is Convention A verbatim
@@ -100,7 +100,7 @@ Negative-spec:
       need its own, differently-named entrypoint if ever built; it is not
       a mode of this gate.
     - The bash oracle (verify-templates-bin-sync.sh) has been retired by
-      DoE's bash clean-slate migration and no longer exists in DoE-claude
+      DoE's bash clean-slate migration and no longer exists in coordinator-content-repo
       — there is no live oracle left to stay byte-parity-locked against.
       This module's behaviour is now defined by this docstring and its
       co-located test, not by oracle parity.

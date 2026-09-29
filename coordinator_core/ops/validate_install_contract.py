@@ -28,8 +28,8 @@ string `"true"` is NOT accepted as opt-in). A manifest that omits
 (exit 0, "not opted in") rather than failing.
 
 Port of: validate-install-contract.sh (DoE b5a4192c, 2026-07-20; 303 lines, bash + jq)
-Spec backlink: DoE-claude:pln-fleet-packageability-contract--d44c4c § C4
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-fleet-packageability-contract--d44c4c § C4
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 
 Negative-spec (deliberate behavior differences from the bash+jq oracle):
     - No `jq` / `bash >= 4.3` runtime precondition: this is a pure-Python
@@ -93,8 +93,8 @@ from coordinator_core.ops.platform_outcome_records import (
 
 #: Candidate repo-root-relative manifest paths, probed in order, when no
 #: --manifest-path is given. Two layouts coexist by design across the fleet:
-#: `coordinator/docs/install/...` (the DoE-claude layout) and
-#: `docs/install/...` (claude-klabauter's own layout — see the DoE-claude repo's
+#: `coordinator/docs/install/...` (the coordinator-content-repo layout) and
+#: `docs/install/...` (claude-klabauter's own layout — see the coordinator-content-repo repo's
 #: `coordinator/docs/install/AGENT.md`, the only repo where that file exists).
 #: Before this list existed, only the DoE relpath was probed, so `main()`
 #: with no args in THIS repo (claude-klabauter) always landed on "no manifest
@@ -243,7 +243,7 @@ def _check_point2_declared_paths(
     """Assert every declared setup-script path actually resolves on disk.
 
     WHY: Point 2 verified that the field and its flags were DECLARED, never that
-    the path resolved. DoE-claude's manifest consequently reported
+    the path resolved. Coordinator-content-repo's manifest consequently reported
     `packageability-compliant` while its declared entry point had left the repo
     entirely — a migration of 1135 files moved it and nothing noticed, because
     the only thing under test was the presence of a string. A check that
@@ -262,7 +262,7 @@ def _check_point2_declared_paths(
     NEGATIVE SPEC, second half: an UNSUPPORTED VALUE SHAPE is a failure too,
     never a skip. The `str` check below guards the `Path` join, and reading it
     as "not a path, nothing to verify" is what made the whole check bypassable:
-    an object-valued `posix`/`windows` — the cross-repo form DoE-claude proposed
+    an object-valued `posix`/`windows` — the cross-repo form coordinator-content-repo proposed
     on 2026-08-17 — took the `continue` and the stat never ran, so the manifest
     passed Point 2 while declaring an entry point nothing had confirmed. Silent
     green, from the guard written to close silent green. The absent key stays a
@@ -279,7 +279,7 @@ def _check_point2_declared_paths(
 #: wins outright and `standalone_setup_script` is not even consulted — yet the
 #: declared-path stat originally covered only `standalone_setup_script`. So the
 #: field the contract trusts most was the one field nothing verified. Found
-#: 2026-08-17 by building the `coordinator-install` entry against DoE-claude's
+#: 2026-08-17 by building the `coordinator-install` entry against coordinator-content-repo's
 #: manifest: its `programmatic_entry_point.posix` declares
 #: `coordinator/scripts/install-maximalist.py`, which exists in neither their
 #: working tree nor the published mirror, and Point 2 passed it — the same
@@ -625,7 +625,7 @@ def main(argv: List[str]) -> int:
             file=sys.stderr,
         )
         print(
-            "  Fix: if this repo SHOULD declare a manifest, see the DoE-claude repo's",
+            "  Fix: if this repo SHOULD declare a manifest, see the coordinator-content-repo repo's",
             file=sys.stderr,
         )
         print(

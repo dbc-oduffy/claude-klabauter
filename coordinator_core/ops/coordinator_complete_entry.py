@@ -700,8 +700,8 @@ def _query_records_existing_path(repo_root: str, chain_slug: str) -> Optional[st
     """Primary existence signal — native records-query (best-effort, fail-open).
 
     Was: a ``node query-records.js --type completion --where chain=<slug>``
-    subprocess spawned against DoE-claude's ``coordinator/bin/`` (resolved via
-    ``coordinator_doe_root``). Repointed 2026-07-22 onto claude-klabauter's own
+    subprocess spawned against coordinator-content-repo's ``coordinator/bin/`` (resolved via
+    ``coordinator_content_root``). Repointed 2026-07-22 onto claude-klabauter's own
     ``ceremony.records_query.query_records`` seam — no DoE coupling, no node.
 
     Reproduces the oracle's markdown-list ``completion`` rendering
@@ -1003,7 +1003,7 @@ def _which_render_rollup_shim() -> str:
     walk with `extensions=[]` (bare-name-only — the filename already carries
     its own `.sh` extension, so no `PATHEXT` candidate should ever be
     appended to it). Same underlying CPython gap `_resolve_claude_bin` in
-    `coordinator/bin/claude-doe.py` guards against; that site can't import this
+    `coordinator/bin/claude-author.py` guards against; that site can't import this
     module (installed standalone) and keeps its own PATHEXT-aware walk
     in sync by hand — see its docstring.
     """

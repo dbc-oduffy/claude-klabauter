@@ -81,7 +81,7 @@ copy, never overwritten if already present), and the canonical file is written t
 `log_path` only after that backup succeeds.
 
 Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C8;
-DoE-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
+Coordinator-content-repo/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
 
 Arrow-dialect migration (2026-08-06) — `normalize_arrow_dialects_log`
 ----------------------------------------------------------------------
@@ -89,7 +89,7 @@ A second, independent normalizer in this module for a THIRD non-canonical input 
 distinct from the legacy pipe-table format above: a log that is ALREADY under real
 `## Run <run-id>` headers, where some rows parse as canonical and others are arrow-edged
 near-misses that `_common._ROW_RE` rejects. Source: inbound memo
-`cross-repo/inbox/2026-08-06-doe-claude-em-distill-log-correction-the-defect-is-ours.md`
+`cross-repo/inbox/2026-08-06-coordinator-content-repo-em-distill-log-correction-the-defect-is-ours.md`
 (retracting an earlier, wrong ask to loosen `_RUN_HEADER_RE`/`_ROW_RE` — those canonical
 matchers are correct and are NOT modified by this module; a non-conforming log is fixed by
 migrating its rows, never by loosening the reader).
@@ -594,9 +594,9 @@ second one, and `_row_round_trips` still passes because `_common._ROW_RE`'s non-
 fate anchors on the LAST `(run: ...)` — so the guard compares a corrupt row against a
 re-render of the same corrupt row. The round-trip check cannot see corruption that
 lands INSIDE the field it round-trips; only this precondition can. Reported by
-doe-claude-em against `2c510a2857b3` after 780 of 1437 rows were mangled on a copy with
+Coordinator-content-repo-em against `2c510a2857b3` after 780 of 1437 rows were mangled on a copy with
 `rows_skipped: 0`
-(`cross-repo/inbox/2026-08-30-doe-claude-em-arrow-normalizer-mangles-two-paren-rows.md`).
+(`cross-repo/inbox/2026-08-30-coordinator-content-repo-em-arrow-normalizer-mangles-two-paren-rows.md`).
 
 Negative-spec: this is scoping, not repair — a tailed row is routed to `skipped` with a
 reason and left byte-identical, never rewritten by a smarter regex. `skipped: 0` on a

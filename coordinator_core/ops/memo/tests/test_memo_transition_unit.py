@@ -2005,7 +2005,7 @@ created: 2026-06-01
 class TestLiftVerb:
     """(b) lift: draft -> open, the one receiver-side move for a hand-delivered draft.
 
-    Backlink: state/cross-repo/archive/2026-09-02-doe-claude-em-outbound-defects-
+    Backlink: state/cross-repo/archive/2026-09-02-coordinator-content-repo-em-outbound-defects-
     batch.md § "A hand-delivered draft memo is unclosable by its receiver".
     """
 

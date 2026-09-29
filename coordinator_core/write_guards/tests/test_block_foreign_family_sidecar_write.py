@@ -111,7 +111,7 @@ class TestLeg1Applicability:
         monkeypatch.setattr(guard, "resolve_repo_root", _boom)
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_A}.txt",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_A}.txt",
             agent_id=_AGENT_A,
         )
         assert guard.check(payload) is None
@@ -121,7 +121,7 @@ class TestEmMainLoopWrite:
     def test_no_agent_id_allows(self, tmp_path):
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_A}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_A}.md",
             agent_id="",
         )
         assert guard.check(payload) is None
@@ -137,7 +137,7 @@ class TestDeny:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -153,8 +153,8 @@ class TestDeny:
         # cap. The caller's identity still reaches the reader, via the id
         # embedded in its own leaf's filename.
         assert _AGENT_A in reason
-        assert f"coordinatorexecutor.{_AGENT_A}.md" in reason
-        assert f"coordinatorexecutor.{_AGENT_B}.md" in reason
+        assert f"coordinator-executor.{_AGENT_A}.md" in reason
+        assert f"coordinator-executor.{_AGENT_B}.md" in reason
         assert "dispatched as" not in reason
 
 
@@ -206,7 +206,7 @@ class TestCarveOut3FailOpenArms:
         # No .agents/<agent_id>/em-session-id.txt written at all.
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -223,7 +223,7 @@ class TestCarveOut3FailOpenArms:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -238,7 +238,7 @@ class TestCarveOut3FailOpenArms:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -256,7 +256,7 @@ class TestCarveOut3FailOpenArms:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -278,7 +278,7 @@ class TestAcceptanceOracle:
     _CALLER = "a13be9aa2ab0dd63f"
     _SIBLING = "a200555c09c99b946"
     _TYPE = "coordinator:review-integrator"
-    _LABEL = "coordinatorreview-integrator"
+    _LABEL = "coordinator-review-integrator"
 
     def _backpointer(self, tmp_path):
         _write_backpointer(
@@ -356,7 +356,7 @@ class TestCaseInsensitiveFilesystemBypass:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.MD",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{_AGENT_B}.MD",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -373,7 +373,7 @@ class TestCaseInsensitiveFilesystemBypass:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/CoordinatorExecutor.{_AGENT_B}.md",
+            f"state/subagent-share/{_SESSION_ID}/Coordinator-Executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -404,7 +404,7 @@ class TestCanonicalIdDivergence:
         )
         payload = _payload(
             tmp_path,
-            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{raw_agent_id}.md",
+            f"state/subagent-share/{_SESSION_ID}/coordinator-executor.{raw_agent_id}.md",
             agent_id=raw_agent_id,
             session_id=_EM_SESSION_ID,
         )
@@ -445,7 +445,7 @@ class TestLiveSidecarRoot:
         payload = _payload(
             tmp_path,
             f".coordinator-local/subagent-share/{_SESSION_ID}/"
-            f"coordinatorexecutor.{_AGENT_B}.md",
+            f"coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )
@@ -466,7 +466,7 @@ class TestLiveSidecarRoot:
         payload = _payload(
             tmp_path,
             f".coordinator-local/subagent-share/{_SESSION_ID}/"
-            f"coordinatorexecutor.{_AGENT_B}.md",
+            f"coordinator-executor.{_AGENT_B}.md",
             agent_id=_AGENT_A,
             session_id=_EM_SESSION_ID,
         )

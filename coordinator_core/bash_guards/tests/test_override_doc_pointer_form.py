@@ -38,7 +38,7 @@ from coordinator_core.install.substrate import _install_claude_klabauter_seed_wi
 #: Mirrors the disposition probe's own criterion set — any one of these
 #: appearing in a guard MESSAGE a session working in an unrelated repo would
 #: see is the exact defect this plan closes.
-_CRITERION_MARKERS = ("claude-klabauter", "claude-klabauter", "DoE-claude", "doe-claude-klabauter")
+_CRITERION_MARKERS = ("claude-klabauter", "claude-klabauter", "coordinator-content-repo", "content-engine")
 
 
 def test_display_form_names_no_repo():

@@ -433,7 +433,7 @@ def _newest_pending_release(repo_dir: str) -> str:
     looked in** — so the repos shipping most regularly were exactly the ones
     whose Progress section froze, and the tile made the repos that ship least
     look the most current. Ruling: widen the reader, move no writer
-    (doe-claude-em, 2026-09-04, cross-repo/inbox
+    (coordinator-content-repo-em, 2026-09-04, cross-repo/inbox
     `exec-summary-progress-rung2-archive-contract-ruling`).
 
     Selection is by AUTHORED DATE, never list position. `sorted(...)[-1]` over

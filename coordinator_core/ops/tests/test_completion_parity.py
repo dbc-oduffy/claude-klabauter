@@ -15,10 +15,10 @@ Coverage:
 
 Oracle skip semantics: when the oracle CLI (or its dependency, bash) is absent, tests are
 skipped with a clear diagnostic — NOT silently passed. Oracle skips are expected in CI
-environments that don't have the DoE-claude sibling repo.
+environments that don't have the coordinator-content-repo sibling repo.
 
 Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C2
-Oracle: [DoE-claude] coordinator/bin/append-plan-session.py
+Oracle: [coordinator-content-repo] coordinator/bin/append-plan-session.py
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
 """
 
@@ -47,20 +47,20 @@ from coordinator_core.ops.completion_ops import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# Oracle / DoE-root path resolution
+# Oracle / content-root path resolution
 # ---------------------------------------------------------------------------
 
-_DOE_ROOT_SENTINEL = Path.home() / ".claude" / ".doe-root"
+_CONTENT_ROOT_SENTINEL = Path.home() / ".claude" / ".coordinator-content-root"
 _ORACLE_APPEND_SESSION: Optional[Path] = None
 
-if _DOE_ROOT_SENTINEL.exists():
+if _CONTENT_ROOT_SENTINEL.exists():
     try:
-        _doe_root = _DOE_ROOT_SENTINEL.read_text(encoding="utf-8").strip()
+        _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding="utf-8").strip()
         _ORACLE_APPEND_SESSION = (
-            Path(_doe_root) / "coordinator" / "bin" / "append-plan-session.py"
+            Path(_content_root) / "coordinator" / "bin" / "append-plan-session.py"
         )
     except OSError:
-        print(f"skip: <module>: _doe_root = _DOE_ROOT_SENTINEL.read_text(encoding=\"utf-8\").strip() failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: <module>: _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding=\"utf-8\").strip() failed: {sys.exc_info()[1]}", file=sys.stderr)
         pass
 
 # ---------------------------------------------------------------------------

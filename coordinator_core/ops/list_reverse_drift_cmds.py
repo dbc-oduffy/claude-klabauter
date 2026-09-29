@@ -17,7 +17,7 @@ Per-repo scoping (--scope-repo <repo-root>):
   drift. The meta-repo (${HOME}/.claude, the coordinator home) is the explicit
   check-all case — releasing it covers every copy_install plugin on the
   machine. Any other repo emits only rows whose source_path IS that repo.
-  Paths are normalized before comparison (Windows X:/ vs MSYS /x/ vs $HOME /c/)
+  Paths are normalized before comparison (Windows C:/ vs MSYS /x/ vs $HOME /c/)
   so the meta-repo and source_path matches survive cross-platform path forms.
   Spec backlink: cross-repo/inbox/2026-06-01-reverse-drift-gate-per-repo-scoping.md
 

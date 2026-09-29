@@ -16,13 +16,13 @@ Step-0 sweep mechanism against the result.
 
 The sweep half is not reimplemented: it is extracted VERBATIM (same
 marker-based technique ``coordinator/lib/tests/test-install-rendezvous-sweep.sh``
-uses) out of DoE-claude's own
+uses) out of coordinator-content-repo's own
 ``coordinator/templates/handoffs/continue-onboarding-and-installation.md`` —
 the actual Step 0 spine-builder every coordinator-claude install session runs.
 Claude-klabauter does not vendor that template (it is coordinator-claude/DoE
 content, not claude-klabauter's — see claude-klabauter's own CLAUDE.md § What this repo
-is), so this test resolves the DoE-claude repo root the same registry-first,
-machine-portable way ``coordinator_core.doe_root_pointer`` is designed for and
+is), so this test resolves the coordinator-content-repo repo root the same registry-first,
+machine-portable way ``coordinator_core.content_root_pointer`` is designed for and
 SKIPS (never fails) when that root, or the template inside it, is not
 resolvable on the current machine — a missing sibling checkout is an
 environment fact, not a defect in the mechanism this test is proving.
@@ -62,7 +62,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core._settings_home import settings_home as _real_settings_home
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -140,10 +140,10 @@ def _extract_bash_block(template_text: str, marker: str) -> str:
 
 
 def _resolve_template_path() -> Path | None:
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         return None
-    candidate = Path(doe_root) / _TEMPLATE_REL
+    candidate = Path(content_root) / _TEMPLATE_REL
     return candidate if candidate.is_file() else None
 
 
@@ -156,9 +156,9 @@ def _write_executable(path: Path, content: str) -> None:
 @pytest.mark.skipif(shutil.which("bash") is None, reason="no bash on PATH — Windows without git-bash/WSL")
 def test_driven_leaf_seed_sweep_pickup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Opts out of conftest.py's autouse home quarantine via ``real_home``:
-    resolving the DoE-claude sibling root is a READ-ONLY oracle lookup (same
+    resolving the coordinator-content-repo sibling root is a READ-ONLY oracle lookup (same
     class of use the marker exists for). That opt-out is held open ONLY long
-    enough to perform the read-only DoE-root lookup and to resolve the real
+    enough to perform the read-only content-root lookup and to resolve the real
     rendezvous path via the same seam (``settings_home()``) the production
     code honors — immediately after, this test re-quarantines HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME to a throwaway sandbox before the seed/sweep
@@ -169,7 +169,7 @@ def test_driven_leaf_seed_sweep_pickup(tmp_path: Path, monkeypatch: pytest.Monke
     template_path = _resolve_template_path()
     if template_path is None:
         pytest.skip(
-            "DoE-claude root not resolvable via coordinator_core.doe_root_pointer "
+            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
             "on this machine (or the template is missing there) — the real Step 0 "
             "sweep mechanism this test proves against is unavailable; not a defect "
             "in claude-klabauter."

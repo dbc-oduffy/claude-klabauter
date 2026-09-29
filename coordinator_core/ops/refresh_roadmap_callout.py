@@ -11,7 +11,7 @@ when the roadmap dir or callout is absent — a roadmap_id with no index is
 not an error.
 
 Trust guard: before delegating, resolves and trust-checks the DoE
-coordinator root (CLAUDE_PLUGIN_ROOT env, else `~/.claude/.doe-root` pointer
+coordinator root (CLAUDE_PLUGIN_ROOT env, else `~/.claude/.coordinator-content-root` pointer
 + `/coordinator`) via the canonical
 `coordinator_core.trusted_root_guard.is_trusted` — see that module for the
 full anchor list. cc_root is still validated before any rendering proceeds,
@@ -20,7 +20,7 @@ than a subprocess-to-node call (refresh-queries.js itself is retired — see
 Negative-spec).
 
 Port of: refresh-roadmap-callout.sh (DoE a1a568d2, 2026-07-22)
-Spec backlink: DoE-claude:pln-refresh-roadmap-query-callout--d3d748 § C1
+Spec backlink: coordinator-content-repo:pln-refresh-roadmap-query-callout--d3d748 § C1
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (R1 DOE-PORT)
 
 Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix"):
@@ -115,7 +115,7 @@ def _resolve_root(root_arg: str) -> str:
 
 
 def _resolve_cc_root() -> str:
-    """CLAUDE_PLUGIN_ROOT env -> ~/.claude/.doe-root pointer + content root.
+    """CLAUDE_PLUGIN_ROOT env -> ~/.claude/.coordinator-content-root pointer + content root.
 
     The content root is resolved for EITHER layout (private authoring tree or
     published flat mirror); "" still means unresolved, and the caller's
@@ -125,12 +125,12 @@ def _resolve_cc_root() -> str:
     if env_root:
         return env_root
     claude_home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
-    doe_root_pointer = Path(claude_home) / ".claude" / ".doe-root"
+    content_root_pointer = Path(claude_home) / ".claude" / ".coordinator-content-root"
     try:
-        doe_root = doe_root_pointer.read_text(encoding="utf-8").strip()
+        content_root = content_root_pointer.read_text(encoding="utf-8").strip()
     except OSError:
-        doe_root = ""
-    content_root = content_root_for(doe_root)
+        content_root = ""
+    content_root = content_root_for(content_root)
     if content_root is None:
         return ""
     return str(content_root)
@@ -228,7 +228,7 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
 
     if not cc_root or not os.path.isdir(cc_root):
         print(
-            "ERROR: coordinator root unresolved — ~/.claude/.doe-root missing/invalid; "
+            "ERROR: coordinator root unresolved — ~/.claude/.coordinator-content-root missing/invalid; "
             "re-run coordinator:install",
             file=sys.stderr,
         )

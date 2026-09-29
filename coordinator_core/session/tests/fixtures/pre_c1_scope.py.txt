@@ -1,0 +1,434 @@
+"""Frozen pre-C1 `normalize_touch_path` (guardless) and its transitive helpers,
+exec'd by `test_scope.py :: TestNormalizeTouchPathDifferential` as the
+reference the guarded implementation must match. Test data, never imported."""
+
+from __future__ import annotations
+
+import os
+import posixpath
+import re
+import subprocess
+import sys
+from typing import List, NamedTuple, Optional, Tuple
+
+from coordinator_core.session import core
+from coordinator_core.win_portability import no_console_creationflags
+
+_ABSOLUTE_RE = re.compile(r"^(?:/|[A-Za-z]:)")
+
+_EXTENDED_LENGTH_UNC_RE = re.compile(r"^\\\\\?\\UNC\\", re.IGNORECASE)
+
+_EXTENDED_LENGTH_LOCAL_RE = re.compile(r"^\\\\\?\\", re.IGNORECASE)
+
+def _strip_extended_length_prefix(path: str) -> str:
+    """Strip a Windows extended-length path prefix, if present.
+
+    ``\\\\?\\C:\\foo`` -> ``C:\\foo`` (an ordinary drive-letter path,
+    recognized by ``_ABSOLUTE_RE``).  # abs-path-ok: synthetic docstring
+    example, not a real machine path
+    ``\\\\?\\UNC\\server\\share`` ->
+    ``\\\\server\\share`` (an ordinary UNC path). Any other input is returned
+    unchanged. Applied BEFORE the absoluteness test and every normalization
+    arm, so nothing downstream needs its own extended-length dialect — see
+    the negative-spec at ``_EXTENDED_LENGTH_UNC_RE``'s definition for why the
+    UNC variant is stripped down to an ordinary UNC form rather than dropped
+    or left untouched.
+    """
+    if _EXTENDED_LENGTH_UNC_RE.match(path or ""):
+        return "\\\\" + path[8:]
+    if _EXTENDED_LENGTH_LOCAL_RE.match(path or ""):
+        return path[4:]
+    return path
+
+def _is_absolute(path: str) -> bool:
+    """True iff ``path`` is absolute in the bash sense (POSIX ``/`` or a
+    drive-qualified ``C:`` prefix)."""
+    return _ABSOLUTE_RE.match(path or "") is not None
+
+_normalize_diag_fired = False
+
+def _emit_normalize_diagnostic(reason: str) -> None:
+    """One-shot, deduped-per-process stderr diagnostic for
+    :func:`normalize_touch_path`'s fail-open path.
+
+    Fires at most once per process (module-level latch) so a systemic
+    ``git ls-files``/relpath failure (e.g. the exit-128-on-every-edit class
+    documented in the plan this satisfies) surfaces within one session
+    instead of being silently swallowed on every ``touch()`` call. Never
+    raises — this is an observability seam only, not a behavior change:
+    ``normalize_touch_path``'s and ``touch()``'s fail-open contracts are
+    unchanged either way.
+
+    Negative spec on the WORDING: the message must not claim more than the
+    code knows. A fired latch means one normalization attempt took an
+    UNEXPECTED failure path, not that any specific entry is wrong — the
+    relpath fallback frequently produces the correct repo-relative path
+    anyway. It also must not be read as covering the routine
+    path-outside-this-repo case, which :func:`_ls_files_failure_is_benign`
+    now filters out before this is ever called (example-cockpit-repo-em memo,
+    2026-08-05 § 2, and the follow-up mis-calibration finding: the latch used
+    to fire on every session that touched a sibling repo, ``~/.claude``, or a
+    scratch dir — the dominant case in this fleet — while asserting
+    corruption that had not happened).
+    """
+    global _normalize_diag_fired
+    if _normalize_diag_fired:
+        return
+    _normalize_diag_fired = True
+    try:
+        print(
+            f"normalize_touch_path: {reason} failed unexpectedly at least "
+            "once this process — further occurrences are silenced. This is "
+            "NOT the routine path-outside-this-repo case (expected, handled "
+            "by the relpath fallback); normalization fell back to a "
+            "best-effort relative path, so touched.txt entries written this "
+            "process may be mis-normalized or missing.",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
+
+class GitRun(NamedTuple):
+    """One completed ``git`` invocation's full result — returncode, stdout and
+    stderr — for the one call site that must DISCRIMINATE between failure
+    shapes rather than collapse them (see :func:`_ls_files_failure_is_benign`).
+    """
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
+    """Run ``git <args>`` and return the full :class:`GitRun`, or ``None`` iff
+    git could not be EXECUTED at all (``OSError``: binary missing, not
+    executable, fork failure).
+
+    THE single subprocess seam for this module — :func:`_git_output` is a thin
+    projection of this, deliberately, so there is exactly one git dialect here
+    (same argv shape, same ``no_console_creationflags()`` flags, same text
+    mode).
+
+    Negative spec: ``None`` means "no git ran", NOT "git failed" — a non-zero
+    exit is a fully-populated ``GitRun`` and must stay distinguishable from
+    ``None``, because the two classify differently downstream (an unexecutable
+    git is always operational; a non-zero exit may be benign).
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return None
+    return GitRun(result.returncode, result.stdout, result.stderr)
+
+_GIT_OUTSIDE_REPOSITORY_MARKER = "outside repository"
+
+def _path_is_outside_worktree(fpath: str, root: Optional[str]) -> Optional[bool]:
+    """``True``/``False`` iff ``fpath`` provably is/is not inside the worktree
+    at ``root``; ``None`` when that cannot be decided (no resolved root).
+
+    Native and locale-proof — realpath on BOTH sides, matching
+    :func:`normalize_touch_path`'s own fallback (macOS ``/var`` →
+    ``/private/var``). A ``ValueError`` from ``relpath`` is a Windows
+    cross-drive comparison, which is itself proof the path is not under
+    ``root``.
+    """
+    if not root:
+        return None
+    try:
+        rel = os.path.relpath(os.path.realpath(fpath), os.path.realpath(root))
+    except ValueError:
+        return True  # different drive — cannot be inside this worktree
+    except OSError:
+        return None
+    rel = rel.replace(os.sep, "/")
+    return rel == ".." or rel.startswith("../")
+
+def _ls_files_failure_is_benign(
+    result: Optional[GitRun], fpath: str, root: Optional[str]
+) -> bool:
+    """Did ``git ls-files --full-name -- <fpath>`` fail merely because
+    ``fpath`` is not in THIS repository?
+
+    That case is routine and expected — a session touching a sibling repo,
+    ``~/.claude``, or a scratch dir hits it on every such write, and
+    :func:`normalize_touch_path`'s relpath fallback handles it correctly.
+    Before this discrimination existed, it armed
+    :func:`_emit_normalize_diagnostic`'s latch, which in this fleet made the
+    latch fire for most sessions on a non-condition — and, once
+    ``safe-commit-offer`` began LEADING its report with that latch, put a
+    false "DEGRADED INPUT" banner at the head of most reports
+    (example-cockpit-repo-em memo, 2026-08-05 § 2, and the follow-up finding
+    against ``eb1e8b5d76c8``).
+
+    Negative spec — FAIL TOWARD SURFACING. Only a POSITIVELY identified
+    not-in-this-repo failure is benign. Everything else is operational and
+    MUST arm the latch, including:
+      - ``result is None`` (git missing/unexecutable): the containment check
+        below may still say "outside", but nothing here was actually
+        determined by git, and a missing git is systemic by definition.
+      - an unresolvable ``root`` ("not a git repository", a racing/removed
+        git dir): containment is undecidable, so the failure is unclassified.
+      - any unrecognised non-zero exit for a path that IS inside the
+        worktree (index lock contention, a ref race, a signal death, a git
+        version rejecting the argv): exactly the systemic class this latch
+        exists to surface.
+    An unclassifiable failure must never be quietly reclassified as benign to
+    keep the report clean — a silent latch is only correct when we can say
+    WHY.
+    """
+    if result is None:
+        return False
+    if _GIT_OUTSIDE_REPOSITORY_MARKER in (result.stderr or ""):
+        return True
+    return _path_is_outside_worktree(fpath, root) is True
+
+def _relpath_failure_is_benign(exc: Exception, fpath: str, root: str) -> bool:
+    """Did ``os.path.relpath(realpath(fpath), realpath(root))`` fail merely
+    because ``fpath`` and ``root`` are on different Windows drives?
+
+    On Windows, ``os.path.relpath`` raises ``ValueError`` whenever the two
+    paths do not share a drive letter. That is exactly the routine
+    path-outside-this-repo case — a ``C:``-drive scratchpad, ``~/.claude``, a
+    sibling repo — when this repo's worktree lives on a non-system drive
+    (e.g. ``X:``). It is not evidence of anything unexpected and must not
+    arm :func:`_emit_normalize_diagnostic`'s latch — mirrors
+    :func:`_ls_files_failure_is_benign`'s discrimination for the ``ls-files``
+    arm (2026-08-07 finding: independently reported by coordinator-content-repo and
+    carried as an undiagnosed item on a live handoff in this tree, both
+    traced to the same false premise — that relpath failure is non-routine
+    on every platform, which holds on POSIX but not on Windows).
+
+    Determined from the actual path values (drive/anchor comparison), never
+    from the exception's message text — message text is locale- and
+    version-fragile.
+
+    Negative spec: only a ``ValueError`` attributable to a drive mismatch is
+    benign. An ``OSError`` is never classified benign here — that stays an
+    operational failure and still arms the latch, exactly as before this
+    function existed. On POSIX there are no drive letters
+    (``os.path.splitdrive`` always returns ``""`` for both sides), so this
+    predicate is unconditionally ``False`` there and POSIX behavior is
+    byte-identical to before this function existed: every relpath failure
+    still arms the latch.
+    """
+    if not isinstance(exc, ValueError):
+        return False
+    fdrive = os.path.splitdrive(os.path.realpath(fpath))[0]
+    rdrive = os.path.splitdrive(os.path.realpath(root))[0]
+    return fdrive.lower() != rdrive.lower()
+
+def _relpath_candidate(fpath: str, root: str) -> Tuple[str, Optional[Exception]]:
+    """Attempt the pure-Python ``relpath`` arm in isolation: returns
+    ``(candidate, exc)``.
+
+    ``candidate`` is ``""`` when the attempt failed OR produced an
+    outside-worktree/unusable answer — mirrors ``normalize_touch_path``'s
+    pre-existing "drop it" treatment for a resolved-but-outside-repo relpath
+    (C2, 2026-08-05: a sibling-directory path resolves cleanly to a
+    non-absolute, ``../``-laden string, which must still be dropped here
+    rather than reaching ``touched.txt``). ``exc`` is the raised
+    ``OSError``/``ValueError``, for the caller's diagnostic classification —
+    ``None`` both on success and on the outside-worktree drop (no exception
+    occurred in that case, so there is nothing to classify).
+    """
+    try:
+        candidate = os.path.relpath(
+            os.path.realpath(fpath), os.path.realpath(root)
+        ).replace(os.sep, "/")
+    except (OSError, ValueError) as exc:
+        return "", exc
+    canonical = posixpath.normpath(candidate)
+    if (
+        canonical in (".", "..")
+        or canonical.startswith("../")
+        or posixpath.isabs(canonical)
+    ):
+        return "", None
+    return candidate, None
+
+def normalize_touch_path(
+    path: str, cwd: Optional[str] = None, root: Optional[str] = None
+) -> Optional[str]:
+    """Normalize a ``touched.txt`` candidate entry to repo-relative, or signal
+    "skip" via ``None`` if it is STILL absolute after the attempt.
+
+    Extracted from :func:`touch` so every writer of a session's
+    ``touched.txt`` (the PreToolUse hot path here, and
+    ``coordinator_core.session.claims.self_claim``'s
+    ``atomic_dedup_append`` call) shares ONE normalization dialect —
+    two writers with two dialects is how the absolute-path-in-touched.txt
+    defect (240 corroborated on-disk entries, DoE security-audit
+    2026-07-31) happened in the first place. Do NOT re-inline a second
+    copy of this normalization at a new call site; import and call this.
+
+    Two pre-existing defects fixed 2026-08-08 (surfaced by the tracked-path
+    zero-spawn baseline spike, bug-backlog entries
+    ``2026-08-08-core-quotepath-corrupts-touched-txt-for-9b099a0360ca`` and
+    ``2026-08-08-extended-length-paths-bypass-absolute-re-3e7b2e5a95ff``):
+
+      - The ``ls-files`` arm now runs with ``-c core.quotepath=false`` on the
+        argv. Previously, with a caller's ``core.quotePath`` at its default
+        (true), git C-quotes any non-ASCII path in its output — a tracked
+        file named e.g. ``café.md`` came back as the literal quoted-and-
+        octal-escaped string ``"caf\\303\\251.md"``, which ``lines[0].strip()``
+        then wrote into ``touched.txt`` verbatim, matching no file on disk.
+        ``-c core.quotepath=false`` was chosen over ``-z``/NUL-splitting: it
+        is a one-token argv addition with no output-framing change, so it
+        does not touch the ``lines[0].strip()`` parse this arm already does,
+        and this call only ever wants the FIRST match (``--`` pathspec
+        against one input path) — there is no multi-line output here for
+        ``-z`` NUL-termination to help disambiguate. It does depend on this
+        argv actually reaching git rather than on caller config, which is
+        exactly what ``-c`` (not the ambient ``core.quotePath`` setting)
+        guarantees.
+      - ``path`` now has any Windows extended-length prefix (``\\\\?\\`` or
+        its UNC form ``\\\\?\\UNC\\``) stripped via
+        :func:`_strip_extended_length_prefix` BEFORE ``_is_absolute`` or any
+        normalization arm runs — previously such a prefix defeated
+        ``_ABSOLUTE_RE`` entirely (the regex matches neither backslash form),
+        so the path was never recognized as absolute, never normalized, and
+        reached ``touched.txt`` still absolute: the exact corruption class
+        this function's negative-spec exists to prevent. Stripping happens
+        once, up front, so both existing arms see an ordinary drive-letter
+        (or UNC) path rather than gaining a second absoluteness dialect of
+        their own.
+
+    ``root``, if the caller already knows the worktree root (e.g.
+    ``hooks/track_touched_files.py:491`` passes ``_worktree_root``, and its
+    own comment at :476 states that value MUST be the worktree root), lets
+    this function skip re-deriving it via ``core.git_root(cwd)`` — a pure
+    addition: omitting ``root`` reproduces today's behavior byte-for-byte,
+    subprocess count included.
+
+    Normalization arm ORDER: ``git ls-files --full-name`` runs FIRST,
+    unconditionally — the sole authoritative source for a tracked file's
+    repo-relative path, exactly as before ``root`` existed as a parameter.
+    ``root``, when supplied, is used ONLY to skip the ``core.git_root(cwd)``
+    re-derivation on the miss path (an untracked file), letting the
+    pure-Python ``relpath`` fallback run against the caller-supplied root
+    instead of re-spawning git to find it. When ``root`` is absent, behavior
+    is byte-identical to before ``root`` existed, spawn count included.
+
+    Net effect: a tracked file costs one spawn (``ls-files``), root supplied
+    or not. An untracked file costs one spawn with ``root`` supplied
+    (``ls-files`` miss only) and two without it (``ls-files`` miss +
+    ``core.git_root``).
+
+    Negative spec — a ``relpath``-first fast arm (tried before ``ls-files``
+    when ``root`` is supplied) was attempted and rejected (2026-08-08,
+    review of the touched-path-normalize-spawn-diet plan, C1): it looked
+    spawn-free and correct for the common case, but ``os.path.realpath``
+    resolves symlinks and Windows junctions to their real, on-disk target,
+    while ``git ls-files --full-name`` returns git's recorded (unresolved)
+    path. For a tracked file reached through a symlinked or junctioned
+    directory INSIDE the worktree — an ordinary, fully git-legal
+    configuration, not out-of-band corruption — the two arms can
+    legitimately disagree, and relpath-first would silently normalize to
+    the resolved-through-the-symlink path instead of git's recorded one.
+    That failure class fires on case-sensitive POSIX with a plain symlink
+    present; it is broader than, and not to be confused with, the narrower
+    case-insensitive-filesystem case-drift scenario, and unlike that
+    scenario it is not an already-broken invariant independent of this
+    function. A single shared normalization dialect silently diverging on
+    which arm wins was judged not worth the extra spawn it would save. Do
+    not re-attempt the reorder without addressing the symlink/junction
+    divergence first.
+
+    Normalization: first via ``git ls-files --full-name``
+    (tracked/staged files), else via
+    ``os.path.relpath(realpath(path), realpath(root))``, where ``root`` is
+    the caller-supplied root if any, else ``core.git_root(cwd)``.
+    ``realpath`` is applied to BOTH sides so that macOS ``/var →
+    /private/var`` symlink resolution does not cause a prefix mismatch (git
+    resolves the repo root through ``/private/var`` while the incoming path
+    may still use ``/var``). ``realpath`` canonicalises the existing prefix
+    of a non-existent path, so untracked files are safe.
+
+    ``root=""`` (falsy but not ``None``) is deliberately treated as "no root
+    supplied" — the same truthy test (``if root:``) used throughout this
+    function decides whether the git-root-skip fast path applies. An empty
+    string can never be a valid absolute worktree root, so treating it as
+    "supplied" would only route a nonsense value into the relpath fallback;
+    treating it as absent degrades safely to the pre-``root`` behavior
+    (``core.git_root(cwd)`` re-derivation on the miss path), the same as any
+    other falsy/omitted ``root``.
+
+    Returns the normalized (repo-relative, or already-relative) path, or
+    ``None`` if the path is STILL absolute after the normalization attempt
+    (Python relpath failed, path outside repo) — the caller's fail-open skip
+    signal; an absolute path in ``touched.txt`` corrupts the relative-path
+    scope set (see :func:`compute_scope`). Never raises for an operational
+    failure — mirrors ``touch()``'s own fail-open contract.
+
+    Diagnostic calibration (2026-08-05, revised 2026-08-07): an ``ls-files``
+    failure arms :func:`_emit_normalize_diagnostic`'s latch ONLY when
+    :func:`_ls_files_failure_is_benign` cannot positively attribute it to
+    "this pathspec is not in this repo". A path outside the worktree — a
+    sibling repo, a settings home, a scratch dir — is the routine case, is
+    resolved correctly by the relpath fallback below, and must NOT arm the
+    latch; an unclassifiable failure still must.
+
+    The relpath arm gets the SAME treatment now, via
+    :func:`_relpath_failure_is_benign`. The original premise here — "relpath
+    failing is not a routine condition on any platform" — was FALSE: on
+    Windows, ``os.path.relpath`` raises ``ValueError`` whenever ``fpath`` and
+    ``root`` sit on different drive letters, which is exactly the routine
+    path-outside-this-repo case when this repo's worktree lives on a
+    non-system drive (e.g. ``X:``) and a session touches a path on another
+    drive (a ``C:``-drive scratchpad, ``~/.claude``, a sibling repo). That is
+    not evidence of anything unexpected and must not arm the latch. On
+    POSIX, where there are no drive letters, the predicate never fires and
+    every relpath failure still arms the latch, unchanged. Either way the
+    entry is still dropped (``rel = ""``, entry lost) — only whether the
+    diagnostic arms is affected, never the fail-open skip behavior.
+
+    Because ``ls-files`` runs on every absolute-path call again
+    (unconditionally, ``root`` supplied or not), this latch is reachable on
+    the hot path exactly as it was before ``root`` existed as a parameter —
+    a caller-supplied ``root`` only ever changes whether the ``relpath``
+    fallback re-derives the worktree root, never whether ``ls-files``
+    itself runs or is classified.
+    """
+    fpath = _strip_extended_length_prefix(path)
+    if _is_absolute(fpath):
+        rel = ""
+        ls_files = _git_run(
+            ["-c", "core.quotepath=false", "ls-files", "--full-name", "--", fpath],
+            cwd,
+        )
+        ls_files_failed = ls_files is None or ls_files.returncode != 0
+        if not ls_files_failed and ls_files.stdout:
+            lines = ls_files.stdout.splitlines()
+            rel = lines[0].strip() if lines else ""
+        if not rel:
+            # `root`, when supplied (truthy — see the docstring's `root=""`
+            # paragraph for why falsy, not `is not None`, is the test used
+            # throughout this function), lets this skip the
+            # `core.git_root(cwd)` re-derivation entirely — the ONE spawn
+            # this parameter exists to remove. Absent `root`, this still
+            # pays exactly one `core.git_root(cwd)` spawn, unchanged from
+            # before `root` existed.
+            resolved_root = root if root else core.git_root(cwd)
+            if ls_files_failed and not _ls_files_failure_is_benign(
+                ls_files, fpath, resolved_root
+            ):
+                _emit_normalize_diagnostic("git ls-files")
+            if resolved_root:
+                candidate, exc = _relpath_candidate(fpath, resolved_root)
+                if candidate:
+                    rel = candidate
+                elif exc is not None and not _relpath_failure_is_benign(
+                    exc, fpath, resolved_root
+                ):
+                    _emit_normalize_diagnostic("relpath")
+        if rel:
+            fpath = rel
+
+    if _is_absolute(fpath):
+        return None
+    return fpath

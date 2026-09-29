@@ -1744,7 +1744,7 @@ def test_an_unlabelled_arrival_is_never_filed_under_a_real_event(
     `UNLABELLED_EVENT` bucket, NOT under a plausible event name and NOT under
     its request path.
 
-    `doe-claude-a9` hit the severe form of this on their forwarder -- an
+    `coordinator-content-repo-a9` hit the severe form of this on their forwarder -- an
     unparsable body defaulting to "PreToolUse" -- where the arrived-but-
     unlabelled population disappears into the exact bucket being interrogated.
     An earlier revision here had the weaker form: a path-inferred key shared a

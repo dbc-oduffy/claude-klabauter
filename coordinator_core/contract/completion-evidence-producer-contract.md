@@ -8,7 +8,7 @@
 > plan that ratified this contract.
 >
 > **Ratified by:** `docs/decisions/DR-442-completion-evidence-is-the-engine-s-record-not-the-side-effect.md`,
-> extending the 2026-09-09 ruling (DoE-claude `state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md`
+> extending the 2026-09-09 ruling (coordinator-content-repo `state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md`
 > § Row M11, @ 62d63adfe).
 >
 > **Spec backlinks.**

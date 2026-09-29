@@ -123,7 +123,7 @@ gap. That verdict was reached by reasoning about this module's OWN
 ``shlex``-based tokenizer in isolation, not by re-deriving the actual
 execution model. Re-derived: this project's Bash-tool execution path on
 Windows is Git Bash / MSYS bash (see ``docs/wiki/bash-on-windows-
-gotchas.md``, DoE-claude) -- a genuine POSIX shell that performs real
+gotchas.md``, coordinator-content-repo) -- a genuine POSIX shell that performs real
 word-splitting and backslash-escape processing on the command string
 BEFORE any executable is resolved, not a raw ``CreateProcess``
 successive-space-delimited-prefix resolution (that Win32 hazard requires
@@ -445,7 +445,7 @@ it on the belief that C1 catches executors first.
 
 Ported from: coordinator_core/bash_guards/nudge_subagent_scoped_commit.py
   (git-commit detection regexes; scoped-pathspec exemption removed).
-Spec backlink: DoE-claude:pln-g4-execute-pipeline-agents-two-7ba754
+Spec backlink: coordinator-content-repo:pln-g4-execute-pipeline-agents-two-7ba754
   chunk M4 ("claude-klabauter -- subagent-commit enforcement gate").
 Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
   chunk C2 ("close the two no-obfuscation holes in block_subagent_commit").
@@ -2801,6 +2801,7 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_completed_handoffs",
         "fleet.archive_paper_trail",
         "fleet.archive_queue_entry",
+        "fleet.prune_closed_bugs",
         "handoff.ship_and_archive",
         "fleet.archive_terminal_sizings",
         # `_COMMIT_SINK_CALL_MARKERS`'s substring-scan limit below, now fixed

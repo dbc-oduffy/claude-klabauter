@@ -68,12 +68,12 @@ Public API:
         CLI entry point. ``argv`` is the trampoline's own ``sys.argv[1:]``.
         ``default_coordinator_root`` is used when ``--root`` is not passed on
         the command line — the ``coordinator/bin/backfill-deliverable-spine.py``
-        trampoline resolves DoE-claude's own ``coordinator/`` directory (via
-        the shared ``doe_root()`` registry helper, NOT its own ``__file__``
+        trampoline resolves coordinator-content-repo's own ``coordinator/`` directory (via
+        the shared ``content_root()`` registry helper, NOT its own ``__file__``
         location — this executable now lives in claude-klabauter while the
-        corpus it walks, DoE-claude's ``coordinator/{state,docs,archive}``,
-        stayed in DoE-claude) and passes it here. If BOTH ``--root`` and
-        ``default_coordinator_root`` are absent (e.g. ``doe_root()`` could
+        corpus it walks, coordinator-content-repo's ``coordinator/{state,docs,archive}``,
+        stayed in coordinator-content-repo) and passes it here. If BOTH ``--root`` and
+        ``default_coordinator_root`` are absent (e.g. ``content_root()`` could
         not resolve on this machine either), this module fails loud
         (exit 1) rather than falling back to its own ``coordinator_core/ops/``
         directory — that directory has none of the corpus subdirs and would
@@ -1485,8 +1485,8 @@ def main(
         coordinator_root = default_coordinator_root
     else:
         # No --root, and the caller (the coordinator/bin/backfill-deliverable-spine.py
-        # trampoline) could not resolve a default either (e.g. DOE_ROOT /
-        # repos.doe_claude unresolvable on this machine). Do NOT fall back to
+        # trampoline) could not resolve a default either (e.g. CONTENT_ROOT /
+        # repos.content_root unresolvable on this machine). Do NOT fall back to
         # this module's OWN directory (coordinator_core/ops/) — that is a
         # nonsense corpus root (no state/handoffs, docs/plans, etc. live there)
         # and would silently enumerate an empty corpus instead of failing loud.
@@ -1494,7 +1494,7 @@ def main(
         # "corpus root unreadable" contract.
         print(
             "ERROR: no corpus root available — pass --root <path> explicitly, "
-            "or resolve DOE_ROOT / repos.doe_claude in the machine-local "
+            "or resolve CONTENT_ROOT / repos.content_root in the machine-local "
             "registry so the trampoline can derive a default.",
             file=err,
         )

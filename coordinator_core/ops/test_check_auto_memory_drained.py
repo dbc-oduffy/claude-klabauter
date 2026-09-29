@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.check_auto_memory_drained.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C13, AC15.
 """
 
@@ -44,8 +44,8 @@ def test_slugify_replaces_path_separators_with_dashes() -> None:
     assert _slugify_repo_root("/home/example/repos/claude-klabauter") == (
         "-home-example-repos-claude-klabauter"
     )
-    assert _slugify_repo_root("/home/example/repos/DoE-claude") == (
-        "-home-example-repos-DoE-claude"
+    assert _slugify_repo_root("/home/example/repos/coordinator-content-repo") == (
+        "-home-example-repos-coordinator-content-repo"
     )
 
 
@@ -55,13 +55,13 @@ def test_slugify_normalizes_backslash_separators() -> None:
 
 
 def test_slugify_encodes_drive_letter_colon() -> None:
-    """Real Windows paths carry a drive-letter colon (``X:\\claude-klabauter``),
+    """Real Windows paths carry a drive-letter colon (``C:\\claude-klabauter``),
     which Claude Code's own ``~/.claude/projects/<slug>/`` naming also
     encodes (verified on-disk: ``X--claude-klabauter``). A test path without a
     colon (like the sibling backslash-only case above) does not exercise
     this and previously let a separator-only encoding ship broken on every
     real Windows drive-letter root."""
-    assert _slugify_repo_root("X:\\claude-klabauter") == "X--claude-klabauter"
+    assert _slugify_repo_root("C:\\claude-klabauter") == "X--claude-klabauter"
     assert _slugify_repo_root("C:\\Users\\someone\\repo") == (
         "C--Users-someone-repo"
     )
@@ -511,5 +511,5 @@ def test_slugify_encodes_every_character_in_the_documented_scheme():
     instead of failing loudly.
     """
     assert _slugify_repo_root("C:\\Users\\me\\.claude") == "C--Users-me--claude"
-    assert _slugify_repo_root("X:\\repo.name\\sub") == "X--repo-name-sub"
+    assert _slugify_repo_root("C:\\repo.name\\sub") == "X--repo-name-sub"
     assert _slugify_repo_root("/home/me/.config/repo") == "-home-me--config-repo"

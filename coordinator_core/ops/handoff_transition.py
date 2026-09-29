@@ -6,8 +6,8 @@ mutations invoked at pickup-time (claim), supersession-time (supersede), and
 stamp-only archival-time (ship).  Each verb is ONE atomic file write (no
 half-mutated on-disk intermediate); post-mutation schema validation gates the write.
 
-Spec backlink: DoE-claude coordinator/bin/handoff-transition.js
-Port source:   DoE-claude coordinator/bin/handoff-transition.js
+Spec backlink: coordinator-content-repo coordinator/bin/handoff-transition.js
+Port source:   coordinator-content-repo coordinator/bin/handoff-transition.js
 
 Verb contracts (mirrored from the JS spec):
 
@@ -1092,7 +1092,7 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
         # state:shipped and pickup_ready:true are one logical state
         # disagreeing with itself — same double-dispatch hazard the
         # 2026-08-10 close-terminal fix closed (cross-repo/inbox/2026-08-10-
-        # doe-claude-em-reconcile-close-terminal-and-scrub-key.md § 1: "The
+        # coordinator-content-repo-em-reconcile-close-terminal-and-scrub-key.md § 1: "The
         # two fields are one logical state"), un-fixed on this OTHER
         # terminal-write path until now. `status` is deliberately left
         # untouched (DR-084 P4 narrow decouples status from terminality —
@@ -1429,7 +1429,7 @@ def _close(
         # preserve. Replace if present (covers a stale true AND a stale
         # already-quoted value); insert if absent (a record minted before
         # pickup_ready existed gets the same guarantee going forward).
-        # Spec: cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-close-
+        # Spec: cross-repo/inbox/2026-08-10-coordinator-content-repo-em-reconcile-close-
         # terminal-and-scrub-key.md § 1.
         if read_fm_field(fm, "pickup_ready") is not None:
             fm = replace_fm_field(fm, "pickup_ready", "false")
@@ -1935,7 +1935,7 @@ def _unclaim(
         # `_cf_ready_to_fire_no_unresolved_blocked_by`, which refuses it: the
         # transition aborted, the dead holder's claim stood, and
         # `reap-orphaned-in-flight-handoffs` re-reported rc=1 on that node every
-        # morning with nothing able to clear it. Reported by doe-claude-em
+        # morning with nothing able to clear it. Reported by coordinator-content-repo-em
         # 2026-08-31; routed through the small-items baton.
         #
         # Routing through the TIGHTEN-ONLY seam rather than adding a second
@@ -2613,14 +2613,14 @@ _SIBLING_PROSE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*
 
 #: One narrowly-scoped, DOCUMENTED bare-word alias — not a general alias
 #: mechanism. This repo's own doctrine (CLAUDE.md) uses bare "DoE" as the
-#: standing shorthand for the `doe_claude` sibling throughout its prose, and
+#: standing shorthand for the `content_root` sibling throughout its prose, and
 #: the spinoff's own motivating incident (its "What this covers" section) is
 #: itself a bare-"DoE" `gate_dependency:` sentence ("DoE 'finalizing its
-#: contract'"), not a hyphenated "DoE-claude" one — so the un-hyphenated form
+#: contract'"), not a hyphenated "coordinator-content-repo" one — so the un-hyphenated form
 #: is the dominant real-corpus shape this table exists to catch, not an edge
 #: case. Extending this table for other repos' informal names is a judgment
 #: call for a future chunk/PM ruling, not a local addition here.
-_SIBLING_PROSE_ALIASES: Dict[str, str] = {"doe": "doe_claude"}
+_SIBLING_PROSE_ALIASES: Dict[str, str] = {"doe": "content_root"}
 
 
 def _registered_sibling_repo_named_in_prose(prose: str) -> Optional[str]:
@@ -2637,7 +2637,7 @@ def _registered_sibling_repo_named_in_prose(prose: str) -> Optional[str]:
     Token shape: prose is scanned for identifier-like runs
     (`[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*`), each lowercased and
     hyphen-normalised to underscore to match this repo's own `repos.<id>`
-    naming convention (e.g. "DoE-claude" -> "doe_claude", "claude-klabauter"
+    naming convention (e.g. "coordinator-content-repo" -> "content_root", "claude-klabauter"
     -> "claude_klabauter" — the same convention CLAUDE.md's own prose uses
     throughout). `_SIBLING_PROSE_ALIASES` covers the one documented bare-word
     exception (see its own docstring).

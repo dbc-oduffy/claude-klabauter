@@ -2,7 +2,7 @@
 PreToolUse(Bash|PowerShell) hard-deny guard making repo-setup's "never
 target ~/.claude" precondition executable rather than prose.
 
-Port of DoE-claude's ``coordinator/hooks/scripts/guard-repo-setup-claude-
+Port of coordinator-content-repo's ``coordinator/hooks/scripts/guard-repo-setup-claude-
 home-refusal.py``, one of the four folded PreToolUse(Bash) guards
 `preuse-bash-dispatch.py` runs in-process ahead of the engine dispatch (see
 `docs/plans/2026-08-28-the-four-folded-bash-guards-get-registered-not-
@@ -20,7 +20,7 @@ a result. ``coordinator:new-project`` delegates its own onboarding half back
 to this same skill, so one guard at this seam covers both entry points
 without a second, drifting copy of the same predicate. The specific incident
 is single-sourced to DoE's own cross-repo memo prose
-(`cross-repo/inbox/2026-08-27-doe-claude-em-rehome-four-bash-guards-onto-
+(`cross-repo/inbox/2026-08-27-coordinator-content-repo-em-rehome-four-bash-guards-onto-
 the-guard-chain.md`) and has not been independently verified in THIS repo;
 this port's rationale rests only on the general hazard the incident
 illustrates -- a prose-only precondition is not an enforced one -- not on
@@ -60,7 +60,7 @@ whole safety argument -- this is a no-write exemption, not an escape hatch.
 
 CLAUDE HOME RESOLUTION -- never ``os.path.expanduser`` naively, which
 ignores a monkeypatched ``HOME`` in a way that has clobbered a real
-``.doe-root`` in this repo family's own install history. Resolution order,
+``.coordinator-content-root`` in this repo family's own install history. Resolution order,
 explicit and testable via an injected env mapping: ``CLAUDE_CONFIG_DIR``
 (if set, IS the Claude Home) -> ``HOME`` (POSIX) -> ``USERPROFILE``
 (Windows), each joined with ``.claude`` for the latter two. No fallback to
@@ -115,7 +115,7 @@ their own docstrings, matching DoE's original fail-open posture for those
 specific cases.
 
 Spec backlink: state/bug-backlog/2026-08-15-repo-setup-scaffolded-claude-as-
-a-projec-7439cdca3aa3.yaml (DoE-claude); cross-repo/inbox/2026-08-27-doe-
+a-projec-7439cdca3aa3.yaml (coordinator-content-repo); cross-repo/inbox/2026-08-27-doe-
 claude-em-rehome-four-bash-guards-onto-the-guard-chain.md
 """
 

@@ -2,7 +2,7 @@
 coordinator_core.hooks.nudge_autonomous_askuserquestion — PreToolUse(AskUserQuestion)
 advisory hook op.
 
-Purpose: warm-door counterpart of DoE-claude's
+Purpose: warm-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/nudge-autonomous-askuserquestion.py` — the FIRST hot-path
 reconstructable unit built against `docs/reference/warm-hook-migration.md` (C1's
 classification table), and the worked example this plan's C3 replicates across the
@@ -96,18 +96,18 @@ def _read_key_from_file(path: str, key: str) -> Optional[str]:
 
 def _resolve_posture(cwd: str, env: Mapping) -> str:
     """Fail-open posture resolution: `<cwd>/coordinator.local.md` frontmatter,
-    then the identity file under the DoE-claude home order, then "precision".
+    then the identity file under the coordinator-content-repo home order, then "precision".
 
     `cwd` is the caller-supplied fact off the payload — never this process's own
     working directory. `env` is REQUIRED (no default): the identity-file rung
-    mirrors DoE-claude's `_posture.py :: _resolve_posture`
+    mirrors coordinator-content-repo's `_posture.py :: _resolve_posture`
     (`os.environ.get("CLAUDE_HOME") or Path.home()`) but reads `env["CLAUDE_HOME"]`
     from the caller-supplied payload mapping, never this process's own
     `os.environ` — the resident engine serves ~50 concurrent sessions, and its own
     environment belongs to none of them. A `CLAUDE_HOME` that is missing, empty, or
     not an absolute path counts as unset and falls through to `Path.home()` (the
     engine host's own home, a fixed machine fact) — never to a cwd-relative read,
-    since a relative `CLAUDE_HOME` would resolve against DoE-claude's hook process's
+    since a relative `CLAUDE_HOME` would resolve against coordinator-content-repo's hook process's
     cwd, which this engine does not share.
     """
     if cwd:

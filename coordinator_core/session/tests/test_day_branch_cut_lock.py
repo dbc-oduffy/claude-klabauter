@@ -4,7 +4,7 @@ The N-racer test uses REAL PROCESSES, not threads: the guarantee this module
 rests on is filesystem atomicity (``O_CREAT | O_EXCL``), and threads in one
 interpreter do not exercise it.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
 ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md`` chunk C7.
 
 Spawn ratchet C2 disposition: TIER -- multi-process IS the property
@@ -56,6 +56,7 @@ class TestKeying:
     def test_lock_lives_in_the_git_common_dir(self, repo):
         assert lock.lock_path(repo) == repo / ".git" / "coordinator-day-branch-cut.json"
 
+    @pytest.mark.skipif(os.name != "nt", reason="backslash separators are a Windows path form")
     def test_path_variants_of_one_tree_resolve_to_one_lock(self, repo):
         forward = str(repo).replace("\\", "/")
         backward = str(repo).replace("/", "\\")

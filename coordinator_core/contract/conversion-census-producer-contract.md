@@ -1,14 +1,14 @@
 # coordinator → conversion-census row-shape contract (DRAFT)
 
-> **What this is.** The row-shape contract for DoE-claude's **conversion census** — the
+> **What this is.** The row-shape contract for coordinator-content-repo's **conversion census** — the
 > per-step classification record produced when converting a skill into a computed skill. It
 > defines the fields a conforming census row carries (step identity, classification, and —
 > when the step is `MIXED` — the forced mechanical/judgment split) so that claude-klabauter's
 > compute-layer scaffolder (`coordinator_core/ops/compute_layer_scaffold/`) can read a
 > conforming census and know what to generate versus stub, **without further co-design on the
-> claude-klabauter side**. DoE-claude *classifies and produces rows*; claude-klabauter *reads rows and scaffolds*.
+> claude-klabauter side**. Coordinator-content-repo *classifies and produces rows*; claude-klabauter *reads rows and scaffolds*.
 >
-> **Who consumes this.** A context-less DoE-claude EM building the census procedure/tooling,
+> **Who consumes this.** A context-less coordinator-content-repo EM building the census procedure/tooling,
 > and claude-klabauter's own compute-layer scaffolder implementation. Everything needed to emit a
 > conforming row is in this file: the field table, the `classification` enum, the `MIXED`
 > split rule, and the worked example. The machine-checkable shape is
@@ -21,23 +21,23 @@
 > scope — not our surface".
 >
 > **Status: DRAFT — one confirmation short of FROZEN.** The co-design round-trip the FROZEN
-> exemplars in this directory have has now *happened*: DoE-claude read the fields and replied
+> exemplars in this directory have has now *happened*: coordinator-content-repo read the fields and replied
 > (twice, the second correcting the first). The `MIXED`-split rule is confirmed workable, and the
-> corrected field set is implemented here. What is still owed is DoE-claude's read of the
+> corrected field set is implemented here. What is still owed is coordinator-content-repo's read of the
 > **implemented shape** rather than of the memo that requested it — two shaping calls inside it
 > were delegated to claude-klabauter (§ 2.3, § 2.4) and only they can say the result is what they meant.
 > **§ 6 states the exact one-line confirmation that closes the gate.** Until it lands, treat every
-> field here as negotiable on DoE-claude's say-so, not claude-klabauter's — but note that the DRAFT
+> field here as negotiable on coordinator-content-repo's say-so, not claude-klabauter's — but note that the DRAFT
 > exemption is claude-klabauter-local and does not reach the artifact-shape-contract bundle, which vendors
 > this row shape and takes a MAJOR from this revision regardless (§ 7).
 >
 > **Changelog:**
 > - **2026-08-13 (initial authoring, DRAFT):** authored as the deliverable discharging
 >   claude-klabauter's counter-proposal reply to
->   `cross-repo/inbox/2026-08-13-doe-claude-em-computed-conversion-vehicle.md`. Source:
+>   `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-computed-conversion-vehicle.md`. Source:
 >   `docs/plans/2026-08-13-compute-layer-scaffolder.md`, chunk C3.
-> - **2026-08-14 (field-set revision, still DRAFT):** DoE-claude's § 6 confirmation arrived as
->   two memos — `cross-repo/inbox/2026-08-13-doe-claude-em-census-field-set.md`, superseded
+> - **2026-08-14 (field-set revision, still DRAFT):** coordinator-content-repo's § 6 confirmation arrived as
+>   two memos — `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-census-field-set.md`, superseded
 >   within the hour by `...-census-field-set-corrected.md`. Both § 6 conditions are met: the
 >   `MIXED`-split rule is confirmed workable (their doctrine changes, not this schema), and the
 >   field set is confirmed *with corrections*, applied here. Five changes: `mechanical_part` and
@@ -46,19 +46,19 @@
 >   ordinal `judgment_tier`; `round_trip` and `revalidate_at_dispatch` added as two orthogonal
 >   fields rather than one lossy enum; `candidate_op` added, optional; and the
 >   `additionalProperties: false` question answered with a single `x_producer` extension object
->   (§ 2.4). The freeze gate stays open pending DoE-claude's read of the *implemented* shape —
+>   (§ 2.4). The freeze gate stays open pending coordinator-content-repo's read of the *implemented* shape —
 >   see § 6.
 >
 > **Spec backlinks.**
 > - Plan (source of truth): `docs/plans/2026-08-13-compute-layer-scaffolder.md`
-> - Source memo (DoE-claude's proposal): `cross-repo/inbox/2026-08-13-doe-claude-em-computed-conversion-vehicle.md`
+> - Source memo (coordinator-content-repo's proposal): `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-computed-conversion-vehicle.md`
 > - Machine-checkable shape: `coordinator_core/contract/conversion-census.schema.json`
 
 ---
 
 ## 0. Contract summary (read this first)
 
-DoE-claude's conversion procedure classifies each step of converting a skill into a computed
+Coordinator-content-repo's conversion procedure classifies each step of converting a skill into a computed
 skill. A conforming census is a list of rows; each row carries, per step: the step's identity
 (`step_id`), its `classification` (`MECHANICAL` | `JUDGMENT` | `MIXED`), the fields that decide
 *what* gets generated (`candidate_op` on the mechanical side; `judgment_kind`, `round_trip`,
@@ -68,11 +68,11 @@ skill. A conforming census is a list of rows; each row carries, per step: the st
 A scaffolder reading a conforming census can decide, per step: generate it in full
 (`MECHANICAL`), stub it for the author (`JUDGMENT`), or generate the mechanical fraction and
 stub the judgment fraction (`MIXED`) — and in every case knows *which* construct to emit rather
-than guessing. This contract fixes that read contract; it says nothing about how DoE-claude
+than guessing. This contract fixes that read contract; it says nothing about how coordinator-content-repo
 arrives at a classification.
 
 **Two roles:**
-- **DoE-claude** — runs the conversion procedure, classifies each step, produces census rows.
+- **coordinator-content-repo** — runs the conversion procedure, classifies each step, produces census rows.
   Owns the procedure and its tooling.
 - **claude-klabauter** — reads a conforming census; the compute-layer scaffolder consumes rows
   to decide generate-vs-stub per step. Owns this row-shape contract and the scaffolder that
@@ -129,7 +129,7 @@ Without this field the scaffolder must guess the constructor, and guessing wrong
 `TypeError` at runtime for the first case or a doctrine violation for the second. It is named
 rather than numbered on purpose: the discriminator is *"may the engine offer a recommendation at
 all?"* — a security-class boolean, not an ordinal. A `2|3` encoding invites `>=` comparisons with
-no defined meaning, and collides with DoE-claude's own three-tier sort in which tier 1 is
+no defined meaning, and collides with coordinator-content-repo's own three-tier sort in which tier 1 is
 `MECHANICAL`. The tier numbers remain useful documentation; they are not wire values.
 
 ### 1.4 `round_trip` and `revalidate_at_dispatch` are two fields, not one
@@ -145,7 +145,7 @@ freshness-sensitive. They are orthogonal, and collapsing them loses a real state
 `round_trip: round_trip` with `revalidate_at_dispatch: false` is an entry that gates downstream
 recomputation but whose evidence does not go stale. That state is representable and meaningful in
 the decision-object schema the scaffolder generates against, so a census that cannot express it
-does not merely lose detail — it silently mis-generates. Both are spelled as DoE-claude's own wiki
+does not merely lose detail — it silently mis-generates. Both are spelled as coordinator-content-repo's own wiki
 spells them (`coordinator/docs/wiki/computed-skills.md` § round-trip classification).
 
 ---
@@ -162,7 +162,7 @@ skill under conversion.
 ### 2.2 `MIXED` is a forced split, not an optional detail
 
 When `classification` is `MIXED`, the row MUST carry both `mechanical_part` and
-`judgment_part` — this is not an elaboration DoE-claude may choose to omit. The split exists
+`judgment_part` — this is not an elaboration coordinator-content-repo may choose to omit. The split exists
 so the scaffolder has an unambiguous generate-vs-stub boundary within one step: it generates
 `mechanical_part`'s content and stubs `judgment_part`'s content, rather than treating the
 whole step as one opaque unit.
@@ -224,7 +224,7 @@ outlives it.
 **A `MIXED` row without both split fields is not a valid row.** This contract has no
 "omit-when-unsure" posture for the split fields the way the commit-trailer contract does for
 optional keys (§ 3 of that contract) — `mechanical_part`/`judgment_part` are conditionally
-**required**, not conditionally omitted. If DoE-claude's procedure cannot yet name both halves
+**required**, not conditionally omitted. If coordinator-content-repo's procedure cannot yet name both halves
 of a `MIXED` step, the step is not yet ready to be classified `MIXED`.
 
 ---
@@ -289,16 +289,16 @@ handler bodies from `judgment_part`, reading the constructor off the *half* rath
 ## 5. Out of scope — not our surface
 
 To keep the producer/consumer boundary unambiguous, the following are **explicitly NOT part
-of this contract** and are **DoE-claude's own decisions**:
+of this contract** and are **coordinator-content-repo's own decisions**:
 
 - **The conversion procedure itself** — what counts as a "step," how a step is judged
   `MECHANICAL` vs `JUDGMENT` vs `MIXED`, and any rubric or heuristic behind that judgment.
-  DoE-claude's own design surface.
+  coordinator-content-repo's own design surface.
 - **The tooling that produces census rows** — how a census file is assembled, generated,
-  reviewed, or revised. DoE-claude's own build.
+  reviewed, or revised. Coordinator-content-repo's own build.
 - **Census file delivery/storage** — the format the census is packaged in, its filename, its
   location, or how it reaches claude-klabauter. This contract fixes the shape of one row; it does not
-  fix a file format or a transport. **DoE-claude has taken this half up**: the document envelope
+  fix a file format or a transport. **coordinator-content-repo has taken this half up**: the document envelope
   `{ schema_version, skill, source_path, source_sha, unit, taken_at, round_trip_shape, rows }`
   is theirs, authored as `coordinator/schemas/census-document.schema.json` in their tree and
   registered into the artifact-shape-contract bundle at `7.0.0`. It `$ref`s this row shape rather
@@ -318,7 +318,7 @@ of this contract** and are **DoE-claude's own decisions**:
 ## 6. Path to FROZEN
 
 This contract ships as **DRAFT**, not FROZEN, unlike the other producer contracts in this
-directory. It moves to **FROZEN** once DoE-claude confirms, via cross-repo memo reply, that:
+directory. It moves to **FROZEN** once coordinator-content-repo confirms, via cross-repo memo reply, that:
 
 1. The field set matches what their classification procedure can actually produce.
 2. The `MIXED`-forced-split rule (§ 2.2, § 3) is workable against their procedure — i.e. their
@@ -327,11 +327,11 @@ directory. It moves to **FROZEN** once DoE-claude confirms, via cross-repo memo 
 **Status as of 2026-08-14: condition 2 is confirmed; condition 1 is confirmed-with-corrections
 and the corrections are applied, but the gate stays open for one more round-trip.**
 
-Condition 2 is closed outright — DoE-claude confirmed § 2.2 and § 3 workable and is restating
+Condition 2 is closed outright — coordinator-content-repo confirmed § 2.2 and § 3 workable and is restating
 their own "zero MIXED may remain" doctrine as "no MIXED row may remain *unsplit*", with an
 invariant checker enforcing exactly this contract's conditional.
 
-Condition 1 is deliberately **not** self-certified. DoE-claude's corrected memo specified a field
+Condition 1 is deliberately **not** self-certified. Coordinator-content-repo's corrected memo specified a field
 set; this revision implements it, with two shaping decisions that were theirs to delegate and are
 therefore theirs to check — the explicit-`classification` choice over the derived alternative they
 leaned toward (§ 2.3), and `x_producer` over the other two escape hatches (§ 2.4). Reading their
@@ -340,11 +340,11 @@ they described fields, claude-klabauter built a schema, and only they can say th
 **The freeze needs one line back — "the implemented shape matches" — against this revision, not
 against the memo that requested it.**
 
-Until that confirmation lands, this file and its schema are subject to change on DoE-claude's
+Until that confirmation lands, this file and its schema are subject to change on coordinator-content-repo's
 say-so without triggering the reader-widen-before-writer-flips bump protocol the FROZEN
 exemplars in this directory use — that protocol applies only after freeze.
 
-**That DRAFT exemption is claude-klabauter-local and does not reach the bundle.** Because DoE-claude's
+**That DRAFT exemption is claude-klabauter-local and does not reach the bundle.** Because coordinator-content-repo's
 census-document envelope vendors this row shape into the artifact-shape-contract bundle, a change
 here changes their bundle body whether or not this contract has frozen. The bundle's own bump rule
 has no DRAFT carve-out — see § 7.
@@ -374,8 +374,8 @@ guessing on any row that took the string arm. Paying a MAJOR is the cheaper of t
 
 ---
 
-<!-- producer-contract: DoE-claude conversion-census row shape. DRAFT (2026-08-13, field-set
-     revision 2026-08-14), pending DoE-claude confirmation of the IMPLEMENTED shape — the
+<!-- producer-contract: coordinator-content-repo conversion-census row shape. DRAFT (2026-08-13, field-set
+     revision 2026-08-14), pending coordinator-content-repo confirmation of the IMPLEMENTED shape — the
      MIXED-split rule is already confirmed and the corrected field set is applied; § 6 names the
      one line that closes the gate. Discharges
      docs/plans/2026-08-13-compute-layer-scaffolder.md C3 / AC11. -->

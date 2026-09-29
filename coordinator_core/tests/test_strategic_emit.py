@@ -46,7 +46,7 @@ from coordinator_core.ops.strategic.emit_writer import (
     read_canonical,
 )
 from coordinator_core.ops.emit.context import EmitContext
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -58,7 +58,7 @@ pytestmark = [
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CLAUDE_KLABAUTER_ROOT = _PROJECT_ROOT  # this repo IS the claude-klabauter repo under test
 _FROZEN_SCHEMA_PATH = (
-    Path(resolve_doe_root() or "/doe-root-unresolved")
+    Path(resolve_content_root() or "/content-root-unresolved")
     / "coordinator" / "schemas" / "strategic-self-description.schema.json"
 )
 
@@ -356,16 +356,16 @@ def test_wire_level_dispatch_smoke(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _load_frozen_schema():
-    doe_root = resolve_doe_root()
-    if not doe_root:
+    content_root = resolve_content_root()
+    if not content_root:
         pytest.skip(
-            "No DoE-claude sibling checkout resolvable (env override / machine-local "
-            "registry / .doe-root pointer all empty) — AC5 structural schema-subset "
+            "No coordinator-content-repo sibling checkout resolvable (env override / machine-local "
+            "registry / .coordinator-content-root pointer all empty) — AC5 structural schema-subset "
             "validation requires the frozen schema from that checkout; skipping."
         )
     if not _FROZEN_SCHEMA_PATH.exists():
         pytest.skip(
-            f"DoE-claude root resolved to {doe_root!r} but frozen schema absent at "
+            f"coordinator-content-repo root resolved to {content_root!r} but frozen schema absent at "
             f"{_FROZEN_SCHEMA_PATH} — cross-repo file may be absent/relocated; skipping."
         )
     return json.loads(_FROZEN_SCHEMA_PATH.read_text(encoding="utf-8"))

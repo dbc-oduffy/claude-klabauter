@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.handoff_close_origin_stub — "handoff.close_origin_stub" op.
 
-Purpose: Python port + join-fix of DoE-claude's close-origin-stub-on-ship.sh
+Purpose: Python port + join-fix of coordinator-content-repo's close-origin-stub-on-ship.sh
 (Port of: close-origin-stub-on-ship.sh, DoE 394c8b64, 2026-07-19). A
 ``kind: spinoff``/``spinoff-roadmap``
 origin stub in ``state/handoffs/`` is authored ``deployment_state:

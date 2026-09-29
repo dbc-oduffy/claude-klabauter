@@ -3,7 +3,7 @@ coordinator_core.reconcile.ac27_differential_oracle -- differential verdict orac
 comparing gate_eval's pre-widening and post-widening evaluators across the live+
 archived handoff corpus of all five fleet repos (COMPUTE_ONLY, read-only).
 
-Purpose: C4-C7 (docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md, DoE-claude)
+Purpose: C4-C7 (docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md, coordinator-content-repo)
 widened gate_eval.evaluate_gate's structured-path eligibility, chased `continued_into`
 to a terminus, added an external-gate evidence class, and gave dangling `blocked_by`
 refs a disposition. The expected first-pass flip count across the live corpus is
@@ -12,7 +12,7 @@ over-clears something it should not -- a fixture only ever catches a failure mod
 someone already imagined. This module is the oracle for that gap (AC27/C12 GATE): it
 loads gate_eval.py exactly as it existed immediately before C4 and immediately after
 C7 landed, runs BOTH over the IDENTICAL live+archived data for every `awaiting_gate`
-baton in DoE-claude, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and
+baton in coordinator-content-repo, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and
 Example-market-data-repo, and reports every verdict delta for human attribution against
 the four named widenings.
 
@@ -99,7 +99,7 @@ from coordinator_core.reconcile.handoff_corpus import (  # noqa: E402
 )
 
 REPO_KEYS: Tuple[Tuple[str, str], ...] = (
-    ("repos.doe_claude", "DoE-claude"),
+    ("repos.content_root", "coordinator-content-repo"),
     ("repos.claude_klabauter", "claude-klabauter"),
     ("repos.example_cockpit_repo", "example-cockpit-repo"),
     ("repos.project_rag", "project-rag"),

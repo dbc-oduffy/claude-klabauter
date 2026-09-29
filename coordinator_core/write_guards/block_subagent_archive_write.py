@@ -45,7 +45,7 @@ Ported from the retired DoE bash guard ``block-subagent-archive-write.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Widened 2026-08-03 to close a naming-dependent hole (see
-``cross-repo/inbox/2026-08-03-doe-claude-em-archive-write-guard-pincer.md``):
+``cross-repo/inbox/2026-08-03-coordinator-content-repo-em-archive-write-guard-pincer.md``):
 the guard now gates on RAW ``agent_id`` presence (any non-empty value),
 the exact complement of the (now-retired) EM-side pending-review-integration
 guard's own EM/subagent split (``payload.get("agent_id")`` present ->

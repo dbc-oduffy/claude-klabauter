@@ -80,7 +80,7 @@ PERCOLATE_STORE_REL = f"{SCHEMAS_REL_DIR}/percolate-store.schema.json"
 #: rather than run once at a console.
 #:
 #: DO NOT re-add `7bc1500d2` here. It appears in this schema's own
-#: `x-bump-note` and in this plan's prose, but it is a DoE-CLAUDE sha
+#: `x-bump-note` and in this plan's prose, but it is a COORDINATOR-CONTENT-REPO sha
 #: (`percolate: label the percolation-only doctrine copies, and stop shipping a
 #: false delivery claim`) authored against DoE's history; it does not resolve
 #: in this repository at all. Claude-klabauter's counterpart -- the commit that made the

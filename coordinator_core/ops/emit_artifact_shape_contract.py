@@ -1,20 +1,20 @@
 """
 coordinator_core.ops.emit_artifact_shape_contract — emit a versioned JSON Schema
-contract from the coordinator schema registry (DoE-claude coordinator/schemas/*.yaml
+contract from the coordinator schema registry (coordinator-content-repo coordinator/schemas/*.yaml
 + *.schema.json).
 
 shell-doc-ok: this changelog quotes real JSON-Schema `$defs`/`$ref`/`$id` pointer
 syntax throughout (the artifact this module emits) — accurate documentation, not
 a shell paste hazard. `>=`/`->` occurrences below are version-bump/rewrite prose.
 
-Port source: DoE-claude coordinator/bin/emit-artifact-shape-contract.js (642 lines).
+Port source: coordinator-content-repo coordinator/bin/emit-artifact-shape-contract.js (642 lines).
 Spec backlink: archive/specs/2026-06/2026-06-25-example-initiative-tc-4-fleet-machinery-contract-emit.md § Chunk B1
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, BIG_PORT Wave B
                item emit-artifact-shape-contract
 
 PURPOSE
 Emits `artifact-shape-contract/artifact-shape-contract.schema.json` (written under the
-DoE-claude coordinator/ tree, NOT claude-klabauter) — a stable, versioned JSON Schema contract
+Coordinator-content-repo coordinator/ tree, NOT claude-klabauter) — a stable, versioned JSON Schema contract
 (draft-2020-12) carrying:
   (a) One JSON Schema per registered schema type (under `$defs`).
   (b) The cross-type liveness mapping as first-class contract data (tc-0 D2 forward
@@ -34,7 +34,7 @@ Schema registry, not Zod TypeScript. Separate artifact, separate version line, n
 shared module.
 
 CONTRACT_VERSION history (condensed — full per-bump rationale lives in the JS oracle's
-own header comment, DoE-claude coordinator/bin/emit-artifact-shape-contract.js:36-49,
+own header comment, coordinator-content-repo coordinator/bin/emit-artifact-shape-contract.js:36-49,
 preserved there as the historical record; this port carries only the CURRENT pin):
   1.9.0  (2026-06-xx) session-events-summary $def removed (no vendored consumer, additive-safe).
   1.10.0-1.11.0 (2026-07-03) ProvenanceEnvelope sub-shape injected + same-day D9 fix.
@@ -60,7 +60,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     enum gains `consumed`, (2) `origin_handoff_id` widened to anyOf[string, null],
     (3) `applies_to` widened to a recursive glob. All three additive/widening — no
     `$defs` removed, no enum value narrowed. Ratified DoE-side in
-    DoE-claude coordinator/artifact-shape-contract/DECISIONS.md 2.1.0 row; that row
+    coordinator-content-repo coordinator/artifact-shape-contract/DECISIONS.md 2.1.0 row; that row
     notes the bundle regen is claude-klabauter-run and lagged the ratification — this bump
     discharges that lag.
   3.0.0  (2026-07-28) MAJOR: schema_to_json_schema's `_isJsonSchema` branch now
@@ -107,11 +107,11 @@ preserved there as the historical record; this port carries only the CURRENT pin
     converts an unresolvable ref into a resolvable intra-bundle one — no `$defs`
     removed, no enum narrowed, no field/required removed. Reported by
     example-retrieval-repo-ue-addon-em (consumer-side containment, per-file demotion to a
-    violation row), relayed and verified by doe-claude-em; contract-owner ruled `tasks`
+    violation row), relayed and verified by coordinator-content-repo-em; contract-owner ruled `tasks`
     stays in-contract, no DoE-side schema edit needed (the source `$id` convention at
     `coordinator/schemas/plan.schema.json:120` is correct as authored — only the
     bundling pass had the gap). See
-    cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-external-ref-survives-bundling.md.
+    cross-repo/inbox/2026-08-03-coordinator-content-repo-em-artifact-contract-external-ref-survives-bundling.md.
   4.0.0  (2026-08-04) MAJOR: `$defs.review.properties.reviewer` enum narrows from persona
     names to agent-registry role slugs — `the Staff Engineer`/`sid`/`the Data Science Reviewer`/`the Front-End Reviewer`/`the UX Reviewer`/`the Director of Engineering` are
     dropped; `staff-eng`/`staff-game-dev`/`staff-data-sci`/`senior-front-end`/`staff-ux`/
@@ -121,9 +121,9 @@ preserved there as the historical record; this port carries only the CURRENT pin
     Six enum members REMOVED — textbook non-additive, so MAJOR per the bump rule below,
     and consumers must re-vendor. Source narrow: DoE `coordinator/schemas/review.schema.json`
     1.0.0->2.0.0. `schema_count` unchanged at 61 — no $defs added or removed.
-    Landed by doe-claude-em under per-session PM assent (no standing cross-repo grant);
+    Landed by coordinator-content-repo-em under per-session PM assent (no standing cross-repo grant);
     announced before the edit in
-    cross-repo/inbox/2026-08-04-doe-claude-em-contract-version-bump-owed-4-0-0-and-im-landing-it.md.
+    cross-repo/inbox/2026-08-04-coordinator-content-repo-em-contract-version-bump-owed-4-0-0-and-im-landing-it.md.
     Recorded honestly: the DoE side first regenerated this bundle claiming NO bump was owed,
     citing the same-window-catch-up convention (the 2.1.0/2026-07-28 and 3.0.0/2026-07-31
     no-bump rows). That was wrong — those rows are catch-up regens for a narrow already
@@ -150,7 +150,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     Deliberately NOT a mirror of 5.0.0's character class. `[a-z0-9-]` strands 24 live ids
     fleet-wide, all legitimate `dlv-<stub_id>` mints, because mint_deliverable_id's
     mint-from-stub path passes stub_id through verbatim with no case-folding — 23 uppercase in
-    DoE-claude (`computed-skills-B*`, `agent-fleet-G*` families) and 1 dot-bearing in
+    coordinator-content-repo (`computed-skills-B*`, `agent-fleet-G*` families) and 1 dot-bearing in
     example-retrieval-repo-ue-addon. Hence case-permissive, `.`-admitting, and NOT anchored on
     `-[0-9a-f]{6}` (the stub-origin shape carries no hex suffix; the corpus holds
     trailing-dash-before-hex slug-truncation artifacts). Verified twice independently: claude-klabauter
@@ -189,7 +189,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     artifact lives in DoE's tree, so until they regenerate no committed bundle anywhere carries
     6.1.0. They regenerate, commit the bundle, and own the DECISIONS.md row on their side; claude-klabauter
     owns only this constant. Cross-repo edits stay declined in both directions per DR-127.
-    Requested in cross-repo/inbox/2026-08-13-doe-claude-em-contract-not-pinned-bump-6-1-0-owed-first.md.
+    Requested in cross-repo/inbox/2026-08-13-coordinator-content-repo-em-contract-not-pinned-bump-6-1-0-owed-first.md.
   7.0.0  (2026-08-14) `reviewed_range` pattern narrow, PLUS the `census-document`
     registration DoE requested as a separate 6.2.0. One MAJOR covers both, deliberately.
     The narrow: `reviewed_range` array items gain
@@ -241,8 +241,8 @@ preserved there as the historical record; this port carries only the CURRENT pin
     carried here unchanged; it is the narrowing it would have travelled beside that
     forces MAJOR. Requesting session's DECISIONS.md row re-opens on their side.
     Both asks arrived as
-    cross-repo/inbox/2026-08-14-doe-claude-em-bug-blitz-engine-plane-findings.md § 4 and
-    cross-repo/inbox/2026-08-14-doe-claude-em-contract-bump-6-2-0-owed-for-census-document.md.
+    cross-repo/inbox/2026-08-14-coordinator-content-repo-em-bug-blitz-engine-plane-findings.md § 4 and
+    cross-repo/inbox/2026-08-14-coordinator-content-repo-em-contract-bump-6-2-0-owed-for-census-document.md.
     Cross-repo edits stay declined in both directions per DR-127: claude-klabauter owns this
     constant, DoE owns the regen, the bundle commit, and the DECISIONS.md row.
   8.0.0  (2026-08-14) `conversion-census-row` — the vendored row shape this repo owns —
@@ -270,7 +270,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     8.0.0 until they do, and no consumer is exposed in the window. The row schema's own DRAFT
     status grants no exemption from owing this bump (7.0.0 row, same point).
     Requested in
-    cross-repo/inbox/2026-08-14-doe-claude-em-census-field-set-answer-received-8-0-0-owed.md,
+    cross-repo/inbox/2026-08-14-coordinator-content-repo-em-census-field-set-answer-received-8-0-0-owed.md,
     superseding their earlier 6.2.0 ask. Cross-repo edits stay declined in both directions
     per DR-127: claude-klabauter owns this constant, DoE owns the re-vendor, the regen, the bundle
     commit, and the DECISIONS.md row.
@@ -288,9 +288,9 @@ preserved there as the historical record; this port carries only the CURRENT pin
     SEQUENCING inverts the usual shape, and the reason is recorded rather than assumed: the
     drift was already committed on DoE's side, so this constant moves to STAMP a body that
     exists, not ahead of one. DoE regenerates and commits the bundle in the same pass.
-    LANDED BY doe-claude-em, not this repo, under explicit per-session PM assent ("it is
+    LANDED BY coordinator-content-repo-em, not this repo, under explicit per-session PM assent ("it is
     yours to fix") after DoE asked for the bump in
-    state/cross-repo/inbox/2026-09-11-doe-claude-em-plan-tasks-2-0-0-and-contract-regen.md.
+    state/cross-repo/inbox/2026-09-11-coordinator-content-repo-em-plan-tasks-2-0-0-and-contract-regen.md.
     That is the DR-127 exception, not its retirement: the standing decline in the 7.0.0 and
     8.0.0 rows above still governs every bump without such assent.
   9.1.0  (2026-09-12) ProvenanceEnvelope SUB_SHAPES catches up to the cockpit contract's
@@ -299,7 +299,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     additive, no `$defs` removed, no enum narrowed. Recorded here late (b7f498b92a moved the
     constant without a history line).
   9.2.0  (2026-09-22) `queue-grind-profile` registered: DoE's
-    `coordinator/schemas/queue-grind-profile.schema.json` (DoE-claude 4b7ea5ddc,
+    `coordinator/schemas/queue-grind-profile.schema.json` (coordinator-content-repo 4b7ea5ddc,
     x-schema-version 1.0.0), picked up by directory discovery. `schema_count` 69 -> 70; its 12
     local `$defs` hoist to the bundle root (`$defs` 85 -> 98), zero removed. The same body
     carries DoE's additive `lesson-entry` and `lessons-outbox` 1.0.0 -> 1.1.0: five optional
@@ -1033,9 +1033,9 @@ _USAGE = (
     "usage: emit-artifact-shape-contract\n"
     "\n"
     "Emits artifact-shape-contract/artifact-shape-contract.schema.json into the\n"
-    "DoE-claude coordinator root. Takes no arguments.\n"
+    "coordinator-content-repo coordinator root. Takes no arguments.\n"
     "\n"
-    "NOTE — this writes into a SIBLING repo's working tree (DoE-claude owns\n"
+    "NOTE — this writes into a SIBLING repo's working tree (coordinator-content-repo owns\n"
     "artifact-shape-contract/; claude-klabauter owns the sole regeneration path). The write is\n"
     "deterministic and uncommitted; claim it with the peer rather than leaving it for\n"
     "them to find in a diff.\n"

@@ -104,7 +104,7 @@ from the root directory's own mtime), which removes sibling
 older than `_STALE_SESSION_DIR_AGE_SECONDS` (48h). This package has no
 SessionEnd hook wired to THIS module (the precedent module's own SessionEnd
 sweep, `_write_bump_marker.sweep_stale_markers`, is itself "hygiene only,
-never load-bearing" and lives in DoE-claude's hook wiring, out of this
+never load-bearing" and lives in coordinator-content-repo's hook wiring, out of this
 dispatch's file scope) -- age-based best-effort cleanup on the write path is
 the self-contained alternative that needs no new cross-repo hook
 registration. Exactly like its precedent's sweep, this is pure hygiene: a
@@ -135,6 +135,9 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
+
+# Helper, not a dispatchable guard: it only silences repeat advisories and never denies.
+CLASS = "advisory"
 
 
 #: Matches a `COMMAND_LINE_LABEL`-labeled line (any leading whitespace, any
@@ -175,7 +178,7 @@ def advisory_dedupe_key(guard_name: str, envelope: Optional[Dict[str, Any]]) -> 
        and the one that kept dedupe inert after fix 1. That block is built
        FROM the operator's command, so it varies per invocation, is not
        ``Command:``-labeled, and survived normalization straight into the
-       hash. Measured by doe-claude-em 2026-08-18 off 28 sessions'
+       hash. Measured by coordinator-content-repo-em 2026-08-18 off 28 sessions'
        ``.git/advisory-dedupe/`` markers: the command-echoing shapes
        accumulated a fresh key per firing, while the shapes that never echo
        (``_platform_verdict.platform_verdict_for_shape``) held at a 1-2 key

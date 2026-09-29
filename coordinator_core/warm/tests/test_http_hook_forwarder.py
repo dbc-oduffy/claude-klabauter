@@ -1,7 +1,7 @@
 """Coverage for `coordinator_core.warm.http_hook_forwarder` -- the fixed-port front door
 `type: "http"` hook registrations dial, forwarding to the engine's own ephemeral warm listener.
 
-This module arrived from DoE-claude's `coordinator/hooks/http_hook_forwarder.py`
+This module arrived from coordinator-content-repo's `coordinator/hooks/http_hook_forwarder.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, row W4-C2): a long-lived fixed-port relay is
 engine infrastructure, so it now lives in the engine's own supervised process set. The move
 required one substantive change beyond the path, and this file's first section pins it: per that

@@ -1,7 +1,7 @@
 """
 coordinator_core.install.ensure_venv — Port of:
 ``coordinator/bin/ensure-coordinator-venv.sh`` (DoE e19314de, 2026-07-17)
-[DoE-claude repo].
+[coordinator-content-repo repo].
 
 Purpose: idempotently ensure a coordinator-owned Python venv exists with
 ``coordinator_whoami``, ``pydantic``, and ``psutil`` importable (the
@@ -111,7 +111,7 @@ Negative-spec:
     repo), which re-resolves every hook fire rather than pinning an editable
     install. (Corrected 2026-08-15: this block previously named
     ``resolve_claude_klabauter_root()`` "at ~line 840" as that rung. No such
-    function exists in DoE-claude — verified by repo-wide grep; the only real
+    function exists in coordinator-content-repo — verified by repo-wide grep; the only real
     ``_resolve_claude_klabauter_root`` is in the published MIRROR's
     ``cc_invoke.py`` and resolves the mirror, not the live tree. The
     negative-spec's conclusion is unaffected; only its cited mechanism was

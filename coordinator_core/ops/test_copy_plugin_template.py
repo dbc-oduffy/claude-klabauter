@@ -6,7 +6,7 @@ Covers the settled branch matrix (dest absent → copy; byte-identical → skip;
 differing bytes → skip-and-report NEVER clobber), the CC-4 double-invocation
 no-op proof, the direct-pytest verification contract
 ([sys.executable, "-m", "pytest", dest]), and the CC-7 structured-error
-premises. All filesystem work is tmp_path-hermetic; the DoE-root resolver is
+premises. All filesystem work is tmp_path-hermetic; the content-root resolver is
 never exercised (template_path is injected), so tests pass on a machine with
 no DoE clone.
 """
@@ -116,8 +116,8 @@ def test_dest_is_directory_raises_structured_error(template, target, monkeypatch
         mod.copy_console_subprocess_tripwire(str(target), template_path=template)
 
 
-def test_unresolvable_doe_root_raises_structured_error(target, monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_doe_root", lambda: None)
+def test_unresolvable_content_root_raises_structured_error(target, monkeypatch):
+    monkeypatch.setattr(mod, "coordinator_content_root", lambda: None)
     with pytest.raises(mod.TripwireCopyError, match="unresolvable"):
         mod.copy_console_subprocess_tripwire(str(target))
 

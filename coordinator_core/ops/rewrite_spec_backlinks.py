@@ -55,7 +55,7 @@ from coordinator_core.session.declared_writes import declare_write
 
 PathLike = Union[str, Path]
 
-_PEER_REPO_NAME = "DoE-claude"
+_PEER_REPO_NAME = "coordinator-content-repo"
 
 # this file's test module pin uppercase "HIT"/"MISS"/"AMBIGUITY" values, C1's
 Resolver = Callable[[str], Dict[str, object]]
@@ -98,12 +98,12 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
     repo-qualified, matching every pre-C7 test's expectation unchanged. Only
     a citation this repo's index cannot resolve to a real id (local MISS,
     AMBIGUITY, or a HIT whose record carries neither id as real) falls
-    through to a LAZILY-built DoE-claude peer index (`doe_root()`), mirroring
+    through to a LAZILY-built coordinator-content-repo peer index (`content_root()`), mirroring
     C1's `resolve()` peer-laziness contract: the peer index is built at most
     ONCE per resolver instance (on the first citation that needs it, not
     eagerly at resolver-construction time, and not once per citation) via a
     closed-over `peer_state` flag. A citation resolving in the peer repo is
-    emitted `DoE-claude:pln-<id>` / `DoE-claude:dlv-<id>` -- local-first is
+    emitted `coordinator-content-repo:pln-<id>` / `coordinator-content-repo:dlv-<id>` -- local-first is
     the documented precedence rule for a target that would resolve in BOTH:
     this repo's own corpus is authoritative for its own citations, and the
     peer repo is consulted only as a fallback for citations this repo cannot
@@ -112,7 +112,7 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
     from coordinator_core.ops.spec_backlink_resolve import (
         build_index,
         resolve_path_with_index,
-        _doe_root_path,
+        _content_root_path,
     )
 
     root = Path(worktree_root)
@@ -128,7 +128,7 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
 
         if not peer_state["attempted"]:
             peer_state["attempted"] = True
-            peer_root = _doe_root_path()
+            peer_root = _content_root_path()
             if peer_root is not None and peer_root.is_dir():
                 peer_state["root"] = peer_root
                 peer_state["index"] = build_index(peer_root)

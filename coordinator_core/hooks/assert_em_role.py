@@ -3,7 +3,7 @@ identity to the main coordinator session, via an ordered manifest of
 EM-only doctrine snippets plus a bounded peer-contention/Group-EM read.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/assert-em-role.py`. This is a
+from coordinator-content-repo `coordinator/hooks/scripts/assert-em-role.py`. This is a
 standalone top-level SessionStart registration in DoE's own hooks.json,
 deliberately NOT folded into either dispatcher fan-in landed alongside it —
 its own docstring records the measured reason (a shared-stdout fan-in

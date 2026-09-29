@@ -1,9 +1,9 @@
 """coordinator_core.citation_graph — citation extraction and four-class
 resolution over a doctrine wiki corpus.
 
-Purpose: `check-citation-integrity` (DoE-claude) is a DoE-only script; DoE's
+Purpose: `check-citation-integrity` (coordinator-content-repo) is a DoE-only script; DoE's
 `coordinator/lib` is not published, so DoE's mirror sources this module from
-Claude-klabauter instead. This is the engine-hosted twin of DoE-claude's
+Claude-klabauter instead. This is the engine-hosted twin of coordinator-content-repo's
 `coordinator/lib/citation_graph.py` (`docs/plans/2026-08-30-citation-
 integrity-tier-1.md`, chunk C1) — ported near-verbatim per
 `docs/plans/2026-09-18-doe-holds-no-scripts.md` chunk W2-C3 (DoE's tree
@@ -13,7 +13,7 @@ path stay, but the source of truth for the shared library moves here).
 The doctrine corpus cites a sibling page overwhelmingly by a backticked bare
 filename in prose (`` `some-page.md` ``), not a markdown link -- 3,933 such
 bare-backtick `.md` citations were measured against 874 resolved markdown
-page links (DoE-claude `docs/research/2026-08-30-17h00-llm-wiki-doctrine-
+page links (coordinator-content-repo `docs/research/2026-08-30-17h00-llm-wiki-doctrine-
 corpus-workdir/own-side-audit.md`). Nothing today can tell a live bare
 citation from one whose target was renamed or deleted out from under it
 ("rename rot") -- this module is the extraction + resolution library, so a
@@ -54,7 +54,7 @@ resolved verdict (a resolution is a fact about OTHER files and goes stale on
 any change that doesn't touch the citing file -- recompute per run, never
 persist). No per-line cross-line-split or de-extensioned-citation handling.
 
-Spec: DoE-claude `docs/plans/2026-08-30-citation-integrity-tier-1.md`,
+Spec: coordinator-content-repo `docs/plans/2026-08-30-citation-integrity-tier-1.md`,
 chunk C1. Port spec: `docs/plans/2026-09-18-doe-holds-no-scripts.md`,
 chunk W2-C3.
 """
@@ -72,16 +72,16 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: claude-klabauter's own doctrine wiki corpus lives at `docs/wiki/` (unlike
-#: DoE-claude, where the corpus is nested under `coordinator/docs/wiki/`) --
-#: used only as this module's own default; a caller (DoE-claude's
+#: coordinator-content-repo, where the corpus is nested under `coordinator/docs/wiki/`) --
+#: used only as this module's own default; a caller (coordinator-content-repo's
 #: check-citation-integrity) always passes its own `wiki_root`/`repo_root`
 #: explicitly when scanning its own corpus.
 WIKI_ROOT = REPO_ROOT / "docs" / "wiki"
 
 #: The plugin root candidate for a pathed-citation resolution -- kept for
-#: parity with the DoE-claude corpus convention this module's callers author
+#: parity with the coordinator-content-repo corpus convention this module's callers author
 #: against ("Both trees are named 'coordinator-claude'; they are NOT the
-#: same tree" -- DoE-claude `CLAUDE.md` § Architecture). A pathed citation in
+#: same tree" -- coordinator-content-repo `CLAUDE.md` § Architecture). A pathed citation in
 #: that corpus is authored relative to the PLUGIN root, not the repo root,
 #: so a caller resolving that corpus must try the plugin root candidate
 #: first, falling back to the repo root, or the overwhelming majority of

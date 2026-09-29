@@ -5,12 +5,12 @@ Spec: dispatch brief C5, ``docs/plans/2026-08-19-review-mints-its-own-gated-
 workflow.md``. Oracle for AC2 (stage order), AC3 (arity decides serial-vs-
 parallel), AC4 (gate schema), AC7 (no ``model:`` on a reviewer call), AC9
 (no commit/pytest stage) in one place, exercised against the actual v3
-fragment DoE-claude ships -- not just the synthetic fixtures ``test_op.py``
+fragment coordinator-content-repo ships -- not just the synthetic fixtures ``test_op.py``
 and ``test_compose.py`` hand-roll.
 
 ``FIXTURES_DIR / "review-roster-fragment.json"`` is a ONE-TIME vendored copy
 of ``coordinator/contract/review-roster-fragment.json``, resolved through
-``coordinator_core.doe_root_pointer.read_doe_root_pointer()`` at copy time
+``coordinator_core.content_root_pointer.read_content_root_pointer()`` at copy time
 (never a literal cross-repo path). Every test in this file reads that
 vendored copy -- no test here touches the sibling clone at run time, and the
 suite must pass with no sibling clone present at all (plan Anti-scope "do
@@ -23,8 +23,8 @@ still resolves the sibling clone itself (see that module's docstring).
 
 FIXTURE DRIFT: ``test_vendored_fixture_matches_the_shipped_fragment`` is the
 one test that DOES resolve the sibling clone (again via
-``read_doe_root_pointer()``, never a literal path) -- to catch this vendored
-copy silently diverging from what DoE-claude actually ships (e.g. a new gate
+``read_content_root_pointer()``, never a literal path) -- to catch this vendored
+copy silently diverging from what coordinator-content-repo actually ships (e.g. a new gate
 agent the vendored copy doesn't know about). It skips cleanly, rather than
 failing, when no sibling root resolves -- preserving the no-hard-dependency
 rule the rest of this file honours.
@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ops.review_mint.compose import compose
 from coordinator_core.ops.review_mint.op import _make_gate_policy
 from coordinator_core.ops.review_mint.roster import parse_stages
@@ -149,7 +149,7 @@ def test_no_commit_or_pytest_stage(fragment, tier):
 
 # ---------------------------------------------------------------------------
 # Fixture-drift oracle -- catches the vendored copy silently diverging from
-# what DoE-claude actually ships. Skips cleanly when no sibling root
+# what coordinator-content-repo actually ships. Skips cleanly when no sibling root
 # resolves; never a hard failure or a hard dependency on the clone.
 # ---------------------------------------------------------------------------
 
@@ -157,15 +157,15 @@ def test_no_commit_or_pytest_stage(fragment, tier):
 @pytest.mark.real_home
 def test_vendored_fixture_matches_the_shipped_fragment():
     # Opts out of conftest's home quarantine deliberately: the quarantine nulls
-    # the registry `read_doe_root_pointer()` reads, so under it this oracle
+    # the registry `read_content_root_pointer()` reads, so under it this oracle
     # resolves a stub root, hits the is_file() rung, and skips on EVERY run --
     # a drift detector that never detects. Read-only parity check, which is
     # exactly what the marker is for.
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
-        pytest.skip("no DoE-claude sibling root resolved -- cannot check fixture drift")
+    content_root = read_content_root_pointer()
+    if not content_root:
+        pytest.skip("no coordinator-content-repo sibling root resolved -- cannot check fixture drift")
 
-    shipped_path = Path(doe_root) / _FRAGMENT_RELPATH
+    shipped_path = Path(content_root) / _FRAGMENT_RELPATH
     if not shipped_path.is_file():
         pytest.skip(f"sibling root resolved but {shipped_path} is absent")
 

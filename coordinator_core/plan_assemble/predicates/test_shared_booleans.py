@@ -71,13 +71,13 @@ class TestNoCrossRepoContract:
 
     def test_relative_dotdot_crossing(self):
         result = collapse_no_cross_repo_contract(
-            _context(scope=["coordinator_core/", "../DoE-claude/coordinator/docs/wiki/x.md"])
+            _context(scope=["coordinator_core/", "../coordinator-content-repo/coordinator/docs/wiki/x.md"])
         )
         assert result["no_cross_repo_contract"] is False
-        assert result["crossing_paths"] == ["../DoE-claude/coordinator/docs/wiki/x.md"]
+        assert result["crossing_paths"] == ["../coordinator-content-repo/coordinator/docs/wiki/x.md"]
 
     def test_absolute_path_outside_repo_root_crossing(self):
-        outside_path = "/opt/sibling-repos/DoE-claude/coordinator/docs/wiki/x.md"
+        outside_path = "/opt/sibling-repos/coordinator-content-repo/coordinator/docs/wiki/x.md"
         result = collapse_no_cross_repo_contract(_context(scope=[outside_path]))
         assert result["no_cross_repo_contract"] is False
         assert result["crossing_paths"] == [outside_path]

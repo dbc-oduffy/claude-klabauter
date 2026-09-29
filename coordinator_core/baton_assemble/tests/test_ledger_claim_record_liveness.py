@@ -236,7 +236,7 @@ class TestExplicitArtifactPathDoesReachTheDR242Gate:
             lambda: {
                 "settings_home": "/fake/settings-home",
                 "claude_klabauter_bin": "/fake/settings-home/bin",
-                "doe_root": "/fake/doe-root",
+                "content_root": "/fake/content-root",
             },
         )
 

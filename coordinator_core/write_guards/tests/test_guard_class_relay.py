@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards import engine as _engine
 from coordinator_core.write_guards.guard_class_relay import (
     UNCOVERED_SHAPE,
@@ -34,8 +33,6 @@ from coordinator_core.write_guards.guard_class_relay import (
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-_NO_CONSOLE = no_console_creationflags()
-
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GUARD_MODULE = (
     _REPO_ROOT / "coordinator_core" / "write_guards"
@@ -43,29 +40,28 @@ _GUARD_MODULE = (
 )
 _REFERENCE_DOC = _REPO_ROOT / "docs" / "reference" / "guard-class-relay.md"
 
-# C15 apply commit (docs/plans/2026-08-06-apply-guard-class-census.md C15):
-# retired the COORDINATOR_SCHEMA_STRICT deny-upgrade inside
-# validate_frontmatter_schema_deny.py WITHOUT moving its module-level CLASS
-# literal -- the exact "intra-module branch-contract change" shape this
-# relay is scoped to miss. Verified this session: CLASS == "hard-deny" on
-# both sides of this commit.
-_C15_APPLY_SHA = "f0994eabc647d3b3adde861d914f158cce9955c9"
-_C15_PARENT_SHA = "f0994eabc647d3b3adde861d914f158cce9955c9~1"
+# The C15 shape: a branch-contract change inside a module (the strict-mode
+# deny-upgrade retired) that leaves the module-level CLASS literal unmoved.
+# Frozen inline so the demonstration does not depend on a commit being
+# reachable in the clone.
+_C15_OLD_SOURCE = """CLASS = "hard-deny"
+MATCHERS = ["Write", "Edit"]
+PRIORITY = 100
 
 
-def _git_show(ref: str, path: str) -> str:
-    import subprocess
+def check(payload, env):
+    if env.get("COORDINATOR_SCHEMA_STRICT"):
+        return deny(payload)
+    return advise(payload)
+"""
+_C15_NEW_SOURCE = """CLASS = "hard-deny"
+MATCHERS = ["Write", "Edit"]
+PRIORITY = 100
 
-    out = subprocess.run(
-        ["git", "show", f"{ref}:{path}"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-        encoding="utf-8",
-        **_NO_CONSOLE,
-    )
-    return out.stdout
+
+def check(payload, env):
+    return advise(payload)
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +172,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_memo_status_hand_edit": ["hard-deny", ["Write", "Edit", "MultiEdit"], 56],
 "block_oss_mirror_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 132],
 "block_priority_ledger_edit": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 114],
+"block_sizing_object_schema_violation": ["hard-deny", ["Write", "Edit", "MultiEdit"], 4],
 "block_subagent_archive_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 30],
 "block_subagent_grant_record_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 46],
 "block_subagent_guard_grant_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 47],
@@ -296,13 +293,11 @@ def test_none_returning_shapes_fall_back_to_eager_import(tmp_path, monkeypatch, 
 
 
 def test_c15_shape_is_provably_uncovered():
-    """Demonstration 1 (C6): the real pre-C15 and post-C15 source of
-    `validate_frontmatter_schema_deny.py`, fed to the detector, must return
+    """Demonstration 1 (C6): a pre-C15 and post-C15 module pair (branch
+    contract changed, CLASS literal unmoved), fed to the detector, must return
     None. Its failure means the uncovered shape stopped being uncovered.
     """
-    old_source = _git_show(_C15_PARENT_SHA, "coordinator_core/write_guards/validate_frontmatter_schema_deny.py")
-    new_source = _git_show(_C15_APPLY_SHA, "coordinator_core/write_guards/validate_frontmatter_schema_deny.py")
-    assert detect_class_transition(old_source, new_source) is None
+    assert detect_class_transition(_C15_OLD_SOURCE, _C15_NEW_SOURCE) is None
 
 
 def test_dr277_shaped_flip_is_detected():

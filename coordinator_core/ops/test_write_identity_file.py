@@ -265,3 +265,17 @@ def test_claude_home_ending_in_dot_claude_is_rejected(tmp_path):
     assert result["exit_code"] == 1
     assert "must name the home directory" in result["error"]
     assert not (doubled / ".claude").exists()
+
+
+def test_non_ascii_value_is_written_verbatim_and_round_trips(tmp_path):
+    claude_home = _make_git_repo(tmp_path / "home")
+    result = _call({
+        "claude_home": str(claude_home),
+        "fields": {"operator_name": "Dónal"},
+    })
+    assert result["exit_code"] == 0
+    identity_path = claude_home / ".claude" / "coordinator-identity.yaml"
+    raw = identity_path.read_bytes()
+    assert "Dónal".encode("utf-8") in raw
+    assert b"\\x" not in raw
+    assert yaml.safe_load(raw.decode("utf-8"))["operator_name"] == "Dónal"

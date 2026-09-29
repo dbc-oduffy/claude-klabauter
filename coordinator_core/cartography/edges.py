@@ -150,7 +150,7 @@ inversion; it is wrong as stated, corrected here per
 § "C7's join premise — corrected, and viable".
 
 The four marker labels are transcribed verbatim (predicate meaning, not
-prose) from DoE-claude's
+prose) from coordinator-content-repo's
 ``coordinator/pipelines/deep-architecture-survey/agent-prompts.md`` §
 "Marker Reference" — this repo does not own that vocabulary, and a future
 reader must not have to re-derive it. That doc's markers are stated from a
@@ -636,7 +636,7 @@ def _label_boundary(
     caller_system: str | None,
 ) -> str:
     """Label a single import edge's target per the boundary-marker join —
-    predicates transcribed from DoE-claude's ``deep-architecture-survey/
+    predicates transcribed from coordinator-content-repo's ``deep-architecture-survey/
     agent-prompts.md`` § "Marker Reference"; see module docstring
     "BOUNDARY-MARKER JOIN" for the full mapping and citation. Always
     returns a real string; never ``None``.

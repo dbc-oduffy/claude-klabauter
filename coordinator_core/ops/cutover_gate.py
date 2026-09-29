@@ -107,7 +107,7 @@ writer-only migration once, silently, in prose; this module makes that
 omission structurally unrepresentable for any record that selects
 ``value-vocabulary``.
 
-Extensionless Python consumers (FIX-D — the named house trap, DoE-claude
+Extensionless Python consumers (FIX-D — the named house trap, coordinator-content-repo
 coordinator.local.md: "count by shebang, not by extension"): the candidate-file
 collector cannot key off ``.py`` alone. The plan's own worked example
 (pre-C6-rename), ``coordinator/bin/archive-stamp-cli``, was a pure-Python
@@ -234,7 +234,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-#: Repo-relative path (DoE-claude-relative) of the vendored cutover schema —
+#: Repo-relative path (coordinator-content-repo-relative) of the vendored cutover schema —
 #: mirrors D2 ("schema lives DoE-side"). Read via `git show <ref>:<this>`,
 #: never vendored into claude-klabauter (unlike the frontmatter schemas
 #: `schema_drift_watch.py` watches — this schema is read live, not copied).
@@ -514,7 +514,7 @@ _PYTHON_SHEBANG_RE = re.compile(r"(?:^|[/\s])python3?(?:\.\d+)?(?:$|\s)")
 def _has_python_shebang(file_path: Path) -> bool:
     """Return True iff ``file_path``'s first line is a shebang naming Python.
 
-    Named house trap (DoE-claude coordinator.local.md: "count by shebang, not by
+    Named house trap (coordinator-content-repo coordinator.local.md: "count by shebang, not by
     extension") — several extensionless files in this fleet (e.g.
     ``coordinator/bin/archive-stamp-cli`` prior to its C6 rename, the plan's
     own worked example) are pure Python with no ``.py`` suffix; a collector
@@ -978,7 +978,7 @@ def derive(gate_source: Mapping[str, object], repo_roots: Mapping[str, Path]) ->
 
 class CutoverSchemaResolutionError(RuntimeError):
     """Raised when ``coordinator/schemas/cutover.schema.json`` cannot be read
-    live from the DoE-claude sibling clone (clone unresolvable, ``git show``
+    live from the coordinator-content-repo sibling clone (clone unresolvable, ``git show``
     fails, or the resolved content is not valid JSON)."""
 
 
@@ -997,7 +997,7 @@ def resolve_cutover_schema(
     ``coordinator_core.frontmatter.schema_validate.check_schema_drift``
     (D2: "the gate reads it engine-side via
     ``git -C <doe> show HEAD:coordinator/schemas/…``, the established
-    seam") — resolves the DoE-claude clone root via
+    seam") — resolves the coordinator-content-repo clone root via
     ``coordinator_core.frontmatter.schema_drift_watch.resolve_doe_repo_path``
     (registry-first, DR-071; never a hardcoded path or a ``Path(__file__)``
     walk — that shape is exactly what
@@ -1008,7 +1008,7 @@ def resolve_cutover_schema(
     co-vendored (D2).
 
     Args:
-        doe_repo_path: DoE-claude clone root override. ``None`` (the
+        doe_repo_path: coordinator-content-repo clone root override. ``None`` (the
             default) resolves it via ``resolve_doe_repo_path()``.
         ref: git ref to read the schema at. Defaults to ``HEAD`` — the
             gate always validates against the DoE tip, not a pin.
@@ -1032,8 +1032,8 @@ def resolve_cutover_schema(
     root = Path(doe_repo_path) if doe_repo_path is not None else resolve_doe_repo_path()
     if root is None:
         raise CutoverSchemaResolutionError(
-            "DoE-claude sibling clone could not be resolved (REPO_DOE_CLAUDE / "
-            "registry repos.doe_claude / pointer files all absent) — cannot read "
+            "coordinator-content-repo sibling clone could not be resolved (REPO_CONTENT_ROOT / "
+            "registry repos.content_root / pointer files all absent) — cannot read "
             f"{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} at ref {ref!r}."
         )
 
@@ -1069,19 +1069,19 @@ def resolve_cutover_schema(
 #: Repo-name aliases this handler recognizes when building the repo_roots map
 #: `derive()` needs. A cutover record's `gate_source.repos[].repo` string is
 #: authored per-record (C3/C11-C17); several plausible spellings for the same
-#: two repos ("doe-claude" vs "DoE-claude", "claude-klabauter" vs "claude-klabauter") are
+#: two repos ("coordinator-content-repo" vs "coordinator-content-repo", "claude-klabauter" vs "claude-klabauter") are
 #: all pointed at the same resolved root so a record author's casing choice
 #: doesn't silently fail to match. Extra unused aliases are harmless — derive()
 #: (C4a::_scan_repos) only consults the aliases a record's gate_source.repos[]
 #: actually names.
-_DOE_ROOT_ALIASES: tuple[str, ...] = ("doe-claude", "DoE-claude", "doe_claude")
+_CONTENT_ROOT_ALIASES: tuple[str, ...] = ("coordinator-content-repo", "coordinator-content-repo", "content_root")
 _CLAUDE_KLABAUTER_ROOT_ALIASES: tuple[str, ...] = ("claude-klabauter", "claude_klabauter", "claude-klabauter")
 
 
-def _build_repo_roots(doe_root: Path) -> dict[str, Path]:
+def _build_repo_roots(content_root: Path) -> dict[str, Path]:
     """Build the {repo-name-alias: local root} map `derive()` scans against.
 
-    `doe_root` is the caller-resolved DoE-claude worktree (this handler's own
+    `content_root` is the caller-resolved coordinator-content-repo worktree (this handler's own
     `repo_root`/`main_worktree_root()` — cutover records live DoE-side, D2).
     The claude-klabauter root is THIS repo's own root, derived via an in-repo
     `Path(__file__)` climb — safe under `test_no_hardcoded_paths.py`'s Tooth 2
@@ -1092,8 +1092,8 @@ def _build_repo_roots(doe_root: Path) -> dict[str, Path]:
     """
     claude_klabauter_root = Path(__file__).resolve().parents[2]
     roots: dict[str, Path] = {}
-    for alias in _DOE_ROOT_ALIASES:
-        roots[alias] = doe_root
+    for alias in _CONTENT_ROOT_ALIASES:
+        roots[alias] = content_root
     for alias in _CLAUDE_KLABAUTER_ROOT_ALIASES:
         roots[alias] = claude_klabauter_root
     return roots
@@ -1455,7 +1455,7 @@ _SIBLING_COMMITMENT_REF_RE = re.compile(
 _SIBLING_COMMITMENT_FULFILLED_STATUS = "fulfilled"
 
 
-def _reverify_sibling_commitment_ref(ref: str, doe_root: Optional[Path]) -> tuple[bool, str]:
+def _reverify_sibling_commitment_ref(ref: str, content_root: Optional[Path]) -> tuple[bool, str]:
     """Resolve `ref` to a `state/cross-repo-commitments/*.yaml` record on OUR
     OWN disk and confirm it genuinely attests the sibling's confirmation.
 
@@ -1477,7 +1477,7 @@ def _reverify_sibling_commitment_ref(ref: str, doe_root: Optional[Path]) -> tupl
     (the commitment record is the sibling-sourced signal; this function only
     reads it).
     """
-    if doe_root is None:
+    if content_root is None:
         return False, f"sibling-commitment-ref {ref!r}: no DoE repo root available to resolve against"
     if not _SIBLING_COMMITMENT_REF_RE.match(ref):
         return False, f"sibling-commitment-ref {ref!r}: does not match the cross-repo-commitment filename shape"
@@ -1486,8 +1486,8 @@ def _reverify_sibling_commitment_ref(ref: str, doe_root: Optional[Path]) -> tupl
     prefix = "state/cross-repo-commitments/"
     if relative.startswith(prefix):
         relative = relative[len(prefix):]
-    candidate = doe_root / "state" / "cross-repo-commitments" / relative
-    resolved = contained_path(candidate, [doe_root])
+    candidate = content_root / "state" / "cross-repo-commitments" / relative
+    resolved = contained_path(candidate, [content_root])
     if resolved is None or not resolved.is_file():
         return False, f"sibling-commitment-ref {ref!r}: commitment record not found at {candidate}"
 
@@ -1708,7 +1708,7 @@ async def _cutover_gate(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         record (str, required) — path to the cutover record markdown file,
-            absolute or relative to the resolved DoE-claude worktree.
+            absolute or relative to the resolved coordinator-content-repo worktree.
 
     Returns (coverage_gate-shaped verdict envelope):
         {

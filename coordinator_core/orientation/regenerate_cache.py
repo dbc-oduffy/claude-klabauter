@@ -84,7 +84,7 @@ exist under ``state/``, answering "has someone already looked at this?" —
 never a bare count, and never a sample of what was in them most recently).
 
 ``## Capabilities`` admission test (2026-08-14, per
-cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md):
+cross-repo/inbox/2026-08-14-coordinator-content-repo-em-orientation-cache-capability-pointers.md):
 a pointer earns its place in THIS section when a newborn agent would not
 otherwise know the thing exists — discoverability, not usefulness. This is a
 narrower test than route-vs-answer above: plenty of routing-shaped facts fail
@@ -93,7 +93,7 @@ listing); the concrete first case is example-retrieval-repo query tools in a rep
 Example-retrieval-repo is available but nothing else in a cold session mentions it.
 
 Recency-sample ruling (2026-08-14, per
-cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-pointers.md):
+cross-repo/inbox/2026-08-14-coordinator-content-repo-em-cache-recency-samples-are-not-pointers.md):
 generalizing beyond ``## Capabilities``, this governs any section in this
 module, present or future. The discriminator: does an enumeration tell the
 reader WHAT EXISTS (a pointer set — bounded by the shape of the space,
@@ -211,6 +211,7 @@ from coordinator_core.orientation.route_unreachable_signal import emit_route_unr
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
 from coordinator_core.orientation.expired_grant_signal import emit_expired_grants
 from coordinator_core.orientation.abandoned_claim_signal import emit_abandoned_claims
+from coordinator_core.orientation.stray_venv_signal import emit_stray_venvs
 from coordinator_core.ops.ceremony.detached_spawn import (
     advance_failures_cursor,
     clear_failures_log,  # noqa: F401 — reset primitive, re-exported for callers
@@ -457,7 +458,7 @@ elastic (`_CACHE_ELASTIC_SECTIONS`), so a repo with many more pages is
 trimmed by `_enforce_cache_budget`, not by this cap alone.
 
 Survives the recency-sample test (2026-08-14, per
-cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-pointers.md)
+cross-repo/inbox/2026-08-14-coordinator-content-repo-em-cache-recency-samples-are-not-pointers.md)
 that the former ``## Audits & censuses`` filename tail failed: this
 enumeration is a stable taxonomy, bounded by the subsystems that exist
 rather than by when a page was last touched. It changes only when the
@@ -576,7 +577,7 @@ def emit_capability_pointers(repo_root: Path) -> List[str]:
     Elastic, not protected (`_CACHE_ELASTIC_SECTIONS`): a pointer trimmed by
     the byte budget costs an agent one lookup, not a wrong belief, so
     trimmability is correct rather than a defect to engineer around -- see
-    cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md.
+    cross-repo/inbox/2026-08-14-coordinator-content-repo-em-orientation-cache-capability-pointers.md.
     Omitted (not rendered as "none configured") when the key is absent/empty,
     matching every other omit-when-empty section in this module.
     """
@@ -611,7 +612,7 @@ def emit_audits_index(state_root: Path) -> List[str]:
     looked at this?" without pre-answering it.
 
     Directory pointer only, never a filename tail (2026-08-14 ruling, per
-    cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-
+    cross-repo/inbox/2026-08-14-coordinator-content-repo-em-cache-recency-samples-are-not-
     pointers.md): a "recent: <names>" enumeration failed this section's own
     admission test. It samples a directory at one moment rather than naming
     what exists, implies a significance the sample does not carry, goes
@@ -769,7 +770,7 @@ def emit_branch_line(repo_root: Path) -> str:
 # "Windows is first-class" runtime convention: a spawn on a hot path is
 # break-class, reimplemented rather than tolerated). 89% of fleet sessions
 # were independently re-deriving this fact at boot via their own git log call
-# (state/audits/2026-07-29-orientation-cache-boot-facts.md, DoE-claude) before
+# (state/audits/2026-07-29-orientation-cache-boot-facts.md, coordinator-content-repo) before
 # this section existed. One cache-time git spawn here amortizes that cost
 # across every one of them: this adds ONE git spawn to build_cache -- an
 # explicitly cold, ceremony/machine-invoked path (~10 spawns already) with no
@@ -1283,6 +1284,7 @@ def _render_cache(
     budget_breach_line: str,
     expired_grant_lines: str,
     abandoned_claim_lines: str,
+    stray_venv_lines: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1342,6 +1344,9 @@ def _render_cache(
 
     if abandoned_claim_lines:
         parts.append("\n## Abandoned claims\n" + abandoned_claim_lines + "\n")
+
+    if stray_venv_lines:
+        parts.append("\n## Stray venvs\n" + stray_venv_lines + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1429,6 +1434,7 @@ def build_cache(
     budget_breach_line = emit_budget_breaches(repo_root)
     expired_grant_lines = emit_expired_grants(repo_root)
     abandoned_claim_lines = emit_abandoned_claims(repo_root)
+    stray_venv_lines = emit_stray_venvs(repo_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1460,6 +1466,7 @@ def build_cache(
         budget_breach_line=budget_breach_line,
         expired_grant_lines=expired_grant_lines,
         abandoned_claim_lines=abandoned_claim_lines,
+        stray_venv_lines=stray_venv_lines,
         housekeeping_lines=housekeeping_lines,
         pinboard_final=pinboard_final,
     )
@@ -1675,7 +1682,7 @@ _CACHE_ELASTIC_SECTIONS = frozenset({
 # an agent nothing it needed at boot (DR-310 already rules this residual out of any
 # gate/alert path) -- see coordinator_core.orientation.hook_cancellation_signal.
 # "Capabilities" is elastic, not protected, by deliberate ruling (memo
-# cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md):
+# cross-repo/inbox/2026-08-14-coordinator-content-repo-em-orientation-cache-capability-pointers.md):
 # a pointer trimmed by the byte budget costs an agent one lookup, not a wrong
 # belief, so protecting it would defend against a cost this section does not
 # actually impose.

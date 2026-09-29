@@ -295,7 +295,7 @@ def _empty_payload(deliverable_id: str = "", scan_incomplete: bool = False) -> d
 # state/sizings/ root only) — see `_scan_artifacts_by_deliverable_id`'s
 # per-root reader dispatch.
 #
-# LEG (a) of C10 CLEARED (cross-repo/inbox/2026-08-13-doe-claude-em-spec-
+# LEG (a) of C10 CLEARED (cross-repo/inbox/2026-08-13-coordinator-content-repo-em-spec-
 # backlink-id-form-ruled-and-rollup-cleared.md): the reader
 # (coordinator_render_rollup.py) is count-agnostic over `artifacts_matched`
 # and, since the finish-strangler port, claude-klabauter-resident — no DoE-side change

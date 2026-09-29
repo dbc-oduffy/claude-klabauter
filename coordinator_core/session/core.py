@@ -12,7 +12,7 @@ NOT-cached-across-calls constraint this preserves from the bash original.
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-t4a-coordinator-session-hub.md § core.py
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 
 Negative-spec:
     - Do NOT call ``ps -p``/``kill -0``/``psutil.pid_exists`` on a stored
@@ -230,7 +230,7 @@ def _normalize_cwd(cwd: Optional[str]) -> Optional[str]:
 
     A session launched from Git Bash has a POSIX cwd (``/x/claude-klabauter``).
     ``Path("/x/claude-klabauter").resolve()`` on Windows anchors that to the
-    CURRENT process drive and yields ``X:\\x\\claude-klabauter`` — a path that  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    CURRENT process drive and yields ``C:\\x\\claude-klabauter`` — a path that  # abs-path-ok: illustrative example shape, not a machine-specific citation
     exists nowhere, so the ``.git`` walk behind ``git_common_dir`` finds
     nothing and ``sessions_dir()`` answers ``""``. Every registry lookup
     layered on it then reports an empty hub, which reads identically to "this
@@ -240,7 +240,7 @@ def _normalize_cwd(cwd: Optional[str]) -> Optional[str]:
     Delegates the decoding to
     ``bash_guards._write_bump_sink_shapes.translate_msys_path`` rather than
     re-deriving it — that function is the repo's single normalization seam for
-    this spelling (DoE-claude ``coordinator/docs/wiki/bash-on-windows-
+    this spelling (coordinator-content-repo ``coordinator/docs/wiki/bash-on-windows-
     gotchas.md`` §10/§14) and carries the reasoning for every shape it
     declines. Its POSIX-host rule is what keeps this module cross-platform:
     on a non-Windows host ``/x/foo`` is a real directory and the translator is
@@ -376,7 +376,7 @@ def sessions_dir(cwd: Optional[str] = None) -> str:
 
     ``cwd`` is passed through ``_normalize_cwd`` FIRST, before both the cache
     key and the resolution, so a Git-Bash POSIX cwd (``/x/repo``) and its
-    native spelling (``X:/repo``) name one hub and share one cache entry  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    native spelling (``C:/repo``) name one hub and share one cache entry  # abs-path-ok: illustrative example shape, not a machine-specific citation
     rather than resolving to two answers, one of them empty.
 
     REFUSAL CONTRACT — KNOWN GAP, deliberately still open. An UNRESOLVABLE
@@ -685,7 +685,7 @@ def _win_create_time_epoch(pid_int: int) -> Optional[int]:
 
     Originally added for Windows (no ``ps`` binary there), then converged
     onto by POSIX too in the 2026-07-27 ps-to-psutil port (DoE
-    cross-repo memo ``2026-07-27-doe-claude-em-ac6-ps-to-psutil-yes-oracle-
+    cross-repo memo ``2026-07-27-coordinator-content-repo-em-ac6-ps-to-psutil-yes-oracle-
     retired.md`` confirmed the bash ``_cs_stable_pid_alive`` parity oracle
     this POSIX arm preserved was itself retired 2026-07-22 — there is no
     remaining counterparty to diff against). ``create_time()`` is an
@@ -1540,7 +1540,7 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     ~18 concurrent sessions sharing this worktree it names whichever
     session most recently initialized, not necessarily the caller's — see
     coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
-    sole writer (session-init.py, the DoE-claude SessionStart hook) was
+    sole writer (session-init.py, the coordinator-content-repo SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives, so
     it could never be refreshed. ``cwd`` is retained for API compatibility
     with existing callers even though tiers 0-3 do not use it.

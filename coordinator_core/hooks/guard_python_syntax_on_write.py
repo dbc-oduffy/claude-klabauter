@@ -3,7 +3,7 @@
 unparseable Python on disk under `coordinator_core/`.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-python-syntax-on-write.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/guard-python-syntax-on-write.py`.
 Two shape changes, both forced by DR-047 (claude-klabauter owns guard logic, DoE owns
 plumbing) plus this row's own op contract, neither a behaviour change:
 

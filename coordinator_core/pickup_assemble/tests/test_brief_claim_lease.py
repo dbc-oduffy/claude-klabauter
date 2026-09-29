@@ -278,7 +278,7 @@ def test_a_rebrief_by_the_holder_is_resuming_not_contention(
 def test_a_live_foreign_holder_denies_a_memo_brief_with_a_standdown(
     tmp_path, as_session, holder_reads_live
 ):
-    """Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-
+    """Memo/handoff parity fix (cross-repo/inbox/2026-08-17-coordinator-content-repo-em-
     memo-claim-fires-after-the-em-can-already-act.md): a DENIED grant against
     a live foreign holder must halt the SECOND session's brief before the memo
     body is worth reading — a stand-down (`directives: []`), never the full

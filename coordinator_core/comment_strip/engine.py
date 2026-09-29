@@ -707,22 +707,9 @@ def _find_ts_pkg() -> str | None:
     global _TS_PKG_CACHE
     if _TS_PKG_CACHE != "__unset__":
         return _TS_PKG_CACHE
-    import os
-    import shutil
+    from coordinator_core.machine_resolver import registry_get
 
-    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.environ.get("CLAUDE_HOME") or str(Path.home())
-    settings_home = settings_home if settings_home.endswith(".coordinator-claude-settings") else str(Path(settings_home) / ".coordinator-claude-settings")
-    ml_bin = shutil.which("machine-local") or str(Path(settings_home) / "bin" / "machine-local")
-    example_retrieval_repo = None
-    try:
-        out = subprocess.run(
-            [ml_bin, "get", "repos.project_rag"],
-            capture_output=True, text=True, timeout=10, check=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        example_retrieval_repo = out.stdout.strip() or None
-    except (subprocess.SubprocessError, OSError):
-        example_retrieval_repo = None
+    example_retrieval_repo = registry_get("repos.project_rag") or None
     candidates = []
     if example_retrieval_repo is not None:
         candidates.append(Path(example_retrieval_repo) / "vendor/scip-typescript/node_modules/typescript")
@@ -919,5 +906,5 @@ def strip_repo(
         summary["peer_skipped"] = list(peer_skipped)
     if report_path is not None:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8", newline="\n")
     return summary

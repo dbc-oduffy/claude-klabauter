@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.nudge_prose_queue_append — advisory guard.
 
-Spec: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 § PM direction (A) ("Append-silence becomes append-advisory — the PM
 sentence wins"). Part 3 of the original ruling specified this half as
 silent; the PM direction that arrived afterward overrode that specific
@@ -85,7 +85,7 @@ Negative-spec:
     reconstruction failure returns ``None`` (ALLOW/no-op), never an
     advisory.
 
-Spec backlink: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec backlink: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
 
 from __future__ import annotations
@@ -97,6 +97,7 @@ from coordinator_core.bash_guards._helpers import (
     is_trivial_reason as _is_trivial_reason,
     operator_override_note,
 )
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.write_guards.nudge_improvement_queue_write import _ENTRY_LINE_RE
 from coordinator_core.write_guards.nudge_prose_queue_creation import (
     _extract_file_path,
@@ -213,9 +214,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not file_path:
             return None
 
-        normalized = file_path.replace("\\", "/")
-        while "//" in normalized:
-            normalized = normalized.replace("//", "/")
+        normalized = collapse_slashes(file_path)
 
         segments = [seg for seg in normalized.split("/") if seg]
         if not segments:

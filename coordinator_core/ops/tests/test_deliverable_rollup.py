@@ -1291,7 +1291,7 @@ def test_resolvable_root_predicate_shared_constant_shape() -> None:
     `spec_backlink_resolve.build_index` import — pins the shape so neither
     caller can silently re-fork a hard-coded root list.
 
-    C10 leg (a) cleared (cross-repo/inbox/2026-08-13-doe-claude-em-spec-
+    C10 leg (a) cleared (cross-repo/inbox/2026-08-13-coordinator-content-repo-em-spec-
     backlink-id-form-ruled-and-rollup-cleared.md): `SIZINGS_ONLY_ROOT` is now
     folded directly into `RESOLVABLE_ARTIFACT_ROOTS` (five entries), not a
     separate root the rollup scanner omits."""
@@ -1315,7 +1315,7 @@ def test_ac10_resolvable_root_sets_are_equal() -> None:
 
     Was `test_ac10_resolvable_root_sets_are_equal_pending_gate`, red BY
     DESIGN pending leg (a) of C10. The gate cleared
-    (cross-repo/inbox/2026-08-13-doe-claude-em-spec-backlink-id-form-ruled-
+    (cross-repo/inbox/2026-08-13-coordinator-content-repo-em-spec-backlink-id-form-ruled-
     and-rollup-cleared.md): the reader (`coordinator_render_rollup.py`) is
     count-agnostic over `artifacts_matched` and claude-klabauter-resident — no DoE-side
     reader change was required. `SIZINGS_ONLY_ROOT` is now folded into

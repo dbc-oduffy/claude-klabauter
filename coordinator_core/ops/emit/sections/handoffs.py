@@ -115,7 +115,7 @@ strings), UNLIKE the ``plan_id`` dead-join above:
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 1 + § SECTION
   1.5. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P01
-Spec backlink (origin_* fix): DoE-claude:pln-structured-originating-session-8b505c § C7;
+Spec backlink (origin_* fix): coordinator-content-repo:pln-structured-originating-session-8b505c § C7;
   contract requiredness verified against handoff-summary.schema.json at 2.10.0/2.17.0/2.20.0.
 
 Node-subprocess retirement (2026-07-22): this section originally shelled out to ``node
@@ -256,7 +256,7 @@ def _derive_handoff_id(repo: str, path: Optional[str]) -> tuple[str, str]:
     handoff eventually makes), which would silently re-point this key mid-life — a join key
     that mutates out from under its consumers on a routine housekeeping move is worse than no
     key. The basename survives that move untouched. ``repo`` qualifies the pair because the
-    cockpit corpus aggregates records across repos (claude-klabauter, DoE-claude, example-retrieval-repo,
+    cockpit corpus aggregates records across repos (claude-klabauter, coordinator-content-repo, example-retrieval-repo,
     example-cockpit-repo, …) and a timestamp-prefixed basename (``2026-07-19-foo.md``) is exactly the
     shape that can collide between two repos emitting on the same day.
 

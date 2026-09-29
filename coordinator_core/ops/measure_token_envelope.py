@@ -24,11 +24,11 @@ needing exact parity with a specific model's tokenizer must not treat this as
 authoritative.
 
 Consumed by (or intended to be consumed by):
-    - DoE-claude `coordinator/hooks/scripts/check-claude-md-size.py`
+    - coordinator-content-repo `coordinator/hooks/scripts/check-claude-md-size.py`
     - claude-klabauter `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`
       ("Check 7")
 
-Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(a)
+Spec backlink: coordinator-content-repo:pln-always-loaded-doctrine-envelop-cd5932 § C1(a)
 """
 
 from __future__ import annotations

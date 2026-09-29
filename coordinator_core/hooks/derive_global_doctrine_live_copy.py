@@ -6,7 +6,7 @@ their TRACKED sources (in the coordinator-claude doctrine-plane repo) may
 have changed.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/derive-global-doctrine-live-copy.py`
+from coordinator-content-repo `coordinator/hooks/scripts/derive-global-doctrine-live-copy.py`
 (itself coordinator-claude-repo-resident doctrine content, reached from this
 engine the same command/native-door way every sibling hook in this row is).
 Shape, per the W4-C1 verdict: command/native-door, `hooks.<name>` op,
@@ -28,7 +28,7 @@ against. Replaced with `_resolve_doctrine_repo_root()` below, an adaptation
 of `cater_subagent_start._resolve_role_append_snippet_path`'s /
 `provision_report.resolve_plugin_root()`'s own multi-rung plugin-root probe
 (CLAUDE_PLUGIN_ROOT env, `<claude_config_dir>/plugins/coordinator-claude` in
-both known shapes, `.doe-root` pointer) -- ONE LEVEL UP from those probes'
+both known shapes, `.coordinator-content-root` pointer) -- ONE LEVEL UP from those probes'
 own target (they resolve the coordinator-claude CONTENT root, i.e. the
 `coordinator/` subdir; this hook needs the REPO ROOT one level above it,
 where `global-doctrine/`, `coordinator/templates/global-doctrine/`, and the
@@ -91,12 +91,12 @@ def _resolve_doctrine_repo_root() -> Optional[Path]:
         return plugin_base
 
     try:
-        pointer = machine_local_dir() / ".doe-root"
-        doe_root_text = pointer.read_text(encoding="utf-8").strip()
+        pointer = machine_local_dir() / ".coordinator-content-root"
+        content_root_text = pointer.read_text(encoding="utf-8").strip()
     except OSError:
-        doe_root_text = ""
-    if doe_root_text:
-        candidate_root = Path(doe_root_text)
+        content_root_text = ""
+    if content_root_text:
+        candidate_root = Path(content_root_text)
         found = _artifact_at(candidate_root)
         if found is not None:
             return candidate_root

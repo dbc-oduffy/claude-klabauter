@@ -2,7 +2,7 @@
 
 Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C17
 
-Two guard classes, mirroring coordinator/tests/test_claude_doe_launch_waits.py's
+Two guard classes, mirroring coordinator/tests/test_claude_author_launch_waits.py's
 split:
 
   - Source-shape (AST): pins that the shared shutdown tail (`_run_tail`)

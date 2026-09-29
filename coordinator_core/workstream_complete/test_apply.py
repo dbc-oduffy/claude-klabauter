@@ -888,7 +888,7 @@ def test_apply_executes_directives_from_a_successful_brief(monkeypatch: pytest.M
 
 
 # ---------------------------------------------------------------------------
-# No-commit row guard (C13, DoE-claude docs/plans/2026-07-29-pm-approved-
+# No-commit row guard (C13, coordinator-content-repo docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md) — a task-spine row this session's
 # commit-coverage oracle (close_out_and_stamp._determine_shipped, reused not
 # reimplemented) found no covering commit for must not resolve to a silent
@@ -1189,7 +1189,7 @@ def test_resolve_arg_tokens_unrecognized_token_shape_fails_loud() -> None:
 
 # ---------------------------------------------------------------------------
 # Residual backstop is NAME-shaped, not BRACE-shaped (2026-08-13
-# doe-claude-em-wsc-review-list-collides-with-token-syntax) —
+# coordinator-content-repo-em-wsc-review-list-collides-with-token-syntax) —
 # `directives_commit_tail.build_close_tail_args_directive` (removed in the
 # ceremony.wsc_tail kill, 2026-08-23) used to serialize a
 # per-slice review entry with `json.dumps(payload, sort_keys=True)` into
@@ -1303,7 +1303,7 @@ def test_resolve_arg_tokens_landed_field_fails_loud_when_producer_never_landed()
 # (formerly `directives_commit_tail.build_wsc_tail_directive`'s
 # `"{d-close-tail-args.argv}"`, removed in the ceremony.wsc_tail kill,
 # 2026-08-23) that closed the 2026-08-03
-# doe-claude-em-wsc-tail-review-metadata-dropped hole: `d-close-tail-args`
+# coordinator-content-repo-em-wsc-tail-review-metadata-dropped hole: `d-close-tail-args`
 # (`wsc-close tail-args`) printed one argv token per line on stdout, and this
 # field is what spliced those tokens into `d-run-wsc-tail`'s own
 # argv -- `depends_on` alone only orders the two directives. The generic
@@ -2511,7 +2511,7 @@ def _brief_with_complete_entry(monkeypatch: pytest.MonkeyPatch, stdout: str) -> 
             "directives": [_directive("d-complete-entry", "coordinator-complete-entry")],
             "judgment_points": [],
             "decisions": decisions or {},
-            "artifact": {"path": "X:/nonexistent-worktree"},
+            "artifact": {"path": "C:/nonexistent-worktree"},
         },
     )
 
@@ -2594,15 +2594,15 @@ def test_apply_does_not_fold_when_the_close_commit_landed_no_sha(
 def test_completion_entry_fold_is_a_no_op_without_a_path_or_a_sha() -> None:
     """The gate itself, directly: both halves are required, and a missing
     one is `None` (step did not run), never an attempted fold."""
-    assert ws_apply._run_completion_entry_fold("X:/nonexistent", None, "abc1234") is None
-    assert ws_apply._run_completion_entry_fold("X:/nonexistent", _ENTRY_REL, None) is None
+    assert ws_apply._run_completion_entry_fold("C:/nonexistent", None, "abc1234") is None
+    assert ws_apply._run_completion_entry_fold("C:/nonexistent", _ENTRY_REL, None) is None
 
 
 # ---------------------------------------------------------------------------
 # Plugin-local CLI dispatch (docs/plans/2026-09-07-directive-resolution-
 # reaches-a-plugin-local-cli.md, T5). Everything below is either deterministic
 # against a monkeypatched `_CLI_DISPATCH`/`_PLUGIN_CLI_SCRIPT_ROOT` entry (no
-# dependency on any real DoE-claude clone), or explicitly `skipif`-gated on one
+# dependency on any real coordinator-content-repo clone), or explicitly `skipif`-gated on one
 # resolving (AC8b/AC9) — never a silent no-op either way.
 # ---------------------------------------------------------------------------
 
@@ -2738,7 +2738,7 @@ _ZERO_SPAWN_IMPORT_SCRIPT = (
 
 
 def _live_doe_repo_root() -> Optional[str]:
-    """The DoE-claude repo root this box's ladder actually resolves to, if
+    """The coordinator-content-repo repo root this box's ladder actually resolves to, if
     any — never a hardcoded path (a hardcoded box-specific path is wrong on
     every other host). `resolve_plugin_cli_script_root()` returns
     `<root>/coordinator/bin`; its grandparent is the repo root."""
@@ -2751,21 +2751,21 @@ def _live_doe_repo_root() -> Optional[str]:
 @pytest.mark.parametrize(
     "use_resolvable_env",
     [
-        pytest.param(False, id="doe-root-unresolvable"),
-        pytest.param(True, id="doe-root-resolvable-via-env"),
+        pytest.param(False, id="content-root-unresolvable"),
+        pytest.param(True, id="content-root-resolvable-via-env"),
     ],
 )
 def test_first_import_of_apply_costs_zero_process_spawns(use_resolvable_env: bool) -> None:
     import os
 
     env = dict(os.environ)
-    doe_root = _live_doe_repo_root() if use_resolvable_env else None
-    if use_resolvable_env and doe_root is None:
-        pytest.skip("no resolvable DoE-claude clone on this box")
-    if doe_root:
-        env["REPO_DOE_CLAUDE"] = doe_root
+    content_root = _live_doe_repo_root() if use_resolvable_env else None
+    if use_resolvable_env and content_root is None:
+        pytest.skip("no resolvable coordinator-content-repo clone on this box")
+    if content_root:
+        env["REPO_CONTENT_ROOT"] = content_root
     else:
-        env.pop("REPO_DOE_CLAUDE", None)
+        env.pop("REPO_CONTENT_ROOT", None)
     repo_root = Path(__file__).resolve().parents[2]
 
     proc = subprocess.run(
@@ -2935,7 +2935,7 @@ _LIVE_PLUGIN_ROOT = _resolve_live_plugin_root()
 
 def _live_doe_ref() -> str:
     """AC9: the DoE ref every skipif-gated test in this set ran against, read
-    in-process from `<doe_root>/.git/HEAD` once per session — a green with no
+    in-process from `<content_root>/.git/HEAD` once per session — a green with no
     ref is a claim about an unnamed tree."""
     if _LIVE_PLUGIN_ROOT is None:
         return "(no resolvable DoE clone)"
@@ -2943,7 +2943,7 @@ def _live_doe_ref() -> str:
     return head.read_text(encoding="utf-8").strip() if head.is_file() else "(no .git/HEAD)"
 
 
-@pytest.mark.skipif(_LIVE_PLUGIN_ROOT is None, reason="no resolvable DoE-claude clone on this box (AC8b)")
+@pytest.mark.skipif(_LIVE_PLUGIN_ROOT is None, reason="no resolvable coordinator-content-repo clone on this box (AC8b)")
 class TestAC8bThreeNamedDoeScripts:
     def test_each_named_script_resolves_loads_and_exposes_an_argv_main(self) -> None:
         from coordinator_core.ceremony_common.cli_dispatch import load_cli_module

@@ -2,7 +2,7 @@
 coordinator_core.hooks.guard_kira_verdict_routed — Stop-hook engine op,
 the Kira (overengineering-reviewer) verdict-routing hard-stop.
 
-Purpose: warm command/native-door counterpart of DoE-claude's
+Purpose: warm command/native-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/guard-kira-verdict-routed.py` — verbatim port of
 its frontmatter-only decision logic (no YAML dependency, column-zero-only
 line-scan). See the source script's own module docstring for the full
@@ -36,7 +36,7 @@ to read a fact), `no_advisory()` otherwise.
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C14
 DoE source: coordinator/hooks/scripts/guard-kira-verdict-routed.py
 
-Routing repoint (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md
+Routing repoint (coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md
 row M4): a Kira verdict routes by a verified `findings_ledger` stamp on the
 Kira sidecar itself (`_kira_has_verified_ledger`), or by a rebuild-route
 executor's run-report `integrated_from` naming the Kira stem
@@ -192,7 +192,7 @@ def _kira_block_condition_1(in_scope: list) -> bool:
 def _kira_has_verified_ledger(meta: dict) -> bool:
     """True when the Kira sidecar's OWN frontmatter carries a non-empty
     `findings_ledger:` stamp (written by `review_findings_ledger.verify`,
-    DoE-claude docs/plans/2026-09-26-retire-review-integrator.md row M4).
+    coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md row M4).
     A verified ledger on Kira's own sidecar satisfies routing directly --
     it never needs a separate integrator sidecar to name it."""
     value = meta.get("findings_ledger")

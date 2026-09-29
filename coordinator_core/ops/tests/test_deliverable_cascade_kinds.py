@@ -542,7 +542,7 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
     pinned = "1.21.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check DoE-claude@937455db6 "
+        f"{pinned!r} — check coordinator-content-repo@937455db6 "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
@@ -562,24 +562,24 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # state/improvement-queue/2026-08-30-re-vendor-sizing-object-schema-1-18-0-to-1-20-0.yaml,
     # and each bump's own rationale is carried in the vendored file's
     # `x-bump-note` chain.
-    ("sizing-object.schema.json", "1.21.0", "DoE-claude@937455db6 (coordinator/schemas/sizing-object.schema.json)"),
+    ("sizing-object.schema.json", "1.21.0", "coordinator-content-repo@937455db6 (coordinator/schemas/sizing-object.schema.json)"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch
     # reporting MATCH. The recorded answer this row demands is
-    # cross-repo/inbox/2026-08-21-doe-claude-em-roadmap-glob-widened-and-spine-homing-answered.md.
-    ("roadmap.schema.json", "1.4.0", "DoE-claude@1c5f0d849 (coordinator/schemas/roadmap.schema.json)"),
+    # cross-repo/inbox/2026-08-21-coordinator-content-repo-em-roadmap-glob-widened-and-spine-homing-answered.md.
+    ("roadmap.schema.json", "1.4.0", "coordinator-content-repo@1c5f0d849 (coordinator/schemas/roadmap.schema.json)"),
     # Re-pinned 1.2.0 -> 1.3.0 on DoE adding `superseded` to the goal
     # `status` enum (enum-value-additive, DoE c89a8d64c), re-vendored here at
     # 10724f4046 — upstream HEAD and the vendored copy both read 1.3.0.
-    ("goal.schema.json", "1.3.0", "DoE-claude@c89a8d64c (coordinator/schemas/goal.schema.json)"),
-    ("initiative.schema.json", "1.1.0", "DoE-claude coordinator/schemas/initiative.schema.json"),
+    ("goal.schema.json", "1.3.0", "coordinator-content-repo@c89a8d64c (coordinator/schemas/goal.schema.json)"),
+    ("initiative.schema.json", "1.1.0", "coordinator-content-repo coordinator/schemas/initiative.schema.json"),
     # Newly vendored at 616874831 (C3b). Added as a row rather than left
     # unpinned: this table exists to catch EQUAL_VERSION_SHAPE_DRIFT the moment
     # DoE bumps a vendored schema, and a schema with no row is exactly the
     # silent divergence it was built to close. Same recorded answer as the
     # roadmap row above -- one memo settled both.
-    ("spine.schema.json", "1.0.0", "DoE-claude coordinator/schemas/spine.schema.json"),
+    ("spine.schema.json", "1.0.0", "coordinator-content-repo coordinator/schemas/spine.schema.json"),
 )
 
 

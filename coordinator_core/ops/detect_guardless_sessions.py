@@ -3,7 +3,7 @@ coordinator_core.ops.detect_guardless_sessions — observe live `claude.exe`
 processes launched WITHOUT the coordinator plugin, after the fact.
 
 Purpose: coordinator guards reach a session only because it was launched via
-`claude-doe`, which execs `claude --plugin-dir <DoE>/coordinator`. A session
+`claude-author`, which execs `claude --plugin-dir <DoE>/coordinator`. A session
 launched as bare `claude` (cmd.exe, `-NoProfile`, or explicit `claude.exe`)
 gets ZERO coordinator guards, in any repo, silently. Session records under
 `.git/coordinator-sessions/` are written BY the coordinator hooks, so a
@@ -34,7 +34,7 @@ coordinator plugin directory. Rejected alternatives, and why:
     already exited and been swept, which does not fit this op's "safe to
     call from a routine surface, cheap, live" requirement as directly as a
     single process-table read.
-  - `claude-doe` writing its own launch ledger — does not exist; building it
+  - `claude-author` writing its own launch ledger — does not exist; building it
     is spawn-time interception (a separate, explicitly out-of-scope
     workstream), not read-only detection of the state the machine is
     ALREADY in.
@@ -165,10 +165,10 @@ def _resolved_coordinator_plugin_dir() -> Optional[str]:
         from coordinator_core.resolution.facade import resolve_operator_config
         from coordinator_core.data_root import content_root_for
 
-        doe_root = resolve_operator_config()["doe_root"]
+        content_root = resolve_operator_config()["content_root"]
     except Exception:
         return None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         return None
     return os.path.normcase(os.path.normpath(str(content_root)))

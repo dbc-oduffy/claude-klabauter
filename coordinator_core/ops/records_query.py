@@ -23,7 +23,7 @@ Worktree resolution (mirrors roadmap_serve.py / handoff_children.py):
     with a logged warning — an unknown worktree is NOT a 500.
 
 Spec backlink: pln-strang-11-c11-12-native-record-e92436 § C1
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1
   (query-records.js grammar EXTEND — freeze-query-records-grammar.md is the parity
   oracle; the FULL ``--where``/``--since``/``--older-than``/``--sort``/``--format``
   grammar and the ``liveness()`` predicate table below are byte-parity ports of the
@@ -451,7 +451,7 @@ _SYNTHETIC_TYPES: frozenset[str] = frozenset({'handoff-ledger', 'research-claim'
 # NEGATIVE-SPEC — do NOT widen these globs to absorb a single repo's stray
 # archive location. Fleet-verified 2026-08-11 by example-cockpit-repo-em, who ran
 # `handoff.columns` across all six coordinator repos on this disk and compared
-# served rows against on-disk handoff files: DoE-claude 550/550, claude-klabauter
+# served rows against on-disk handoff files: coordinator-content-repo 550/550, claude-klabauter
 # 431/431, example-retrieval-repo 371/371, example-market-data-repo 194/194, example-cockpit-repo
 # 169/169 — five of six exact on the globs above. The sixth, example-store-repo, served
 # 18 of 25 because seven handoffs sit in a FLAT `state/handoffs/archive/`
@@ -647,7 +647,7 @@ def _legacy_prose_signal(worktree_root: Path, record_type: str) -> Optional[dict
 # loop's business. This is why the set lives here rather than being
 # recomputed per-caller.
 #
-# Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C3 (AC4)
+# Spec backlink: coordinator-content-repo:pln-initiative-govern-sweep-priori-6cf808 § C3 (AC4)
 UNATTACHED_TYPES: tuple[str, ...] = ('bug', 'debt', 'improvement', 'roadmap', 'handoff', 'plan')
 
 

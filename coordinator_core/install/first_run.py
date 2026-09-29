@@ -59,7 +59,7 @@ source to bash as a shell script, which never worked. Step 4c below now
 calls `coordinator_core.hooks.platform_localize.main()` directly in-process,
 which sidesteps both the wrong-path bug and the stale bash spawn.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C12
 """
 
@@ -656,7 +656,7 @@ def run_post_toolchain(plugin_root: Path, args: _Args) -> int:
 def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     print(f"[post-toolchain] PLUGIN_ROOT={plugin_root}")
 
-    # DoE-claude CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
+    # coordinator-content-repo CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
     # SCRIPT_DIR-relative not repo_root-relative -- see that file's header)
     try:
         claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_engine_root_with_class()

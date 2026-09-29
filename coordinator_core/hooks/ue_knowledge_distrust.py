@@ -5,7 +5,7 @@ auto-bootstrap (Port of: ue-knowledge-distrust.sh, DoE e91827a7, 2026-07-20,
 W4b bash-to-python-migration cohort).
 
 Disposition: naked-Python DIRECT PORT (recipe section 2.5:
-X:/DoE-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md).
+C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md).
 
 Ported behavior, in order:
   1. Bounded ".uproject" search: cwd-relative, maxdepth 3 (matches the bash
@@ -41,7 +41,7 @@ Called IN-PROCESS by the thin DoE SessionStart stub
 coordinator_reminder.render_reminder / example_retrieval_repo_detect.detect_banner's
 direct-import shape -- no IPC round trip, no register_op().
 
-Spec backlink: X:/DoE-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md section 2.5
+Spec backlink: C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md section 2.5
 """
 
 from __future__ import annotations

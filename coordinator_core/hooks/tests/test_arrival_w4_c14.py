@@ -85,6 +85,97 @@ def test_guard_manufactured_blocker_fires_on_handoff_construct(tmp_path):
     assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
 
 
+def _write_transcript(tmp_path, text):
+    import json
+
+    transcript = tmp_path / "transcript.jsonl"
+    entry = {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+    }
+    transcript.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return transcript
+
+
+def test_guard_manufactured_blocker_skips_negated_handoff(tmp_path):
+    from coordinator_core.hooks.guard_manufactured_blocker import _handler
+
+    transcript = _write_transcript(
+        tmp_path, "Nothing is waiting on you here -- proceeding on my own."
+    )
+    out = _handler(
+        {
+            "payload": {
+                "transcript_path": str(transcript),
+                "session_id": "sess-neg",
+                "cwd": str(tmp_path),
+            }
+        }
+    )
+    hso = out.get("hookSpecificOutput")
+    assert hso is None or hso.get("permissionDecision") != "deny"
+
+
+def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path):
+    from coordinator_core.hooks.guard_manufactured_blocker import _handler
+
+    transcript = _write_transcript(
+        tmp_path,
+        'As another session put it, "merging is your call" -- noted for context only.',
+    )
+    out = _handler(
+        {
+            "payload": {
+                "transcript_path": str(transcript),
+                "session_id": "sess-quote",
+                "cwd": str(tmp_path),
+            }
+        }
+    )
+    hso = out.get("hookSpecificOutput")
+    assert hso is None or hso.get("permissionDecision") != "deny"
+
+
+def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path):
+    from coordinator_core.hooks.guard_manufactured_blocker import _handler
+
+    transcript = _write_transcript(
+        tmp_path, "Three things now wait on you: A, B, C."
+    )
+    out = _handler(
+        {
+            "payload": {
+                "transcript_path": str(transcript),
+                "session_id": "sess-genuine",
+                "cwd": str(tmp_path),
+            }
+        }
+    )
+    hso = out.get("hookSpecificOutput")
+    assert hso is not None
+    assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
+
+
+def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path):
+    from coordinator_core.hooks.guard_manufactured_blocker import _handler
+
+    (tmp_path / ".git").mkdir()
+    payload = {
+        "session_id": "sess-once",
+        "cwd": str(tmp_path),
+    }
+
+    transcript_1 = _write_transcript(tmp_path, "Three things now wait on you: A, B, C.")
+    first = _handler({"payload": {**payload, "transcript_path": str(transcript_1)}})
+    first_hso = first.get("hookSpecificOutput")
+    assert first_hso is not None
+    assert first_hso.get("additionalContext") or first_hso.get("permissionDecisionReason")
+
+    transcript_2 = _write_transcript(tmp_path, "Two more things now wait on you: D, E.")
+    second = _handler({"payload": {**payload, "transcript_path": str(transcript_2)}})
+    assert second == {}
+
+
 def test_postuse_stop_family_dispatch_registers():
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.postuse_stop_family_dispatch  # noqa: F401

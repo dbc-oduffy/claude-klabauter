@@ -56,7 +56,7 @@ def test_bare_home_claude_md_without_dotclaude_dir_is_NOT_governed(tmp_path):
 def test_dev_repo_coordinator_claude_md_is_governed(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir(parents=True, exist_ok=True)
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
     coord_dir = repo_root / "coordinator"
@@ -70,7 +70,7 @@ def test_dev_repo_coordinator_claude_md_is_governed(tmp_path):
 def test_repo_scoped_claude_md_is_NOT_governed(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
     repo_scoped = repo_root / "CLAUDE.md"
@@ -112,7 +112,7 @@ def test_governed_surface_paths_global_only_without_repo_root(tmp_path):
 def test_governed_surface_paths_includes_coordinator_claude_md_with_sentinel(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
 
@@ -142,7 +142,7 @@ def test_global_home_claude_md_is_claude_md_class(tmp_path):
 
 
 def test_global_doctrine_mirror_claude_md_is_claude_md_class(tmp_path):
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     mirror_dir = repo_root / "global-doctrine"
     mirror_dir.mkdir(parents=True)
     mirror_file = mirror_dir / "CLAUDE.md"
@@ -162,7 +162,7 @@ def test_coordinator_claude_md_is_claude_md_class_even_without_sentinel(tmp_path
 
 
 def test_coordinator_templates_claude_md_tmpl_is_claude_md_class(tmp_path):
-    templates_dir = tmp_path / "DoE-claude" / "coordinator" / "templates"
+    templates_dir = tmp_path / "coordinator-content-repo" / "coordinator" / "templates"
     templates_dir.mkdir(parents=True)
     tmpl_file = templates_dir / "CLAUDE.md.tmpl"
     tmpl_file.write_text("x", encoding="utf-8")
@@ -223,7 +223,7 @@ def test_sibling_repo_coordinator_claude_md_without_sentinel_is_ledger_scoped(tm
 
 
 def test_template_claude_md_tmpl_is_ledger_scoped(tmp_path):
-    templates_dir = tmp_path / "DoE-claude" / "coordinator" / "templates"
+    templates_dir = tmp_path / "coordinator-content-repo" / "coordinator" / "templates"
     templates_dir.mkdir(parents=True)
     tmpl_file = templates_dir / "CLAUDE.md.tmpl"
     tmpl_file.write_text("x", encoding="utf-8")

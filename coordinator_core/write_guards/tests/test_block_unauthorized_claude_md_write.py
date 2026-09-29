@@ -3,7 +3,7 @@ coordinator_core.write_guards.block_unauthorized_claude_md_write -- the
 CLAUDE.md-class write guard DR-104 (2026-07-27) reintroduces over DR-058
 for one path class only (see the module's own docstring).
 
-Three tests here are load-bearing acceptance criteria per DoE-claude
+Three tests here are load-bearing acceptance criteria per coordinator-content-repo
 docs/plans/2026-07-27-claude-md-altitude-triage.md § C4, not coverage:
 
   AC8 (TestSubagentOriginatedDenied) -- a SUBAGENT-originated payload
@@ -210,9 +210,9 @@ class TestRealScopeEqualsStatedScope:
     def test_claude_md_class_paths_all_denied(self, monkeypatch, file_path):
         _deny(monkeypatch, file_path)
 
-    def test_self_referential_scope_doe_claude_own_repo_root_claude_md_denied(self, monkeypatch):
+    def test_self_referential_scope_content_root_own_repo_root_claude_md_denied(self, monkeypatch):
         monkeypatch.setattr(guard, "_is_growth", lambda *a, **kw: True)
-        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/DoE-claude")
+        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/coordinator-content-repo")
 
     @pytest.mark.parametrize(
         "file_path",

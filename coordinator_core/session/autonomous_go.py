@@ -40,7 +40,7 @@ from __future__ import annotations
 from typing import Dict, List, Mapping, Optional
 
 from coordinator_core.session import autonomous_sentinel
-from coordinator_core.session.mode_resolution import (
+from coordinator_core.session.job_mode_env import (
     COORDINATOR_JOB_MODE,
     JOB_MODE_VALUES,
 )

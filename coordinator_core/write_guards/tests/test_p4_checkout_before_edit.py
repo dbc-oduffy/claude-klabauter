@@ -280,3 +280,20 @@ class TestUnregisteredWorkspace(_ReadOnlyFixture):
 
         assert result is not None
         assert "unregistered" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_is_writable_predicate(tmp_path):
+    import os
+    import stat
+
+    from coordinator_core.write_guards import p4_checkout_before_edit as mod
+
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8", newline="\n")
+    assert mod._is_writable(str(tmp_path / "missing.txt")) is True
+    os.chmod(f, stat.S_IRUSR | stat.S_IRGRP)
+    assert mod._is_writable(str(f)) is False
+    os.chmod(f, stat.S_IRUSR | stat.S_IWGRP)
+    assert mod._is_writable(str(f)) is True
+    os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)
+    assert mod._is_writable(str(f)) is True

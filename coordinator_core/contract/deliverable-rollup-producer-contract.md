@@ -4,7 +4,7 @@
 > coordinator control-plane engine (**claude-klabauter**) derives and returns via the `deliverable.rollup` op.
 > It defines the return-field schema, per-field grain/cardinality/precision, and the resolution
 > semantics (DIRECT — slice-1 only), so that **DoE** can build its completion-entry fold render
-> (C5 of `DoE-claude:docs/plans/2026-07-06-mechanize-execution-record-fold.md`) against a stable
+> (C5 of `coordinator-content-repo:docs/plans/2026-07-06-mechanize-execution-record-fold.md`) against a stable
 > schema — without further co-design on the claude-klabauter side.
 > claude-klabauter *derives and resolves*; DoE *composes the prose* and owns the completion entry.
 >
@@ -40,7 +40,7 @@
 >   `coordinator_render_rollup.py` is **claude-klabauter-resident**, and it is **count-agnostic** over
 >   `artifacts_matched` (`grep -c artifacts_matched coordinator_core/ops/coordinator_render_rollup.py`
 >   returns 0 — the field appears nowhere in that reader's production path). Ruled in
->   `cross-repo/inbox/2026-08-13-doe-claude-em-spec-backlink-id-form-ruled-and-rollup-cleared.md`:
+>   `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-spec-backlink-id-form-ruled-and-rollup-cleared.md`:
 >   widen freely, no DoE-side reader change or sign-off was required, the `be8b5d88` precedent
 >   (which WAS a genuine DoE-side reader widen, for `scan_incomplete`) does not apply here. The
 >   writer (`_scan_artifacts_by_deliverable_id` in `deliverable_rollup.py`) is flipped as of this
@@ -178,7 +178,7 @@ The op scans:
 - `state/sizings/*.yaml` — **LANDED 2026-08-13.** Whole-document YAML sizing objects (no
   frontmatter fence), read via a dedicated YAML reader rather than the markdown-frontmatter
   parser. Folded into `RESOLVABLE_ARTIFACT_ROOTS` alongside the four roots above once the reply
-  in `cross-repo/inbox/2026-08-13-doe-claude-em-spec-backlink-id-form-ruled-and-rollup-cleared.md`
+  in `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-spec-backlink-id-form-ruled-and-rollup-cleared.md`
   established the reader is count-agnostic and claude-klabauter-resident (see Changelog).
 
 A handoff-only scan under-counts direct recall because the `initiative` FK co-occurs with
@@ -240,7 +240,7 @@ an error, because the token simply does not match any artifact's frontmatter val
 resolved from the **claude-klabauter central-state root** (`coordinator_state_root --central`, confirmed
 Claude-klabauter-resident under DR-209 tri-plane state-placement law), with a **worktree-local fail-open
 fallback** when the claude-klabauter root is unresolvable (`CLAUDE_KLABAUTER_ROOT` env-miss AND `machine-local get
-repos.claude_klabauter` returns nothing). For claude-klabauter's own worktree the central directory and the
+Repos.claude_klabauter` returns nothing). For claude-klabauter's own worktree the central directory and the
 worktree-local directory coincide (`coordinator_claude_klabauter_root` IS claude-klabauter's repo root), so
 Claude-klabauter-own rollups resolve correctly via either branch.
 

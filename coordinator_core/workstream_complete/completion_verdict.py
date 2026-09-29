@@ -47,11 +47,11 @@ PURITY — this module is pure:
     - Spawns no subprocess.
     - Touches no disk.
 
-Vocabulary ban (AC4): this module never emits doe-claude-em's next-step
+Vocabulary ban (AC4): this module never emits coordinator-content-repo-em's next-step
 vocabulary (trampoline / won't-do / backlog / spinoff). A residue item
 carries only what this engine owns — the producing gate, a reference we
 own, and the gate's own summary text — never a next-step verb. Mapping
-residue to that vocabulary is a lookup doe-claude-em's ceremony prose
+residue to that vocabulary is a lookup coordinator-content-repo-em's ceremony prose
 performs against data this module supplies either way; guessing it here
 would make their later answer a breaking change instead of a lookup
 table.

@@ -14,7 +14,7 @@ on ANY resolution failure (fail-safe advisory — mirrors the bash oracle's
 `set -uo pipefail` + `trap 'exit 0' ERR`).
 
 Port of: list-week-changelog.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec (do NOT "fix" mid-port — faithfully reproduced oracle quirks):
     - Does NOT resolve state root via the coordinator-state-root.sh bash seam

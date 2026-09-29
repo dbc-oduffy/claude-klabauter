@@ -3,16 +3,16 @@ coordinator_core.write_guards.validate_frontmatter_schema_deny — the
 CLASS=hard-deny leg of the fan-in split of DoE's
 validate-frontmatter-schema.py PreToolUse hook.
 
-Requires the sibling DoE-claude checkout (for coordinator/schemas/ and the
+Requires the sibling coordinator-content-repo checkout (for coordinator/schemas/ and the
 registry manifest) — skipped entirely when absent, mirroring the advisory
-sibling's suite and the coordinator_core.testing.doe_root convention.
+sibling's suite and the coordinator_core.testing.content_root convention.
 
-`coordinator_doe_root` is monkeypatched to the resolved sibling root for
-every test (rather than relying on REPO_DOE_CLAUDE / machine-local at test
+`coordinator_content_root` is monkeypatched to the resolved sibling root for
+every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
 
-Covers: non-write-tool/non-dict-tool_input passthrough, DoE-root-unresolvable
+Covers: non-write-tool/non-dict-tool_input passthrough, content-root-unresolvable
 fail-open, the four UNCONDITIONAL denies (own-inbox misplacement, lineage-
 reachability hard-reject, grouping-approval scope-cut, D3 out-of-enum
 handoff `kind`) firing regardless of COORDINATOR_SCHEMA_STRICT, every
@@ -26,8 +26,8 @@ for that same finding, a mutual-exclusivity smoke test against the advisory
 sibling across a representative payload set, and the module contract
 (CLASS/MATCHERS/PRIORITY).
 
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C10
-Source: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+Spec backlink: coordinator-content-repo:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C10
+Source: coordinator-content-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -42,12 +42,12 @@ import pytest
 import yaml
 
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as guard
 from coordinator_core.win_portability import no_console_creationflags
 
-_doe_root, _doe_present = doe_root_and_present()
+_content_root, _doe_present = content_root_and_present()
 
 # Real-git spawn is load-bearing: `_init_repo` builds a real git repo whose
 # lineage-reachability the deny guard's unconditional hard-reject reads
@@ -60,11 +60,11 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _pin_doe_root(monkeypatch):
+def _pin_content_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling DoE-claude checkout not found")
-    monkeypatch.setattr(guard, "coordinator_doe_root", lambda: _doe_root)
-    monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: _doe_root)
+        pytest.skip("sibling coordinator-content-repo checkout not found")
+    monkeypatch.setattr(guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: _content_root)
 
 
 def _payload(tool_name, file_path, cwd, **tool_input_extra):
@@ -113,8 +113,8 @@ class TestGateOnToolAndPayloadShape:
     def test_missing_file_path_passes_through(self, tmp_path):
         assert guard.check({"tool_name": "Write", "tool_input": {}, "cwd": str(tmp_path)}) is None
 
-    def test_doe_root_unresolvable_fails_open(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: None)
+    def test_content_root_unresolvable_fails_open(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
         result = guard.check(
             _payload("Write", str(tmp_path / "state" / "handoffs" / "x.md"), str(tmp_path),
                      content="---\ntitle: t\n---\nbody")
@@ -134,11 +134,11 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
     unconditional denies must not.
     """
 
-    def _absent_doe_root(self, monkeypatch):
+    def _absent_content_root(self, monkeypatch):
         # Simulate absence via the resolver, never by touching/moving the
         # real sibling checkout — see plan C2's "never by moving the real
         # clone" instruction.
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: None)
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
 
     def test_schema_shape_violation_still_warns_under_strict_with_sibling_absent(
         self, tmp_path, monkeypatch
@@ -146,7 +146,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
         """2026-08-06 ruling: a schema-shape violation warns, never blocks —
         this still exercises the vendored-corpus-with-sibling-absent property
         (AC2), just against the new advisory shape."""
-        self._absent_doe_root(monkeypatch)
+        self._absent_content_root(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         d = tmp_path / "state" / "handoffs"
         d.mkdir(parents=True, exist_ok=True)
@@ -160,7 +160,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
         assert "handoff:" in reason
 
     def test_fully_conformant_handoff_still_passes_with_sibling_absent(self, tmp_path, monkeypatch):
-        self._absent_doe_root(monkeypatch)
+        self._absent_content_root(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         d = tmp_path / "state" / "handoffs"
         d.mkdir(parents=True, exist_ok=True)
@@ -176,7 +176,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
         assert result is None
 
     def test_context_still_resolves_vendored_schemas_dir_with_sibling_absent(self, monkeypatch):
-        self._absent_doe_root(monkeypatch)
+        self._absent_content_root(monkeypatch)
         ctx = guard._load_context()
         assert ctx is not None
         assert ctx.schemas_dir == guard._VENDORED_SCHEMAS_DIR
@@ -191,7 +191,7 @@ class TestSchemaCorpusSourcePinned:
     test alone would silently pass again the moment DoE's live corpus and
     claude-klabauter's vendored copy happen to agree, exactly the trap the plan names.
     Asserts the guard's resolved schemas directory is the in-repo vendored
-    path and is never derived from `coordinator_doe_root()`.
+    path and is never derived from `coordinator_content_root()`.
     """
 
     def test_resolved_schemas_dir_is_the_vendored_in_repo_path(self):
@@ -203,23 +203,23 @@ class TestSchemaCorpusSourcePinned:
         assert ctx.schemas_dir == expected
         assert ctx.schemas_dir.is_dir()
 
-    def test_resolved_schemas_dir_does_not_move_when_doe_root_changes(self, tmp_path, monkeypatch):
-        # A re-point at ANY doe_root value (real, fake, or absent) must never
+    def test_resolved_schemas_dir_does_not_move_when_content_root_changes(self, tmp_path, monkeypatch):
+        # A re-point at ANY content_root value (real, fake, or absent) must never
         # change the resolved schema corpus -- pinning the SOURCE, not merely
         # today's behavioural agreement between the two corpora.
-        fake_doe_root = str(tmp_path / "not-a-real-doe-claude-checkout")
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_doe_root)
+        fake_content_root = str(tmp_path / "not-a-real-coordinator-content-repo-checkout")
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_content_root)
         ctx = guard._load_context()
         assert ctx is not None
         assert ctx.schemas_dir == guard._VENDORED_SCHEMAS_DIR
         assert "coordinator" not in ctx.schemas_dir.parts
 
-    def test_resolved_schemas_dir_is_never_derived_from_coordinator_doe_root(self):
+    def test_resolved_schemas_dir_is_never_derived_from_coordinator_content_root(self):
         ctx = guard._load_context()
         assert ctx is not None
         # The vendored corpus lives under claude-klabauter's own frontmatter/ tree,
-        # never under the DoE-claude sibling's coordinator/schemas/.
-        assert str(ctx.schemas_dir) != str(Path(_doe_root) / "coordinator" / "schemas")
+        # never under the coordinator-content-repo sibling's coordinator/schemas/.
+        assert str(ctx.schemas_dir) != str(Path(_content_root) / "coordinator" / "schemas")
         assert ctx.schemas_dir.resolve().is_relative_to(
             Path(guard.__file__).resolve().parents[1]
         )
@@ -362,8 +362,8 @@ class TestTornWriteRetry:
         cannot afford dead sleep on a steady-state absent path."""
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
-        fake_root = str(tmp_path / "nonexistent-doe-claude-root")
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_root)
+        fake_root = str(tmp_path / "nonexistent-coordinator-content-repo-root")
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
         )
@@ -379,13 +379,13 @@ class TestOwnInboxUnconditionalDeny:
 
     def _memo_content(self):
         return (
-            "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: coordinator-content-repo-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
 
     def test_own_inbox_misplacement_denies_in_default_mode(self):
-        fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-test.md"
-        result = guard.check(_payload("Write", fp, _doe_root, content=self._memo_content()))
+        fp = f"{_content_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-test.md"
+        result = guard.check(_payload("Write", fp, _content_root, content=self._memo_content()))
         assert result is not None
         reason = _assert_deny_shape(result)
         assert "cross-repo/inbox/" in reason
@@ -400,24 +400,24 @@ class TestOwnInboxUnconditionalDeny:
 
     def test_own_inbox_misplacement_denies_under_strict_too(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
-        fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-strict-test.md"
-        result = guard.check(_payload("Write", fp, _doe_root, content=self._memo_content()))
+        fp = f"{_content_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-strict-test.md"
+        result = guard.check(_payload("Write", fp, _content_root, content=self._memo_content()))
         assert result is not None
         _assert_deny_shape(result)
 
     def test_override_env_var_suppresses_the_deny(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_OWN_INBOX", "1")
-        fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-override-test.md"
-        result = guard.check(_payload("Write", fp, _doe_root, content=self._memo_content()))
+        fp = f"{_content_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-override-test.md"
+        result = guard.check(_payload("Write", fp, _content_root, content=self._memo_content()))
         assert result is None
 
     def test_correct_inbound_memo_passes_through_silent(self):
-        fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-correct-inbound-test.md"
+        fp = f"{_content_root}/cross-repo/inbox/2099-01-01-fake-correct-inbound-test.md"
         memo_content = (
-            "---\nfrom: example-game-repo-em\nto: doe-claude-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: example-game-repo-em\nto: coordinator-content-repo-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
-        result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
+        result = guard.check(_payload("Write", fp, _content_root, content=memo_content))
         assert result is None
 
 
@@ -427,7 +427,7 @@ class TestOwnInboxCasefoldBypass:
     `test_casefold_bypass_lint.py`, commit `223e04b7bf2e`).
 
     Reproduces the bug WITHOUT depending on the host filesystem's own
-    case sensitivity: both `repo_root_realpath` and `doe_root_realpath`
+    case sensitivity: both `repo_root_realpath` and `content_root_realpath`
     are `Path(...).resolve()` outputs, and `.resolve()` is lexical (no
     on-disk lookup, hence no case correction) for any path COMPONENT that
     does not exist on disk -- true on every platform, not only a
@@ -447,10 +447,10 @@ class TestOwnInboxCasefoldBypass:
         ctx = guard._load_context()
         central_id = ctx.central_canonical_id
 
-        canonical_doe_root = str(tmp_path / "doe-root-casefold-proof")
-        aliased_repo_root = str(tmp_path / "DOE-ROOT-CASEFOLD-PROOF")
+        canonical_content_root = str(tmp_path / "content-root-casefold-proof")
+        aliased_repo_root = str(tmp_path / "CONTENT-ROOT-CASEFOLD-PROOF")
 
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: canonical_doe_root)
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: canonical_content_root)
 
         repo_rel = "cross-repo/inbox/2099-01-01-fake-casefold-bypass-test.md"
         abs_file_path = f"{aliased_repo_root}/{repo_rel}"
@@ -475,18 +475,18 @@ class TestOwnInboxCasefoldBypass:
         ctx = guard._load_context()
         central_id = ctx.central_canonical_id
 
-        canonical_doe_root = str(tmp_path / "doe-root-casefold-proof-control")
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: canonical_doe_root)
+        canonical_content_root = str(tmp_path / "content-root-casefold-proof-control")
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: canonical_content_root)
 
         repo_rel = "cross-repo/inbox/2099-01-01-fake-casefold-control-test.md"
-        abs_file_path = f"{canonical_doe_root}/{repo_rel}"
+        abs_file_path = f"{canonical_content_root}/{repo_rel}"
         tool_input = {
             "file_path": abs_file_path,
             "content": self._memo_content(central_id, "some-other-repo-em"),
         }
 
         result = guard._memo_guard_step(
-            ctx, "Write", tool_input, canonical_doe_root, abs_file_path, repo_rel
+            ctx, "Write", tool_input, canonical_content_root, abs_file_path, repo_rel
         )
         assert result is not None and result[0] == "deny"
 
@@ -573,7 +573,7 @@ class TestDenyForensicsCapture:
         assert record["capture_reason"] == "deny"
         assert record["deny_reason"] == reason
         assert record["matched_schema_name"] == "handoff"
-        assert record["doe_root"] == _doe_root
+        assert record["content_root"] == _content_root
         # Repointed at the vendored corpus (AC1/AC3) -- no longer DoE's live
         # working tree -- so the forensics capture must reflect that too.
         assert record["schema_corpus_path"] == str(guard._VENDORED_SCHEMAS_DIR)
@@ -690,7 +690,7 @@ class TestDenyForensicsCapture:
         assert result is None
         assert not self._forensics_dir(tmp_path).exists()
 
-    def test_capture_does_not_fire_on_absent_doe_root_steady_state(self, tmp_path, monkeypatch):
+    def test_capture_does_not_fire_on_absent_content_root_steady_state(self, tmp_path, monkeypatch):
         """An unresolvable DoE root is the ABSENT steady state this module's
         docstring calls out (partial install, no sibling checkout) — NOT a
         failure, and potentially true on EVERY guarded write on such a
@@ -698,7 +698,7 @@ class TestDenyForensicsCapture:
         would reintroduce a per-write tax on exactly the machines least able
         to afford one.
         """
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: None)
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
         fp = tmp_path / "state" / "handoffs" / "x.md"
         fp.parent.mkdir(parents=True, exist_ok=True)
         result = guard.check(_payload("Write", str(fp), str(tmp_path), content="---\ntitle: t\n---\nbody"))
@@ -922,14 +922,14 @@ class TestRoutingMismatchDeny:
         )
 
     def test_routing_mismatch_silent_by_default(self):
-        fp = f"{_doe_root}/cross-repo/2099-01-01-fake-routing-mismatch-test.md"
-        result = guard.check(_payload("Write", fp, _doe_root, content=self._memo_content()))
+        fp = f"{_content_root}/cross-repo/2099-01-01-fake-routing-mismatch-test.md"
+        result = guard.check(_payload("Write", fp, _content_root, content=self._memo_content()))
         assert result is None
 
     def test_routing_mismatch_warns_under_strict(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
-        fp = f"{_doe_root}/cross-repo/2099-01-01-fake-routing-mismatch-strict-test.md"
-        result = guard.check(_payload("Write", fp, _doe_root, content=self._memo_content()))
+        fp = f"{_content_root}/cross-repo/2099-01-01-fake-routing-mismatch-strict-test.md"
+        result = guard.check(_payload("Write", fp, _content_root, content=self._memo_content()))
         assert result is not None
         reason = _assert_advisory_shape(result)
         assert "example-retrieval-repo-em" in reason
@@ -1114,7 +1114,7 @@ class TestPlanTasksSpineDeny:
             # dispositions. Present so the ONLY variable this test isolates stays the
             # pm_approved-required branch. NOTE: this fixture tracks DoE's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_doe_root(), so a DoE-side bump reaches them with no re-vendor.
+            # coordinator_content_root(), so a DoE-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )
@@ -1418,9 +1418,9 @@ class TestEveryFiringResultIsDenyOrAdvisoryShaped:
         return [
             _payload("Edit", str(unresolvable), str(tmp_path),
                      old_string="old", new_string="new"),
-            _payload("Write", f"{_doe_root}/cross-repo/inbox/2099-01-01-shape-test.md", _doe_root,
+            _payload("Write", f"{_content_root}/cross-repo/inbox/2099-01-01-shape-test.md", _content_root,
                       content=(
-                          "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+                          "---\nfrom: coordinator-content-repo-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
                           "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
                       )),
         ]
@@ -1567,13 +1567,13 @@ class TestMutualExclusivityWithAdvisorySibling:
             "readme": _payload("Write", str(readme), str(tmp_path),
                                content="# hello\n\nnot schema-shaped"),
             "own_inbox_misplacement": _payload(
-                "Write", f"{_doe_root}/cross-repo/inbox/2099-01-01-mutex-test.md", _doe_root,
+                "Write", f"{_content_root}/cross-repo/inbox/2099-01-01-mutex-test.md", _content_root,
                 content=(
-                    "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+                    "---\nfrom: coordinator-content-repo-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
                     "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
                 )),
             "cross_repo_routing": _payload(
-                "Write", f"{_doe_root}/cross-repo/2099-01-01-mutex-routing-test.md", _doe_root,
+                "Write", f"{_content_root}/cross-repo/2099-01-01-mutex-routing-test.md", _content_root,
                 content=(
                     "---\nfrom: example-game-repo-em\nto: example-retrieval-repo-em\ntopic: test\ntitle: t\n"
                     "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
@@ -2102,38 +2102,38 @@ class TestQueueDeferralDenyIsClaudeKlabauterScoped:
         }
 
     def test_a_sibling_repos_ceremony_park_is_not_denied(self, tmp_path, monkeypatch):
-        sibling = tmp_path / "DoE-claude"
+        sibling = tmp_path / "coordinator-content-repo"
         (sibling / "state" / "debt-backlog").mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
-        monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
+        monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: str(sibling))
         assert guard.check(self._payload(sibling)) is None
 
     def test_the_same_payload_is_denied_in_our_own_tree(self, tmp_path, monkeypatch):
         """The other half — scoping must not have disabled the rule at home."""
-        sibling = tmp_path / "DoE-claude"
+        sibling = tmp_path / "coordinator-content-repo"
         (sibling / "state" / "debt-backlog").mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
         result = guard.check(self._payload(Path.cwd()))
         assert result is not None
         assert "case_against" in _assert_deny_shape(result)
 
     def test_evaluator_declines_on_a_doe_owned_root(self, tmp_path, monkeypatch):
-        sibling = tmp_path / "DoE-claude"
+        sibling = tmp_path / "coordinator-content-repo"
         sibling.mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
         fm = {"status": "deferred", "pm_approved": True, "deferred_by": "/debt-triage x",
               "deferred_until": "2026-12-31", "why_blocked": "w"}
         assert guard._evaluate_queue_deferral_grant(
             fm, "state/debt-backlog/park.yaml", {"session_id": "s"}, "", str(sibling)
         ) is None
 
-    def test_an_unresolvable_doe_root_keeps_enforcing_locally(self, monkeypatch):
+    def test_an_unresolvable_content_root_keeps_enforcing_locally(self, monkeypatch):
         """Fail-safe direction: a resolver that raises must not silently disable
         the guard. Under-enforcing at home is recoverable; reaching into a
         sibling is not, and neither is a rule that quietly stops working."""
         def _boom():
             raise RuntimeError("registry unavailable")
-        monkeypatch.setattr(guard, "coordinator_doe_root", _boom)
+        monkeypatch.setattr(guard, "coordinator_content_root", _boom)
         assert guard._is_doe_owned_repo(str(Path.cwd())) is False
         result = guard.check(self._payload(Path.cwd()))
         assert result is not None, "guard stopped enforcing when DoE root was unresolvable"
@@ -2391,7 +2391,7 @@ class TestPlanTasksSpineIntegrityDeny:
       * `## Spine` instead of `## Tasks` — claude-klabauter
         docs/plans/2026-09-07-dispatch-emit-runtime-pathspec-and-test-locator.md,
         authored the day before this landed, with both guards live.
-      * an unparseable block — DoE-claude
+      * an unparseable block — coordinator-content-repo
         docs/plans/2026-08-20-make-the-atlas-mechanical.md, where the lenient
         `parse_yaml` returned 9 rows of a 15-row spine and the guard validated
         the 9 it invented.

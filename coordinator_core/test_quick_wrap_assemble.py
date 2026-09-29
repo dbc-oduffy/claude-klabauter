@@ -17,7 +17,7 @@ stops being emitted, which is the failure mode that made quick-wrap's skill body
 five `engine-gap` markers in the first place.
 
 Spec backlink: state/handoffs/2026-08-14-fact-layer-library-sweep.md § Specification
-Fold-in ask: cross-repo/archive/2026-08-14-doe-claude-em-quick-wrap-has-no-assembler-at-all.md
+Fold-in ask: cross-repo/archive/2026-08-14-coordinator-content-repo-em-quick-wrap-has-no-assembler-at-all.md
 Cutover:      docs/plans/2026-08-18-five-close-gate-facts-onto-the-facade.md § C7
 """
 from __future__ import annotations
@@ -364,7 +364,7 @@ def test_memo_only_session_passes_condition_three(tmp_path: Path):
             "consumed_predecessor": False,
             "classification": "memo",
             "artifact_path": None,
-            "basename": "2026-08-19-doe-claude-em-some-memo.md",
+            "basename": "2026-08-19-coordinator-content-repo-em-some-memo.md",
         },
         {"present": False},
         _diff(),

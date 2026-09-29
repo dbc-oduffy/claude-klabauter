@@ -19,7 +19,7 @@ from coordinator_core.ops.doc_content_verify import (
 
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route for
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -114,10 +114,10 @@ class TestNegativeSurface:
         assert is_excluded("/coordinator:install") is True
 
     def test_exclusion_url_with_scheme(self):
-        assert is_excluded("https://github.com/dbc-oduffy/DoE-claude") is True
+        assert is_excluded("https://github.com/dbc-oduffy/coordinator-content-repo") is True
 
     def test_exclusion_bare_domain(self):
-        assert is_excluded("github.com/dbc-oduffy/DoE-claude") is True
+        assert is_excluded("github.com/dbc-oduffy/coordinator-content-repo") is True
 
     def test_exclusion_glob_metacharacter(self):
         assert is_excluded("coordinator/skills/*/SKILL.md") is True
@@ -239,8 +239,8 @@ class TestAC13MotivatingIncident:
         )
 
 
-def _doe_root() -> str:
-    return read_doe_root_pointer()
+def _content_root() -> str:
+    return read_content_root_pointer()
 
 
 def _git_show(repo_root: str, sha: str, path: str) -> str:
@@ -268,7 +268,7 @@ def _git_ls_tree_exists(repo_root: str, sha: str, path: str) -> bool:
 
 @functools.lru_cache()
 def _doe_repo_available() -> bool:
-    root = _doe_root()
+    root = _content_root()
     if not root or not Path(root).is_dir():
         return False
     result = subprocess.run(
@@ -288,13 +288,13 @@ class TestAC13HistoricalReplay:
     def _require_doe_repo(self):
         if not _doe_repo_available():
             pytest.skip(
-                "DoE-claude repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
+                "coordinator-content-repo repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
             )
 
     @staticmethod
-    def _repo_exists_at_commit(doe_root: str, sha: str) -> "callable":
+    def _repo_exists_at_commit(content_root: str, sha: str) -> "callable":
         def _check(token: str) -> bool:
-            return _git_ls_tree_exists(doe_root, sha, token)
+            return _git_ls_tree_exists(content_root, sha, token)
 
         return _check
 
@@ -302,7 +302,7 @@ class TestAC13HistoricalReplay:
         """DISK-TRUTH ADAPTATION from the plan's stated feasibility note.
 
         The plan's C6b/AC13 text asserts `coordinator/scripts/install-maximalist.py`
-        is "absent everywhere" at b644d5a9 — absent from DoE-claude AND absent
+        is "absent everywhere" at b644d5a9 — absent from coordinator-content-repo AND absent
         under the engine root. The first half holds (verified below via
         `git ls-tree`); the second half does not: `git log --follow --diff-filter=A`
         against claude-klabauter shows the file landed there at commit `8a28a6ca`,
@@ -329,17 +329,17 @@ class TestAC13HistoricalReplay:
         and "post-install, engine root expected" is a prose-context judgment,
         explicitly out of v1's mechanical scope (see module docstring's
         anti-scope)."""
-        doe_root = _doe_root()
-        text = _git_show(doe_root, _B644D5A9_SHA, "README.md")
+        content_root = _content_root()
+        text = _git_show(content_root, _B644D5A9_SHA, "README.md")
 
         assert not _git_ls_tree_exists(
-            doe_root, _B644D5A9_SHA, "coordinator/scripts/install-maximalist.py"
+            content_root, _B644D5A9_SHA, "coordinator/scripts/install-maximalist.py"
         )
 
         findings = verify_doc(
             "README.md",
             text,
-            repo_exists=self._repo_exists_at_commit(doe_root, _B644D5A9_SHA),
+            repo_exists=self._repo_exists_at_commit(content_root, _B644D5A9_SHA),
             sibling_checkers=[],
         )
 
@@ -349,15 +349,15 @@ class TestAC13HistoricalReplay:
         ) in {(f.token, f.reason) for f in findings}
 
     def test_install_maximalist_resolves_cross_repo_when_sibling_root_available(self):
-        doe_root = _doe_root()
-        text = _git_show(doe_root, _B644D5A9_SHA, "README.md")
+        content_root = _content_root()
+        text = _git_show(content_root, _B644D5A9_SHA, "README.md")
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "scripts" / "install-maximalist.py").exists()
 
         findings = verify_doc(
             "README.md",
             text,
-            repo_exists=self._repo_exists_at_commit(doe_root, _B644D5A9_SHA),
+            repo_exists=self._repo_exists_at_commit(content_root, _B644D5A9_SHA),
             sibling_checkers=[lambda token: (claude_klabauter_root / token).exists()],
         )
 
@@ -365,11 +365,11 @@ class TestAC13HistoricalReplay:
         assert "coordinator/scripts/install-maximalist.py" not in flagged_tokens
 
     def test_negative_cross_repo_citation_not_flagged_install_substrate(self):
-        doe_root = _doe_root()
-        text = _git_show(doe_root, _B644D5A9_SHA, "INSTALL.md")
+        content_root = _content_root()
+        text = _git_show(content_root, _B644D5A9_SHA, "INSTALL.md")
 
         assert not _git_ls_tree_exists(
-            doe_root, _B644D5A9_SHA, "coordinator/lib/install-substrate.py"
+            content_root, _B644D5A9_SHA, "coordinator/lib/install-substrate.py"
         )
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists()
@@ -377,7 +377,7 @@ class TestAC13HistoricalReplay:
         findings = verify_doc(
             "INSTALL.md",
             text,
-            repo_exists=self._repo_exists_at_commit(doe_root, _B644D5A9_SHA),
+            repo_exists=self._repo_exists_at_commit(content_root, _B644D5A9_SHA),
             sibling_checkers=[lambda token: (claude_klabauter_root / token).exists()],
         )
 

@@ -26,7 +26,7 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _HAZARDOUS_PAYLOAD = {
-    "worktree_root": "/Users/x/X/DoE-claude",
+    "worktree_root": "/Users/x/X/coordinator-content-repo",
     "paths": ["docs/plans/p.md"],
     "message": (
         "reconcile: C1's claude-klabauter half landed\n\n"

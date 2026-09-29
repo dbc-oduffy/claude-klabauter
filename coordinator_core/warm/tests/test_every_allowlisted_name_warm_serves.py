@@ -14,7 +14,7 @@ instrument, never an import/exec of the corpus -- see that module's own
 negative-spec) over the LIVE allowlist and fails on any finding not already
 recorded in `_BASELINE` below.
 
-Ratchet shape LIFTED from `X:/DoE-claude/coordinator/tests/test_bin_entrypoint_inertness.py`
+Ratchet shape LIFTED from `C:/coordinator-content-repo/coordinator/tests/test_bin_entrypoint_inertness.py`
 (`_load_local_baseline`, `test_bin_entrypoint_inertness_baseline_has_no_stale_entries`,
 `test_baseline_is_empty`, `test_scans_all_bin_files`) per this chunk's own body ("Reuse
 DoE's ratchet shape, don't invent one") -- not re-derived. A 202-name (at

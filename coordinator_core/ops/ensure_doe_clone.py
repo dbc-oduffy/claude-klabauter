@@ -1,11 +1,11 @@
 """
 coordinator_core.ops.ensure_doe_clone — DoE-clone resolution + idempotent
-clone-if-absent, ported from the DoE-claude install playbook
+clone-if-absent, ported from the coordinator-content-repo install playbook
 (coordinator/commands/install.md)
-(the two literal bash fences at lines 731 and 747 of the DoE-claude source).
+(the two literal bash fences at lines 731 and 747 of the coordinator-content-repo source).
 
-Purpose: resolve the local DoE-claude clone path (``REPO_DOE_CLAUDE`` env
-override, then ``machine-local get repos.doe_claude``) and, if the resolved
+Purpose: resolve the local coordinator-content-repo clone path (``REPO_CONTENT_ROOT`` env
+override, then ``machine-local get repos.content_root``) and, if the resolved
 directory does not yet contain a ``.git`` (i.e. is not actually cloned),
 perform the clone. Emits the exact ``doe_clone: <status>`` contract row the
 DoE doc's Phase 7 status table expects on every exit path — this collapses
@@ -13,14 +13,14 @@ install.md's own status-row echo/if wrapper into the CLI (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
 
 Division of labor (unchanged from every other DoE-clone-resolving op in this
-slice, e.g. ``gen_doe_root_pointer``): resolution order is env override,
+slice, e.g. ``gen_content_root_pointer``): resolution order is env override,
 then the ``machine-local`` registry. This module additionally resolves a
-clone URL (``REPO_DOE_CLAUDE_URL`` env override, then ``machine-local get
-repos.doe_claude_url``) — a widening over the DoE doc block's own literal
+clone URL (``REPO_CONTENT_ROOT_URL`` env override, then ``machine-local get
+repos.content_root_url``) — a widening over the DoE doc block's own literal
 text, which read ``DOE_REPO_URL="<operator-supplied or coordinated from
-repos.doe_claude_url registry key>"`` (a placeholder comment, not runnable
+repos.content_root_url registry key>"`` (a placeholder comment, not runnable
 shell). A real CLI has to resolve an actual URL to invoke ``git clone``, so
-this module implements the ``repos.doe_claude_url`` half of that comment
+this module implements the ``repos.content_root_url`` half of that comment
 literally and fails loud (a distinct ``doe_clone: failed`` row) when no URL
 is resolvable — see docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 port notes for this repo's disposition of the gap.
@@ -62,19 +62,19 @@ def _registry_get(key: str) -> str:
 
 
 def resolve_doe_clone() -> str:
-    """Tier 1: REPO_DOE_CLAUDE env. Tier 2: machine-local get repos.doe_claude."""
-    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
+    """Tier 1: REPO_CONTENT_ROOT env. Tier 2: machine-local get repos.content_root."""
+    env_override = os.environ.get("REPO_CONTENT_ROOT", "")
     if env_override:
         return env_override
-    return _registry_get("repos.doe_claude")
+    return _registry_get("repos.content_root")
 
 
 def resolve_doe_clone_url() -> str:
-    """Tier 1: REPO_DOE_CLAUDE_URL env. Tier 2: machine-local get repos.doe_claude_url."""
-    env_override = os.environ.get("REPO_DOE_CLAUDE_URL", "")
+    """Tier 1: REPO_CONTENT_ROOT_URL env. Tier 2: machine-local get repos.content_root_url."""
+    env_override = os.environ.get("REPO_CONTENT_ROOT_URL", "")
     if env_override:
         return env_override
-    return _registry_get("repos.doe_claude_url")
+    return _registry_get("repos.content_root_url")
 
 
 def main(argv: List[str]) -> int:
@@ -88,18 +88,18 @@ def main(argv: List[str]) -> int:
 
     if not doe_clone:
         if check_only:
-            print("doe_clone: skipped (repos.doe_claude not set)")
+            print("doe_clone: skipped (repos.content_root not set)")
             return 0
         if non_interactive:
             msg = (
-                "doe_clone: failed (repos.doe_claude not set — pre-seed the registry or set "
-                "REPO_DOE_CLAUDE before running --non-interactive install)"
+                "doe_clone: failed (repos.content_root not set — pre-seed the registry or set "
+                "REPO_CONTENT_ROOT before running --non-interactive install)"
             )
             print(msg, file=sys.stderr)
             print(msg)
             return 1
         print(
-            "doe_clone: skipped (repos.doe_claude not set — run the interactive "
+            "doe_clone: skipped (repos.content_root not set — run the interactive "
             "DoE-clone prompt, then re-invoke)"
         )
         return 1
@@ -117,7 +117,7 @@ def main(argv: List[str]) -> int:
         # A git clone of SOMETHING, but not coordinator-claude -- not the
         msg = (
             f"doe_clone: failed ({doe_clone} is a git clone but has no coordinator/ "
-            f"-- not coordinator-claude; repoint repos.doe_claude at the correct clone "
+            f"-- not coordinator-claude; repoint repos.content_root at the correct clone "
             f"or clone the right URL)"
         )
         print(msg, file=sys.stderr)
@@ -131,8 +131,8 @@ def main(argv: List[str]) -> int:
     url = resolve_doe_clone_url()
     if not url:
         msg = (
-            f"doe_clone: failed (repos.doe_claude_url not resolvable — set REPO_DOE_CLAUDE_URL "
-            f"or `machine-local set repos.doe_claude_url <url>` for target {doe_clone})"
+            f"doe_clone: failed (repos.content_root_url not resolvable — set REPO_CONTENT_ROOT_URL "
+            f"or `machine-local set repos.content_root_url <url>` for target {doe_clone})"
         )
         print(msg, file=sys.stderr)
         print(msg)

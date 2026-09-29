@@ -2,7 +2,7 @@
 coordinator_core.ops.verify_coverage — cross-reference integrity sweep for the
 coordinator-claude plugin tree.
 
-Purpose: port of `coordinator/bin/verify-coverage.js` (DoE-claude). Inspired by
+Purpose: port of `coordinator/bin/verify-coverage.js` (coordinator-content-repo). Inspired by
 Example-game-repo's agent-domain-coverage.test.ts (TOOL_ORPHANED / TOOL_DOUBLE_CLAIMED /
 STALE_AGENT_ENTRY against the MCP tool-defs <-> agent-routing-table producer/
 consumer contract). This module ports the same shape to coordinator-claude's
@@ -51,7 +51,7 @@ Exit codes (parity-critical -- callers branch on these):
          or file could not be scanned -- see "scanIncomplete"/"scanErrors" in JSON output)
     2 -- usage / configuration error (unknown flag, missing root/sweep-root dir)
 
-Port source: coordinator/bin/verify-coverage.js (DoE-claude, 517 lines)
+Port source: coordinator/bin/verify-coverage.js (coordinator-content-repo, 517 lines)
 Spec backlink: docs/plans/2026-07-16-clean-slate-recon (BIG_PORT Wave B, item verify-coverage)
 
 Negative-spec (faithful reproduction of the JS oracle's behavior):
@@ -101,7 +101,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 
 
 _USAGE = (
@@ -140,9 +140,9 @@ def parse_args(argv: List[str]) -> dict:
 def default_root(home_dir: Optional[str] = None) -> str:
     if home_dir is None:
         home_dir = os.path.expanduser("~")
-    doe_root = read_doe_root_pointer_file(home_dir)
-    if doe_root:
-        return doe_root
+    content_root = read_content_root_pointer_file(home_dir)
+    if content_root:
+        return content_root
     return os.path.join(home_dir, ".claude", "plugins", "coordinator-claude")
 
 
@@ -274,7 +274,7 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
         'worker'     -- name listed under "## Worker Dispatch Recommendations"
 
     Marker-vocabulary discriminator (2026-08-06, cross-repo memo
-    2026-08-06-doe-claude-em-verify-coverage-extractor-marker-vocabulary.md):
+    2026-08-06-coordinator-content-repo-em-verify-coverage-extractor-marker-vocabulary.md):
     `coordinator:` doubles as the fence/sentinel/marker namespace, not only
     the dispatch namespace -- a doc describing a marker TOKEN ("needs a
     `coordinator:fleet-only` fence") is not dispatching anything, and no

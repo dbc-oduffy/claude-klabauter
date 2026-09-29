@@ -2,7 +2,7 @@
 coordinator_core.review_assemble.exec_auth_stamp — mutating assembler for the
 `/review` skill's execution-authorization stamp.
 
-Purpose: `/review`'s "Cross-reference exit" gate (DoE-claude
+Purpose: `/review`'s "Cross-reference exit" gate (coordinator-content-repo
 `coordinator/skills/review/SKILL.md` L197-200) narrates a three-step ORDINAL
 sequence in prose -- land every plan-body edit the approval entails FIRST,
 THEN compute the plan-body hash, THEN write the four
@@ -71,7 +71,7 @@ is a CLI-verb-layer hook, not a mint-level one:
 never flip plan status when called directly, in-process, by a caller other
 than `main()`/`_main_authorize_invocation`.
 
-Third verb, `mark-reviewed` (DoE-claude memo 2026-08-27-doe-claude-em-stamp-
+Third verb, `mark-reviewed` (coordinator-content-repo memo 2026-08-27-coordinator-content-repo-em-stamp-
 reviewed-bound-to-approval-ceremony): the EARLIER, dedicated producer of the
 `reviewed` rung, reachable at review-integration completion rather than at PM
 execution-approval, writing no authorization field at all -- see
@@ -109,7 +109,7 @@ Negative-spec:
     verified importable as a dispatch-time sanity check (per this chunk's
     spec note) but is not consumed by this module's body.
 
-Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
+Spec backlink: coordinator-content-repo:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
 """
 
 from __future__ import annotations
@@ -983,15 +983,15 @@ def _main_mark_reviewed(rest: list[str]) -> int:
 
     Exists because `reviewed` is a real transitory state a plan occupies
     between review-integration completion and the PM being asked about
-    execution (DoE-claude `coordinator/docs/wiki/coordinator-tripwires/
+    execution (coordinator-content-repo `coordinator/docs/wiki/coordinator-tripwires/
     plan-status-ladder.md`: `reviewed` is earned when *"review integration
     completes"*). Before this verb the only producer of that rung was
     `_fire_stamp_reviewed` on the `stamp` verb, which runs at PM
     EXECUTION-approval and is superseded by `_fire_stamp_approved` in the
     same invocation -- so no plan was ever observed at `reviewed`, and a
     fully reviewed-and-integrated plan awaiting the PM read `draft`,
-    indistinguishable from one nobody had looked at (DoE-claude memo
-    2026-08-27-doe-claude-em-stamp-reviewed-bound-to-approval-ceremony).
+    indistinguishable from one nobody had looked at (coordinator-content-repo memo
+    2026-08-27-coordinator-content-repo-em-stamp-reviewed-bound-to-approval-ceremony).
 
     Divergence from `_fire_stamp_reviewed`'s additive-side-effect contract,
     deliberate: the rung advance IS this verb's whole job, not a side effect

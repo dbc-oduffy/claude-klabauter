@@ -42,6 +42,7 @@ from typing import Optional
 
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.op import restamp
+from coordinator_core.session.claimed_write import replace_text
 
 
 class NoEmbeddedCommitPhaseError(ValueError):
@@ -144,5 +145,5 @@ def mark_landed_and_restamp(
     """
     script_text = script_path.read_text(encoding="utf-8")
     new_text = mark_landed(script_text, phase_title, sha)
-    script_path.write_text(new_text, encoding="utf-8", newline="\n")
+    replace_text(script_path, new_text)
     return restamp(script_path, session_id)

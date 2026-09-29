@@ -415,21 +415,21 @@ def test_fixture_refuted_and_not_reproduced_route_legally():
 
 
 def test_doe_queue_profiles_pass_validate_graph():
-    # census row 1: all six DoE profiles at doe-claude 15e42950 already pass
+    # census row 1: all six DoE profiles at coordinator-content-repo 15e42950 already pass
     # both new refusals unchanged. Resolved through the fleet's existing
-    # `repos.doe_claude` machine-local registry key (the same resolution
-    # `session_start_register_doe_claude_root.py` maintains).
+    # `repos.content_root` machine-local registry key (the same resolution
+    # `session_start_register_content_root_root.py` maintains).
     from coordinator_core.machine_resolver import registry_get
 
-    doe_root = registry_get("repos.doe_claude")
-    if not doe_root or not Path(doe_root).is_dir():
-        pytest.skip("repos.doe_claude unresolved")
-    profile_dir = Path(doe_root) / "coordinator" / "queue-profiles"
+    content_root = registry_get("repos.content_root")
+    if not content_root or not Path(content_root).is_dir():
+        pytest.skip("repos.content_root unresolved")
+    profile_dir = Path(content_root) / "coordinator" / "queue-profiles"
     if not profile_dir.is_dir():
-        pytest.skip("repos.doe_claude unresolved")
+        pytest.skip("repos.content_root unresolved")
     profile_names = sorted(p.stem for p in profile_dir.glob("*.yaml"))
     if not profile_names:
-        pytest.skip("repos.doe_claude unresolved")
+        pytest.skip("repos.content_root unresolved")
     for name in profile_names:
         profile = gp.load_profile(name, profile_dir)
         gp.validate_graph(profile)  # must not raise

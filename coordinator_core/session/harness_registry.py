@@ -70,7 +70,7 @@ returned false on Windows before ever reading the variable, so there the
 override is inert rather than wrong.
 
 Reading a gate-off registry therefore does NOT license "nothing local can
-be done". `coordinator/bin/claude-doe.py` already defaults the variable
+be done". `coordinator/bin/claude-author.py` already defaults the variable
 on for every session it launches. What is still unexplained, and is a
 Claude-klabauter defect rather than a remote-flag fact, is that the default has not
 yet produced a bound inbox on the interactive path: measured 2026-08-15,
@@ -92,7 +92,7 @@ within six minutes of each other:
 
 The second line is the inbox bound and listening on a native Windows
 named pipe, and it is the mechanism behind the cross-repo EM-to-EM round
-trip DoE-claude recorded that day
+trip coordinator-content-repo recorded that day
 (`archive/handoffs/2026-08/2026-08-14-addressability-retraction-and-peer-read-wiring.md`).
 So a gate-off reading here is a point-in-time fact about a remote flag,
 never evidence that the capability is missing on this platform.
@@ -127,8 +127,8 @@ Like every other field here, reading them attaches no liveness meaning:
 `start_epoch` only.
 
 `self_record()` (added `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
-§ C1, spike-verified anchor; cite `DoE-claude@642195ba` / follow-up
-`DoE-claude@88929bea` — the wrongful-takeover shape this module's
+§ C1, spike-verified anchor; cite `coordinator-content-repo@642195ba` / follow-up
+`coordinator-content-repo@88929bea` — the wrongful-takeover shape this module's
 negative-spec defends against) is the O(1) leg over the pid-keyed
 `<registry_dir>/<CLAUDE_PID>.json` file: it resolves `CLAUDE_PID` via
 `coordinator_core.session.core._resolve_claude_pid_from_env` (the one
@@ -185,7 +185,7 @@ Negative-spec:
       1465-second measurement above is the reason why, and that finding
       stands unchanged, not superseded by anything below.
 
-      A larger spike (DoE-claude:state/audits/2026-08-13-session-stop-reason-spike.md)
+      A larger spike (coordinator-content-repo:state/audits/2026-08-13-session-stop-reason-spike.md)
       independently re-measured this: 390 consecutive-tick transitions
       across 30 live sessions over 17 ticks, using monotonic process
       CPU-time delta as independent ground truth, excluding an ambiguous
@@ -202,7 +202,7 @@ Negative-spec:
       distribution do not depend on that threshold.
 
       RULING (EM ruling, claude-klabauter-em, 2026-08-14, in response to DoE's
-      memo `cross-repo/inbox/2026-08-13-doe-claude-em-session-state-surface-findings.md`):
+      memo `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-session-state-surface-findings.md`):
       DoE's observation was correct — the ban IS broader than the 1465s
       `updatedAt` measurement alone supports — and it is kept broad
       deliberately, not by oversight. Both questions DoE raised are now

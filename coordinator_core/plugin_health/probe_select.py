@@ -9,7 +9,7 @@ run mode (closes a subprocess spawn site that fired on every doctor-sentinel inv
 under the bash oracle — that script shelled out to this file, itself once-Python, as a
 separate `python doctor-probe-select.py` process).
 
-`git mv` port of DoE-claude coordinator/bin/doctor-probe-select.py: logic is otherwise
+`git mv` port of coordinator-content-repo coordinator/bin/doctor-probe-select.py: logic is otherwise
 unchanged (it was already pure, portable Python with no shell dependency) — only the
 manifest-path default changed from "sibling to this file" (coordinator/bin/) to an
 explicit caller-supplied `manifest_path` argument, since this module's own directory is
@@ -19,8 +19,8 @@ this module is claude-klabauter-side code — see plugin_health/__init__.py nega
 CARGO-CULT GUARD: this selector operates on the fired-probe manifest only. P-7a is
 EM-native and NOT in the manifest; --probe P-7a / select_probe(probes, "P-7a") exits 2.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2
-Port of:       coordinator/bin/doctor-probe-select.py (DoE-claude repo)
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2
+Port of:       coordinator/bin/doctor-probe-select.py (coordinator-content-repo repo)
 """
 
 from __future__ import annotations

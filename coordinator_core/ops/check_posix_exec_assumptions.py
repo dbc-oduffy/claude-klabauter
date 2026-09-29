@@ -85,7 +85,7 @@ confidence -- the tier determines whether a class can block or only report:
     untrustworthy hits fleet-wide, and is absent here rather than shipped
     noisy). Zero-tolerance like Tier A (no baseline): the two repos this
     module has been run against had a small, mechanically-fixable count
-    (34 files in claude-klabauter, 1 in DoE-claude), fixed outright on
+    (34 files in claude-klabauter, 1 in coordinator-content-repo), fixed outright on
     2026-07-28 rather than grandfathered into a shrinking baseline.
 
 Classes are independent tells and are NOT deduped against each other -- see
@@ -287,7 +287,7 @@ cannot fail a gate.
 This module is fleet-shaped: every function takes a `root` (the repo to
 scan), so the SAME engine backs a guard in claude-klabauter's own tree and,
 via cross-repo import (`_claude_klabauter_root.resolve_claude_klabauter_root()`), a guard
-invoked from any sibling repo's own test tier (e.g. DoE-claude) against
+invoked from any sibling repo's own test tier (e.g. Coordinator-content-repo) against
 ITS OWN tree and ITS OWN baseline. There is no notion of "the" tree here —
 callers always name one.
 
@@ -310,7 +310,7 @@ Anchor choice (2026-07-28 review fix, replacing an inert `HEAD`-relative
 diff): comparing against `HEAD` is structurally unable to ever fire once a
 widening commit has landed, because the instant that commit exists, `HEAD`
 IS the widened content and `current == HEAD` trivially. The two callers of
-this function (this repo's and DoE-claude's own real-tree pytest suites) run
+this function (this repo's and coordinator-content-repo's own real-tree pytest suites) run
 `assert_baseline_not_grown` as a plain pytest assertion, necessarily AFTER
 any widening commit has already landed — neither repo wires this into a
 git pre-commit hook (staged-vs-parent-HEAD is the only diff shape where
@@ -401,7 +401,7 @@ target with an owner, not a settled row -- the same "standing reduction
 target" teeth class (b) in `shell-out-carve-outs.md` already carries for
 local git hooks.
 
-Keying (repo-scoped, closed 2026-08-03 — was the DoE-claude memo of
+Keying (repo-scoped, closed 2026-08-03 — was the coordinator-content-repo memo of
 2026-07-28's open caveat): EXEMPTIONS is keyed
 `class -> repo_key -> relpath -> reason`, and `scan()` subtracts ONLY the
 sub-dict belonging to the repo actually being scanned. Bare-relpath keying
@@ -410,7 +410,7 @@ fleet-shaped, so `coordinator/scripts/setup.py` — granted for claude-klabauter
 — also exempted that exact relpath in EVERY sibling repo, silently hiding a
 genuinely defective sibling file the guard exists to report. `repo_key` is
 NOT a new identity mechanism: it is the fleet's existing `repos.<key>`
-machine-local registry vocabulary (`repos.doe_claude`,
+machine-local registry vocabulary (`repos.content_root`,
 `repos.claude_klabauter`), derived from the repo directory basename by the
 same normalization as `coordinator_core.install.first_run._derive_repo_key`,
 `cross-repo-memo`'s `_receiver_repo_key`, and
@@ -536,13 +536,13 @@ Negative-spec:
       matching for the same reason — a docstring citing an example path is
       documentation, not a hardcoded runtime assumption.
     - Does NOT scan non-`.py` files for classes 4-6. Bash is being retired
-      fleet-wide (see DoE-claude `coordinator.local.md` P0 bash-kill
+      fleet-wide (see coordinator-content-repo `coordinator.local.md` P0 bash-kill
       campaign) and the remaining count is near zero; adding a shell-syntax
       parser for a near-extinct substrate was not worth the added false-
       positive surface. A `.py`-only scope is stated as a real limitation,
       not implied to be complete coverage of every interpreter in the tree.
 
-Spec backlink: DoE-claude coordinator/docs/wiki/foreign-platform-path-guard.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/foreign-platform-path-guard.md
   (sibling guard for a related but distinct hazard class — settings.json /
   working-repos.yaml path leakage, not execution-assumption files)
 Prior art: coordinator/bin/check-machine-path-leak.py (git-ls-files-based
@@ -701,7 +701,7 @@ _FORBIDDEN_PATH_CHARS = re.compile(r'[:*?"<>|]')
 #
 # Zero-tolerance like Tier A (no baseline, no ratchet): the two repos this
 # module has been run against had a small, mechanically-fixable violation
-# count (34 files in claude-klabauter, 1 file in DoE-claude, all fixed
+# count (34 files in claude-klabauter, 1 file in coordinator-content-repo, all fixed
 # 2026-07-28 by inserting `encoding="utf-8"` at each site) -- small enough
 # to fix outright rather than grandfather into a shrinking baseline.
 #
@@ -1078,7 +1078,7 @@ _REASON_CHMOD_RELATIVE_INVARIANT = (
 # (`coordinator_core/ops/ensure_python3_exe_shim.py`) ... retire and
 # re-target sourcers." Two prior audits against the grant, not one, and
 # neither is cited or reconciled by the grant text that superseded them.
-# `cross-repo/archive/2026-08-13-doe-claude-em-resolve-python-sh-caller-
+# `cross-repo/archive/2026-08-13-coordinator-content-repo-em-resolve-python-sh-caller-
 # sweep-answer.md` adds a third: zero callers plane-wide, an explicit "we
 # assert no interface constraint on resolve-python.sh" from the peer
 # plane, and DoE doctrine already recording the FLOOR shim retired in
@@ -1239,7 +1239,7 @@ _REASON_ACCESS_XOK_TEST_ASSERTION_DEGRADES = (
 #: of that repo's canonical clone directory), named here so a typo in a
 #: nested key is a NameError at import rather than a silently-inert grant.
 REPO_CLAUDE_KLABAUTER = "claude_klabauter"
-REPO_DOE_CLAUDE = "doe_claude"
+REPO_CONTENT_ROOT = "content_root"
 REPO_EXAMPLE_GAME_WORKBENCH_REPO = "example_game_workbench_repo"
 
 
@@ -1281,16 +1281,16 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        # the two REPO_DOE_CLAUDE entries formerly here
+        # the two REPO_CONTENT_ROOT entries formerly here
         # (coordinator/bin/stable-suite-run.py,
         # coordinator/tests/test_cc_root_source_guard.py) exempted a class
         # that can no longer fire in ANY repo: C1 dropped path_separator's
         # three detection arms unconditionally (not scoped to
         # claude-klabauter), so _scan_python_file never calls
-        # _record("path_separator", ...) for any repo_key, DoE-claude
+        # _record("path_separator", ...) for any repo_key, coordinator-content-repo
         # included -- the identical dead-letter rationale C2's own comment
         # above used to strike the 148 REPO_CLAUDE_KLABAUTER rows. Struck by
-        # the same rationale rather than left for DoE-claude's own test
+        # the same rationale rather than left for coordinator-content-repo's own test
         # tier to notice, since check_no_stale_exemptions is repo-scoped
         # and a claude-klabauter gate run can never flag another repo's
         # entries (see that function's own docstring).
@@ -1355,7 +1355,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/warm/tests/test_door_credential.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_door_read_deadline_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_election_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
-            # `_write_claude_doe_argv_stub`'s only caller is guarded by an
+            # `_write_claude_author_argv_stub`'s only caller is guarded by an
             # enclosing `if os.name == "nt": skip ... elif ...:` at the
             # call site, not inside this function's own body -- a
             # cross-function guard `_is_windows_guarded()`'s single-
@@ -1440,7 +1440,7 @@ EXEMPT_PREFIXES: Dict[str, Dict[str, str]] = {
         "coordinator_core/publish/tests/fixtures/golden-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
         "coordinator_core/publish/tests/fixtures/input-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
     },
-    REPO_DOE_CLAUDE: {
+    REPO_CONTENT_ROOT: {
         "state/review-trail/diffs/m8-baseline/": _M8_REVIEW_TRAIL_SNAPSHOT_REASON,
     },
 }
@@ -1454,7 +1454,7 @@ def repo_key_for_root(root) -> str:
     `coordinator_core.install.first_run._derive_repo_key`, `cross-repo-memo`'s
     `_receiver_repo_key`, and `coordinator_core.ops.register_discovered_repos`,
     which is what makes `EXEMPTIONS`'s repo keys the SAME names the
-    machine-local registry already uses (`repos.doe_claude`,
+    machine-local registry already uses (`repos.content_root`,
     `repos.claude_klabauter`) rather than a second, private repo vocabulary.
 
     See the module docstring's "Keying" paragraph for the named residual gap

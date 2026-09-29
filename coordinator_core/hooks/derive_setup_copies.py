@@ -4,7 +4,7 @@ their CANONICAL repo-root sources whenever a canonical row is written, in
 the coordinator-claude doctrine-plane repo.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/derive-setup-copies.py`. Shape,
+from coordinator-content-repo `coordinator/hooks/scripts/derive-setup-copies.py`. Shape,
 per the W4-C1 verdict: command/native-door, `hooks.<name>` op,
 payload-dict-in/response-out -- stdin JSON read and `_message_envelope.emit()`
 are replaced with `register_op`'s contract and this package's own

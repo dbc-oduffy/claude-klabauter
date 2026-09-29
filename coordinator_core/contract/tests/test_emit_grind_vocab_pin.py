@@ -15,7 +15,7 @@ _HEADS_UP = (
     "this module's emitted grind-vocab.json / "
     "queue-grind-handback.schema.json. DO NOT regenerate the golden "
     "fixtures or otherwise silence this failure locally -- send a heads-up "
-    "to DoE-claude before anything ships."
+    "to coordinator-content-repo before anything ships."
 )
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"

@@ -1,7 +1,7 @@
 """
 coordinator_core.subagent_sandbox.tests.test_g2_c13_lens_template_fit -- G2
 chunk C13 regression net (docs/plans/2026-07-24-g2-plan-pipeline-sidecar-
-contract.md, C13, DoE-claude): does each of the five surviving plan-pipeline
+contract.md, C13, coordinator-content-repo): does each of the five surviving plan-pipeline
 lenses' `report_type_map:`-assigned template (`assessment` / `review-findings` /
 `run-report`) actually accommodate the lens's real provisioned output shape?
 
@@ -44,7 +44,7 @@ when the spawn payload also carries a non-empty `plan_path`, never through the
 ordinary `type` string a caller sets directly -- is no longer a freeform
 placeholder heading a lens is at liberty to replace: its ten `### ` findings
 headings and thirteen-bucket counts line are copied byte-exact from
-DoE-claude's `coordinator/agents/plan-coverage-checker.md` § Sidecar
+Coordinator-content-repo's `coordinator/agents/plan-coverage-checker.md` § Sidecar
 Format, and their absence classifies the sidecar DEGRADED rather than merely
 differing from a suggested starting point. The finding above still stands,
 unchanged, for the other four surviving lenses (prior-art-checker,
@@ -59,7 +59,7 @@ still asserts `review-findings` for that row, and does so correctly -- that
 row is read only by the ordinary `type`-string axis this lens's plan-derivable
 dispatch no longer goes through.
 
-Spec backlink: DoE-claude:pln-g2-plan-pipeline-agent-fleet-o-c7c20a, C13
+Spec backlink: coordinator-content-repo:pln-g2-plan-pipeline-agent-fleet-o-c7c20a, C13
 """
 
 from __future__ import annotations
@@ -70,18 +70,18 @@ import pytest
 import yaml
 
 from coordinator_core.subagent_sandbox.provision_report import _build_doc_text
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
-_doe_root, _doe_present = doe_root_and_present()
+_content_root, _doe_present = content_root_and_present()
 
 #: The surviving G2 plan-pipeline lenses this chunk covers, and the template
 #: type this test asserts `report_type_map:` (coordinator/subagent-sandbox-
-#: policy.yaml, DoE-claude) still resolves each of them to. A change here
+#: policy.yaml, coordinator-content-repo) still resolves each of them to. A change here
 #: (in either direction) means the C13 finding above needs re-verification
 #: against fresh live output, not a silent test-literal update.
 #:
 #: `coordinator:code-architect` was the sixth entry and is deliberately absent:
-#: the agent was RETIRED by PM ruling in DoE-claude `ab2889499` (2026-07-30,
+#: the agent was RETIRED by PM ruling in coordinator-content-repo `ab2889499` (2026-07-30,
 #: "delete the agent nobody ever dispatched"), which unwired its `report_type_map`
 #: row along with the agent body, its registry rows, and its provisioning entry.
 #: This is the re-verification this comment demands, not a literal bump: the
@@ -111,14 +111,14 @@ _TEMPLATE_PLACEHOLDER_HEADING = {
 
 
 def _policy_path() -> Path:
-    return Path(_doe_root) / "coordinator" / "subagent-sandbox-policy.yaml"
+    return Path(_content_root) / "coordinator" / "subagent-sandbox-policy.yaml"
 
 
 @pytest.fixture(scope="module")
 def report_type_map() -> dict:
     if not _doe_present or not _policy_path().exists():
         pytest.skip(
-            "sibling DoE-claude checkout with coordinator/subagent-sandbox-policy.yaml not found"
+            "sibling coordinator-content-repo checkout with coordinator/subagent-sandbox-policy.yaml not found"
         )
     data = yaml.safe_load(_policy_path().read_text(encoding="utf-8"))
     return data["report_type_map"]

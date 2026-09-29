@@ -3,19 +3,19 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard
 
-_doe_root, _doe_present = doe_root_and_present()
+_content_root, _doe_present = content_root_and_present()
 
 
 @pytest.fixture(autouse=True)
-def _pin_doe_root(monkeypatch):
+def _pin_content_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling DoE-claude checkout not found")
-    monkeypatch.setattr(deny_guard, "coordinator_doe_root", lambda: _doe_root)
-    monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: _doe_root)
+        pytest.skip("sibling coordinator-content-repo checkout not found")
+    monkeypatch.setattr(deny_guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: _content_root)
 
 
 def _payload(tool_name, file_path, cwd, **tool_input_extra):

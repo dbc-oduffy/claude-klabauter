@@ -3,7 +3,7 @@
 > **What this is.** The producer-side interface for `dispatch_ack.AckStore` and the
 > `warm.request_status` poll op it serves — what a caller may rely on when a MUTATING dispatch
 > comes back `WARM_DISPATCH_INDETERMINATE` (-32004). Cites the 2026-09-09 staff-eng ruling
-> (DoE-claude `state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md` § Row M11, read @
+> (coordinator-content-repo `state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md` § Row M11, read @
 > `2860147bc`), which prescribes recording that the engine was asked before it dispatches, and
 > stamping the outcome on completion, so the caller's reconcile read cannot false-negative.
 >

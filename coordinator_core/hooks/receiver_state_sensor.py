@@ -79,7 +79,7 @@ Negative-spec:
       them by construction) — nothing here registers a hook trigger.
 
 Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
-    (source memo: cross-repo/inbox/2026-08-14-doe-claude-em-receiver-state-sensor-seam.md)
+    (source memo: cross-repo/inbox/2026-08-14-coordinator-content-repo-em-receiver-state-sensor-seam.md)
 """
 
 from __future__ import annotations

@@ -189,7 +189,7 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
     monkeypatch.setattr(module, "_write_block_log", lambda *a, **kw: None, raising=False)
     # `block-reviewer-bash-outside-allowlist` sits early in CONFINEMENT_DENY and
     # DR-125 removed that type from `_helpers._CONFINED_FINDINGS_AGENTS`, no
-    # UNRESOLVABLE -- `resolve_roster()` finds no DoE-root pointer -- and leg 3
+    # UNRESOLVABLE -- `resolve_roster()` finds no content-root pointer -- and leg 3
     monkeypatch.setattr(
         reviewer_guard, "is_confined_by_roster_absence", lambda effective_type: False
     )

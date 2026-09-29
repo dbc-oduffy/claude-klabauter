@@ -4,7 +4,7 @@ deliverable `dlv-the-group-em-wake-gets-the-spool-it-is-m-bd7b96`).
 
 PURPOSE. `<repo_root>/state/group-em-watch-spool.jsonl` is a transition spool
 a DoE-plane `Stop` guard appends one line to per park -- see
-`cross-repo/inbox/2026-09-02-doe-claude-em-group-em-wake-fires-on-stop.md`.
+`cross-repo/inbox/2026-09-02-coordinator-content-repo-em-group-em-wake-fires-on-stop.md`.
 That producer is theirs, is not in this repo, and may not exist on disk yet;
 this module is written against the AGREED CONTRACT, never against a live
 producer, and this docstring is deliberately silent about how or when the

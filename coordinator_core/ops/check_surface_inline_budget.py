@@ -43,7 +43,7 @@ Note: these four signals are independent tells, not mutually exclusive
 Spec backlink: canonical-resolution-engine plan, chunk W1-A3a (2026-07-24)
   — AC-11 anti-rebound inline-mechanism budget gate.
 Prior art: coordinator_core/ops/check_wsc_inline_budget.py (single-surface,
-  single-signal ancestor of this module); DoE-claude
+  single-signal ancestor of this module); coordinator-content-repo
   coordinator/tests/test_no_command_fences_in_doctrine.py (BLOCK-severity
   doctrine gate over the full signal space this module approximates at
   WARN-severity and reduced precision — deliberately not ported verbatim;
@@ -52,7 +52,7 @@ Prior art: coordinator_core/ops/check_wsc_inline_budget.py (single-surface,
 Negative-spec:
     - This is NOT a port of the DoE BLOCK-severity gate. That gate is a
       ~2000-line, corpus-calibrated, multi-pass-tuned detector living in
-      the doctrine repo (DoE-claude) against a fixed guarded-tree scope
+      the doctrine repo (coordinator-content-repo) against a fixed guarded-tree scope
       (skills/commands/agents/pipelines/snippets) and is out of scope for
       this repo (claude-klabauter) to depend on or duplicate. This module is
       a lighter-weight, WARN-only, surface-agnostic heuristic — false

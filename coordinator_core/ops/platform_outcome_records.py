@@ -30,7 +30,7 @@ json's schema-level description verbatim):
               days old.
 A record failing either rule is stale and cannot promote/back a platform.
 
-Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C3a1
+Spec backlink: coordinator-content-repo:pln-platform-verified-is-a-distinc-a076aa § C3a1
 Spec backlink: state/handoffs/2026-07-21_190724_checkpoint4-platform-outcome-records-crosscheck.md
 """
 from __future__ import annotations

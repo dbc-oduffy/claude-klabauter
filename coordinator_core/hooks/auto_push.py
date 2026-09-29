@@ -854,7 +854,7 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
         per-call escape hatch that skips this gate on purpose and prints via
         `_emit_push_policy_line("override-exercised", ...)` every time it
         fires. As of that function's own docstring, its one sanctioned
-        consumer is DoE-claude's `merging-to-main` SKILL, Step 10 item 5 (the
+        consumer is coordinator-content-repo's `merging-to-main` SKILL, Step 10 item 5 (the
         post-merge, on-`main`, release-notes bookkeeping commit) -- no op in
         this repo passes it. `main` otherwise reaches origin by PR merge,
         which is GitHub's own action, not a push this hook or engine issues.
@@ -903,7 +903,7 @@ def _log_push_attempt_duration(branch: str, duration_secs: float, outcome: str) 
     twice state its counts must mean "unrecovered failures", and both
     `workday.surface_auto_push_failure_stats` and the cross-repo Stop-time
     tripwire (`runtime-tripwire-em-check.py::_check_push_failures`,
-    DoE-claude) read it -- a success row landing there would poison both
+    coordinator-content-repo) read it -- a success row landing there would poison both
     consumers' counts.
     """
     print(
@@ -1227,7 +1227,7 @@ def log_race_resolved(repo_root: str, branch: str, route: str, attempts: int) ->
     entire job is "crash insurance is not currently working," and a resolved
     race (our commit is already on origin) is the opposite signal. Both
     `workday.surface_auto_push_failure_stats` and the Stop-time mid-session
-    detector (`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude)
+    detector (`runtime-tripwire-em-check.py::_check_push_failures`, coordinator-content-repo)
     read that file, so keeping resolved races out of it is what keeps their
     counts meaning "unrecovered failures" rather than "lines written." Stderr
     only, matching every other advisory print in this module.
@@ -1253,7 +1253,7 @@ def log_dead_ref_failure(
     `_RETRYABLE_CLASSES` so it is reported exactly once per attempt, never
     looped. Both `workday.surface_auto_push_failure_stats` and the
     Stop-time mid-session detector (`runtime-tripwire-em-check.py::
-    _check_push_failures`, DoE-claude) read `push-failures.log`; keeping
+    _check_push_failures`, coordinator-content-repo) read `push-failures.log`; keeping
     dead-ref rejections out of it is what keeps their counts meaning
     "unrecovered failures" rather than "lines written." This function is
     purely the forensic trace for the push attempt itself, unconditional
@@ -1273,7 +1273,7 @@ def log_dead_ref_failure(
 # cockpit-contract release publish -- fires from THIS hook, not GitHub
 # Actions, per PM directive (the org's Actions runner is billing-blocked and
 # cannot start jobs at all). The publish logic itself
-# (`.github/scripts/publish_cockpit_contract.py`, DoE-claude) is untouched
+# (`.github/scripts/publish_cockpit_contract.py`, coordinator-content-repo) is untouched
 # and already correct -- this seam only decides WHETHER and WHEN to invoke
 # it, after a push this hook already performed successfully.
 #
@@ -1282,10 +1282,10 @@ def log_dead_ref_failure(
 # which is vendored into every coordinator-installed repo, not just DoE's --
 # so example-retrieval-repo's and example-cockpit-repo's daily ceremonies would each have
 # tried to publish a tag to DoE's origin and failed forever on any machine
-# where DoE is unresolvable (DoE-claude
+# where DoE is unresolvable (coordinator-content-repo
 # cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md).
 # The guard below is intrinsic to the committing repo (a file that only
-# DoE-claude tracks), not a repo-name allowlist or a ceremony hook, so it
+# coordinator-content-repo tracks), not a repo-name allowlist or a ceremony hook, so it
 # cannot reproduce that failure mode in any other repo.
 # ---------------------------------------------------------------------------
 
@@ -1306,10 +1306,10 @@ def _cockpit_publish_script(repo_root: str) -> Path | None:
     This single filesystem stat is the entire scoping guard for the seam
     below. It cannot fire in example-retrieval-repo, example-cockpit-repo, or any other
     fleet repo, because none of them track
-    `.github/scripts/publish_cockpit_contract.py` -- only DoE-claude does.
+    `.github/scripts/publish_cockpit_contract.py` -- only coordinator-content-repo does.
     No repo-name allowlist, no machine-local registry lookup: the guard is
     derived from the committing repo's own working tree, so it stays
-    correct even if the script is renamed or DoE-claude itself moves.
+    correct even if the script is renamed or coordinator-content-repo itself moves.
     Deliberately a `Path.is_file()` stat, not a git call -- cheap enough to
     run unconditionally ahead of the additional git rev-parse this seam
     would otherwise add.

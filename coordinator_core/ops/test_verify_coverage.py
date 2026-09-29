@@ -2,7 +2,7 @@
 coordinator_core.ops.test_verify_coverage
 
 Independent parity tests for coordinator_core.ops.verify_coverage, the port of
-DoE-claude's retired bash/JS coverage-sweep oracle. Each test builds its own
+Coordinator-content-repo's retired bash/JS coverage-sweep oracle. Each test builds its own
 scaffolded fixture tree and asserts the surfaced/silenced orphan categories
 directly against the ported functions -- these do NOT re-derive the port's own
 transcription, they independently reconstruct the expected verdict from the
@@ -411,12 +411,12 @@ def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
 
 
 def test_default_root_uses_sentinel_when_present(tmp_path, monkeypatch):
-    # `read_doe_root_pointer_file`'s rung 1 (settings-home's own
-    # `machine-local/.doe-root` durable mirror) resolves via
+    # `read_content_root_pointer_file`'s rung 1 (settings-home's own
+    # `machine-local/.coordinator-content-root` durable mirror) resolves via
     # `_settings_home.settings_home()` UNCONDITIONALLY -- the injectable
     # `home` parameter this test passes only reaches rung 2 (the legacy
-    # `<home>/.claude/.doe-root` file). On a real dev box that already has a
-    # settings-home `.doe-root` on disk, rung 1 wins and this test would
+    # `<home>/.claude/.coordinator-content-root` file). On a real dev box that already has a
+    # settings-home `.coordinator-content-root` on disk, rung 1 wins and this test would
     # silently assert against THAT machine's real DoE-clone path instead of
     # the fixture's. Point COORDINATOR_SETTINGS_HOME at an empty tmp dir so
     # rung 1 has nothing to read and falls through to the fixture's rung 2.
@@ -424,16 +424,16 @@ def test_default_root_uses_sentinel_when_present(tmp_path, monkeypatch):
     tmp_home = tmp_path / "home"
     sentinel_dir = tmp_home / ".claude"
     sentinel_dir.mkdir(parents=True)
-    fake_doe_root = "/fake/doe/clone/root"
-    (sentinel_dir / ".doe-root").write_text(fake_doe_root + "\n", encoding="utf-8")
+    fake_content_root = "/fake/doe/clone/root"
+    (sentinel_dir / ".coordinator-content-root").write_text(fake_content_root + "\n", encoding="utf-8")
     result = vc.default_root(str(tmp_home))
-    assert result == fake_doe_root
+    assert result == fake_content_root
 
 
 def test_default_root_falls_back_when_sentinel_absent(tmp_path, monkeypatch):
     # Same real-machine-settings-home isolation as the sibling test above --
     # without it, rung 1 can resolve against this box's actual settings-home
-    # `.doe-root` and this "no sentinel anywhere" case would never truly
+    # `.coordinator-content-root` and this "no sentinel anywhere" case would never truly
     # exercise the OSS-mirror fallback.
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-settings-home"))
     tmp_home = tmp_path / "home2"
@@ -619,7 +619,7 @@ def test_json_envelope_top_level_keys_are_stable(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Marker-vocabulary discriminator -- fence/sentinel/marker/block prose
-# (cross-repo memo 2026-08-06-doe-claude-em-verify-coverage-extractor-
+# (cross-repo memo 2026-08-06-coordinator-content-repo-em-verify-coverage-extractor-
 # marker-vocabulary.md)
 # ---------------------------------------------------------------------------
 

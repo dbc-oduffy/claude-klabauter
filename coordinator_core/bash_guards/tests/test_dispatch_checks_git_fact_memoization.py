@@ -123,13 +123,13 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
         self, monkeypatch: pytest.MonkeyPatch, repo_with_ordinary_dirty_file: Path
     ) -> None:
         count = _counting_run_git(monkeypatch, ["--no-optional-locks", "status", "--porcelain"])
-        cmd = "git -C %s checkout . && git -C %s reset --hard" % (
+        cmd = "git -C %s checkout -f && git -C %s reset --hard HEAD" % (
             repo_with_ordinary_dirty_file,
             repo_with_ordinary_dirty_file,
         )
         check_destructive_git_revert_advisory(cmd)
         assert count[0] == 1, (
-            "chained 'git checkout . && git reset --hard' against ONE "
+            "chained 'git checkout -f && git reset --hard HEAD' against ONE "
             "working tree spawned %d 'git status --porcelain' calls; "
             "expected exactly 1 -- the fact is loop-invariant per cwd and "
             "must resolve once." % count[0]
@@ -139,7 +139,10 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
         self, monkeypatch: pytest.MonkeyPatch, repo_with_ordinary_dirty_file: Path
     ) -> None:
         count = _counting_run_git(monkeypatch, ["--no-optional-locks", "status", "--porcelain"])
-        cmd = "git -C %s checkout . && git -C %s reset --hard && git -C %s stash" % (
+        # Whole-tree forms (`checkout .`, bare `reset --hard`, `stash`) deny from the command
+        # string alone with no probe; test_sc_dr_023_whole_tree_deny pins them. These probing
+        # shapes are the ones that reach the memoized oracle.
+        cmd = "git -C %s checkout -f && git -C %s reset --hard HEAD && git -C %s checkout -f" % (
             (repo_with_ordinary_dirty_file,) * 3
         )
         check_destructive_git_revert_advisory(cmd)
@@ -155,7 +158,7 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
         two DIFFERENT repos in the same chained command must each still get
         their own, real oracle call."""
         count = _counting_run_git(monkeypatch, ["--no-optional-locks", "status", "--porcelain"])
-        cmd = "git -C %s reset --hard && git -C %s reset --hard" % (
+        cmd = "git -C %s reset --hard HEAD && git -C %s reset --hard HEAD" % (
             repo_with_ordinary_dirty_file,
             clean_repo,
         )
@@ -168,14 +171,14 @@ class TestGitRevertFullPriorVerdictUnchanged:
     def test_loadbearing_dirty_tree_still_denies_on_reset_hard(
         self, repo_with_peer_work: Path
     ) -> None:
-        result = check_destructive_git_revert("git -C %s reset --hard" % repo_with_peer_work)
+        result = check_destructive_git_revert("git -C %s reset --hard HEAD" % repo_with_peer_work)
         assert result is not None
         assert "state/peer-in-flight.md" in _deny_reason(result)
 
     def test_loadbearing_dirty_tree_still_denies_on_chained_segments(
         self, repo_with_peer_work: Path
     ) -> None:
-        cmd = "git -C %s status && git -C %s reset --hard" % (
+        cmd = "git -C %s status && git -C %s reset --hard HEAD" % (
             repo_with_peer_work,
             repo_with_peer_work,
         )
@@ -186,13 +189,13 @@ class TestGitRevertFullPriorVerdictUnchanged:
     def test_ordinary_dirty_tree_is_advisory_not_deny(
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
-        cmd = "git -C %s reset --hard" % repo_with_ordinary_dirty_file
+        cmd = "git -C %s reset --hard HEAD" % repo_with_ordinary_dirty_file
         assert check_destructive_git_revert(cmd) is None
         advisory = check_destructive_git_revert_advisory(cmd)
         assert advisory is not None
 
     def test_clean_tree_allows(self, clean_repo: Path) -> None:
-        cmd = "git -C %s checkout . && git -C %s reset --hard" % (clean_repo, clean_repo)
+        cmd = "git -C %s checkout -f && git -C %s reset --hard HEAD" % (clean_repo, clean_repo)
         assert check_destructive_git_revert(cmd) is None
         assert check_destructive_git_revert_advisory(cmd) is None
 

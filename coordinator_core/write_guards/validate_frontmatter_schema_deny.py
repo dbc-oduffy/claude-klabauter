@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.validate_frontmatter_schema_deny — HARD-DENY
 leg of the frontmatter-schema validator.
 
-Ported from DoE-claude
+Ported from coordinator-content-repo
 ``coordinator/hooks/scripts/validate-frontmatter-schema.py`` (faithful port —
 see ``write_guards/INTERFACE.md``). That single 2042-line script originally
 emitted BOTH ``permissionDecision: deny`` and ``additionalContext``
@@ -121,25 +121,25 @@ Schema/manifest resolution
 ----------------------------
 The source hook resolved ``coordinator/schemas/`` and
 ``coordinator-registry.manifest.json`` relative to its own on-disk location
-inside the DoE-claude checkout (schemas are DoE-owned doctrine, not
+inside the coordinator-content-repo checkout (schemas are DoE-owned doctrine, not
 Claude-klabauter-owned). Running from inside claude-klabauter, this module resolves the
-DoE-claude repo root via ``coordinator_core.ops.coordinator_doe_root.
-coordinator_doe_root()`` — the same ratified full-ladder resolver the
-advisory sibling uses (``REPO_DOE_CLAUDE`` env override, then the
+Coordinator-content-repo repo root via ``coordinator_core.ops.coordinator_content_root.
+coordinator_content_root()`` — the same ratified full-ladder resolver the
+advisory sibling uses (``REPO_CONTENT_ROOT`` env override, then the
 ``machine-local`` registry, then the native clone-root resolver) — rather
-than ``coordinator_core.doe_root_pointer.read_doe_root_pointer()``, which
-``coordinator_core/testing/doe_root.py`` documents as "the wrong layer to
-standardize... call sites on" (it skips the ``REPO_DOE_CLAUDE`` override
+than ``coordinator_core.content_root_pointer.read_content_root_pointer()``, which
+``coordinator_core/testing/content_root.py`` documents as "the wrong layer to
+standardize... call sites on" (it skips the ``REPO_CONTENT_ROOT`` override
 and the ``machine-local``/clone-root rungs entirely). Both split modules
 must resolve through the identical function, or they can silently disagree
-on which DoE-claude checkout is authoritative — exactly the condition the
+on which coordinator-content-repo checkout is authoritative — exactly the condition the
 mutual-exclusivity guarantee above depends on not happening. Unresolvable
 root, missing manifest, or malformed manifest/schema JSON all narrow to
 "this guard produces nothing" (``check()`` returns ``None``), exactly
 mirroring the source's own ``sys.exit(0)`` on manifest-load failure — never
 a deny on infra, per the source's own "NEVER block on infra" negative-spec.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
   coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
@@ -168,7 +168,7 @@ from coordinator_core.frontmatter.baton_class import (
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter as _split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.frontmatter.schema_validate import (
@@ -199,7 +199,7 @@ _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
 # The vendored, version-pinned schema corpus this module now validates
 # against — see module docstring § Schema/manifest resolution. Resolved
 # relative to this file's own on-disk location (this module runs INSIDE
-# claude-klabauter already), never from DoE-claude's live working tree.
+# claude-klabauter already), never from coordinator-content-repo's live working tree.
 _VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "frontmatter" / "schemas"
 
 # ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ class _Context:
 
 def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Context]:
     """Resolve the vendored schema corpus (always available in-repo) plus,
-    best-effort, the DoE-claude registry manifest + the five registries
+    best-effort, the coordinator-content-repo registry manifest + the five registries
     derived from it. NEVER returns ``None`` for the corpus itself any more —
     that is exactly the fail-open-on-missing-sibling hole AC2 closes (see
     module docstring § Schema/manifest resolution and
@@ -400,7 +400,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
     is a dict assignment (no I/O), so the ``None`` default (every call site
     that doesn't care) costs nothing. See `_capture_guard_forensics` for the
     consumer and the ABSENT-vs-TORN distinction this distinguishes: an
-    unresolvable/absent DoE root is recorded as ``doe_root_unresolvable``
+    unresolvable/absent DoE root is recorded as ``content_root_unresolvable``
     (steady state, e.g. a partial install with no sibling checkout — NOT a
     failure worth capturing on every write on such a machine), while a
     manifest read that found the path present but never got a clean parse
@@ -408,21 +408,21 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
     ``exhausted`` fields are the actual torn-read signature).
     """
     try:
-        doe_root = coordinator_doe_root()
+        content_root = coordinator_content_root()
     except Exception:  # noqa: BLE001 — degrade-open, never block on infra
-        doe_root = None
+        content_root = None
         if _forensics is not None:
-            _forensics["doe_root_resolve_raised"] = True
-    if not doe_root:
-        if _forensics is not None and "doe_root_resolve_raised" not in _forensics:
-            _forensics["doe_root_unresolvable"] = True
+            _forensics["content_root_resolve_raised"] = True
+    if not content_root:
+        if _forensics is not None and "content_root_resolve_raised" not in _forensics:
+            _forensics["content_root_unresolvable"] = True
     elif _forensics is not None:
-        _forensics["doe_root"] = doe_root
+        _forensics["content_root"] = content_root
 
     # Schema CORPUS resolution is repointed at claude-klabauter's own vendored,
-    # version-pinned copy — no longer DoE-claude's live working tree, and no
+    # version-pinned copy — no longer coordinator-content-repo's live working tree, and no
     # longer coupled to the manifest read below at all. The registry
-    # MANIFEST stays on `doe_root`: it is routing/scaffold logic, not a
+    # MANIFEST stays on `content_root`: it is routing/scaffold logic, not a
     # schema, and is explicitly out of scope for the repoint (plan AC4 +
     # Out of scope).
     schemas_dir = _VENDORED_SCHEMAS_DIR
@@ -430,7 +430,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
         _forensics["schemas_dir"] = str(schemas_dir)
 
     manifest: Optional[Dict[str, Any]] = None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is not None:
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         manifest_retry_record: Dict[str, Any] = {}
@@ -867,16 +867,16 @@ def _memo_guard_step(
         return ("advisory", _memo_offer_message())
 
     repo_root_stripped = repo_root.rstrip("/\\")
-    doe_root_realpath: Optional[str] = None
+    content_root_realpath: Optional[str] = None
     try:
-        doe_root_raw = coordinator_doe_root() or ""
+        content_root_raw = coordinator_content_root() or ""
     except Exception:  # noqa: BLE001 — fail-open
-        doe_root_raw = ""
-    if doe_root_raw:
+        content_root_raw = ""
+    if content_root_raw:
         try:
-            doe_root_realpath = str(Path(doe_root_raw).resolve())
+            content_root_realpath = str(Path(content_root_raw).resolve())
         except OSError:
-            doe_root_realpath = None
+            content_root_realpath = None
 
     normalized_rel_for_routing = repo_rel.replace("\\", "/")
 
@@ -890,9 +890,9 @@ def _memo_guard_step(
         # Comparison-only fold: both realpaths are used only for this
         # identity check, never for I/O — safe to fold both sides.
         this_repo_is_central = (
-            doe_root_realpath is not None
+            content_root_realpath is not None
             and repo_root_realpath is not None
-            and casefold_path(repo_root_realpath) == casefold_path(doe_root_realpath)
+            and casefold_path(repo_root_realpath) == casefold_path(content_root_realpath)
         )
         this_em_id = ctx.central_canonical_id if this_repo_is_central else _em_id_for_basename(ctx, repo_basename)
 
@@ -963,16 +963,16 @@ def _memo_guard_step(
                     repo_root_realpath = None
                 # Comparison-only fold: see `this_repo_is_central` above.
                 landing_repo_is_central = (
-                    doe_root_realpath is not None
+                    content_root_realpath is not None
                     and repo_root_realpath is not None
-                    and casefold_path(repo_root_realpath) == casefold_path(doe_root_realpath)
+                    and casefold_path(repo_root_realpath) == casefold_path(content_root_realpath)
                 )
                 landing_em_id = ctx.central_canonical_id if landing_repo_is_central else _em_id_for_basename(ctx, landing_basename)
 
                 to_repo_field_raw = _extract_yaml_to_repo_field(memo_check_content)
                 if to_repo_field_raw is not None:
                     this_repo_registry_key = (
-                        "repos.doe_claude"
+                        "repos.content_root"
                         if landing_repo_is_central
                         else _registry_key_for_basename(ctx, landing_basename)
                     )
@@ -989,10 +989,10 @@ def _memo_guard_step(
                     landing_is_central = landing_em_id == ctx.central_canonical_id
                     if to_is_central and landing_is_central:
                         pass
-                    elif doe_root_realpath is None:
+                    elif content_root_realpath is None:
                         # Fail open when the DoE root is unresolvable. This deliberately does NOT
                         # also test `to_is_central`: `central_em_ids` is only populated once the
-                        # DoE root HAS resolved, so `to_is_central and doe_root_realpath is None`
+                        # DoE root HAS resolved, so `to_is_central and content_root_realpath is None`
                         # was unsatisfiable by construction and the regex fallback below fired
                         # unconditionally on any `-em`-suffixed `to:`. With the root unresolvable we
                         # cannot tell whether `to:` is central, so the honest move is to emit
@@ -1349,7 +1349,7 @@ def _queue_record_fields(
 
 
 def _is_doe_owned_repo(repo_root: str) -> bool:
-    """True when `repo_root` is DoE-claude's own checkout.
+    """True when `repo_root` is coordinator-content-repo's own checkout.
 
     THE QUEUE-DEFERRAL DENY IS CLAUDE-KLABAUTER-SCOPED BY AGREEMENT, and unlike C3's
     cross-field rule this one is a WRITE GUARD keyed on path pattern plus
@@ -1359,7 +1359,7 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
     park in DoE's own tree is HARD-BLOCKED by claude-klabauter's rule.
 
     Measured 2026-08-29, not supposed: driving `check()` with a ceremony park
-    written into `X:/DoE-claude/state/debt-backlog/` — `pm_approved`,
+    written into `C:/coordinator-content-repo/state/debt-backlog/` — `pm_approved`,
     `deferred_by: /debt-triage <session-id>`, `deferred_until`, `why_blocked`,
     exactly as their `SKILL.md:148-150` writes one — returned a deny on the
     absent `case_against`, which their ceremony does not stamp. That is Queue
@@ -1375,8 +1375,8 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
     reaches into a sibling.
     """
     try:
-        doe_root = coordinator_doe_root()
-        if not doe_root:
+        content_root = coordinator_content_root()
+        if not content_root:
             return False
         # Casefolded on BOTH sides. Unfolded, a DoE root differing from
         # `repo_root` only in case compares unequal on a case-insensitive-but-
@@ -1386,7 +1386,7 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
         # docstring above says must never happen, reached by the one route the
         # fail-safe direction does not cover.
         return casefold_path(str(Path(repo_root).resolve())) == casefold_path(
-            str(Path(str(doe_root)).resolve())
+            str(Path(str(content_root)).resolve())
         )
     except Exception:  # noqa: BLE001 — fail-safe: keep enforcing locally
         return False
@@ -1814,11 +1814,11 @@ def _reachability_and_schema_step(
 def _unvendored_offerable_doc_type(
     ctx: "_Context", schemas: dict, frontmatter: Optional[dict], repo_rel: str
 ) -> Optional[dict]:
-    """Cross-reference-2026-08-06-doe-claude-em-twelve-doc-types-lost-write-enforcement:
+    """Cross-reference-2026-08-06-coordinator-content-repo-em-twelve-doc-types-lost-write-enforcement:
     detect a write that WOULD have matched an ``offerable: true`` manifest
     doc type but can't, purely because that type's schema is absent from the
     vendored corpus (see module docstring § Schema/manifest resolution and
-    the DoE-claude cross-repo memo this line names). Returns the manifest
+    the coordinator-content-repo cross-repo memo this line names). Returns the manifest
     docType dict on a match, else None.
 
     This is a heuristic re-derivation of the resolution `_match_schema`
@@ -1875,7 +1875,7 @@ def _unvendored_offerable_message(doc_type: dict) -> str:
 def _first_result(
     payload: Dict[str, Any], _forensics: Optional[Dict[str, Any]] = None
 ) -> Optional[Tuple[str, str]]:
-    """``_forensics`` (optional) lets `check()` observe the ACTUAL DoE-root/
+    """``_forensics`` (optional) lets `check()` observe the ACTUAL content-root/
     schema-corpus state this call resolved and validated against — see
     `_capture_guard_forensics`. Every stash into it below is a reference/dict
     assignment on data already computed for the walk itself (no extra I/O,
@@ -2102,8 +2102,8 @@ def _plan_tasks_schema_identity(forensics: Dict[str, Any]) -> Tuple[str, Optiona
         return "absent_in_corpus", None
     if (
         forensics.get("manifest_load_failed")
-        or forensics.get("doe_root_unresolvable")
-        or forensics.get("doe_root_resolve_raised")
+        or forensics.get("content_root_unresolvable")
+        or forensics.get("content_root_resolve_raised")
         or forensics.get("context_fields_malformed")
     ):
         return "context_unavailable", None
@@ -2126,7 +2126,7 @@ def _capture_guard_forensics(
     Captures the state that ACTUALLY produced this call's verdict —
     ``forensics`` is populated by `_load_context`/`_first_result` from
     objects those functions already loaded for their own purposes (see
-    their docstrings); this function performs NO re-read of DoE-claude's
+    their docstrings); this function performs NO re-read of coordinator-content-repo's
     schema corpus. The only I/O this function itself performs is a
     best-effort ``git status`` in the DoE root (dirty-tree signal) and the
     forensics file write — both gated to the deny/load-failure branches
@@ -2144,13 +2144,13 @@ def _capture_guard_forensics(
 
         plan_tasks_status, plan_tasks_sha256 = _plan_tasks_schema_identity(forensics)
 
-        doe_root = forensics.get("doe_root")
+        content_root = forensics.get("content_root")
         doe_tree_dirty: Optional[bool] = None
-        if doe_root:
+        if content_root:
             try:
                 git_result = subprocess.run(
                     ["git", "status", "--porcelain"],
-                    cwd=doe_root, capture_output=True, text=True, timeout=2,
+                    cwd=content_root, capture_output=True, text=True, timeout=2,
                     **no_console_creationflags(),
                 )
                 if git_result.returncode == 0:
@@ -2166,7 +2166,7 @@ def _capture_guard_forensics(
             "file_path": (payload.get("tool_input") or {}).get("file_path"),
             "deny_reason": deny_reason,
             "matched_schema_name": forensics.get("matched_schema_name"),
-            "doe_root": doe_root,
+            "content_root": content_root,
             "schema_corpus_path": forensics.get("schemas_dir"),
             "plan_tasks_schema_status": plan_tasks_status,
             "plan_tasks_schema_sha256": plan_tasks_sha256,
@@ -2225,7 +2225,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     `_unvendored_offerable_doc_type`), this returns a non-blocking
     `additionalContext` diagnostic instead of the silent `None` a genuinely-
     non-matching write gets — that silence is the regression this closes
-    (cross-repo/inbox/2026-08-06-doe-claude-em-twelve-doc-types-
+    (cross-repo/inbox/2026-08-06-coordinator-content-repo-em-twelve-doc-types-
     lost-write-enforcement-today.md).
     """
     forensics: Dict[str, Any] = {}
@@ -2238,7 +2238,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # Fail-open on a genuine torn read (path existed, every retry
         # attempt still failed) is exactly the unreproducible-deny shape
         # this capture exists for, even though it resolves to an ALLOW —
-        # gated on `_is_torn_read_signature` so an ordinary absent-DoE-root
+        # gated on `_is_torn_read_signature` so an ordinary absent-content-root
         # machine (a steady state, not a failure) never pays this cost.
         if _is_torn_read_signature(forensics):
             _capture_guard_forensics(

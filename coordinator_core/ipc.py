@@ -258,8 +258,8 @@ Negative-spec (hard-won):
         relational store (dual-write ban); MUST NOT be invoked from inside a
         wsc-commit critical section (DR-413 § D4 — a sequencing constraint the DR's
         bound discharges, not a runtime check this call site enforces itself).
-        Authorization: doe-claude-em accepted option (a), commit-only
-        (cross-repo/inbox/2026-08-07-doe-claude-em-archive-op-carveout-answer-
+        Authorization: coordinator-content-repo-em accepted option (a), commit-only
+        (cross-repo/inbox/2026-08-07-coordinator-content-repo-em-archive-op-carveout-answer-
         option-a.md) — DR-413 is the registered record of that acceptance, proposed
         here pending PM ratification.
         Classification: MUTATING (DR-208, classification.py).
@@ -308,8 +308,8 @@ Negative-spec (hard-won):
                                        state/scratch/artifact-distillation/<run-id>/
           - cartography.chunk_table:  emits a reduced source-file chunk table under
                                        <target_root>/state/scratch/cartography-chunk-table/<run-id>/
-                                       (--emit only; DoE-claude's cross-tree consumer —
-                                       cross-repo/inbox/2026-08-06-doe-claude-em-cartography-
+                                       (--emit only; coordinator-content-repo's cross-tree consumer —
+                                       cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-
                                        chunk-table-producer-seam.md)
           D6 bounds: write-confined to the op's own named target only; create-or-full-
           rewrite only (never partial in-place mutation); no delete; no commit (landing
@@ -1087,7 +1087,7 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
 
     Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1b
 
-    Cloud-session fallback (DoE-claude#85 row 8): the remote hook envelope
+    Cloud-session fallback (coordinator-content-repo#85 row 8): the remote hook envelope
     (`CLAUDE_CODE_REMOTE=true`) carries no cwd and never stamps
     `_origin_worktree`. Rather than let every common_dir-scoped op fail
     loud for the entire session, fall back to `CLAUDE_PROJECT_DIR` (the
@@ -1414,7 +1414,7 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     every caller that resolves a sibling op by key (e.g. `cutover.advance`
     resolving `cutover.gate`) whenever it ran as anything other than the directly
     dispatched op. See
-    cross-repo/inbox/2026-07-25-doe-claude-em-cutover-advance-cannot-resolve-gate-op.md.
+    cross-repo/inbox/2026-07-25-coordinator-content-repo-em-cutover-advance-cannot-resolve-gate-op.md.
 
     Added to allow fleet-op callers to resolve handlers
     via the public op key rather than accessing the op module's private handler
@@ -2476,10 +2476,10 @@ def dispatch_from_hook(
     harness channel, and degrade. Transport policy (the envelope shape, the dispatch call,
     error surfacing) is engine-resident, not the shim's to reimplement.
 
-    Spec backlink: cross-repo/archive/2026-07-31-doe-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
+    Spec backlink: cross-repo/archive/2026-07-31-coordinator-content-repo-em-dr116-seam-contents-and-ipc-hook-dispatch.md
                    (DoE's DR-118 — the memo's filename says dr116 because DoE renumbered
                    the ruling at execute time; DR-116 in the DoE tree is an unrelated
-                   record, per 2026-07-31-doe-claude-em-dr116-is-now-dr118-citation-correction.md)
+                   record, per 2026-07-31-coordinator-content-repo-em-dr116-is-now-dr118-citation-correction.md)
 
     Args:
         op_name:         the JSON-RPC "method" to dispatch.
@@ -2597,7 +2597,7 @@ def dispatch_ops_from_hook(
     postuse-advisory-dispatch.py: an advisory dispatch plus a bookkeeping
     dispatch, where a failure in either must not suppress the other).
 
-    Spec backlink: cross-repo/inbox/2026-08-19-doe-claude-em-widen-the-seam-dispatch-ops-from-hook.md
+    Spec backlink: cross-repo/inbox/2026-08-19-coordinator-content-repo-em-widen-the-seam-dispatch-ops-from-hook.md
 
     Ops run in the order given, each awaited to completion before the next
     starts. Sequential is the contract, not an implementation detail:

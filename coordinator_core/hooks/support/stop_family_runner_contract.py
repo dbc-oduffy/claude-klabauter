@@ -2,7 +2,7 @@
 to `guard_runner_contract.py` (GUARD-ON-RUNNER-CONTRACT), not an extension
 of it, for a genuinely different aggregation problem.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_stop_family_runner_contract.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_stop_family_runner_contract.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3, verbatim
 (pure vocabulary, no per-guard-body reference needing porting-time
 adaptation -- see `guard_runner_contract.py`'s own docstring for the same

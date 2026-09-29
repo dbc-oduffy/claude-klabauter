@@ -155,7 +155,7 @@ from coordinator_core.ops.backfill_deliverable_spine import (
     is_sidecar_plan as _backfill_is_sidecar_plan,
 )
 from coordinator_core.ops.spec_backlink_resolve import (
-    _doe_root_path,
+    _content_root_path,
     _RECOGNIZED_PEER_REPO,
     build_index as _build_backlink_index,
     resolve_id as _resolve_id,
@@ -372,7 +372,7 @@ def scan_id_form_citations(
                 if _repo != _RECOGNIZED_PEER_REPO:
                     outcome = {"outcome": "miss"}
                 else:
-                    peer_root = _doe_root_path()
+                    peer_root = _content_root_path()
                     if peer_root is None or not peer_root.is_dir():
                         outcome = {"outcome": "miss"}
                     else:

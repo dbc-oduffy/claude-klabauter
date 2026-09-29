@@ -163,7 +163,7 @@ def test_a_pathspec_named_dash_h_is_not_help(monkeypatch):
     """Past the `--` separator the token is a FILE, and a commit naming a
     pathspec is the ratified scoped form -- neither help nor a deny."""
     _install_git_stub(monkeypatch, (0, "peer.txt\n"))
-    assert dispatch_checks._bt_commit_is_help_invocation(
+    assert dispatch_checks._bt_commit_is_noop_invocation(
         ["git", "commit", "-m", "x", "--", "-h"]
     ) is False
 

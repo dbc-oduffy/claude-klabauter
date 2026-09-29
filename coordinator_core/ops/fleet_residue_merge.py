@@ -12,7 +12,7 @@ now writes and the residue is what is left behind at the old paths.
 SCOPE IS EVERY REPO, INCLUDING ONES THE SWEEP NEVER TOUCHED. A repo whose data
 was never moved still splits the moment the republished engine starts writing its
 new root beside the old corpus: the writer moved even where the data did not.
-DoE-claude is the worked example -- 7,127 files at its old path, 4 at a new root
+Coordinator-content-repo is the worked example -- 7,127 files at its old path, 4 at a new root
 that is fourteen minutes NEWER. Any inventory taken before the republish
 understates this and must be re-derived.
 

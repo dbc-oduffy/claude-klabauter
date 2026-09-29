@@ -24,7 +24,7 @@ Preserved-exactly semantics (do not "clean up" without re-reading the oracle):
     "truthy" by a naive ``bool(...)`` check — mirrors the oracle's jq
     ``objects | length > 0`` filter, which is load-bearing.
 
-Hook-layer reachability (added 2026-07-28, DoE-claude dispatch
+Hook-layer reachability (added 2026-07-28, coordinator-content-repo dispatch
 ``state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-8cc51fd5.md``): ``_is_healthy`` used to classify a machine
 as healthy solely on ``enabledPlugins`` shape, with zero awareness of whether
@@ -54,8 +54,8 @@ check) funnels through this one predicate, the same augmentation
 transparently fixes both the "write a hookless snapshot as last-known-good"
 and "restore from a hookless snapshot" failure modes — no separate gating
 code was needed at either call site.
-  - ``is_inline_install``: reads ``{config_dir}/.doe-root`` directly (NOT the
-    shared ``read-doe-root-pointer.sh``-equivalent helper, because this guard's
+  - ``is_inline_install``: reads ``{config_dir}/.coordinator-content-root`` directly (NOT the
+    shared ``read-content-root-pointer.sh``-equivalent helper, because this guard's
     ``CONFIG_DIR`` is caller-supplied and differs from that helper's fixed
     ``${CLAUDE_HOME:-$HOME}/.claude``). Strips only a trailing CR/LF
     (embedded spaces preserved — Windows "OneDrive - Company Name" paths).
@@ -143,7 +143,7 @@ _CLOBBER_BAK_NAME = ".settings-clobbered.bak"
 # newer one.
 _KNOWN_GOOD_BACKUP_GLOB = "settings.json.known-good-*"
 _KNOWN_GOOD_BACKUP_RE = re.compile(r"^settings\.json\.known-good-(\d{8}T\d{6})$")
-_DOEROOT_NAME = ".doe-root"
+_DOEROOT_NAME = ".coordinator-content-root"
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 _HOOKS_JSON_REL = ("hooks", "hooks.json")
 _EFFECTIVE_DELIVERY_REL = ("hooks", "effective-delivery.json")
@@ -339,15 +339,15 @@ def _hook_layer_reachable(settings_data: dict) -> bool:
 def is_inline_install(config_dir: Path) -> bool:
     """A DoE `--plugin-dir` install has no `enabledPlugins` legitimately.
 
-    Reads the `.doe-root` pointer off one of two rungs, migrated rung
+    Reads the `.coordinator-content-root` pointer off one of two rungs, migrated rung
     first:
 
-      1. `<settings-home>/machine-local/.doe-root`
+      1. `<settings-home>/machine-local/.coordinator-content-root`
          (`coordinator_core._settings_home.machine_local_dir()`) — the
          canonical home since the 2026-08-01 migration off `{config_dir}/
-         .doe-root`, which was machine-local state living in a git-tracked
+         .coordinator-content-root`, which was machine-local state living in a git-tracked
          cross-machine repo (a Mac writing `/Users/...` and a Windows box
-         writing `X:\\...` committing over each other for weeks). Consulted
+         writing `C:\\...` committing over each other for weeks). Consulted
          ONLY when `_settings_home_scoped_to(config_dir, settings_home())`
          is True — i.e. `config_dir` is a direct sibling of the resolved
          settings home, the shape `settings_home()`'s own default
@@ -361,7 +361,7 @@ def is_inline_install(config_dir: Path) -> bool:
          2026-08-01 (see `_settings_home_scoped_to` and the "Restore
          rungs" section's 2026-08-01 scope-escape note). When not scoped,
          the migrated rung is treated as absent, not consulted at all.
-      2. `{config_dir}/.doe-root` (legacy) — consulted whenever the
+      2. `{config_dir}/.coordinator-content-root` (legacy) — consulted whenever the
          migrated rung does not answer live (absent, blank, unreadable, or
          naming a missing tree).
 
@@ -374,7 +374,7 @@ def is_inline_install(config_dir: Path) -> bool:
 
     Strips ONLY a trailing CR/LF from whichever rung answers — NOT a
     blanket whitespace strip, which would clobber embedded spaces in a
-    Windows path like "C:\\Users\\me\\OneDrive - Company Name\\DoE-claude".
+    Windows path like "C:\\Users\\me\\OneDrive - Company Name\\coordinator-content-repo".
 
     Public because it is a cross-module seam, not an internal helper:
     `guard_hook_generation_self_probe` imports it at module scope to
@@ -385,13 +385,13 @@ def is_inline_install(config_dir: Path) -> bool:
     public name is what pins that contract for a future renamer.
 
     Negative spec: this is a LIVE existence probe, not a pointer read. A
-    stale `.doe-root` naming a directory that no longer exists returns
+    stale `.coordinator-content-root` naming a directory that no longer exists returns
     False, which is what keeps the probe's true-positive (destroyed clone)
     detection intact — on EITHER rung.
 
-    Spec backlink: DR-117 (DoE-claude, maintainer signals may classify,
+    Spec backlink: DR-117 (coordinator-content-repo, maintainer signals may classify,
     never diagnose) — this predicate CLASSIFIES an install shape
-    (`.doe-root` present and live); the caller's job, not this function's,
+    (`.coordinator-content-root` present and live); the caller's job, not this function's,
     is to never read its `False` branch as a health verdict.
     """
     try:
@@ -404,12 +404,12 @@ def is_inline_install(config_dir: Path) -> bool:
         # which internally re-resolves settings_home() a second time for the
         # same path; on this SessionStart boot path resolution cost is a
         # first-order concern (see module docstring).
-        if _doe_root_pointer_is_live(home / "machine-local" / _DOEROOT_NAME):
+        if _content_root_pointer_is_live(home / "machine-local" / _DOEROOT_NAME):
             return True
-    return _doe_root_pointer_is_live(config_dir / _DOEROOT_NAME)
+    return _content_root_pointer_is_live(config_dir / _DOEROOT_NAME)
 
 
-def _doe_root_pointer_is_live(doeroot_file: Path) -> bool:
+def _content_root_pointer_is_live(doeroot_file: Path) -> bool:
     if not doeroot_file.is_file():
         return False
     try:
@@ -622,7 +622,7 @@ def _banner_unreachable_plugins(keys: list[str], settings_data: dict | None = No
 # Contract seam: `_PLUGIN_GATING_CONTRACT_PATH` is the ONE thing a future
 # repointer needs to touch. It currently names a claude-klabauter-local JSON file
 # (`plugin_gating_contract.json`, this directory) because writing into
-# DoE-claude's tree from here would be a cross-repo write this module must
+# coordinator-content-repo's tree from here would be a cross-repo write this module must
 # not make. The finding suggests the contract eventually live beside DoE's
 # `coordinator/docs/wiki/per-project-plugin-gating.md`, where its
 # documentation already lives -- when that lands, only this one path
@@ -735,7 +735,7 @@ def evaluate_guardless_sessions() -> str:
 
     Reports every guardless PID on one line, per docs/wiki/guard-messaging.md
     § Register: the fact stated once, plus the terse, runnable fix. Names
-    `claude-doe` (a relaunch script), never a slash command -- a session
+    `claude-author` (a relaunch script), never a slash command -- a session
     that never came up cannot run an agentic surface.
     """
     from coordinator_core.ops.detect_guardless_sessions import detect
@@ -747,7 +747,7 @@ def evaluate_guardless_sessions() -> str:
     pids = ", ".join(str(obs.pid) for obs in result.guardless)
     return (
         f"Guardless session(s), no --plugin-dir: PID {pids}. "
-        "Relaunch via claude-doe."
+        "Relaunch via claude-author."
     )
 
 
@@ -780,7 +780,7 @@ def evaluate_guardless_sessions() -> str:
 # regenerates anything. A human/PM call is required to pick which surface to
 # retire on which machine.
 #
-# Spec backlink: DoE-claude dispatch state/subagent-share/
+# Spec backlink: coordinator-content-repo dispatch state/subagent-share/
 # 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-8166967b.md
 # (2026-07-28).
 # ---------------------------------------------------------------------------
@@ -1550,7 +1550,7 @@ def _atomic_copy(src: Path, dst: Path) -> bool:
 _BANNER_INLINE_INSTALL = """
 ╔══════════════════════════════════════════════════════════════════╗
 ║  ℹ  settings.json has no `enabledPlugins` — but this is an INLINE
-║     (--plugin-dir) install (`.doe-root` present, coordinator loads live
+║     (--plugin-dir) install (`.coordinator-content-root` present, coordinator loads live
 ║     from the clone). This is EXPECTED, not a clobber. No action needed.
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -1676,8 +1676,8 @@ _BANNER_NO_RESTORE_SOURCE = """
 #      -- while ambient env vars still resolve `home` to THIS machine's
 #      real settings home no longer restores from it; rung 3 simply
 #      reports no candidate. This was a real defect, not a hypothetical:
-#      two DoE-claude tests
-#      (`test_case_a2_bogus_doe_root_falls_through_to_clobber`,
+#      two coordinator-content-repo tests
+#      (`test_case_a2_bogus_content_root_falls_through_to_clobber`,
 #      `test_case_b_genuine_clobber_no_sentinel`) ran the hook with only
 #      `CLAUDE_CONFIG_DIR` pointed at a tmp dir and got AUTO-RESTORED from a
 #      real operator-placed backup on the host machine's actual settings
@@ -1974,7 +1974,7 @@ def _evaluate_settings_integrity_own_config(config_dir: Optional[Path] = None) -
 # `Since`/`Expires` are the only two lines this parser requires; `Reason`/
 # `Disarm condition` are surfaced verbatim when present, never required.
 #
-# Spec backlink: DoE-claude dispatch state/subagent-share/
+# Spec backlink: coordinator-content-repo dispatch state/subagent-share/
 # 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-dcbed68d.md
 # (2026-07-28/29).
 # ---------------------------------------------------------------------------
@@ -1987,7 +1987,7 @@ _KS_DISARM_RE = re.compile(r"(?im)^\s*disarm condition:\s*(.+)$")
 
 # Historical fact, not derived from the marker's own (possibly un-migrated)
 # text: the disarm condition this marker carried when first armed
-# (2026-07-14, per DoE-claude archive/daily-summaries/2026-07-14-machine-a.md
+# (2026-07-14, per coordinator-content-repo archive/daily-summaries/2026-07-14-machine-a.md
 # and state/2026-07-28-machine-a-install-dogfood-friction-log.md) was "delete
 # once the naked-Python hook migration lands". That migration is COMPLETE
 # (37/37 hook scripts are Python, verified 2026-07-28 on the machine-a

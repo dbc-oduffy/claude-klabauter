@@ -2,13 +2,13 @@
 test-red emitter (coordinator_core/ops/test_red_record.py).
 
 Spec backlink: cross-repo commitment
-    DoE-claude state/cross-repo-commitments/2026-07-25-claude-klabauter-to-answer-the-test-red-record-con-bff3653a45f8.yaml
+    coordinator-content-repo state/cross-repo-commitments/2026-07-25-claude-klabauter-to-answer-the-test-red-record-con-bff3653a45f8.yaml
 Frozen contract:
-    claude-klabauter cross-repo/archive/2026-07-25-doe-claude-em-test-red-record-contract-consult.md
+    claude-klabauter cross-repo/archive/2026-07-25-coordinator-content-repo-em-test-red-record-contract-consult.md
     § "## EM Response"
 
 Every assertion here targets a field/shape/behaviour actually parsed by the
-two DoE-claude consumers (workday-start.md § Step 1.66, workstream-start
+two coordinator-content-repo consumers (workday-start.md § Step 1.66, workstream-start
 SKILL.md § Engage item 6) — not merely "a file appeared."
 """
 from __future__ import annotations

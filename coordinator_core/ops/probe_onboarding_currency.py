@@ -40,7 +40,7 @@ Interface — env-only (mirrors the original script; no CLI args):
                                             sets this explicitly before calling
                                             main() — see its _resolve_plugin_root()
                                             (env override wins verbatim, else
-                                            resolves via coordinator_registry.doe_root()
+                                            resolves via coordinator_registry.content_root()
                                             + "/coordinator").
     COORDINATOR_CURRENCY_SCRIPT_DIR      — the CALLING trampoline's own directory.
                                             DoE-side contract fact (path resolution
@@ -54,11 +54,11 @@ Interface — env-only (mirrors the original script; no CLI args):
                                             plugin_root when PLUGIN_ROOT is unset —
                                             that fallback assumes the calling script
                                             and coordinator-schema-version are
-                                            co-located (true of the retired DoE-claude
+                                            co-located (true of the retired coordinator-content-repo
                                             layout, NOT of the current trampoline,
                                             which migrated to claude-klabauter while
                                             coordinator-schema-version stayed in
-                                            DoE-claude's coordinator/ tree — see that
+                                            coordinator-content-repo's coordinator/ tree — see that
                                             trampoline's module docstring "Plugin-root
                                             resolution note"). No known caller relies
                                             on this fallback today (the trampoline and

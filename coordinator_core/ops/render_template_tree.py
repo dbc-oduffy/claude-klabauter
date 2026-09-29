@@ -1,6 +1,6 @@
-"""Renders a template tree (e.g. a DoE-root skeleton) into a launchable
+"""Renders a template tree (e.g. a content-root skeleton) into a launchable
 target directory, resolving the DoE root through the tiered precedence
-documented on `_resolve_doe_root` rather than a single hardcoded env var.
+documented on `_resolve_content_root` rather than a single hardcoded env var.
 """
 
 from __future__ import annotations
@@ -23,42 +23,42 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 _PROG = "render-template-tree.sh"
 
 
-def _resolve_doe_root() -> "tuple[Optional[str], int]":
+def _resolve_content_root() -> "tuple[Optional[str], int]":
     """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
 
-    Tier 1: DOE_ROOT env var (permanent legacy alias — wins first when both
-        DOE_ROOT and REPO_DOE_CLAUDE are set, per coordinator_registry.doe_root()).
-    Tier 2: REPO_DOE_CLAUDE env var (operator override).
-    Tier 3: `machine-local get repos.doe_claude` (registry).
-    Mirrors coordinator_core.ops.gen_doe_root_pointer's resolution order and
-    coordinator_registry.doe_root()'s precedence.
+    Tier 1: CONTENT_ROOT env var (permanent legacy alias — wins first when both
+        CONTENT_ROOT and REPO_CONTENT_ROOT are set, per coordinator_registry.content_root()).
+    Tier 2: REPO_CONTENT_ROOT env var (operator override).
+    Tier 3: `machine-local get repos.content_root` (registry).
+    Mirrors coordinator_core.ops.gen_content_root_pointer's resolution order and
+    coordinator_registry.content_root()'s precedence.
 
-    DOE_ROOT was previously
+    CONTENT_ROOT was previously
     missing from this hand-rolled resolver, silently dropping the legacy-alias
-    rung the shared coordinator_registry.doe_root() honors.
+    rung the shared coordinator_registry.content_root() honors.
 
     Tier 3 itself tries `registry_get` first, zero-spawn, and falls back to
     the `machine-local get` CLI only on a miss -- `registry_get` alone
     doesn't reach the CLI's autodiscovery/`path-exceptions.toml` rungs, and
     this repo's own `.coordinator-dev-repo` marker proves autodiscovery is
-    live for `repos.doe_claude` on a real machine, not a hypothetical
+    live for `repos.content_root` on a real machine, not a hypothetical
     (2026-08-16 review finding).
     """
-    doe_root_override = os.environ.get("DOE_ROOT", "")
-    if doe_root_override:
-        return doe_root_override, 0
+    content_root_override = os.environ.get("CONTENT_ROOT", "")
+    if content_root_override:
+        return content_root_override, 0
 
-    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
+    env_override = os.environ.get("REPO_CONTENT_ROOT", "")
     if env_override:
         return env_override, 0
 
-    value = _registry_get("repos.doe_claude") or ""
+    value = _registry_get("repos.content_root") or ""
     if not value:
         ml_bin = resolve_machine_local_cli()
         if ml_bin is not None:
             try:
                 proc = subprocess.run(
-                    [ml_bin, "get", "repos.doe_claude"],
+                    [ml_bin, "get", "repos.content_root"],
                     capture_output=True,
                     text=True,
                     timeout=15,
@@ -70,7 +70,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
                 pass
     if not value:
         print(
-            f"{_PROG}: could not resolve repos.doe_claude via the registry",
+            f"{_PROG}: could not resolve repos.content_root via the registry",
             file=sys.stderr,
         )
         return None, 1
@@ -82,10 +82,10 @@ def _co_located_render_single() -> Optional[str]:
 
     render-template.py migrated with render-template-tree.py in the
     coordinator/bin executable-surface migration (commit b644d5a9 in
-    DoE-claude) -- it is now claude-klabauter's OWN sibling executable, not
+    coordinator-content-repo) -- it is now claude-klabauter's OWN sibling executable, not
     DoE-resident content, so it is resolved relative to this repo
-    unconditionally, ahead of any DoE-root lookup (env override or
-    registry alike). REPO_DOE_CLAUDE / the registry still govern
+    unconditionally, ahead of any content-root lookup (env override or
+    registry alike). REPO_CONTENT_ROOT / the registry still govern
     DoE-resident content this module has not itself absorbed (there is
     none left here, but the fallback below is kept as a compatibility
     safety net for a checkout where this co-located sibling is somehow
@@ -103,13 +103,13 @@ def _find_render_single() -> Optional[str]:
     if co_located is not None:
         return co_located
 
-    doe_root, rc = _resolve_doe_root()
-    if doe_root is None:
+    content_root, rc = _resolve_content_root()
+    if content_root is None:
         return None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         print(
-            f"render-template-tree: no coordinator content root under DoE root: {doe_root}",
+            f"render-template-tree: no coordinator content root under DoE root: {content_root}",
             file=sys.stderr,
         )
         return None

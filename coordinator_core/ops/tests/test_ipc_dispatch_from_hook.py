@@ -2,7 +2,7 @@
 build + asyncio.run(dispatch_message) + result-unwrap body that seven DoE hook
 shims currently hand-roll identically.
 
-Spec backlink: cross-repo/archive/2026-07-31-doe-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
+Spec backlink: cross-repo/archive/2026-07-31-coordinator-content-repo-em-dr116-seam-contents-and-ipc-hook-dispatch.md
                (DoE's DR-118 — the memo's filename says dr116 because DoE renumbered the
                ruling at execute time; DR-116 in the DoE tree is an unrelated record)
 

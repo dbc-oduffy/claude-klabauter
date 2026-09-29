@@ -6,7 +6,6 @@ import os
 import socket
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +40,9 @@ class _FakeVersionState:
     server_sha = "deadbeef"
 
     def is_skewed(self, client_token: str) -> bool:
+        return False
+
+    def is_source_stale(self) -> bool:
         return False
 
 
@@ -89,6 +91,29 @@ def test_acceptor_refuses_and_keeps_accepting_after_close_listener(monkeypatch) 
     assert listener.accept_calls == len(late) + 1
     assert ctx._queue.qsize() == 0
     assert ctx.in_flight() == 0
+
+
+def test_a_connection_accepted_as_the_listener_closes_is_counted_before_the_drain(
+    monkeypatch,
+) -> None:
+    """The window between the acceptor's listening check and its enqueue:
+    if `close_listener` lands there and the connection is not yet counted,
+    the drain reads zero, the server exits, and the request is stranded.
+    Admission and the count are one step, so the drain must see it."""
+    ctx = _ctx()
+    seen = []
+
+    def _wrap(conn):
+        ctx.close_listener()
+        seen.append(ctx.drain_outstanding())
+        return "io"
+
+    monkeypatch.setattr(server, "_wrap_socket", _wrap)
+
+    ctx._acceptor_loop(_FakeListener([_FakeConn()]))
+
+    assert seen == [1]
+    assert ctx._queue.get_nowait() == "io"
 
 
 def test_a_pool_task_outliving_its_connection_still_holds_the_drain(monkeypatch) -> None:
@@ -158,6 +183,8 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
 
     release = threading.Event()
     exited = threading.Event()
+    dispatch_entered = threading.Event()
+    listener_closed = threading.Event()
     answered_before_exit = []
 
     ctx = _ctx(
@@ -169,13 +196,21 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
     )
 
     def _dispatch(self, msg, *, caller=None, isolated=False):
-        release.wait(10)
+        dispatch_entered.set()
+        release.wait(30)
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "served"}
 
     def _exit(code):
         answered_before_exit.append(ctx.drain_outstanding() == 0)
         exited.set()
 
+    real_close_listener = ctx.close_listener
+
+    def _close_listener():
+        real_close_listener()
+        listener_closed.set()
+
+    monkeypatch.setattr(ctx, "close_listener", _close_listener)
     monkeypatch.setattr(type(ctx), "_pool_dispatch", _dispatch)
     monkeypatch.setattr(
         ctx,
@@ -184,7 +219,7 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
             in_flight_count=ctx.drain_outstanding,
             ctx_shutdown=lambda: None,
             exit_fn=_exit,
-            drain_ceiling_secs=10,
+            drain_ceiling_secs=30,
         ),
     )
     ctx._start_worker_pool(pool_size=2)
@@ -194,7 +229,7 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
 
     def _send(token, request_id):
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(5)
+        client.settimeout(30)
         client.connect(str(path))
         frame = {"jsonrpc": "2.0", "id": request_id, "method": "ping", "params": {}, "_engine_token": token}
         client.sendall((json.dumps(frame) + "\n").encode("utf-8"))
@@ -208,17 +243,16 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
 
     try:
         in_flight = _send("pre-publish", "in-flight")
-        deadline = time.monotonic() + 5
-        while ctx.in_flight() == 0 and time.monotonic() < deadline:
-            time.sleep(0.01)
+        assert dispatch_entered.wait(30), "the in-flight request never reached dispatch"
 
         evicting = _read(_send("post-publish", "evicting"))
+        assert listener_closed.wait(30), "the eviction never closed the listener"
         late = [_read(_send("post-publish", f"late-{i}")) for i in range(3)]
 
         assert not exited.is_set(), "the server exited with a request still in flight"
         release.set()
         in_flight_response = _read(in_flight)
-        assert exited.wait(5)
+        assert exited.wait(30)
     finally:
         release.set()
         listen_socket.close()

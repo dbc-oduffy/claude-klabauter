@@ -33,7 +33,7 @@ base-wins semantics directly. The jq-vs-awk-vs-python fallback ladder is an
 artefact of bash not having a JSON library in-process; it is unnecessary here
 and is intentionally NOT ported.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 Spec backlink (original C1/C5 contract):
     docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C1, § C5
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
@@ -440,7 +440,7 @@ def producer_set(
     records in this design and they are deliberately different shapes:
 
       - CAPTURE-side (this function, ``session-shape.json``):
-        ``typed_command`` + ``captured_at``. DoE-claude's landed
+        ``typed_command`` + ``captured_at``. Coordinator-content-repo's landed
         ``session-shape.schema.json`` (x-schema-version 1.1.0) declares this
         object ``additionalProperties: false`` with both keys REQUIRED, so an
         extra ``op_identity`` key here is a hard validation failure on their
@@ -469,7 +469,7 @@ def producer_set(
 
     Negative-spec: do NOT validate ``typed_command`` against the coordinator
     command vocabulary here. That vocabulary is declared single-point in
-    DoE-claude (their AC-6, with its own parity test); re-enumerating it on
+    coordinator-content-repo (their AC-6, with its own parity test); re-enumerating it on
     this side would create a second source of truth that drifts silently.
     Any non-empty ``str`` is accepted by design -- the closed members
     (``"other-command"`` / ``"unresolved"``) are the contract this side
@@ -485,7 +485,7 @@ def producer_set(
     indistinguishable "ordinary command name" on disk.
 
     Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
-    Spec backlink (cross-repo contract): DoE-claude
+    Spec backlink (cross-repo contract): coordinator-content-repo
         docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md D6
     """
     if typed_command is not None and not isinstance(typed_command, str):
@@ -569,9 +569,10 @@ def _git(args, cwd: Optional[str]) -> Optional[subprocess.CompletedProcess]:
             capture_output=True,
             text=True,
             cwd=cwd,
+            timeout=30,
             **no_console_creationflags(),
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
 
 

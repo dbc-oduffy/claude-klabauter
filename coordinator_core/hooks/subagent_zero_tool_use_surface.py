@@ -2,7 +2,7 @@
 coordinator_core.hooks.subagent_zero_tool_use_surface — thin pure-read surfacing op.
 
 Purpose: Stage 2 (read side) of the zero-tool-use detection cross-repo contract with
-DoE-claude. Returns this session's `kind == "zero-tool-use"` durable records — written
+Coordinator-content-repo. Returns this session's `kind == "zero-tool-use"` durable records — written
 by hooks.subagent_zero_tool_use — in append order, as structured JSON-RPC result
 data. This is new ground: no existing hooks.* op returns structured data (every prior
 op returns an advisory envelope via _envelope.py); this op returns a plain dict
@@ -15,7 +15,7 @@ note"). `kind == "zero-tool-use"` identifies which detector wrote the record, no
 its count. A caller that treats every returned record as a zero-tool-use detection
 will misreport healthy agents; filter each record's own `tool_use_count == 0`
 yourself (DoE's consumer does this — see
-cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-store-records-every-count.md).
+cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-store-records-every-count.md).
 hooks.subagent_zero_tool_use_resolve does this filtering per-agent already, if a
 single verdict rather than the raw record list is what you need.
 
@@ -61,7 +61,7 @@ Negative-spec:
     same kind-discriminated shape) — it is NOT counted in `skipped_lines`, since it
     parsed correctly and is simply out of scope for this surface op.
 
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Tests for coordinator_core.write_guards.bump_out_of_repo_tool_write -- the
 write-confinement speed bump's `Write`/`Edit`/`MultiEdit`/`NotebookEdit` leg.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C7. Covers AC2 (a Write/Edit/MultiEdit with a path outside the
 session's repo bumps), AC13 (registered as a real `write_guards/engine.py`
 entry via CLASS/MATCHERS/PRIORITY, not a call-site patch), AC19 (those
@@ -624,9 +624,9 @@ def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(
     asymmetry between the Bash and tool-write legs."""
     session_id = "verify-boundary-probe"
     if os.name == "nt":
-        cwd = r"X:\claude-klabauter"
-        foreign_file = r"X:\experiments\coordinator.local.md"
-        foreign_dir_for_bash = "X:/experiments"
+        cwd = r"C:\claude-klabauter"
+        foreign_file = r"C:\experiments\coordinator.local.md"
+        foreign_dir_for_bash = "C:/experiments"
     else:
         cwd = "/opt/claude-klabauter"
         foreign_file = "/opt/experiments/coordinator.local.md"
@@ -673,8 +673,8 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
     "deny"`."""
     session_id = "verify-boundary-probe-anchored"
     if os.name == "nt":
-        cwd = r"X:\claude-klabauter"
-        foreign_file = r"X:\experiments\coordinator.local.md"
+        cwd = r"C:\claude-klabauter"
+        foreign_file = r"C:\experiments\coordinator.local.md"
     else:
         own_repo = _init_repo(tmp_path, "verify-boundary-own-repo")
         foreign_repo = _init_repo(tmp_path, "verify-boundary-experiments")
@@ -1442,16 +1442,16 @@ def test_ac4_registered_repo_destination_still_bumps(tmp_path, monkeypatch):
 
 
 def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
-    doe_root = str(tmp_path / "DoE-claude")
+    content_root = str(tmp_path / "coordinator-content-repo")
     assert guard._target_is_lessons_outbox_write(
-        doe_root + "/state/lessons-outbox/some-lesson.yaml"
+        content_root + "/state/lessons-outbox/some-lesson.yaml"
     )
     assert guard._target_is_lessons_outbox_write(
-        doe_root + "/state/lessons-outbox/drained/old.yaml"
+        content_root + "/state/lessons-outbox/drained/old.yaml"
     )
-    assert not guard._target_is_lessons_outbox_write(doe_root + "/cross-repo/inbox/memo.md")
+    assert not guard._target_is_lessons_outbox_write(content_root + "/cross-repo/inbox/memo.md")
     assert not guard._target_is_lessons_outbox_write(
-        doe_root + "/state/lessons-outbox-unrelated/f.txt"
+        content_root + "/state/lessons-outbox-unrelated/f.txt"
     )
     assert not guard._target_is_lessons_outbox_write("")
 
@@ -1849,3 +1849,56 @@ def test_c4c_msys_scratchpad_write_never_bumps_through_dispatcher(tmp_path, monk
 
     result = engine.evaluate(payload)
     assert result is None
+
+
+def test_settings_home_inside_a_git_tracked_home_is_not_foreign(tmp_path, monkeypatch):
+    """A repo that encloses the settings home (a git-tracked $HOME) does not
+    make the settings home a foreign repo."""
+    home_repo = _init_repo(tmp_path, "home-repo")
+    settings_home = home_repo / ".coordinator-claude-settings"
+    settings_home.mkdir()
+    own = _init_repo(tmp_path, "own-repo")
+    session_id = "sess-tracked-home-settings"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+    payload = _payload("Write", str(settings_home / "notes.md"), session_id, str(own))
+    assert guard.check(payload) is None
+    outside = _payload("Write", str(home_repo / "other.md"), session_id, str(own))
+    assert guard.check(outside) is not None
+
+
+def _consumer(monkeypatch):
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    machine_profile.reset_cache()
+
+
+def test_consumer_warns_once_per_session_then_stays_silent(tmp_path, monkeypatch):
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-warn-once"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    _consumer(monkeypatch)
+
+    first = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
+    hso = first["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "full context" in hso["additionalContext"]
+    assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
+    assert guard.check(_payload("Write", str(foreign / "b.txt"), session_id, str(own))) is None
+
+
+def test_off_level_is_silent_and_strict_override_still_denies(tmp_path, monkeypatch):
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-level-off"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    _consumer(monkeypatch)
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
+    assert guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own))) is None
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
+    denied = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"

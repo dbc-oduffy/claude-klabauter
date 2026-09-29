@@ -11,7 +11,7 @@ Spec backlink:
                   plan-spine id C2b
 
 HAZARD (state/lessons/0000-00-00-hand-edit-of-generated-artifact-survives-until-next-emit.yaml,
-DoE-claude `d97c8aa7`): a hand-edit made INSIDE the delimited region reads as landed and
+Coordinator-content-repo `d97c8aa7`): a hand-edit made INSIDE the delimited region reads as landed and
 reviewed, then is silently destroyed by the next regeneration. The naive predicate
 ("pre-emit region content disagrees with a fresh render") cannot discriminate a hand-edit
 from ordinary drift — both present as region-bytes-disagree-with-fresh-render.

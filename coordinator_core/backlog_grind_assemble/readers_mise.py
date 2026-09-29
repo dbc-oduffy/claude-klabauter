@@ -14,7 +14,7 @@ disjoint surface set, never a session/day/week severity knob — see
 unconditionally for every cadence and trusts each to self-gate; this module
 is a no-op `ReaderResult()` for every cadence except `"mise-en-place"`.
 
-Scope, per DoE-claude `coordinator/commands/mise-en-place.md`: mise-en-place's
+Scope, per coordinator-content-repo `coordinator/commands/mise-en-place.md`: mise-en-place's
 Phase 0 five readiness criteria assess a spec's SEMANTIC completeness (is the
 decision made? are downstream contracts sequenced? is this pure-executor
 work? is the footprint declarable and data-reachable? is verification
@@ -57,7 +57,7 @@ line:
    chunk C1) — `/mise` Phase 6's review-scale rule, computed here instead of
    left as prose the EM evaluates. NOT "a multi-baton run is partitioned by
    default": DoE retired that prose (their c8ea9b16a; `cross-repo/inbox/
-   2026-08-04-doe-claude-em-mise-phase6-partitions-by-default-does-not-
+   2026-08-04-coordinator-content-repo-em-mise-phase6-partitions-by-default-does-not-
    survive-the-verdict.md`) after probing the shipped reader — a resolved
    `baton_count >= 2` MULTIPLIES the row-4 metrics and floors the verdict
    above the no-review rows; it never forces the partitioned row, so a
@@ -81,7 +81,7 @@ line:
    INHERITABLE, and one directive naming them all as
    `additional_predecessors` fan-in legs (D-A; no new lineage axis).
    `baton_role: work | record` (DoE-ratified,
-   `cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`)
+   `cross-repo/inbox/2026-08-19-coordinator-content-repo-em-baton-role-axis-ruling.md`)
    is authoritative WHERE PRESENT on a frontmatter-bearing artifact
    (positive match only — absence is unknown, never defaulted, mirroring
    C7's own discipline); the existing path-shape heuristic
@@ -121,7 +121,7 @@ Phase 6. Three-way, deliberately:
 WHICH record is the run in flight is READ, never inferred: the caller
 supplies it as `backlog-grind-assemble brief mise-en-place --run-id
 <run-id>`, naming `state/mise-inventory/<run-id>.md` (ratified 2026-08-04,
-`cross-repo/inbox/2026-08-04-doe-claude-em-mise-run-id-carrier-env-breaks-
+`cross-repo/inbox/2026-08-04-coordinator-content-repo-em-mise-run-id-carrier-env-breaks-
 windows.md`). `run_id` reaches this module as a uniform keyword on EVERY
 reader's `collect()` — the seam stays cadence-agnostic and each reader
 self-gates on it exactly as it already self-gates on `cadence`.
@@ -131,7 +131,7 @@ load_family_records` (D-6, AC6, scoped to this file) — no directory glob,
 no hand-rolled YAML frontmatter parse over a backlog directory anywhere
 below.
 
-Spec backlink: DoE-claude DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3b; docs/plans/2026-08-04-mise-phase-6-review-scale-is-computed-by.md,
 chunk C1 (point 4 above).
 
@@ -197,7 +197,7 @@ Negative-spec:
       run onward), and start-SHA ancestry (announced itself, but still
       picked a record nothing had named). The carrier is now the caller's
       own `--run-id`, ratified 2026-08-04 (`cross-repo/inbox/2026-08-04-
-      doe-claude-em-mise-run-id-carrier-env-breaks-windows.md`): "I would
+      coordinator-content-repo-em-mise-run-id-carrier-env-breaks-windows.md`): "I would
       rather see the inference path deleted than kept as a fallback that
       quietly reactivates on any caller that forgets the flag." There is
       therefore no `_ancestry_probe`, no candidate set, no ordering, and no
@@ -207,7 +207,7 @@ Negative-spec:
       whose established idiom is asking rather than raising.
     - Does NOT accept a SECOND carrier for the run id — no `MISE_RUN_ID`
       env fallback, no session-state lookup, no sentinel read (PM ruling,
-      2026-08-04, with DoE-claude concurring). A second carrier is a second
+      2026-08-04, with coordinator-content-repo concurring). A second carrier is a second
       way to be wrong, and an env prefix is unreachable on the Windows
       `.cmd` launcher path (`VAR=value command` is not a line `cmd.exe`
       parses) and dead on every host across the fresh-shell-per-EM-call
@@ -373,7 +373,7 @@ _MISE_INVENTORY_DIRNAME = "mise-inventory"
 #: the dangerous one, hence exact key names only, never a fuzzy match.
 _START_SHA_FM_KEYS = ("start_sha", "starting_sha", "run_start_sha", "range_start_sha")
 
-#: The record's own run identifier, per DoE-claude `coordinator/pipelines/
+#: The record's own run identifier, per coordinator-content-repo `coordinator/pipelines/
 #: mise-en-place/PIPELINE.md` § Phase 1 ("the record MUST open with
 #: frontmatter carrying `run_id:` and `start_sha:`") and
 #: `coordinator/commands/mise-en-place.md`'s scout brief. EXACT key only,
@@ -1063,7 +1063,7 @@ def _read_phase_6_review_scale(run_id: Optional[str]) -> ReaderResult:
 _TODO_LEG_RE = re.compile(r"^tasks/[\w./-]+/todo\.md$")
 
 #: The two `baton_role` values DoE ratified
-#: (`cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`).
+#: (`cross-repo/inbox/2026-08-19-coordinator-content-repo-em-baton-role-axis-ruling.md`).
 #: An artifact's frontmatter value outside this set — including the
 #: retired-by-ruling `execution` spelling — is treated exactly like an
 #: absent field: unknown, never accepted as either member.
@@ -1158,7 +1158,7 @@ class _BatonInheritance(NamedTuple):
 
 def _resolve_baton_inheritance(repo_root: Path, baton_paths: set[str]) -> _BatonInheritance:
     """PUT THE AXIS IN FRONT OF THE HEURISTIC — DO NOT SWAP IT OUT (ruled:
-    `cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`).
+    `cross-repo/inbox/2026-08-19-coordinator-content-repo-em-baton-role-axis-ruling.md`).
     `baton_role: work` on a frontmatter-bearing artifact makes it
     inheritable; `baton_role: record` excludes it explicitly; an absent
     (or unrecognised, or frontmatter-less) axis falls to the path-shape
@@ -1413,7 +1413,7 @@ class MintedRunId(NamedTuple):
     repo-relative, forward-slash `state/mise-inventory/<run_id>.md` path it
     implies — NEVER a machine-absolute path: this repo is Windows-first, and
     an absolute-path string would platform-separate on Windows (backslashes
-    in place of `/`), and this value is also consumed by a DoE-claude hook
+    in place of `/`), and this value is also consumed by a coordinator-content-repo hook
     in a sibling repo, where an absolute path rooted in *this* machine is
     meaningless. `__init__.py`'s `main()` serialises these two fields
     verbatim to JSON — see AC7's negative-spec: it reads
@@ -1549,14 +1549,14 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
     seam never learns which is which. Only the baton-unification surface
     reads it; the other three sub-readers below are run-invariant.
 
-    `_read_phase_6_review_scale` is DELIBERATELY NOT called here. DoE-claude
+    `_read_phase_6_review_scale` is DELIBERATELY NOT called here. Coordinator-content-repo
     `ecbb6b78607fa3df61dde22559417d686e8ec3ea` ("doctrine(mise): review
     belongs to the capping ceremony, not the run") retired `/mise-en-place`'s
     own review gate — mise now freezes its run diff and routes to
     `/workstream-complete`'s chain-scoped review, which decides its own
     scale over the chain diff, a range that strictly contains this run's.
     Nothing downstream reads `d-mise-phase-6-review-scale` any more (see
-    `cross-repo/archive/2026-08-06-doe-claude-em-mise-review-ruling-orphans-
+    `cross-repo/archive/2026-08-06-coordinator-content-repo-em-mise-review-ruling-orphans-
     readers-mise-leg.md`). The function itself, and the shared
     `decide_review_scale` it calls, are NOT orphaned -- `workstream_complete`
     still calls the latter, and this reader's own pinned tests still exercise

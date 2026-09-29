@@ -294,10 +294,10 @@ def test_handler_releases_nothing_on_failed_commit_event(tmp_path, monkeypatch):
 
 
 def _doe_wrapper_mapped_event(tool_name: str, command: str | None = None) -> dict:
-    """The params shape `postuse-advisory-dispatch.py` (DoE-claude) actually
+    """The params shape `postuse-advisory-dispatch.py` (coordinator-content-repo) actually
     builds today, NOT the seven-field fixture assumed above.
 
-    Verified against DoE-claude coordinator/hooks/scripts/postuse-advisory-
+    Verified against coordinator-content-repo coordinator/hooks/scripts/postuse-advisory-
     dispatch.py (2026-09-26): it maps session_id/transcript_path/agent_id/
     tool_name unconditionally, `file_path`/`content` ONLY when
     `tool_name == "Write"`, and `tool_response` ONLY when
@@ -326,7 +326,7 @@ def test_real_doe_wrapper_shape_never_forwards_command_for_bash(monkeypatch):
     the claim-release leg is currently dormant, not merely untested.
 
     Also worth naming (not asserted here, since it is a matcher fact, not a
-    params-mapping one): DoE-claude's hooks.json registers this dispatcher
+    params-mapping one): coordinator-content-repo's hooks.json registers this dispatcher
     under matcher `Write|Edit|MultiEdit|NotebookEdit|Agent|Workflow` --
     `Bash` is not in that set, so in production the hook process is never
     even invoked on a Bash PostToolUse event in the first place.

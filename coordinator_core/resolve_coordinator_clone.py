@@ -24,7 +24,7 @@ separately rather than overloading this module's contract.
 
 Port of: resolve-coordinator-clone.sh (DoE 290997c7, 2026-07-22), 804 lines.
 This is the Python-native mirror for claude-klabauter-resident callers, exactly as
-``coordinator_core.state_root`` and ``coordinator_core.ops.coordinator_doe_root``
+``coordinator_core.state_root`` and ``coordinator_core.ops.coordinator_content_root``
 are for their oracles.
 
 Public API:
@@ -58,24 +58,24 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
       the bottom of the bash file) — see Scope note above.
     - Does NOT reimplement the four composed peers this module is a SIBLING
       of (``coordinator_core.state_root``, ``coordinator_core.ops.
-      coordinator_doe_root``, ``coordinator_core.engine_root``,
-      ``coordinator_core.doe_root_pointer``) — no second settings-home/
+      coordinator_content_root``, ``coordinator_core.engine_root``,
+      ``coordinator_core.content_root_pointer``) — no second settings-home/
       state-root/clone resolver.
-    - The pointer-file read (``_read_doe_root_pointer``) now DELEGATES to
-      ``coordinator_core.doe_root_pointer.read_doe_root_pointer`` rather than
+    - The pointer-file read (``_read_content_root_pointer``) now DELEGATES to
+      ``coordinator_core.content_root_pointer.read_content_root_pointer`` rather than
       reimplementing it locally (fixed 2026-07-22, DR-071): that shared port
       previously implemented only the LEGACY rung, which was stale relative
       to the durable-then-legacy bash oracle and would have silently
       mis-resolved on a migrated machine; it has since been updated to the
-      full DR-071 order (registry `repos.doe_claude` -> durable
-      `<settings-home>/machine-local/.doe-root` -> legacy
-      `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`), so delegating here is now
+      full DR-071 order (registry `repos.content_root` -> durable
+      `<settings-home>/machine-local/.coordinator-content-root` -> legacy
+      `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`), so delegating here is now
       correct and deletes what would otherwise be a second, drift-prone copy
       of the same read order.
-    - `_registry_doe_claude` reads the registry canonical key via
+    - `_registry_content_root` reads the registry canonical key via
       ``coordinator_core.machine_resolver.registry_get`` — a direct-tomllib
       read, not the ``machine-local`` CLI — for the same reset-safety reason
-      documented on ``registry_get`` and ``doe_root_pointer``: the CLI's
+      documented on ``registry_get`` and ``content_root_pointer``: the CLI's
       reader/exec bits live under the resettable ``~/.claude/bin/``, so
       "`machine-local get` works" is not proof of reset-survival. The CLI
       subprocess (``_machine_local_get``) is retained as a fallback rung only
@@ -88,8 +88,8 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
       values. This port instead reads the same key via ``registry_get``
       (direct tomllib, no subprocess) first and only shells out to
       ``machine-local get plugin.mirrors.coordinator-claude.live_path`` when
-      that fails to resolve — same two-rung shape ``_registry_doe_claude``
-      above already uses for `repos.doe_claude`, not a second convention.
+      that fails to resolve — same two-rung shape ``_registry_content_root``
+      above already uses for `repos.content_root`, not a second convention.
       (Originally ported as CLI-only; that was a hot-path spawn defect fixed
       2026-07-28 — see `_registry_live_path`'s own docstring.)
     - Versioned-cache newest-wins comparison is numeric major.minor.patch
@@ -107,7 +107,7 @@ from typing import List, Optional
 
 from coordinator_core._content_root_primitive import content_root_for as _content_root_for
 from coordinator_core._claude_klabauter_root import _machine_local_get
-from coordinator_core.doe_root_pointer import read_doe_root_pointer as _read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer as _read_content_root_pointer
 from coordinator_core.machine_resolver import registry_get
 
 
@@ -124,7 +124,7 @@ class ResolveCoordinatorCloneError(RuntimeError):
     -- as opposed to a genuinely actionable failure (ambiguous source,
     invalid COORDINATOR_SOURCE_MODE, OSS install present but not
     git-backed). A caller on the hot dispatch path
-    (`coordinator_core.ops.coordinator_doe_root._resolve_via_clone_root_script`)
+    (`coordinator_core.ops.coordinator_content_root._resolve_via_clone_root_script`)
     uses this to distinguish "nothing to report, every rung already tried
     and failed identically" from "something worth a reader's attention" --
     see that function's own docstring.
@@ -141,11 +141,11 @@ def _claude_home_dir() -> Optional[str]:
     return os.path.join(home, ".claude") if home else None
 
 
-def _registry_doe_claude() -> Optional[str]:
-    value = registry_get("repos.doe_claude")
+def _registry_content_root() -> Optional[str]:
+    value = registry_get("repos.content_root")
     if value:
         return value
-    return _machine_local_get("repos.doe_claude")
+    return _machine_local_get("repos.content_root")
 
 
 def _registry_live_path() -> Optional[str]:
@@ -236,9 +236,9 @@ def _resolve_source_mode(verb: str) -> str:
     oss_present = bool(flat) and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json"))
 
     candidate = (
-        _registry_doe_claude()
+        _registry_content_root()
         or _registry_live_path()
-        or _read_doe_root_pointer()
+        or _read_content_root_pointer()
         or (flat if flat and not oss_present and _flat_evidences_coordinator_tree(flat) else "")
         or ""
     )
@@ -282,10 +282,10 @@ def resolve_clone_root() -> str:
 
     dev / passthrough mode, in order:
       1. COORDINATOR_CLONE env var (must have `.git/`, else fail loud)
-      2. registry: repos.doe_claude (canonical) then
+      2. registry: repos.content_root (canonical) then
          plugin.mirrors.coordinator-claude.live_path (fallback) — gated on
          `.git/`; present-but-not-git-backed falls through, not a hard stop
-      3. `.doe-root` pointer (durable-then-legacy) -> that root itself,
+      3. `.coordinator-content-root` pointer (durable-then-legacy) -> that root itself,
          gated on `.git/`
       4. Flat layout `<claude_home>/plugins/coordinator-claude`, gated on
          `.git/`
@@ -314,22 +314,22 @@ def resolve_clone_root() -> str:
             "it has no .git directory"
         )
 
-    live = _registry_doe_claude() or _registry_live_path()
+    live = _registry_content_root() or _registry_live_path()
     if live and os.path.isdir(os.path.join(live, ".git")):
         return live
 
-    doe_root = _read_doe_root_pointer()
-    if doe_root and os.path.isdir(os.path.join(doe_root, ".git")):
-        return doe_root
+    content_root = _read_content_root_pointer()
+    if content_root and os.path.isdir(os.path.join(content_root, ".git")):
+        return content_root
 
     if flat and os.path.isdir(os.path.join(flat, ".git")):
         return flat
 
     raise ResolveCoordinatorCloneError(
         "resolve-coordinator-clone --for-git-ops: no git-backed coordinator clone found.\n"
-        "  Tried: COORDINATOR_CLONE env, registry repos.doe_claude (canonical),\n"
+        "  Tried: COORDINATOR_CLONE env, registry repos.content_root (canonical),\n"
         "         registry plugin.mirrors.coordinator-claude.live_path (fallback),\n"
-        "         ~/.claude/.doe-root pointer, flat ~/.claude/plugins/coordinator-claude\n"
+        "         ~/.claude/.coordinator-content-root pointer, flat ~/.claude/plugins/coordinator-claude\n"
         "  (no .git in any tried location)\n"
         "  Run: coordinator:install OR set COORDINATOR_CLONE to the clone path."
     )
@@ -347,7 +347,7 @@ def resolve_content_root() -> str:
       2. COORDINATOR_ROOT (must exist, else fail loud)
       3. registry live_path (dev-loop clone wins over cache)
       4. newest versioned cache
-      5. `.doe-root` pointer -> the coordinator content root inside it, either
+      5. `.coordinator-content-root` pointer -> the coordinator content root inside it, either
          layout (`<root>/coordinator`, else `<root>` itself when it carries the
          `.claude-plugin/plugin.json` manifest marker)
       6. flat layout, gated on `.claude-plugin/plugin.json` manifest marker
@@ -396,9 +396,9 @@ def resolve_content_root() -> str:
     if newest:
         return newest
 
-    doe_root = _read_doe_root_pointer()
-    if doe_root:
-        found = _content_root_for(doe_root)
+    content_root = _read_content_root_pointer()
+    if content_root:
+        found = _content_root_for(content_root)
         if found is not None:
             return str(found)
 
@@ -408,7 +408,7 @@ def resolve_content_root() -> str:
     raise ResolveCoordinatorCloneError(
         "resolve-coordinator-clone --for-content: no readable coordinator content root found.\n"
         "  Tried: CLAUDE_PLUGIN_ROOT, COORDINATOR_ROOT, registry live_path,\n"
-        "         versioned cache glob, ~/.claude/.doe-root pointer,\n"
+        "         versioned cache glob, ~/.claude/.coordinator-content-root pointer,\n"
         "         flat ~/.claude/plugins/coordinator-claude\n"
         "  Run: coordinator:install OR set COORDINATOR_ROOT to the coordinator directory."
     )

@@ -8,11 +8,11 @@ codenames to non-navigable placeholders on publish. A rendered message that
 directs a reader to go read/see a codenamed repo therefore breaks for an OSS
 mirror reader who has none of our repos. This module's `description` fields
 are rendered text — they ship inside cross-repo-memo.schema.json /
-archived-memo.schema.json, consumed by agents and DoE-claude's routing hook
+archived-memo.schema.json, consumed by agents and coordinator-content-repo's routing hook
 — so they are in scope for that discriminator.
 
 Investigation for this chunk (C7c) found no navigation prose: the handful of
-`DoE-claude` / `example-retrieval-repo` mentions inside description strings were
+`coordinator-content-repo` / `example-retrieval-repo` mentions inside description strings were
 historical attribution ("example-retrieval-repo-em's inbox-blitz proposal", "DoE-
 claude-local extension") or `repos.<key>` functional-identifier examples,
 never a "go read <repo>" instruction. A follow-up EM ruling overrode that
@@ -20,7 +20,7 @@ disposition: this module's emitted JSON is a row in a later chunk's
 rendered-message corpus, gated by register rule B7, which fires on ANY
 REDACTION-class token in rendered text regardless of navigation intent — the
 codenames were removed from every description accordingly (registry keys
-`repos.doe_claude` / `repos.project_rag` are functional identifiers, stay).
+`repos.content_root` / `repos.project_rag` are functional identifiers, stay).
 This test locks that state in so a future edit re-introducing either
 navigation prose OR a bare REDACTION-class codename mention is caught here
 rather than only at OSS-publish time.
@@ -38,7 +38,7 @@ from typing import Any, Iterator
 
 from coordinator_core.contract.emit_memo_schema import emit_schemas
 
-_CODENAMES = ("DoE-claude", "project-rag", "cockpit", "example-fleet", "example-game-repo")
+_CODENAMES = ("coordinator-content-repo", "project-rag", "cockpit", "example-fleet", "example-game-repo")
 _NAVIGATION_PATTERN = re.compile(
     r"\b(see|read|check|visit)\b[^.]{0,60}(" + "|".join(_CODENAMES) + r")",
     re.IGNORECASE,
@@ -76,11 +76,11 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         repo.md): a REDACTION-class codename mention in rendered text is
         broken regardless of navigation intent — attribution prose that
         scrubs to a non-navigable placeholder still names nothing an OSS
-        reader can resolve. Registry keys (`repos.doe_claude`,
+        reader can resolve. Registry keys (`repos.content_root`,
         `repos.project_rag`) are functional identifiers, not prose mentions,
         and are exempted below via `test_functional_repo_keys_still_present`
         rather than here."""
-        redaction_tokens = ("DoE-claude", "project-rag", "cockpit", "example-fleet", "example-game-repo")
+        redaction_tokens = ("coordinator-content-repo", "project-rag", "cockpit", "example-fleet", "example-game-repo")
         emitted = emit_schemas(out_dir=tmp_path)
         for name, schema in emitted.items():
             for description in _iter_descriptions(schema):
@@ -96,7 +96,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         to_repo_desc = emitted["cross-repo-memo"]["properties"]["to_repo"][
             "description"
         ]
-        assert "repos.doe_claude" in to_repo_desc
+        assert "repos.content_root" in to_repo_desc
         assert "repos.project_rag" in to_repo_desc
 
 

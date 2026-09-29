@@ -1,5 +1,5 @@
 """coordinator_core.write_guards.check_claude_md_size — hard-deny SIZE leg
-ported from DoE-claude ``coordinator/hooks/scripts/check-claude-md-size.py``.
+ported from coordinator-content-repo ``coordinator/hooks/scripts/check-claude-md-size.py``.
 
 Purpose: that DoE hook carries TWO INDEPENDENT checks against a governed
 (fleet-loaded) CLAUDE.md-class target -- a byte-size budget (soft exit-1
@@ -61,7 +61,7 @@ Negative-spec -- do NOT "complete" this port while reading it:
     C2 priority map, not ``write_guards/INTERFACE.md``'s illustrative
     four-matcher example.
 
-C7c addendum (mirrors DoE-claude ``coordinator/hooks/scripts/_claude_md_ledger.py``
+C7c addendum (mirrors coordinator-content-repo ``coordinator/hooks/scripts/_claude_md_ledger.py``
 ``admission_check_for_surface``, commit ``0f59b1abc``): a surface already over
 its watermark must still admit the edits that SHRINK it -- refusing those
 freezes the file and leaves "raise the watermark" as the only way out, which
@@ -109,7 +109,7 @@ and silently drop this guard's message. This module still carries no
 `COORDINATOR_OVERRIDE_*` key -- unchanged by the flip, per
 docs/wiki/write-guard-priority-bands.md.
 
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
+Spec backlink: coordinator-content-repo:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
   docs/plans/2026-08-06-apply-guard-class-census.md (chunk C2);
   docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md;
   CLASS/MATCHERS/PRIORITY convention per
@@ -119,7 +119,7 @@ Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
   ratchet watermark per docs/plans/2026-07-30-boot-doctrine-cut-and-refill-
   gate.md § C7b.
 Reference (DoE source, SIZE leg only -- the per-heading admission-gate leg
-  and the soft warning remain there): DoE-claude
+  and the soft warning remain there): coordinator-content-repo
   coordinator/hooks/scripts/check-claude-md-size.py.
 """
 

@@ -4,11 +4,11 @@ agent-mode consent prompt, functional dep probing, and the crash-safe
 visited-set cycle-detection state machine consumed by coordinator's
 install-chain setup.sh.
 
-Port source: coordinator/scripts/lib/dep_check.sh [DoE-claude repo] — the
-`.sh` file is RETIRED and no longer exists in DoE-claude (all of
+Port source: coordinator/scripts/lib/dep_check.sh [coordinator-content-repo repo] — the
+`.sh` file is RETIRED and no longer exists in coordinator-content-repo (all of
 `coordinator/scripts/lib/` is gone repo-wide). Historical context: it was
 last a thin bash veneer subprocess-calling into this module's function
-bodies, and by 2026-07-17 DoE-claude's own coordinator/scripts/setup.sh no
+bodies, and by 2026-07-17 coordinator-content-repo's own coordinator/scripts/setup.sh no
 longer sourced it at all (it had become a polyglot trampoline into
 coordinator_core.ops.setup_chain_walker.main, which ports
 manifest-reading/dep-probing natively) — it survived only as a byte-parity

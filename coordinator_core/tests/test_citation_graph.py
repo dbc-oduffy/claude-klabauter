@@ -1,7 +1,7 @@
 """coordinator_core/tests/test_citation_graph.py -- tests for
 `coordinator_core.citation_graph`.
 
-Ported from DoE-claude `coordinator/tests/test_citation_graph.py`
+Ported from coordinator-content-repo `coordinator/tests/test_citation_graph.py`
 (`docs/plans/2026-08-30-citation-integrity-tier-1.md`, chunk C1) per
 `docs/plans/2026-09-18-doe-holds-no-scripts.md` chunk W2-C3.
 

@@ -61,7 +61,7 @@ def test_no_retired_review_trail_file_remains_on_disk():
     fourteen existed.
 
     The readjudication reporter briefly sat under its own `pending_fix` leg while C6 waited
-    on DoE-claude's answer; doe-claude-ae answered on 2026-08-29 (nothing there dispatches
+    on coordinator-content-repo's answer; coordinator-content-repo-ae answered on 2026-08-29 (nothing there dispatches
     it), C6 landed, and the split was deleted with the gate it existed for.
     """
     still_present = [

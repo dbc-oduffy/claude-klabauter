@@ -916,7 +916,7 @@ def _config_value(path: str, section: str, key: str) -> str:
 
 
 def _resolve_operator(git_dir: str) -> str:
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or str(Path.home())
     global_override = os.environ.get("GIT_CONFIG_GLOBAL")
     if global_override:
         candidates = [global_override]

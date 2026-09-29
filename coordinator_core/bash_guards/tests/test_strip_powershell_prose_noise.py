@@ -18,7 +18,7 @@ set:
     `git stash drop`.
   - `TestDoubleQuotedSpanStripped` -- a double-quoted span containing
     `worktree add`.
-  - `TestHazardProseNotDenied` -- the real-world shape doe-claude hit: a
+  - `TestHazardProseNotDenied` -- the real-world shape coordinator-content-repo hit: a
     hazard-documenting prose string naming a destructive git command
     inside a quoted block, which must NOT read as a live command once
     stripped.

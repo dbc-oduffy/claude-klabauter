@@ -70,7 +70,7 @@ Negative-spec (hard-won):
     tree, so Plan-Id/Deliverable match the version actually committed (not a later local edit).
   - Does NOT emit Resolves: on every commit that carries a Deliverable-Id: — that is
     precisely the workstream-membership/completion conflation this key exists to avoid
-    (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § Anti-scope). Resolves:
+    (coordinator-content-repo:docs/plans/2026-08-01-baton-spine-information-integrity.md § Anti-scope). Resolves:
     is gated on an additional, independent staged-diff signal: a completion entry
     (`archive/completed/*.md`) in the SAME staged set. A commit with only Deliverable-Id:
     and no staged completion entry never emits Resolves:.
@@ -462,7 +462,7 @@ def _has_staged_completion_entry(
     (or to none at all) no longer satisfies this gate — fail closed rather than
     stamping a false `Resolves:` on an unrelated deliverable.
 
-    Spec backlink: DoE-claude:pln-baton-spine-information-integr-d3e1d7
+    Spec backlink: coordinator-content-repo:pln-baton-spine-information-integr-d3e1d7
     § A1 (b) — stamp Resolves: at the completion event, not on every commit.
 
     Read-only comparison — the trailer this gates on is always stamped with

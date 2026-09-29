@@ -1,6 +1,6 @@
 """
 Co-located pytest for coordinator_core.ops.install_shell_init_guard_seam
-(install.md § 3.5b.1 native port, DoE-claude repo). Covers: --check-only
+(install.md § 3.5b.1 native port, coordinator-content-repo repo). Covers: --check-only
 reports without mutating the rc file; a live run writes the sentinel-guarded
 block and is idempotent on re-run (append-not-clobber — pre-existing rc
 content is preserved, and a second live run is a silent no-op rather than a
@@ -20,7 +20,7 @@ the one test that relies on tier-2 falling through
 operator's REAL registry either -- per
 `state/lessons/2026-07-17-redirect-state-home-env-to-tmp-in-unit-t-*.yaml`.
 
-Spec backlink: coordinator/commands/install.md § 3.5b.1 [DoE-claude repo]
+Spec backlink: coordinator/commands/install.md § 3.5b.1 [coordinator-content-repo repo]
 """
 
 from __future__ import annotations

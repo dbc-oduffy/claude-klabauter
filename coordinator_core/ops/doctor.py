@@ -7,7 +7,7 @@ WHY THIS EXISTS
     repair it (Write, Edit, Bash) are exactly the tools the break disables. A
     guard that runs through the tool it guards can detect a break but never
     repair it — see `docs/plans/2026-07-29-windows-viability-stop-the-spawn-
-    storms.md` row WS-9 and DoE-claude `state/2026-07-29-deleted-hook-scripts-
+    storms.md` row WS-9 and coordinator-content-repo `state/2026-07-29-deleted-hook-scripts-
     bricked-every-write.md`. This module's PRIMARY invocation is a plain
     terminal (`python3 <this-repo>/coordinator/bin/doctor.py`, or the paired
     `doctor.cmd` on Windows) with NO Claude Code process involved, so a session
@@ -19,12 +19,13 @@ AUDIENCE
     a layer with nothing to report) and loud, with a plain remediation, on a
     broken one. This is not a wall of diagnostics — see `render_report()`.
 
-LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
+LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list; the last, install drift, imports
+    the content root's coordinator_install.py and reports manifest/step disagreement without a spawn)
     1. Sibling resolution     — can this machine resolve claude-klabauter's own
-       root and DoE-claude's root via the settings-home ladder? (the same
+       root and coordinator-content-repo's root via the settings-home ladder? (the same
        resolution every coordinator bin/ trampoline depends on.)
     2. Hook registration      — every `coordinator/hooks/hooks.json` command
-       (DoE-claude side) resolves to a script that exists on disk, and reports
+       (coordinator-content-repo side) resolves to a script that exists on disk, and reports
        whether it routes through the fail-open launcher
        (`coordinator/hooks/fail_open_launcher.py`, DoE 7e5b546a9) or is a bare
        command that would brick every tool call if its target ever goes
@@ -60,7 +61,7 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
 REPAIR POSTURE — what this command fixes vs. only reports, and why
     Exactly one layer is auto-repairable, and only when `--fix` is passed
     (never on a bare read): layer 2's BARE (non-fail-open-wrapped) hook
-    command entries in DoE-claude's `coordinator/hooks/hooks.json`. This is
+    command entries in coordinator-content-repo's `coordinator/hooks/hooks.json`. This is
     safe because (a) `hooks.json` is not the bidirectionally-synced file —
     `~/.claude/settings.json` is, and this doctor never writes that one — and
     (b) the wrap is idempotent and already covered by the fail_open_launcher
@@ -76,7 +77,7 @@ REPAIR POSTURE — what this command fixes vs. only reports, and why
     not be evaluated (unresolvable sibling root, unreadable hooks.json, etc.)
     reports itself as UNKNOWN, distinct from OK.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 WS-9 / AC-28
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9 WS-9 / AC-28
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ _HOOKS_DISABLED_MARKER_NAME = ".coordinator-hooks-disabled"
 _KNOWN_NON_COMMAND_HOOK_TYPES = {"http"}
 
 # Generator-provenance: the only auto-repair write (--fix, layer 2) targets
-# DoE-claude's coordinator/hooks/hooks.json -- a sibling repo's tree, never
+# coordinator-content-repo's coordinator/hooks/hooks.json -- a sibling repo's tree, never
 # claude-klabauter's own.
 GENERATES = []
 
@@ -155,6 +156,19 @@ def _config_dir() -> Path:
     return home_dir() / ".claude"
 
 
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_LAUNCHER_BASENAME = "hook-run"
+
+
+def _is_launcher_argv(argv: List[str]) -> bool:
+    """True for a `hook-run <module> ...` registration: the settings-home
+    launcher runs an engine hook module, so there is no script path to audit."""
+    base = os.path.basename(argv[0].replace("\\", "/")).lower()
+    if base.endswith(".exe"):
+        base = base[: -len(".exe")]
+    return base == _LAUNCHER_BASENAME
+
+
 def _hook_argv(hook: dict) -> Optional[List[str]]:
     """Return a hook registration's full argv, across both encodings the fleet
     ships.
@@ -162,7 +176,7 @@ def _hook_argv(hook: dict) -> Optional[List[str]]:
     Legacy string form puts the whole invocation in `command`
     (`python3 -c '<bootstrap>' <script> [args...]`, or bare
     `python3 <script> [args...]`). Exec form — what `fail_open_launcher
-    .wrap_command_exec` emits and what every registration in DoE-claude's
+    .wrap_command_exec` emits and what every registration in coordinator-content-repo's
     hooks.json now uses — puts the bare interpreter in `command` and the real
     argv in `args`, so no shell is ever in the path.
 
@@ -189,9 +203,11 @@ def _hook_argv(hook: dict) -> Optional[List[str]]:
         tokens = shlex.split(command, posix=posix)
     except ValueError:
         return None
-    if posix:
-        return tokens
-    return [_strip_enclosing_quotes(t) for t in tokens]
+    if not posix:
+        tokens = [_strip_enclosing_quotes(t) for t in tokens]
+    while tokens and _ENV_ASSIGNMENT.match(tokens[0]):
+        tokens = tokens[1:]
+    return tokens or None
 
 
 def _strip_enclosing_quotes(token: str) -> str:
@@ -243,15 +259,15 @@ def _extract_script_path(argv: List[str]) -> Optional[str]:
     return None
 
 
-def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
-    if _PLUGIN_ROOT_TOKEN not in path or not doe_root:
+def _resolve_plugin_root_token(path: str, content_root: Optional[str]) -> str:
+    if _PLUGIN_ROOT_TOKEN not in path or not content_root:
         return path
     # On a published flat mirror the plugin root IS the DoE root; expanding to
-    # `<doe_root>/coordinator` there made every registered script read as
+    # `<content_root>/coordinator` there made every registered script read as
     # missing on disk. content_root_or_private falls back to that same join
     # so a root that holds neither layout still reports the same path it
     # always did (overengineering-reviewer finding 2).
-    return path.replace(_PLUGIN_ROOT_TOKEN, content_root_or_private(doe_root))
+    return path.replace(_PLUGIN_ROOT_TOKEN, content_root_or_private(content_root))
 
 
 def _iter_hook_commands(hooks_doc: Any):
@@ -313,7 +329,7 @@ def _check_sibling_resolution() -> Layer:
     except RuntimeError as exc:
         status = "broken"
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1)
-        findings.append(Finding("broken", f"claude-klabauter root did not resolve: {exc}"))
+        findings.append(Finding("broken", f"engine root did not resolve: {exc}"))
         claude_klabauter_root = None
     else:
         if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):
@@ -322,27 +338,27 @@ def _check_sibling_resolution() -> Layer:
             findings.append(
                 Finding(
                     "broken",
-                    f"resolved claude-klabauter root '{claude_klabauter_root}' has no "
+                    f"resolved engine root '{claude_klabauter_root}' has no "
                     "coordinator_core/ — wrong path or partial checkout.",
                 )
             )
 
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    doe_root = coordinator_doe_root()
-    if not doe_root:
+    content_root = coordinator_content_root()
+    if not content_root:
         status = "broken"
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
         findings.append(
             Finding(
                 "broken",
-                "DoE-claude root did not resolve — set it via "
-                "'machine-local set repos.doe_claude <path>', or repair the "
-                "'.doe-root' pointer under the settings-home machine-local dir.",
+                "content root did not resolve — set it via "
+                "'machine-local set repos.content_root <path>', or repair the "
+                "content-root pointer under the settings-home machine-local dir.",
             )
         )
     else:
-        content_root = content_root_for(doe_root)
+        content_root = content_root_for(content_root)
         hooks_json = None if content_root is None else content_root / "hooks" / "hooks.json"
         if hooks_json is None or not hooks_json.is_file():
             status = "broken"
@@ -356,12 +372,12 @@ def _check_sibling_resolution() -> Layer:
             findings.append(
                 Finding(
                     "broken",
-                    f"resolved DoE-claude root '{doe_root}' {detail} — "
+                    f"resolved content root '{content_root}' {detail} — "
                     "wrong path or partial checkout.",
                 )
             )
 
-    return Layer("Sibling repo resolution (claude-klabauter + DoE-claude)", status, findings)
+    return Layer("Sibling repo resolution (engine + content root)", status, findings)
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +386,7 @@ def _check_sibling_resolution() -> Layer:
 
 
 def _check_one_hooks_doc(
-    doc_path: Path, doe_root: Optional[str], label: str
+    doc_path: Path, content_root: Optional[str], label: str
 ) -> "tuple[str, List[Finding], bool]":
     """Returns (status, findings, present). `present` is False only for the
     "file does not exist at all" case — the expected, silent, clean state for
@@ -427,6 +443,8 @@ def _check_one_hooks_doc(
                 Finding("broken", f"{label} [{event}/{m_idx}/{h_idx}]: command shape not understood.")
             )
             continue
+        if _is_launcher_argv(argv):
+            continue
         wrapped = any(_HOOK_SEAM_MARKER in token for token in argv)
         script = _extract_script_path(argv)
         if script is None:
@@ -434,7 +452,7 @@ def _check_one_hooks_doc(
                 Finding("broken", f"{label} [{event}/{m_idx}/{h_idx}]: command shape not understood.")
             )
             continue
-        resolved = _resolve_plugin_root_token(script, doe_root)
+        resolved = _resolve_plugin_root_token(script, content_root)
         if not os.path.isfile(resolved):
             missing += 1
             findings.append(
@@ -488,16 +506,16 @@ def _check_one_hooks_doc(
 
 
 def _check_hook_registration() -> Layer:
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    doe_root = coordinator_doe_root()
+    content_root = coordinator_content_root()
     findings: List[Finding] = []
     statuses: List[str] = []
 
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is not None:
         hooks_json = content_root / "hooks" / "hooks.json"
-        status, doc_findings, present = _check_one_hooks_doc(hooks_json, doe_root, "hooks.json")
+        status, doc_findings, present = _check_one_hooks_doc(hooks_json, content_root, "hooks.json")
         if present:
             statuses.append(status)
         findings.extend(doc_findings)
@@ -505,12 +523,12 @@ def _check_hook_registration() -> Layer:
         statuses.append("unknown")
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
         findings.append(
-            Finding("broken", "hooks.json: cannot check — DoE-claude content root unresolved.")
+            Finding("broken", "hooks.json: cannot check — content root unresolved.")
         )
 
     settings_path = _config_dir() / "settings.json"
     status, doc_findings, present = _check_one_hooks_doc(
-        settings_path, doe_root, "settings.json hooks block"
+        settings_path, content_root, "settings.json hooks block"
     )
     # A present-and-empty (no hooks key at all) or genuinely-absent
     # settings.json is the expected clean state right now (plugin-side
@@ -536,7 +554,7 @@ def _check_hook_registration() -> Layer:
 #: `inserted = dir not in sys.path` check, insert, then unconditional
 #: `sys.path.remove(dir)` in a `finally` — is a first-match-by-VALUE
 #: removal: under two interleaved warm dispatches both needing the SAME
-#: `hooks_lib_dir` (the common case — most sessions target one doe-claude
+#: `hooks_lib_dir` (the common case — most sessions target one coordinator-content-repo
 #: root), the FIRST caller to finish can pop the entry while the SECOND
 #: caller's still-in-flight `import fail_open_launcher` is relying on it
 #: being present, stripping a peer's still-needed path entry mid-import.
@@ -589,19 +607,19 @@ def _sys_path_pop(dir_path: str) -> None:
 
 
 def _fix_bare_hook_commands(fix_report: List[str]) -> None:
-    """--fix action: wrap every bare (unwrapped) command in DoE-claude's
+    """--fix action: wrap every bare (unwrapped) command in coordinator-content-repo's
     hooks.json via the real, already-tested fail_open_launcher.wrap_command —
     imported from its actual source location rather than re-derived here, so
     this command shares the exact same wrapping logic the rest of the fleet
     already relies on. Idempotent: is_wrapped() entries are left untouched.
     Does NOT touch ~/.claude/settings.json — that file is bidirectionally
     synced and out of scope for auto-repair (see module docstring)."""
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    content_root = content_root_for(coordinator_doe_root())
+    content_root = content_root_for(coordinator_content_root())
     if content_root is None:
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
-        fix_report.append("--fix: skipped hooks.json wrap — DoE-claude content root unresolved.")
+        fix_report.append("--fix: skipped hooks.json wrap — content root unresolved.")
         return
 
     hooks_json_path = content_root / "hooks" / "hooks.json"
@@ -934,7 +952,7 @@ def _check_shim_freshness() -> Layer:
         return Layer(
             name,
             "unknown",
-            [Finding("info", f"source claude-klabauter root did not resolve — nothing to compare: {exc}")],
+            [Finding("info", f"source engine root did not resolve — nothing to compare: {exc}")],
         )
 
     source_path = Path(claude_klabauter_root) / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
@@ -1004,7 +1022,7 @@ def _check_hook_interpreter_resolvability() -> Layer:
     binary is missing".
 
     Reads the same two hooks docs `_check_hook_registration` reads
-    (hooks.json under the resolved DoE-claude content root, and any `hooks`
+    (hooks.json under the resolved coordinator-content-repo content root, and any `hooks`
     block inside `~/.claude/settings.json`), collects each command
     registration's argv[0] basename — case-folded and `.exe`-stripped, the
     same normalization `_extract_script_path` already applies, so a native
@@ -1017,11 +1035,11 @@ def _check_hook_interpreter_resolvability() -> Layer:
     "Absence of a check must not read as the check passing").
     """
     name = "Hook-command interpreter resolvability"
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    doe_root = coordinator_doe_root()
+    content_root = coordinator_content_root()
     doc_candidates: List[tuple[Path, str]] = []
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is not None:
         doc_candidates.append((content_root / "hooks" / "hooks.json", "hooks.json"))
     doc_candidates.append((_config_dir() / "settings.json", "settings.json hooks block"))
@@ -1047,7 +1065,7 @@ def _check_hook_interpreter_resolvability() -> Layer:
             interpreter = os.path.basename(argv[0].replace("\\", "/")).lower()
             if interpreter.endswith(".exe"):
                 interpreter = interpreter[: -len(".exe")]
-            if not interpreter:
+            if not interpreter or _is_launcher_argv(argv):
                 continue
             interpreters[interpreter] = interpreters.get(interpreter, 0) + 1
 
@@ -1076,6 +1094,32 @@ def _check_hook_interpreter_resolvability() -> Layer:
     return Layer(name, status, findings)
 
 
+def _check_install_drift() -> Layer:
+    """Imports the install script from the content root and runs its manifest/step drift check."""
+    name = "Install manifest and steps agree"
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+
+    content_root = coordinator_content_root()
+    content_root = content_root_for(content_root) if content_root else None
+    script = None if content_root is None else content_root / "lib" / "install" / "coordinator_install.py"
+    if script is None or not script.is_file():
+        return Layer(name, "ok", [])
+    import importlib.util
+
+    try:
+        spec = importlib.util.spec_from_file_location("_doctor_coordinator_install", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        problems = module.check_manifest_drift()
+    except Exception as exc:  # a broken install script is itself the finding
+        return Layer(name, "broken", [Finding("broken", f"install drift check raised {exc!r} ({script}).")])
+    findings = [
+        Finding("broken", f"install drift: {p} — fix the manifest or the step in {script.name}.")
+        for p in problems
+    ]
+    return Layer(name, "broken" if findings else "ok", findings)
+
+
 def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report = DoctorReport()
     report.layers.append(_check_sibling_resolution())
@@ -1085,6 +1129,7 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_hook_generation_currency())
     report.layers.append(_check_shim_freshness())
     report.layers.append(_check_hook_interpreter_resolvability())
+    report.layers.append(_check_install_drift())
 
     fix_report: List[str] = []
     if fix:

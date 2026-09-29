@@ -12,7 +12,7 @@ CompetitorSegment = Literal["mobile", "console_pc", "web", "all", "other"]
 
 CompetitorCategory = Literal["competitor", "peer", "aspirational_target", "first_party"]
 """Relationship class of the competitor to us. 'first_party' is a Example-Fleet-owned
-product or parent company carried in the same registry (DR-192, DoE-claude) —
+product or parent company carried in the same registry (DR-192, coordinator-content-repo) —
 the alternative was category:null, which discards the stance."""
 
 CompetitorStatus = Literal["reference", "incumbent", "analyzed", "gap_closed"]

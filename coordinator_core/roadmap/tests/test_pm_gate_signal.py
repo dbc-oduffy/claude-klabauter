@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.roadmap.pm_gate_signal import detect, detect_stub, load_fragment
 
 _VENDORED_FRAGMENT_PATH = (
@@ -27,10 +27,10 @@ def test_load_fragment_reads_the_vendored_copy(fragment: dict) -> None:
 
 
 def test_vendored_fragment_is_byte_identical_to_doe_source() -> None:
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
-        pytest.skip("DoE-claude sibling root not resolvable on this machine")
-    doe_path = Path(doe_root) / _DOE_FRAGMENT_RELPATH
+    content_root = read_content_root_pointer()
+    if not content_root:
+        pytest.skip("coordinator-content-repo sibling root not resolvable on this machine")
+    doe_path = Path(content_root) / _DOE_FRAGMENT_RELPATH
     if not doe_path.is_file():
         pytest.skip(f"DoE source fragment not found at {doe_path}")
     doe_bytes = doe_path.read_bytes()

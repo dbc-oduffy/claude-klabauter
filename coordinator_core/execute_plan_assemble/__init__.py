@@ -24,7 +24,7 @@ caller-supplied free-text path. Additive and gated on `plan_path`/
 `chunk_id` both resolved, same shape as `roadmap_planning_assemble.
 brief`'s C3 precedent.
 
-Spec backlink: DoE-claude coordinator/skills/execute-plan/SKILL.md § Phase 4
+Spec backlink: coordinator-content-repo coordinator/skills/execute-plan/SKILL.md § Phase 4
 Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-
 remembered.md, chunk C6.
 

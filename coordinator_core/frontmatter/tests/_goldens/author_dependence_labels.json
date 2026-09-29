@@ -3101,7 +3101,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "archive/handoffs/2026-08/2026-08-10-doe-claude-em-repo-cut-target-kind.md": {
+    "archive/handoffs/2026-08/2026-08-10-coordinator-content-repo-em-repo-cut-target-kind.md": {
       "b_blind": false,
       "corpus": "archive/handoffs",
       "proxy_a": true,
@@ -4163,7 +4163,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "archive/handoffs/2026-08/2026-08-17-doe-claude-em-claude-doe-shebang-and-entrypoint-ownership.md": {
+    "archive/handoffs/2026-08/2026-08-17-coordinator-content-repo-em-claude-author-shebang-and-entrypoint-ownership.md": {
       "b_blind": false,
       "corpus": "archive/handoffs",
       "proxy_a": true,
@@ -7139,7 +7139,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "archive/handoffs/2026-08/2026-08-26-doe-claude-em-touched-files-path-never-creates-meta-json.md": {
+    "archive/handoffs/2026-08/2026-08-26-coordinator-content-repo-em-touched-files-path-never-creates-meta-json.md": {
       "b_blind": true,
       "corpus": "archive/handoffs",
       "proxy_a": true,
@@ -10941,7 +10941,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "docs/plans/2026-08-13-doe-claude-precommit-installer-entry-point.md": {
+    "docs/plans/2026-08-13-coordinator-content-repo-precommit-installer-entry-point.md": {
       "b_blind": false,
       "corpus": "docs/plans",
       "proxy_a": null,
@@ -12320,7 +12320,7 @@
       "proxy_b": null,
       "split": "train"
     },
-    "docs/plans/config-slash-doe-claude.md": {
+    "docs/plans/config-slash-coordinator-content-repo.md": {
       "b_blind": false,
       "corpus": "docs/plans",
       "proxy_a": null,
@@ -12473,7 +12473,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "state/handoffs/2026-07-21_install-surface-debash-doe-root-relocation.md": {
+    "state/handoffs/2026-07-21_install-surface-debash-content-root-relocation.md": {
       "b_blind": false,
       "corpus": "state/handoffs",
       "proxy_a": null,
@@ -13967,7 +13967,7 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "state/handoffs/2026-08-26-doe-claude-em-percolate-round-passes-but-drops-every-removal.md": {
+    "state/handoffs/2026-08-26-coordinator-content-repo-em-percolate-round-passes-but-drops-every-removal.md": {
       "b_blind": false,
       "corpus": "state/handoffs",
       "proxy_a": true,

@@ -16,14 +16,14 @@ Trust boundary: a resolved root is trusted iff it sits under one of five
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
      descendants only — that directory is a container, never a plugin root,
-  2. the DoE clone at the ``.doe-root`` sentinel's content, read registry-first
+  2. the DoE clone at the ``.coordinator-content-root`` sentinel's content, read registry-first
      per DR-071 (2026-07-22 — the settings-home machine-local registry key
-     ``repos.doe_claude`` is the canonical, authoritative coordinator-root
-     anchor; the ``.doe-root`` file is a demoted, non-authoritative mirror),
+     ``repos.content_root`` is the canonical, authoritative coordinator-root
+     anchor; the ``.coordinator-content-root`` file is a demoted, non-authoritative mirror),
      with the durable/legacy file rungs retained as fallbacks:
-     ``repos.doe_claude`` registry key first, then
-     ``<settings-home>/machine-local/.doe-root``, then
-     ``${CLAUDE_HOME:-$HOME}/.claude/.doe-root``,
+     ``repos.content_root`` registry key first, then
+     ``<settings-home>/machine-local/.coordinator-content-root``, then
+     ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``,
   3. the registry-resolved claude-klabauter root (2026-07-22 — the settings-home
      machine-local registry key ``repos.claude_klabauter``, the same anchor
      ``coordinator_core.engine_root.coordinator_engine_root()`` resolves for
@@ -37,7 +37,7 @@ anchors:
      (``plugin.mirrors.coordinator-claude.live_path``) — the SERVED plugin
      tree, which is a different thing from the DoE authoring checkout anchor
      2 names and needs its own anchor wherever the two diverge (a cloud
-     container serves a flat published mirror while ``repos.doe_claude``
+     container serves a flat published mirror while ``repos.content_root``
      names an authoring tree that carries the doctrine corpus the mirror does
      not publish), or
   5. an arbitrary ``--plugin-dir`` checkout with the explicit
@@ -90,11 +90,11 @@ def _settings_home_dir_from_env(env: dict) -> str:
     """Resolve the settings-home directory from an INJECTED ``env`` mapping —
     the single shared implementation of the ``COORDINATOR_SETTINGS_HOME``
     override -> ``${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings``
-    precedence used by ``_doe_root``, ``_claude_klabauter_root``, and
+    precedence used by ``_content_root``, ``_claude_klabauter_root``, and
     ``coordinator_core.resolution.facade.resolve_operator_config``.
 
     AC-3). Consolidates what used to
-    be a 3x/4x-duplicated inline branch (``_doe_root``, ``_claude_klabauter_root``, and
+    be a 3x/4x-duplicated inline branch (``_content_root``, ``_claude_klabauter_root``, and
     ``facade._settings_home_dir`` each carried an independent copy) into one
     env-parametrized helper. Reads from the injected ``env`` dict rather than
     calling ``coordinator_core._settings_home.settings_home()`` (which reads
@@ -120,7 +120,7 @@ def _home_from_env(env: dict) -> str:
     Git-Bash/MSYS set it, but **native Windows shells (PowerShell, cmd.exe) do not** —
     they set ``USERPROFILE``. Without this rung a native-Windows invocation resolves
     home to ``""``, which makes ``_settings_home_dir_from_env`` return ``""``, which
-    skips *every* rung of ``_doe_root``/``_claude_klabauter_root`` — including the canonical
+    skips *every* rung of ``_content_root``/``_claude_klabauter_root`` — including the canonical
     registry rung whose value is present and correct. One absent env var silently
     disabled the whole resolution chain, so the trust anchor rejected the operator's
     real clone and aborted the installer, with an error naming neither the pointer
@@ -139,6 +139,13 @@ def _home_from_env(env: dict) -> str:
 
 
 def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
+    found = _registry_key_exact(settings_home_dir, key)
+    if found is None and key == CONTENT_ROOT_KEY:
+        found = _registry_key_exact(settings_home_dir, CONTENT_ROOT_KEY)
+    return found
+
+
+def _registry_key_exact(settings_home_dir: str, key: str) -> Optional[str]:
     reg_dir = Path(settings_home_dir) / "machine-local"
     for fname in ("registry.local.toml", "registry.toml"):
         flat = _flatten(_load_toml(reg_dir / fname))
@@ -152,7 +159,8 @@ def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
     return None
 
 
-DOE_CLAUDE_KEY = "repos.doe_claude"
+CONTENT_ROOT_KEY = "repos.content_root"
+CONTENT_ROOT_KEY = "repos.content_root"  # private-name-ok: compat-fallback
 CLAUDE_KLABAUTER_KEY = "repos.claude_klabauter"
 
 
@@ -194,12 +202,12 @@ def _self_located_engine_root() -> str:
 
 
 def _claude_klabauter_root(env: dict) -> str:
-    """Read the registry-resolved claude-klabauter root — same shape as ``_doe_root``
+    """Read the registry-resolved claude-klabauter root — same shape as ``_content_root``
     above, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
     has no such legacy sentinel; ``coordinator_core.engine_root.
     coordinator_engine_root()`` is the in-process analog for callers that
     also want the ``CLAUDE_KLABAUTER_ROOT`` env-var rung and the machine-local CLI
-    subprocess rung — this function stays subprocess-free like ``_doe_root``,
+    subprocess rung — this function stays subprocess-free like ``_content_root``,
     so a missing/absent registry key degrades to "" rather than raising or
     shelling out):
         1. registry ``repos.claude_klabauter``               (canonical anchor)
@@ -228,18 +236,18 @@ def _claude_klabauter_root(env: dict) -> str:
     return content
 
 
-def _doe_root(env: dict) -> str:
-    """Read the ``.doe-root`` sentinel content, trailing-slash normalized.
+def _content_root(env: dict) -> str:
+    """Read the ``.coordinator-content-root`` sentinel content, trailing-slash normalized.
 
     Registry-first per DR-071 (2026-07-22 — the settings-home machine-local
-    registry key ``repos.doe_claude`` is the canonical, authoritative
-    coordinator-root anchor; ``.doe-root`` is a demoted, non-authoritative
+    registry key ``repos.content_root`` is the canonical, authoritative
+    coordinator-root anchor; ``.coordinator-content-root`` is a demoted, non-authoritative
     mirror), durable-file-then-legacy-file fallback (Port of:
     coordinator-trusted-root-guard.sh (DoE bd8cc0e9, 2026-07-22),
     updated for DR-071):
-        1. registry ``repos.doe_claude``                    (canonical anchor)
-        2. <settings-home>/machine-local/.doe-root          (durable file mirror)
-        3. ${CLAUDE_HOME:-$HOME}/.claude/.doe-root          (legacy fallback)
+        1. registry ``repos.content_root``                    (canonical anchor)
+        2. <settings-home>/machine-local/.coordinator-content-root          (durable file mirror)
+        3. ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root          (legacy fallback)
     Mirrors the bash ``cat ... || true`` (missing sentinel -> empty string)
     plus the single trailing-slash strip (``${_cc_doe%/}``) for the two file
     rungs; the registry rung short-circuits before that normalization matters
@@ -259,19 +267,19 @@ def _doe_root(env: dict) -> str:
     settings_home_dir = _settings_home_dir_from_env(env)
 
     if settings_home_dir:
-        registry_value = _registry_key(settings_home_dir, DOE_CLAUDE_KEY)
+        registry_value = _registry_key(settings_home_dir, CONTENT_ROOT_KEY)
         if registry_value:
             content = registry_value
 
     if not content and settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".doe-root")
+        durable = os.path.join(settings_home_dir, "machine-local", ".coordinator-content-root")
         try:
             with open(durable, "r", encoding="utf-8") as f:
                 content = f.read()
         except OSError:
             content = ""
     if not content and home:
-        sentinel = os.path.join(home, ".claude", ".doe-root")
+        sentinel = os.path.join(home, ".claude", ".coordinator-content-root")
         try:
             with open(sentinel, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -287,9 +295,9 @@ def _norm(p: str) -> str:
     """Normalize a path for TEXTUAL prefix comparison on Windows only.
 
     On Windows the same location is spelled inconsistently across the anchors
-    this guard compares: ``.doe-root`` is written with forward slashes
-    (``X:/DoE-claude``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
-    (``X:\\DoE-claude\\coordinator``), and the filesystem is case-insensitive.
+    this guard compares: ``.coordinator-content-root`` is written with forward slashes
+    (``C:/coordinator-content-repo``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
+    (``C:\\coordinator-content-repo\\coordinator``), and the filesystem is case-insensitive.
     Without normalization the DoE-clone anchor can never match and the guard
     false-rejects a legitimately-trusted dev clone — and, worse, the ``/..``
     traversal check silently misses ``\\..``.
@@ -303,35 +311,35 @@ def _norm(p: str) -> str:
     return p.replace("\\", "/").lower()
 
 
-def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
+def _content_root_rungs(env: dict) -> list[tuple[str, str]]:
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)
     rungs: list[tuple[str, str]] = []
 
     if settings_home_dir:
-        rungs.append(("registry repos.doe_claude", _registry_key(settings_home_dir, DOE_CLAUDE_KEY) or "<absent>"))
+        rungs.append(("registry repos.content_root", _registry_key(settings_home_dir, CONTENT_ROOT_KEY) or "<absent>"))
     else:
-        rungs.append(("registry repos.doe_claude", "<skipped: settings-home dir resolved empty>"))
+        rungs.append(("registry repos.content_root", "<skipped: settings-home dir resolved empty>"))
 
     if settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".doe-root")
+        durable = os.path.join(settings_home_dir, "machine-local", ".coordinator-content-root")
         try:
             with open(durable, "r", encoding="utf-8") as f:
                 rungs.append((f"file {durable}", f.read().rstrip("\n") or "<absent>"))
         except OSError:
             rungs.append((f"file {durable}", "<absent>"))
     else:
-        rungs.append(("<settings-home>/machine-local/.doe-root", "<skipped: settings-home dir resolved empty>"))
+        rungs.append(("<settings-home>/machine-local/.coordinator-content-root", "<skipped: settings-home dir resolved empty>"))
 
     if home:
-        sentinel = os.path.join(home, ".claude", ".doe-root")
+        sentinel = os.path.join(home, ".claude", ".coordinator-content-root")
         try:
             with open(sentinel, "r", encoding="utf-8") as f:
                 rungs.append((f"legacy file {sentinel}", f.read().rstrip("\n") or "<absent>"))
         except OSError:
             rungs.append((f"legacy file {sentinel}", "<absent>"))
     else:
-        rungs.append(("legacy ${CLAUDE_HOME:-$HOME}/.claude/.doe-root", "<skipped: home resolved empty>"))
+        rungs.append(("legacy ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root", "<skipped: home resolved empty>"))
 
     return rungs
 
@@ -352,7 +360,7 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)
     trusted_prefix = _norm(os.path.join(home, ".claude") + os.sep)
-    doe_root = _doe_root(env)
+    content_root = _content_root(env)
     claude_klabauter_root = _claude_klabauter_root(env)
 
     def _flag(val: str, note: str) -> str:
@@ -365,10 +373,10 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
         f"  settings-home dir:       {settings_home_dir!r}"
         + _flag(settings_home_dir, "skips every registry/durable-file rung below"),
         f"  marketplace anchor:      {trusted_prefix!r}",
-        f"  doe_root resolved to:    {doe_root!r}"
-        + _flag(doe_root, "every rung below returned nothing"),
+        f"  content_root resolved to:    {content_root!r}"
+        + _flag(content_root, "every rung below returned nothing"),
     ]
-    for label, val in _doe_root_rungs(env):
+    for label, val in _content_root_rungs(env):
         lines.append(f"      - {label}: {val!r}")
     lines.append(
         f"  claude_klabauter_root resolved to: {claude_klabauter_root!r}"
@@ -382,7 +390,7 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
         f"{(_registry_key(settings_home_dir, PLUGIN_MIRROR_LIVE_PATH_KEY) if settings_home_dir else None) or '<absent>'!r}"
     )
 
-    if not home or not settings_home_dir or not doe_root or not claude_klabauter_root:
+    if not home or not settings_home_dir or not content_root or not claude_klabauter_root:
         lines.append(
             "  NOTE: at least one anchor above resolved EMPTY. That is very likely the "
             "actual defect (upstream misresolution), not a genuinely untrusted root. Fix "
@@ -396,7 +404,7 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
 def _at_or_under(root_cmp: str, anchor: str) -> bool:
     """Whether ``root_cmp`` IS ``anchor`` or sits strictly beneath it.
 
-    The registry-resolved anchors (``repos.doe_claude``, ``repos.claude_klabauter``,
+    The registry-resolved anchors (``repos.content_root``, ``repos.claude_klabauter``,
     ``plugin.mirrors.coordinator-claude.live_path``)
     name a content root that is itself a legitimate ``CLAUDE_PLUGIN_ROOT``, not
     merely the parent of one. A strict-descendant-only match trusted
@@ -434,7 +442,7 @@ def _norm_anchor(raw: str) -> str:
     Windows sentinel ending in a BACKSLASH only becomes a trailing slash after
     `_norm`, so it survives that strip and would cause a "//" false-reject.
     Re-strip on Windows only: on POSIX the single-strip behavior is a deliberate
-    bash-oracle parity quirk (see test_doe_root_only_single_trailing_slash_
+    bash-oracle parity quirk (see test_content_root_only_single_trailing_slash_
     stripped) and must not be broadened.
 
     Was a third copy of the same
@@ -458,7 +466,7 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     if claude_home and root_cmp.startswith(trusted_prefix):
         trusted = True
 
-    for anchor in (_doe_root(env), _claude_klabauter_root(env), _plugin_mirror_root(env)):
+    for anchor in (_content_root(env), _claude_klabauter_root(env), _plugin_mirror_root(env)):
         anchor_cmp = _norm_anchor(anchor)
         if anchor_cmp and _at_or_under(root_cmp, anchor_cmp):
             trusted = True
@@ -470,6 +478,44 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
         trusted = True
 
     return trusted
+
+
+def _version_key(name: str) -> tuple:
+    return tuple(int(t) if t.isdigit() else -1 for t in name.replace("-", ".").split("."))
+
+
+def installed_cache_plugin_root(env: dict | None = None) -> str:
+    """Newest marketplace-cache install of the plugin, or "" when none exists."""
+    env = os.environ if env is None else env
+    home = _home_from_env(env)
+    if not home:
+        return ""
+    base = os.path.join(home, ".claude", "plugins", "cache", "coordinator-claude", "coordinator")
+    try:
+        versions = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+    except OSError:
+        return ""
+    if not versions:
+        return ""
+    return os.path.join(base, max(versions, key=_version_key))
+
+
+def resolve_plugin_root(own_root: str, *, env: dict | None = None) -> str:
+    """Plugin root for a script that knows only its own location.
+
+    ``CLAUDE_PLUGIN_ROOT`` wins; the Bash tool never exports it. Otherwise the
+    root derived from ``__file__`` is used when it is itself an installed cache
+    tree, and the newest installed cache is preferred over a source clone.
+    """
+    env = os.environ if env is None else env
+    explicit = env.get("CLAUDE_PLUGIN_ROOT")
+    if explicit:
+        return explicit
+    home = _home_from_env(env)
+    cache_prefix = _norm(os.path.join(home, ".claude", "plugins", "cache") + os.sep) if home else ""
+    if cache_prefix and _norm(own_root).startswith(cache_prefix):
+        return own_root
+    return installed_cache_plugin_root(env) or own_root
 
 
 def coordinator_trusted_root_guard(

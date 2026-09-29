@@ -57,7 +57,7 @@ artifact path it wrote, via ``coordinator_core.git.commit.commit_paths``
 called in-process — zero git spawns, no push leg, no lock nesting (see that
 call site's own comment below for the full rationale). This is the option
 (a), commit-only carve-out resolved by
-``cross-repo/inbox/2026-08-07-doe-claude-em-archive-op-carveout-answer-
+``cross-repo/inbox/2026-08-07-coordinator-content-repo-em-archive-op-carveout-answer-
 option-a.md`` and registered at DR-413.
 
 Exit codes:

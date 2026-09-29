@@ -180,7 +180,7 @@ Negative-spec:
       must not survive the reduction).
 
 Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C1, C2
-    (source memo: cross-repo/inbox/2026-08-14-doe-claude-em-receiver-state-sensor-seam.md)
+    (source memo: cross-repo/inbox/2026-08-14-coordinator-content-repo-em-receiver-state-sensor-seam.md)
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@ a text payload prescribe a POSIX-only shell invocation reaching a
 coordinator-CLI forwarder?
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-verbatim from DoE-claude `coordinator/hooks/scripts/_posix_invocation_detect.py`
+verbatim from coordinator-content-repo `coordinator/hooks/scripts/_posix_invocation_detect.py`
 -- pure predicate module, no DoE-repo-relative imports or paths, so only the
 module rename was needed.
 

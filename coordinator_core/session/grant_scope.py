@@ -45,7 +45,7 @@ record itself. It has no import of ``write_tier_u_grant`` and must not gain
 one: the two artifacts are owned by different repos, and the only direction
 authority moves here is down.
 
-Spec backlink: DoE-claude DR-088 § Decision, layer 5.
+Spec backlink: coordinator-content-repo DR-088 § Decision, layer 5.
 Ruling backlink: ``docs/decisions/DR-396-a-grant-narrows-without-touching-a-schema-it-does-not-own.md``
 """
 

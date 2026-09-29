@@ -26,7 +26,7 @@ out" rather than "the POSIX `for` keyword". The consumer leg
 negative-spec, so widening what classifies here widens what is ADVISED, never
 what is denied.
 
-Provenance: raised by doe-claude-aa on 2026-09-01 as an explicit non-finding --
+Provenance: raised by coordinator-content-repo-aa on 2026-09-01 as an explicit non-finding --
 they saw the C-style `for` from their own tree and could not tell intent from
 omission. They were right that they couldn't: no intent was recorded, and
 `while`/`do-while` were missing too, which their probe did not reach.

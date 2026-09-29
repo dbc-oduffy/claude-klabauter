@@ -48,7 +48,7 @@ problem" bucket the bash oracle itself used for missing source dirs.
 
 Port of: verify-dist-publish-repo-sync.sh (DoE b5a4192c, 2026-07-20).
 Spec backlink: docs/plans/2026-05-21-back-percolate-publish-repo-orphans.md
-§ Chunk 4 (DoE-claude repo) and docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C8 (DoE-claude repo).
+§ Chunk 4 (coordinator-content-repo repo) and docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C8 (coordinator-content-repo repo).
 
 Negative-spec (faithfully reproduced from the .sh original):
     - Only maxdepth-1 (non-recursive) file scan of each dist/ target — mirrors

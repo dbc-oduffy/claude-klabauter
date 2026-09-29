@@ -8,7 +8,7 @@ and threshold boundaries, the refusal to guess a name, and the conjunction
 produced once. A test here going red means the watcher is about to nudge a
 corpse, skip a stalled peer, or report a suspended fleet as active.
 
-The output shape is the CONSUMER'S contract (DoE-claude
+The output shape is the CONSUMER'S contract (coordinator-content-repo
 `coordinator/docs/wiki/fleet-watch-idle-report-contract.md`, read by
 `coordinator/agents/fleet-watch.md`), so the field names and the verdict
 vocabulary asserted here are transcribed from their side deliberately: if these
@@ -439,7 +439,7 @@ def test_no_named_move_asks_which_it_is(tmp_path, projects_dir, now):
 
 
 def test_a_non_matching_phrase_is_unresolved_not_none(tmp_path, projects_dir, now):
-    """DoE-claude bc5b1ba18: a whitelist predicate can almost never emit
+    """coordinator-content-repo bc5b1ba18: a whitelist predicate can almost never emit
     `none` -- matching a phrase establishes presence, failing to match
     establishes nothing (the space of ways to name a next move is open). So
     every non-match renders `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE`,
@@ -587,7 +587,7 @@ def test_the_report_dict_carries_the_instant_its_counts_were_struck(
     """C5 falsifier leg 1, `report_has_when`. The heartbeat's `last_tick_at`
     answers when the watcher ran, not when THIS report's `counts` block was
     taken -- `as_of` is `now`, spelled the way the falsifier's `_WHEN_TOKEN`
-    actually matches (never `taken_at`). DoE-claude bc5b1ba18 amended the
+    actually matches (never `taken_at`). Coordinator-content-repo bc5b1ba18 amended the
     contract's `summary_line` format to append `as_of=<iso>` -- the same
     instant, re-derived from `report["as_of"]`, never a second clock.
     """
@@ -772,9 +772,9 @@ def test_peers_splits_into_quiet_actionable_and_exited_with_no_remainder(
 
 
 def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path):
-    resolved = idle_report.projects_dir_for("X:/some-repo", home=str(tmp_path))
+    resolved = idle_report.projects_dir_for("C:/some-repo", home=str(tmp_path))
     assert resolved.endswith("X--some-repo")
-    assert idle_report.projects_dir_for("X:\\some-repo", home=str(tmp_path)) == resolved
+    assert idle_report.projects_dir_for("C:\\some-repo", home=str(tmp_path)) == resolved
 
 
 def test_an_observed_exit_outranks_every_inference(tmp_path, projects_dir, now):

@@ -101,7 +101,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         cmd = "Start-Process git -ArgumentList '-C','%s','stash'" % repo_with_peer_work
         result = check_destructive_git_revert(cmd, payload=_powershell_payload())
         assert result is not None, "Start-Process-wrapped stash swept a peer's tracked work undetected"
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "whole-tree revert" in _deny_reason(result)
 
     def test_bash_verdict_parity_same_command_without_start_process(
         self, repo_with_peer_work: Path
@@ -109,7 +109,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         cmd = "git -C %s stash" % repo_with_peer_work
         result = check_destructive_git_revert(cmd)
         assert result is not None
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "whole-tree revert" in _deny_reason(result)
 
     def test_start_process_powershell_non_sweep_subcommand_allows(
         self, repo_with_peer_work: Path
@@ -127,7 +127,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         cmd = "git -C %s stash" % repo_with_peer_work
         result = check_destructive_git_revert(cmd, payload={"tool_name": "Bash"})
         assert result is not None
-        assert "state/peer-in-flight.md" in _deny_reason(result)
+        assert "whole-tree revert" in _deny_reason(result)
 
 
 class TestDestructiveGitRevertAdvisoryNoChangeVerdict:

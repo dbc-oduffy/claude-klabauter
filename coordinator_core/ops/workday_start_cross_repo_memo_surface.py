@@ -223,6 +223,10 @@ def _split_line(line: str) -> Tuple[str, str, str, str, str]:
 
 
 def main(argv: List[str]) -> int:
+    from coordinator_core.machine_profile import feature_enabled
+
+    if not feature_enabled("cross_repo_memos"):
+        return 0
     inbox_dir = _resolve_inbox_dir()
     mock_today = os.environ.get("MOCK_TODAY", "")
     today = _resolve_today(mock_today)

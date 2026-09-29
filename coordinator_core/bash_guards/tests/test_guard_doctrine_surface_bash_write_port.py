@@ -1,8 +1,8 @@
-"""Port of two DoE-claude doctrine bash-write fixes into the live engine
+"""Port of two coordinator-content-repo doctrine bash-write fixes into the live engine
 guard (IBMDT-C10, `docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md`).
 
 DoE source read (dead, read-only):
-`coordinator/hooks/scripts/guard-doctrine-surface-bash-write.py`, DoE-claude
+`coordinator/hooks/scripts/guard-doctrine-surface-bash-write.py`, coordinator-content-repo
 sha `5f7f50067004e15ab50592ef4c38cf836d29d928`.
 
 Two fixes ported, both into the LIVE body

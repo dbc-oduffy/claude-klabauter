@@ -165,7 +165,7 @@ def test_build_fire_command_prompt_relays_terminal_commit():
 # when both fail. `--print-plugin-dir` is a SHIM flag, not a `claude` flag
 # -- the raw `claude` binary `shutil.which` can resolve to on Windows does
 # not understand it (live coordinator finding). The native, in-process
-# `coordinator_doe_root()` resolver is the primary path so the happy path
+# `coordinator_content_root()` resolver is the primary path so the happy path
 # never depends on shelling out at all.
 # ---------------------------------------------------------------------------
 
@@ -173,7 +173,7 @@ def test_build_fire_command_prompt_relays_terminal_commit():
 def test_resolve_plugin_dir_prefers_native_resolver(monkeypatch):
     monkeypatch.setattr(fire, "_native_plugin_dir", lambda: "/native/resolved/coordinator")
 
-    def fail_if_called(shim_bin="claude-doe"):
+    def fail_if_called(shim_bin="claude-author"):
         raise AssertionError("shim fallback must not run when the native resolver succeeds")
 
     monkeypatch.setattr(fire, "_shim_plugin_dir", fail_if_called)
@@ -181,11 +181,11 @@ def test_resolve_plugin_dir_prefers_native_resolver(monkeypatch):
 
 
 def test_resolve_plugin_dir_unmocked_against_real_resolver():
-    """Exercises `resolve_plugin_dir` against the real `coordinator_doe_root()`
+    """Exercises `resolve_plugin_dir` against the real `coordinator_content_root()`
     resolver, unmocked -- the gap that let the live Windows defect through
     was that every other test here stubs this seam. Skips cleanly (rather
     than failing) when no coordinator plugin install resolves at all --
-    e.g. a fresh clone with no DoE-claude checkout -- since that is an
+    e.g. a fresh clone with no coordinator-content-repo checkout -- since that is an
     install-surface gap, not a `resolve_plugin_dir` defect."""
     try:
         resolved = fire.resolve_plugin_dir()
@@ -203,8 +203,8 @@ def test_resolve_plugin_dir_unmocked_against_real_resolver():
 def test_resolve_plugin_dir_falls_back_to_shim_when_native_fails(monkeypatch):
     monkeypatch.setattr(fire, "_native_plugin_dir", lambda: None)
 
-    def fake_shim(shim_bin="claude-doe"):
-        assert shim_bin == "claude-doe"
+    def fake_shim(shim_bin="claude-author"):
+        assert shim_bin == "claude-author"
         return "/shim/resolved/coordinator"
 
     monkeypatch.setattr(fire, "_shim_plugin_dir", fake_shim)
@@ -220,7 +220,7 @@ def test_shim_plugin_dir_never_invokes_bare_claude(monkeypatch):
 
     monkeypatch.setattr(fire.subprocess, "run", fake_run)
     assert fire._shim_plugin_dir() == "/home/user/.claude/plugins/coordinator"
-    assert captured["cmd"][0] == "claude-doe"
+    assert captured["cmd"][0] == "claude-author"
     assert captured["cmd"][0] != "claude"
 
 
@@ -242,7 +242,7 @@ def test_shim_plugin_dir_returns_none_on_blank_stdout(monkeypatch):
 
 def test_shim_plugin_dir_returns_none_on_missing_binary(monkeypatch):
     def fake_run(cmd, **kwargs):
-        raise FileNotFoundError("no such file: claude-doe")
+        raise FileNotFoundError("no such file: claude-author")
 
     monkeypatch.setattr(fire.subprocess, "run", fake_run)
     assert fire._shim_plugin_dir() is None
@@ -250,7 +250,7 @@ def test_shim_plugin_dir_returns_none_on_missing_binary(monkeypatch):
 
 def test_resolve_plugin_dir_fails_loud_when_both_paths_fail(monkeypatch):
     monkeypatch.setattr(fire, "_native_plugin_dir", lambda: None)
-    monkeypatch.setattr(fire, "_shim_plugin_dir", lambda shim_bin="claude-doe": None)
+    monkeypatch.setattr(fire, "_shim_plugin_dir", lambda shim_bin="claude-author": None)
     with pytest.raises(fire.PluginDirResolutionError):
         fire.resolve_plugin_dir()
 
@@ -824,17 +824,17 @@ def test_write_record_returns_exactly_what_landed_on_disk(repo, script, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def _patch_doe_root(monkeypatch, root):
+def _patch_content_root(monkeypatch, root):
     monkeypatch.setattr(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root",
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root",
         lambda: str(root),
     )
 
 
 def test_native_plugin_dir_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
-    root = tmp_path / "DoE-claude"
+    root = tmp_path / "coordinator-content-repo"
     (root / "coordinator").mkdir(parents=True)
-    _patch_doe_root(monkeypatch, root)
+    _patch_content_root(monkeypatch, root)
     assert fire._native_plugin_dir() == str(root / "coordinator")
 
 
@@ -842,12 +842,12 @@ def test_native_plugin_dir_resolves_the_published_flat_mirror(tmp_path, monkeypa
     root = tmp_path / "coordinator-claude"
     (root / ".claude-plugin").mkdir(parents=True)
     (root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    _patch_doe_root(monkeypatch, root)
+    _patch_content_root(monkeypatch, root)
     assert fire._native_plugin_dir() == str(root)
 
 
 def test_native_plugin_dir_still_rejects_a_bare_directory(tmp_path, monkeypatch):
     root = tmp_path / "bare"
     root.mkdir()
-    _patch_doe_root(monkeypatch, root)
+    _patch_content_root(monkeypatch, root)
     assert fire._native_plugin_dir() is None

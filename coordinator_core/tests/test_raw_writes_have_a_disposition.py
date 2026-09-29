@@ -181,14 +181,14 @@ _SCAN_ROOT = "coordinator_core"
 _EXCLUDED_DIRS = frozenset({"tests", "testing", "benchmarks", "__pycache__"})
 
 _RAW_LITERALS: Tuple[bytes, ...] = (
+    b"os.replace(",
     b".write_text(",
-    b".write_bytes(",
+    b"mkstemp(",
     b"os.fdopen(",
     b"json.dump(",
-    b"os.replace(",
     b"O_CREAT",
+    b".write_bytes(",
     b"append_line(",
-    b"mkstemp(",
 )
 _RAW_OPEN_RE = re.compile(rb"""open\([^)\n]*['"][wax]b?\+?['"]""")
 _RAW_MODE_RE = re.compile(rb"""mode\s*=\s*['"][wax]""")
@@ -228,11 +228,32 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: to-fix members held no actual `state/` write and are RECATEGORIZED
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/hooks/flag_em_poll_in_flight.py': ('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
+    'coordinator_core/hooks/guard_doctrine_surface_bash_write.py': ('in-repo-non-state', 'no write: the raw-write vocabulary appears only in docstrings and patterns the guard detects'),
+    'coordinator_core/hooks/guard_doctrine_surface_ratio_precommit.py': ('outside-repo', 'accumulator json under machine_local_dir() (settings home): _save_accumulator'),
+    'coordinator_core/hooks/nudge_multiwave_workflow.py': ('git-internal', 'dispatch log inside the session dir under <git-common-dir>/coordinator-sessions'),
+    'coordinator_core/hooks/observe_config_change.py': ('git-internal', 'hook-observation jsonl under <git-common-dir>/coordinator-sessions/hook-observations'),
+    'coordinator_core/hooks/observe_post_compact.py': ('git-internal', 'hook-observation jsonl under <git-common-dir>/coordinator-sessions/hook-observations'),
+    'coordinator_core/hooks/offer_exploration_tier_dispatch.py': ('git-internal', 'exclusive-create fire marker inside the session dir under <git-common-dir>/coordinator-sessions'),
+    'coordinator_core/hooks/pickup_autofire.py': ('git-internal', 'decision files under <repo>/.git/coordinator-sessions/decisions and a probe log under tempfile.gettempdir()'),
+    'coordinator_core/hooks/repin_cloud_engine_root.py': ('outside-repo', 'engine-root symlink repoint in the cloud install location, outside every repo'),
+    'coordinator_core/hooks/runtime_tripwire_stop_watcher.py': ('git-internal', 'stop-watcher pid lock under <git-common-dir>/coordinator-sessions/<session>'),
+    'coordinator_core/hooks/session_start_announce_job_mode.py': ('outside-repo', 'job-mode log under <settings-home>/state'),
+    'coordinator_core/hooks/session_start_register_content_root_root.py': ('outside-repo', 'root pointer files under home/settings-home'),
+    'coordinator_core/hooks/session_start_repair_prepare_commit_msg_hook.py': ('git-internal', 'rewrites the installed .git/hooks/prepare-commit-msg shim'),
+    'coordinator_core/hooks/session_start_write_plugin_root_breadcrumb.py': ('outside-repo', 'breadcrumb file under the user home directory'),
+    'coordinator_core/hooks/support/bin_impl_drift.py': ('outside-repo', 'refreshes <settings-home>/bin files and the daily stamp file'),
+    'coordinator_core/hooks/support/next_move_ledger.py': ('ignored-target', 'ledger under .coordinator-local/subagent-share (gitignored) plus drain/claim files beside it: append and drain use O_APPEND/O_EXCL on box-local bookkeeping'),
+    'coordinator_core/ops/grind_ops.py': ('outside-repo', 'NamedTemporaryFile scratch json passed to a verifier subprocess'),
+    'coordinator_core/ops/session/emit_effective_delivery.py': ('in-repo-non-state', 'generated effective-delivery manifest under the plugin content root, temp file then replace; no state/ target'),
+    'coordinator_core/warm/http_hook_forwarder.py': ('outside-repo', 'dial-count file and degrade log under CLAUDE_HOME, machine-global'),
     'coordinator_core/async_hook_status.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_failure'),
     'coordinator_core/authz/classification.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>'),
     'coordinator_core/authz/token.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_tokens'),
+    'coordinator_core/backlog_grind_assemble/grind_rows.py': ('claims-explicitly', 'claim token in _declare_under_repo_root: rows, run records and the ledger under state/queue-grind stay raw (temp file + os.replace, one appended line) because the claim must anchor on the verb\'s --repo-root via a nested recording scope; the seam claims on the ambient cwd, which a dispatched agent rarely shares with its target repo'),
     'coordinator_core/bash_guards/_alternative_liveness.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>, _trigger_destructive_git_revert, _trigger_destructive_git_revert_advisory, _trigger_host_subagent_policy_guard'),
     'coordinator_core/bash_guards/_dialect.py': ('to-fix', 'raw-write site(s): _log_dialect_parser_unavailable; runtime observed=yes (n=24), sample=/tmp/pytest-of-root/pytest-716/home-quarantine21712/.coordinator-claude-settings/state/dialect-parser-unavailable.log'),
+    'coordinator_core/bash_guards/_rewrite_support.py': ('outside-repo', 'best-effort interpreter-resolution cache (atomic tmp+os.replace) under state/cache with an OS-tempdir fallback: _bt_python3_invocation; fail-open, no cross-session claim semantics'),
     'coordinator_core/bash_guards/_write_bump_session_start.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_session_start_record'),
     'coordinator_core/bash_guards/_write_bump_sink_shapes.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _bound_literal_paths, _strip_comments_and_docstrings'),
     'coordinator_core/bash_guards/_write_bump_stand_down.py': ('to-fix', 'raw-write site(s): _mirror_to_durable_sink, log_environment_stand_down; runtime observed=yes (n=15), sample=/tmp/pytest-of-root/pytest-705/test_deny_grant_allow_consumed0/anchor/state/stand-downs/foreign-repo-write.log'),
@@ -247,12 +268,15 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/block_discharge.py': ('to-fix', 'raw-write site(s): _append_record; runtime observed=not-scanned (n=0), sample=n/a'),
     'coordinator_core/ceremony_common/_phantom_sweep_providers.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: sweep_review_assemble writes its fixture .md files under a pytest tmp_path, never a tracked path in this repo'),
     'coordinator_core/claims_emit.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_atomic_pair'),
+    'coordinator_core/comment_strip/engine.py': ('in-repo-non-state', 'rewrites the source files being comment-stripped (and reverts them) plus an operator-named report path; no state/ target'),
+    'coordinator_core/contract/grind_vocab.py': ('in-repo-non-state', 'emits grind-vocab.json and the handback schema into the schema directory; no state/ target'),
     'coordinator_core/commit_ledger/store.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: append_entry._append, record_predecessor_pointer -- target is <git-common-dir>/coordinator-sessions/.commit-ledger/<handoff_id>.jsonl, not state/'),
     'coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: generate'),
     'coordinator_core/contract/cockpit_schema/emit_schema.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: emit_schemas'),
     'coordinator_core/contract/cockpit_schema/entities/competitor_summary.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
     'coordinator_core/contract/cockpit_schema/provenance.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
     'coordinator_core/contract/emit_memo_schema.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: emit_schemas -- generated schema file, matching contract/cockpit_schema/emit_schema.py and emit_conformance_fixture.py'),
+    'coordinator_core/daily_branch.py': ('git-internal', 'appends coordinator.dayBranch to the git common-dir config file'),
     'coordinator_core/diagnostics/contained_run.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_spawn_script'),
     'coordinator_core/distill/_common.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: active_reference_guard_many'),
     'coordinator_core/distill/log_append.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: append_row, append_rows'),
@@ -296,7 +320,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/install/door_install.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _replace_possibly_running_image, install_named_forwarder'),
     'coordinator_core/install/door_uninstall.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_uninstall_fallback_cmd_forwarder'),
     'coordinator_core/install/host_sampler_scheduler.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: register_host_sampler_task'),
-    'coordinator_core/install/sandbox_check.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _tier1_filesystem_shape, _tier1b_mirror_and_cold_tier, _tier1b_pointer_and_shim, _tier1c_publish_repo_parity, _write_claude_doe_argv_stub'),
+    'coordinator_core/install/sandbox_check.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _tier1_filesystem_shape, _tier1b_mirror_and_cold_tier, _tier1b_pointer_and_shim, _tier1c_publish_repo_parity, _write_claude_author_argv_stub'),
     'coordinator_core/locked_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: held_lock, locked_rmw, replace_with_retry'),
     'coordinator_core/machine_resolver.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: registry_set'),
     'coordinator_core/op_census/module_summary.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: save_index'),
@@ -356,16 +380,16 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/fleet/memo_send.py': ('claims-explicitly', "claim token in _memo_send [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/fleet/migrate_handoff_vocabulary.py': ('to-fix', 'raw-write site(s): apply_migration; runtime observed=yes (n=8), sample=/tmp/pytest-of-root/pytest-705/test_idempotent_second_run_is_1/state/handoffs/a.md'),
     'coordinator_core/ops/fleet_machinery_sweep.py': ('to-fix', "raw-write site(s): _write_ignore_block, append_audit, main; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
-    'coordinator_core/ops/gen_claude_doe_launcher.py': ('claims-explicitly', 'claim token in main'),
-    'coordinator_core/ops/gen_claude_doe_shim.py': ('claims-explicitly', 'claim token in main'),
-    'coordinator_core/ops/gen_doe_root_pointer.py': ('claims-explicitly', 'claim token in main'),
+    'coordinator_core/ops/gen_claude_author_launcher.py': ('claims-explicitly', 'claim token in main'),
+    'coordinator_core/ops/gen_claude_author_shim.py': ('claims-explicitly', 'claim token in main'),
+    'coordinator_core/ops/gen_content_root_pointer.py': ('claims-explicitly', 'claim token in main'),
     'coordinator_core/ops/generate_exec_summary.py': ('claims-explicitly', "claim token in main [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/generator_provenance.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _call_is_write, _is_excluded_base, _is_fdopen_of_scratch_fd, _promoted_tmp_names, _replace_destination_exprs, _scratch_mkstemp_fds, _tmp_var_info, _write_target_expr'),
     'coordinator_core/ops/generator_scan_cache.py': ('to-fix', "raw-write site(s): save, save_content_cache; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/guard_message_audit.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: main'),
     'coordinator_core/ops/handoff_archive_transition.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: _commit_retained_supersede_flip [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/handoff_repoint_origin.py': ('to-fix', "raw-write site(s): _handler; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
-    'coordinator_core/ops/install_doe_claude_precommit_hook.py': ('claims-explicitly', 'claim token in _atomic_write'),
+    'coordinator_core/ops/install_content_root_precommit_hook.py': ('claims-explicitly', 'claim token in _atomic_write'),
     'coordinator_core/ops/install_lfs_pre_push_hook.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: install'),
     'coordinator_core/ops/install_meta_repo_precommit_hook.py': ('claims-explicitly', 'claim token in _atomic_write'),
     'coordinator_core/ops/install_publish_repo_precommit_hook.py': ('claims-explicitly', 'claim token in main'),
@@ -524,11 +548,9 @@ _SCAN_MS_BUDGET = 200.0
 def _is_raw_writer(content: bytes) -> bool:
     if any(lit in content for lit in _RAW_LITERALS):
         return True
-    if b"open(" in content and _RAW_OPEN_RE.search(content):
+    if b"open(" in content and _RAW_OPEN_RE.search(content) is not None:
         return True
-    if b"mode" in content and _RAW_MODE_RE.search(content):
-        return True
-    return False
+    return b"mode" in content and _RAW_MODE_RE.search(content) is not None
 
 
 def scan_raw_writers(root: pathlib.Path) -> List[str]:

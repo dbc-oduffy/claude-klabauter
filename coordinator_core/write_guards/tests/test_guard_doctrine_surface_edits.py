@@ -15,7 +15,7 @@ approval window with no Bash guard in the loop at all. The fix requires
 `_sentinel_state`, independent of the Bash surface, so a future edit cannot
 silently reintroduce the `getmtime`-only check.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
   coordinator/tests/test_guard_doctrine_surface_edits.py (sibling coverage,
   reached via `check()` rather than `_sentinel_state()` directly)
 """
@@ -473,21 +473,21 @@ _DOE_ONLY_RELATIVES = [
 def two_roots(tmp_path, monkeypatch):
     """A DoE root and an unrelated session repo, with the pointer resolved to
     the former and `_git_root()` to the latter -- the shape the mis-anchor
-    needed to be visible at all. Clears the module's per-process DoE-root
+    needed to be visible at all. Clears the module's per-process content-root
     memo both before and after, so ordering against any other test that has
     already resolved it cannot decide this one.
     """
-    doe = tmp_path / "DoE-claude"
+    doe = tmp_path / "coordinator-content-repo"
     (doe / "coordinator" / "snippets").mkdir(parents=True)
     (doe / "global-doctrine").mkdir(parents=True)
     session_repo = tmp_path / "project-peer"
     session_repo.mkdir()
 
-    guard._doe_root_memo.clear()
-    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: str(doe))
+    guard._content_root_memo.clear()
+    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: str(doe))
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
     yield doe, session_repo
-    guard._doe_root_memo.clear()
+    guard._content_root_memo.clear()
 
 
 def _verdict(target) -> str:
@@ -504,7 +504,7 @@ def test_doe_only_surfaces_are_protected_from_a_foreign_session(two_roots, relat
 
 
 @pytest.mark.parametrize("relative", _DOE_ONLY_RELATIVES)
-def test_doe_only_surface_approval_is_read_at_the_doe_root(two_roots, relative):
+def test_doe_only_surface_approval_is_read_at_the_content_root(two_roots, relative):
     """The sentinel follows the OWNING repo. An approval in the editing
     session's own repo must not authorize an edit to DoE's doctrine --
     otherwise any repo on the box approves fleet-wide doctrine changes.
@@ -530,8 +530,8 @@ def test_unresolvable_doe_pointer_lands_on_the_pre_fix_protected_set(
     guard already protected still protected.
     """
     doe, session_repo = two_roots
-    guard._doe_root_memo.clear()
-    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: "")
+    guard._content_root_memo.clear()
+    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: "")
 
     paths = [path for path, _ in guard._protected_entries(str(session_repo))]
     assert guard._norm(str(doe.joinpath(*_DOE_ONLY_RELATIVES[0]))) not in paths
@@ -579,11 +579,11 @@ def foreign_third_repo(tmp_path, monkeypatch):
     _make_repo(session_repo)
     _make_repo(third_repo)
 
-    guard._doe_root_memo.clear()
-    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: "")
+    guard._content_root_memo.clear()
+    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: "")
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
     yield session_repo, third_repo
-    guard._doe_root_memo.clear()
+    guard._content_root_memo.clear()
 
 
 @pytest.mark.parametrize("name", ["CLAUDE.md", "coordinator.local.md"])
@@ -686,19 +686,73 @@ def test_in_cloud_session_reads_the_same_env_var_as_repin_cloud_engine_root(monk
     assert guard._in_cloud_session() is False
 
 
-def test_doe_root_is_resolved_once_per_process(two_roots, monkeypatch):
+def test_content_root_is_resolved_once_per_process(two_roots, monkeypatch):
     """The resolver runs on the PreToolUse path for every Write/Edit. The memo
     is what keeps a registry read plus two file reads off that path per call.
     """
     doe, session_repo = two_roots
-    guard._doe_root_memo.clear()
+    guard._content_root_memo.clear()
     calls = []
 
     def _counted():
         calls.append(1)
         return str(doe)
 
-    monkeypatch.setattr(guard, "read_doe_root_pointer", _counted)
+    monkeypatch.setattr(guard, "read_content_root_pointer", _counted)
     for _ in range(4):
         guard._protected_entries(str(session_repo))
     assert len(calls) == 1
+
+
+def _write(target, content, tool="Write"):
+    key = "content" if tool == "Write" else "new_string"
+    return guard.check(
+        {"tool_name": tool, "session_id": "t", "tool_input": {"file_path": str(target), key: content}}
+    )
+
+
+def test_first_time_create_of_missing_claude_md_is_allowed(two_roots):
+    _doe, repo = two_roots
+    target = repo / "CLAUDE.md"
+    target.unlink(missing_ok=True)
+    assert _write(target, "# Project\n") is None
+
+
+def test_write_over_existing_claude_md_still_denies(two_roots):
+    _doe, repo = two_roots
+    (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
+    assert _write(repo / "CLAUDE.md", "# y\n")["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_project_type_only_local_config_write_is_allowed(two_roots):
+    _doe, repo = two_roots
+    assert _write(repo / "coordinator.local.md", "project_type: general\n") is None
+
+
+@pytest.mark.parametrize("line", ["fast_test_cmd: pytest", "fast_tier_unscoped_reason: x", "b_post_command: y"])
+def test_local_config_with_privileged_key_still_denies(two_roots, line):
+    _doe, repo = two_roots
+    out = _write(repo / "coordinator.local.md", f"project_type: general\n{line}\n")
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_write_dropping_existing_privileged_key_still_denies(two_roots):
+    _doe, repo = two_roots
+    (repo / "coordinator.local.md").write_text("fast_test_cmd: pytest\n", encoding="utf-8")
+    out = _write(repo / "coordinator.local.md", "project_type: general\n")
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("level,denies", [("strict", True), ("warn", False), ("off", False)])
+def test_guard_level_governs_the_deny(two_roots, monkeypatch, level, denies):
+    _doe, repo = two_roots
+    (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: level)
+    out = _write(repo / "CLAUDE.md", "# y\n")
+    if denies:
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    elif level == "off":
+        assert out is None
+    else:
+        assert "permissionDecision" not in out["hookSpecificOutput"]
+        assert "blast radius" in out["hookSpecificOutput"]["additionalContext"]

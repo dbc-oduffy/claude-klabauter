@@ -63,9 +63,9 @@ Functions:
   - `read_doe_identity() -> dict`
         The DoE registry manifest's `identity` object — THE one manifest read
         in this module, resolving the DoE root through the canonical DR-071
-        ladder (`coordinator_core.doe_root_pointer.read_doe_root_pointer()`:
-        registry `repos.doe_claude`, then `<settings-home>/machine-local/
-        .doe-root`, then the legacy `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`).
+        ladder (`coordinator_core.content_root_pointer.read_content_root_pointer()`:
+        registry `repos.content_root`, then `<settings-home>/machine-local/
+        .coordinator-content-root`, then the legacy `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`).
         Graceful degradation: `{}` on any resolution/read/parse failure.
         Never raises.
   - `read_receiver_aliases() -> dict[str, str]`
@@ -80,7 +80,7 @@ Functions:
         Lowercased, stripped `identity.redirectAliases` from the DoE manifest —
         the set of receiver ids that redirect to *self* (e.g. `.claude-em`,
         `coordinator-claude`, all redirecting to `centralReceiverIds[0]` —
-        `doe-claude-em` today). Graceful
+        `coordinator-content-repo-em` today). Graceful
         degradation: returns `set()` if the manifest does not resolve, is
         unparseable, or the field is absent from a given manifest.
         Never raises. Consumed by `memo.check_addressee`'s redirect-MATCH path
@@ -131,7 +131,7 @@ Functions:
         is a central id (`identity.centralReceiverIds`) or a redirect alias
         (`identity.redirectAliases`) — both fan in to the same registered
         central repo, so both canonicalize to the SAME id (today, that's
-        `doe-claude-em` -> `repos.doe_claude`, never hardcoded — derived by
+        `coordinator-content-repo-em` -> `repos.content_root`, never hardcoded — derived by
         the same fan-in scan `resolve_receiver_inbox` uses). For any other
         receiver id, returns the input stripped/lowercased, unchanged
         otherwise — this is the addressee-gate normalization: a memo's
@@ -183,7 +183,7 @@ from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
 from coordinator_core.memo_corpus import receiver_inbox_root
 
@@ -271,17 +271,17 @@ def read_doe_identity() -> dict:
     `read_central_receiver_ids()` and `read_redirect_aliases()` are three
     projections over it, not three independent sentinel readers.
 
-    DoE-root resolution delegates to `coordinator_core.doe_root_pointer.
-    read_doe_root_pointer()`, the repo's canonical DR-071 ladder:
-        1. registry `repos.doe_claude`                (canonical anchor)
-        2. <settings-home>/machine-local/.doe-root    (durable file mirror)
-        3. ${CLAUDE_HOME:-$HOME}/.claude/.doe-root    (legacy fallback)
+    content-root resolution delegates to `coordinator_core.content_root_pointer.
+    read_content_root_pointer()`, the repo's canonical DR-071 ladder:
+        1. registry `repos.content_root`                (canonical anchor)
+        2. <settings-home>/machine-local/.coordinator-content-root    (durable file mirror)
+        3. ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root    (legacy fallback)
     Each reader here previously implemented rung 3 ALONE, and implemented it
-    against `<CLAUDE_HOME>/.doe-root` — a location no writer has written since
-    `ops.gen_doe_root_pointer` moved the pointer to rung 2 (the tracked
+    against `<CLAUDE_HOME>/.coordinator-content-root` — a location no writer has written since
+    `ops.gen_content_root_pointer` moved the pointer to rung 2 (the tracked
     `~/.claude` meta-repo syncs between machines, so a per-machine clone path
     could not live there). The result was a reader/writer split that reported
-    "repos.doe_claude not registered on this machine" from `--list-receivers`
+    "repos.content_root not registered on this machine" from `--list-receivers`
     on a machine where delivery to that receiver worked: `is_central` was
     False for every candidate because the central-id set was empty.
 
@@ -292,23 +292,23 @@ def read_doe_identity() -> dict:
     """
     try:
         # then the legacy path. This read USED to be a bare `<CLAUDE_HOME>/
-        raw_root = read_doe_root_pointer()
+        raw_root = read_content_root_pointer()
         if not raw_root.strip():
             _LOG.warning(
-                "_memo_resolver: no DoE root resolved (registry repos.doe_claude, "
-                "<settings-home>/machine-local/.doe-root, and the legacy "
-                "${CLAUDE_HOME:-$HOME}/.claude/.doe-root all came back empty) — "
+                "_memo_resolver: no DoE root resolved (registry repos.content_root, "
+                "<settings-home>/machine-local/.coordinator-content-root, and the legacy "
+                "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root all came back empty) — "
                 "manifest-backed receiver identity resolution disabled",
             )
             return {}
-        doe_root = normalize_native_path(raw_root.strip())
-        content_root = content_root_for(doe_root)
+        content_root = normalize_native_path(raw_root.strip())
+        content_root = content_root_for(content_root)
         if content_root is None:
             _LOG.warning(
                 "_memo_resolver: no coordinator content root under %s (neither a "
                 "coordinator/ directory nor a flat .claude-plugin/plugin.json) — "
                 "manifest-backed receiver identity resolution disabled",
-                doe_root,
+                content_root,
             )
             return {}
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
@@ -732,6 +732,26 @@ def reroute_owner(receiver_em_id: str) -> Optional[str]:
     return read_publish_mirrors().get(mirror_key, {}).get("owner") or None
 
 
+def explicit_git_repo_path(receiver: str) -> Optional[Path]:
+    """The git repo root named by `receiver` when it is a path, else None.
+
+    A receiver spelled as a path (absolute, `~`-, `./`- or `../`-led) that
+    is an existing directory carrying a `.git` entry is a valid receiver
+    without a registry key. An EM id never contains a path separator, so
+    the two forms cannot collide.
+    """
+    text = receiver.strip()
+    if not text or not (
+        text.startswith(("/", "~", "./", "../", ".\\", "..\\"))
+        or (len(text) > 2 and text[1] == ":" and text[2] in "/\\")
+    ):
+        return None
+    candidate = Path(os.path.expanduser(text))
+    if candidate.is_dir() and (candidate / ".git").exists():
+        return candidate.resolve()
+    return None
+
+
 def resolve_receiver_inbox(
     receiver_em_id: str,
 ) -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
@@ -739,7 +759,7 @@ def resolve_receiver_inbox(
 
     A publish mirror or a redirect alias is never a receiver. A memo addressed
     to one routes to its owner (`reroute_owner`): `claude-klabauter-em` resolves
-    to `claude-klabauter-em`'s inbox, `coordinator-claude-em` to `doe-claude-em`'s.
+    to `claude-klabauter-em`'s inbox, `coordinator-claude-em` to `coordinator-content-repo-em`'s.
     A mirror with no owner declared resolves to no receiver at all (the
     `(None, None, all_repos)` UNKNOWN shape), never to the mirror's own inbox.
 
@@ -753,14 +773,14 @@ def resolve_receiver_inbox(
         see module docstring).
 
     Central receivers (receiver_em_id in identity.centralReceiverIds, e.g.
-    'claude-central-em', 'central-em', 'central', 'doe-claude-em') fan in to a
+    'claude-central-em', 'central-em', 'central', 'coordinator-content-repo-em') fan in to a
     single authoritative registry key: every central id maps through the same
     convention/alias rules any other receiver would use, but only ONE of those
     ids is expected to have a registered repos.* entry on a given machine
-    (today, that's 'doe-claude-em' → repos.doe_claude — never hardcoded here,
+    (today, that's 'coordinator-content-repo-em' → repos.content_root — never hardcoded here,
     always derived by scanning the manifest's central-id set, in sorted order,
     against the registered repos). This mirrors the DoE cross-repo-memo CLI's
-    "central is not a repos.* key — anchored on repos.doe_claude" special-case
+    "central is not a repos.* key — anchored on repos.content_root" special-case
     without importing DoE's coordinator_registry or hardcoding the literal key.
 
     Raises:
@@ -770,6 +790,13 @@ def resolve_receiver_inbox(
         AmbiguousReceiverError: a central receiver id fans in to more than one
             DISTINCT registered repos.* key (manifest/registry disagreement).
     """
+    explicit_repo = explicit_git_repo_path(receiver_em_id)
+    if explicit_repo is not None:
+        all_repos = read_registry_repos()
+        if publish_mirror_path_match(explicit_repo):
+            return None, None, all_repos
+        corpus_root_str, _ = receiver_inbox_root(str(explicit_repo))
+        return Path(corpus_root_str) / "inbox", explicit_repo, all_repos
     owner = reroute_owner(receiver_em_id)
     if owner and owner.strip().lower() != receiver_em_id.strip().lower():
         if reroute_owner(owner) is None:
@@ -815,9 +842,9 @@ def resolve_self_em_id(self_root: Path) -> str:
     canonical key when a repo is registered under several (its own key plus
     the receive-only aliases siblings may address it by) — enumeration order
     used to decide that, and the two callers enumerate in different orders
-    (central included — a repo registered under `repos.doe_claude` resolves
-    to `_repo_key_to_self_em_id('repos.doe_claude')`, i.e.
-    `'doe-claude-em'` today, the SAME id `em_id_for_root`'s dedicated
+    (central included — a repo registered under `repos.content_root` resolves
+    to `_repo_key_to_self_em_id('repos.content_root')`, i.e.
+    `'coordinator-content-repo-em'` today, the SAME id `em_id_for_root`'s dedicated
     central-canonical branch produces, without a second special case here).
     Falls back to the unregistered-repo convention
     (`basename(self_root) + '-em'`) when no registered path matches, or when
@@ -840,7 +867,7 @@ def resolve_self_em_id(self_root: Path) -> str:
     or `compute_reply_closure`'s sender-id match silently breaks for every
     aliased repo (2026-07-26 review finding 1).
     """
-    basename_fallback = os.path.basename(str(self_root).rstrip("/\\")) + "-em"
+    basename_fallback = os.path.basename(str(self_root).rstrip("/\\")).lower() + "-em"
     try:
         all_repos = read_registry_repos()
     except RegistryReadError:
@@ -976,9 +1003,9 @@ def unique_nearest_receiver(
     A RETIRED CENTRAL ID NEVER AUTO-ACCEPTS, on any machine. Not a belt-and-
     braces guard — without it the outcome is REGISTRY-SIZE DEPENDENT, which is
     how it was missed. Against this box's 20 registered repos both
-    `doe-claude-em` and a second repo clear the 0.5 cutoff for
+    `coordinator-content-repo-em` and a second repo clear the 0.5 cutoff for
     `claude-central-em`, so the ambiguity gate returns `None` and nothing
-    happens. Against a machine registering only a handful, `doe-claude-em` is
+    happens. Against a machine registering only a handful, `coordinator-content-repo-em` is
     the sole match, the gate reports it unambiguous, and `memo.draft` would
     SILENTLY ACCEPT a send addressed to an id DoE deliberately retired —
     reinstating by edit-distance accident the redirect they declined to
@@ -1042,7 +1069,7 @@ def never_inbox_mirror_refusal(
         return None
     return (
         f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
-        f"  Send coordinator/doctrine topics to {_repo_key_to_self_em_id('repos.doe_claude')}; "
+        f"  Send coordinator/doctrine topics to {_repo_key_to_self_em_id('repos.content_root')}; "
         f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}."
     )
 

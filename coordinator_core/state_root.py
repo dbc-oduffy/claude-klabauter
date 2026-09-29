@@ -10,7 +10,7 @@ Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22).
 
 COMPOSED — this module does NOT reimplement the four sibling resolver ladders. It
 dispatches the 5-rule state-root routing on top of the already-native peers:
-  - coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()  (Optional[str])
+  - coordinator_core.ops.coordinator_content_root.coordinator_content_root()  (Optional[str])
   - coordinator_core.engine_root.coordinator_engine_root()            (str, raises)
   - coordinator_core.artifact_subject.classify()                     (engine|doctrine|cross-cutting)
   - coordinator_core.meta_repo_identity.is_meta_repo()               (bool, raises)
@@ -23,7 +23,7 @@ Spec backlinks:
 Five routing rules (verbatim from the bash oracle's header):
 
   Rule 1  central=True, subject="doctrine"
-            -> <coordinator_doe_root()>/state
+            -> <coordinator_content_root()>/state
             Fail-loud (StateRootError) if the DoE root cannot resolve. Does NOT
             fall back to claude-klabauter.
 
@@ -133,7 +133,7 @@ from coordinator_core.meta_repo_identity import (
     MetaRepoResolutionError,
     is_meta_repo,
 )
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 _STATE_SUBDIR = "state"
 
@@ -159,12 +159,12 @@ def _state_of(root: str) -> str:
 
 
 def _doe_state() -> str:
-    doe = coordinator_doe_root()
+    doe = coordinator_content_root()
     if not doe:
         raise StateRootError(
             "coordinator_state_root: cannot resolve DoE doctrine root — "
-            "repos.doe_claude is not set. Does NOT fall back to claude-klabauter for the "
-            "doctrine subject. Remediate: machine-local set repos.doe_claude "
+            "repos.content_root is not set. Does NOT fall back to claude-klabauter for the "
+            "doctrine subject. Remediate: machine-local set repos.content_root "
             "<path>, or re-run /coordinator:install."
         )
     return _state_of(doe)
@@ -356,7 +356,7 @@ def coordinator_state_root_central() -> str:
 def print_map() -> str:
     subjects: dict = {}
 
-    doe = coordinator_doe_root()
+    doe = coordinator_content_root()
     if doe:
         subjects["doctrine"] = _state_of(doe)
     else:

@@ -40,9 +40,9 @@ this module's own `brief(...)["directives"]` into the printed decision
 object's `directives[]` — `residue.brief`'s own `directives=[]` field is
 untouched by C5 (writes stay inside `__init__.py`, never `residue.py`).
 
-Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
-Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C3
-Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C4
+Spec backlink: coordinator-content-repo:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
+Spec backlink: coordinator-content-repo:pln-review-skill-computed-residue--db84bf, chunk C3
+Spec backlink: coordinator-content-repo:pln-review-skill-computed-residue--db84bf, chunk C4
 Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-remembered.md, chunk C5
 
 Negative spec (C5's slice): does NOT decide whether a `review-findings`

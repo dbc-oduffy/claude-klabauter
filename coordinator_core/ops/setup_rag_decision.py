@@ -20,6 +20,9 @@ currently UE-only because an upstream `example-retrieval-repo-ue-addon`
 upstream limitation in example-retrieval-repo-ue-addon (tracked via cross-repo memo
 Example-retrieval-repo-ue-addon-em); widen to non-UE only after that defect is resolved.
 
+Consumer profile: the whole decision is skipped and nothing is written, so
+no RAG text reaches a consumer CLAUDE.md.
+
 Detect-then-fail-loud: if UE-vs-non-UE or daemon-presence cannot be
 determined unambiguously, main() returns non-zero with a remediation message
 rather than silently picking a branch.
@@ -351,6 +354,12 @@ def setup_rag_decision(argv: List[str]) -> int:
         if help_text is not None:
             print(help_text)
         return early_exit
+
+    from coordinator_core.machine_profile import machine_profile
+
+    if machine_profile() != "author":
+        print("setup-rag-decision: consumer profile -- RAG step skipped, nothing written.")
+        return 0
 
     # Resolve target root (env override -> --root flag -> cwd).
     env_root = os.environ.get("SETUP_RAG_TARGET_ROOT", "")

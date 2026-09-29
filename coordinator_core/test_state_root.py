@@ -10,7 +10,7 @@ from coordinator_core import state_root as sr
 from coordinator_core.artifact_subject import Subject
 from coordinator_core.meta_repo_identity import MetaRepoResolutionError
 
-_DOE = "/repos/DoE-claude"
+_DOE = "/repos/coordinator-content-repo"
 _CLAUDE_KLABAUTER = "/repos/claude-klabauter"
 _SIBLING = "/repos/some-sibling"
 
@@ -33,7 +33,7 @@ def stub_peers(monkeypatch):
     still used elsewhere in this module (``_doe_state``/``_claude_klabauter_state``
     peers), even though ``print_map`` no longer calls it.
     """
-    monkeypatch.setattr(sr, "coordinator_doe_root", lambda: _DOE)
+    monkeypatch.setattr(sr, "coordinator_content_root", lambda: _DOE)
     monkeypatch.setattr(sr, "coordinator_engine_root", lambda: _CLAUDE_KLABAUTER)
     monkeypatch.setattr(
         sr,
@@ -53,10 +53,10 @@ def test_rule1_doctrine_routes_to_doe_state(stub_peers):
 
 
 def test_rule1_doctrine_fail_loud_no_claude_klabauter_fallback(stub_peers):
-    stub_peers.setattr(sr, "coordinator_doe_root", lambda: None)
+    stub_peers.setattr(sr, "coordinator_content_root", lambda: None)
     with pytest.raises(sr.StateRootError) as exc:
         sr.coordinator_state_root(central=True, subject="doctrine")
-    assert "DoE" in str(exc.value) or "doe_claude" in str(exc.value)
+    assert "DoE" in str(exc.value) or "content_root" in str(exc.value)
     assert _CLAUDE_KLABAUTER not in str(exc.value)
 
 
@@ -184,7 +184,7 @@ def test_rule3_artifact_cross_cutting_fail_loud(stub_peers):
 
 def test_rule3_uses_real_classifier_end_to_end(stub_peers):
     stub_peers.undo()
-    stub_peers.setattr(sr, "coordinator_doe_root", lambda: _DOE)
+    stub_peers.setattr(sr, "coordinator_content_root", lambda: _DOE)
     stub_peers.setattr(sr, "coordinator_engine_root", lambda: _CLAUDE_KLABAUTER)
     stub_peers.setattr(
         sr,
@@ -299,7 +299,7 @@ def test_print_map_both_resolvable(stub_peers):
 
 
 def test_print_map_doctrine_null_when_doe_unresolvable(stub_peers, capsys):
-    stub_peers.setattr(sr, "coordinator_doe_root", lambda: None)
+    stub_peers.setattr(sr, "coordinator_content_root", lambda: None)
     parsed = json.loads(sr.print_map())
     assert parsed["subjects"]["doctrine"] is None
     assert parsed["subjects"]["engine"] == _state(_CLAUDE_KLABAUTER)

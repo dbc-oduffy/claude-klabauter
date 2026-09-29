@@ -27,7 +27,7 @@ the name.
 
 Negative-spec:
   - Does NOT tighten `roadmap.schema.json`. That schema is validated by
-    DoE-claude against its own corpus (CLAUDE.md: its leniency is contract),
+    coordinator-content-repo against its own corpus (CLAUDE.md: its leniency is contract),
     so a `pattern` there would reject a sibling's records for a convention
     that is ours. `additionalProperties` is already true, so `*_approved_via`
     needs no schema edit to be legal. This guard polices claude-klabauter's corpus only.

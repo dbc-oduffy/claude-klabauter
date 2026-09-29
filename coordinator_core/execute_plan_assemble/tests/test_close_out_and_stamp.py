@@ -730,7 +730,7 @@ class TestPostCommitTailStubCloseReach:
     def test_partial_close_out_skips_stub_close_leg_even_though_a_commit_lands(
         self, tmp_path, monkeypatch
     ):
-        """Regression, DoE-claude bug-backlog 2026-09-06-close-out-promotes-
+        """Regression, coordinator-content-repo bug-backlog 2026-09-06-close-out-promotes-
         an-origin-stub-to-shipped-on-a-partial-plan.yaml: a halted close-out
         (`shipped=False`/`stamped=False`, one open row) that still lands a
         real commit -- here, via AC8 auto-resolving `C1`'s row, the exact
@@ -2754,8 +2754,8 @@ class TestCloseOutAndStampDispositionRefRejections:
             f"  disposition_ref: {landing_sha}\n"
             "  disposition_detail: 'gated on an external repo, not actually shipped'\n"
             "  external_gate:\n"
-            "    - owner_repo: doe_claude\n"
-            "      condition: doe_claude must clear its own half first\n"
+            "    - owner_repo: content_root\n"
+            "      condition: content_root must clear its own half first\n"
             "      cleared: false\n"
             "      blocks: execution\n"
             "  body: |\n"
@@ -3584,7 +3584,7 @@ class TestAcTableDesync:
         assert "ADVISORY" in result["message"]
         assert "AC1" in result["message"]
         # The memo's second binding constraint (cross-repo/archive/
-        # 2026-08-27-doe-claude-em-ac-table-disposition.md § "Option (1)"):
+        # 2026-08-27-coordinator-content-repo-em-ac-table-disposition.md § "Option (1)"):
         # a bare `N of M unticked` re-implies the retired oracle to a reader
         # who never knew it was retired, so the emission must name the
         # table's advisory standing AND where delivery is actually judged.
@@ -4148,7 +4148,7 @@ class TestResolveDerivedFromArchiveSizingsFallback:
 
 
 # ===========================================================================
-# Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-inside-
+# Review-stamp refusal (MK1, coordinator-content-repo docs/plans/2026-09-27-review-inside-
 # execute-plan.md) -- close_out_and_stamp's own mirror of plan_status_
 # transition._stamp_implemented's identical gate (see that module's own
 # `test_stamp_implemented_refuses_subject_plan_with_no_review_stamp` /

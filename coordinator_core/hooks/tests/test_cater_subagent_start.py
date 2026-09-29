@@ -4,12 +4,12 @@ the C2 engine-side SubagentStart catering composer.
 
 Two families:
 
-  * Synthetic-fixture tests (no DoE-claude checkout required) -- exercise
+  * Synthetic-fixture tests (no coordinator-content-repo checkout required) -- exercise
     `compose_catering`'s ORDER, marker shapes, and fail-open contract (AC5)
     against a hand-built `coordinator/snippets/` + policy fixture, mirroring
     `test_provision_report.py`'s `git_repo`/`policy_path` fixture
     conventions.
-  * Real-corpus tests (skipped when the sibling DoE-claude checkout is not
+  * Real-corpus tests (skipped when the sibling coordinator-content-repo checkout is not
     resolvable) -- AC1/AC2/AC3 against the actual `subagent-sandbox-
     policy.yaml` and `coordinator/snippets/` on disk, the only artifacts
     that prove this leg reaches the exact population the gating plan names.
@@ -53,7 +53,7 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _sanitize_segment,
     assemble_contract_blocks_for_payload,
 )
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
@@ -62,7 +62,7 @@ from coordinator_core.session import machinery_paths
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-DOE_ROOT, DOE_ROOT_PRESENT = doe_root_and_present()
+CONTENT_ROOT, CONTENT_ROOT_PRESENT = content_root_and_present()
 
 ELIGIBLE_TYPE = "coordinator:code-reviewer"
 INELIGIBLE_ON_ROSTER_TYPE = "Explore"
@@ -87,7 +87,7 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # :: _quarantine_real_home`) already exports GIT_AUTHOR_NAME/EMAIL and
     # GIT_COMMITTER_NAME/EMAIL process-wide for every test. Each spawn here
     # contends with the real-corpus tests' own `resolve_git_root` call
-    # against the sibling DoE-claude checkout (2.0s hard timeout,
+    # against the sibling coordinator-content-repo checkout (2.0s hard timeout,
     # `engine.py :: _resolve_git_root_uncached`) -- measured under load,
     # trimming this fixture's 3 spawns to 1 is what keeps that call clear of
     # the timeout rather than flaking into a false "sidecar_provisioning:
@@ -561,7 +561,7 @@ def test_missing_cwd_refuses_miss_sentinel_rather_than_guessing_ambient(
     came back empty still must not have `_write_miss_sentinel` fall back to
     `show_toplevel`'s ambient-process-cwd walk just because `cwd` is falsy --
     that write is the exact "durable wrong record" klabauter#47 names
-    (`_guard_kira_verdict_routed`, DoE-claude `hooks/stop_dispatch.py`, reads
+    (`_guard_kira_verdict_routed`, coordinator-content-repo `hooks/stop_dispatch.py`, reads
     it back and reports a false routing verdict off it)."""
     monkeypatch.chdir(git_repo)
     _force_provisioning_miss(monkeypatch)
@@ -603,7 +603,7 @@ def test_explicit_cwd_still_keys_the_sidecar_on_the_named_target(
 def test_non_repo_cwd_miss_names_the_cause(tmp_path: Path) -> None:
     """A `cwd` naming a real, existing directory that is NOT inside any git
     repo (a cloud container's non-repo parent-of-checkouts session cwd, per
-    a live doe-claude session observation) must degrade to the ordinary miss
+    a live coordinator-content-repo session observation) must degrade to the ordinary miss
     path -- never guess a repo (klabauter#47, mirrored by the two
     `missing_cwd` tests above) -- but the miss body must name WHY, not read
     identically to an internal engine defect."""
@@ -1056,13 +1056,13 @@ def test_sentinel_is_flagged_by_existing_unfilled_detector(git_repo: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# Real-corpus tests (AC1/AC2/AC3) -- skipped without a sibling DoE-claude checkout
+# Real-corpus tests (AC1/AC2/AC3) -- skipped without a sibling coordinator-content-repo checkout
 # ---------------------------------------------------------------------------
 
 pytestmark_doe = pytest.mark.skipif(
-    not DOE_ROOT_PRESENT,
-    reason="sibling DoE-claude checkout not resolvable on this machine "
-    "(see coordinator_core.testing.doe_root.resolve_doe_root)",
+    not CONTENT_ROOT_PRESENT,
+    reason="sibling coordinator-content-repo checkout not resolvable on this machine "
+    "(see coordinator_core.testing.content_root.resolve_content_root)",
 )
 
 
@@ -1084,14 +1084,14 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(
     )
 
     # The suite-root quarantine (`coordinator_core/conftest.py ::
-    # _quarantine_real_home`) deliberately seeds `.doe-root` with a
+    # _quarantine_real_home`) deliberately seeds `.coordinator-content-root` with a
     # throwaway stub, not the real sibling checkout, so
     # `resolve_plugin_root()`'s rungs 2/3 cannot see the real corpus this
     # test exists to exercise. Point its rung-1 `CLAUDE_PLUGIN_ROOT`
-    # override straight at DOE_ROOT's own content root instead.
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(DOE_ROOT) / "coordinator"))
+    # override straight at CONTENT_ROOT's own content root instead.
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(CONTENT_ROOT) / "coordinator"))
 
-    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_file = Path(CONTENT_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
     block_names = policy_data["contract_blocks"][ELIGIBLE_TYPE]
 
@@ -1106,11 +1106,11 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(
     # there, not ignored. Anything this test leaves behind is reconciliation
     # work for whoever runs `git status` in that repo next, so the session
     # directory comes back out however this test exits.
-    session_dir = Path(machinery_paths.share_dir(str(DOE_ROOT), session_id))
+    session_dir = Path(machinery_paths.share_dir(str(CONTENT_ROOT), session_id))
     try:
-        result = compose_catering(payload, cwd=DOE_ROOT)
+        result = compose_catering(payload, cwd=CONTENT_ROOT)
 
-        snippets_dir = Path(DOE_ROOT) / "coordinator" / "snippets"
+        snippets_dir = Path(CONTENT_ROOT) / "coordinator" / "snippets"
         registry_data = load_registry(snippets_dir / "registry.toml")
         for name in block_names:
             entry = get_snippet_entry(registry_data, name)
@@ -1154,11 +1154,11 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
 
     OVER_CAP_TYPE = "coordinator:staff-eng"
 
-    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_file = Path(CONTENT_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
     block_names = policy_data["contract_blocks"][OVER_CAP_TYPE]
 
-    snippets_dir = Path(DOE_ROOT) / "coordinator" / "snippets"
+    snippets_dir = Path(CONTENT_ROOT) / "coordinator" / "snippets"
     registry_data = load_registry(snippets_dir / "registry.toml")
     probes = []
     for name in block_names:
@@ -1174,11 +1174,11 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
     import shutil
 
     # See the sibling AC1 test above for why this override is required:
-    # the suite-root quarantine stubs `.doe-root` so `resolve_plugin_root()`
+    # the suite-root quarantine stubs `.coordinator-content-root` so `resolve_plugin_root()`
     # cannot otherwise see the real corpus.
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(DOE_ROOT) / "coordinator"))
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(CONTENT_ROOT) / "coordinator"))
 
-    session_dir = Path(machinery_paths.share_dir(str(DOE_ROOT), "ac9-real-staff-eng"))
+    session_dir = Path(machinery_paths.share_dir(str(CONTENT_ROOT), "ac9-real-staff-eng"))
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)
     try:
         payload = {
@@ -1186,7 +1186,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
             "session_id": "ac9-real-staff-eng",
             "contract_blocks": block_names,
         }
-        result = compose_catering(payload, cwd=DOE_ROOT)
+        result = compose_catering(payload, cwd=CONTENT_ROOT)
 
         assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP
         assert result.count(BLOCKS_COMPANION_MARKER_PREFIX) == 1
@@ -1199,7 +1199,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
         )
         marker_line = result_lines[marker_index]
         companion_rel_path = marker_line[len(BLOCKS_COMPANION_MARKER_PREFIX):]
-        companion_file = Path(DOE_ROOT) / companion_rel_path
+        companion_file = Path(CONTENT_ROOT) / companion_rel_path
 
         # The pointer's own prose line, not the whole prompt: several block
         # bodies mention sibling block names in passing, so a prompt-wide
@@ -1256,26 +1256,26 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     """AC2: real policy/eligibility check against the real
     `subagent-sandbox-policy.yaml`, in a scratch git repo (the sidecar file
     itself must land under `state/subagent-share/<session>/`, which must
-    not be DoE-claude's own tree)."""
+    not be coordinator-content-repo's own tree)."""
     # `git init` only -- see `git_repo` fixture's docstring-equivalent
     # comment above for why the `user.email`/`user.name` config calls this
     # test never needed are cut: no commit happens here, and trimming
     # subprocess spawns keeps `resolve_git_root`'s own 2.0s-timeout spawn
-    # (against the sibling DoE-claude checkout, right below) clear of the
+    # (against the sibling coordinator-content-repo checkout, right below) clear of the
     # load-driven contention that flaked it into a false
     # "sidecar_provisioning: missed" read.
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
-    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_file = Path(CONTENT_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     if not policy_file.is_file():
-        # Flat plugin-mirror layout: `DOE_ROOT` itself IS the plugin content
+        # Flat plugin-mirror layout: `CONTENT_ROOT` itself IS the plugin content
         # root (no nested `coordinator/` subdir) -- the same two-shape
         # ambiguity `provision_report.resolve_plugin_root()` already probes
         # for (dev-clone source repo vs marketplace/OSS-mirror clone, see
-        # that resolver's own docstring). `doe_root.py`'s own negative-spec
+        # that resolver's own docstring). `content_root.py`'s own negative-spec
         # says a caller applies its own site-specific existence gate rather
         # than assuming one on-disk shape -- this is that gate.
-        policy_file = Path(DOE_ROOT) / "subagent-sandbox-policy.yaml"
+        policy_file = Path(CONTENT_ROOT) / "subagent-sandbox-policy.yaml"
     import os
 
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)

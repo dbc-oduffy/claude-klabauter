@@ -6,7 +6,7 @@ Two properties invisible until they break:
    never the native `dispatch.emit` op. A static AST scan over `apply.py`
    asserting it neither imports nor calls
    `coordinator_core.ops.dispatch_emit.emit.emit_script` / the `dispatch.emit`
-   op — this is what keeps DoE-claude's auto-fired
+   op — this is what keeps coordinator-content-repo's auto-fired
    `block-workflow-foreign-emission.py` able to do its job: the receipt it
    compares against is written by the DoE script's own stamping leg, and a
    script emitted around that leg is precisely a foreign emission.

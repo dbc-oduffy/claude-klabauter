@@ -24,7 +24,7 @@ real process boundary", which only a real subprocess can establish.
 TWO DOORS, NOT ONE. C4's op (``fleet.mode_set`` / ``fleet.mode_show``) is
 reached through the ``coordinator-invoke`` RPC door and appears in
 ``coordinator_core/ops/_registry_map.py``. The converted turn-boundary hook
-(DoE-claude's ``coordinator/hooks/scripts/postuse-advisory-dispatch.py``) is
+(coordinator-content-repo's ``coordinator/hooks/scripts/postuse-advisory-dispatch.py``) is
 invoked directly by the harness as a subprocess fed JSON on stdin — a
 different transport, reached a different way, and neither substitutes for
 the other. Leg 1 below exercises the first; leg 2 exercises the second.
@@ -128,16 +128,16 @@ def _registry_value(text: str, key: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _doe_claude_root(real_home: Path) -> Path | None:
+def _content_root_root(real_home: Path) -> Path | None:
     text = _registry_text(real_home)
     if text is None:
         return None
-    value = _registry_value(text, "repos.doe_claude")
+    value = _registry_value(text, "repos.content_root")
     return Path(value) if value else None
 
 
-def _postuse_advisory_dispatch_script(doe_root: Path) -> Path | None:
-    candidate = doe_root / "coordinator" / "hooks" / "scripts" / "postuse-advisory-dispatch.py"
+def _postuse_advisory_dispatch_script(content_root: Path) -> Path | None:
+    candidate = content_root / "coordinator" / "hooks" / "scripts" / "postuse-advisory-dispatch.py"
     return candidate if candidate.is_file() else None
 
 
@@ -160,7 +160,7 @@ def _fleet_op_present(text: str) -> bool:
 def _isolated_settings_home(tmp_path: Path, real_home: Path) -> Path:
     """A fresh settings home carrying only a copy of the REAL machine-local
     registry -- so the engine-resolution seam (both the compiled
-    ``coordinator-invoke`` door and DoE-claude's ``_engine_root.py`` ladder)
+    ``coordinator-invoke`` door and coordinator-content-repo's ``_engine_root.py`` ladder)
     still resolves the real published engine, while every file this test
     writes (fleet-mode.json, the context-usage sidecar) lands in an
     isolated location the real machine never sees."""
@@ -382,17 +382,17 @@ def test_leg2_real_hook_subprocess_reflects_fleet_value(tmp_path, real_home, eng
     Stating both is also strictly stronger than the original shape: it proves
     each value reaches a live hook fire, rather than one value plus a default.
     """
-    doe_root = _doe_claude_root(real_home)
-    if doe_root is None or not doe_root.is_dir():
+    content_root = _content_root_root(real_home)
+    if content_root is None or not content_root.is_dir():
         pytest.skip(
-            "could not resolve repos.doe_claude from the real machine-local "
-            "registry -- the DoE-claude root (home of the converted turn-boundary "
+            "could not resolve repos.content_root from the real machine-local "
+            "registry -- the coordinator-content-repo root (home of the converted turn-boundary "
             "hook entry point) is unavailable on this machine"
         )
-    script = _postuse_advisory_dispatch_script(doe_root)
+    script = _postuse_advisory_dispatch_script(content_root)
     if script is None:
         pytest.skip(
-            f"postuse-advisory-dispatch.py not found under {doe_root} -- the "
+            f"postuse-advisory-dispatch.py not found under {content_root} -- the "
             "converted turn-boundary hook entry point is unavailable on this "
             "machine"
         )

@@ -7,7 +7,7 @@ supported queue schemas: debt-backlog, bug-backlog, improvement-queue, lessons,
 cross-repo-commitment. The trailing ``-<digest12>`` filename component is a content
 digest (DR-213 D2(i) amendment, 2026-07-08) — see § Content digest below.
 
-Byte-parity target: ``[DoE-claude] coordinator/bin/coordinator-queue-append``. NOTE:
+Byte-parity target: ``[coordinator-content-repo] coordinator/bin/coordinator-queue-append``. NOTE:
 byte parity covers file *content*, not filename — the digest component is an
 intentional, documented divergence from the bash oracle's ``<date>-<slug>.yaml`` shape.
 
@@ -92,7 +92,7 @@ Negative-spec (DR-213 § D2):
     - NO cwd-based repo resolution; always uses caller_worktree from repo_root param.
 
 Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C1
-Parity oracle: [DoE-claude] coordinator/bin/coordinator-queue-append
+Parity oracle: [coordinator-content-repo] coordinator/bin/coordinator-queue-append
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 """
 
@@ -268,7 +268,7 @@ def _verify_override_session_ownership(override: str) -> None:
             return
         else:
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(current_session)
             except OSError:
                 pass

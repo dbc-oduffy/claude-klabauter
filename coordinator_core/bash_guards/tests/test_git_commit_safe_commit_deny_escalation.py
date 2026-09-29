@@ -14,11 +14,13 @@ the solo bare `git commit -m "x"` with no preceding `add` at all), does it
 fire as ADVISORY or escalate to DENY, and under what index state.
 
 2026-08-30 PM ruling: the compound bare-commit-half no longer has an index
-axis at all -- it denies UNCONDITIONALLY (`_bt_compound_add_bare_commit`),
-and the two-`git diff --cached` probe that used to gate it is deleted. Its
-rows below therefore assert DENY across every index state, which is the
-POINT of those rows, not redundancy: they pin that no index state, and no
-probe outcome, can talk the deny back down to advisory. The index axis is
+axis at all -- it fires UNCONDITIONALLY (`_bt_compound_add_bare_commit`),
+and the two-`git diff --cached` probe that used to gate it is deleted. When
+the add names literal paths the command is REWRITTEN to scope the commit to
+them; otherwise it is DENIED. Its rows below therefore assert the same
+verdict across every index state, which is the POINT of those rows, not
+redundancy: they pin that no index state, and no probe outcome, can talk
+the shape down to a bare advisory. The index axis is
 still live for the SOLO bare commit and the `-a`/`--all` sweep.
 
 Each row below uses a real, isolated `tmp_path` git repo (never the
@@ -74,7 +76,14 @@ def _verdict(cmd: str) -> str:
         return "none"
     decision = out["hookSpecificOutput"]["permissionDecision"]
     assert decision in ("allow", "deny")
-    return "deny" if decision == "deny" else "advisory"
+    if decision == "deny":
+        return "deny"
+    return "rewrite" if "updatedInput" in out["hookSpecificOutput"] else "advisory"
+
+
+def _rewritten(cmd: str) -> str:
+    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    return out["hookSpecificOutput"]["updatedInput"]["command"]
 
 
 def _compound_cmd(repo, own_paths, commit_flags='-m "x"'):
@@ -86,27 +95,85 @@ def _compound_cmd(repo, own_paths, commit_flags='-m "x"'):
     )
 
 
-def test_deny_when_index_holds_foreign_staged_paths(tmp_path):
+def test_rewrite_when_index_holds_foreign_staged_paths(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
+    assert _rewritten(cmd) == cmd + " -- own.txt"
 
 
-def test_deny_when_own_add_names_paths_positionally_without_separator(tmp_path):
+def test_rewrite_when_own_add_names_paths_positionally_without_separator(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add own.txt && git -C %s commit -m "x"' % (repo_q, repo_q)
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
+    assert _rewritten(cmd) == cmd + " -- own.txt"
 
 
-def test_separatorless_add_denies_even_when_it_covers_the_whole_index(tmp_path):
+def test_separatorless_add_rewrites_even_when_it_covers_the_whole_index(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "own.txt")
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add own.txt && git -C %s commit -m "x"' % (repo_q, repo_q)
+    assert _verdict(cmd) == "rewrite"
+
+
+def test_rewrite_is_refused_when_add_and_commit_name_different_repos(tmp_path):
+    """The same relative path names a different file under a different
+    `-C`, so no scope can be copied across -- the shape denies."""
+    repo = _init_repo(tmp_path)
+    cmd = 'git -C %s add own.txt && git commit -m "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "deny"
+
+
+@pytest.mark.parametrize("add_operand", [".", ":/", "*.py", "$FILE"])
+def test_rewrite_is_refused_for_operands_that_are_not_literal_paths(
+    tmp_path, add_operand
+):
+    repo = _init_repo(tmp_path)
+    repo_q = shlex.quote(str(repo))
+    cmd = 'git -C %s add %s && git -C %s commit -m "x"' % (
+        repo_q, add_operand, repo_q
+    )
+    assert _verdict(cmd) == "deny", add_operand
+
+
+def test_rewrite_is_refused_when_the_commit_is_not_the_last_segment(tmp_path):
+    repo = _init_repo(tmp_path)
+    repo_q = shlex.quote(str(repo))
+    cmd = 'git -C %s add own.txt && git -C %s commit -m "x" && git -C %s log -1' % (
+        repo_q, repo_q, repo_q
+    )
+    assert _verdict(cmd) == "deny"
+
+
+def test_rewrite_is_refused_when_a_trailing_comment_would_swallow_the_scope(
+    tmp_path,
+):
+    repo = _init_repo(tmp_path)
+    repo_q = shlex.quote(str(repo))
+    cmd = 'git -C %s add own.txt && git -C %s commit -m "x"  # done' % (
+        repo_q, repo_q
+    )
+    assert _verdict(cmd) == "deny"
+
+
+def test_rewrite_quotes_a_path_with_a_space(tmp_path):
+    repo = _init_repo(tmp_path)
+    repo_q = shlex.quote(str(repo))
+    cmd = "git -C %s add 'my file.txt' && git -C %s commit -m x" % (repo_q, repo_q)
+    assert _rewritten(cmd) == cmd + " -- 'my file.txt'"
+
+
+def test_rewrite_nag_names_the_rewritten_command(tmp_path):
+    repo = _init_repo(tmp_path)
+    cmd = _compound_cmd(repo, ["own.txt"])
+    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith("Rewritten:")
+    assert cmd + " -- own.txt" in context
 
 
 def test_flag_only_add_denies_too(tmp_path):
@@ -151,7 +218,7 @@ def test_denies_even_when_index_holds_only_the_commands_own_pathspec(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "own.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
 
 
 def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
@@ -169,7 +236,8 @@ def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
         "git -C %s add -- one.txt && git -C %s add -- two.txt && "
         'git -C %s commit -m "x"' % (repo_q, repo_q, repo_q)
     )
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
+    assert _rewritten(cmd) == cmd + " -- one.txt two.txt"
 
 
 def test_denies_even_when_nothing_is_staged_at_all(tmp_path):
@@ -180,7 +248,7 @@ def test_denies_even_when_nothing_is_staged_at_all(tmp_path):
     nothing about what it holds when the commit runs."""
     repo = _init_repo(tmp_path)
     cmd = _compound_cmd(repo, ["own.txt"])
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
 
 
 def test_solo_bare_commit_denies_when_index_holds_any_staged_paths(tmp_path):
@@ -409,7 +477,7 @@ def test_compound_deny_survives_a_dead_git_because_it_never_probes(
         return (-1, "")
 
     monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
 
 
 def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
@@ -424,7 +492,7 @@ def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
         return real_run(args, *a, **kw)
 
     monkeypatch.setattr(dispatch_checks.subprocess, "run", _counting_run)
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
     assert not [a for a in spawned if "diff" in a], spawned
     # Pin the pre-existing cost too, so a REGRESSION that adds a fourth
     assert len(spawned) == 3, spawned
@@ -456,13 +524,15 @@ def test_add_positional_and_separator_paths_deny_like_any_other_add(tmp_path):
         'git -C %s add one.txt -- two.txt && git -C %s commit -m "x"'
         % (repo_q, repo_q)
     )
-    assert _verdict(cmd) == "deny"
+    assert _verdict(cmd) == "rewrite"
+    assert _rewritten(cmd) == cmd + " -- one.txt two.txt"
 
 
 def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
-    cmd = _compound_cmd(repo, ["own.txt"], commit_flags='-m "the subject"')
+    repo_q = shlex.quote(str(repo))
+    cmd = 'git -C %s add -A && git -C %s commit -m "the subject"' % (repo_q, repo_q)
     out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "the subject" in reason
@@ -759,7 +829,8 @@ def test_compound_deny_escalation_matches_across_m_and_f_heredoc_shapes(
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
-    assert _verdict(cmd) == "deny"
+    # A heredoc-fed commit cannot take an appended pathspec, so it denies.
+    assert _verdict(cmd) == ("rewrite" if commit_flags == '-m "x"' else "deny")
 
 
 @pytest.mark.parametrize(

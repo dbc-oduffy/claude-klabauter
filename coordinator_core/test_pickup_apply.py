@@ -313,7 +313,7 @@ class TestExitCodeContract:
         `claim["holder"] is not None` guard never fires and the run instead
         reaches `_execute_directives`' own pre-loop `claim_grant` gate
         unchanged). This case was unasserted before the memo/handoff parity
-        fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-fires-
+        fix (cross-repo/inbox/2026-08-17-coordinator-content-repo-em-memo-claim-fires-
         after-the-em-can-already-act.md) -- that silence is why the early
         check's coarsening (treating a genuine denial as "brief did not
         resolve a plan") went unnoticed for the handoff branch too.
@@ -1523,7 +1523,7 @@ class TestMemoClaimSameSessionReentry:
         my_sid = "sid-mine"
         artifact_path = "cross-repo/inbox/m1.md"
 
-        # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-
+        # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-coordinator-content-repo-em-
         # memo-claim-fires-after-the-em-can-already-act.md) moved this denial
         # from apply()'s OWN pre-loop blanket `claim_grant` gate to `brief()`'s
         # early stand-down -- exactly mirroring the pre-existing handoff

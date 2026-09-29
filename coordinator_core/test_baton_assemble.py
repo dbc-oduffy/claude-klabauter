@@ -27,7 +27,7 @@ subprocess round-trip to a real CLI). Covers:
       baton's *wiring* to that runner, not the runner's own internals a
       second time.
 
-Spec backlink: DoE-claude DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48,
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48,
 chunk C3 (depends C1-C2).
 
 Run: python -m pytest coordinator_core/test_baton_assemble.py -q
@@ -60,7 +60,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _FAKE_OPERATOR_CONFIG = {
     "settings_home": "/fake/settings-home",
     "claude_klabauter_bin": "/fake/settings-home/bin",
-    "doe_root": "/fake/doe-root",
+    "content_root": "/fake/content-root",
 }
 
 
@@ -1887,7 +1887,7 @@ class TestStandaloneHandoffSlugFromTitle:
 
 # ---------------------------------------------------------------------------
 # 2026-07-29 follow-up: successor-derivation archive-collision fix. Evidence:
-# DoE-claude state/handoffs/2026-07-29_175200_confinement-band-split-plan-
+# coordinator-content-repo state/handoffs/2026-07-29_175200_confinement-band-split-plan-
 # awaiting-review.md § Session Ledger -- `baton-assemble apply handoff`'s
 # first brief timestamped the predecessor's basename (a live same-day
 # collision, correctly disambiguated); a concurrent session then archived
@@ -2882,7 +2882,7 @@ class TestValidateDecisionsShapeIsPickupsOwnCopy:
 
 # ---------------------------------------------------------------------------
 # (e) resolve_operator_config spy -- brief() calls the shared B0 resolver,
-# never re-derives its own settings_home/claude_klabauter_root/doe_root.
+# never re-derives its own settings_home/claude_klabauter_root/content_root.
 # ---------------------------------------------------------------------------
 
 
@@ -3443,7 +3443,7 @@ class TestHandoffStampPhaseSiteReceivesArgsVerbatim:
         assert result["args"] == [normalized]
 
     def test_nonzero_exit_code_raises_rather_than_returning_a_failed_result(self, tmp_path, monkeypatch):
-        """The swallow doe-claude-em reported 2026-07-29: `_invoke_op_in_process`
+        """The swallow coordinator-content-repo-em reported 2026-07-29: `_invoke_op_in_process`
         returns the op's `_err(...)` dict as an ordinary value, and
         `apply_base.execute_directives` treats only a RAISED exception as
         failure -- so without this raise a failed stamp landed in `landed`
@@ -3494,7 +3494,7 @@ class TestHandoffStampPhaseSiteReceivesArgsVerbatim:
 
 # ---------------------------------------------------------------------------
 # C1 -- the push-side succession writer (d6, "handoff.supersede_predecessor").
-# Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d, chunk C1.
+# Spec backlink: coordinator-content-repo:pln-push-side-write-discipline-for-05c30d, chunk C1.
 #
 # Three required assertions:
 #   (a) continuation -> predecessor stamped `continued` + `continued_into`
@@ -4272,7 +4272,7 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
     def test_no_ledger_record_leaves_the_dr242_refusal_verbatim(self, tmp_path, monkeypatch):
         """DR-242 is NOT weakened: with no ledger entry there is no independent
         evidence. The wrapper-level pre-filter that used to gate composing the
-        op on `reconciled` was itself the DoE-claude defect (see
+        op on `reconciled` was itself the coordinator-content-repo defect (see
         `_dispatch_handoff_supersede_predecessor`'s own "reconciled is
         deliberately NOT branched on any more" comment) -- the op IS still
         composed, and it is `handoff.archive_transition`'s own choke point
@@ -8285,7 +8285,7 @@ class TestFanInCarriedItemsBlockedVisibility:
                 '  - carry_id: "cf-peer-repo-landing-aa0005"',
                 '    description: "row cf-peer-repo-landing-aa0005"',
                 '    disposition: "blocked"',
-                '    disposition_detail: "waits on DoE-claude re-vendor"',
+                '    disposition_detail: "waits on coordinator-content-repo re-vendor"',
             ],
         )
         _seed_handoff_claim(

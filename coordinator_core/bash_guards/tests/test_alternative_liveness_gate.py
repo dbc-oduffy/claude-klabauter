@@ -29,6 +29,7 @@ Spec backlink: coordinator_core/bash_guards/_alternative_liveness.py
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -306,6 +307,10 @@ def test_named_alternatives_are_not_dead(guard):
 
     unverifiable = [v for _alt, v in ev.verdicts if v.status is altlive.VerdictStatus.UNVERIFIABLE]
     expected = EXPECTED_UNVERIFIABLE_COUNTS.get(guard, 0)
+    if guard == "check_raw_pid_liveness" and shutil.which("session-liveness-cli"):
+        # The two COMMAND alternatives are UNVERIFIABLE only when the shim is
+        # not resolvable; a PATH-installed shim grades them LIVE.
+        expected = 0
     assert len(unverifiable) == expected, (
         "%s: expected %d UNVERIFIABLE alternative(s), got %d (%s) -- update "
         "EXPECTED_UNVERIFIABLE_COUNTS if this is a real, reviewed change"
@@ -482,7 +487,7 @@ class TestCapabilityManifestOracle:
         mirroring that guard's own real, unverified "in-process, zero
         extra forks" claim about what is actually a `python3 -c`
         subprocess (see harness_capability_manifest.json's own comment;
-        roster-truth audit: DoE-claude state/audits/2026-07-29-search-
+        roster-truth audit: coordinator-content-repo state/audits/2026-07-29-search-
         capability-roster-truth.md). The REAL, guard-scoped oracle must
         refuse to grade this LIVE just because `guard_inprocess_search::
         in-process` happens to be a true entry."""

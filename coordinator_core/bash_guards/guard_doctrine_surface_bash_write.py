@@ -1,9 +1,9 @@
 """coordinator_core.bash_guards.guard_doctrine_surface_bash_write --
 PreToolUse(Bash|PowerShell) hard-deny guard closing the Bash escape from the
-C7 doctrine admission gate (DoE-claude's ``check-claude-md-size.py``,
+C7 doctrine admission gate (coordinator-content-repo's ``check-claude-md-size.py``,
 registered on ``Write|Edit|MultiEdit`` only).
 
-Port of DoE-claude's ``coordinator/hooks/scripts/guard-doctrine-surface-
+Port of coordinator-content-repo's ``coordinator/hooks/scripts/guard-doctrine-surface-
 bash-write.py`` (1537 lines, 488 executable), one of the four folded
 PreToolUse(Bash) guards ``preuse-bash-dispatch.py`` runs in-process ahead of
 the engine dispatch (see ``docs/plans/2026-08-28-the-four-folded-bash-
@@ -141,7 +141,7 @@ read pipelines"):
       a file object bound to a name, a redirect, ``tee``, ``sed -i`` -- is
       unreadable here and still declines.
 
-  12. ASSIGNMENT-CAPTURED-SUBSTITUTION READ-SHAPE -- port of DoE-claude's
+  12. ASSIGNMENT-CAPTURED-SUBSTITUTION READ-SHAPE -- port of coordinator-content-repo's
       Item-4 EM-stage-governed-doctrine-edit allowance
       (``coordinator/hooks/scripts/guard-doctrine-surface-bash-write.py``,
       sha ``5f7f50067004e15ab50592ef4c38cf836d29d928``,
@@ -171,6 +171,10 @@ leg. Filed with its own measurement and a perf constraint at
 identifier-prefilter.yaml``; pinned by a test that asserts the current
 wrong behaviour so the fix cannot land silently.
 
+OPT-IN. The doctrine-edit approval gate is off on every profile: ``check``
+allows first, before any parsing, unless ``machine-local set
+coordinator.feature.doctrine_edit_gate on`` has been run.
+
 Contract: ``check(payload, governed_surfaces) -> Optional[Dict[str, Any]]``
 (this package's own convention, replacing DoE's stdin/exit-code ``main()``).
 ``governed_surfaces`` is the per-call list ``dispatch.py``'s own
@@ -183,11 +187,12 @@ can redirect; see the plan's own C4 row).
 
 Spec backlink: docs/plans/2026-08-28-the-four-folded-bash-guards-get-
 registered-not-folded.md § C4; original: docs/plans/2026-07-30-boot-
-doctrine-cut-and-refill-gate.md § C7a (DoE-claude)
+doctrine-cut-and-refill-gate.md § C7a (coordinator-content-repo)
 """
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -196,6 +201,8 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.machine_profile import feature_enabled
+from coordinator_core.write_guards._guard_level import apply_level
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_interpreter_payload_write_sink_targets,
     extract_write_sink_targets_for_segment,
@@ -206,7 +213,7 @@ MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 _WIKI_ANCHOR = (
-    "coordinator/docs/wiki/guard-message-concision.md"
+    "coordinator/docs/wiki/guards/guard-message-concision.md"
     "#doctrine-surface-bash-write-guard-carve-outs-and-remedies"
 )
 
@@ -298,7 +305,7 @@ def _redirect_target_token(segment: str) -> Optional[str]:
 
 
 def _has_non_redirect_write_marker(text: str) -> bool:
-    """DoE-parity helper (``guard-doctrine-surface-bash-write.py``, DoE-claude
+    """DoE-parity helper (``guard-doctrine-surface-bash-write.py``, coordinator-content-repo
     sha ``5f7f50067004e15ab50592ef4c38cf836d29d928``): every write-marker
     family that is NOT a bare ``>``/``>>`` redirect -- ``tee``, an in-place
     editor, ``cp``/``mv``/``install``/``dd``/``truncate``, a write-mode
@@ -1038,7 +1045,7 @@ def _assignment_indirection_reaches_a_write(
     argument parsing per marker family; it is not attempted here, and a
     future narrowing must add them one measured family at a time.
 
-    Ported from DoE-claude ``9d1404fa6``; the only divergence is that
+    Ported from coordinator-content-repo ``9d1404fa6``; the only divergence is that
     ``identifiers_lower`` is threaded in per call rather than read off an
     import-time constant (module docstring, "GOVERNED IDENTIFIER SOURCE")."""
     bound = _governed_bound_variables(segments, identifiers_lower)
@@ -1319,6 +1326,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             return True
         if (
             _is_git_read_shape(segment)
+            or _is_file_test_read_shape(segment)
             or _is_commit_wrapper_read_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
@@ -1333,6 +1341,71 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             return True
 
     return False
+
+_TEST_COMMAND_TOKENS = frozenset({"test", "[", "[["})
+_TEST_LEADING_KEYWORDS = frozenset({"if", "elif", "while", "until", "then", "do", "!"})
+_FILE_TEST_FLAG_RE = re.compile(r"(?<!\S)-[a-zA-Z]\b")
+
+
+def _is_file_test_read_shape(segment: str) -> bool:
+    """`test -f <governed>` / `[ -f <governed> ]`, optionally led by a
+    shell keyword, with only discard redirects: a predicate on the path,
+    never a write to it."""
+    masked = _SAFE_REDIRECT_RE.sub(" ", segment)
+    if "<" in masked or ">" in masked or "$(" in masked or "`" in masked:
+        return False
+    tokens = masked.split()
+    while tokens and tokens[0] in _TEST_LEADING_KEYWORDS:
+        tokens.pop(0)
+    if not tokens or tokens[0] not in _TEST_COMMAND_TOKENS:
+        return False
+    return bool(_FILE_TEST_FLAG_RE.search(masked))
+
+
+_PRIVILEGED_KEY_RE = re.compile(
+    r"(?<![\w-])[\w-]*(?:_cmd|_reason|_post_command|_shape)\s*:"
+)
+_GUARD_NAME = "guard-doctrine-surface-bash-write"
+
+
+def _governed_write_targets(cmd: str, identifiers_lower: Tuple[str, ...]) -> List[str]:
+    targets = list(_resolved_write_sink_targets(cmd))
+    for segment in _split_top_level_segments(cmd):
+        target = _redirect_target_token(segment)
+        if target:
+            targets.append(target)
+    return [t for t in targets if _mentions_governed_identifier(t, identifiers_lower)]
+
+
+def _is_onboarding_write(
+    cmd: str, identifiers_lower: Tuple[str, ...], cwd: str
+) -> bool:
+    """Every governed sink is a missing `CLAUDE.md`, or `coordinator.local.md`
+    written without a `*_cmd`/`*_reason`/`*_post_command`/`*_shape` key and
+    either missing or carrying `project_type`."""
+    targets = _governed_write_targets(cmd, identifiers_lower)
+    if not targets:
+        return False
+    for raw in targets:
+        base = raw.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].lower()
+        dynamic = "$" in raw or "`" in raw
+        exists = True
+        if not dynamic:
+            path = os.path.expanduser(raw)
+            if not os.path.isabs(path):
+                path = os.path.join(cwd or os.getcwd(), path)
+            exists = os.path.lexists(path)
+        if base == "coordinator.local.md":
+            if _PRIVILEGED_KEY_RE.search(cmd):
+                return False
+            if exists and "project_type" not in cmd:
+                return False
+        elif base == "claude.md":
+            if exists or dynamic or "global-doctrine" in raw or "snippets" in raw:
+                return False
+        else:
+            return False
+    return True
 
 
 def _looks_commit_shaped(cmd: str) -> bool:
@@ -1448,6 +1521,8 @@ def check(
     governed_surfaces: Optional[List[str]],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> Optional[Dict[str, Any]]:
+    if not feature_enabled("doctrine_edit_gate"):
+        return None
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -1465,16 +1540,20 @@ def check(
     if not is_denied_bash_write(cmd, identifiers_lower):
         return None
 
+    if _is_onboarding_write(cmd, identifiers_lower, str(payload.get("cwd") or "")):
+        return None
+
     message = _compose_deny_message(
         commit_shaped=_looks_commit_shaped(cmd),
         quoted_content_shaped=_looks_quoted_content_shaped(cmd, identifiers_lower),
         resolve_wiki_citation=resolve_wiki_citation,
     )
 
-    return {
+    denial = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": message,
         }
     }
+    return apply_level(_GUARD_NAME, denial, "this command writes a governed doctrine surface.")

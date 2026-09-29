@@ -8,7 +8,7 @@ matching envelope, not on each producer happening to carry a `repo` field.
 
 Spec backlink: DECISIONS.md § D25
 Spec backlink: cross-repo/inbox/2026-07-13-claude-klabauter-em-emission-scope-envelope-invariant.md
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

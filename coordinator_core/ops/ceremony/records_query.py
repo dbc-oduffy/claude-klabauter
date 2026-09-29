@@ -10,7 +10,7 @@ build their table assembly on.  Unlike ``coordinator_core.ops.records_query`` (t
 renderer ops — no ``register_op``, no async handler, no wire envelope.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8a
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1
   (query-records.js grammar EXTEND, ``since=`` + full type-set widening)
 
 Negative-spec:

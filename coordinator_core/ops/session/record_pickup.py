@@ -27,7 +27,7 @@ mkdir-lock do not mutually exclude one another, so using `locked_rmw` here
 would silently reopen the exact write-race class this op exists to close.
 
 Schema note: `pickup_history[]` is an ADDITIVE field not yet declared in the
-DoE-owned schema (`DoE-claude/coordinator/schemas/session-shape.schema.json`,
+DoE-owned schema (`coordinator-content-repo/coordinator/schemas/session-shape.schema.json`,
 `additionalProperties:false` on the document's top level). This op does not
 edit that schema — see the dispatch report's "schema-ownership finding" for
 the DoE-side follow-up. Old readers that only know `pickup` are unaffected;
@@ -65,7 +65,7 @@ Negative-spec:
     stay exactly as branch_resolution's reader expects; only a new SIBLING key
     (`pickup_history`) is added. Never rename or remove `pickup` for backward-compat.
   - Does NOT edit session-shape.schema.json — that file is DoE-owned
-    (DoE-claude/coordinator/schemas/session-shape.schema.json); the additive
+    (coordinator-content-repo/coordinator/schemas/session-shape.schema.json); the additive
     `pickup_history` schema change rides the veneer memo, not this op.
   - Does NOT implement the generic `cs_session_shape_set` field-level deep-merge writer
     (actioned_memos append / plan replace / base-wins identity fields) — this op is

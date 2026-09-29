@@ -8,7 +8,7 @@ resolves on a non-main active branch. Folds `origin/main` into the current
 branch so the active workstream stays mergeable; never abandons in-progress
 work.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 Port of: workday-start-step0-reconcile.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec: does NOT check out `main`, does NOT push, does NOT resolve

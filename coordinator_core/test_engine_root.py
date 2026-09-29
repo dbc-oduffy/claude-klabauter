@@ -20,14 +20,17 @@ Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § 
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coordinator_core import engine_root as mr
 
+_REAL_SELF_LOCATED = mr._self_located_root
+
 
 @pytest.fixture(autouse=True)
-def _clear_root_memo():
+def _clear_root_memo(monkeypatch):
     """`coordinator_engine_root`'s Rung 2 answer is memoized process-scope on
     `_registry_mtime_pair`, and every test here points COORDINATOR_SETTINGS_HOME at
     a tmp_path with no registry files — so they all share the one memo key that
@@ -35,6 +38,7 @@ def _clear_root_memo():
     for every later one. Order-dependence, not a resolver defect: the module
     ships `_reset_root_memo` as exactly this seam."""
     mr._reset_root_memo()
+    monkeypatch.setattr(mr, "_self_located_root", lambda: None)
     yield
     mr._reset_root_memo()
 
@@ -137,3 +141,14 @@ def test_env_var_wins_over_rung2(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/tmp/from-env-wins")
     monkeypatch.setattr(mr.shutil, "which", lambda _name: None)
     assert mr.coordinator_engine_root() == "/tmp/from-env-wins"
+
+
+def test_unset_env_no_registry_derives_engine_root_from_own_checkout(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    monkeypatch.setattr(mr.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mr, "_self_located_root", _REAL_SELF_LOCATED)
+    assert mr.coordinator_engine_root() == str(Path(mr.__file__).resolve().parent.parent)

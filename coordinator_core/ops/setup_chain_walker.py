@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.setup_chain_walker — coordinator-claude install-chain walker.
 
-Purpose: full reimplementation of DoE-claude's 922-line bash chain-walker as
+Purpose: full reimplementation of coordinator-content-repo's 922-line bash chain-walker as
 a native Python module. coordinator-claude
 is the terminal node of the OSS plugin-adoption chain (chain step 5 of 5 —
 nothing installs "above" it) but, as of W0.5 Option B+C (2026-07-19),
@@ -1197,13 +1197,13 @@ def parse_args(argv: list[str], out=None, err=None) -> dict[str, Any]:
 _COORDINATOR_ROOT_LADDER_REMEDIATION = (
     "  1. --coordinator-root <path>\n"
     "  2. $COORDINATOR_CLAUDE_ROOT\n"
-    "  3. engine.working_repos.doe_claude registry key\n"
+    "  3. engine.working_repos.content_root registry key\n"
     "  (repos.coordinator_claude stays RETIRED -- it names the publish-mirror\n"
     "  location, never a working checkout; see publish.mirrors.<name>.path in\n"
     "  the machine-local registry for the mirror this repo actually resolves\n"
-    "  that key to. `engine.working_repos.doe_claude` is written by DoE's own\n"
+    "  that key to. `engine.working_repos.content_root` is written by DoE's own\n"
     "  installer / self-heal, never by claude-klabauter -- claude-klabauter only reads this\n"
-    "  namespace. Absent: `machine-local set engine.working_repos.doe_claude\n"
+    "  namespace. Absent: `machine-local set engine.working_repos.content_root\n"
     "  <path>`.)\n"
     "  Every rung additionally requires the candidate to (a) NOT be a\n"
     "  registered publish.mirrors.*.path entry, and (b) show positive\n"
@@ -1217,7 +1217,7 @@ def _is_publish_mirror(path: Path) -> bool:
     `publish.mirrors.*.path` entry in the machine-local registry.
 
     Reuses the SAME mirror-identification mechanism the cross-repo write
-    guard already uses to recognize `X:\\coordinator-claude` as a publish
+    guard already uses to recognize `C:\\coordinator-claude` as a publish
     mirror (`coordinator_core.bash_guards._write_bump_applicability.
     target_is_publish_destination`) rather than inventing a second one here
     -- see that module's own docstring for the closed-set membership test
@@ -1262,7 +1262,7 @@ def _resolve_coordinator_root_ladder(
 
         1. --coordinator-root <path> / --coordinator-root=<path> (this argv)
         2. $COORDINATOR_CLAUDE_ROOT
-        3. `engine.working_repos.doe_claude` registry key (via
+        3. `engine.working_repos.content_root` registry key (via
            `coordinator_core.machine_resolver.registry_get` — never a
            `machine-local` subprocess), passed through C1a's shape
            derivation (`coordinator_core.coordinator_root.
@@ -1273,7 +1273,7 @@ def _resolve_coordinator_root_ladder(
     — that key is RETIRED (2026-06-30 registry-publish-vs-working-targets
     migration) and, on operator machines that still carry it, resolves
     straight to the publish mirror location, which `_is_publish_mirror`
-    exists to reject; it is never repointed. `engine.working_repos.doe_claude`
+    exists to reject; it is never repointed. `engine.working_repos.content_root`
     is a DIFFERENT, live-registered key that DOES name a coordinator-claude
     WORKING checkout generically on this fleet (verified live: the raw
     registered value is a repo root one directory ABOVE the actual plugin
@@ -1284,7 +1284,7 @@ def _resolve_coordinator_root_ladder(
     returns `None` is a rung MISS, not an error — fail-open, so an OSS
     single-tree box with no such key behaves byte-identically to today.
     This rung is written by DoE's own installer / self-heal via
-    `machine-local set engine.working_repos.doe_claude <path>` — claude-klabauter only
+    `machine-local set engine.working_repos.content_root <path>` — claude-klabauter only
     reads this namespace, never writes another repo's registry entry.
 
     Every candidate from any rung must clear TWO gates, in order, before
@@ -1328,11 +1328,11 @@ def _resolve_coordinator_root_ladder(
     if env_val:
         candidates.append((Path(env_val), "$COORDINATOR_CLAUDE_ROOT env"))
 
-    registry_val = registry_get("engine.working_repos.doe_claude")
+    registry_val = registry_get("engine.working_repos.content_root")
     if registry_val:
         derived = _resolve_plugin_root_for_machine_local(Path(registry_val))
         if derived is not None:
-            candidates.append((derived, "engine.working_repos.doe_claude registry key"))
+            candidates.append((derived, "engine.working_repos.content_root registry key"))
 
     for candidate, rung in candidates:
         if _is_publish_mirror(candidate):

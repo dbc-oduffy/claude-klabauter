@@ -127,7 +127,7 @@ _KNOWN_OLD_PATH_EXTENSIONS = (".py", ".js", ".sh", ".cmd", ".ps1")
 # registry id that same section names as claude-klabauter's own self-identifier, and
 # every fixture in this module's own test file already assumes it. An entry
 # recording a DIFFERENT repo's history (the one production entry records a
-# DoE-claude -> claude-klabauter adoption, not a claude-klabauter-internal move) must never
+# coordinator-content-repo -> claude-klabauter adoption, not a claude-klabauter-internal move) must never
 # "explain away" a disappearance from claude-klabauter's OWN tree merely because its
 # `old_path` stem happens to collide with a tracked inventory name.
 _SELF_OLD_REPO_ID = "claude_klabauter"

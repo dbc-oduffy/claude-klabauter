@@ -18,7 +18,7 @@ Residue directory (fixed resolution, no parallel ladder):
     os.path.join(resolve_content_root(), "skills", "review", "residue")
 via `coordinator_core.resolve_coordinator_clone.resolve_content_root` — the
 same content-root resolver every other computed-skill engine uses. This
-module deliberately does NOT read a DoE-root pointer directly (that
+module deliberately does NOT read a content-root pointer directly (that
 resolves only a DoE clone and breaks on a pure OSS install); it composes
 the shared resolver instead.
 
@@ -84,9 +84,9 @@ Negative-spec:
     resolution step; no fallback probing of alternate locations.
   - Does NOT do per-domain routing beyond `plan`/`diff`/`shared` — this is
     a single flat assembler, not a god-assembler dispatching to other
-    skills' concerns (DoE-claude `docs/decisions/DR-092-canonical-resolution-
+    skills' concerns (coordinator-content-repo `docs/decisions/DR-092-canonical-resolution-
     engine.md`; NOT the retired prime-v1 DR-092, which numbers a different
-    decision in `DoE-claude/archive/prime-v1-decisions/`).
+    decision in `coordinator-content-repo/archive/prime-v1-decisions/`).
   - Does NOT emit a well-formed envelope carrying zero residue. An empty
     residue directory, an unreadable content root
     (`ResolveCoordinatorCloneError`), or a segment set that resolves to
@@ -95,7 +95,7 @@ Negative-spec:
     unchanged) — never a silent empty-but-valid envelope. That silent
     fail-open shape is exactly what AC-14(a) exists to catch.
 
-Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C3
+Spec backlink: coordinator-content-repo:pln-review-skill-computed-residue--db84bf, chunk C3
 """
 from __future__ import annotations
 

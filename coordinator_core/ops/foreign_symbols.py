@@ -137,7 +137,7 @@ def _signature_text(symbol: Any) -> Optional[str]:
     `_DECL_TEXT_MAX_CHARS` (4096) — for a function that is the whole
     IMPLEMENTATION, not a signature, so emitting it under a key named
     `signature` misdescribes what the consumer is holding and carries most of
-    the payload's bytes (doe-claude-em memo 2026-08-19: 254 of 257 sampled
+    the payload's bytes (coordinator-content-repo-em memo 2026-08-19: 254 of 257 sampled
     fields contained newlines, max 4082 chars against that 4096 cap).
 
     `Symbol.detail` is the extractor's LSP-canonical `DocumentSymbol.detail` —

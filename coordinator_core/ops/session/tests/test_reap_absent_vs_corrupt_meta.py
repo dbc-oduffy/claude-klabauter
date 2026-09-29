@@ -10,8 +10,8 @@ The reaper is the documented backstop for a session that died without a
 SessionEnd and so was never archived, and this made it the reason those dirs are
 stranded permanently instead of merely un-archived.
 
-Traced by doe-claude-em (2026-08-26) across two trees: of the >30d unreaped
-session dirs, 37 of 37 in DoE-claude and 9 of 9 in this repo carry no meta.json,
+Traced by coordinator-content-repo-em (2026-08-26) across two trees: of the >30d unreaped
+session dirs, 37 of 37 in coordinator-content-repo and 9 of 9 in this repo carry no meta.json,
 and none carries one. Absent meta.json is the whole discriminant for the stuck
 population, not a partial signal. Same root as the backfill landed at
 `6bf7fc291`: a session with no record is outside `live_session_ids`' scan scope,

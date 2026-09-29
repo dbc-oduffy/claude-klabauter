@@ -71,7 +71,7 @@ Negative-spec:
   - Does NOT re-run a `census[].command`, and does NOT check that a plan's cited
     paths resolve. Both are named in the library module's own negative-spec.
 
-Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
                .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md § 2
 """
 

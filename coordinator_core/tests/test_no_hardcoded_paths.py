@@ -13,11 +13,11 @@ gate as the mechanized enforcement of constraint (3) ("no hardcoded paths").
 The live violation this gate was scoped to catch:
 `coordinator_core/frontmatter/schema_drift_watch.py::resolve_doe_repo_path`
 used to walk `Path(__file__).resolve().parents[2]` to derive "claude-klabauter repo
-root", then guessed `claude_klabauter_root.parent / "DoE-claude"` as the sibling
+root", then guessed `claude_klabauter_root.parent / "coordinator-content-repo"` as the sibling
 clone's location — hardcoding both the checkout depth from this file AND a
 flat-sibling directory layout. Retired 2026-07-22 in the same change that
 added this gate; the fix delegates entirely to
-`coordinator_core.doe_root_pointer.read_doe_root_pointer()` (registry-first,
+`coordinator_core.content_root_pointer.read_content_root_pointer()` (registry-first,
 DR-071), which resolves the DoE root without any assumption about checkout
 layout. See that module's docstring for the retirement negative-spec.
 
@@ -69,7 +69,7 @@ teeth — three real Tooth-2-shaped instances surfaced on 2026-07-25 alone,
 all in test code, none catchable by the gate as originally scoped:
 `coordinator_core/tests/test_step_zero_emit.py` and
 `coordinator_core/tests/test_normalize_snippet.py` (both fixed in
-`9057a88c`), and `_write_doe_root_sentinel` in
+`9057a88c`), and `_write_content_root_sentinel` in
 `coordinator/bin/test_cross_repo_memo.py`, whose `Path(__file__).parents[3]`
 landed back inside claude-klabauter instead of at the sibling root, so
 `identity.redirectAliases` never resolved and three assertions had been
@@ -84,7 +84,7 @@ Rationale for keeping Tooth 1 production-only: the 2026-07-25 fallout
 measurement (running the naively-widened, both-teeth scan before landing
 the per-tooth split) found ZERO new Tooth 2 hits and 45 unique Tooth 1 hits
 in test code, of which 43 were ordinary mock/placeholder literals
-(`/tmp/...`, `/fake/...`, `X:/DoE-claude`, etc.) handed as arguments to
+(`/tmp/...`, `/fake/...`, `C:/coordinator-content-repo`, etc.) handed as arguments to
 functions under test — not portability defects, just fixture data. A
 root-anchored literal is the hazardous SHAPE only when it's a real
 resolution the running code depends on; as a mock input to a function being
@@ -99,9 +99,9 @@ input where any placeholder would do — fixed directly to
 `/fake/home/.claude`, no gate exemption needed since it's simply no longer a
 real-looking path. `test_settings_home.py`'s
 `test_normalize_native_path_is_noop_on_posix` pairs a root literal with the
-`DoE-claude` token but is a pure string-mount-form fixture for
+`coordinator-content-repo` token but is a pure string-mount-form fixture for
 `normalize_native_path` (mirroring the sibling msys/cygdrive tests' use of
-the same `"/x/DoE-claude"` literal) with no `__file__` climb anywhere in
+the same `"/x/coordinator-content-repo"` literal) with no `__file__` climb anywhere in
 reach — adjudicated as a genuine fixture, not a sibling-resolution site, and
 left as-is.
 
@@ -148,7 +148,7 @@ Negative-spec:
     actual production violation this gate was built to catch, which was a
     two-statement same-function same-module split:
     `claude_klabauter_root = Path(__file__).resolve().parents[2]` then
-    `claude_klabauter_root.parent / "DoE-claude"`). A violation split across module
+    `claude_klabauter_root.parent / "coordinator-content-repo"`). A violation split across module
     boundaries, or reconstructed through a function call, is a false
     negative this gate accepts — same class of accepted tradeoff
     `test_no_node_schema_shellout.py`'s docstring names for dynamic string
@@ -176,10 +176,10 @@ _SCAN_ROOT = _REPO_ROOT / "coordinator_core"
 # they co-occur, in one path-construction expression, with a __file__-anchored
 # directory climb. Deliberately a closed, small list — not "every repo name
 # ever seen" — per the dispatch brief's minimum set plus the plan's own seed
-# set (DEC-4 names DoE-claude and claude-klabauter; .claude is the third anchor
+# set (DEC-4 names coordinator-content-repo and claude-klabauter; .claude is the third anchor
 # CLAUDE.md § Runtime conventions and trusted_root_guard.py both treat as a
 # trust/resolution boundary).
-_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "project-rag", ".claude"}
+_SIBLING_REPO_TOKENS = {"coordinator-content-repo", "claude-klabauter", "project-rag", ".claude"}
 
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
@@ -198,7 +198,7 @@ _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _EXEMPT_SITES: set[str] = {
     "coordinator_core/pyresolve.py::_pyorg_search",
     "coordinator_core/lifecycle.py::global_sentinel_dir",
-    # explicit -> REPO_DOE_CLAUDE env -> sibling-dir fallback (mirrors
+    # explicit -> REPO_CONTENT_ROOT env -> sibling-dir fallback (mirrors
     # doe_drift's resolution ladder); the sibling probe is the last rung,
     # never the sole source of truth. 2026-08-25.
     "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py::resolve_doe_clone",
@@ -299,7 +299,7 @@ def _is_dunder_file_anchor(node: ast.AST) -> bool:
     against the depth of the file being SCANNED, and that arithmetic only
     holds when the climb starts at that same file. A climb rooted at another
     module's `__file__` -- `test_engine_root_conformance.py` walks from a
-    module it loaded out of the DoE-claude checkout -- starts somewhere this
+    module it loaded out of the coordinator-content-repo checkout -- starts somewhere this
     gate cannot measure, so counting its levels against the scanned file's
     depth reports an escape that is not one. Unmeasurable is `None`, never a
     guess. Binding it to a local first (`_FILE = __file__`) is still traced:
@@ -701,7 +701,7 @@ def test_no_hardcoded_cross_repo_paths_in_production_code():
     violations = find_hardcoded_path_violations(_SCAN_ROOT)
     assert violations == [], (
         "Found hardcoded-path violation(s) in coordinator_core/ production "
-        "code (resolve via the machine-local registry / doe_root_pointer / "
+        "code (resolve via the machine-local registry / content_root_pointer / "
         "trusted_root_guard instead, or add a named, dated _EXEMPT_SITES "
         f"entry per DEC-4): {violations}"
     )
@@ -716,7 +716,7 @@ def test_gate_detects_a_planted_parents_sibling_shellout(tmp_path):
         "from pathlib import Path\n"
         "\n"
         "def resolve_sibling():\n"
-        "    return Path(__file__).resolve().parents[2].parent / \"DoE-claude\"\n",
+        "    return Path(__file__).resolve().parents[2].parent / \"coordinator-content-repo\"\n",
         encoding="utf-8",
     )
 
@@ -727,7 +727,7 @@ def test_gate_detects_a_planted_parents_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_parents_sibling.py")
     assert lineno == 4
-    assert detail == "DoE-claude"
+    assert detail == "coordinator-content-repo"
 
 
 def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
@@ -740,7 +740,7 @@ def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
         "\n"
         "def resolve_sibling():\n"
         "    claude_klabauter_root = Path(__file__).resolve().parents[2]\n"
-        "    return claude_klabauter_root.parent / \"DoE-claude\"\n",
+        "    return claude_klabauter_root.parent / \"coordinator-content-repo\"\n",
         encoding="utf-8",
     )
 
@@ -751,7 +751,7 @@ def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_split_taint.py")
     assert lineno == 5
-    assert detail == "DoE-claude"
+    assert detail == "coordinator-content-repo"
 
 
 def test_gate_detects_a_planted_dirname_join_sibling_shellout(tmp_path):
@@ -782,7 +782,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
     """Proves Tooth 2 catches the EXACT single-expression shape
     test_step_zero_emit.py's `_FIXTURE_CANDIDATES` carried: one
     `os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-    "..", "DoE-claude", ...)` call, string-segment `".."` climb style rather
+    "..", "coordinator-content-repo", ...)` call, string-segment `".."` climb style rather
     than pathlib `.parents[n]`, with the climb marker and the sibling token
     co-occurring directly in the same construction (no intermediate
     variable needed)."""
@@ -793,7 +793,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
         "def resolve_fixture():\n"
         "    return os.path.join(\n"
         "        os.path.dirname(os.path.abspath(__file__)),\n"
-        '        "..", "..", "..", "DoE-claude",\n'
+        '        "..", "..", "..", "coordinator-content-repo",\n'
         '        "coordinator", "tests", "fixtures", "step-zero-conformance.json",\n'
         "    )\n",
         encoding="utf-8",
@@ -805,7 +805,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
     assert len(matches) == 1
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_dirname_join_str_segments.py")
-    assert detail == "DoE-claude"
+    assert detail == "coordinator-content-repo"
 
 
 def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
@@ -824,7 +824,7 @@ def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
         "def find_lib():\n"
         "    here = os.path.dirname(os.path.abspath(__file__))\n"
         '    claude_klabauter_root = os.path.abspath(os.path.join(here, "..", ".."))\n'
-        '    return os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")\n',
+        '    return os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-content-repo")\n',
         encoding="utf-8",
     )
 
@@ -835,7 +835,7 @@ def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_multi_hop_taint.py")
     assert lineno == 6
-    assert detail == "DoE-claude"
+    assert detail == "coordinator-content-repo"
 
 
 def test_gate_detects_a_planted_root_anchored_literal(tmp_path):
@@ -867,7 +867,7 @@ def test_gate_detects_a_planted_windows_drive_literal(tmp_path):
         "import os\n"
         "\n"
         "def hardcoded_home():\n"
-        "    return os.path.join(\"C:\\\\DoE-claude\", \"coordinator\")\n",
+        "    return os.path.join(\"C:\\\\coordinator-content-repo\", \"coordinator\")\n",
         encoding="utf-8",
     )
 
@@ -891,10 +891,10 @@ def test_gate_ignores_in_repo_only_climbing_and_doc_comment_mentions(tmp_path):
     fixture = tmp_path / "pkg" / "sub" / "fixture_benign.py"
     fixture.parent.mkdir(parents=True, exist_ok=True)
     fixture.write_text(
-        '"""Uses Path(__file__).resolve().parents[4] / "DoE-claude" in prose only."""\n'
+        '"""Uses Path(__file__).resolve().parents[4] / "coordinator-content-repo" in prose only."""\n'
         "from pathlib import Path\n"
         "\n"
-        "# A comment mentioning DoE-claude and parents[2] together is not code.\n"
+        "# A comment mentioning coordinator-content-repo and parents[2] together is not code.\n"
         "def repo_root():\n"
         "    return Path(__file__).resolve().parents[2]\n"
         "\n"

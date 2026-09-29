@@ -11,9 +11,9 @@ over a frozen contract) rather than the tables living as prose the operator
 self-navigates (the "deterministic table in a markdown fence" defect
 `invisible-doctrine.md` realization #6 forbids).
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-DR-090 (DoE-claude docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
-Spec backlink: DoE-claude DoE-claude:pln-computed-skills-b5-planning-cl-a28764,
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+DR-090 (coordinator-content-repo docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-computed-skills-b5-planning-cl-a28764,
 chunk C11 (Design Option A, AC17)
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/staff-session-assemble` trampoline
@@ -24,13 +24,13 @@ consumed directly by the `coordinator/bin/staff-session-assemble` trampoline
 resolver READS it, it does not own/hardcode it as new engine-side data.**
 The three tables formerly hardcoded at `staff-session/SKILL.md:72-78`
 (domain-signal -> default pair), `:89-98` (slug -> agent-file), and
-`:169-178` (slug -> subagent_type) fold to DoE-claude's `coordinator/
+`:169-178` (slug -> subagent_type) fold to coordinator-content-repo's `coordinator/
 routing.md` (AC7(a)/C9 — the single home). This module has no compiled-in
 roster dict; every call re-reads and re-parses `routing.md` fresh
 (recompute-never-trust-caller, same discipline as `pickup_assemble`).
 
 **Doctrine-side read contract (what C9 must land in routing.md).** This
-module expects THREE markdown pipe-tables in DoE-claude's
+module expects THREE markdown pipe-tables in coordinator-content-repo's
 `coordinator/routing.md`, each immediately preceded by an exact H3 heading
 line (see `_HEADING_DOMAIN_PAIR` / `_HEADING_AGENT_FILE` /
 `_HEADING_SUBAGENT_TYPE` below) — table shape mirrors the three tables as
@@ -50,7 +50,7 @@ Negative-spec:
       read+compute function.
     - Do NOT hardcode a roster dict as a module-level constant. The whole
       point of the F1 reconciliation is that the roster DATA lives in
-      DoE-claude's `routing.md`, not in a second engine-owned copy here —
+      coordinator-content-repo's `routing.md`, not in a second engine-owned copy here —
       a hardcoded fallback dict would silently reintroduce the very
       duplication AC7(a)/AC17 close.
     - Do NOT resolve `the Director of Engineering` as a debater slug — he is the staff-session

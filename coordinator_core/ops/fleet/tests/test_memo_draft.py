@@ -753,7 +753,7 @@ class TestClassifyReceiver:
 # ===========================================================================
 # 3c. rejection_class — cross-repo wire field (2026-07-21, DoE consult)
 #
-# DoE claude-central-em's CLI previously mapped classify_receiver rejections
+# coordinator content repo-central-em's CLI previously mapped classify_receiver rejections
 # to three distinct process exit codes (publish-target: 1, unknown receiver:
 # 2, registry error: 3); collapsing to a single exit_code:1 setup-error
 # envelope lost that split. rejection_class restores it on the wire as a
@@ -855,27 +855,27 @@ class TestRejectionClass:
             tmp_path,
             receiver_repos={
                 "central": tmp_path / "central-repo",
-                "doe_claude": tmp_path / "doe-claude-repo",
+                "content_root": tmp_path / "coordinator-content-repo-repo",
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        # repos.doe_claude is registered, so the DR-071 doe-root ladder's
+        # repos.content_root is registered, so the DR-071 content-root ladder's
         # registry rung resolves the DoE root — the manifest must live there,
         # and the pointer file goes on the durable settings-home rung.
-        doe_root = tmp_path / "doe-claude-repo"
-        schemas_dir = doe_root / "coordinator" / "schemas"
+        content_root = tmp_path / "coordinator-content-repo-repo"
+        schemas_dir = content_root / "coordinator" / "schemas"
         schemas_dir.mkdir(parents=True, exist_ok=True)
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True, exist_ok=True)
-        (machine_local / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+        (machine_local / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
         import json as _json
 
         (schemas_dir / "coordinator-registry.manifest.json").write_text(
             _json.dumps(
                 {
                     "identity": {
-                        "centralReceiverIds": ["central-em", "doe-claude-em"],
+                        "centralReceiverIds": ["central-em", "coordinator-content-repo-em"],
                         "repoAliases": [],
                     }
                 }

@@ -3,7 +3,7 @@ primitives for Layer 1 leg 1b -- the enforcing git pre-commit gate
 (`coordinator_core.hooks.guard_doctrine_surface_ratio_precommit`).
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/_doctrine_surface_netting.py`,
+from coordinator-content-repo `coordinator/hooks/scripts/_doctrine_surface_netting.py`,
 with one shape change: the `sys.path` self-insertion + bare `from
 _doctrine_changelog_prose import surface_of` (a same-directory sibling-
 script import, DoE's flat `hooks/scripts/` layout) becomes an ordinary

@@ -1,7 +1,7 @@
 """Tests for the grouping-approval authorization predicate (2026-07-29).
 
-Contract: cross-repo/archive/2026-07-29-doe-claude-em-grouping-approval-contract.md
-(actioned; moved from inbox/ to archive/), as amended by our reply (DoE-claude
+Contract: cross-repo/archive/2026-07-29-coordinator-content-repo-em-grouping-approval-contract.md
+(actioned; moved from inbox/ to archive/), as amended by our reply (coordinator-content-repo
 cross-repo/inbox/2026-07-29-claude-klabauter-em-grouping-approval-contract-confirmed.md).
 
 The predicate replaces the per-row `pm_approved` boolean with three
@@ -125,7 +125,7 @@ class TestGovernedDiscriminator:
     anywhere in this repo (no plan schema declares `schema_version`), so it
     was always unsatisfied and `is_governed_plan` returned False for every
     plan that will ever be authored here, including a fully-approved one.
-    See cross-repo/inbox/2026-07-29-doe-claude-em-grouping-discriminator-correction.md.
+    See cross-repo/inbox/2026-07-29-coordinator-content-repo-em-grouping-discriminator-correction.md.
     """
 
     def test_no_block_is_legacy(self):

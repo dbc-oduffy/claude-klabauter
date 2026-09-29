@@ -24,7 +24,7 @@ direct-import trampoline shape, template-variant #1). The op it dispatches
 (handoff.reconcile_open) is already registered elsewhere; this module adds no
 new registry entries.
 
-Spec backlink: DoE-claude:pln-doe-side-adoption-of-claude-klabauter-au-284ced (C1) +
+Spec backlink: coordinator-content-repo:pln-doe-side-adoption-of-claude-klabauter-au-284ced (C1) +
 cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md
 
 Negative-spec:
@@ -76,7 +76,7 @@ def _resolve_own_repo_root() -> Optional[Path]:
     location), regardless of which repo actually invoked it, so every
     caller reconciled (and, once dry_run is armed, would have WRITTEN to)
     claude-klabauter's own state/handoffs/ corpus instead of its own. See
-    DoE-claude docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md
+    coordinator-content-repo docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md
     (AC26c).
     """
     from coordinator_core.lifecycle import find_repo_root

@@ -34,9 +34,9 @@
 >
 > **Spec backlinks.**
 > - Plan (source of truth): `docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md`
-> - Frozen schema: `DoE-claude:coordinator/schemas/strategic-self-description.schema.json`
+> - Frozen schema: `coordinator-content-repo:coordinator/schemas/strategic-self-description.schema.json`
 >   (x-schema-version 1.0.0, frozen DoE 017da24b)
-> - Upstream standard (DoE-owned): `DoE-claude:coordinator/docs/plans/2026-07-11-strategic-self-description-standard.md`
+> - Upstream standard (DoE-owned): `coordinator-content-repo:coordinator/docs/plans/2026-07-11-strategic-self-description-standard.md`
 > - Consumer refresh skill: `coordinator:strategic-self-description-refresh`
 > - Sibling contract (model): `coordinator_core/contract/deliverable-rollup-producer-contract.md`
 

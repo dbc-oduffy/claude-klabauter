@@ -43,8 +43,8 @@ env-var override rung (`_machine_local.py::_env_key`) so callers/tests can pin
 a value without touching the on-disk registry.
 
 `registry_get` (public since DR-071, 2026-07-22) is this same direct-tomllib
-reader, promoted to a public name so the DoE-root anchor consumers listed on
-its docstring can bind to `repos.doe_claude` reset-safely without duplicating
+reader, promoted to a public name so the content-root anchor consumers listed on
+its docstring can bind to `repos.content_root` reset-safely without duplicating
 a second TOML parser. `_registry_get` is kept as an alias for this module's
 own pre-existing internal callers.
 
@@ -94,7 +94,7 @@ tail-sanitizer, see ``_tail_slug`` below) is imported lazily, function-local,
 rather than at module level. Importing ANY name under ``coordinator_core.ops``
 forces Python to first fully execute ``coordinator_core/ops/__init__.py``,
 which (default/eager mode) walks its full op-module list — including
-``doe_root_pointer``'s transitive chain back to THIS module's ``registry_get``.
+``content_root_pointer``'s transitive chain back to THIS module's ``registry_get``.
 A module-level import here raced that cascade: whichever of
 {``machine_resolver``, ``coordinator_core.ops``} was imported first left the
 other partially initialized, so the loser's needed name (``registry_get``,
@@ -230,24 +230,41 @@ def _env_override_key(key: str) -> str:
     return "MACHINE_LOCAL_" + key.upper().replace(".", "_")
 
 
+# compat-fallback: the content-root key and its pre-rename name answer for each other.
+_CONTENT_ROOT_KEY_PAIR = {
+    "repos.content_root": "repos.content_root",  # private-name-ok: compat-fallback
+    "repos.content_root": "repos.content_root",  # private-name-ok: compat-fallback
+}
+
+
 def registry_get(key: str) -> Optional[str]:
     """Resolve a dotted registry key, or None if unresolved.
+
+    `repos.content_root` falls back to its legacy name (and the reverse), so a box
+    holding either key resolves for readers of either.
 
     Resolution order: ``MACHINE_LOCAL_<KEY>`` env override -> registry.local.toml
     -> registry.toml. Empty-string values are treated as not-found (see module
     docstring negative-spec).
 
     Public promotion (DR-071, 2026-07-22): this is the direct-tomllib registry
-    reader every DoE-root anchor consumer (``coordinator_core.doe_root_pointer``,
+    reader every content-root anchor consumer (``coordinator_core.content_root_pointer``,
     ``coordinator_core.trusted_root_guard``, ``coordinator_core.
     resolve_coordinator_clone``, ``coordinator_core.install._shared``) now binds
-    ``repos.doe_claude`` reads to, in preference to the ``machine-local`` CLI —
+    ``repos.content_root`` reads to, in preference to the ``machine-local`` CLI —
     the CLI's reader/exec bits live under the resettable ``~/.claude/bin/``, so
     a Claude Code reset that wipes ``~/.claude`` breaks the CLI even though the
     registry TOML under settings-home survives untouched. "``machine-local get``
     works" is therefore not proof of reset-survival; a direct read of this
     function is.
     """
+    found = _registry_get_exact(key)
+    if found is None and key in _CONTENT_ROOT_KEY_PAIR:
+        found = _registry_get_exact(_CONTENT_ROOT_KEY_PAIR[key])
+    return found
+
+
+def _registry_get_exact(key: str) -> Optional[str]:
     env_override = os.environ.get(_env_override_key(key))
     if env_override:
         return env_override
@@ -348,7 +365,7 @@ def registry_set(key: str, value: str) -> None:
     those must go through the real ``machine-local`` CLI.
 
     Shape sanctioned for exactly this single-writer-namespaced-table case by
-    DoE-claude's ``docs/wiki/machine-local-registry.md``: "Append-only
+    coordinator-content-repo's ``docs/wiki/machine-local-registry.md``: "Append-only
     writers that structurally preserve sibling tables (read ->
     tomllib-parse-absent-check -> append -> atomic os.replace) satisfy the
     preserve-unrelated-tables property by construction and need no
@@ -568,21 +585,21 @@ def _identity_central_canonical_id() -> str:
     centralReceiverIds[0]` in the DoE manifest, mirroring `coordinator_registry.
     _central_canonical_id()`'s own index-0-is-canonical convention (itself
     mirroring DoE's frontmatter validator). Degrades to the well-known default
-    `"doe-claude-em"` when the manifest does not resolve — the same graceful-
+    `"coordinator-content-repo-em"` when the manifest does not resolve — the same graceful-
     degradation floor every reader in `_memo_resolver` already uses; never
     raises."""
     from coordinator_core.ops.fleet._memo_resolver import read_doe_identity
 
     central_ids = read_doe_identity().get("centralReceiverIds") or []
-    return central_ids[0] if central_ids else "doe-claude-em"
+    return central_ids[0] if central_ids else "coordinator-content-repo-em"
 
 
 def repo_key_to_em_id(key: str) -> str:
     """Reverse a repos.<name> registry key to its EM identity string.
 
-    Special-case: repos.doe_claude → the manifest-derived canonical central
+    Special-case: repos.content_root → the manifest-derived canonical central
     identity (see `_identity_central_canonical_id()` — identity.centralReceiverIds[0],
-    currently "doe-claude-em"). "claude-central-em", "central-em" and "central"
+    currently "coordinator-content-repo-em"). "claude-central-em", "central-em" and "central"
     were RETIRED OUTRIGHT from identity.centralReceiverIds by DoE at their
     b787bf0f0 (2026-08-26): they are not aliases, not members of
     CENTRAL_RECEIVER_IDS, and do not resolve — their absence is the operative
@@ -597,14 +614,14 @@ def repo_key_to_em_id(key: str) -> str:
     are handled defensively but unsupported.
 
     Negative-spec: the ~/.claude/home path is NOT special-cased here — central
-    identity is anchored on repos.doe_claude, not the home directory.
+    identity is anchored on repos.content_root, not the home directory.
 
     Moved 2026-09-12 (DoE e267d18336) from `coordinator/bin/lib/
     coordinator_registry.py` — that module is NOT on `coordinator_core`'s
     import path (DR-047), so the engine could not call it where it used to
     live. `coordinator_registry.repo_key_to_em_id` now delegates here.
     """
-    if key == "repos.doe_claude":
+    if key == "repos.content_root":
         return _identity_central_canonical_id()
     shortname = key[len("repos."):] if key.startswith("repos.") else key
     canonical = _identity_repo_aliases().get(shortname)
@@ -618,7 +635,7 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
 
     Resolution order:
       1. root is None  → 'unknown-sender-em'
-      2. root path-matches repo_key_paths['repos.doe_claude']  → the manifest-derived
+      2. root path-matches repo_key_paths['repos.content_root']  → the manifest-derived
          canonical central identity (see `_identity_central_canonical_id()`)
       3. root path-matches any other registered repos.* path   → repo_key_to_em_id(key),
          the key chosen by `canonical_repo_key_for_root` when
@@ -627,7 +644,7 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
       4. unregistered git repo  → basename(root) + '-em'
 
     Negative-spec: the old ~/.claude/home special-case is REMOVED — ~/.claude is no
-    longer a memo-identity anchor. Central identity flows through repos.doe_claude only.
+    longer a memo-identity anchor. Central identity flows through repos.content_root only.
 
     Moved 2026-09-12 (DoE e267d18336) from `coordinator/bin/lib/
     coordinator_registry.py` alongside `repo_key_to_em_id` — see that
@@ -636,8 +653,8 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
     """
     if root is None:
         return "unknown-sender-em"
-    doe_claude_path = repo_key_paths.get("repos.doe_claude")
-    if doe_claude_path and _same_path(str(root), str(doe_claude_path)):
+    content_root_path = repo_key_paths.get("repos.content_root")
+    if content_root_path and _same_path(str(root), str(content_root_path)):
         return _identity_central_canonical_id()
     key = canonical_repo_key_for_root(root, repo_key_paths)
     if key is not None:
@@ -674,7 +691,7 @@ def _hostname_short() -> Optional[str]:
 
     `socket` is imported HERE, not at module scope. It costs ~4.3ms to import
     (it pulls `selectors` and `select` with it), this module is on the commit
-    hot path via `doe_root_pointer`, and `compute_machine` resolves
+    hot path via `content_root_pointer`, and `compute_machine` resolves
     `$COORDINATOR_MACHINE` and the settings file BEFORE it ever asks for a
     hostname -- so the eager import was paid by every op and consumed by
     almost none.

@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.emit_withheld_knobs — emit claude-klabauter's withheld-knob set as data,
-into the DoE-claude coordinator/ tree, beside the manifest that runs the other way.
+into the coordinator-content-repo coordinator/ tree, beside the manifest that runs the other way.
 
 PURPOSE
 Some env knobs are live in the engine but deliberately NOT ADVERTISED on a particular
@@ -35,7 +35,7 @@ NEGATIVE SPEC — what this artifact is NOT
     drift the artifact exists to stop, wearing the costume of the fix.
 
 CROSS-REPO WRITE (same shape as `emit_artifact_shape_contract`, deliberately)
-Writes into a SIBLING repo's working tree: DoE-claude owns `coordinator/withheld-knobs.json`,
+Writes into a SIBLING repo's working tree: coordinator-content-repo owns `coordinator/withheld-knobs.json`,
 Claude-klabauter owns the sole regeneration path. It lands beside `coordinator/doctrine-surfaces.json`,
 which runs the other way — DoE emits it, claude-klabauter's `verify_skill_anchor_links` consumes it.
 The write is deterministic and uncommitted; claim it with the peer rather than leaving it
@@ -47,7 +47,7 @@ scans are theirs.
 
 Reference: docs/reference/withheld-knobs.md
 Plan:      docs/plans/2026-09-04-emit-the-withheld-knob-set-as-data.md
-Memo:      state/cross-repo/inbox/2026-09-04-doe-claude-em-emit-the-withheld-knob-set-so-doctrine-cannot-prescribe-one.md
+Memo:      state/cross-repo/inbox/2026-09-04-coordinator-content-repo-em-emit-the-withheld-knob-set-so-doctrine-cannot-prescribe-one.md
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ from typing import Dict, List, Optional
 
 from coordinator_core.data_root import content_root_for
 from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.session.declared_writes import declare_write
 
 #: Bumped only when an EXISTING field changes meaning or leaves. Adding a field, or adding
@@ -69,7 +69,7 @@ SCHEMA_VERSION = 1
 #: Output-dir override, mirroring `ARTIFACT_CONTRACT_OUT_DIR`'s role for the sibling op.
 OUT_DIR_ENV = "WITHHELD_KNOBS_OUT_DIR"
 
-# DoE-claude tree (or OUT_DIR_ENV's override), explicitly NOT claude-klabauter -- see
+# coordinator-content-repo tree (or OUT_DIR_ENV's override), explicitly NOT claude-klabauter -- see
 # module docstring CROSS-REPO WRITE. Same declaration as the sibling op that
 GENERATES = []
 
@@ -200,23 +200,23 @@ def _out_dir() -> Optional[str]:
     override = os.environ.get(OUT_DIR_ENV)
     if override:
         return os.path.abspath(override)
-    doe_root = coordinator_doe_root()
-    if not doe_root:
+    content_root = coordinator_content_root()
+    if not content_root:
         return None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is not None:
         return str(content_root)
-    return os.path.join(doe_root, "coordinator")
+    return os.path.join(content_root, "coordinator")
 
 
 _USAGE = (
     "usage: emit-withheld-knobs\n"
     "\n"
-    "Emits coordinator/withheld-knobs.json into the DoE-claude root — the set of env\n"
+    "Emits coordinator/withheld-knobs.json into the coordinator-content-repo root — the set of env\n"
     "knobs that are LIVE in the engine but must not be prescribed by a doctrine surface\n"
     "for a named path. Takes no arguments.\n"
     "\n"
-    "NOTE — this writes into a SIBLING repo's working tree (DoE-claude owns the file;\n"
+    "NOTE — this writes into a SIBLING repo's working tree (coordinator-content-repo owns the file;\n"
     "claude-klabauter owns the sole regeneration path). The write is deterministic and\n"
     "uncommitted; claim it with the peer rather than leaving it in their diff.\n"
     "\n"
@@ -237,7 +237,7 @@ def main(argv: List[str]) -> int:
     out_dir = _out_dir()
     if out_dir is None:
         print(
-            "emit-withheld-knobs: DoE-claude root did not resolve and "
+            "emit-withheld-knobs: coordinator-content-repo root did not resolve and "
             f"{OUT_DIR_ENV} is unset — refusing to guess a path in a sibling repo.",
             file=sys.stderr,
         )

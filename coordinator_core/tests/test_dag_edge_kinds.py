@@ -20,7 +20,7 @@ Coverage:
 The out-of-default-set property for origin_handoff mirrors the DoE JS side
 (walk-handoff-dag.js) per the ratified spinoff-provenance-ancestry contract.
 
-Spec backlink: DoE-claude:pln-structured-originating-session-8b505c (DoE side)
+Spec backlink: coordinator-content-repo:pln-structured-originating-session-8b505c (DoE side)
 Ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md
 """
 

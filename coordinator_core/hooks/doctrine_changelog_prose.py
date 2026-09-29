@@ -2,7 +2,7 @@
 changelog-shaped prose in coordinator doctrine surfaces.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/_doctrine_changelog_prose.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/_doctrine_changelog_prose.py`.
 Shape change: `REPO_ROOT` (used only to build `DOCTRINE_MD_DIRS`/
 `DOCTRINE_SCHEMAS_DIR`, the coordinator-claude plugin's own shipped doctrine
 content) now resolves via `_resolve_doctrine_content_root()` (the shared
@@ -203,7 +203,7 @@ from typing import Iterable, Optional
 def _resolve_doctrine_content_root() -> Path:
     """W4-C5 shape change (see module arrival note): the original
     `REPO_ROOT = Path(__file__).resolve().parents[3]` walk anchored on this
-    module's own on-disk position three directories under DoE-claude's repo
+    module's own on-disk position three directories under coordinator-content-repo's repo
     root (`coordinator/hooks/scripts/`) -- a walk that is meaningless now
     that this module lives in claude-klabauter's own tree. `DOCTRINE_MD_DIRS`/
     `DOCTRINE_SCHEMAS_DIR` name the coordinator-claude plugin's SHIPPED
@@ -394,7 +394,7 @@ def iter_doctrine_surface_files(config_repo_root: "Optional[Path]" = None) -> It
     per the original docstring's own caveat that `scope_class`'s general
     classification "must never use REPO_ROOT") for the config-class probe
     too -- correct there only because that module's `REPO_ROOT` WAS the
-    checked-out repo being ratcheted (DoE-claude, run in-tree). Now that
+    checked-out repo being ratcheted (coordinator-content-repo, run in-tree). Now that
     `REPO_ROOT` here names the coordinator-claude PLUGIN's content root
     (see module arrival note), the config-class probe takes an explicit
     `config_repo_root` -- the SESSION's own repo, resolved by the caller

@@ -5,7 +5,7 @@ Subject: the eight `hooks.<name>` ops this row's own body writes —
 `pickup_autofire`, `mise_autofire`, `handoff_segment_inject`,
 `group_em_autofire`, `nudge_initiative_goals_ladder`,
 `offer_exploration_tier_dispatch`, `observe_config_change`,
-`observe_post_compact` — ported from DoE-claude's
+`observe_post_compact` — ported from coordinator-content-repo's
 `coordinator/hooks/scripts/*.py` siblings per
 docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W4-C12.
 

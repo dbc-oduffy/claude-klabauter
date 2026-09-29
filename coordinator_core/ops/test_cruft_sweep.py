@@ -622,7 +622,7 @@ def _sweep_scratchpad_kwargs(tmp_path, **overrides):
     kwargs = dict(
         temp_root=str(tmp_path),
         self_session_id=_SP_SID_SELF,
-        slug_to_root_map={"X--claude-klabauter": "X:/claude-klabauter"},
+        slug_to_root_map={"X--claude-klabauter": "C:/claude-klabauter"},
     )
     kwargs.update(overrides)
     return kwargs

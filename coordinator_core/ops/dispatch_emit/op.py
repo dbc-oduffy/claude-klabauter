@@ -40,7 +40,7 @@ Wire params:
                                      unlike ``queue`` (row content), a DoE
                                      profile is an operator-trusted input
                                      that routinely lives in a different
-                                     repo (DoE-claude) than the one whose
+                                     repo (coordinator-content-repo) than the one whose
                                      rows are being closed. Guarding it here
                                      would refuse a legitimate cross-repo
                                      profile_dir in production.
@@ -114,7 +114,7 @@ Reply fields:
 The receipt is a property of emitting, not of one repo's wrapper:
     Every emission route writes a provenance sidecar at
     ``<script>.mjs.emitted.json``. The OTHER producer of that same sidecar is
-    DoE-claude's wrapper CLI ``coordinator/bin/emit-dispatch-workflow.py``
+    coordinator-content-repo's wrapper CLI ``coordinator/bin/emit-dispatch-workflow.py``
     (``_write_emission_receipt`` / ``script_sha256`` / ``restamp``), and the
     consumer is a DoE-side hook that verifies ``sha256`` against the script
     bytes on disk. The shape is therefore a CROSS-REPO CONTRACT: same keys,
@@ -173,7 +173,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.cartography._guard import PathEscapeError
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -186,7 +186,7 @@ from coordinator_core.ops._param_alias import aliased_param, spellings
 
 #: Sibling-relative path of DoE's roster-v5 stage-schema file (AC22) --
 #: joined onto the SAME sibling root ``review_mint.op.load_fragment``
-#: already resolves the roster fragment from (``read_doe_root_pointer()``),
+#: already resolves the roster fragment from (``read_content_root_pointer()``),
 #: never a second cross-repo pointer.
 _REVIEW_STAGE_SCHEMA_RELPATH = "coordinator/schemas/review-stage.schema.json"
 
@@ -194,7 +194,7 @@ _REVIEW_STAGE_SCHEMA_RELPATH = "coordinator/schemas/review-stage.schema.json"
 def _load_review_roster_and_stage_schemas() -> tuple:
     """Best-effort load of the v5 review roster fragment plus DoE's stage
     schemas (AC22) -- reusing ``review_mint.op.load_fragment``'s own
-    DoE-root resolution for the fragment, never a duplicated pointer.
+    content-root resolution for the fragment, never a duplicated pointer.
 
     Returns ``(fragment, stage_schemas)``, each ``None`` on any failure
     (unresolvable DoE root, missing file, unparseable JSON, or a stage
@@ -207,11 +207,11 @@ def _load_review_roster_and_stage_schemas() -> tuple:
     except (FileNotFoundError, OSError, ValueError):
         return None, None
 
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         return fragment, None
 
-    schema_path = Path(doe_root) / _REVIEW_STAGE_SCHEMA_RELPATH
+    schema_path = Path(content_root) / _REVIEW_STAGE_SCHEMA_RELPATH
     if not schema_path.is_file():
         return fragment, None
 
@@ -372,7 +372,7 @@ def emission_receipt_path(guarded_script_path: Path) -> Path:
     ``<script>.mjs`` -> ``<script>.mjs.emitted.json``, beside the script: the
     script's own path is the only key the emitter and the fire-leg verifier
     share, so a registry keyed on it would be a second thing to keep in step
-    with a file that already exists. Same rule as DoE-claude's
+    with a file that already exists. Same rule as coordinator-content-repo's
     ``emit-dispatch-workflow.py :: emission_receipt_path`` — the two producers
     must agree on where the sidecar lands, not just on what is in it.
 
@@ -528,7 +528,7 @@ def restamp(script_path: Path, session_id: str) -> dict:
     """Re-stamp an emission receipt's ``sha256`` over a script THIS session
     deliberately edited after emission.
 
-    Mirrors DoE-claude's wrapper CLI ``emit-dispatch-workflow.py :: restamp``
+    Mirrors coordinator-content-repo's wrapper CLI ``emit-dispatch-workflow.py :: restamp``
     (the other producer of this same receipt shape, § The receipt is a
     property of emitting, not of one repo's wrapper, above) -- same refusal
     shape, same serialisation. The published surface documents
@@ -803,7 +803,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
-        # schemas itself, through the existing DoE-root pointer resolution
+        # schemas itself, through the existing content-root pointer resolution
         # -- never a caller-supplied fragment param, and never a guessed
         # roster on an unresolvable sibling root (degrades to emit.py's own
         # narration instead).

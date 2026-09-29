@@ -18,7 +18,7 @@ a deliberate STRANDING, PM-accepted, and reads `unsized` without any
 longer knows whether the plan exists — only that the pointer was never
 written.
 
-Cross-repo ask: `cross-repo/inbox/2026-08-20-doe-claude-em-pickup-brief-
+Cross-repo ask: `cross-repo/inbox/2026-08-20-coordinator-content-repo-em-pickup-brief-
 should-emit-the-sizing-disposition.md`.
 """
 

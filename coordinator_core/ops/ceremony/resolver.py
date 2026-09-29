@@ -151,8 +151,8 @@ def find_all_consumed_handoffs(
     (retired by DR-084 P4, still ingested per C7), ``claimed_by`` winning when
     both are present. So a corpus carrying zero ``consumed_by`` fields — which
     is every corpus post-migration — resolves normally through this scan.
-    Reported as a suspected always-empty predicate by doe-claude-em
-    (2026-08-30, ``cross-repo/inbox/2026-08-30-doe-claude-em-wsc-consumed-set-
+    Reported as a suspected always-empty predicate by coordinator-content-repo-em
+    (2026-08-30, ``cross-repo/inbox/2026-08-30-coordinator-content-repo-em-wsc-consumed-set-
     keys-on-a-retired-field.md``) on the strength of THIS docstring's previous
     wording plus the local variable name below; the wording was stale, the
     behaviour was not. Do not restate the match as a ``consumed_by`` read.
@@ -284,7 +284,7 @@ def detect_git_provenance_consumed(
     --find-renames --name-status`` with a per-commit ``%(trailers:key=Session-
     Id,valueonly)`` marker line, mirroring the bash oracle's own
     ``awk -v sid=`` pass line-for-line (see
-    ``DoE-claude/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
+    ``coordinator-content-repo/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
     Detector B). Collects EVERY match across the range (not just the first —
     unlike the bash oracle's awk ``exit`` at first hit — so a DAG-pickup
     session that shipped/archived N predecessor handoffs this run gets all N

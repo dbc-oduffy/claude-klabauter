@@ -3,12 +3,12 @@ coordinator_core.frontmatter.schema_validate
 
 Schema-parameterized JSON Schema (draft-2020-12 subset) validator plus cross-field
 rules engine. Python port of validateFrontmatter + applyCrossFieldRules from
-DoE-claude coordinator/bin/lib/schema.js (W4 / JSON-Schema-backed path only).
+Coordinator-content-repo coordinator/bin/lib/schema.js (W4 / JSON-Schema-backed path only).
 
 Spec backlink:
   coordinator/bin/lib/schema.js — validateRecord, validateJsonSchemaNode,
     CROSS_FIELD_RULES['handoff'], applyCrossFieldRules.
-  HISTORICAL: that file no longer exists in any repo. It moved DoE-claude ->
+  HISTORICAL: that file no longer exists in any repo. It moved coordinator-content-repo ->
   claude-klabauter 2026-07-22 (b644d5a9b / 5ffc537876) and was deleted here 2026-07-24
   (480ad8f867 / 90de9c3083, the de-node cutover). Every "Port of schema.js:NNNN"
   citation below is provenance for a completed port, not a live oracle to
@@ -60,9 +60,9 @@ Negative-spec:
     JSON-Schema-backed branch, `testNegativeCorpus`, and `checkReferentialIntegrity`
     remain out of scope — not needed by `validate()`'s callers.
 
-Legacy-YAML data-layer port (T4d-g1a, DoE-claude
+Legacy-YAML data-layer port (T4d-g1a, coordinator-content-repo
   scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-T4d-g1-js-data-layer-cluster.md):
-  Spec backlink: DoE-claude coordinator/bin/lib/schema.js — parseYaml (+ consumeBlockScalar,
+  Spec backlink: coordinator-content-repo coordinator/bin/lib/schema.js — parseYaml (+ consumeBlockScalar,
     parseYamlLines, parseList, skipPast, parseInlineList, stripInlineComment, parseScalar),
     globToRegex, matchGlob, applyDefaultMatchMode, loadSchemas, matchSchema,
     matchSchemaForPath, parseFrontmatter.
@@ -260,7 +260,7 @@ def _plan_tasks_schema_without_pm_approved_required(schema: dict | None = None) 
     OWN `plan-tasks` schema object from DoE's vendored corpus
     (`coordinator/schemas/plan-tasks.schema.json`, a copy that is known to
     have drifted from claude-klabauter's own — see the "config-edit re-vendor gap"
-    noted in cross-repo/inbox/2026-07-29-doe-claude-em-grouping-
+    noted in cross-repo/inbox/2026-07-29-coordinator-content-repo-em-grouping-
     discriminator-correction.md — and is tracked separately by
     `check_schema_drift`). The `allOf`-branch shape this function strips is
     identical in both copies, so the SAME transform applies regardless of
@@ -296,7 +296,7 @@ def _coerce_dates_to_strings(obj: Any) -> Any:
     caller's original dict.
 
     THIS LENIENCY IS CROSS-REPO CONTRACT, NOT AN IMPLEMENTATION DETAIL, and
-    tightening it breaks a repo we do not own. DoE-claude imports this module
+    tightening it breaks a repo we do not own. Coordinator-content-repo imports this module
     BY FILE PATH and calls `validate_frontmatter_obj`; their whole artifact
     corpus runs through it (`coordinator/tests/test_artifact_corpus_validates_
     against_schema.py` on their side), so a date rejected here fails records
@@ -495,7 +495,7 @@ def _validate_json_schema_node(
 ) -> list[ErrorDict]:
     """Recursively validate a value against a JSON Schema node (draft-2020-12 subset).
 
-    Port of validateJsonSchemaNode from DoE-claude coordinator/bin/lib/schema.js.
+    Port of validateJsonSchemaNode from coordinator-content-repo coordinator/bin/lib/schema.js.
 
     Supported keywords: $ref, anyOf, allOf, oneOf, type, enum, format
     (date/date-time), pattern, minLength, maxLength, minItems, uniqueItems, minimum, maximum,
@@ -1131,7 +1131,7 @@ def _tolerate_handoff_kind_aliases_in_result(
 # ---------------------------------------------------------------------------
 # Cross-field rules — handoff schema only.
 #
-# Port of CROSS_FIELD_RULES['handoff'] from DoE-claude coordinator/bin/lib/schema.js.
+# Port of CROSS_FIELD_RULES['handoff'] from coordinator-content-repo coordinator/bin/lib/schema.js.
 # Each rule is a callable (fm_dict) -> ErrorDict | None.
 # Negative-spec: handoff-archived has no cross-field rules by design.
 # ---------------------------------------------------------------------------
@@ -1351,8 +1351,8 @@ _ROADMAP_BATON_KINDS = frozenset(kind_values_for_canonical('roadmap-baton'))
 
 #: GRAVESTONE — `_cf_graph_fields_roadmap_only` and `_cf_roadmap_id_implies_kind`,
 #: the two rules that rejected `roadmap_id` on any kind but roadmap-baton.
-#: DELETED 2026-09-11 under DR-198(b) (DoE-claude, landed `0add2b70`), whose ask
-#: reached this repo as `state/cross-repo/inbox/2026-09-06-doe-claude-em-roadmap-
+#: DELETED 2026-09-11 under DR-198(b) (coordinator-content-repo, landed `0add2b70`), whose ask
+#: reached this repo as `state/cross-repo/inbox/2026-09-06-coordinator-content-repo-em-roadmap-
 #: id-referential-and-two-rule-deletions.md` and had been open since.
 #:
 #: `roadmap_id` is REFERENTIAL, not kind-gated: when carried it must name a
@@ -1381,7 +1381,7 @@ _ROADMAP_BATON_KINDS = frozenset(kind_values_for_canonical('roadmap-baton'))
 
 
 #: Operator escape hatch for `_cf_spinoff_roadmap_requires_graph`, minted as a
-#: CONDITION OF RATIFICATION under SC-DR-016 (DoE-claude
+#: CONDITION OF RATIFICATION under SC-DR-016 (coordinator-content-repo
 #: `coordinator/docs/wiki/scoped-safety-commits.md` § "The deny-from-day-one
 #: class is the self-contained oracle, not the command string"). That record
 #: clears this rule to ship deny-from-day-one without an SC-DR-003 warn-first
@@ -1415,7 +1415,7 @@ def _cf_spinoff_roadmap_requires_graph(fm: dict) -> ErrorDict | None:
         # C1/D5). `operator_override_note` is audience-gated now and takes a
         # required `payload=`; this module never receives one. It is reached
         # through `validate_frontmatter`, whose signature is a cross-repo
-        # contract DoE-claude imports by file path, so threading a payload
+        # contract coordinator-content-repo imports by file path, so threading a payload
         # down to here is out of bounds -- not a local defect to fix later.
         #
         # The pointer is therefore dropped for every audience rather than
@@ -1697,7 +1697,7 @@ def _cf_forked_from_spinoff_only(fm: dict) -> ErrorDict | None:
 # ---------------------------------------------------------------------------
 # origin-axis cross-field rules (Rules C2-1 through C2-5).
 #
-# Port of DoE-claude coordinator/bin/lib/schema.js:1283-1553.
+# Port of coordinator-content-repo coordinator/bin/lib/schema.js:1283-1553.
 # origin_session / origin_handoff / origin_plan_id / origin_goal_id record where a
 # fork was spawned FROM — a DISTINCT axis from predecessor (continuation spine),
 # forked_from (branch-point ancestry), and deliverable_id (dlv- grouping key). All
@@ -2028,7 +2028,7 @@ def _cf_initiative_non_empty(fm: dict) -> ErrorDict | None:
 
 
 def _cf_execution_stamp_required(fm: dict) -> ErrorDict | None:
-    # foreign-identity: OUT-OF-CLASS — the "DoE-claude coordinator/bin/lib/schema.js"
+    # foreign-identity: OUT-OF-CLASS — the "coordinator-content-repo coordinator/bin/lib/schema.js"
     # citation below is a port-provenance note inside this function's docstring,
     # not agent-facing rendered runtime text
     """H-CROSS-EXEC-1: handoff_phase=execution requires the full FOUR-field
@@ -2041,7 +2041,7 @@ def _cf_execution_stamp_required(fm: dict) -> ErrorDict | None:
     residual since the emitter controls created).
     Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C2
 
-    Port of DoE-claude coordinator/bin/lib/schema.js CROSS_FIELD_RULES['handoff']
+    Port of coordinator-content-repo coordinator/bin/lib/schema.js CROSS_FIELD_RULES['handoff']
     H-CROSS-EXEC-1 (~line 1221). Comparison is string-lexicographic (not a date
     object) — safe for ISO dates (YYYY-MM-DD and YYYY-MM-DDTHH:MM:SSZ); non-ISO
     created values are absent in the post-2026-04 corpus.
@@ -2132,7 +2132,7 @@ def _cf_mise_prepped_stamp_quartet(fm: dict) -> ErrorDict | None:
     the cutoff's only live effect is exempting a backdated going-forward plan — an
     accepted residual, since the write op controls what it stamps.
 
-    Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
+    Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
                    .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md § 1
     """
     created = fm.get('created')
@@ -2296,7 +2296,7 @@ HANDOFF_PHASE_KINDS = _HANDOFF_PHASE_KINDS
 
 
 def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
-    # foreign-identity: OUT-OF-CLASS — the "DoE-claude coordinator/bin/lib/schema.js"
+    # foreign-identity: OUT-OF-CLASS — the "coordinator-content-repo coordinator/bin/lib/schema.js"
     # citation below is a port-provenance note inside this function's docstring,
     # not agent-facing rendered runtime text
     """H-CROSS-EXEC-2: handoff_phase PRESENT (either 'continuation' or 'execution')
@@ -2306,7 +2306,7 @@ def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
     applies regardless of the handoff_phase value. Kind enum:
     coordinator/schemas/handoff.schema.json (`properties.kind.enum`).
     Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C2;
-    roadmap-baton admission ratified in DoE-claude DR-126
+    roadmap-baton admission ratified in coordinator-content-repo DR-126
     (`docs/decisions/DR-126-roadmap-baton-lifecycle-model-a-second-o.md`),
     schema description landed DoE-side at `feef6527f`.
 
@@ -2317,7 +2317,7 @@ def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
     session-handoff-only. Backfilling roadmap batons with a phase is an explicit
     anti-scope of DR-126.
 
-    Port of DoE-claude coordinator/bin/lib/schema.js CROSS_FIELD_RULES['handoff']
+    Port of coordinator-content-repo coordinator/bin/lib/schema.js CROSS_FIELD_RULES['handoff']
     H-CROSS-EXEC-2 (retired; the live home for these rules is
     `_HANDOFF_CROSS_FIELD_RULES` below).
     """
@@ -2363,7 +2363,7 @@ def is_unowned(v: object) -> bool:
     fleet-wide ownership read-model) must call this rather than re-deriving
     the equivalence per-consumer, or they silently diverge.
 
-    Spec backlink: DoE-claude
+    Spec backlink: coordinator-content-repo
       docs/plans/2026-07-19-mcollab-multi-axis-ownership-schema-publication.md
       § P2 (is_unowned(v) := (v absent) OR (v is null) OR (v.trim()=='')),
       § C2 (Python port of the original JS predicate
@@ -2392,7 +2392,7 @@ def _cf_owner_axis_scalar(fm: dict) -> ErrorDict | None:
     slug). Mirrors the multi-field-loop shape of
     _cf_origin_scalar_fields_reject_arrays above.
 
-    Spec backlink: DoE-claude
+    Spec backlink: coordinator-content-repo
       docs/plans/2026-07-19-mcollab-multi-axis-ownership-schema-publication.md
       § C2, § AC6.
 
@@ -2669,7 +2669,7 @@ def _cf_gate_evidence_legs_shape(fm: dict) -> ErrorDict | None:
                 'field': f'gate_evidence.legs[{i}].repo',
                 'error': 'required field missing',
                 'hint': (
-                    f'kind: {kind} requires repo — a registry key (e.g. doe_claude, '
+                    f'kind: {kind} requires repo — a registry key (e.g. Content_root, '
                     'claude_klabauter), never inferred from context (ruling 6).'
                 ),
             }
@@ -2796,7 +2796,7 @@ _PLAN_TASKS_CODED_SHA_RE = re.compile(r'^[0-9a-f]{7,40}$')
 # actual pm_approved/grouping-approval gate set.
 
 # Dispositions that actually require pm_approved (D4, as narrowed by DoE's
-# 2026-08-05 ruling — cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-
+# 2026-08-05 ruling — cross-repo/inbox/2026-08-05-coordinator-content-repo-em-plan-tasks-
 # five-exits-ruling.md). `spun_off` was relaxed: moving a row to another
 # plan doesn't drop work (nothing leaves the corpus), so there is no scope
 # cut for the PM to ratify, and the EM now self-issues it. `backlogged` and
@@ -3058,14 +3058,14 @@ def _cf_queue_disposition_shape(
     creeping into the shared function.
 
     SCOPED TO CLAUDE-KLABAUTER'S OWN CORPUS, and inert by default — `local_queue_corpus`
-    must be passed true or this rule does nothing. DoE-claude imports THIS FILE
+    must be passed true or this rule does nothing. Coordinator-content-repo imports THIS FILE
     by path (`Path(claude_klabauter_root) / "coordinator_core" / "frontmatter" /
     "schema_validate.py"`, e.g. their `test_artifact_corpus_validates_against_
     schema.py`) with no re-vendor and no version gate, so an unscoped rule here
     changes enforcement on their corpus the instant it lands on our disk. That
     is the seam the version gate exists to prevent, and it is why DoE asked for
     this rule to stay claude-klabauter-scoped and opt in on their own schedule
-    (`cross-repo/inbox/2026-08-28-doe-claude-em-doe-schema-branch-already-
+    (`cross-repo/inbox/2026-08-28-coordinator-content-repo-em-doe-schema-branch-already-
     landed-and-scoping-answers.md`; adopted as this plan's C6 decision).
 
     MEASURED, not supposed — the unscoped first draft was verified to reject a
@@ -3394,12 +3394,12 @@ def _cf_plan_tasks_unratified_deferral_governed(
 # The banner previously also named "C6's plan-coverage-checker" as an
 # intended caller. That was never implementable and the expectation is
 # withdrawn, not pending: plan-coverage-checker is a markdown agent prompt
-# in DoE-claude (`coordinator/agents/plan-coverage-checker.md`), not a
+# in coordinator-content-repo (`coordinator/agents/plan-coverage-checker.md`), not a
 # Python module, so it cannot import or call anything. Surfacing this lint
 # to that agent needs something executable to run it and hand the agent a
 # result — a design question nobody has taken, deliberately left unclaimed
 # here rather than named as though it were merely unwired.
-# (Raised by doe-claude-em, 2026-07-29.)
+# (Raised by coordinator-content-repo-em, 2026-07-29.)
 #
 # Negative-spec: does NOT validate row SHAPE (missing fields, bad
 # disposition_ref, missing pm_approved) — that is
@@ -3522,9 +3522,9 @@ def check_plan_tasks_ordering(source: str) -> ErrorDict | None:
 # ---------------------------------------------------------------------------
 # Grouping approval — the authorization predicate, at SOURCE scope (2026-07-29).
 #
-# Contract: cross-repo/archive/2026-07-29-doe-claude-em-grouping-approval-contract.md
+# Contract: cross-repo/archive/2026-07-29-coordinator-content-repo-em-grouping-approval-contract.md
 # (actioned; moved from inbox/ to archive/ — see line ~2411 below), as amended
-# by our reply (DoE-claude
+# by our reply (coordinator-content-repo
 # cross-repo/inbox/2026-07-29-claude-klabauter-em-grouping-approval-contract-confirmed.md).
 #
 # WHY THIS IS NOT A PER-ROW CROSS-FIELD RULE. DoE's memo asked us to extend
@@ -3739,9 +3739,9 @@ def is_governed_plan(fm: dict) -> bool:
     version leg was always `None` and always failed — `is_governed_plan`
     returned False for EVERY plan, including one carrying a fully populated,
     PM-approved `grouping_approvals` block. The gate could never fire. See
-    cross-repo/inbox/2026-07-29-doe-claude-em-grouping-discriminator-correction.md
+    cross-repo/inbox/2026-07-29-coordinator-content-repo-em-grouping-discriminator-correction.md
     and the ratified contract text at
-    cross-repo/archive/2026-07-29-doe-claude-em-grouping-approval-contract.md:84.
+    cross-repo/archive/2026-07-29-coordinator-content-repo-em-grouping-approval-contract.md:84.
 
     Presence is sufficient on its own because it is non-forgeable in both
     directions: a plan cannot claim legacy while carrying the key, and
@@ -3778,7 +3778,7 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
     authoring the block itself a schema violation. The key could not originate
     here either: plan.schema.json is vendored byte-for-byte and
     `check_schema_drift` enforces that parity with no pin or tolerance escape,
-    so DoE-claude authored and bumped it and claude-klabauter re-vendored.
+    so coordinator-content-repo authored and bumped it and claude-klabauter re-vendored.
 
     The widen is GOVERNED-only: `spun_off` joins the set this check scans
     (`_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`), while
@@ -4332,7 +4332,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
 # ---------------------------------------------------------------------------
 # Cross-field rules — cross-repo-memo schema.
 #
-# Port of CROSS_FIELD_RULES['cross-repo-memo'] from DoE-claude coordinator/bin/lib/schema.js:1332-1522.
+# Port of CROSS_FIELD_RULES['cross-repo-memo'] from coordinator-content-repo coordinator/bin/lib/schema.js:1332-1522.
 # Each rule is a callable (fm_dict) -> dict | None.
 # The grandfather rule returns {'__skip__': True} when created < 2026-05-22;
 # _apply_cross_field_rules detects this sentinel and returns [] immediately.
@@ -4688,7 +4688,7 @@ def _memo_cf_distill_fate(fm: dict) -> ErrorDict | None:
 # Ordered list of cross-field rule functions for the "cross-repo-memo" schema.
 # Grandfather rule MUST be first — returns {'__skip__': True} to short-circuit all
 # remaining rules when created < 2026-05-22.
-# Port of CROSS_FIELD_RULES['cross-repo-memo'] from DoE-claude coordinator/bin/lib/schema.js:1332-1522.
+# Port of CROSS_FIELD_RULES['cross-repo-memo'] from coordinator-content-repo coordinator/bin/lib/schema.js:1332-1522.
 _MEMO_CROSS_FIELD_RULES = [
     _memo_cf_grandfather,
     _memo_cf_in_progress_needs_picked_up_by,
@@ -4707,7 +4707,7 @@ _MEMO_CROSS_FIELD_RULES = [
 # Cross-field rules — cutover schema.
 #
 # Hand-authored port of coordinator/schemas/cutover.schema.json's allOf block
-# (DoE-claude, C1) — `_validate_json_schema_node` does not implement the
+# (coordinator-content-repo, C1) — `_validate_json_schema_node` does not implement the
 # `allOf`/`minItems` keywords, so the schema's own if/then couplings are
 # inert at runtime without this. Same shape as _HANDOFF_CROSS_FIELD_RULES:
 # each rule is a callable (fm_dict) -> ErrorDict | None.
@@ -4930,7 +4930,7 @@ def _apply_cross_field_rules(
 ) -> list[ErrorDict]:
     """Apply cross-field rules for the given schema name.
 
-    Port of applyCrossFieldRules from DoE-claude coordinator/bin/lib/schema.js.
+    Port of applyCrossFieldRules from coordinator-content-repo coordinator/bin/lib/schema.js.
     Returns a (possibly empty) list of error dicts.
 
     __skip__ sentinel: when a rule returns a dict with {'__skip__': True}, all remaining
@@ -5066,7 +5066,7 @@ def _is_claude_klabauter_vendored_schema(schema_path: str | Path) -> bool:
 def validate_memo_cross_fields(fm_dict: dict) -> list[ErrorDict]:
     """Apply cross-repo-memo cross-field rules only (no base-required validation).
 
-    Port of applyCrossFieldRulesFor('cross-repo-memo', fm) from DoE-claude
+    Port of applyCrossFieldRulesFor('cross-repo-memo', fm) from coordinator-content-repo
     coordinator/bin/lib/schema.js, consumed by memo-transition.js:validateMemoFrontmatter.
 
     Cross-field only — memos are foreign-authored; a sender's base-field slip must never
@@ -5276,7 +5276,7 @@ _AHEAD_RETENTION_EXEMPT_PATHS: frozenset[tuple] = frozenset(
 # DoE's value being a substring of claude-klabauter's is an honest append, not a
 # rewrite, for exactly these keys and no others. A NAMED set, not a suffix
 # match or "x-" prefix glob: a glob would silently absorb any future
-# code-consumed `x-*` key that is NOT prose (see DoE-claude's equivalent
+# code-consumed `x-*` key that is NOT prose (see coordinator-content-repo's equivalent
 # allowlist, named for the same reason). `$comment` is not listed here --
 # it is stripped by `_strip_comment_annotations` before flattening, so it
 # never reaches this retention check at all (D1's ruling: `$comment`
@@ -5596,7 +5596,7 @@ def _strip_comment_annotations(node: Any) -> Any:
     non-list leaves are returned as-is.
 
     Spec backlink:
-    cross-repo/inbox/2026-08-03-doe-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
+    cross-repo/inbox/2026-08-03-coordinator-content-repo-em-drift-normalize-yes-but-comment-survives-canonicalization.md
     """
     if isinstance(node, dict):
         return {
@@ -5810,7 +5810,7 @@ def _read_bump_class(content: str) -> str | None:
     Same contract as `_read_schema_version`: best-effort, None on any parse/shape
     failure, never a guess. Closed vocabulary on the producer side
     (`top-level-array-additive` / `nested-field-additive` / `major` — DR-097,
-    cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md)
+    cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md)
     but this reader does not validate membership — it surfaces whatever string is
     present, verbatim, same as `_read_schema_version` does for the version string.
     Adoption is partial upstream (some schemas lack the key today); absence is an
@@ -6046,7 +6046,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
                 whenever the vendored content was actually read, independent of
                 whether the DoE side was readable. Additive key (2026-07-26,
                 cross-repo schema-version surfacing — see
-                cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md);
+                cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md);
                 the schema/diverged/determinate/direction/detail contract above
                 is unchanged.
             doe_version (str | None): the same read applied to DoE HEAD's schema
@@ -6061,7 +6061,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
                 local_version. Adoption is partial upstream, so None is the
                 ordinary "not yet adopted on this schema" case, not an error.
                 Additive key (2026-07-27, bump-class surfacing — see
-                cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md);
+                cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md);
                 the schema/diverged/determinate/direction/detail/local_version/
                 doe_version contract above is unchanged.
             doe_bump_class (str | None): the same read applied to DoE HEAD's
@@ -6101,7 +6101,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
     inconsistency to reconcile.
 
     Spec backlink:
-    cross-repo/inbox/2026-08-03-doe-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
+    cross-repo/inbox/2026-08-03-coordinator-content-repo-em-drift-normalize-yes-but-comment-survives-canonicalization.md
     """
     return check_schema_drift_advisory_batch([schema_path], doe_repo_path)[0]
 
@@ -6364,7 +6364,7 @@ def _advisory_compare(
 # T4d-g1a — legacy-YAML data layer: restricted YAML parser, glob matcher,
 # schema loader/matcher, read-side frontmatter parser.
 #
-# Port of DoE-claude coordinator/bin/lib/schema.js lines 20-818 (parseYaml family,
+# Port of coordinator-content-repo coordinator/bin/lib/schema.js lines 20-818 (parseYaml family,
 # globToRegex/matchGlob, loadSchemas, matchSchema, matchSchemaForPath,
 # parseFrontmatter). See module docstring "Legacy-YAML data-layer port" section
 # for the full spec backlink and negative-spec.
@@ -6525,7 +6525,7 @@ def _fold_quoted_continuation(
     space, a blank line folds to a newline. Without this the restricted parser
     ends the value at the first newline and reads every following `word: text`
     line as a KEY — so a correct record reports phantom additional properties
-    (doe-claude-em memo, example-retrieval-repo-ue-addon F15) and every reader of the
+    (coordinator-content-repo-em memo, example-retrieval-repo-ue-addon F15) and every reader of the
     value gets it truncated with its opening quote still attached.
 
     Negative-spec: a scalar left unterminated by the end of the block, or by a
@@ -7018,7 +7018,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # Registry-derivation vendored contract — port of query-records.js
-# _buildTypeToGlob (DoE-claude coordinator/bin/query-records.js:211-272).
+# _buildTypeToGlob (coordinator-content-repo coordinator/bin/query-records.js:211-272).
 #
 # These two dicts are literal, hand-copied vendored contract (renames /
 # overrides the schema-name-vs-query-type registries disagree on), NOT
@@ -7335,7 +7335,7 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
 # validateFrontmatter's YAML-dialect branch, plus their checkType /
 # suggestNearMiss / NEAR_MISS_CANONICAL helpers.
 #
-# Spec backlink: DoE-claude coordinator/bin/lib/schema.js — NEAR_MISS_CANONICAL
+# Spec backlink: coordinator-content-repo coordinator/bin/lib/schema.js — NEAR_MISS_CANONICAL
 #   (line 1026), suggestNearMiss (line 1049), validateField (line 1059),
 #   validateFrontmatter YAML-dialect branch (lines 1134-1186), checkType
 #   (line 2535).
@@ -7977,7 +7977,7 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 
 
 # =============================================================================
-# CLI trampoline body — port of DoE-claude coordinator/bin/lint-frontmatter.js
+# CLI trampoline body — port of coordinator-content-repo coordinator/bin/lint-frontmatter.js
 # (deleted at claude-klabauter commit c79e66cd; retrieved for this port via
 # `git show c79e66cd~1:coordinator/bin/lint-frontmatter.js`).
 #
@@ -8136,7 +8136,7 @@ def _lint_collect_files_for_glob(repo_root: str, glob: str) -> list[tuple[str, s
 def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
     """Build a handoff_id -> logical repo-relative path index.
 
-    Byte-faithful port of buildHandoffIdIndex (DoE-claude
+    Byte-faithful port of buildHandoffIdIndex (coordinator-content-repo
     coordinator/bin/lint-frontmatter.js, deleted at claude-klabauter commit c79e66cd;
     retrieved via `git show c79e66cd~1:coordinator/bin/lint-frontmatter.js`).
 
@@ -8171,7 +8171,7 @@ def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
     rebuilt per record — callers must build once and thread the result
     through, mirroring git_history_cache's threading pattern.
 
-    Spec backlink: DoE-claude coordinator/bin/lint-frontmatter.js
+    Spec backlink: coordinator-content-repo coordinator/bin/lint-frontmatter.js
       buildHandoffIdIndex (pre-deletion; git show
       c79e66cd~1:coordinator/bin/lint-frontmatter.js)
     """
@@ -8256,7 +8256,7 @@ def _check_referential_integrity_id_refs(
     """Resolver-seam existence + never-silently-disagree validation for the
     local handoff-DAG ID refs (predecessor_id, origin_handoff_id).
 
-    Byte-faithful port of checkReferentialIntegrity (DoE-claude
+    Byte-faithful port of checkReferentialIntegrity (coordinator-content-repo
     coordinator/bin/lib/schema.js, deleted at claude-klabauter commit c79e66cd;
     retrieved via `git show c79e66cd~1:coordinator/bin/lib/schema.js`), with
     the JS resolver-callback seam collapsed into a direct dict lookup against
@@ -8289,7 +8289,7 @@ def _check_referential_integrity_id_refs(
     those closures run on every validate call with no place to receive a
     resolver).
 
-    Spec backlink: DoE-claude coordinator/bin/lib/schema.js
+    Spec backlink: coordinator-content-repo coordinator/bin/lib/schema.js
       checkReferentialIntegrity (pre-deletion; git show
       c79e66cd~1:coordinator/bin/lib/schema.js)
     """
@@ -8698,7 +8698,7 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
         # PM-ratified): the vendored applies_to on disk is 'archive/handoffs/*.md'
         # (single star — DoE-owned SSOT, claude-klabauter only vendors it, see
         # check_schema_drift's tamper-check; editing the vendored copy directly
-        # here would diverge from DoE HEAD and requires an upstream DoE-claude
+        # here would diverge from DoE HEAD and requires an upstream coordinator-content-repo
         # schema edit + re-vendor, out of scope for this fix). _GLOB_OVERRIDES
         # already carries the recursive 'archive/handoffs/**/*.md' the registry
         # needs (build_type_to_glob above uses the SAME dict for the same

@@ -5,8 +5,8 @@ coordinator_core.engine_root — ported from coordinator/lib/coordinator-claude-
 in a later gated wave, per port-template variant "SOURCED LIB").
 
 Purpose: resolves the claude-klabauter sibling-repo root, analogous to how CLAUDE_HOME->~/.claude
-works for the coordinator meta-repo. Mirror-image of `coordinator_core.ops.gen_doe_root_pointer`
-(which resolves DOE_ROOT from inside a DoE-clone-relative context) — this module resolves
+works for the coordinator meta-repo. Mirror-image of `coordinator_core.ops.gen_content_root_pointer`
+(which resolves CONTENT_ROOT from inside a DoE-clone-relative context) — this module resolves
 CLAUDE_KLABAUTER_ROOT for callers already running inside the claude-klabauter engine.
 
 Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
@@ -35,18 +35,18 @@ Public API:
 Negative-spec:
     - Does NOT reimplement the machine-local registry.toml/registry.local.toml parser —
       shells out to the `machine-local` CLI (PATH-resolved), exactly like the bash
-      oracle's Rung 2 and gen_doe_root_pointer.py's Tier 2.
+      oracle's Rung 2 and gen_content_root_pointer.py's Tier 2.
     - Does NOT export CLAUDE_KLABAUTER_ROOT to os.environ as a side effect (the bash oracle does,
       per its own §4b idempotency-gate docstring) — a pure resolver is safer to import
       from a long-lived process (e.g. a future op) where implicit env mutation on
       import-time-adjacent calls would be a surprising side effect. Callers that need
       the shell's idempotency-gate behavior opt in explicitly.
       This note previously recorded a deliberate
-      ASYMMETRY against `coordinator_core.ops.coordinator_doe_root`, which did
-      export `REPO_DOE_CLAUDE` to os.environ on every successful resolution to
+      ASYMMETRY against `coordinator_core.ops.coordinator_content_root`, which did
+      export `REPO_CONTENT_ROOT` to os.environ on every successful resolution to
       mirror ITS bash oracle's `export`. That asymmetry was retired on
       2026-07-21: the export leaked interpreter-global state across tests and
-      into every subprocess child's inherited env, and `coordinator_doe_root` is
+      into every subprocess child's inherited env, and `coordinator_content_root` is
       now pure too (its re-resolution guard moved to an explicit module-scope
       memo with a reset seam). Both resolvers now make the SAME choice, and this
       module's was the one that turned out right — see that module's docstring
@@ -105,6 +105,15 @@ def _reset_root_memo() -> None:
     _ROOT_MEMO.clear()
 
 
+def _self_located_root() -> Optional[str]:
+    """The checkout this module was imported from, when it is an engine root
+    (`coordinator_core/` beside a `pyproject.toml`); None otherwise."""
+    root = Path(__file__).resolve().parent.parent
+    if (root / "coordinator_core").is_dir() and (root / "pyproject.toml").is_file():
+        return str(root)
+    return None
+
+
 def coordinator_engine_root() -> str:
     """Resolve the claude-klabauter sibling-repo root via the documented chain.
 
@@ -153,6 +162,13 @@ def coordinator_engine_root() -> str:
             if resolved:
                 _ROOT_MEMO[memo_key] = resolved
                 return resolved
+
+    # Last rung, reached only when every configured rung is empty: the running
+    # engine is by definition an engine root, never a different one.
+    located = _self_located_root()
+    if located:
+        _ROOT_MEMO[memo_key] = located
+        return located
 
     raise RuntimeError(_REMEDIATION)
 
@@ -207,7 +223,7 @@ def _reset_skew_advisory() -> None:
         _shim_module._reset_skew_advisory()
 
 
-#: `coordinator_core.ops.coordinator_doe_root`'s DECISION REVERSAL shape
+#: `coordinator_core.ops.coordinator_content_root`'s DECISION REVERSAL shape
 #: (module docstring § DECISION REVERSAL) — an explicit memo with a reset
 #: review finding 8): a warm server serves dispatches from DIFFERENT
 #: slot is the same missing-key COLLISION class C7 fixes for the two

@@ -80,6 +80,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.write_guards._slash_normalize import collapse_slashes as _collapse_slashes
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -90,13 +91,6 @@ _OUTBOX_DRAFT_RE = re.compile(
 )
 
 _MAX_WHOLE_FILE_BYTES = 1024 * 1024
-
-
-def _collapse_slashes(value: str) -> str:
-    normalized = value.replace("\\", "/")
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:

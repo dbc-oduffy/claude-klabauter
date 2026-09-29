@@ -36,7 +36,7 @@ This is the correct shape for an advisory guard (fidelity rule 6) — it does
 not convert a fail-closed guard into fail-open, because this guard was never
 fail-closed to begin with.
 
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C9
+Spec backlink: coordinator-content-repo:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C9
 Source: coordinator/hooks/scripts/nudge-em-code-dispatch.py
 """
 

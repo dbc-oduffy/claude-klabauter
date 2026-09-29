@@ -9,7 +9,7 @@ PROCESS's directory, i.e. wherever the harness happened to be sitting.
 
 So the guard read the right repository only for the rare `-C` spelling and
 the wrong one for the ordinary case, which inverts which commands it can
-reason about at all. doe-claude-em pinned it on 2026-09-04: adding a no-op
+reason about at all. Coordinator-content-repo-em pinned it on 2026-09-04: adding a no-op
 `git -C .` to an otherwise identical command flipped allow to deny. The
 payload cwd was in scope at every one of these sites and unused, while
 `_bt_commit_scope_operand_is_sweeping` two hundred lines away was already

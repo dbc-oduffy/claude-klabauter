@@ -1,12 +1,12 @@
 """Characterization tests for coordinator_core.ops.emit_artifact_shape_contract.
 
-Port source: DoE-claude coordinator/bin/emit-artifact-shape-contract.js (retired
+Port source: coordinator-content-repo coordinator/bin/emit-artifact-shape-contract.js (retired
 2026-07-24, D1 of docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md
 — zero fleet callers per the fleet-reachability gate, no trampoline). Independently
-re-derives the assertions from DoE-claude coordinator/bin/tests/
+re-derives the assertions from coordinator-content-repo coordinator/bin/tests/
 test-emit-artifact-shape-contract.js (not a re-assertion of this module's own
 transcription) — each `it(...)` block in that file has a corresponding test here,
-run against a FRESH emit of the real DoE-claude coordinator/schemas/ tree, plus a
+run against a FRESH emit of the real coordinator-content-repo coordinator/schemas/ tree, plus a
 synthetic-schema-dir unit suite that exercises field_to_json_schema/schema_to_json_schema
 edge cases directly (no cross-repo dependency).
 
@@ -33,10 +33,10 @@ from coordinator_core.ops.emit_artifact_shape_contract import (
 )
 from coordinator_core.frontmatter.schema_corpus import published_subset_reason
 from coordinator_core.ops.records_query import liveness as _records_liveness
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
-DOE_ROOT = Path(resolve_doe_root() or "/doe-root-unresolved")
-DOE_COORDINATOR_ROOT = DOE_ROOT / "coordinator"
+CONTENT_ROOT = Path(resolve_content_root() or "/content-root-unresolved")
+DOE_COORDINATOR_ROOT = CONTENT_ROOT / "coordinator"
 DOE_SCHEMAS_DIR = DOE_COORDINATOR_ROOT / "schemas"
 
 _SIBLING_AVAILABLE = DOE_SCHEMAS_DIR.is_dir()
@@ -56,7 +56,7 @@ def _run_python_emit(tmp_path: Path, monkeypatch) -> dict:
 @pytest.fixture()
 def bundle(tmp_path, monkeypatch):
     if not _SIBLING_AVAILABLE:
-        pytest.skip("DoE-claude sibling repo (coordinator/schemas) not available")
+        pytest.skip("coordinator-content-repo sibling repo (coordinator/schemas) not available")
     return _run_python_emit(tmp_path, monkeypatch)
 
 
@@ -289,7 +289,7 @@ def test_missing_coordinator_root_env_returns_2(monkeypatch):
 
 class TestArgvIsNotIgnored:
     """`main` once accepted argv and discarded it, so `--help` emitted the bundle into
-    DoE-claude's working tree instead of printing usage. These pin that an operator
+    coordinator-content-repo's working tree instead of printing usage. These pin that an operator
     reaching for an interface, or fat-fingering a flag, never triggers a peer-tree write.
     """
 
@@ -340,7 +340,7 @@ def test_sub_shapes_collision_returns_1(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Cross-schema $ref rewrite (2026-08-03, contract v3.2.0). Regression coverage for
-# cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-external-ref-survives-bundling.md:
+# cross-repo/inbox/2026-08-03-coordinator-content-repo-em-artifact-contract-external-ref-survives-bundling.md:
 # a $id-style cross-schema $ref (https://coordinator.local/schemas/<name>.schema.json)
 # must be rewritten to its bundled #/$defs/<name> location, and an unregistered target
 # must refuse to emit rather than ship an unresolvable ref.
@@ -407,11 +407,11 @@ def test_registered_cross_schema_ref_rewritten_to_intra_bundle_pointer(tmp_path,
 # ---------------------------------------------------------------------------
 # Real-tree parity — re-derives every assertion from the JS oracle's own test
 # file (test-emit-artifact-shape-contract.js) independently against a fresh
-# Python emit. Skipped when the DoE-claude sibling repo isn't checked out.
+# Python emit. Skipped when the coordinator-content-repo sibling repo isn't checked out.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _SIBLING_AVAILABLE, reason="DoE-claude sibling repo not available for real-tree parity check")
+@pytest.mark.skipif(not _SIBLING_AVAILABLE, reason="coordinator-content-repo sibling repo not available for real-tree parity check")
 class TestRealTreeParity:
     def test_version_pin(self, bundle):
         # Deliberately a LITERAL, not CONTRACT_VERSION — the `bundle` fixture emits
@@ -436,7 +436,7 @@ class TestRealTreeParity:
 
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
-        # Regression for cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-
+        # Regression for cross-repo/inbox/2026-08-03-coordinator-content-repo-em-artifact-contract-
         # external-ref-survives-bundling.md — assert over the WHOLE serialized bundle
         # (not just $defs.plan) so a future second such ref trips this too, not only
         # the one known offender.
@@ -654,13 +654,13 @@ def _neutralise_subset_guard(monkeypatch) -> None:
 
 
 def _authoring_coordinator_root() -> Path | None:
-    """A DoE-claude AUTHORING coordinator root (`<repo>/coordinator` carrying
+    """A coordinator-content-repo AUTHORING coordinator root (`<repo>/coordinator` carrying
     `schemas/`, sentinel at `<repo>`), or None. Never a hardcoded path: tries the
     ratified resolver first, then scans this checkout's sibling directories for
     the fleet-wide `.coordinator-dev-repo` sentinel — the flat mirror the resolver
     lands on in a consumer container never carries it."""
     candidates = []
-    resolved = resolve_doe_root()
+    resolved = resolve_content_root()
     if resolved:
         candidates.append(Path(resolved) / "coordinator")
     try:
@@ -725,7 +725,7 @@ def test_authoring_corpus_emits_byte_identical_with_and_without_the_guard(tmp_pa
     compare bytes, no normalization either side."""
     coordinator_root = _authoring_coordinator_root()
     if coordinator_root is None:
-        pytest.skip("no DoE-claude authoring checkout available (only a published mirror)")
+        pytest.skip("no coordinator-content-repo authoring checkout available (only a published mirror)")
 
     monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(coordinator_root))
     monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(tmp_path / "guarded"))

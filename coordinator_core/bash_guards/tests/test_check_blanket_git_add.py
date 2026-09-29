@@ -22,7 +22,7 @@ it is a HAZARD-DISCRIMINATED guard. It fires (a) inside the ~/.claude
 meta-repo (the origin incident's own repo -- unchanged from the original
 scope), and (b) inside any repo the machine-local fleet registry
 (``repos.*``, see ``coordinator_core.machine_resolver``) knows about
-(claude-klabauter, DoE-claude, every other sibling repo this machine tracks
+(claude-klabauter, coordinator-content-repo, every other sibling repo this machine tracks
 -- the concurrent-multi-session cross-contamination hazard that motivated
 the guard in the first place). It stays INERT in a repo that is neither
 the meta-repo nor a registered fleet sibling -- the OSS-consumer-install

@@ -263,11 +263,11 @@ def test_door_owned_check_does_not_cover_unrelated_corrupt_forwarders(
     assert not report.complete
 
 
-_BYTE_COPIED_NAME = "claude-doe"
+_BYTE_COPIED_NAME = "claude-author"
 
 _byte_copied_is_a_forwarder_slot = pytest.mark.skipif(
     os.name == "nt",
-    reason="claude-doe is excluded from the Windows forwarder set "
+    reason="claude-author is excluded from the Windows forwarder set "
     "(substrate._AGENT_HELPER_RESERVED_NAMES) -- the byte-copy arm has no slot there",
 )
 

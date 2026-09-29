@@ -20,8 +20,8 @@ env var; this module falls back to `Path.cwd()` when the env var is absent
 (direct/test invocation, matching the bash oracle's own `cd`-relative
 resolution when sourced ad hoc).
 
-Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (DoE-claude)
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (coordinator-content-repo)
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — sync completed (including all-SKIP runs — missing source dir, missing

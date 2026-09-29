@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.review_findings_ledger — the reviewer-applies-own-findings
 ledger op (retires `append_integrator_dispositions` / `fan_out_integrator`;
-DoE-claude docs/plans/2026-09-26-retire-review-integrator.md, row M2).
+Coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md, row M2).
 
 Purpose: the review-integrator agent is retired. A reviewer now applies every
 finding it logs directly to the reviewed artifact, then records one row per
@@ -24,6 +24,8 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
     read by the re-scoped `write_guards.block_confined_agent_write` (M1).
     `--session-id` defaults from the hook-provided session-id env
     (`resolve_session_id`'s own precedence) when omitted.
+    `--agent-key <agent id|provision key>` writes `review-targets.<key>.txt`
+    instead: that dispatch is then confined to its own set alone.
 
 Zero git spawns. All comparisons are in-process and CRLF-normalized.
 
@@ -49,7 +51,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.claimed_write import replace_text
 
 # Generator-provenance declaration (generator_provenance.py). `verify`/`reject`
 # mutate whichever sidecar and reviewed-artifact file the caller names; the
@@ -69,7 +71,7 @@ _VALID_STATUSES = (_STATUS_APPLIED, _STATUS_EM_REJECTED, _STATUS_SUSPENDED)
 #: op's `verify`/`reject` may only ever target a real, still-open reviewer
 #: findings sidecar — never an arbitrary file, never the caller's own
 #: run-report. Membership mirrors that module's own re-derivation exactly
-#: (DoE-claude `subagent-sandbox-policy.yaml` `report_type_map:` rows routed
+#: (coordinator-content-repo `subagent-sandbox-policy.yaml` `report_type_map:` rows routed
 #: to the `review-findings`/`staff-eng-review` templates); ported rather than
 #: re-derived, since the underlying policy file has not moved.
 _REVIEWER_AGENT_TYPES = frozenset(
@@ -578,8 +580,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
         % (len(new_rows), applied, em_rejected, suspended, verified_at)
     )
     new_text = _stamp_frontmatter_key(new_text, "findings_ledger", stamp_value)
-    sidecar_path.write_text(new_text, encoding="utf-8", newline="\n")
-    declare_write(sidecar_path)
+    replace_text(sidecar_path, new_text)
     _fire_stamp_reviewed_for_plans(new_rows, repo_root)
     return VerifyOutcome(
         True,
@@ -676,26 +677,36 @@ def reject(sidecar_path: Path, finding_id: str, reason: str, *, repo_root: Path)
         # Insertion being rejected with nothing to remove is a no-op revert.
         new_file_text = file_text
 
-    target_path.write_text(new_file_text, encoding="utf-8", newline="\n")
-    declare_write(target_path)
+    replace_text(target_path, new_file_text)
 
     target_row["status"] = _STATUS_EM_REJECTED
     target_row["reason"] = reason.strip()
     target_row.pop("verified", None)
     new_text = _rewrite_ledger_rows(text, rows)
-    sidecar_path.write_text(new_text, encoding="utf-8", newline="\n")
-    declare_write(sidecar_path)
+    replace_text(sidecar_path, new_text)
     return file_rel
 
 
-def _session_targets_path(repo_root: Path, session_id: str) -> Path:
-    return repo_root / ".git" / "coordinator-sessions" / session_id / "review-targets.txt"
+_AGENT_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def targets_add(repo_root: Path, session_id: str, paths: List[str]) -> List[str]:
-    """Append `paths` (repo-relative, forward-slash) to the session's
-    review-targets file, de-duplicated. Returns the full, de-duplicated set
-    after the append. Refuses an absolute path or a drive letter."""
+def _session_targets_path(repo_root: Path, session_id: str, agent_key: Optional[str] = None) -> Path:
+    name = "review-targets.txt" if agent_key is None else f"review-targets.{agent_key}.txt"
+    return repo_root / ".git" / "coordinator-sessions" / session_id / name
+
+
+def targets_add(
+    repo_root: Path, session_id: str, paths: List[str], agent_key: Optional[str] = None
+) -> List[str]:
+    """Append `paths` (repo-relative, forward-slash) to the review-targets file,
+    de-duplicated, and return the full set after the append. Refuses an
+    absolute path or a drive letter. With `agent_key` (a dispatch's agent id or
+    provision key) the set is that dispatch's own and, once it exists, replaces
+    the session-wide set for that agent in `block_confined_agent_write`."""
+    if agent_key is not None and not _AGENT_KEY_RE.match(agent_key):
+        raise LedgerError(
+            f"targets --agent-key {agent_key!r} must match [A-Za-z0-9._-]+ (an agent id or provision key)"
+        )
     normalized: List[str] = []
     for raw in paths:
         # Checked textually, not via `Path(raw)` — on POSIX, `pathlib.Path`
@@ -709,7 +720,7 @@ def targets_add(repo_root: Path, session_id: str, paths: List[str]) -> List[str]
             )
         normalized.append(_normalize_path(raw))
 
-    target_file = _session_targets_path(repo_root, session_id)
+    target_file = _session_targets_path(repo_root, session_id, agent_key)
     existing: List[str] = []
     if target_file.is_file():
         existing = [
@@ -724,8 +735,7 @@ def targets_add(repo_root: Path, session_id: str, paths: List[str]) -> List[str]
             merged.append(entry)
 
     target_file.parent.mkdir(parents=True, exist_ok=True)
-    target_file.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8", newline="\n")
-    declare_write(target_file)
+    replace_text(target_file, "\n".join(merged) + ("\n" if merged else ""))
     return merged
 
 
@@ -761,6 +771,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # previously accepted exactly one path per flag occurrence, forcing a
     # shell loop for a multi-path writes: list (memo friction item 2).
     targets_p.add_argument("--add", nargs="+", action="extend", default=[], dest="add")
+    targets_p.add_argument(
+        "--agent-key",
+        default=None,
+        help="Scope the targets to one dispatch (agent id or provision key) instead of the whole session.",
+    )
     targets_p.add_argument(
         "--session-id",
         default=None,
@@ -827,7 +842,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 2
         try:
-            merged = targets_add(git_root, session_id, args.add)
+            merged = targets_add(git_root, session_id, args.add, args.agent_key)
         except LedgerError as exc:
             print(f"review-findings-ledger: {exc}", file=sys.stderr)
             return 1

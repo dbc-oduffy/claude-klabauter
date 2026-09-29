@@ -42,6 +42,11 @@ _SUMMARY_MAX_CHARS = 120
 
 # are line-oriented, comment-unaware parsers; see memo_draft._BODY_PLACEHOLDER's
 SUMMARY_PLACEHOLDER = (
+    f"[Replace me with a one-line summary of at most {_SUMMARY_MAX_CHARS} "
+    f"characters; a longer summary is refused.]"
+)
+
+_LEGACY_SUMMARY_PLACEHOLDER = (
     "[Replace me as a summary, no more than 100 characters.  this is 99 "
     "characters, it just so happens!]"
 )
@@ -121,7 +126,7 @@ def is_placeholder_summary(value: str | None) -> bool:
     """
     if not value:
         return True
-    return value.strip() == SUMMARY_PLACEHOLDER
+    return value.strip() in (SUMMARY_PLACEHOLDER, _LEGACY_SUMMARY_PLACEHOLDER)
 
 
 def validate_explicit_summary(mode: str, summary: str | None) -> str | None:

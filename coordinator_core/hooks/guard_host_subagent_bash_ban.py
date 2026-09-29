@@ -3,7 +3,7 @@ independently-invocable door onto the already-landed host subagent-Bash-ban
 guard.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-host-subagent-bash-ban.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/guard-host-subagent-bash-ban.py`.
 That script's own header records it as `guard-not-a-hook-entrypoint` —
 folded into `preuse-bash-dispatch.py`'s in-process guard registry, kept on
 disk only so its own dedicated test suite keeps exercising the real

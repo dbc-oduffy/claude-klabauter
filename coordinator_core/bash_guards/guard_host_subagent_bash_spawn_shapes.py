@@ -2,7 +2,7 @@
 PreToolUse (Bash|PowerShell) hard-deny guard: make a host's
 ``subagent_bash_spawn_shapes: deny`` opt-in executable, not prose.
 
-Port of: DoE-claude coordinator/hooks/scripts/guard-host-subagent-bash-
+Port of: coordinator-content-repo coordinator/hooks/scripts/guard-host-subagent-bash-
 spawn-shapes.py (folded into DoE's ``preuse-bash-dispatch.py``
 ``_run_folded_bash_guards``, one of the four folded guards this port
 registers so DoE can delete that in-process fold once the cold path
@@ -115,7 +115,7 @@ the answerable overlap. See `_declines_for_inprocess_answer` below --
 comment the predicate itself, not the chain order, since that is where
 the next reader will actually look before changing it.
 
-Legitimacy under DR-125 (DoE-claude docs/decisions/DR-125-subagent-bash-
+Legitimacy under DR-125 (coordinator-content-repo docs/decisions/DR-125-subagent-bash-
 confinement-two-classes.md, which scopes subagent confinement to exactly
 two classes, narrowed only on measured cost): this decline-predicate
 resolution moves no boundary -- the ported guard denies exactly what

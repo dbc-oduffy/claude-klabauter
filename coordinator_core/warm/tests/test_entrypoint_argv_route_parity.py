@@ -1,5 +1,5 @@
 """coordinator_core.warm.tests.test_entrypoint_argv_route_parity -- the
-route-parity gate DoE-claude asked for: for EVERY allowlisted CLI, the
+route-parity gate coordinator-content-repo asked for: for EVERY allowlisted CLI, the
 arguments the warm door route hands `main` are the arguments that CLI's own
 cold route hands `main`, given the same typed argv.
 
@@ -13,7 +13,7 @@ command line instead of the caller's, and the 36 written
 first real argument -- which, on subcommand CLIs, reads as
 `pickup-assemble: unknown subcommand '<path>'`. Both are silent argv
 corruption at the highest-traffic surface in the fleet.
-→ cross-repo/inbox/2026-08-29-doe-claude-em-exe-forwarder-argv-mangling.md
+→ cross-repo/inbox/2026-08-29-coordinator-content-repo-em-exe-forwarder-argv-mangling.md
 → state/bug-backlog/2026-08-29-the-warm-route-hands-clis-the-server-s-s-6f56b9b28c79.yaml
 
 TWO REQUIREMENTS, BOTH FROM HOW THE ORIGINAL INVESTIGATION NEARLY WENT
@@ -71,7 +71,7 @@ Negative-spec (RAG-bait):
     static reader cannot certify, and claiming parity for it would be the
     vacuous green this module exists to refuse.
 
-Spec backlink: cross-repo/inbox/2026-08-29-doe-claude-em-exe-forwarder-argv-mangling.md
+Spec backlink: cross-repo/inbox/2026-08-29-coordinator-content-repo-em-exe-forwarder-argv-mangling.md
 """
 from __future__ import annotations
 

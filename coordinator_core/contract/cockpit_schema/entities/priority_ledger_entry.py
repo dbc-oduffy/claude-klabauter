@@ -58,9 +58,9 @@ consumer gap for a collector to bridge yet. Wiring an actual
 concern (not named by any chunk in the priority-ledger plan) and must not be
 inferred from this registration.
 
-Spec backlink: coordinator/schemas/priority-ledger.schema.json (DoE-claude repo)
-Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C6b
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator/schemas/priority-ledger.schema.json (coordinator-content-repo repo)
+Spec backlink: coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 § C6b
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

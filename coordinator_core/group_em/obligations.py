@@ -2,7 +2,7 @@
 `gem-01`, baton `gem-14`, chunk C1).
 
 PURPOSE. `send_pass.undischarged_obligations` already reads the ledger
-DoE-claude writes (`.coordinator-local/subagent-share/<sid>/next-move-ledger.jsonl`) and
+Coordinator-content-repo writes (`.coordinator-local/subagent-share/<sid>/next-move-ledger.jsonl`) and
 returns a *count*. What the standing watch (chunk C2) needs is the *names*
 behind that count -- `for_peer` below returns the rows themselves, not a
 scalar. And the ledger has almost nothing to count: measured before this
@@ -10,9 +10,9 @@ chunk, 183/1579 share dirs and 2/26 live sessions carried a ledger at all,
 because nothing on this plane ever wrote to it.
 
 **This module does not write the ledger.** `next-move-ledger.jsonl` is
-DoE-claude's, and it is read-modify-whole-file-rewrite (`_write_records` in
+Coordinator-content-repo's, and it is read-modify-whole-file-rewrite (`_write_records` in
 `coordinator/hooks/scripts/_next_move_ledger.py`, resolved via
-`repos.doe_claude`, never a hardcoded drive path) -- atomic for
+`repos.content_root`, never a hardcoded drive path) -- atomic for
 one writer, lossy for two. An earlier revision of this chunk had claude-klabauter
 append to it directly, on the mistaken assurance that session directories
 are "disjoint by construction"; that assurance was about directories, not
@@ -25,7 +25,7 @@ Instead this module appends to a file only this plane writes --
 `.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- which DoE's
 own drain claims, folds, and deletes. One writer per file, one rewrite path,
 no shared file, no lock. Contract, producer-facing:
-`coordinator/docs/wiki/obligations-inbound-intake.md` in `repos.doe_claude`
+`coordinator/docs/wiki/obligations-inbound-intake.md` in `repos.content_root`
 (landed sha `764e6c198` on DoE's `work/machine-a/2026-08-22to31`). Built
 against that page, not against their module -- the module is the consumer's
 implementation, not the contract.

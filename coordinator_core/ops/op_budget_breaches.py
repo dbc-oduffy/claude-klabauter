@@ -120,8 +120,8 @@ MAX_TAIL_BYTES = 6 * 1024 * 1024
 
 DEFAULT_TOP_N = 20
 
-#: How an op DECLARES that one of its arms spends its time on a remote, so
-#: `_ARM_NOOP`/`_ARM_NETWORK` is the worked example); an arm named with this
+#: An op arm named with this suffix declares its time is a remote's latency
+#: (`push_outstanding._ARM_NETWORK`); such rows are excluded from ranking.
 NETWORK_ARM_SUFFIX = ".network"
 
 BRIGHTLINE_BUDGET_MS = 500.0
@@ -294,34 +294,13 @@ def _current_generation_paths(repo_root: Path) -> List[Path]:
         return []
 
 
-def _remedy_for(op: str) -> str:
-    """The imperative half of the headline, chosen by what the op declared.
-
-    A local op is told to delete or rebuild. An arm the op itself named with
-    `NETWORK_ARM_SUFFIX` is told the one thing that can actually move its
-    number — fewer round trips — because no amount of local work reduces a
-    remote's latency, and `headline_for`'s register rule requires the
-    alternative to be one the reader can take.
-
-    Never names a timeout, for either arm: that is `headline_for`'s standing
-    rule and a wider budget is not a fix on a network arm either.
-    """
-    if op.endswith(NETWORK_ARM_SUFFIX):
-        return (
-            "Its cost is a remote round trip, not local work — "
-            "cut round trips, or accept it and stop ranking it."
-        )
-    return "Confirm on process time, then delete it or rebuild it under the bar."
-
-
 def _fit_op_name(op: str, budget_bytes: int) -> str:
     """Elide `op` from the tail so it fits in `budget_bytes` UTF-8 bytes.
 
     Truncates by encoded bytes, not characters, because the caller's budget
     is itself byte-denominated (`MAX_HEADLINE_BYTES`) and a character slice
     of a multi-byte op name could still overflow it. Degrades the DISPLAY
-    only — the op name a caller would delete or rebuild is unaffected;
-    `_remedy_for` is resolved against the untruncated `op` before this runs.
+    only — the op name a caller would delete or rebuild is unaffected.
     """
     if budget_bytes <= 0:
         return ""
@@ -363,7 +342,7 @@ def headline_for(summary: dict) -> str:
     -- report wall clock as wall clock and drop the CPU-attribution framing --
     and it is NOT the fix, which needs a trustworthy per-op process figure the
     sink does not yet carry (`time.process_time()` excludes children).
-    The kill bar is not softened by this: `_remedy_for` still says delete or
+    The kill bar is not softened by this: the remedy still says delete or
     rebuild, and adds only the measurement that can carry the conviction.
     """
     totals = summary["totals"]
@@ -377,7 +356,7 @@ def headline_for(summary: dict) -> str:
         )
 
     worst = summary["ops"][0]
-    remedy = _remedy_for(worst["op"])
+    remedy = "Confirm on process time, then delete it or rebuild it under the bar."
     prefix = (
         f"{breaching} ops past the {bar_ms:.0f}ms bar, "
         f"{totals['stolen_ms'] / 1000.0:.1f}s wall-clock excess. "
@@ -428,7 +407,10 @@ def breach_report(
             entries = []
         rows_capped = len(entries) >= MAX_TELEMETRY_ROWS
 
-    summary = breach_summary(entries, bar_ms=PROCESS_TIME_BAR_MS, now=now, top_n=top_n)
+    # A `.network` arm's time is a remote's latency, which DR-344 does not
+    # govern: excluded before ranking so it never headlines as a breach.
+    ranked = [e for e in entries if not str(e.get("op", "")).endswith(NETWORK_ARM_SUFFIX)]
+    summary = breach_summary(ranked, bar_ms=PROCESS_TIME_BAR_MS, now=now, top_n=top_n)
     if head_truncated:
         for row in summary.get("ops", ()):
             row["trend"] = TREND_WINDOW_LIMITED

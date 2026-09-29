@@ -16,8 +16,8 @@ negative-spec at lines 38-50 against re-deriving `_emit`/`build_envelope`
 locally). `pickup_assemble`/`baton_assemble` are the model only for the
 CLI trampoline (C5) and package layout, never for this envelope/seam.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3 (D-1..D-6 live in that plan's "Key decisions" section).
 
 Reader wiring: `brief(cadence)` calls each of the five C3a-C3e reader
@@ -42,7 +42,7 @@ only cadence reading it today. That is the same constraint that rejected a
 `--phase` flag: what is forbidden here is a PER-SURFACE BRANCH, not a
 parameter. A `if cadence == "mise-en-place"` guard around the threading
 would be the violation; uniform threading is not.
-Carrier ratified 2026-08-04, `cross-repo/inbox/2026-08-04-doe-claude-em-
+Carrier ratified 2026-08-04, `cross-repo/inbox/2026-08-04-coordinator-content-repo-em-
 mise-run-id-carrier-env-breaks-windows.md`.
 
 READ-ONLY, by construction (AC2): this module only reads disk/git state via
@@ -57,7 +57,7 @@ chokepoint.
 
 Roots (AC5): `resolve_operator_config()` from
 `coordinator_core.resolution.facade` is called directly rather than
-re-deriving `settings_home`/`claude_klabauter_bin`/`claude_klabauter_root`/`doe_root` locally
+re-deriving `settings_home`/`claude_klabauter_bin`/`claude_klabauter_root`/`content_root` locally
 — this module defines no `_settings_home`/`_resolve_settings_home` helper
 of its own.
 
@@ -83,7 +83,7 @@ Negative-spec:
       reader claims it. A reader that receives a `run_id` it has no use for
       ignores it; that is self-gating, not seam logic.
     - Do NOT add a SECOND carrier for `run_id` (an env var read here, a
-      session-state lookup): PM ruling 2026-08-04, with DoE-claude
+      session-state lookup): PM ruling 2026-08-04, with coordinator-content-repo
       concurring. The flag is the only path.
     - Do NOT construct, parse, or validate a run id in the `mint-run-id`
       dispatch either (AC7, 2026-08-04 `docs/plans/2026-08-04-engine-
@@ -171,7 +171,7 @@ def brief(
     Raises `ValueError` for a `cadence` outside `CADENCES`. Read-only
     (AC2): performs no disk mutation and no git mutation. Calls
     `resolve_operator_config()` (AC5) rather than re-deriving
-    `settings_home`/`claude_klabauter_bin`/`claude_klabauter_root`/`doe_root` locally — the
+    `settings_home`/`claude_klabauter_bin`/`claude_klabauter_root`/`content_root` locally — the
     resolved config is not currently consumed further by this thin seam,
     but the call itself is the AC5 contract (proven by a spy test), and
     keeps roots resolved through one chokepoint for any future reader that

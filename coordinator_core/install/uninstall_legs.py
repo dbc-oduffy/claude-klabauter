@@ -15,7 +15,7 @@ risk to the real install.
 
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
     (T4a-g3b chunk).
-Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C3-C6
+Spec backlink: coordinator-content-repo:pln-first-class-coordinator-uninst-15db2e § C3-C6
 Surface source of truth: tasks/coordinator-uninstall/surface-map.md
 Identity-key source of truth: coordinator/lib/settings-hook-identity.sh (C2),
     ported at coordinator_core.install._shared.settings_hook_identity_inverse_strip.
@@ -826,14 +826,14 @@ def uninstall_remove_shim() -> bool:
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or resolved_home
     claude_home = os.environ.get("CLAUDE_HOME") or home
 
-    shim_sentinel_begin = "# --- coordinator claude-doe shim [generated] ---"
-    shim_sentinel_end = "# --- end coordinator claude-doe shim ---"
+    shim_sentinel_begin = "# --- coordinator claude-author shim [generated] ---"
+    shim_sentinel_end = "# --- end coordinator claude-author shim ---"
     legacy_marker_begin = "# --- coordinator maximalist launch ---"
 
     overall_ok = True
 
     # ---- (a) #4a: shell shim owned file ----
-    shim_file = _claude_dir(claude_home) / "shell" / "claude-doe-shim.sh"
+    shim_file = _claude_dir(claude_home) / "shell" / "claude-author-shim.sh"
     if shim_file.is_file() or shim_file.is_symlink():
         try:
             shim_file.unlink()
@@ -874,7 +874,7 @@ def uninstall_remove_shim() -> bool:
         text = legacy_bashrc.read_text(encoding="utf-8", errors="replace")
         lines = text.split("\n")
         if legacy_marker_begin in lines:
-            # `X/DoE-claude` is a fingerprint of the literal text a prior generator
+            # `X/coordinator-content-repo` is a fingerprint of the literal text a prior generator
             # wrote into `~/.bashrc`, matched as a string below -- never resolved as
             # a path. It must stay frozen to keep matching that historical output, so
             # it must NOT be swapped for registry/settings-home resolution. A mismatch
@@ -885,10 +885,10 @@ def uninstall_remove_shim() -> bool:
             # deliberately to strip the shim); a third-repo session cannot hit this
             # ambiently, but an operator CAN reach it by running the uninstall command
             # (audit row 7, uninstall_legs.py:882-883).
-            expected_claude_bin = f"{home}/X/DoE-claude/coordinator/bin/claude-doe"
-            expected_repo = f"{home}/X/DoE-claude"
+            expected_claude_bin = f"{home}/X/coordinator-content-repo/coordinator/bin/claude-author"
+            expected_repo = f"{home}/X/coordinator-content-repo"
             expected_line = (
-                f'claude() {{ REPO_DOE_CLAUDE="{expected_repo}" command bash '
+                f'claude() {{ REPO_CONTENT_ROOT="{expected_repo}" command bash '
                 f'"{expected_claude_bin}" "$@"; }}'
             )
 
@@ -941,14 +941,14 @@ def uninstall_remove_shim() -> bool:
                 )
                 overall_ok = False
 
-    # ---- (d) #10 (the Staff Engineer F0): claude-doe wrapper ----
-    wrapper = Path(home) / ".local" / "bin" / "claude-doe"
+    # ---- (d) #10 (the Staff Engineer F0): claude-author wrapper ----
+    wrapper = Path(home) / ".local" / "bin" / "claude-author"
     if wrapper.is_file() or wrapper.is_symlink():
         try:
             wrapper.unlink()
         except OSError as exc:
             print(
-                f"uninstall_remove_shim: failed to remove claude-doe wrapper {wrapper}: {exc}",
+                f"uninstall_remove_shim: failed to remove claude-author wrapper {wrapper}: {exc}",
                 file=sys.stderr,
             )
             overall_ok = False
@@ -1417,7 +1417,7 @@ def uninstall_remove_substrate(
             "plugin.mirrors.coordinator-claude.propagation_mode",
             "coordinator.python",
             "coordinator.whoami_src",
-            "repos.doe_claude",
+            "repos.content_root",
         ):
             if not ml_set(key, "", plugin_root=plugin_root, registry_dir=ml_dir):
                 errors.append(f"failed to clear registry key {key}")
@@ -1454,8 +1454,8 @@ def uninstall_remove_substrate(
     )
     _sweep_orphaned_swap_dirs(_claude_dir(claude_home) / ".coordinator-venv")
 
-    # ---- #6: .doe-root pointer (BOTH modes) ----
-    _rm_target(_claude_dir(claude_home) / ".doe-root", ".doe-root", errors)
+    # ---- #6: .coordinator-content-root pointer (BOTH modes) ----
+    _rm_target(_claude_dir(claude_home) / ".coordinator-content-root", ".coordinator-content-root", errors)
 
     # ---- installed percolation setup/ dir residuals (BOTH modes, C8/AC9/
     # AC10) ----  A stale setup/ affects root resolution (rung 3) the same
@@ -1574,7 +1574,7 @@ def _uninstall_remove_navi_role(
     claude_home: str, force: bool, errors: List[str]
 ) -> None:
     """Removal leg for ``<claude_home>/.claude/agents/navi.md`` — the
-    user-level Navi role file DoE's install step renders (DoE-claude
+    user-level Navi role file DoE's install step renders (coordinator-content-repo
     docs/plans/2026-09-02-navi-installable-user-level-nudge-role.md). Runs in
     full-remove mode only. Idempotent — a no-op when the file is absent.
 
@@ -1926,7 +1926,7 @@ Usage: coordinator-uninstall.sh [OPTIONS]
 
 Reverses the maximalist coordinator install's out-of-repo surfaces
 (settings.json generated hooks, shell shim/wrapper, machine-local registry
-keys, whoami/venv, .doe-root pointer, ~/.claude/bin forwarders, plugin
+keys, whoami/venv, .coordinator-content-root pointer, ~/.claude/bin forwarders, plugin
 wiring). All filesystem/registry targets are resolved from environment
 overrides (CLAUDE_HOME, COORDINATOR_SETTINGS_HOME, MACHINE_LOCAL_REGISTRY_DIR)
 — never a hardcoded real-user path.
@@ -1941,7 +1941,7 @@ Options:
                              clears live_path, instead of removing wiring
                              entirely. Machine-local dir and ~/.claude/bin
                              forwarders are preserved (other surfaces may
-                             still depend on them post-revert); .doe-root is
+                             still depend on them post-revert); .coordinator-content-root is
                              REMOVED (it is a resolution-shadowing pointer
                              that would otherwise outrank the re-registered
                              flat tree and defeat the revert).
@@ -1992,7 +1992,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     leg), matching the bash oracle's exit-code contract.
 
     Port of: coordinator-uninstall.sh (DoE b5a4192c, 2026-07-20, C7).
-    Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C7
+    Spec backlink: coordinator-content-repo:pln-first-class-coordinator-uninst-15db2e § C7
     """
     mode = "full-remove"
     purge_operator_config = False
@@ -2031,7 +2031,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     print("  3. strip cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)")
     print("  4. remove host-sampler scheduled task (Windows Task Scheduler)")
     print(
-        "  5. remove substrate (registry keys, whoami/venv, .doe-root, "
+        "  5. remove substrate (registry keys, whoami/venv, .coordinator-content-root, "
         "~/.claude/bin forwarders, settings-home tree)"
     )
     if purge_operator_config:
@@ -2067,7 +2067,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         return fail_loud(
             "settings.json generated hooks (surface #2)",
             "Resolve coordinator root explicitly (COORDINATOR_ROOT env, machine-local "
-            "repos.doe_claude, REPO_DOE_CLAUDE env, or ${CLAUDE_HOME:-$HOME}/.doe-root "
+            "repos.content_root, REPO_CONTENT_ROOT env, or ${CLAUDE_HOME:-$HOME}/.coordinator-content-root "
             "pointer) and re-run.",
         )
 
@@ -2102,7 +2102,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         plugin_root=plugin_root,
     ):
         return fail_loud(
-            "substrate (registry keys / whoami / venv / .doe-root / ~/.claude/bin "
+            "substrate (registry keys / whoami / venv / .coordinator-content-root / ~/.claude/bin "
             "forwarders / settings-home tree, surfaces #3/#5/#6/#7/#8/#9)",
             "Check stderr above for the specific removal/registry-clear failure. If it "
             "names a hand-edited operator-config file, re-run with "
@@ -2152,8 +2152,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invoked directly, bypassing the coordinator-uninstall.sh wrapper that
     # normally exports it) must not silently degrade ml_set/resolve_machine_local_cli
     # to PATH-only resolution. resolve_coordinator_root() carries the same
-    # self-locating fallback chain (machine-local registry -> REPO_DOE_CLAUDE
-    # env -> .doe-root pointer) already used elsewhere in this module for the
+    # self-locating fallback chain (machine-local registry -> REPO_CONTENT_ROOT
+    # env -> .coordinator-content-root pointer) already used elsewhere in this module for the
     # analogous CLAUDE.local.md render seam.
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not plugin_root:

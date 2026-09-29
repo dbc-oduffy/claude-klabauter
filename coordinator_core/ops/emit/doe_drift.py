@@ -8,7 +8,7 @@ fail-loud drift-check when claude-klabauter's vendored schema-version lags the D
 cross-repo/archive/2026-07-04-strang-emission-fixture-answers.md § Ask 1.
 
 Resolution contract (DoE emission-conformance-contract.md § CD-1/CD-2):
-  - **Body read — no origin.** Resolve DoE clone via machine-local ``repos.doe_claude``
+  - **Body read — no origin.** Resolve DoE clone via machine-local ``repos.content_root``
     (direct TOML file read, NEVER the machine-local CLI — a plugin-load-PATH-only
     bootstrap hazard per CD-3 / Ask-2 caveat).  Read fixture body at
     ``coordinator/cockpit-contract/conformance/emission-conformance.json``.
@@ -43,7 +43,7 @@ ancestry helper uses the DoE local clone only; it issues NO network call.
 
 Spec backlink: state/handoffs/2026-07-04_201949_roadmap-strang-02.md (strang-02)
 Spec backlink: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md § 2
-Oracle: /Users/example-operator/X/DoE-claude/coordinator/docs/wiki/emission-conformance-contract.md
+Oracle: /Users/example-operator/X/coordinator-content-repo/coordinator/docs/wiki/emission-conformance-contract.md
 """
 
 from __future__ import annotations
@@ -198,27 +198,27 @@ def _read_toml_file(path: Path) -> Optional[dict]:
     return _parse_toml_text(path.read_text(encoding="utf-8"))
 
 
-def _extract_repos_doe_claude_from_toml(data: dict) -> Optional[str]:
-    """Walk the nested TOML dict looking for 'repos.doe_claude'."""
+def _extract_repos_content_root_from_toml(data: dict) -> Optional[str]:
+    """Walk the nested TOML dict looking for 'repos.content_root'."""
     # Two forms the registry CLI writes:
-    #   1. Top-level quoted-dotted key: "repos.doe_claude" = "/path"
-    #   2. Nested table: [repos] ... doe_claude = "/path"  (less common in this registry)
+    #   1. Top-level quoted-dotted key: "repos.content_root" = "/path"
+    #   2. Nested table: [repos] ... Content_root = "/path"  (less common in this registry)
     # Check top-level flat dotted key first (most common form).
     for k, v in data.items():
-        if k == "repos.doe_claude" and isinstance(v, str) and v:
+        if k == "repos.content_root" and isinstance(v, str) and v:
             return v
     # Nested table form.
     repos = data.get("repos")
     if isinstance(repos, dict):
-        val = repos.get("doe_claude")
+        val = repos.get("content_root")
         if isinstance(val, str) and val:
             return val
     return None
 
 
-def _extract_repos_doe_claude_regex(text: str) -> Optional[str]:
+def _extract_repos_content_root_regex(text: str) -> Optional[str]:
     """Regex fallback for quoted-key form when TOML parser unavailable."""
-    m = re.search(r'"repos\.doe_claude"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
+    m = re.search(r'"repos\.content_root"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
     if m:
         return m.group(1).strip()
     return None
@@ -245,19 +245,19 @@ def resolve_doe_clone() -> Path:
         text = registry_path.read_text(encoding="utf-8")
         data = _parse_toml_text(text)
         if data is not None:
-            raw = _extract_repos_doe_claude_from_toml(data)
+            raw = _extract_repos_content_root_from_toml(data)
         else:
             # TOML parser unavailable — fall back to regex using already-read text.
-            raw = _extract_repos_doe_claude_regex(text)
+            raw = _extract_repos_content_root_regex(text)
         if raw:
             candidate = normalize_native_path(raw).expanduser()
             if candidate.is_dir():
                 return candidate
 
     raise DoeResolveError(
-        "Cannot locate DoE clone: 'repos.doe_claude' unset or path absent in "
+        "Cannot locate DoE clone: 'repos.content_root' unset or path absent in "
         f"{_registry_paths()[0]} and {_registry_paths()[1]}.  "
-        "Set it with: machine-local set repos.doe_claude /path/to/DoE-claude"
+        "Set it with: machine-local set repos.content_root /path/to/coordinator-content-repo"
     )
 
 

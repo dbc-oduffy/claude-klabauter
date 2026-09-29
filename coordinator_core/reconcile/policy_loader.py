@@ -31,10 +31,10 @@ Fail-closed behavior (absent-vs-malformed split, the Staff Engineer review findi
 
 `policy_report_fields(result)` (§ C10 / AC16) flattens `PolicyResult.source`
 and `.resolved_path` into the two fields a downstream reconcile report must
-surface -- landed because DoE-claude named the un-reported `source` split as
+surface -- landed because coordinator-content-repo named the un-reported `source` split as
 the cheap engine-side fix that would have told a starvation-report reader
 which of "absent"/"malformed"/"loaded" a run was in, one line, no cross-repo
-round-trip (`cross-repo/inbox/2026-07-28-doe-claude-em-handoff-terminal-
+round-trip (`cross-repo/inbox/2026-07-28-coordinator-content-repo-em-handoff-terminal-
 starvation-answers.md`).
 
 Repo-resident overlay (route 3 of 4, see § Overlay in the grammar pin):
@@ -134,7 +134,7 @@ class PolicyResult:
     the `CLAUDE_PLUGIN_ROOT` default did not resolve to any path at all).
 
     Spec backlink: pln-handoff-close-path-fail-loud-b-db23e8 § C10
-    (AC16) -- DoE-claude's reply (`cross-repo/inbox/2026-07-28-doe-claude-em-
+    (AC16) -- coordinator-content-repo's reply (`cross-repo/inbox/2026-07-28-coordinator-content-repo-em-
     handoff-terminal-starvation-answers.md`) named the missing report surface
     for this data as the cheap fix that would have told a downstream reader
     which of "absent" / "malformed" / "loaded" a run was in without a
@@ -370,7 +370,7 @@ def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
     policy = dict(data)
     # Fail-closed: absent key must resolve identically to the absent-file and
     # malformed-file branches (both `auto_ship_enabled: False`), so silence
-    # never arms auto-ship. See cross-repo/inbox/2026-08-13-doe-claude-em-
+    # never arms auto-ship. See cross-repo/inbox/2026-08-13-coordinator-content-repo-em-
     # grammar-pin-cannot-express-auto-ship-off.md.
     policy.setdefault("auto_ship_enabled", False)
     return PolicyResult(

@@ -15,8 +15,8 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 def _drop_settings_home_override(monkeypatch):
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
-    The trust core resolves the DoE root through the `.doe-root` pointer, whose
-    DURABLE rung is ``<settings-home>/machine-local/.doe-root`` and whose
+    The trust core resolves the DoE root through the `.coordinator-content-root` pointer, whose
+    DURABLE rung is ``<settings-home>/machine-local/.coordinator-content-root`` and whose
     settings-home resolver prefers ``COORDINATOR_SETTINGS_HOME`` over the
     CLAUDE_HOME each case sets. The suite-root home quarantine
     (``coordinator_core/conftest.py::_quarantine_real_home``) does not clear
@@ -33,13 +33,13 @@ def test_trusted_root_under_claude_home(tmp_path, monkeypatch):
     assert _trusted_root(str(tmp_path / ".claude" / "plugins" / "x")) is True
 
 
-def test_trusted_root_under_doe_root_sentinel(tmp_path, monkeypatch):
+def test_trusted_root_under_content_root_sentinel(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     (home / ".claude").mkdir()
     doe = tmp_path / "doe-clone"
     doe.mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(doe) + "\n", encoding="utf-8")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(doe) + "\n", encoding="utf-8")
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.delenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", raising=False)
     assert _trusted_root(str(doe / "coordinator")) is True

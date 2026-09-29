@@ -28,8 +28,8 @@ own docstring). Every SPAWNING handler still resolves its script from an
 explicit argv list built from this module's own file location — never a
 brief-derived import, never a shell string built from `directives[].args`.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
 Spec backlink (C2): docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md, chunk C2
 
 Negative-spec:
@@ -333,7 +333,7 @@ def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str,
 def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
     """`d_grant_write` / `d_grant_handback` — the ceremony's Tier-U token,
     minted after the ceremony gate and handed back at its close
-    (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-grants-belong-in-
+    (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-ceremony-grants-belong-in-
     code-not-prose.md § 3).
 
     IN-PROCESS, unlike every other handler in this table, and that is the

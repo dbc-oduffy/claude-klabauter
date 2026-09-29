@@ -3831,7 +3831,7 @@ def _handoff_stamp_evidence(root: Path, abs_artifact_path: Path) -> bool:
     already landed — a mirror-sourced holder, or a ledger-sourced holder
     whose claim dir carries the durable `stamped` marker (`apply` stage
     alone is reachable on a refused stamp too; see C11 row 35 /
-    cross-repo/inbox/2026-08-13-doe-claude-em-pickup-already-satisfied-
+    cross-repo/inbox/2026-08-13-coordinator-content-repo-em-pickup-already-satisfied-
     masks-a-refused-write.md). Ledger-first so a branch-switch-revert
     desync (the mirror reverted, the ledger claim did not) still reads
     correctly (C11 row 35)."""
@@ -4138,7 +4138,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
                 base_next_move,
                 status=terminal_fields.get("status"),
             )
-        # Archived-memo-still-open kind-dispatch (2026-07-27 doe-claude-em
+        # Archived-memo-still-open kind-dispatch (2026-07-27 coordinator-content-repo-em
         # memo defect fix) — an archived memo whose terminal `status` is
         # NOT already a terminal disposition was swept into the archive
         # without ever having a disposition stamped on it; fire the same
@@ -4258,7 +4258,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     ):
         # Live-claim-holder stand-down (HEAD parity, both the handoff/
         # spinoff branch and the memo/handoff parity fix, cross-repo/inbox/
-        # 2026-08-17-doe-claude-em-memo-claim-fires-after-the-em-can-
+        # 2026-08-17-coordinator-content-repo-em-memo-claim-fires-after-the-em-can-
         # already-act.md): a DENIED grant against a live foreign holder
         # halts the brief before the artifact body is worth reading — no
         # directives, a liveness judgment point as the only offer. A

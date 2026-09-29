@@ -851,7 +851,7 @@ class TestAbsentFalsifierIsSizeGated:
     scopes the falsifier requirement to M+ through `sizing_object`, and
     nothing enforced it. Measured 2026-08-27 across four fixtures differing
     only in t-shirt, all four non-refusing —
-    cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
+    cross-repo/archive/2026-08-27-coordinator-content-repo-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
 
     These pin the size bound in BOTH directions: the M+ half must refuse, and
     the S half must keep passing. A gate that only refuses is a gate that has
@@ -998,3 +998,19 @@ class TestAbsentFalsifierIsSizeGated:
 
     def test_misnested_next_move_names_the_move_not_a_fresh_authoring(self):
         assert "prime_exit_criterion.falsifier" in coas._FALSIFIER_MISNESTED_NEXT_MOVE
+
+
+def test_derived_from_sizing_resolves_in_registered_sibling_repo(tmp_path, monkeypatch):
+    from coordinator_core.execute_plan_assemble import close_out_and_stamp as m
+
+    own, sib = tmp_path / "own", tmp_path / "sib"
+    (sib / "state" / "sizings").mkdir(parents=True)
+    own.mkdir()
+    (sib / "state" / "sizings" / "s.yaml").write_text("x: 1\n")
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIB", str(sib))
+    monkeypatch.setattr(
+        "coordinator_core.machine_resolver.load_flat_registry_file",
+        lambda p: {"repos.sib": str(sib)},
+    )
+    assert m._resolve_derived_from("state/sizings/s.yaml", own) is None
+    assert m._resolve_derived_from("state/sizings/none.yaml", own) is not None

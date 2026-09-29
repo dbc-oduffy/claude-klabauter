@@ -26,7 +26,7 @@ Documentation
 fix, params kept). ``p4_submit_tool``/``p4_checkout_tool`` are written but
 read by NOTHING in this repo, BY DESIGN — they are a cross-repo contract
 row, not residue. The reader contract is DoE's committed
-``coordinator/contract/p4-provider-fragment.md`` (doe-claude-bc landed
+``coordinator/contract/p4-provider-fragment.md`` (coordinator-content-repo-bc landed
 ``repo_key`` alongside ``changelist`` on the submit slot at DoE
 ``a05d95ba8``); DoE's ``finishing-a-development-branch`` H5 skill step
 reads the submit slot to call the tool directly, and claude-unreal-

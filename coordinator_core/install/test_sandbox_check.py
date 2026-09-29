@@ -9,12 +9,12 @@ subprocess timeout/stdin-guard behavior, DoE-clone resolution precedence,
 transport-vs-business exit-code contract) from the bash oracle's own
 documented contract rather than re-asserting this port's own transcription.
 Also drives a full :func:`run_all` pass against a hand-built minimal fake
-DoE clone (NOT the real sibling DoE-claude checkout — this validator's own
+DoE clone (NOT the real sibling coordinator-content-repo checkout — this validator's own
 job is to exercise *other* install scripts via subprocess, so a synthetic
-fixture with a stub ``claude-doe`` is the honest independent oracle here,
+fixture with a stub ``claude-author`` is the honest independent oracle here,
 not a copy of the real coordinator/bin/ tree).
 
-Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § W4.1
+Spec backlink: coordinator-content-repo:pln-doe-maximalist-execution-plugi-6d808d § W4.1
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave C, item install-sandbox-check)
 """
@@ -78,18 +78,18 @@ def test_run_missing_executable_converts_to_synthetic_rc_127_not_an_exception():
     assert cp.returncode == 127
 
 
-# resolve_doe_clone — REPO_DOE_CLAUDE precedence over machine-local
+# resolve_doe_clone — REPO_CONTENT_ROOT precedence over machine-local
 
 
 def test_resolve_doe_clone_prefers_env_var(monkeypatch):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/fake-doe-clone")
+    monkeypatch.setenv("REPO_CONTENT_ROOT", "/tmp/fake-doe-clone")
     clone, resolved = resolve_doe_clone()
     assert resolved is True
     assert clone == "/tmp/fake-doe-clone"
 
 
 def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir-xyz")
     clone, resolved = resolve_doe_clone()
     assert resolved is False
@@ -97,11 +97,11 @@ def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch
 
 
 def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spawn(monkeypatch, tmp_path):
-    """AC10: with REPO_DOE_CLAUDE unset, a seeded scratch registry, and
+    """AC10: with REPO_CONTENT_ROOT unset, a seeded scratch registry, and
     `_run` monkeypatched to raise, resolve_doe_clone() returns the registered
     root and (value, True) — the in-process registry rung must resolve
     without ever reaching the CLI-spawn fallback."""
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
 
     def _boom(*a, **kw):
         raise AssertionError("resolve_doe_clone must not spawn the CLI when the registry rung resolves")
@@ -110,16 +110,16 @@ def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spaw
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
-    (reg_dir / "registry.toml").write_text('"repos.doe_claude" = "/scratch/DoE-claude"\n')
+    (reg_dir / "registry.toml").write_text('"repos.content_root" = "/scratch/coordinator-content-repo"\n')
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     clone, resolved = resolve_doe_clone()
     assert resolved is True
-    assert clone == "/scratch/DoE-claude"
+    assert clone == "/scratch/coordinator-content-repo"
 
 
 def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
@@ -142,19 +142,19 @@ def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatc
 
 
 def test_ac4b_resolve_doe_clone_normalizes_msys_mount_form_registry_value(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
-    (reg_dir / "registry.toml").write_text('"repos.doe_claude" = "/x/DoE-claude"\n')
+    (reg_dir / "registry.toml").write_text('"repos.content_root" = "/x/coordinator-content-repo"\n')
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     clone, resolved = resolve_doe_clone()
     assert resolved is True
     if os.name == "nt":
-        assert clone == "X:/DoE-claude"
+        assert clone == "C:/coordinator-content-repo"
     else:
-        assert clone == "/x/DoE-claude"
+        assert clone == "/x/coordinator-content-repo"
 
 
 def test_run_all_raises_transport_error_when_sandbox_creation_fails(monkeypatch):
@@ -181,7 +181,7 @@ def test_main_help_exits_zero(capsys):
 
 
 def test_main_unknown_argument_exits_transport_code(monkeypatch):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     rc = main(["--totally-unknown-flag"])
     assert rc == 3
 
@@ -196,7 +196,7 @@ def test_run_all_never_raises_when_doe_clone_unresolved(monkeypatch):
     r, sandbox = run_all()
     assert not os.path.isdir(sandbox)
     assert r.fail_count >= 1
-    assert any("repos.doe_claude not resolved" in line for line in r.lines)
+    assert any("repos.content_root not resolved" in line for line in r.lines)
 
 
 def test_run_all_keep_sandbox_preserves_directory(monkeypatch):
@@ -230,19 +230,19 @@ def fake_doe_clone(tmp_path: Path) -> Path:
         "# stand-in for the real machine-local registry reader\n", encoding="utf-8"
     )
     (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
-    (clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
-        # the explicit `--doe-root` argv seam, and REPO_DOE_CLAUDE is never
+    (clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl").write_text(
+        # the explicit `--content-root` argv seam, and REPO_CONTENT_ROOT is never
         "claude() {\n"
-        '  _r="$(cat "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/machine-local/.doe-root" 2>/dev/null)"\n'
+        '  _r="$(cat "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/machine-local/.coordinator-content-root" 2>/dev/null)"\n'
         '  if [ -z "$_r" ]; then\n'
-        '    _r="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root" 2>/dev/null)"\n'
+        '    _r="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root" 2>/dev/null)"\n'
         "  fi\n"
-        '  command claude-doe --doe-root "$_r" "$@"\n'
+        '  command claude-author --content-root "$_r" "$@"\n'
         "}\n",
         encoding="utf-8",
     )
 
-    wrapper = clone / "coordinator" / "bin" / "claude-doe.py"
+    wrapper = clone / "coordinator" / "bin" / "claude-author.py"
     _write_executable(
         wrapper,
         "#!/usr/bin/env python3\n"
@@ -257,7 +257,7 @@ def fake_doe_clone(tmp_path: Path) -> Path:
 
 
 def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone: Path, monkeypatch):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
     coordinator_root = str(fake_doe_clone / "coordinator")
 
     r, sandbox = run_all(coordinator_root_override=coordinator_root)
@@ -265,15 +265,15 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
     assert not os.path.isdir(sandbox)
     assert any("clone present" in line for line in r.lines)
     assert any("clone's coordinator/ dir present" in line for line in r.lines)
-    assert any("claude-doe wrapper source present" in line for line in r.lines)
-    assert any("claude-doe --dry-run emitted exec line with --plugin-dir" in line for line in r.lines)
+    assert any("claude-author wrapper source present" in line for line in r.lines)
+    assert any("claude-author --dry-run emitted exec line with --plugin-dir" in line for line in r.lines)
     assert any(
-        "claude-doe --dry-run exec line references clone's coordinator dir" in line for line in r.lines
+        "claude-author --dry-run exec line references clone's coordinator dir" in line for line in r.lines
     )
-    assert any("gen_doe_root_pointer.main() exited 0 against sandbox" in line for line in r.lines)
-    assert any(".doe-root content matches registry repos.doe_claude" in line for line in r.lines)
-    assert any("gen_claude_doe_shim.main() exited 0 against sandbox" in line for line in r.lines)
-    assert any("claude-doe-shim.sh defines a claude() function" in line for line in r.lines)
+    assert any("gen_content_root_pointer.main() exited 0 against sandbox" in line for line in r.lines)
+    assert any(".coordinator-content-root content matches registry repos.content_root" in line for line in r.lines)
+    assert any("gen_claude_author_shim.main() exited 0 against sandbox" in line for line in r.lines)
+    assert any("claude-author-shim.sh defines a claude() function" in line for line in r.lines)
     assert any(
         "AC5: resolve_coordinator_clone.resolve_content_root()" in line and "returned expected" in line
         for line in r.lines
@@ -284,19 +284,19 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         for line in r.lines
     )
     assert not any("settings.json hooks array empty" in line for line in r.lines)
-    # here, so an AC2 re-derived against REPO_DOE_CLAUDE would go RED on a
+    # here, so an AC2 re-derived against REPO_CONTENT_ROOT would go RED on a
     if os.name != "nt":
         assert any(
-            "AC2 cold-shell: claude-doe --doe-root resolved from pointer alone" in line for line in r.lines
+            "AC2 cold-shell: claude-author --content-root resolved from pointer alone" in line for line in r.lines
         )
-        assert any("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset" in line for line in r.lines)
+        assert any("AC2 cold-shell: shim left REPO_CONTENT_ROOT unset" in line for line in r.lines)
     assert not any(line.startswith("FAIL") and "AC2" in line for line in r.lines)
     assert r.pass_count > 0
 
 
 def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_clone: Path, monkeypatch):
     """The shape DR-087 retired: export the pointer as rung-1
-    ``REPO_DOE_CLAUDE`` and invoke claude-doe with no ``--doe-root``. AC2 must
+    ``REPO_CONTENT_ROOT`` and invoke claude-author with no ``--content-root``. AC2 must
     call BOTH halves out — a missing argv seam and a promoted mirror."""
     if os.name == "nt":
         pytest.skip(
@@ -305,13 +305,13 @@ def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_c
             "on Windows (sandbox_check.py's os.name == 'nt' branch), so "
             "this fixture's FAIL lines can never appear here"
         )
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
-    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl"
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
+    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl"
     tmpl.write_text(
-        'export REPO_DOE_CLAUDE="$(cat "${CLAUDE_HOME:-$HOME}'
-        '/.coordinator-claude-settings/machine-local/.doe-root" 2>/dev/null)"\n'
+        'export REPO_CONTENT_ROOT="$(cat "${CLAUDE_HOME:-$HOME}'
+        '/.coordinator-claude-settings/machine-local/.coordinator-content-root" 2>/dev/null)"\n'
         "claude() {\n"
-        '  command claude-doe "$@"\n'
+        '  command claude-author "$@"\n'
         "}\n",
         encoding="utf-8",
     )
@@ -319,7 +319,7 @@ def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_c
     r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
 
     assert any(
-        line.startswith("FAIL") and "DR-087 requires the explicit `--doe-root" in line for line in r.lines
+        line.startswith("FAIL") and "DR-087 requires the explicit `--content-root" in line for line in r.lines
     )
     assert any(
         line.startswith("FAIL") and "DR-087 demoted the pointer mirror" in line for line in r.lines
@@ -386,7 +386,7 @@ def test_clone_layout_classifies_maximalist_flat_and_neither(tmp_path: Path):
 
 @pytest.fixture
 def flat_mirror_clone(tmp_path: Path) -> Path:
-    """The PUBLISHED FLAT MIRROR shape — what `repos.doe_claude` resolves to on
+    """The PUBLISHED FLAT MIRROR shape — what `repos.content_root` resolves to on
     a marketplace-served install (every cloud container). Its surfaces sit at
     the clone root, so no `<clone>/coordinator/...` path exists by construction.
     The pre-existing `fake_doe_clone` fixture only ever built the maximalist
@@ -397,8 +397,8 @@ def flat_mirror_clone(tmp_path: Path) -> Path:
     (clone / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
     (clone / "skills").mkdir()
     (clone / "templates" / "shell").mkdir(parents=True)
-    (clone / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
-        "claude() { command claude-doe --doe-root \"$_r\" \"$@\"; }\n", encoding="utf-8"
+    (clone / "templates" / "shell" / "claude-author-shim.sh.tmpl").write_text(
+        "claude() { command claude-author --content-root \"$_r\" \"$@\"; }\n", encoding="utf-8"
     )
     return clone
 
@@ -406,7 +406,7 @@ def flat_mirror_clone(tmp_path: Path) -> Path:
 def test_flat_mirror_clone_reports_unevaluable_not_a_pass_equivalent_skip(
     flat_mirror_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -425,7 +425,7 @@ def test_flat_mirror_clone_failures_name_the_layout_as_the_cause(
     Verdict is deliberately UNCHANGED (still FAIL) — only the diagnosis is
     fixed; turning these green on a flat host would be the silent oracle
     rewrite this check exists to prevent."""
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -439,7 +439,7 @@ def test_flat_mirror_clone_failures_name_the_layout_as_the_cause(
 def test_flat_mirror_f8_setup_names_the_missing_oracle_input_not_a_clone_build_failure(
     flat_mirror_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -467,7 +467,7 @@ def test_host_home_prefers_home_when_both_spellings_are_present(monkeypatch):
 def test_hardcoded_home_row_is_unevaluable_when_no_home_resolves(
     fake_doe_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
     monkeypatch.setattr(sandbox_check, "_host_home", lambda: "")
 
     r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
@@ -484,14 +484,14 @@ def test_hardcoded_path_pattern_catches_windows_and_unc_shapes_on_every_host(
     """Host-INDEPENDENT on purpose: a shim generated on Windows can be read on
     Linux, so every host must catch every shape. The pattern was POSIX-only,
     so the Windows-shaped hardcoding it exists to catch could not be caught."""
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
-    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl"
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
+    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl"
 
     for hardcoded in (r"C:\Users\alice\.claude", r"\\fileserver\homes\alice\.claude"):
         tmpl.write_text(
             "claude() {\n"
-            f'  _r="{hardcoded}/.doe-root"\n'
-            '  command claude-doe --doe-root "$_r" "$@"\n'
+            f'  _r="{hardcoded}/.coordinator-content-root"\n'
+            '  command claude-author --content-root "$_r" "$@"\n'
             "}\n",
             encoding="utf-8",
         )
@@ -504,7 +504,7 @@ def test_hardcoded_path_pattern_catches_windows_and_unc_shapes_on_every_host(
 def test_hardcoded_path_pattern_still_passes_a_clean_variable_only_shim(
     fake_doe_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
 
     r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
 
@@ -529,7 +529,7 @@ def test_cold_bare_path_is_host_shaped_not_posix_only(monkeypatch):
 def test_cold_tier_probes_the_binary_the_resolver_actually_spawns(
     fake_doe_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
 
     r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
 

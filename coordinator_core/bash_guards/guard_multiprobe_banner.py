@@ -157,8 +157,8 @@ Negative-spec
     (allows silently, per the 2026-08-06 change above), never as a reason
     to skip its own override check.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-7
-Spec backlink (shape/verdict primitives): DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C6
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9 § BX-7
+Spec backlink (shape/verdict primitives): coordinator-content-repo:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C6
 Spec backlink (rewrite target this guard denies toward): coordinator_core/bash_guards/dispatch_checks.py::check_multiprobe_banner_rewrite
 Spec backlink (seam-calling architecture this module now mirrors): coordinator_core/bash_guards/guard_plumbing_and_loops.py
 """

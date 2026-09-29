@@ -4,7 +4,7 @@ coordinator_core.review_assemble.exec_auth_stamp.stamp_execution_authorization.
 
 Run: python -m pytest coordinator_core/review_assemble/test_exec_auth_stamp.py -q
 
-Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
+Spec backlink: coordinator-content-repo:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
 """
 from __future__ import annotations
 
@@ -929,7 +929,7 @@ def test_cli_mark_reviewed_leaves_plan_at_reviewed_without_authorizing(tmp_path:
     flips `draft -> reviewed` and writes NO `execution_authorized_*` field,
     so a reviewed-and-integrated plan awaiting the PM is observably at
     `reviewed` rather than indistinguishable from an unread `draft` (DoE
-    memo 2026-08-27-doe-claude-em-stamp-reviewed-bound-to-approval-
+    memo 2026-08-27-coordinator-content-repo-em-stamp-reviewed-bound-to-approval-
     ceremony)."""
     _init_repo(tmp_path)
     plan_dir = tmp_path / "docs" / "plans"

@@ -69,11 +69,11 @@ class TestFiresOnTargetedRecordBody:
                 "Edit",
                 "state/lessons/foo.md",
                 old_string="x",
-                new_string="fixed by doe-claude-3a",
+                new_string="fixed by coordinator-content-repo-3a",
             )
         )
         assert result is not None
-        assert "doe-claude-3a" in _advisory_text(result)
+        assert "coordinator-content-repo-3a" in _advisory_text(result)
 
 
 class TestNarrativeMentionIsSilent:
@@ -81,7 +81,7 @@ class TestNarrativeMentionIsSilent:
     def test_real_narrative_excerpt_is_silent(self):
         content = (
             "FIELD COST, MEASURED TODAY, INDEPENDENT OF THIS SESSION. "
-            "doe-claude-3e hit real divergence while working their own "
+            "coordinator-content-repo-3e hit real divergence while working their own "
             "baton: they resolved to the mirror, read CONTRACT_VERSION "
             "3.14.0, and correctly declined to run the emitter."
         )

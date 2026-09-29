@@ -82,7 +82,7 @@ def _drop_settings_home_override(monkeypatch):
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
     Both the dep probe and ``register_claude_klabauter_root`` resolve through
-    settings-home: the dep ladder's `.doe-root` rung and the engine-build
+    settings-home: the dep ladder's `.coordinator-content-root` rung and the engine-build
     provisioning path (which this file asserts against as
     ``$USERPROFILE/.coordinator-claude-settings/engine-build/...``, i.e. the
     quarantined home). ``_settings_home.settings_home()`` prefers
@@ -358,7 +358,7 @@ def test_setup_py_register_claude_klabauter_root_missing_coord_with_override_deg
 
     NEITHER key is registered in this branch — repos.claude_klabauter and
     engine.working_repos.claude_klabauter share the one guard (2026-08-05
-    doe-claude-em working-repo-rule proposal, accepted)."""
+    coordinator-content-repo-em working-repo-rule proposal, accepted)."""
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(
         "coordinator_core.install._shared.resolve_machine_local_cli", lambda plugin_root: None
@@ -382,7 +382,7 @@ def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
     both repos.claude_klabauter and engine.working_repos.claude_klabauter are
     registered to the same resolved path, and both PASS lines print.
 
-    Spec backlink: cross-repo/inbox/2026-08-05-doe-claude-em-working-repo-
+    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-content-repo-em-working-repo-
     rule-19-keys-13-consumers-name-the-set-explicitly.md — our half is the
     install-time write of engine.working_repos.claude_klabauter alongside the
     pre-existing repos.claude_klabauter write."""

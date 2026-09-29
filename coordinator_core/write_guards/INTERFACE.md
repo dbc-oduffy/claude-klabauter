@@ -44,7 +44,7 @@ advisory:
 
 Rule 4 above governs side effects a port INHERITS. A guard that acquires one — any hard-deny
 guard that writes, not only a p4 one — is a new design decision and is judged against the bar in
-DoE-claude `coordinator/docs/wiki/perforce-second-class.md` § The floor, in the
+Coordinator-content-repo `coordinator/docs/wiki/perforce-second-class.md` § The floor, in the
 checkout-before-edit bullet: the mutation must be idempotent, self-healing, bounded by a runner
 timeout, fail-closed, and the guard must be the only seam that sees the write before it lands.
 

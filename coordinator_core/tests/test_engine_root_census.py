@@ -104,12 +104,12 @@ def test_record_captures_the_root_that_answered(sink):
     count -- every read traced to a hand-pinned old name. A recurrence
     should be self-diagnosing."""
     engine_root_census.record_fallback_read(
-        "a.site", root_value="X:/claude-klabauter", sink_root=sink, now=_NOW
+        "a.site", root_value="C:/claude-klabauter", sink_root=sink, now=_NOW
     )
     entry = json.loads(
         engine_root_census.series_path(sink).read_text(encoding="utf-8").strip()
     )
-    assert entry["root"] == "X:/claude-klabauter"
+    assert entry["root"] == "C:/claude-klabauter"
 
 
 def test_record_never_raises_on_an_unwritable_sink(tmp_path):
@@ -198,11 +198,11 @@ def test_accessor_retired_name_read_reaches_the_sink(sink, monkeypatch):
         lambda site, **kw: recorded.append((site, kw.get("root_value"))),
     )
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/somewhere")
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/somewhere")
     engine_root._reset_engine_root_env_advisories()
 
     assert engine_root.coordinator_engine_root_env("test.site") is None
-    assert recorded == [("test.site", "X:/somewhere")], (
+    assert recorded == [("test.site", "C:/somewhere")], (
         "the retired name must still be OBSERVED even though it no longer answers"
     )
 
@@ -218,7 +218,7 @@ def test_accessor_records_once_per_site_per_process(sink, monkeypatch):
         lambda site, **kw: recorded.append(site),
     )
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/somewhere")
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/somewhere")
     engine_root._reset_engine_root_env_advisories()
 
     for _ in range(5):
@@ -236,9 +236,9 @@ def test_new_name_winning_records_nothing(sink, monkeypatch):
         "record_fallback_read",
         lambda site, **kw: recorded.append(site),
     )
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "X:/new")
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "X:/old")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "C:/new")
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "C:/old")
     engine_root._reset_engine_root_env_advisories()
 
-    assert engine_root.coordinator_engine_root_env("test.site") == "X:/new"
+    assert engine_root.coordinator_engine_root_env("test.site") == "C:/new"
     assert recorded == []

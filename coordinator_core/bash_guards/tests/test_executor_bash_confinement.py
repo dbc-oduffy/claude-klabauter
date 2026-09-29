@@ -105,7 +105,7 @@ def _fake_is_confined_by_roster_absence(effective_type: str) -> bool:
     ``coordinator_core/conftest.py``'s autouse ``_quarantine_real_home``
     fixture repoints ``HOME``/``USERPROFILE`` at a throwaway tmp dir for
     every test in the suite, which -- absent a ``COORDINATOR_SETTINGS_HOME``
-    override surviving that quarantine -- makes ``read_doe_root_pointer()``
+    override surviving that quarantine -- makes ``read_content_root_pointer()``
     resolve to ``""`` and ``resolve_roster()`` fail closed (``roster is
     None``), which makes ``is_confined_by_roster_absence`` return ``True``
     for EVERY non-empty ``effective_type`` -- including
@@ -384,13 +384,13 @@ def test_coordinator_doc_new_allows(monkeypatch):
 
 def test_machine_local_get_allows(monkeypatch):
     _confine(monkeypatch)
-    payload = _payload("machine-local get repos.doe_claude")
+    payload = _payload("machine-local get repos.content_root")
     assert guard.check(payload) is None
 
 
 def test_machine_local_has_allows(monkeypatch):
     _confine(monkeypatch)
-    payload = _payload("machine-local has repos.doe_claude")
+    payload = _payload("machine-local has repos.content_root")
     assert guard.check(payload) is None
 
 
@@ -402,13 +402,13 @@ def test_machine_local_keys_allows(monkeypatch):
 
 def test_machine_local_path_allows(monkeypatch):
     _confine(monkeypatch)
-    payload = _payload("machine-local path repos.doe_claude")
+    payload = _payload("machine-local path repos.content_root")
     assert guard.check(payload) is None
 
 
 def test_machine_local_dir_allows(monkeypatch):
     _confine(monkeypatch)
-    payload = _payload("machine-local dir repos.doe_claude")
+    payload = _payload("machine-local dir repos.content_root")
     assert guard.check(payload) is None
 
 
@@ -425,7 +425,7 @@ def test_machine_local_set_allowlist_allows_executor_but_destructive_guard_denie
     guard's own allow/deny split (unaffected by that fix, still asserted
     below) is no longer the only guard in the loop, and the sentence
     "executor allows" is no longer true end-to-end."""
-    cmd = "machine-local set repos.doe_claude /x/evil"
+    cmd = "machine-local set repos.content_root /x/evil"
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     _assert_allowed(guard.check(_payload(cmd)))
@@ -525,12 +525,12 @@ _AC4_REVIEWER_VERDICT_COMMANDS = (
     'grep -rn "foo" coordinator_core',
     "find . -name '*.py'",
     "/x/claude-klabauter/coordinator/bin/coordinator-doc-new.py --type run-report",
-    "machine-local get repos.doe_claude",
-    "machine-local has repos.doe_claude",
+    "machine-local get repos.content_root",
+    "machine-local has repos.content_root",
     "machine-local keys repos",
-    "machine-local path repos.doe_claude",
-    "machine-local dir repos.doe_claude",
-    "machine-local set repos.doe_claude /x/evil",
+    "machine-local path repos.content_root",
+    "machine-local dir repos.content_root",
+    "machine-local set repos.content_root /x/evil",
     "machine-local array-append repos.mirrors /x/evil",
     "machine-local array-set repos.mirrors 0 /x/evil",
     "machine-local migrate-publish-mirrors",

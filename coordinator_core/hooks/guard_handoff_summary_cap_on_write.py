@@ -3,7 +3,7 @@
 handoff's `summary:` frontmatter field over its 140-char cap.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-handoff-summary-cap-on-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-handoff-summary-cap-on-
 write.py`. That script ran as an in-process guard body enrolled into a
 second, doctrine-plane-resident guard registry fired only via
 `preuse-write-dispatch.py`'s own dispatch. None of that applies here: this

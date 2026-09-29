@@ -62,7 +62,7 @@ the original command and `_verbatim_head_tail_alternative`'s emitted `python3
 must be checked by actual execution, not by inspecting the generated source.
 
 Spec backlink: coordinator_core/bash_guards/guard_plumbing_and_loops.py
-Spec backlink (verbatim-alternative promotion): DoE-claude:pln-bash-guard-merged-execution-shape-a71e05 M3
+Spec backlink (verbatim-alternative promotion): coordinator-content-repo:pln-bash-guard-merged-execution-shape-a71e05 M3
 """
 
 from __future__ import annotations
@@ -102,6 +102,7 @@ def _payload(command):
 
 
 _HEAD_TAIL_CMD = "find . -type f | head -n 5"
+_HEAD_TAIL_UNSERVED_CMD = "docker ps | head -n 5"
 
 # A genuine for-loop (FOR_LOOP is the shape-classifier's primary match)
 # FOR_LOOP on the leading `for ... do ... done` and `check_find_exec_rewrite`
@@ -156,13 +157,13 @@ class TestHeadTailPlumbing:
     def test_advises_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_denies_on_windows`,
         # earlier-registered `ADVISORY_REWRITE` chain entry
-        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        out = guard.check(_payload(_HEAD_TAIL_UNSERVED_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
         assert guard._pl_python3_invocation() in ctx
 
     def test_advises_on_macos(self):
-        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
+        out = guard.check(_payload(_HEAD_TAIL_UNSERVED_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
         assert guard._pl_python3_invocation() in ctx
@@ -599,7 +600,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
 
     @pytest.fixture(autouse=True)
     def _isolated_cache(self, tmp_path, monkeypatch):
-        from coordinator_core.bash_guards import dispatch_checks as dc
+        from coordinator_core.bash_guards import _rewrite_support as dc
 
         cache_file = tmp_path / "bt-python3-invocation-cache.json"
         monkeypatch.setattr(dc, "_bt_python3_invocation_cache_path", lambda: str(cache_file))
@@ -662,6 +663,14 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         key_after = self.dc._bt_python3_invocation_cache_key()
         if key_before is not None and key_after is not None:
             assert key_before != key_after
+
+    def test_half_b_cache_key_folds_the_resolved_machine_local_impl(self, monkeypatch):
+        from coordinator_core import _claude_klabauter_root
+        from coordinator_core.bash_guards import _rewrite_support
+
+        monkeypatch.setattr(_claude_klabauter_root, "_machine_local_impl", lambda: "/nonexistent/impl-A.py")
+        key = _rewrite_support._bt_python3_invocation_cache_key()
+        assert key is not None and key[0] == "/nonexistent/impl-A.py"
 
     def test_half_b_write_is_atomic_replace_not_truncate(self):
         import inspect

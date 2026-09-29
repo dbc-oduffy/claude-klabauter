@@ -7,7 +7,7 @@ git root.
 
 Two-repo control, not a single-path assertion (this is what found the
 defect, per C4's brief): the SAME payload, the SAME agent type, assembled
-across a DoE-claude-SHAPED session cwd (where `git_root` and the plugin
+across a coordinator-content-repo-SHAPED session cwd (where `git_root` and the plugin
 content root used to coincide, masking the bug) and an unrelated,
 non-DoE-shaped session cwd (every other real dispatch's actual shape) --
 both must assemble the identical non-empty `injected_prompt_blocks` string.
@@ -21,7 +21,7 @@ rev-parse` spawn against synthetic tmp_path trees would just add
 noise/flakiness the substitution avoids. `CLAUDE_PLUGIN_ROOT` is
 monkeypatched to a synthetic fixture plugin content root carrying a minimal
 real `snippets/registry.toml` + one snippet body -- resolution off the env
-var, not off any real DoE-claude checkout, keeps this test runnable with no
+var, not off any real coordinator-content-repo checkout, keeps this test runnable with no
 sibling-repo dependency.
 
 Module under test: coordinator_core/subagent_sandbox/provision_report.py
@@ -83,11 +83,11 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
     """FULL miss means EVERY rung misses -- all three, not the two this test
     originally knew about.
 
-    ``resolve_plugin_root`` grew a third rung (``machine_local_dir()/.doe-root``
+    ``resolve_plugin_root`` grew a third rung (``machine_local_dir()/.coordinator-content-root``
     + ``coordinator``, the fleet's dev-clone pointer file) after this test was
     written; the test kept isolating only ``CLAUDE_PLUGIN_ROOT`` and
-    ``claude_config_dir()``, so on any box carrying a real ``.doe-root`` the
-    unisolated rung resolved a LIVE plugin root (the machine's own DoE-claude
+    ``claude_config_dir()``, so on any box carrying a real ``.coordinator-content-root`` the
+    unisolated rung resolved a LIVE plugin root (the machine's own coordinator-content-repo
     checkout) and the "full miss" this asserts was never actually constructed.
     Isolate
     each rung the resolver reads, so the scenario under test is the one named.
@@ -114,7 +114,7 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
 
 @pytest.mark.parametrize(
     "session_cwd_name",
-    ["DoE-claude", "some-unrelated-session-repo"],
+    ["coordinator-content-repo", "some-unrelated-session-repo"],
 )
 def test_assemble_contract_blocks_composes_regardless_of_session_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_cwd_name: str

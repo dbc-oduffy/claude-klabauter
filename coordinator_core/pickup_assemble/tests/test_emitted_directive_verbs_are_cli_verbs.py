@@ -8,7 +8,7 @@ through `pickup_assemble.apply`, or run verbatim by hand off the brief.
 `_dispatch_archive_stamp_cli` accepted internally while the CLI itself
 rejected it with `unknown subcommand` (exit 2) — so the brief was correct
 for one consumer and wrong for the other, and only the by-hand path broke
-(cross-repo/inbox/2026-08-20-doe-claude-em-cmd-forwarder-eats-json-and-two-
+(cross-repo/inbox/2026-08-20-coordinator-content-repo-em-cmd-forwarder-eats-json-and-two-
 smaller-seams.md, item 2).
 
 Negative-spec:

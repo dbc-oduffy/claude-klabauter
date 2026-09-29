@@ -41,7 +41,7 @@ unrecognized rows skipped-not-dropped, run-header trailing prose preserved verba
 the accounting invariant across a mixed fixture.
 
 Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C8;
-DoE-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
+Coordinator-content-repo/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
 """
 
 from __future__ import annotations
@@ -840,7 +840,7 @@ def test_normalize_arrow_dialects_refuses_to_clobber_existing_backup(tmp_path):
 
 # ---------------------------------------------------------------------------
 # `(run: <id>)`-tailed arrow rows are out of scope and must be refused, not migrated
-# (doe-claude-em memo, 2026-08-30: 780/1437 rows corrupted with rows_skipped == 0)
+# (coordinator-content-repo-em memo, 2026-08-30: 780/1437 rows corrupted with rows_skipped == 0)
 # ---------------------------------------------------------------------------
 
 _TAILED_ROW = (

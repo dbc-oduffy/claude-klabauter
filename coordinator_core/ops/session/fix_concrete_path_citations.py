@@ -8,7 +8,7 @@ fixes it, so an operator who hits the deny has a next action rather than
 having to hand-invent the same sweep every time.
 
 Origin: ported from a one-off scratch tool (`sweep.py` + `path_map.json`,
-DoE-claude `scratch/abs-path-sweep/`) that took one repo's corpus from 4,254
+Coordinator-content-repo `scratch/abs-path-sweep/`) that took one repo's corpus from 4,254
 findings to 0. That script proved the approach; this module is its
 permanent, cross-platform, engine-resident successor — the enforcement
 (the guard) is permanent, so the remedy must be too.
@@ -298,7 +298,7 @@ def _is_live_doctrine(rel: str) -> bool:
 class Family:
     id: str
     category: str  # "repo" | "publish_mirror" | "config"
-    match_name: str  # folder-name segment to look for in a token, e.g. "DoE-claude"
+    match_name: str  # folder-name segment to look for in a token, e.g. "coordinator-content-repo"
     short_name: str  # citation prefix, "" for a config family (canonical is fixed text)
     canonical: Optional[str] = None  # fixed replacement text, config families only
 

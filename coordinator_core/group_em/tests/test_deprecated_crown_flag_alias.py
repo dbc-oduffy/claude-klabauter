@@ -6,19 +6,19 @@ test names, and the report's own rendered tokens all moved to Group-EM. The CLI 
 the single exception, and it is an exception because it is the only one of them that is
 a HARD PARSE BOUNDARY -- `argparse` exits 2 on an unknown option, before any handler runs.
 
-The callers are not ours. DoE-claude's `coordinator/agents/fleet-watch.md` and
+The callers are not ours. Coordinator-content-repo's `coordinator/agents/fleet-watch.md` and
 `coordinator/skills/group-em/SKILL.md` both instruct dispatched agents to pass
 `--crown-session-id`, and those agents are running right now against a repo whose text we
 do not own and cannot land a change into. A same-commit rename strands every live watcher:
 the watch stops arming, and a watch that never arms is -- by that subsystem's own finding
--- indistinguishable from a quiet fleet. The memo asking DoE-claude to move their text is
+-- indistinguishable from a quiet fleet. The memo asking coordinator-content-repo to move their text is
 `cross-repo/archive/2026-09-01-claude-klabauter-em-crown-nomenclature-retired.md`; this alias
 is what makes that memo a courtesy rather than a deadline.
 
 NEGATIVE SPEC:
   - This does NOT keep "crown" alive as vocabulary. The alias is hidden from `--help` on
     both parsers, and no other surface in this package accepts the old spelling.
-  - This is NOT permanent. Delete this file and both alias legs once DoE-claude's text has
+  - This is NOT permanent. Delete this file and both alias legs once coordinator-content-repo's text has
     moved. That is a deliberate, separately-decided cutover, which is exactly why it needs
     a test -- so the decision is made rather than made silently by a tidy-up.
   - Asserting the flag PARSES is not enough on its own, so the first case asserts the value
@@ -26,7 +26,7 @@ NEGATIVE SPEC:
     Group-EM's behalf, and reports success -- strictly worse than refusing.
 
 Both entry points build their parser inside `_cli`, so every case here goes through argv.
-That is also the level DoE-claude's agents actually reach us at.
+That is also the level coordinator-content-repo's agents actually reach us at.
 
 Run:
     pytest coordinator_core/group_em/tests/test_deprecated_crown_flag_alias.py -v

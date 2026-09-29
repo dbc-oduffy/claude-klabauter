@@ -666,7 +666,7 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
     that function's docstring for the resolver's full design rationale, and
     the module docstring's "`blocked_by_dependents`" section for why it is
     homed here rather than archival.py. Registration accepted by
-    DoE-claude-em (cross-repo/inbox/2026-08-02-doe-claude-em-baton-lifecycle-
+    coordinator-content-repo-em (cross-repo/inbox/2026-08-02-coordinator-content-repo-em-baton-lifecycle-
     three-asks-reply.md, Ask 3).
 
     Params (all optional except candidate):

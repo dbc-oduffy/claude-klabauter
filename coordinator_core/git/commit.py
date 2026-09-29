@@ -159,7 +159,7 @@ class CommitOutcome(NamedTuple):
     #: names five paths and gets four has lost the same thing an empty commit
     #: loses -- a path it believes it delivered -- and the usual cause is a
     #: hook or a peer having already committed that path moments earlier
-    #: (DoE-claude's `874cf35dd`, where the plan `.md` the commit existed for
+    #: (coordinator-content-repo's `874cf35dd`, where the plan `.md` the commit existed for
     #: was the missing one). NOT a refusal: a partial commit is legitimate and
     #: refusing it would break every ordinary scoped commit over a pathspec
     #: that is mostly unchanged.
@@ -187,7 +187,7 @@ class NothingToCommit(CommitRefused):
     WHY A REFUSAL AND NOT A FIELD. The success line is the only signal most
     callers have, and a zero-delta commit reported as `committed sha=<x>`
     reads as delivery to every one of them. That cost a real review pass:
-    `ffcebec80` in DoE-claude reported an applied twelve-finding
+    `ffcebec80` in coordinator-content-repo reported an applied twelve-finding
     review-integration that had not landed, and it had to be re-authored from
     context. A new `CommitOutcome` field would have been just as invisible --
     a caller must already suspect the bug to know to read it, which is the
@@ -922,7 +922,7 @@ def commit_paths(
             )
 
     # PHANTOM DELETION -- a declared deletion for a path the worktree still
-    # has. The stale-shared-index shape this refuses (DoE-claude's
+    # has. The stale-shared-index shape this refuses (coordinator-content-repo's
     # `guard-phantom-staged-deletion-precommit.py`, filed against
     # `state/bug-backlog/2026-08-28-a-stale-shared-index-arms-a-phantom-
     # deletion-of-any-freshly-committed-path.yaml`) lands a removal in HEAD
@@ -1209,7 +1209,7 @@ def commit_paths(
     # early exit was cheaper and threw away the k-of-N answer: a commit where
     # four of five declared paths changed is a REAL commit and must land, but
     # the caller named five and got four, and the fifth is exactly as
-    # invisible as an all-empty commit was. DoE-claude's `874cf35dd` is the
+    # invisible as an all-empty commit was. Coordinator-content-repo's `874cf35dd` is the
     # worked case -- five paths, four landed, and the plan `.md` that was the
     # point of the commit contributed nothing because a status-transition hook
     # had already committed it moments earlier. Same failure as the empty

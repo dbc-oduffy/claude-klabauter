@@ -33,7 +33,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from coordinator_core.hooks.nudge_em_code_dispatch import _DOC_DATA_EXTENSIONS
+from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.hooks.nudge_unrouted_sizing import (
     _is_subagent_session,
     _session_touched_sizing_files,

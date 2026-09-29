@@ -32,6 +32,7 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write
 from coordinator_core.bash_guards import check_raw_pid_liveness
+from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
 
 
 def _payload_dict(command, **extra):
@@ -82,7 +83,7 @@ class TestBlockNoncanonicalBranchCreation:
         def _boom(payload):
             raise RuntimeError("simulated crash inside block_noncanonical_branch_creation")
 
-        monkeypatch.setattr(dispatch, "_check_block_noncanonical_branch_creation", _boom)
+        monkeypatch.setattr(block_noncanonical_branch_creation, "check", _boom)
         out = _evaluate(_payload_dict("git branch bad-name"))
         assert out is None, (
             "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
@@ -121,7 +122,7 @@ class TestBlockSubagentPlanBodyBashWrite:
         def _boom(payload):
             raise RuntimeError("simulated crash inside block_subagent_plan_body_bash_write")
 
-        monkeypatch.setattr(dispatch, "_check_plan_body_bash_write", _boom)
+        monkeypatch.setattr(block_subagent_plan_body_bash_write, "check", _boom)
         out = _evaluate(_payload_dict(self._WRITE_CMD, agent_id="deadbeef0123"))
         assert out is None, (
             "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
@@ -140,7 +141,7 @@ class TestCheckRawPidLiveness:
         def _boom(payload):
             raise RuntimeError("simulated crash inside check_raw_pid_liveness")
 
-        monkeypatch.setattr(dispatch, "_check_raw_pid_liveness", _boom)
+        monkeypatch.setattr(check_raw_pid_liveness, "check", _boom)
         out = _evaluate(_payload_dict("ps -p 12345"))
         assert out is None, (
             "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
@@ -158,7 +159,7 @@ class TestBlockDevRepoSentinelRemoval:
         def _boom(payload):
             raise RuntimeError("simulated crash inside block_dev_repo_sentinel_removal")
 
-        monkeypatch.setattr(dispatch, "_check_dev_repo_sentinel_removal_advisory", _boom)
+        monkeypatch.setattr(block_dev_repo_sentinel_removal, "check_advisory", _boom)
         out = _evaluate(_payload_dict("rm %s" % self.SENTINEL))
         assert out is None, (
             "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out

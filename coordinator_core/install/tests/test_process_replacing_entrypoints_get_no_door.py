@@ -2,7 +2,7 @@
 forwarder -- and never loses its Python one either.
 
 WHAT THIS PREVENTS. The door's warm leg runs the named entrypoint's
-`main()` INSIDE the warm server. `coordinator/bin/claude-doe.py` exists to
+`main()` INSIDE the warm server. `coordinator/bin/claude-author.py` exists to
 `os.execv` into `claude --plugin-dir <clone>/coordinator`, so served warm it
 overlays the SERVER process: the engine every peer on this box is queued
 behind vanishes mid-request, and the caller -- someone starting an
@@ -12,7 +12,7 @@ second, independent reason the same install is wrong.
 
 WHY THE PRESENCE ORACLE COULD NOT CATCH IT. `launcher_is_installable` asks
 whether the published engine carries `coordinator/bin/<name>.py`.
-`claude-doe.py` IS carried -- it is a live, published, PATH-resolved tool.
+`claude-author.py` IS carried -- it is a live, published, PATH-resolved tool.
 It passed, and the 2026-09-02 multi-name install hardlinked the door over
 it. The distinguishing fact is what the entrypoint DOES, which no artifact
 in the payload states, so `door_install._EXEC_SHAPED_NAMES` is a roster
@@ -33,11 +33,11 @@ import pytest
 from coordinator_core.install import door_install, substrate
 
 
-def test_claude_doe_gets_no_door_image():
+def test_claude_author_gets_no_door_image():
     """The roster is reachable through a named predicate, not read directly
     by its callers -- `substrate` asks the question, `door_install` owns the
     answer."""
-    assert not door_install.name_gets_door_image("claude-doe")
+    assert not door_install.name_gets_door_image("claude-author")
 
 
 def test_an_ordinary_op_name_gets_a_door_image():
@@ -54,11 +54,11 @@ def test_no_native_image_is_written_for_a_process_replacing_name(tmp_path):
     bin_dst.mkdir()
 
     result = substrate._write_native_door_forwarder(
-        "claude-doe", bin_dst, check_only=False, engine_root=tmp_path / "engine"
+        "claude-author", bin_dst, check_only=False, engine_root=tmp_path / "engine"
     )
 
     assert result is None
-    assert not (bin_dst / "claude-doe").exists()
+    assert not (bin_dst / "claude-author").exists()
 
 
 def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path):
@@ -67,12 +67,12 @@ def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path):
     the name's only file, so leaving it is leaving the break in place."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    # The platform's image name (`claude-doe.exe` on Windows), not a POSIX literal.
-    stale = door_install.named_forwarder_path(bin_dst, "claude-doe")
+    # The platform's image name (`claude-author.exe` on Windows), not a POSIX literal.
+    stale = door_install.named_forwarder_path(bin_dst, "claude-author")
     stale.write_bytes(b"\xcf\xfa\xed\xfe a door image hardlinked over the trampoline")
 
     substrate._write_native_door_forwarder(
-        "claude-doe", bin_dst, check_only=False, engine_root=tmp_path / "engine"
+        "claude-author", bin_dst, check_only=False, engine_root=tmp_path / "engine"
     )
 
     assert not stale.exists()
@@ -83,11 +83,11 @@ def test_check_only_reports_but_removes_nothing(tmp_path):
     this function honours."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    stale = bin_dst / "claude-doe"
+    stale = bin_dst / "claude-author"
     stale.write_bytes(b"\xcf\xfa\xed\xfe")
 
     result = substrate._write_native_door_forwarder(
-        "claude-doe", bin_dst, check_only=True, engine_root=tmp_path / "engine"
+        "claude-author", bin_dst, check_only=True, engine_root=tmp_path / "engine"
     )
 
     assert result is None

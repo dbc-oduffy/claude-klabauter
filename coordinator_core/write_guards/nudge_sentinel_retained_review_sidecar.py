@@ -2,7 +2,7 @@
 — advisory guard.
 
 Purpose: cover a measured gap in the review-findings-ledger contract
-(DoE-claude docs/plans/2026-09-26-retire-review-integrator.md, row M4):
+(coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md, row M4):
 some reviewer sidecars carry real ``### Finding`` content AND still retain
 the review-findings template's unfilled-scaffold sentinel comment
 (``_FINDINGS_SENTINEL``) — reviewers append findings without deleting the
@@ -74,6 +74,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import _resolve_roster_accessor
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.ops.review_findings_ledger import (
     _extract_frontmatter_key,
     _frontmatter_bounds,
@@ -186,11 +187,7 @@ def _findings_section_is_empty(section: str) -> bool:
     return section.replace(_FINDINGS_SENTINEL, "").strip() == ""
 
 
-def _normalize(value: str) -> str:
-    normalized = value.replace("\\", "/")
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
+_normalize = collapse_slashes
 
 
 def _extract_frontmatter_agent_type(text: str) -> str:

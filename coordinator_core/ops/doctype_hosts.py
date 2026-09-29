@@ -26,7 +26,7 @@ Row shape (`DoctypeHostRow`):
     (C3-C6) land it there) or `"excluded"` (no emission — see `reason`).
   - `reason`: for an `excluded` row only, one of the closed set
     `EXCLUSION_REASONS`. `None` for an `emitted` row.
-  - `citation`: for a `prohibited-by-doctrine` row only — the DoE-claude path
+  - `citation`: for a `prohibited-by-doctrine` row only — the coordinator-content-repo path
     and ref the prohibition was read at. `None` otherwise.
 
 Negative-spec: this module does not construct a `coordinator-doc-new`
@@ -137,7 +137,7 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
         state="excluded",
         reason="prohibited-by-doctrine",
         citation=(
-            "DoE-claude coordinator/docs/wiki/review-integration-doctrine.md:"
+            "coordinator-content-repo coordinator/docs/wiki/review-integration-doctrine.md:"
             "163-170 @ 4b4cb1f0a95b7afb9e30410d1cbd64bc3969522c — a dispatched"
             " persona writes into its pre-provisioned sidecar; the doctrine"
             " states 'No sentinel-append self-scaffold' once a path has"
@@ -152,7 +152,7 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
         state="excluded",
         reason="prohibited-by-doctrine",
         citation=(
-            "DoE-claude coordinator/agents/plan-coverage-checker.md:36 @"
+            "coordinator-content-repo coordinator/agents/plan-coverage-checker.md:36 @"
             " 587401187b228ba4baea830382565f798c53c48f — 'Sidecar path is"
             " provisioned (report_sidecar:) ... Never find/compute a"
             " fallback', and line 229: 'pre-provisioned, no scaffold step'."

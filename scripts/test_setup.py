@@ -208,7 +208,7 @@ def _stub_editable_finder_conversion(setup_mod, monkeypatch):
     monkeypatch.setattr(
         setup_mod,
         "convert_editable_finder_to_plain_path",
-        lambda interpreter, package_root, package_name="coordinator_core": calls.append(
+        lambda interpreter, package_root, package_name="coordinator_core", engine_link=None: calls.append(
             (interpreter, package_root)
         )
         or "stubbed",
@@ -1183,6 +1183,7 @@ def test_resolve_claude_klabauter_root_current_name_outranks_retired(setup_mod, 
 
 
 def test_resolve_claude_klabauter_root_repo_root_default(setup_mod, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     args = setup_mod.Args()
     root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)

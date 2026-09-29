@@ -12,7 +12,7 @@ roadmap that validates while staying invisible to `--type roadmap` — the
 exact surface the sprint-split assemblers consume (empty result set, not an
 error). This module asserts both halves together, never just one.
 
-Spec backlink: cross-repo/inbox/2026-08-21-doe-claude-em-roadmap-glob-widened-
+Spec backlink: cross-repo/inbox/2026-08-21-coordinator-content-repo-em-roadmap-glob-widened-
 and-spine-homing-answered.md; state/dispatch-briefs/2026-08-21-engine-half-of-
 the-roadmap-sprint-spine-split/C3a.md
 

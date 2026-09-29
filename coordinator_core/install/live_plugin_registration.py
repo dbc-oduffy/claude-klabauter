@@ -1,7 +1,7 @@
 """Register the coordinator plugin AT the live clone, never as a copy of it.
 
-THE REQUIREMENT (PM, 2026-08-26, via doe-claude-em): plain ``claude`` must run
-the live coordinator surface on a DoE box. Not ``claude-doe`` — the muscle
+THE REQUIREMENT (PM, 2026-08-26, via coordinator-content-repo-em): plain ``claude`` must run
+the live coordinator surface on a DoE box. Not ``claude-author`` — the muscle
 memory is ``claude``, and a second binary name is a workaround, not an install
 shape.
 
@@ -10,7 +10,7 @@ WHAT BLOCKED IT: ``claude plugin install`` COPIES a directory-source plugin into
 ``gitCommitSha`` at install time — for a directory source exactly as for a git
 one. Plain ``claude`` then serves a frozen snapshot of the clone. Measured on
 the fleet-floor Mac: the snapshot was 4 commits stale 20 minutes after install
-(51 ``coordinator:`` commands against 53 live). ``claude-doe`` was unaffected
+(51 ``coordinator:`` commands against 53 live). ``claude-author`` was unaffected
 because it injects ``--plugin-dir <clone>/coordinator`` and never consults the
 cache — which is precisely why the gap went unnoticed: every agent-launched
 session was live, and only a human typing ``claude`` got the snapshot.

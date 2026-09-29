@@ -40,6 +40,10 @@ def _make_context():
     return server._ServerContext(name="test", sid="sid", version_state=_FakeVersionState())
 
 
+@pytest.fixture(autouse=True)
+def _author_profile(monkeypatch):
+    monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
+
 def test_on_idle_tick_does_not_sweep_before_interval_elapses():
     fake_now = [0.0]
     calls = []
@@ -440,3 +444,50 @@ def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatc
     push_cadence._sweep_one(repo)
 
     assert logged == []
+
+
+def _fresh_branch_repo(tmp_path, *, head="a" * 40, remote_ref_sha="a" * 40, branch_upstream=False):
+    repo = tmp_path / "repo"
+    (repo / ".git" / "refs" / "remotes" / "origin").mkdir(parents=True)
+    (repo / ".git" / "refs" / "remotes" / "origin" / "main").write_text(remote_ref_sha + "\n")
+    if branch_upstream:
+        d = repo / ".git" / "refs" / "remotes" / "origin" / "work" / "x"
+        d.mkdir(parents=True)
+        (d / "day").write_text(head + "\n")
+    return repo
+
+
+def test_sweep_is_silent_noop_on_fresh_branch_with_no_upstream(tmp_path, monkeypatch):
+    repo = _fresh_branch_repo(tmp_path)
+    monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
+    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/day")
+    monkeypatch.setattr(push_cadence, "head_sha", lambda root: "a" * 40)
+    calls = []
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: calls.append(root))
+    push_cadence._sweep_one(repo)
+    assert calls == []
+
+
+def test_sweep_still_pushes_branch_with_new_commits_and_no_upstream(tmp_path, monkeypatch):
+    repo = _fresh_branch_repo(tmp_path, remote_ref_sha="b" * 40)
+    monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
+    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/day")
+    monkeypatch.setattr(push_cadence, "head_sha", lambda root: "a" * 40)
+
+    class _Ok:
+        failed = False
+        unconfirmed = False
+
+    calls = []
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: calls.append(root) or _Ok())
+    push_cadence._sweep_one(repo)
+    assert len(calls) == 1
+
+
+def test_sweep_does_not_run_on_consumer_profile(tmp_path, monkeypatch):
+    repo = _fresh_branch_repo(tmp_path, remote_ref_sha="b" * 40)
+    monkeypatch.setattr(push_cadence, "machine_profile", lambda: "consumer")
+    calls = []
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: calls.append(root))
+    push_cadence._sweep_one(repo)
+    assert calls == []

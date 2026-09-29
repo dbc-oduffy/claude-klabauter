@@ -13,7 +13,7 @@ DoE-resident sibling this port does NOT own (`check-install-divergence.py`).
 Tests stub a minimal `canonical-structure.yaml` manifest + template for stage 3
 and a minimal fake for stage 4's `check-install-divergence.py`, under a
 throwaway `COORDINATOR_ROOT`, so the suite is self-contained and does not
-depend on the sibling DoE-claude repo being checked out on the test machine.
+depend on the sibling coordinator-content-repo repo being checked out on the test machine.
 """
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_doe_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
         lambda home: None,
     )
     target = tmp_path / "target"
@@ -206,20 +206,20 @@ def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path, mon
     empty_root = tmp_path / "empty-coordinator"
     (empty_root / "bin").mkdir(parents=True)
     fallback_root = _make_coordinator_root(tmp_path, name="fallback-coordinator")
-    doe_root = tmp_path / "doe-checkout"
-    (doe_root / "coordinator").mkdir(parents=True)
+    content_root = tmp_path / "doe-checkout"
+    (content_root / "coordinator").mkdir(parents=True)
     for name in os.listdir(fallback_root):
-        os.replace(os.path.join(fallback_root, name), doe_root / "coordinator" / name)
+        os.replace(os.path.join(fallback_root, name), content_root / "coordinator" / name)
 
     isolated_claude_home = tmp_path / "isolated-home" / ".claude"
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_doe_root_pointer_file",
-        lambda home: str(doe_root),
+        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
+        lambda home: str(content_root),
     )
     from coordinator_core.ops.bootstrap_repo import _resolve_scaffold_manifest_root
 
     result = _resolve_scaffold_manifest_root(str(isolated_claude_home), str(empty_root))
-    assert result == str(doe_root / "coordinator")
+    assert result == str(content_root / "coordinator")
 
 
 def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monkeypatch, capsys):
@@ -235,7 +235,7 @@ def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monk
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_doe_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
         lambda home: None,
     )
     from coordinator_core.ops.bootstrap_repo import _resolve_scaffold_manifest_root
@@ -498,7 +498,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_doe_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
         lambda home: None,
     )
 
@@ -792,10 +792,10 @@ def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, 
         assert env.get("LC_ALL") == "C"
 
 
-def _pointer_home(tmp_path, monkeypatch, doe_root):
+def _pointer_home(tmp_path, monkeypatch, content_root):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
     monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
     return str(tmp_path / "claude-home")
 
@@ -803,30 +803,30 @@ def _pointer_home(tmp_path, monkeypatch, doe_root):
 def test_pointer_rung_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
-    doe_root = tmp_path / "DoE-claude"
-    (doe_root / "coordinator").mkdir(parents=True)
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "coordinator-content-repo"
+    (content_root / "coordinator").mkdir(parents=True)
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
 
-    assert _content_root_rungs_2_to_4(claude_home) == str(doe_root / "coordinator")
+    assert _content_root_rungs_2_to_4(claude_home) == str(content_root / "coordinator")
 
 
 def test_pointer_rung_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
-    doe_root = tmp_path / "coordinator-claude"
-    (doe_root / ".claude-plugin").mkdir(parents=True)
-    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "coordinator-claude"
+    (content_root / ".claude-plugin").mkdir(parents=True)
+    (content_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
 
-    assert _content_root_rungs_2_to_4(claude_home) == str(doe_root)
+    assert _content_root_rungs_2_to_4(claude_home) == str(content_root)
 
 
 def test_pointer_rung_skips_a_bare_directory_and_falls_through(tmp_path, monkeypatch):
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
-    doe_root = tmp_path / "bare"
-    doe_root.mkdir()
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "bare"
+    content_root.mkdir()
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
     monkeypatch.setattr("coordinator_core.ops.bootstrap_repo._registry_get", lambda key: None)
 
     assert _content_root_rungs_2_to_4(claude_home) == os.path.join(

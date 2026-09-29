@@ -10,7 +10,7 @@ looking live, so a reader picking by name can action the withdrawn version of a
 correction. That is a supersession inverting itself at the point of pickup, and
 no other test in this package covers the cross-host direction.
 
-Observed, not hypothetical (doe-claude-em, 2026-08-26): five memos in DoE's
+Observed, not hypothetical (coordinator-content-repo-em, 2026-08-26): five memos in DoE's
 inbox carry a macOS-shaped absolute `supersedes` on a Windows host.
 
 Spec backlink: coordinator_core/ops/fleet/_memo_compose.py ::
@@ -48,7 +48,7 @@ def test_portable_refs_are_returned_verbatim(ref):
 
 def test_the_observed_macos_path_on_a_windows_host_becomes_repo_relative():
     ref = (
-        "/Users/someone/X/DoE-claude/cross-repo/inbox/"
+        "/Users/someone/X/coordinator-content-repo/cross-repo/inbox/"
         "2026-08-17-example-cockpit-repo-em-settings-home-ladder-rung-order-is-yours-to-call.md"
     )
     assert _normalize_supersedes_ref(ref) == (
@@ -58,7 +58,7 @@ def test_the_observed_macos_path_on_a_windows_host_becomes_repo_relative():
 
 
 def test_a_windows_absolute_path_normalizes_the_same_way():
-    ref = r"D:\repos\DoE-claude\cross-repo\inbox\2026-08-17-a-memo.md"
+    ref = r"D:\repos\coordinator-content-repo\cross-repo\inbox\2026-08-17-a-memo.md"
     assert _normalize_supersedes_ref(ref) == "cross-repo/inbox/2026-08-17-a-memo.md"
 
 
@@ -76,7 +76,7 @@ def test_the_archive_anchor_is_honoured_not_just_inbox():
 def test_the_validator_normalizes_a_bare_string():
     value, err = _validate_supersedes_param(
         "draft",
-        "/Users/someone/X/DoE-claude/cross-repo/inbox/2026-08-17-a-memo.md",
+        "/Users/someone/X/coordinator-content-repo/cross-repo/inbox/2026-08-17-a-memo.md",
         dry_run=True,
     )
     assert err is None
@@ -87,7 +87,7 @@ def test_the_validator_normalizes_every_entry_in_a_list():
     value, err = _validate_supersedes_param(
         "draft",
         [
-            "/Users/someone/X/DoE-claude/cross-repo/inbox/2026-08-17-first.md",
+            "/Users/someone/X/coordinator-content-repo/cross-repo/inbox/2026-08-17-first.md",
             "cross-repo/inbox/2026-08-17-second.md",
         ],
         dry_run=True,

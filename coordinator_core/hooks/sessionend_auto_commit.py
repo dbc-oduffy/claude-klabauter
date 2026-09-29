@@ -2,7 +2,7 @@
 coordinator_core.hooks.sessionend_auto_commit — SessionEnd warm-door op,
 DEREGISTERED.
 
-Purpose: warm-door counterpart of DoE-claude's
+Purpose: warm-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/sessionend-auto-commit.py`. That script is itself
 DEREGISTERED (2026-08-27 PM ruling, relayed by claude-klabauter-em: "commits
 are for EMs and when they choose to commit") — kept on disk, unregistered,

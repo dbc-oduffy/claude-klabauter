@@ -34,8 +34,8 @@ means "the disarm marker." (A DoE-side hook could not do this: it cannot
 import a claude-klabauter module, so if this guard had to live in DoE it would
 need a hand-copied second string. It does not, because the write-guard fold
 already relocated this whole family into this repo -- see
-`docs/plans/2026-07-29-hook-fan-in-write-path.md` (DoE-claude repo) and
-`coordinator/hooks/scripts/preuse-write-dispatch.py` (DoE-claude repo),
+`docs/plans/2026-07-29-hook-fan-in-write-path.md` (coordinator-content-repo repo) and
+`coordinator/hooks/scripts/preuse-write-dispatch.py` (coordinator-content-repo repo),
 which fronts this package's guards in-process rather than registering a
 separate hook script per guard.)
 

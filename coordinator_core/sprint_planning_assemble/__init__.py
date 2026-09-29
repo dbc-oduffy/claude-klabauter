@@ -1,6 +1,6 @@
 """
 coordinator_core.sprint_planning_assemble — the `sprint-planning-assemble`
-computed-skill engine (DR-047 computed-skills contract: DoE-claude
+computed-skill engine (DR-047 computed-skills contract: coordinator-content-repo
 coordinator/docs/wiki/computed-skills.md), sprint seam.
 
 Purpose: computes the mechanical routing over `sprint-planning`'s scope —
@@ -12,14 +12,14 @@ Schema-of-Record. The spine half (Phase 1 synthesis at roadmap altitude, N
 sprint descriptors, the cross-sprint edge set, no batons) is a SEPARATE
 assembler (`roadmap_planning_assemble`, chunk C10) — this module computes
 only the census rows whose `seam` is `sprint` or `both`
-(DoE-claude state/plan-sidecars/roadmap-planning.census-steps.md, schema
+(coordinator-content-repo state/plan-sidecars/roadmap-planning.census-steps.md, schema
 2.0.0, source_sha 1e598af754b15144a717673cd1b90002e5b6ee61).
 
 Spec backlink: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md,
 chunk C11. Source memo:
-cross-repo/inbox/2026-08-20-doe-claude-em-roadmap-sprint-split-assembler-ops.md.
+cross-repo/inbox/2026-08-20-coordinator-content-repo-em-roadmap-sprint-split-assembler-ops.md.
 
-Entry contract (DoE-claude docs/plans/2026-08-20-split-roadmap-planning-at-the-
+Entry contract (coordinator-content-repo docs/plans/2026-08-20-split-roadmap-planning-at-the-
 sprint-spine.md, chunk C6): `sprint-planning` is invoked once per sprint,
 with a sprint id resolved against a run id — NOT the A/B/C/D entry-point
 shape `roadmap_planning_assemble` resolves (every entryB/entryC/entryD
@@ -104,7 +104,7 @@ Negative-spec:
     - Do NOT resolve an A/B/C/D entry point here. That shape is
       `roadmap_planning_assemble`'s alone (every entry-point row is
       `seam: spine`); this module's entry contract is `run_id` +
-      `sprint_id` only, per DoE-claude C6's own body.
+      `sprint_id` only, per coordinator-content-repo C6's own body.
 """
 from __future__ import annotations
 
@@ -442,7 +442,7 @@ def brief(
     Decision-Object Schema-of-Record. READ-ONLY: touches no disk, mutates
     nothing, calls nothing.
 
-    Entry contract (DoE-claude C6): invoked once per sprint, with a sprint
+    Entry contract (coordinator-content-repo C6): invoked once per sprint, with a sprint
     id resolved against a run id. Both `run_id` and `sprint_id` are
     required — unlike `roadmap_planning_assemble.brief()`, this module
     resolves no A/B/C/D entry point (that shape is spine-only).

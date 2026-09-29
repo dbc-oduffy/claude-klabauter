@@ -2126,13 +2126,14 @@ class _ServerContext:
             except OSError:
                 return
 
-            if not self._is_listening():
+            if not self._admit():
                 _refuse_while_draining(conn, server_sha=self.version_state.server_sha)
                 continue
 
             try:
                 io = _wrap_socket(conn)
             except Exception as exc:  # noqa: BLE001 -- see docstring
+                self.in_flight.exit()
                 print(
                     f"[warm-server] failed to wrap an accepted connection; "
                     f"dropping it and continuing to accept: {exc!r}",
@@ -2144,7 +2145,7 @@ class _ServerContext:
                     pass
                 continue
 
-            self._enqueue_connection(io)
+            self._enqueue_connection(io, admitted=True)
 
     def _start_worker_pool(self, *, pool_size: int = WORKER_POOL_SIZE) -> None:
         for _ in range(pool_size):
@@ -2229,7 +2230,18 @@ class _ServerContext:
                     file=sys.stderr,
                 )
 
-    def _enqueue_connection(self, io: Any) -> None:
+    def _admit(self) -> bool:
+        """Atomically test `_listening` and claim an `in_flight` slot.
+        `close_listener` takes the same lock, so a connection is either
+        counted before the drain starts or refused -- never accepted
+        uncounted after the drain has seen zero and exited."""
+        with self._listening_lock:
+            if not self._listening:
+                return False
+            self.in_flight.enter()
+            return True
+
+    def _enqueue_connection(self, io: Any, *, admitted: bool) -> None:
         """Claim this connection's `in_flight` slot and hand its `io` off
         to the shared queue -- the accept-and-queue boundary's ENQUEUE
         point the module docstring's DRAIN SEMANTICS names. Called from an
@@ -2239,7 +2251,8 @@ class _ServerContext:
         `PENDING_LISTENER_POOL_SIZE` alone, dispatch by `WORKER_POOL_SIZE`
         alone, and neither bound can starve the other.
         """
-        self.in_flight.enter()
+        if not admitted:
+            self.in_flight.enter()
         self._queue.put(io)
 
     def _start_pending_listener_pool(
@@ -2293,7 +2306,7 @@ class _ServerContext:
             _close_handle(handle)
             return
 
-        if not self._is_listening():
+        if not self._admit():
             _close_handle(handle)
             return
 
@@ -2303,12 +2316,24 @@ class _ServerContext:
             except OSError as exc:
                 print(f"[warm-server] failed to create pipe instance: {exc!r}", file=sys.stderr)
             else:
-                threading.Thread(
-                    target=self._accept_and_replenish, args=(next_handle,), daemon=True
-                ).start()
+                try:
+                    threading.Thread(
+                        target=self._accept_and_replenish, args=(next_handle,), daemon=True
+                    ).start()
+                except Exception as exc:
+                    # Thread exhaustion: the admitted slot must still be released.
+                    print(f"[warm-server] failed to start replenish thread: {exc!r}", file=sys.stderr)
+                    _close_handle(next_handle)
+                    _close_handle(handle)
+                    self.in_flight.exit()
+                    return
 
-        io = _wrap_handle(handle)
-        self._enqueue_connection(io)
+        try:
+            io = _wrap_handle(handle)
+        except Exception:
+            self.in_flight.exit()
+            raise
+        self._enqueue_connection(io, admitted=True)
 
 
 def _self_stable_pid_start_epoch() -> Optional[int]:

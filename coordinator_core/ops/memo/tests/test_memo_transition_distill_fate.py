@@ -1,7 +1,7 @@
 """
 distill_fate / in_repo_capture parity tests for coordinator_core.ops.memo_transition._action.
 
-Purpose: closes a scope-drop found while porting DoE-claude coordinator/bin/memo-transition.js
+Purpose: closes a scope-drop found while porting coordinator-content-repo coordinator/bin/memo-transition.js
 (BIG_PORT item memo-transition, Wave B). The pre-existing native port
 (coordinator_core/ops/memo_transition.py, landed under
 docs/plans/2026-07-06-memo-transition-native-python-port.md) predates the JS oracle's
@@ -14,7 +14,7 @@ cross-field-validation behavior (memo-transition.js:423-453 write logic;
 coordinator/bin/lib/schema.js:2236-2280 cross-field rule) rather than re-asserting this
 session's own transcription.
 
-Parity oracle: DoE-claude coordinator/bin/memo-transition.js + coordinator/bin/lib/schema.js
+Parity oracle: coordinator-content-repo coordinator/bin/memo-transition.js + coordinator/bin/lib/schema.js
 Spec backlink: docs/plans/2026-07-12-distill-rebuild-claude-klabauter-reliant.md § C3
 """
 

@@ -18,12 +18,12 @@ FINAL scratch state with `sh -n` and land it via a single atomic
 same-filesystem replace — there is no window where the live path is a
 partially-written file.
 
-See: docs/wiki/concurrent-em-hazards.md (DoE-claude repo) § H33 for the
+See: docs/wiki/concurrent-em-hazards.md (coordinator-content-repo repo) § H33 for the
 incident this helper was built to prevent (2026-07-09, block-illegal-filename.sh
 heredoc-fix took down 4 concurrent agents' Bash tool fleet-wide).
 
 Port of: edit-live-hook.sh (DoE b5a4192c, 2026-07-20, 229 lines)
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 
 Behavior-preservation notes (read alongside the bash source):
   - `stage` copies the live hook to a same-directory scratch file
@@ -118,7 +118,7 @@ def _usage(stream=None) -> None:
 
 See coordinator_core.ops.edit_live_hook module docstring for the full
 stage/edit/validate/atomic-swap pattern and the H33 hazard it prevents
-(docs/wiki/concurrent-em-hazards.md § H33, DoE-claude repo).""",
+(docs/wiki/concurrent-em-hazards.md § H33, coordinator-content-repo repo).""",
         file=stream,
     )
 

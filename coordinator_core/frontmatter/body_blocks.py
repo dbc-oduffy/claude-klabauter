@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.body_blocks
 
 Shared fenced-block locator for plan-body YAML blocks (e.g. the `## Tasks`
-` ```yaml plan-tasks` spine). Parity target: DoE-claude
+` ```yaml plan-tasks` spine). Parity target: coordinator-content-repo
 `coordinator/bin/coordinator-harvest-deferrals:317-372` (`_locate_tasks_block`).
 
 DoE's reference returns only the block body string (or None on any failure,
@@ -24,7 +24,7 @@ two ways, both deliberate:
      re-serialized YAML while leaving the fence markers themselves intact.
 
 PUBLIC CROSS-REPO SEAM (2026-07-29) — `locate_fenced_block` and
-`LocateStatus` are imported BY NAME from outside this repo. DoE-claude's
+`LocateStatus` are imported BY NAME from outside this repo. Coordinator-content-repo's
 `coordinator/bin/plan-spine-check.py` imports both to locate a plan's
 task-spine block. (The first external importer, DoE's write-time guard
 `hooks/scripts/validate-frontmatter-schema.py`, was deleted 2026-08-04; its
@@ -40,7 +40,7 @@ The failure mode is therefore SILENT INERTNESS: their authoring gate
 stops running and every plan still commits green. Nobody gets a red test.
 
 That fail-open is their call and the right one for a write-time hook; the
-obligation it creates is ours. Give DoE-claude a heads-up before
+obligation it creates is ours. Give coordinator-content-repo a heads-up before
 touching either name — same standing arrangement as
 `coordinator_core.contract.cockpit_schema.emit_schema` (see CLAUDE.md
 § Architecture), and the same reason: a sibling's capability depends on a
@@ -80,7 +80,7 @@ weakening: a genuinely misplaced fence (in a later, different section) is
 still MALFORMED.
 
 Spec backlinks:
-  coordinator/bin/coordinator-harvest-deferrals (DoE-claude, lines 317-372)
+  coordinator/bin/coordinator-harvest-deferrals (coordinator-content-repo, lines 317-372)
 """
 from __future__ import annotations
 

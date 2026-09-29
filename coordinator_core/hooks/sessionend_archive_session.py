@@ -1,7 +1,7 @@
 """
 coordinator_core.hooks.sessionend_archive_session — SessionEnd warm-door op.
 
-Purpose: warm-door counterpart of DoE-claude's
+Purpose: warm-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/sessionend-archive-session.py`, which today shells to
 `coordinator/bin/archive-session-scope.py archive-session --sid <sid>` — a spawn
 onto a trampoline in THIS repo (149 lines) whose whole job is

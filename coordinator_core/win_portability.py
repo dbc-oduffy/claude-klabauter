@@ -34,13 +34,13 @@ The three primitives, and the platform-semantics gap each one exists to absorb:
      retyped at a new call site.
 
   3. ``split_path`` -- absorbs the forward-slash-only path-split defect (9 of the
-     98 sites). ``"X:\\DoE-claude\\coordinator".rsplit("/", 1)`` returns the
+     98 sites). ``"C:\\coordinator-content-repo\\coordinator".rsplit("/", 1)`` returns the
      whole string unsplit (there is no ``"/"`` in it at all), so a caller
      expecting ``(parent, leaf)`` silently gets ``(whole_string,)`` and a
      downstream tree-membership check double-adds the same clone. Folding
      backslash to forward-slash BEFORE splitting makes a native Windows path
-     (``X:\\a\\b``), a POSIX path (``/a/b``), and an MSYS/Git-Bash mount-form
-     path (``/x/a/b`` for ``X:\\a\\b``) all split into the same segment shape.
+     (``C:\\a\\b``), a POSIX path (``/a/b``), and an MSYS/Git-Bash mount-form
+     path (``/x/a/b`` for ``C:\\a\\b``) all split into the same segment shape.
 
   4. ``no_console_creationflags()`` -- absorbs the console-popup defect
      (`docs/plans/2026-08-07-no-window-subprocess-primitive.md`, this repo): a
@@ -100,7 +100,7 @@ Negative-spec:
       defects, not I/O).
 
 Spec backlink: docs/research/2026-07-28-windows-simulation-test-harness-design.md
-  (DoE-claude) -- Component Design, the AC-1/AC-3/AC-4 primitives this module
+  (coordinator-content-repo) -- Component Design, the AC-1/AC-3/AC-4 primitives this module
   builds toward. coordinator_core/tests/test_home_resolution_lint.py (this repo,
   commit c1545206) -- the standing gate whose baseline enumerates every site
   these primitives will eventually replace.
@@ -127,7 +127,7 @@ __all__ = [
 
 StrPath = Union[str, "os.PathLike[str]"]
 
-_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
 
 
 def _is_windows() -> bool:

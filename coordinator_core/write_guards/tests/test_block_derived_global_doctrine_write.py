@@ -29,6 +29,12 @@ def _fixed_home(monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _authoring_registered(monkeypatch):
+    monkeypatch.setattr(guard, "registry_get", lambda key: "/opt/authoring" if key == "repos.content_root" else None)
+    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: "strict")
+
+
 def _deny(file_path, **kw):
     result = guard.check(_payload(file_path, **kw))
     assert result is not None, f"expected DENY for: {file_path!r}"
@@ -77,7 +83,7 @@ class TestFiresOnDerivedLiveCopy:
 
 class TestSilentOnEverythingElse:
     def test_authoring_surface_allowed(self):
-        _allow("/Users/alice/repos/DoE-claude/global-doctrine/CLAUDE.md")
+        _allow("/Users/alice/repos/coordinator-content-repo/global-doctrine/CLAUDE.md")
 
     def test_repo_root_project_claude_md_allowed(self):
         _allow("/Users/alice/repos/some-project/CLAUDE.md")
@@ -85,13 +91,13 @@ class TestSilentOnEverythingElse:
     def test_dev_repo_coordinator_claude_md_allowed(self):
         """DoE's own coordinator/CLAUDE.md plugin-doctrine authoring
         surface — a DIFFERENT CLAUDE.md-class surface, not derived."""
-        _allow("/Users/alice/repos/DoE-claude/coordinator/CLAUDE.md")
+        _allow("/Users/alice/repos/coordinator-content-repo/coordinator/CLAUDE.md")
 
     def test_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/DoE-claude/coordinator/snippets/em-operating-doctrine.md")
+        _allow("/Users/alice/repos/coordinator-content-repo/coordinator/snippets/em-operating-doctrine.md")
 
     def test_other_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/DoE-claude/coordinator/snippets/agent-role-dispatched.md")
+        _allow("/Users/alice/repos/coordinator-content-repo/coordinator/snippets/agent-role-dispatched.md")
 
     def test_settings_json_allowed(self):
         _allow("/Users/alice/.claude/settings.json")
@@ -108,7 +114,7 @@ class TestDenyTextNamesAlternativeAndConsequence:
         monkeypatch.setattr(
             guard,
             "registry_get",
-            lambda key: "/opt/some/root" if key == "repos.doe_claude" else None,
+            lambda key: "/opt/some/root" if key == "repos.content_root" else None,
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -130,35 +136,43 @@ class TestDenyTextNamesAlternativeAndConsequence:
         which asserted the override-doc pointer WAS present). The deny text
         for this default (unregistered-root) payload shape is now a wholly
         different narrative — "not the authoring source — the authoring
-        root is unregistered here — `machine-local set repos.doe_claude
+        root is unregistered here — `machine-local set repos.content_root
         <path>`" — with no override-doc pointer and no key at all.
         Positively asserts both the absence of any override-note fragment
         AND the presence of the real, current unregistered-root remediation
         text, so this cannot pass vacuously on a reason carrying neither.
 
         `registry_get` is patched because the branch under test is the
-        UNREGISTERED one, and this box has `repos.doe_claude` registered --
+        UNREGISTERED one, and this box has `repos.content_root` registered --
         without the patch the guard renders the registered narrative and the
         test measures the wrong branch. It read green only while nobody who
         ran it had the key set."""
-        monkeypatch.setattr(guard, "registry_get", lambda key: None)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "guard-override-keys.md" not in reason
         assert guard._OVERRIDE_ENV_VAR not in reason
-        assert "machine-local set repos.doe_claude" in reason
+        assert "/opt/authoring/global-doctrine/CLAUDE.md" in reason
 
     def test_deny_text_resolves_authoring_root_via_registry(self, monkeypatch):
         monkeypatch.setattr(
-            guard, "registry_get", lambda key: "/opt/some/doe-claude" if key == "repos.doe_claude" else None
+            guard, "registry_get", lambda key: "/opt/some/coordinator-content-repo" if key == "repos.content_root" else None
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "/opt/some/doe-claude/global-doctrine/CLAUDE.md" in reason
+        assert "/opt/some/coordinator-content-repo/global-doctrine/CLAUDE.md" in reason
 
-    def test_unregistered_root_names_the_key_not_a_fabricated_path(self, monkeypatch):
+    def test_unregistered_root_allows_the_write(self, monkeypatch):
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
+        _allow("/Users/alice/.claude/CLAUDE.md")
+
+    @pytest.mark.parametrize("level,expect", [("warn", "additionalContext"), ("off", None)])
+    def test_guard_level_relaxes_the_deny(self, monkeypatch, level, expect):
+        monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: level)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "machine-local set repos.doe_claude" in reason
-        assert "global-doctrine/CLAUDE.md" not in reason
+        if expect is None:
+            assert result is None
+        else:
+            out = result["hookSpecificOutput"]
+            assert "permissionDecision" not in out
+            assert "blast radius" in out[expect]
+            assert "machine-local set coordinator.guard_level" in out[expect]

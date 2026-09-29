@@ -1,7 +1,7 @@
 """coordinator_core.hooks.block_dispatch_suite_invocation — PreToolUse
 (Agent, Workflow) op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/block-dispatch-suite-
+Ported from coordinator-content-repo `coordinator/hooks/scripts/block-dispatch-suite-
 invocation.py` per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk
 W4-C9. Layer 2 of the DR-088 ladder: closes the "EM typed a suite command
 into a dispatch brief" gap that layer 3 (PreToolUse(Bash), this repo's own
@@ -61,8 +61,8 @@ marker (payload-dependent, checked after text extraction); any classifier
 import/call failure (degrades to `[]`, treated as "no matches").
 
 Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-
-dispatched-agent-scoped-test-breadth.md (DoE-claude);
-docs/plans/2026-07-23-dr-088-ladder-enforcement-layers.md § C8 (DoE-claude);
+dispatched-agent-scoped-test-breadth.md (coordinator-content-repo);
+docs/plans/2026-07-23-dr-088-ladder-enforcement-layers.md § C8 (coordinator-content-repo);
 docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 """
 

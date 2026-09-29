@@ -101,26 +101,26 @@ def _make_claude_home(
 
 
 def _write_doe_manifest(
-    claude_home: Path, tmp_path: Path, manifest: dict, doe_root: Path | None = None
+    claude_home: Path, tmp_path: Path, manifest: dict, content_root: Path | None = None
 ) -> None:
-    """Write a .doe-root sentinel + coordinator-registry.manifest.json fixture.
+    """Write a .coordinator-content-root sentinel + coordinator-registry.manifest.json fixture.
 
     Mirrors test_memo_check_addressee.py's `_write_doe_manifest` pattern —
     a hermetic tmp_path-scoped manifest, never the real machine's DoE tree.
 
     The sentinel lands on the DR-071 ladder's durable rung
-    (`<settings-home>/machine-local/.doe-root`), not the pre-2026-07-28
-    `<CLAUDE_HOME>/.doe-root` — a location no writer has written since
-    `ops.gen_doe_root_pointer` moved the pointer under the settings home.
-    A caller whose registry fixture registers `repos.doe_claude` must pass
-    that path as `doe_root`; the registry rung outranks the pointer file.
+    (`<settings-home>/machine-local/.coordinator-content-root`), not the pre-2026-07-28
+    `<CLAUDE_HOME>/.coordinator-content-root` — a location no writer has written since
+    `ops.gen_content_root_pointer` moved the pointer under the settings home.
+    A caller whose registry fixture registers `repos.content_root` must pass
+    that path as `content_root`; the registry rung outranks the pointer file.
     """
-    doe_root = doe_root or (tmp_path / "doe-root")
-    schemas_dir = doe_root / "coordinator" / "schemas"
+    content_root = content_root or (tmp_path / "content-root")
+    schemas_dir = content_root / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True, exist_ok=True)
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True, exist_ok=True)
-    (machine_local / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (machine_local / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
     (schemas_dir / "coordinator-registry.manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
@@ -301,24 +301,24 @@ class TestEnumerationAliasesAndCentral:
     def test_is_central_from_settings_home_sentinel_with_no_legacy_pointer(
         self, tmp_path, monkeypatch
     ):
-        doe_repo = tmp_path / "doe-claude-repo"
+        doe_repo = tmp_path / "coordinator-content-repo-repo"
         doe_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"doe_claude": str(doe_repo)})
+        claude_home = _make_claude_home(tmp_path, {"content_root": str(doe_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_doe_manifest(
             claude_home,
             tmp_path,
-            {"identity": {"centralReceiverIds": ["central-em", "doe-claude-em"]}},
-            doe_root=doe_repo,
+            {"identity": {"centralReceiverIds": ["central-em", "coordinator-content-repo-em"]}},
+            content_root=doe_repo,
         )
-        assert not (claude_home / ".doe-root").exists()
-        assert not (claude_home / ".claude" / ".doe-root").exists()
+        assert not (claude_home / ".coordinator-content-root").exists()
+        assert not (claude_home / ".claude" / ".coordinator-content-root").exists()
 
         result = _run(_memo_list({"dry_run": True}))
 
         assert result["exit_code"] == 0
         receivers = _receivers(result["candidates"])
-        doe = [c for c in receivers if c["repo_key"] == "repos.doe_claude"]
+        doe = [c for c in receivers if c["repo_key"] == "repos.content_root"]
         assert len(doe) == 1
         assert doe[0]["is_central"] is True
 

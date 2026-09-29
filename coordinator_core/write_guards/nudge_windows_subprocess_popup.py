@@ -38,14 +38,14 @@ in-process and returned directly.
 CLASS is "advisory" per DR-077 (2026-07-21) — a DoE-authored ruling that
 DELIBERATELY DEPARTS from the retired reference hook (see
 ``docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md``
-in the DoE-claude repo). NOTE: DR-077's scope is the whole-file-context /
+in the coordinator-content-repo repo). NOTE: DR-077's scope is the whole-file-context /
 advisory-class change ONLY (part 1 and part 2 below) — it contains no
 substantive discussion of git or DETACHED_PROCESS semantics and does not
 back the (now-removed) git exemption; that exemption's provenance is
 tracked separately, see the negative-spec below. The
 ``cross-repo/archive/2026-07-21-claude-central-em-popup-guard-fragment-scoped-false-denials-dr077.md``
 citation this docstring used to carry alongside DR-077 is DANGLING — that
-file does not exist in either this repo or DoE-claude (verified
+file does not exist in either this repo or coordinator-content-repo (verified
 2026-08-07 during the windows-popup-guard-blind-to-git-and-asyncio
 spinoff). Left noted here rather than silently dropped so a future reader
 does not re-cite it or burn time hunting for it.
@@ -161,7 +161,7 @@ Negative-spec:
   - Never raises: any unexpected input shape returns ``None`` (ALLOW/no-op).
 
 Spec backlink: docs/plans/2026-06-19-windows-console-popup-coordinator-doctrine.md § C2
-Ruling: DR-077 (DoE-claude docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md)
+Ruling: DR-077 (coordinator-content-repo docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md)
 Grep anchors: WINDOWS-CONSOLE-POPUP DR-077
 """
 

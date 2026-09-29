@@ -4,7 +4,7 @@ the plugin-shipped `subagentStatusLine` command can locate a script inside
 its own plugin.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude
+from coordinator-content-repo
 `coordinator/hooks/scripts/session-start-write-plugin-root-breadcrumb.py`.
 `${CLAUDE_PLUGIN_ROOT}` does not resolve inside a `subagentStatusLine` command
 (upstream anthropics/claude-code#81320) — this hook hands that command the one
@@ -58,7 +58,12 @@ def _plugin_root() -> "str | None":
 
 
 def _breadcrumb_path() -> "Path | None":
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if not home:
+        try:
+            home = str(Path.home())
+        except (RuntimeError, KeyError):
+            return None
     if not home or home == "~":
         return None
     return Path(home) / BREADCRUMB_RELATIVE_PATH

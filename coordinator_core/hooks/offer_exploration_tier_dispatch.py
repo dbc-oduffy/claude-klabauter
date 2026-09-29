@@ -1,7 +1,7 @@
 """coordinator_core.hooks.offer_exploration_tier_dispatch — PreToolUse hook,
 matcher: Agent.
 
-Port of: DoE-claude `coordinator/hooks/scripts/offer-exploration-tier-dispatch.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/offer-exploration-tier-dispatch.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict: command/native-door — no coordinator/bin shim, no http
 registration.

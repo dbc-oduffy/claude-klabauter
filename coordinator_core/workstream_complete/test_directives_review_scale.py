@@ -1605,7 +1605,7 @@ def test_zero_diff_commits_do_not_count_toward_the_commit_brightline():
 
 # ---------------------------------------------------------------------------
 # The surface arm reads the same reviewability predicate as `code_loc`
-# (2026-08-29, doe-claude-9d live report: a close whose whole reviewable
+# (2026-08-29, coordinator-content-repo-9d live report: a close whose whole reviewable
 # delta was a 22-line prose fix was forced into a partitioned review).
 # `_accumulate_numstat` folded EVERY numstat row's path into `surfaces`
 # while `_accumulate_code_loc_numstat`, over the same `git show` text in

@@ -3965,7 +3965,7 @@
       "_COCKPIT_LANGUAGES"
     ],
     [
-      "coordinator_core/ops/tests/test_gen_claude_doe_shim_disabled_block.py",
+      "coordinator_core/ops/tests/test_gen_claude_author_shim_disabled_block.py",
       "_SOURCE_LINES"
     ],
     [

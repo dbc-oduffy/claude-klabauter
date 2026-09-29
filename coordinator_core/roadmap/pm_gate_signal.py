@@ -10,7 +10,7 @@ stub_ids into an advisory judgment point, and it never emits, decides, or
 authors a gate question (fragment ``row_template.authored_by``: "the EM, not
 the detector").
 
-Fragment resolution: the rule text lives in DoE-claude
+Fragment resolution: the rule text lives in coordinator-content-repo
 (``coordinator/contract/pm-gate-signal-fragment.json``), owned by DoE and
 pinned here as a byte-identical vendored copy under
 ``coordinator_core/roadmap/fragments/pm-gate-signal-fragment.json`` -- the
@@ -18,14 +18,14 @@ same "read a JSON fragment off disk, parse it verbatim" shape
 ``coordinator_core.ops.review_mint.op.load_fragment`` uses for its supplied
 roster fragment, but WITHOUT that function's live sibling-clone resolution:
 ``review_mint/op.py``'s module docstring names its own
-``read_doe_root_pointer()`` call as the ONE sanctioned live cross-repo read
+``read_content_root_pointer()`` call as the ONE sanctioned live cross-repo read
 site in that plan's surface, and ``dispatch_emit/emit.py``'s docstring names
 any OTHER live sibling-clone resolution as the defect class it exists to
 avoid. This module neither resolves the sibling root at runtime nor accepts
 an injected-caller-data dict (``dispatch_emit/emit.py``'s shape) -- it reads
 its own vendored copy, verbatim, off disk. ``test_pm_gate_signal.py``'s
 byte-identity test pins that copy against the DoE source, the same guarantee
-``test_supplied_fragments.py`` (DoE-claude) gives the source side.
+``test_supplied_fragments.py`` (coordinator-content-repo) gives the source side.
 
 THREE DETECTION LEGS, ONE JUDGMENT LEG -- not four legs of the same kind
 (fragment ``legs``; see also the fragment's companion

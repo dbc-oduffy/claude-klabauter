@@ -252,7 +252,7 @@ def _iter_hook_script_top_level_imports(hooks_scripts_dir):
 # "coordinator/lib/ holds doctrine_surface_tiers.py"), but on THIS box's
 # `coordinator-claude` live mirror the `coordinator/lib/` layout its
 # `sys.path` insert expects does not exist (it lives only under the sibling
-# `DoE-claude/coordinator/lib/`) -- a pre-existing layout mismatch in that
+# `coordinator-content-repo/coordinator/lib/`) -- a pre-existing layout mismatch in that
 # OTHER repo, out of this repo's remit to fix, and not a pip-installable
 # package this venv could ever satisfy regardless.
 _NON_THIRD_PARTY_HOOK_IMPORTS = frozenset(

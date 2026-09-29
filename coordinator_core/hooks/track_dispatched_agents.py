@@ -166,7 +166,7 @@ def _fold_agent_type(value: str) -> str:
     That the class varies in spelling is not speculative: DoE hooks already
     fold it (`offer-exploration-tier-dispatch.py` for case).
 
-    Reported by doe-claude-em 2026-08-18 with the sample size stated rather
+    Reported by coordinator-content-repo-em 2026-08-18 with the sample size stated rather
     than rounded: zero AMBIGUOUS rows across 8 post-change dispatches --
     not reproduced, and not disproved either.
 

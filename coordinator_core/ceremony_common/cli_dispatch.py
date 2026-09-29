@@ -124,16 +124,16 @@ module now resolves TWO distinct producer roots, never conflated:
        `coordinator/bin` under THIS module's own clone. Always resolvable:
        the engine that runs this code ships that directory by construction.
     2. `resolve_plugin_cli_script_root()` -- a SECOND, DoE-anchored root,
-       `<doe_root>/coordinator/bin`, resolved via
-       `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process()`.
-       Optional by construction: a box with no DoE-claude clone has no such
+       `<content_root>/coordinator/bin`, resolved via
+       `coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process()`.
+       Optional by construction: a box with no coordinator-content-repo clone has no such
        root, and the function returns `None` rather than guessing or raising.
 
 THE RUNG CUT (why `resolve_plugin_cli_script_root()` does not simply call
-`coordinator_doe_root()`). The full ladder's rung 3 delegates to
+`coordinator_content_root()`). The full ladder's rung 3 delegates to
 `resolve_coordinator_clone.resolve_clone_root()`, which retains a
 `subprocess.run` fallback. `resolve_plugin_cli_script_root()` consults rungs
-1, 2, 2.5 and 2.75 ONLY (`coordinator_doe_root_in_process()`) and returns
+1, 2, 2.5 and 2.75 ONLY (`coordinator_content_root_in_process()`) and returns
 `None` rather than descending to rung 3 -- so resolving this second root is
 zero-spawn on EVERY box, resolvable or not. A box that needs a subprocess to
 find DoE is a box where plugin-local dispatch should be off; the sentinel
@@ -143,21 +143,21 @@ THE SENTINEL'S CONTRACT. `UNRESOLVED_PLUGIN_CLI_ROOT` is a module-level
 literal `Path` whose last path segment is `bin`, at a location guaranteed not
 to exist. It exists so a consumer of the optional second root (a
 `dict[str, Path]`-typed dispatch table, e.g.) can keep a non-optional `Path`
-value without inventing its own DoE-root join -- `<script root> or
+value without inventing its own content-root join -- `<script root> or
 UNRESOLVED_PLUGIN_CLI_ROOT` -- and it is owned here, not by any caller,
 because the one-definition guard
 (`ceremony_common/test_producer_root_has_one_definition.py`) exists precisely
-to refuse a second module spelling its own DoE-root join.
+to refuse a second module spelling its own content-root join.
 
 `resolve_plugin_cli_script_root()` never returns a path it has not itself
-seen on disk: the joined `<doe_root>/coordinator/bin` must be a real
+seen on disk: the joined `<content_root>/coordinator/bin` must be a real
 directory (one `is_dir()` inside the resolver), which also covers the stale
 or moved DoE clone -- a resolved-but-gone root is treated exactly like an
 unresolvable one, never surfaced as a `FileNotFoundError` three calls later.
 The join is deliberately NOT layout-aware: a flat OSS/marketplace root (whose
 `schemas/` and `bin/` sit directly under it, no `coordinator/` subdirectory)
 joins to a `coordinator/bin` that does not exist, so it is never an
-admissible plugin-local dispatch source even when `coordinator_doe_root_in_
+admissible plugin-local dispatch source even when `coordinator_content_root_in_
 process()` itself resolves it (at rung 2.75). Admitting a published mirror's
 scripts would be a product decision about consumer boxes this module does
 not make.
@@ -234,7 +234,7 @@ from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
 )
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root_in_process
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root_in_process
 
 #: on any real box -- see module docstring, "THE SENTINEL'S CONTRACT". Exists
 UNRESOLVED_PLUGIN_CLI_ROOT = Path("/__coordinator_unresolved_plugin_cli_root__/coordinator/bin")
@@ -312,16 +312,16 @@ def resolve_plugin_cli_script_root() -> Optional[Path]:
     the same reason `resolve_cli_script_root()` takes none: a caller's
     `repo_root` names the repo a CLI operates on, never the tree it ships in.
 
-    Resolves `<doe_root>/coordinator/bin` from
-    `coordinator_doe_root_in_process()`, which covers rungs 1, 2, 2.5 and
-    2.75 ONLY -- this function never calls `coordinator_doe_root()` and
+    Resolves `<content_root>/coordinator/bin` from
+    `coordinator_content_root_in_process()`, which covers rungs 1, 2, 2.5 and
+    2.75 ONLY -- this function never calls `coordinator_content_root()` and
     never reaches `resolve_coordinator_clone.resolve_clone_root()`'s
     `subprocess.run`. Returns `None`, never raises, when the ladder cannot
     resolve a root AND, equally, when it resolves a root whose joined
     `coordinator/bin` is not a directory (a stale/moved clone, or a
     flat-layout root admissible only up to rung 2.75 itself -- the join is
     deliberately not layout-aware, see module docstring)."""
-    root, _rung = coordinator_doe_root_in_process()
+    root, _rung = coordinator_content_root_in_process()
     if root is None:
         return None
     candidate = Path(root) / "coordinator" / "bin"

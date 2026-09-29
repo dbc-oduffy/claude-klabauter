@@ -337,7 +337,7 @@ class TestMiseContinuanceRedBand:
 
     def test_absent_sentinel_gets_the_plain_handoff_text(self, tmp_path):
         session_id = "session-mise-no-sentinel"
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 1)
         text = _check(session_id)
         assert "HANDOFF NOW" in text
         assert "Phase 6" not in text
@@ -354,7 +354,7 @@ class TestMiseContinuanceRedBand:
         informational text a mere-presence check would have picked."""
         session_id = "session-mise-garbage-sentinel"
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="not-a-real-mode")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 1)
         text = _check(session_id)
         assert "HANDOFF NOW" in text
         assert "INFORMATIONAL" not in text
@@ -385,8 +385,9 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
     def test_the_reading_itself_still_reaches_the_session(self, tmp_path, monkeypatch):
         session_id = "session-autonomous-pct"
         _under_sentinel(tmp_path, monkeypatch, session_id)
-        _write_sidecar(session_id, _red_bound_pct() + 10)
-        assert "~58% of window used" in _check(session_id)
+        pct = _red_bound_pct() + 5
+        _write_sidecar(session_id, pct)
+        assert f"~{round(pct)}% of window used" in _check(session_id)
 
     def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
         _write_sidecar("session-no-sentinel-orange", _orange_bound_pct() + 1)

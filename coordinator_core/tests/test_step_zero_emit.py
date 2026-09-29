@@ -17,15 +17,15 @@ import os
 import pytest
 
 from coordinator_core.install.step_zero_emit import emit_line, json_escape
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
 
 def _find_fixture():
-    doe_root, present = doe_root_and_present()
+    content_root, present = content_root_and_present()
     if not present:
         return None
     candidate = os.path.join(
-        doe_root, "coordinator", "tests", "fixtures", "step-zero-conformance.json"
+        content_root, "coordinator", "tests", "fixtures", "step-zero-conformance.json"
     )
     return candidate if os.path.isfile(candidate) else None
 

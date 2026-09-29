@@ -37,9 +37,9 @@ it asserts that the item's spec-declared acceptance surface went
 undischarged, and that surface is now the spec's `## Tasks` spine row for
 the item plus its `prime_exit_criterion` — NOT a `## Acceptance Criteria`
 section, which the plan scaffold no longer emits (forward-only PM ruling;
-DoE-claude `pln-collapse-the-ac-checkbox-table-c53bbc`). The constant is
+Coordinator-content-repo `pln-collapse-the-ac-checkbox-table-c53bbc`). The constant is
 deliberately NOT renamed to `SPINE-MISS`: this literal is the wire value a
-Haiku verdict file ends with, and DoE-claude's
+Haiku verdict file ends with, and coordinator-content-repo's
 `coordinator/pipelines/mise-en-place/PIPELINE.md` § Phase 5 names the same
 four strings — renaming it is a two-repo coordinated change with no reader
 it would make more correct. `build_haiku_verifier_dispatch`
@@ -48,8 +48,8 @@ that the two shared values are present in whatever set is passed — it does
 NOT merge, widen, or offer a combined enum. See the plan's own instruction:
 "Parameterize; do NOT unify the enums."
 
-Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
+Contract: coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C6.
 
 Negative-spec:

@@ -4,7 +4,7 @@ The fence renders, `git diff` is clean, and a human reads the block
 correctly — while `yaml.safe_load` on its body raises and every spine CLI
 reports a visibly present spine as ABSENT, first noticed at
 `/execute-plan`, after review and PM ratification. Three distinct
-producers have written this class across the fleet (DoE-claude's
+producers have written this class across the fleet (coordinator-content-repo's
 `review-integrator` HTML comments, a title with an unquoted inline
 `kind:`, and this repo's own dedented block-scalar continuation in
 `docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md`),

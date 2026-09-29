@@ -7,7 +7,7 @@ observed incidents this plan cites as its evidence base (see the plan's own
 `abs-path-ok` marker -- not repeated here to avoid a second per-machine
 literal in this codebase) are exactly this shape.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C5 "Outside-repo detection, inline-interpreter classification,
 sandbox reroute".
 
@@ -287,6 +287,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_message import (
+    apply_cross_repo_level,
     AGENT_CLASS_SUBAGENT,
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
@@ -310,6 +311,7 @@ from coordinator_core.bash_guards._write_bump_stand_down import (
     stand_down_reason,
 )
 from coordinator_core.session import machinery_paths
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -802,11 +804,18 @@ def check_bump_outside_repo_write(
                     anchor_git_root_str, effective_sid, raw_target, stood_down
                 )
                 return None
-            return _deny(
-                "'%s' did not expand -- the variable was never set, so this "
-                "write will create a literal file or directory named '%s', "
-                "not use the value you intended. Set/export the variable "
-                "first, or write the real path." % (raw_target, raw_target)
+            return apply_guard_level(
+                "bump-outside-repo-write",
+                _deny(
+                    "'%s' did not expand -- the variable was never set, so this "
+                    "write will create a literal file or directory named '%s', "
+                    "not use the value you intended. Set/export the variable "
+                    "first, or write the real path." % (raw_target, raw_target)
+                ),
+                risk=(
+                    "A variable in the write target did not expand, so the "
+                    "write creates a literal path named after the variable."
+                ),
             )
 
         probe_dir = _nearest_existing_ancestor(target_dir)
@@ -868,7 +877,12 @@ def check_bump_outside_repo_write(
                 anchor_git_root_str, effective_sid, target_label, stood_down
             )
             return None
-        return _deny(message)
+        return apply_cross_repo_level(
+            "bump-outside-repo-write",
+            _deny(message),
+            gitdir=anchor_gitdir,
+            session_id=effective_sid,
+        )
 
     return None
 
@@ -1078,6 +1092,11 @@ def _check_bump_outside_repo_write_powershell(
                 anchor_git_root_str, effective_sid, target_label, stood_down
             )
             return None
-        return _deny(message)
+        return apply_cross_repo_level(
+            "bump-outside-repo-write",
+            _deny(message),
+            gitdir=anchor_gitdir,
+            session_id=effective_sid,
+        )
 
     return None

@@ -2,7 +2,7 @@
 coordinator_core.hooks.postuse_stop_family_dispatch — PostToolUse(Write|
 Edit|MultiEdit) Stop-family advisory fan-in op.
 
-Purpose: warm command/native-door counterpart of DoE-claude's
+Purpose: warm command/native-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/postuse-stop-family-dispatch.py`, which folds
 four write-path advisory guards (`derive-global-doctrine-live-copy.py`,
 `derive-setup-copies.py`, `nudge-initiative-goals-ladder.py`,

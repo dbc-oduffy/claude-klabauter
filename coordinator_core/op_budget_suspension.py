@@ -775,7 +775,7 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "disposition": (
             "gravestone -- job was 'report which parts of the codebase are "
-            "churning most'. The named consumer is DoE-claude "
+            "churning most'. The named consumer is coordinator-content-repo "
             "coordinator/bin/survey-consume-gate.py :: _run_churn, called from "
             "/architecture-survey --refresh's Phase 0 step 7; C1's re-measure "
             "puts a rebuilt producer at p50 4377.7ms end-to-end (n=30), over the "

@@ -3,7 +3,7 @@
 target ~/.claude" an executable refusal, not prose.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-repo-setup-claude-home-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-repo-setup-claude-home-
 refusal.py`. That script ran folded into `preuse-bash-dispatch.py`'s own
 `_BASH_GUARD_REGISTRY`, a second, doctrine-plane-resident dispatch table.
 None of that applies here: this lands as its own `hooks.<name>` op per this

@@ -230,8 +230,8 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
         # `block_consumed_handoff_edit`/`block_cutover_phase_hand_edit`,
         # which spell it this way for the same reason.
         # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH is not
-        # stripped by the latter, so a `git_root` of `X:\repo\` (or `X:\`, a
-        # drive-root repo) composes `X:\repo\/cross-repo/`, which casefolds to
+        # stripped by the latter, so a `git_root` of `C:\repo\` (or `C:\`, a
+        # drive-root repo) composes `C:\repo\/cross-repo/`, which casefolds to
         # a DOUBLE-slash prefix and stops matching the single-slash form
         # `Path.resolve()` produces on the candidate side -- the same silent
         # inertness this fix exists to close, reintroduced through the one

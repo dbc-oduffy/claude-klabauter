@@ -60,7 +60,7 @@ AC6) by vacating slot 65. 114 is a fresh advisory-phase slot chosen against
 that phase's own occupancy (`write-guard-priority-bands.md`'s nine-guard
 slot map) — the old 65 carried no meaning across the phase boundary.
 
-Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a);
+Spec backlink: coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a);
 docs/plans/2026-08-06-apply-guard-class-census.md (chunk C5);
 docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md
 """

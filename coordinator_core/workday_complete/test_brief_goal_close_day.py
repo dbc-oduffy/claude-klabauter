@@ -69,7 +69,7 @@ def _stub_operator_config(monkeypatch) -> None:
             "settings_home": "",
             "claude_klabauter_bin": "",
             "claude_klabauter_root": "",
-            "doe_root": "",
+            "content_root": "",
         },
     )
 

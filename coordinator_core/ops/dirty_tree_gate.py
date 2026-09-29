@@ -114,7 +114,7 @@ from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.state_root import (
     CrossCuttingStateRoot,
     StateRootError,
@@ -134,11 +134,11 @@ def _resolve_plugin_root() -> Tuple[Optional[str], Optional[str]]:
     if plugin_root:
         return plugin_root, None
 
-    doe_root = read_doe_root_pointer_file()
-    content_root = content_root_for(doe_root)
+    content_root = read_content_root_pointer_file()
+    content_root = content_root_for(content_root)
 
     if content_root is None:
-        return None, "ERROR: .doe-root missing/invalid — re-run coordinator:install"
+        return None, "ERROR: .coordinator-content-root missing/invalid — re-run coordinator:install"
 
     return str(content_root), None
 

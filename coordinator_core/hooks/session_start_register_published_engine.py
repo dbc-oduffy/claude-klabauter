@@ -4,7 +4,7 @@ registry so a box that never ran the installer still resolves a published
 engine.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude
+from coordinator-content-repo
 `coordinator/hooks/scripts/session-start-register-published-engine.py`. Its
 gap: a cloud container clones every fleet repo but installs no machine-local
 registry, so `_engine_root`'s ladder falls past the published-engine rung to

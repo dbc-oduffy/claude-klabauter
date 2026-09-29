@@ -17,7 +17,7 @@ winning over pm-decision, the combined appetite_exceeded + pm-decision
 next_move, and a spec-dispatch CLI smoke test.
 
 Also covers the 2026-08-05 premise-provenance detent (cross-repo memo
-2026-08-05-doe-claude-em-premise-provenance-detent-sizing-assemble.md):
+2026-08-05-coordinator-content-repo-em-premise-provenance-detent-sizing-assemble.md):
 `premise_unproven` / `premise_not_applicable` firing on resized L/XL across
 all three non-plan routes, NOT firing at XS/S/M nor for
 executed/unrecorded/None, unconditional validation on the express_lane
@@ -552,7 +552,7 @@ def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance)
 
 def test_premise_unproven_fires_at_m_plan_routed():
     # M is in _PREMISE_DETENT_TSHIRTS but NOT in _LARGE_TSHIRTS — the gap
-    # this dispatch closes (doe-claude-em was hand-reading M for this).
+    # this dispatch closes (coordinator-content-repo-em was hand-reading M for this).
     decision = sa.route(
         appetite="large", estimate={"tshirt": "M"}, premise_provenance="read"
     )
@@ -948,13 +948,13 @@ def test_write_guard_validate_frontmatter_schema_deny_accepts_real_xxl_sizing_ob
     # duty to validate against the claude-klabauter-side write path
     # (validate_frontmatter_schema_deny), not just the validator leg above.
     pytest.importorskip("yaml")
-    from coordinator_core.testing.doe_root import doe_root_and_present
+    from coordinator_core.testing.content_root import content_root_and_present
     from coordinator_core.write_guards import validate_frontmatter_schema_deny as guard
 
-    doe_root, doe_present = doe_root_and_present()
+    content_root, doe_present = content_root_and_present()
     if not doe_present:
-        pytest.skip("sibling DoE-claude checkout not found")
-    monkeypatch.setattr(guard, "coordinator_doe_root", lambda: doe_root)
+        pytest.skip("sibling coordinator-content-repo checkout not found")
+    monkeypatch.setattr(guard, "coordinator_content_root", lambda: content_root)
 
     import yaml
 
@@ -1058,9 +1058,9 @@ def test_sizing_object_schema_version_and_bump_class():
     # Do NOT hand-restore the key here: that would manufacture drift against a
     # deliberate decision, and DoE's `test_vendored_schema_matches_doe_source`
     # hashes shape. And do NOT read a red here as a re-vendor signal — restoring
-    # the key would mean reverting `9f4c0c17b`, which doe-claude-em has stated
+    # the key would mean reverting `9f4c0c17b`, which coordinator-content-repo-em has stated
     # they will not do (memo
-    # 2026-08-13-doe-claude-em-bump-class-deliberately-absent.md).
+    # 2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md).
     assert "x-bump-class" not in schema
 
 
@@ -1133,10 +1133,10 @@ def test_vendored_schema_widened_enums_order_exact():
         "intent_em_elaborated",
         "precedent_shipped_before",
         "probe_raise_on_substrate_condition",
-        # 1.12.0: doe-claude-em's counter — the symmetric mark on ask-scope,
+        # 1.12.0: coordinator-content-repo-em's counter — the symmetric mark on ask-scope,
         # so the notch-preserving answer is no longer the unmarked one.
         "probe_raise_ask_scope_asserted",
-        # 1.13.0: the breadth arm (cross-repo memo 2026-08-12-doe-claude-em-
+        # 1.13.0: the breadth arm (cross-repo memo 2026-08-12-coordinator-content-repo-em-
         # sizing-breadth-arm.md, adopted). Same order-exact, append-at-end
         # discipline as every widen above — never re-sort.
         "probe_raise_on_breadth",
@@ -1207,7 +1207,7 @@ def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up():
 
 
 # --- Sizing-lobby guards become required flags (cross-repo memo
-# --- 2026-08-10-doe-claude-em-sizing-guard-flags.md) ------------------------
+# --- 2026-08-10-coordinator-content-repo-em-sizing-guard-flags.md) ------------------------
 #
 # Both flags replay the --premise-provenance shape: a typed answer that
 # reaches the validator, an advisory detent, a next_move advisory, and no
@@ -1593,7 +1593,7 @@ def test_new_detents_are_declared_in_the_enum():
 
 
 # ---------------------------------------------------------------------------
-# The ask-scope symmetric mark (doe-claude-em's counter, 1.12.0).
+# The ask-scope symmetric mark (coordinator-content-repo-em's counter, 1.12.0).
 #
 # Without it, `substrate-condition` cost the EM the raise while `ask-scope`
 # cost nothing and was recorded nowhere queryable — an honesty gradient where
@@ -1659,7 +1659,7 @@ def test_ask_scope_detent_is_declared_in_the_enum():
 
 
 # ---------------------------------------------------------------------------
-# The breadth arm (cross-repo memo 2026-08-12-doe-claude-em-sizing-breadth-
+# The breadth arm (cross-repo memo 2026-08-12-coordinator-content-repo-em-sizing-breadth-
 # arm.md, adopted): a raise resting solely on a touchpoint COUNT is a
 # dispatch shape, not a size signal, and must not move the notch — same
 # suppression contract as `substrate-condition`, distinct detent.
@@ -1728,7 +1728,7 @@ def test_breadth_detent_is_declared_in_the_enum():
 
 # ---------------------------------------------------------------------------
 # 2026-09-05 route flight recorder (cross-repo memo
-# 2026-09-05-doe-claude-em-sizing-route-flight-recorder-should-emit-itself):
+# 2026-09-05-coordinator-content-repo-em-sizing-route-flight-recorder-should-emit-itself):
 # the lobby's stage rows are computed from route + resized tshirt rather than
 # transcribed by the EM. The failure these cover is the one transcription has:
 # a chain that stops one row short, or a terminal picked from the route instead

@@ -3,7 +3,7 @@
 decision.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-named-dispatch-tool-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-named-dispatch-tool-
 restriction.py`. That script's own header records it as DEREGISTERED from
 `hooks.json`'s `Agent` matcher (2026-07-31, single-emitter fold-in) —
 `enforce-agent-dispatch-mode.py` (this row's own sibling op,

@@ -4,7 +4,7 @@ own docstring for the reference-hook port this is a faithful engine-ification
 of).
 
 Covers the 2026-07-24 widening (memo
-cross-repo/inbox/2026-07-24-doe-claude-em-executor-spec-surface-widening.md,
+cross-repo/inbox/2026-07-24-coordinator-content-repo-em-executor-spec-surface-widening.md,
 actioning C9(c) of DoE's agent-citizenship provisioning plan): the fast-exit
 ``_PLAN_BODY_RE`` now also matches ``docs/problems/**/*.md`` in addition to
 ``docs/plans/**/*.md``, while ``docs/wiki/**`` and ``docs/decisions/**``

@@ -60,7 +60,7 @@ across the remaining three surfaces (_EAGER_OP_MODULES / _OP_KEY_SCOPE /
 _registry_map.py) lands in the separate EM-serial registration pass (CC-3).
 
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B3
-Port source: DoE-claude coordinator/skills/percolate/SKILL.md § Step 5a (bash fence)
+Port source: coordinator-content-repo coordinator/skills/percolate/SKILL.md § Step 5a (bash fence)
 
 Caller status (reconciled 2026-08-14, wave-3 baton close): NO CALLER, and the
 planned cutover will not happen as B3 framed it. B3's follow-through was "cut

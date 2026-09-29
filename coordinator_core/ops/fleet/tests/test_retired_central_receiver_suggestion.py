@@ -42,7 +42,7 @@ def repos():
     (so the registered-successor path is reachable) and one unrelated repo (so
     a fuzzy fallthrough has somewhere to land)."""
     return {
-        "repos.doe_claude": "/x/DoE-claude",
+        "repos.content_root": "/x/coordinator-content-repo",
         "repos.claude_klabauter": "/x/claude-klabauter",
     }
 
@@ -74,15 +74,15 @@ def test_reader_ignores_malformed_rows(monkeypatch):
         "read_doe_identity",
         lambda: {
             "retiredCentralReceiverIds": {
-                "Claude-Central-EM": "  DoE-Claude-EM  ",
+                "Claude-Central-EM": "  coordinator-content-repo-EM  ",
                 "blank-successor": "   ",
-                "": "doe-claude-em",
+                "": "coordinator-content-repo-em",
                 "non-string": 42,
             }
         },
     )
     assert R.read_retired_central_receiver_ids() == {
-        "claude-central-em": "doe-claude-em"
+        "claude-central-em": "coordinator-content-repo-em"
     }
 
 

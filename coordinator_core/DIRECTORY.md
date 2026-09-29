@@ -253,7 +253,7 @@ the DR-215 per-op budget; produces code_sha-keyed conformance records for the qs
 
 ### `percolate/` — generic percolation engine (data-driven, per-consumer store)
 Four-phase (pre_rsync/post_rsync/pre_ci) orchestrator over transform-kinds; driven by
-`percolate_run.py`/`percolate_validate.py` in `ops/`. Byte-parity with the retired DoE-claude
+`percolate_run.py`/`percolate_validate.py` in `ops/`. Byte-parity with the retired coordinator-content-repo
 v3 shell scripts, verified via golden fixtures.
 
 | File | Purpose |
@@ -275,7 +275,7 @@ v3 shell scripts, verified via golden fixtures.
 | `token.py` | Token provisioning primitives |
 
 ### `frontmatter/` — YAML frontmatter primitives
-Python port of the DoE-claude coordinator JS text-manipulation primitives.
+Python port of the coordinator-content-repo coordinator JS text-manipulation primitives.
 
 | File | Purpose |
 |---|---|

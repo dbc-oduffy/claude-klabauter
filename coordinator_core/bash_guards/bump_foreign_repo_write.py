@@ -2,7 +2,7 @@
 CROSS-REPO write-confinement speed bump (C4): a well-meaning session commits
 or writes into a git repo other than its own, and nothing today notices.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C4 "Cross-repo detection and registration".
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Read the plan's "Design
@@ -195,6 +195,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     target_is_publish_destination,
     target_is_registered_repo,
     target_is_under_claude_home,
+    target_is_under_settings_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     bump_is_cleared,
@@ -204,6 +205,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_message import (
+    apply_cross_repo_level,
     AGENT_CLASS_SUBAGENT,
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
@@ -719,7 +721,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     module docstring section there, "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN
     THOUGH IT IS A FOREIGN REPO"). `coordinator-lesson-promote`
     (`ops/queue_promote.py`) writes a universal lesson's durable home to
-    `<doe_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- DoE-claude is
+    `<content_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- coordinator-content-repo is
     the central lessons repo, there is no in-repo alternative, and a foreign-
     repo bump on that write is a false positive on both surfaces alike.
     Callers treat `True` as "never bump".
@@ -728,7 +730,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     sibling `_target_is_bare_temp_scratch`-shaped exemptions (see the tool
     surface's own docstring, same section, for why): the whole point of this
     exemption is that the target IS a foreign repo -- `queue.promote` always
-    writes into an actual DoE-claude checkout -- so gating on "no repo"
+    writes into an actual coordinator-content-repo checkout -- so gating on "no repo"
     would exempt nothing real. This is exactly why the check below sits
     INSIDE the per-candidate loop, after `target_gitdir` is already
     confirmed non-`None`: this guard (C4) only ever sees candidates that
@@ -1162,6 +1164,23 @@ def _is_expansion_valued(target: str) -> bool:
     return "$" in target or "`" in target
 
 
+_SUBSTITUTION_PREFIX_RE = r"(?:\$\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)|`[^`]*`)"
+
+
+def _is_substitution_prefixed(cmd: str, target: str) -> bool:
+    """The tokenizer blanks `$(...)`/backtick substitutions, so `` `pwd`/x ``
+    reaches the sink extractor as `/x`; the raw command still shows the prefix.
+
+    Skips only when EVERY occurrence of `target` in the raw command follows a
+    substitution: a decoy `$(true)/etc/x` elsewhere must not hide a real
+    literal `/etc/x` sink."""
+    prefixed = len(re.findall(_SUBSTITUTION_PREFIX_RE + re.escape(target), cmd))
+    if prefixed == 0:
+        return False
+    total = len(re.findall(re.escape(target), cmd))
+    return total <= prefixed
+
+
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str]
 ) -> Iterator[Tuple[str, str, Optional[str]]]:
@@ -1276,7 +1295,7 @@ def _iter_write_sink_candidates(
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
-            if _is_expansion_valued(raw_target):
+            if _is_expansion_valued(raw_target) or _is_substitution_prefixed(cmd, raw_target):
                 continue
             resolved_target = _resolve_relative(effective_cwd, raw_target)
             if resolved_target is None:
@@ -1366,6 +1385,9 @@ def _evaluate_foreign_repo_candidate(
         return None
 
     if target_is_under_claude_home(target_dir):
+        return None
+
+    if target_is_under_settings_home(target_dir, env=env, target_gitdir=target_gitdir):
         return None
 
     # _deny(message)`. The AC14 SAME-REPO comparison above already
@@ -1487,7 +1509,12 @@ def _evaluate_foreign_repo_candidate(
             "COORDINATOR_CAP_FLEET_PRESENT=1 and the bump enforces again."
         )
         return None
-    return _deny(message)
+    return apply_cross_repo_level(
+        "bump-foreign-repo-write",
+        _deny(message),
+        gitdir=marker_gitdir,
+        session_id=effective_sid,
+    )
 
 
 def check_bump_foreign_repo_write(

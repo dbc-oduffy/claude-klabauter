@@ -1,12 +1,12 @@
 """coordinator_core.write_guards.nudge_tasks_state_folder_split — advisory guard.
 
-Spec: DoE-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
+Spec: coordinator-content-repo docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
 Discharges (partly — see module tail): the "state/ vs tasks/" placement rule
-in DoE-claude's always-on global-doctrine/CLAUDE.md, and the C3 ledger's own
+in coordinator-content-repo's always-on global-doctrine/CLAUDE.md, and the C3 ledger's own
 Row 7 ("central-state-in-claude-klabauter routing sentence" — ACCEPT-UNENFORCED,
 naming this guard as what was owed).
 
-Motivation: DoE-claude's ``state/`` holds always-on session substrate
+Motivation: coordinator-content-repo's ``state/`` holds always-on session substrate
 (orientation_cache, lessons, handoffs, trackers, queues, ledgers, memos,
 review-trail, week-changelog, audits, recovery, scratch, the *-backlog and
 improvement-queue dirs); ``tasks/`` is UUID flight-recorder dirs, dated
@@ -110,6 +110,8 @@ Spec backlink: docs/wiki/coordinator-tripwires.md § tasks-state-folder-split
 from __future__ import annotations
 
 import re
+
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from typing import Any, Dict, Optional, Tuple
 
 CLASS = "advisory"
@@ -206,9 +208,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         file_path = _extract_file_path(payload)
         if not file_path:
             return None
-        file_path_norm = file_path.replace("\\", "/")
-        while "//" in file_path_norm:
-            file_path_norm = file_path_norm.replace("//", "/")
+        file_path_norm = collapse_slashes(file_path)
 
         match = _TASKS_PREFIX_RE.search(file_path_norm)
         if not match:

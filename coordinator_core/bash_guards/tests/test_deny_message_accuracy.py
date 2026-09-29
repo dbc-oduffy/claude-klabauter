@@ -60,7 +60,7 @@ firing through the real dispatcher, not in isolation") is BX-9/BX-10's own
 obligation once registration lands, and is marked inline below wherever a
 finding here can only be FULLY confirmed after that lands.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-12
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9 § BX-12
 """
 
 from __future__ import annotations
@@ -483,7 +483,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
     which stayed green for as long as the advisory printed a suggestion
     that silently dropped the caller's `-- <pathspec>`. A test that cannot
     see the one property that makes a suggestion safe to follow is why an
-    incorrect suggestion shipped green (doe-claude-em cross-repo memo,
+    incorrect suggestion shipped green (coordinator-content-repo-em cross-repo memo,
     2026-07-29).
     """
 

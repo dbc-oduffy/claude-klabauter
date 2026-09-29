@@ -15,7 +15,7 @@ the cross-repo-memo authoring norm documented in
 
 Spec backlink: docs/plans/2026-06-24-cockpit-cockpit-contract-reshape.md
 Ask 7 of the cockpit-contract reshape (chunk C6-entity).
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C6 —
   additive `archived` + `decision_note` fields (return-path/queryability feed; DEC-2/DEC-3).
 Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C8 —
@@ -103,7 +103,7 @@ class CrossRepoMemoSummary(BaseModel):
     """
     The memo kind discriminator (frontmatter `kind:` field).
 
-    MINOR bump 4.7.0 -> 4.8.0 (2026-09-22, closes DoE-claude
+    MINOR bump 4.7.0 -> 4.8.0 (2026-09-22, closes coordinator-content-repo
     state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-
     bug-degrades-silently.yaml): widens this enum by one member, `friction`
     — a workflow/process pain-point report, distinct from `fyi` (which

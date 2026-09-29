@@ -4,7 +4,7 @@ guards inside ONE Python interpreter safely, and what the aggregation,
 exception-isolation, lazy-import, sys.path-ordering, and measurement-mode
 seams around it guarantee.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_guard_runner_contract.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_guard_runner_contract.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3, verbatim:
 this module is pure vocabulary (dataclasses, constants, a scope-matching
 predicate) with no per-guard-body reference that needs porting-time

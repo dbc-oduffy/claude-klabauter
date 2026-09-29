@@ -3,23 +3,23 @@ for `coordinator_core.hooks.oss_operative_strings`.
 
 Subject: `coordinator_core/hooks/oss_operative_strings.py` — the ratified
 classification data (shape rules + the irreducible-literal residue table)
-DoE-claude's DR-141 predicate cluster imports over the wire, per
+Coordinator-content-repo's DR-141 predicate cluster imports over the wire, per
 `docs/plans/2026-09-18-doe-holds-no-scripts.md`'s W4-C6 row. The cluster
 itself (`_prompt_surface_locality.py`, `guard-oss-payload-locality.py`, and
 the rest) stays DoE-resident — this file carries only the data/shape-rule
 module the row's own body names as its remaining write.
 
-Ported behavior coverage against DoE-claude's own
+Ported behavior coverage against coordinator-content-repo's own
 `coordinator/tests/test_oss_payload_locality.py` assertions on these public
 symbols (`is_identifier_shape_operative`, `is_stable_artifact_id`,
 `SIBLING_REPO_RECORD`/`SIBLING_REPO_NAMES`, `IRREDUCIBLE_LITERALS`,
-`mcp_tool_prefixes`) at DoE-claude `d4122a0a2`, plus new coverage for this
+`mcp_tool_prefixes`) at coordinator-content-repo `d4122a0a2`, plus new coverage for this
 arrival's own shape change: `_resolve_mcp_topology_path` resolves the
-doctrine-asset YAML through the plugin content root / `.doe-root` pointer
+doctrine-asset YAML through the plugin content root / `.coordinator-content-root` pointer
 rather than a `Path(__file__)`-relative walk (this module no longer sits
 three directories under a DoE-repo root), and the dynamic, sys.path-driven
 `_oss_payload` import in `_engine_sibling_record` still degrades correctly
-when only DoE-claude's own tree — not claude-klabauter's — carries that module.
+when only coordinator-content-repo's own tree — not claude-klabauter's — carries that module.
 """
 
 from __future__ import annotations
@@ -54,17 +54,17 @@ def test_import_is_fast():
 
 
 def test_env_var_shape_is_operative():
-    assert ops.is_identifier_shape_operative("REPO_DOE_CLAUDE", sibling_names=("DoE-claude",))
+    assert ops.is_identifier_shape_operative("REPO_CONTENT_ROOT", sibling_names=("coordinator-content-repo",))
 
 
 def test_dotted_registry_key_shape_is_operative():
     assert ops.is_identifier_shape_operative(
-        "plugin.mirrors.doe-claude.source_path", sibling_names=("DoE-claude",)
+        "plugin.mirrors.coordinator-content-repo.source_path", sibling_names=("coordinator-content-repo",)
     )
 
 
 def test_bare_sibling_name_is_not_shape_operative():
-    assert not ops.is_identifier_shape_operative("DoE-claude", sibling_names=("DoE-claude",))
+    assert not ops.is_identifier_shape_operative("coordinator-content-repo", sibling_names=("coordinator-content-repo",))
 
 
 def test_trailing_sentence_period_is_stripped():
@@ -73,18 +73,18 @@ def test_trailing_sentence_period_is_stripped():
 
 
 def test_stable_artifact_id_component_matches_sibling():
-    token = "hnd-doe-claude-something-abc123"
-    assert ops.is_stable_artifact_id(token, sibling_names=("DoE-claude",))
-    assert ops.is_identifier_shape_operative(token, sibling_names=("DoE-claude",))
+    token = "hnd-coordinator-content-repo-something-abc123"
+    assert ops.is_stable_artifact_id(token, sibling_names=("coordinator-content-repo",))
+    assert ops.is_identifier_shape_operative(token, sibling_names=("coordinator-content-repo",))
 
 
 def test_bare_sibling_name_is_not_a_stable_artifact_id():
-    assert not ops.is_stable_artifact_id("DoE-claude", sibling_names=("DoE-claude",))
+    assert not ops.is_stable_artifact_id("coordinator-content-repo", sibling_names=("coordinator-content-repo",))
 
 
 def test_unrelated_hyphenated_word_does_not_false_positive():
     assert not ops.is_identifier_shape_operative(
-        "some-other-thing", sibling_names=("DoE-claude",)
+        "some-other-thing", sibling_names=("coordinator-content-repo",)
     )
 
 
@@ -92,16 +92,16 @@ def test_unrelated_hyphenated_word_does_not_false_positive():
 
 
 def test_pinned_unreachable_names_always_present():
-    assert "DoE-claude" in ops.SIBLING_REPO_NAMES
+    assert "coordinator-content-repo" in ops.SIBLING_REPO_NAMES
     assert "DoE" in ops.SIBLING_REPO_NAMES
-    assert ops.SIBLING_REPO_RECORD["DoE-claude"]["oss_reachable"] is False
-    assert ops.SIBLING_REPO_RECORD["DoE-claude"]["case_sensitive"] is True
+    assert ops.SIBLING_REPO_RECORD["coordinator-content-repo"]["oss_reachable"] is False
+    assert ops.SIBLING_REPO_RECORD["coordinator-content-repo"]["case_sensitive"] is True
 
 
 def test_engine_sibling_arm_fails_open_without_oss_payload():
     record = ops._sibling_repo_record()
     assert "claude-klabauter" not in record
-    assert set(record) == {"DoE-claude", "DoE"}
+    assert set(record) == {"coordinator-content-repo", "DoE"}
 
 
 def test_engine_sibling_arm_resolves_when_oss_payload_importable(monkeypatch):
@@ -169,7 +169,7 @@ def test_resolve_mcp_topology_path_fails_open_on_import_error(monkeypatch):
         if name in (
             "coordinator_core._settings_home",
             "coordinator_core.data_root",
-            "coordinator_core.doe_root_pointer",
+            "coordinator_core.content_root_pointer",
         ):
             raise ImportError(f"blocked for test: {name}")
         return real_import(name, *args, **kwargs)

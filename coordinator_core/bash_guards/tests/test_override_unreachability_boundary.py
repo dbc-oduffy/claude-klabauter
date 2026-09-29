@@ -62,7 +62,7 @@ other way first.**
 
 Spec backlink: coordinator_core/bash_guards/dispatch_checks.py (``_override``),
 coordinator_core/warm/hook_http.py (``payload_from_event``), and
-coordinator/hooks/scripts/preuse-bash-dispatch.py (DoE-claude repo,
+coordinator/hooks/scripts/preuse-bash-dispatch.py (coordinator-content-repo repo,
 stdin-only / in-process-no-shell-exec hook entry point).
 """
 
@@ -73,7 +73,7 @@ import os
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.warm import hook_http
 
 
@@ -160,30 +160,30 @@ class TestPayloadFromEventAlwaysPopulatesEnv:
 @pytest.mark.real_home
 class TestHookEntryPointStdinOnlyNoShellExec:
     """Structural properties of the hook entry point itself
-    (``preuse-bash-dispatch.py``, DoE-claude repo) that back the boundary --
+    (``preuse-bash-dispatch.py``, coordinator-content-repo repo) that back the boundary --
     read from source since the entry point isn't importable as a module
     (it's a `python3 -c ... runpy.run_path(...)` hooks.json registration,
     not a package).
 
     ``real_home`` because these are live-tree read-only oracles: the DoE
     checkout is resolved through the machine-local registry rung of
-    ``read_doe_root_pointer``, and conftest's home quarantine points that
+    ``read_content_root_pointer``, and conftest's home quarantine points that
     rung at a throwaway dir, which would turn every method here into a
     permanent skip. Nothing in this class writes."""
 
     def _source(self) -> str:
-        doe_root = read_doe_root_pointer()
+        content_root = read_content_root_pointer()
         candidate = (
-            os.path.join(doe_root, "coordinator", "hooks", "scripts", "preuse-bash-dispatch.py")
-            if doe_root
+            os.path.join(content_root, "coordinator", "hooks", "scripts", "preuse-bash-dispatch.py")
+            if content_root
             else ""
         )
         if not candidate or not os.path.isfile(candidate):
             pytest.skip(
-                "DoE-claude checkout not resolvable via the doe_root_pointer "
-                "ladder (registry `repos.doe_claude`, durable `.doe-root`, "
-                "legacy `.doe-root`); resolved root was %r, hook candidate "
-                "%r." % (doe_root, candidate)
+                "coordinator-content-repo checkout not resolvable via the content_root_pointer "
+                "ladder (registry `repos.content_root`, durable `.coordinator-content-root`, "
+                "legacy `.coordinator-content-root`); resolved root was %r, hook candidate "
+                "%r." % (content_root, candidate)
             )
         with open(candidate, "r", encoding="utf-8") as fh:
             return fh.read()

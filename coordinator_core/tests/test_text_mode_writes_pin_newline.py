@@ -233,7 +233,7 @@ _PINNED_PRODUCTION_SITES = (
     "coordinator_core/hooks/pickup_autofire.py",
     "coordinator_core/hooks/runtime_tripwire_stop_watcher.py",
     "coordinator_core/hooks/session_start_announce_job_mode.py",
-    "coordinator_core/hooks/session_start_register_doe_claude_root.py",
+    "coordinator_core/hooks/session_start_register_content_root_root.py",
     "coordinator_core/hooks/session_start_repair_prepare_commit_msg_hook.py",
     "coordinator_core/hooks/session_start_write_plugin_root_breadcrumb.py",
     "coordinator_core/hooks/support/bin_impl_drift.py",

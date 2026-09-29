@@ -2,7 +2,7 @@
 message-construction seam a Category-A (locally-authored, speaking) hook
 routes through.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_message_envelope.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_message_envelope.py`
 (40 consumers there) per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3, behavior
 -preserving except for wiki-citation resolution (see `resolve_wiki_citation`

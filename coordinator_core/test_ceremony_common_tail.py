@@ -21,7 +21,7 @@ Covers, per assembler (`workday_complete.brief`, `workweek_complete.brief`):
 The emission-cadence half of this tail was removed with the emission
 artifact itself (2026-08-22 CUT); what remains is the post-command hook.
 
-Spec backlink: DoE-claude DoE-claude:pln-b1-ceremony-complete-computed--9ffa54,
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-b1-ceremony-complete-computed--9ffa54,
 chunk C5, AC9
 
 Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordinator_core/test_ceremony_common_tail.py -q

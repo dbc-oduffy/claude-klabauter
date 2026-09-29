@@ -411,7 +411,7 @@ def _none_shape_main_reads_argv(script: Path) -> bool:
     Negative-spec: not a liveness or purity check. A `main` that reads argv
     but does work before parsing would still do it, exactly as its own cold
     route does -- the guarantee here is the file's, not this door's.
-    Reported by doe-claude-em (example-market-data-repo-fa friction log F21):
+    Reported by coordinator-content-repo-em (example-market-data-repo-fa friction log F21):
     `handoff-archive-transition --help` printed a stub naming no verbs,
     leaving the live baton-close door undiscoverable.
     """

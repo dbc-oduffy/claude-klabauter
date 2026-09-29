@@ -3,12 +3,12 @@ published subset, i.e. one no gate may draw a verdict from?
 
 Purpose: the frontmatter schema corpus does not live in this repo. It is
 resolved — `coordinator_core.data_root.data_root("schemas")`, which lands on a
-DoE-claude content root, either layout (see
+Coordinator-content-repo content root, either layout (see
 `coordinator_core._content_root_primitive.content_root_for`). Two of those
 layouts hold DIFFERENT-SIZED corpora, both correct:
 
-  <doe_root>/coordinator/schemas   the private AUTHORING tree — the whole set
-  <doe_root>/schemas (flat)        the published MIRROR — the published subset
+  <content_root>/coordinator/schemas   the private AUTHORING tree — the whole set
+  <content_root>/schemas (flat)        the published MIRROR — the published subset
 
 Percolation is one-way and the OSS editorial principle keeps DoE-internal
 schemas out of the naked publish, so a mirror root legitimately carries a
@@ -62,7 +62,7 @@ from pathlib import Path
 
 from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 
-#: Repo-root sentinel marking a DoE-claude AUTHORING checkout. DoE-claude's
+#: Repo-root sentinel marking a coordinator-content-repo AUTHORING checkout. Coordinator-content-repo's
 DEV_REPO_SENTINEL = ".coordinator-dev-repo"
 
 

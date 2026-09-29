@@ -99,6 +99,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Sequence
+from coordinator_core.win_portability import is_executable
 from typing import Optional
 from coordinator_core.install.write_surface import (
     StaticClause,
@@ -668,7 +669,7 @@ def resolve_bare_name(
                 candidate = dir_path / spelling
                 if not candidate.is_file():
                     continue
-                if require_exec and not os.access(candidate, os.X_OK):
+                if require_exec and not is_executable(candidate):
                     continue
                 if candidate not in hits:
                     hits.append(candidate)

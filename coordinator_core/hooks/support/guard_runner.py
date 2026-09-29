@@ -2,7 +2,7 @@
 runner that batches doctrine-plane-resident write-path guards inside one
 interpreter.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_guard_runner.py` (18
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_guard_runner.py` (18
 consumers there) per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk
 W4-C3. Implements `guard_runner_contract.py` (the GOVERNING SURFACE)
 verbatim -- see that module's numbered clauses for the authoritative

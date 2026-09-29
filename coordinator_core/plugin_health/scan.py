@@ -74,7 +74,7 @@ script probing for one).
 Self-registration: importing this module calls register_op("plugin_health.scan", ...)
 as a side-effect (same pattern as plugin_health.drift / ops/engine_drift.py).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2/T3b
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2/T3b
 Port of: scan-addon-health.sh (DoE b5a4192c, 2026-07-20)
 """
 

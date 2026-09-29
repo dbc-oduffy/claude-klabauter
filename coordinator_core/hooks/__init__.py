@@ -30,7 +30,7 @@ in-process attribute) — REUSED VERBATIM from coordinator_core.ops's own
 now-retired channel, never a hooks-specific one — used to gate this package's
 eager-import block; both channels, and the writers that armed the in-process one,
 are retired. Every consumer of a bare `import coordinator_core.hooks` (including
-DoE-claude's seven hook scripts that still call the sibling repo's own
+Coordinator-content-repo's seven hook scripts that still call the sibling repo's own
 `_arm_lazy_ops()`, defined in that repo's `coordinator/hooks/scripts/_engine_root.py`
 (theirs, not ours — do not go looking for it here); that call becomes a harmless
 no-op the moment nothing here reads the channel it arms) now goes through the
@@ -76,7 +76,7 @@ Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session
 Bookkeeping hook op (W4b) — writes the PreCompact sentinel + state snapshot to tempdir:
     context_pressure_precompact — compaction sentinel + state file; MUTATING
 
-Zero-tool-use detection ops (cross-repo DoE-claude contract, Stage 1 write / Stage 2 read).
+Zero-tool-use detection ops (cross-repo coordinator-content-repo contract, Stage 1 write / Stage 2 read).
 Naming note: the store holds one record per verified tool-use count, not only zero —
 `kind: "zero-tool-use"` names the detector, not a content filter; see
 subagent_zero_tool_use's module docstring ("Naming note") before adding a consumer.
@@ -93,7 +93,7 @@ subagent_zero_tool_use's module docstring ("Naming note") before adding a consum
                                        tool_use_count == 0 for its "zero-tool-use"
                                        verdict; returns structured data
 
-Subagent arrival-check op (cross-repo DoE-claude contract, sibling of the zero-tool-use
+Subagent arrival-check op (cross-repo coordinator-content-repo contract, sibling of the zero-tool-use
 trio above — different question, same pull/poll posture):
     subagent_arrival_check          — pull/poll: classify one agent_id as
                                        arrived/running/unknown by tailing ONLY that
@@ -101,8 +101,8 @@ trio above — different question, same pull/poll posture):
                                        full-file parse); fails toward "running"/"unknown",
                                        never a false "arrived"; returns structured data
 
-Receiver-state sensor op (cross-repo DoE-claude contract, source memo
-2026-08-14-doe-claude-em-receiver-state-sensor-seam.md) — thin op over
+Receiver-state sensor op (cross-repo coordinator-content-repo contract, source memo
+2026-08-14-coordinator-content-repo-em-receiver-state-sensor-seam.md) — thin op over
 session.receiver_state, the detection half of the receiver-state split (DoE owns the
 transport/hook-registration half):
     receiver_state_sensor           — Stop/SubagentStop; writes this session's own
@@ -123,8 +123,8 @@ coordinator_core.subagent_sandbox.detect_unfilled_sidecar):
 Spec backlinks:
     docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md
     docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md
-    cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
-    cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md
+    cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-engine-op-contract.md
+    cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-verdict-viable.md
     docs/plans/2026-08-14-receiver-state-sensor.md
 """
 
@@ -149,6 +149,9 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.track_dispatched_agents",
     "coordinator_core.hooks.agent_postuse_dispatch",
     "coordinator_core.hooks.context_pressure_precompact",
+    "coordinator_core.hooks.postusefailure_cross_repo_memo_remediate",
+    "coordinator_core.hooks.nudge_cross_repo_cwd_boundary",
+    "coordinator_core.hooks.guard_config_change_hookstack_selfdefence",
     "coordinator_core.hooks.subagent_zero_tool_use",
     "coordinator_core.hooks.subagent_zero_tool_use_surface",
     "coordinator_core.hooks.subagent_zero_tool_use_resolve",
@@ -200,9 +203,11 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.assert_em_role",
     "coordinator_core.hooks.sweep_boot",
     "coordinator_core.hooks.session_start_announce_job_mode",
-    "coordinator_core.hooks.session_start_register_doe_claude_root",
+    "coordinator_core.hooks.session_start_register_content_root_root",
     "coordinator_core.hooks.session_start_register_published_engine",
     "coordinator_core.hooks.repin_cloud_engine_root",
+    "coordinator_core.hooks.session_start_watch_presence",
+    "coordinator_core.hooks.session_start_cloud_focus",
     "coordinator_core.hooks.session_start_repair_prepare_commit_msg_hook",
     "coordinator_core.hooks.session_start_write_plugin_root_breadcrumb",
     "coordinator_core.hooks.sessionstart_bin_drift_refresh",

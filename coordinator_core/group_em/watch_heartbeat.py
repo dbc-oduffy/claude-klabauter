@@ -571,7 +571,7 @@ def stamp(
     (≈12.0ms average critical-section process time) and extrapolated to the
     real cadences -- ≈6.7x10⁻⁴ per monitor x monitor tick-pair (18s), which
     accumulates to an expected ≈3.2 lost records/day for a repo watched by
-    two concurrent monitor crowns, consistent with DoE-claude's reported
+    two concurrent monitor crowns, consistent with coordinator-content-repo's reported
     hits. That rate is what justified a guard rather than accept-and-document
     (the anti-scope's forbidden shortcut is arguing collisions "seem
     unlikely"; this is a cited number showing the opposite). The guard reuses
@@ -832,7 +832,7 @@ def _read_record(path: str) -> Optional[dict]:
 
     Deliberate collapse at the VERDICT level, and only there: the cross-plane
     reader this record is written for
-    (`X:/DoE-claude/coordinator/skills/group-em/watch_heartbeat.py::read_watch`,
+    (`C:/coordinator-content-repo/coordinator/skills/group-em/watch_heartbeat.py::read_watch`,
     via its own `_read_existing`) makes the identical collapse -- a missing
     file and a present-but-unparseable one both fall through to its `None`
     branch and read `absent`. A fourth verdict word here would make this

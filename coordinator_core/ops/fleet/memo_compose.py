@@ -92,6 +92,7 @@ from coordinator_core.session.machinery_paths import (
     MEMO_OUTBOX_RELDIR,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import feature_refusal
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
@@ -312,6 +313,10 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
 
     (dry_run, topic, body, explicit_summary, summary_cap_advisory,
      summary_over_cap_original) = validated
+
+    refusal = feature_refusal("cross_repo_memos")
+    if refusal:
+        return build_setup_error_result(_MODE, dry_run, refusal)
     # The body is where an owner gets named; memo.draft never sees it.
     display_name_advisory = owner_name_advisory(
         "memo.compose", detect_unqualified_display_names(body)

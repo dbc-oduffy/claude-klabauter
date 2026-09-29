@@ -10,7 +10,7 @@ Also asserts `coordinator_core.contract.decision_object` stays stdlib-light —
 importing it must not pull in pydantic, asyncio, or the `cockpit_schema` tree.
 
 Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md (Wave 1,
-chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo] Conformance target: DoE-claude's
+chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo] Conformance target: coordinator-content-repo's
 `schemas/decision-object.schema.json` (DR-047) is the schema-of-record; this
 suite asserts this package's key set matches it by name (8 canonical keys).
 """

@@ -472,7 +472,7 @@ class TestComputeOffer:
         `claims.my_agent_touched`.
 
         Negative-spec (touched-txt-release-is-append-only-correction, 2026-08-03
-        cross-repo ruling — DoE-claude declared authoritative over the earlier,
+        cross-repo ruling — coordinator-content-repo declared authoritative over the earlier,
         superseded `touched-txt-prunable-not-append-only`): `touched.txt` is an
         APPEND-ONLY `T`/`R` event log resolved last-event-wins, never a mutable
         set a reader may delete lines from. This module never writes to ANY
@@ -1592,7 +1592,7 @@ class TestCommitGroupPhantomPreFilter:
 # and asserted on exit codes plus captured stdout. Both are gone with the CLI:
 # the op returns its whole report on the wire, so an outcome that used to be an
 # exit code is now a field. The mapping, kept explicit because those exit codes
-# are cited by name in this module's own docstrings and in DoE-claude's:
+# are cited by name in this module's own docstrings and in coordinator-content-repo's:
 #   exit 0 -> ran; `error` absent and `failed_groups` empty
 #   exit 1 -> `error` == "session_id could not be resolved"
 #   exit 2 -> `error` naming the violated precondition (usage)
@@ -1621,7 +1621,7 @@ class TestHandler:
         assert "a.py" in status  # NOT committed
 
     def test_dry_run_names_dirty_paths_no_session_claims(self, tmp_path):
-        """The shape doe-claude-em reported three times (2026-08-18, -21, -30):
+        """The shape coordinator-content-repo-em reported three times (2026-08-18, -21, -30):
         a session whose whole working set was written through Bash carries no
         claim, so the offer answered `safe_paths: 0, excluded: 0` over a tree
         with real modifications -- byte-identical to a clean tree.
@@ -1769,7 +1769,7 @@ class TestHandler:
         assert out["session_id"] == ""
 
     def test_ambient_environment_identity_is_refused_not_used(self, tmp_path, monkeypatch):
-        """The live 2026-08-27 defect, reported by doe-claude-em: dialled through
+        """The live 2026-08-27 defect, reported by coordinator-content-repo-em: dialled through
         coordinator-invoke.exe from three different cwd values, the op returned
         the ENGINE OWNER's session id every time, because the exe does not send
         `_session_id` and `resolve_session_id(cwd)` therefore fell through to
@@ -2477,7 +2477,7 @@ class TestMemoSendDeclaresOutboxWrites:
 # ---------------------------------------------------------------------------
 # (g) Mechanical-fallback commit framing. The `invoker` parameter that used to
 # select between three framings was DELETED 2026-08-27 (no producer ever passed
-# it; doe-claude-em confirmed neither surviving ceremony call site passes one or
+# it; coordinator-content-repo-em confirmed neither surviving ceremony call site passes one or
 # intends to). What these tests now lock is the ONE surviving shape and, more
 # importantly, the claims it must never make.
 #
@@ -2773,7 +2773,7 @@ class TestReconciliation:
     def test_a_path_nothing_claims_is_enumerated_not_merely_counted(self, tmp_path):
         """The load-bearing property is ENUMERATION, not rendering.
 
-        doe-claude-em's SC-DR-022 half 1 permits an operator to adopt an
+        coordinator-content-repo-em's SC-DR-022 half 1 permits an operator to adopt an
         unclaimed path with `--include-orphans`, and the property that makes
         that remedy safe is that the candidate paths are named BY THE ENGINE,
         never assembled by the adopter. An aggregate count supplies no
@@ -2822,7 +2822,7 @@ class TestReconciliation:
         """`reconciled` must stay orthogonal to whether anything was found.
 
         A repo that closes queue entries by `git mv` leaves an unclaimed
-        dirty deletion at the source forever (doe-claude-em, 2026-08-29,
+        dirty deletion at the source forever (coordinator-content-repo-em, 2026-08-29,
         citing their SC-DR-021 d1), so a `reconciled` that meant "ledger and
         tree agree" would read red in steady state — and a signal that is
         always red is a signal nobody reads. It means only that the check

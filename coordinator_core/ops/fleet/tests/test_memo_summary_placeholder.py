@@ -54,12 +54,10 @@ def test_prose_body_is_prose():
     assert has_prose_body("A memo with something in it.\n") is True
 
 
-def test_placeholder_is_exactly_99_chars():
-    assert len(SUMMARY_PLACEHOLDER) == 99
-
-
-def test_placeholder_has_double_space_after_first_sentence():
-    assert "characters.  this is 99" in SUMMARY_PLACEHOLDER
+def test_placeholder_states_the_real_cap_and_its_own_length_claim_is_absent():
+    assert str(_SUMMARY_MAX_CHARS) in SUMMARY_PLACEHOLDER
+    assert "this is 99" not in SUMMARY_PLACEHOLDER
+    assert len(SUMMARY_PLACEHOLDER) <= _SUMMARY_MAX_CHARS
 
 
 def test_is_placeholder_summary_true_for_exact_match():

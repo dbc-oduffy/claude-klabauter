@@ -3,7 +3,7 @@
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
   "door_c_sha256": "ddb39690816184bad3047e0213238fd8f888f24b483b4b5efc0d289eee1c4c8c",
-  "engine_root": "X:\\claude-klabauter",
+  "engine_root": "C:\\claude-klabauter",
   "image_sha256": "601b8facffd1f872a9b480532584a2748937a34d65ccf4610cc397d0f94cae5b",
   "sources": {
     "door.c": "ddb39690816184bad3047e0213238fd8f888f24b483b4b5efc0d289eee1c4c8c",

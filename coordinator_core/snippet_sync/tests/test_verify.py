@@ -928,7 +928,7 @@ def test_dependent_prose_match_is_word_boundary_anchored(tmp_path):
 
 # ---------------------------------------------------------------------------
 # delivery = "inject" enforcement (registry schema_version 3, DoE 7ff1cb75e;
-# answer memo cross-repo/inbox/2026-07-28-doe-claude-em-delivery-field-answer.md).
+# answer memo cross-repo/inbox/2026-07-28-coordinator-content-repo-em-delivery-field-answer.md).
 #
 # On an inject row the block reaches consumers via contract_blocks: assembly and
 # is pasted by NOTHING, so a pasted sentinel is an orphan BY CONSTRUCTION — even

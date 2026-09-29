@@ -764,14 +764,14 @@ def strip_powershell_prose_noise(raw_text: str) -> str:
     the raw command text needs the SAME quote/here-string-blind spot this
     function closes: a hazard-documenting prose string quoting a
     destructive git command (the real-world shape this chunk's own
-    dispatch brief names -- doe-claude hit it live) must not read as an
+    dispatch brief names -- coordinator-content-repo hit it live) must not read as an
     issued command merely because the destructive words appear inside a
     quoted or here-string span. This function does NOT itself decide
     deny/allow -- it only returns the residual text with those spans
     removed; the calling guard applies its own patterns to the result and
     denies on a hit per the PM ruling this chunk's brief cites. See that
     brief's own required test set (here-string body containing `git stash
-    drop`, double-quoted span containing `worktree add`, the doe-claude
+    drop`, double-quoted span containing `worktree add`, the coordinator-content-repo
     hazard-prose shape, and the inverse -- a real command that merely
     RESEMBLES quoted prose must still deny, i.e. must NOT be stripped).
 

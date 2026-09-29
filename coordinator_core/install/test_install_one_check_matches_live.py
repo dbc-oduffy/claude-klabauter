@@ -13,7 +13,7 @@ What went wrong before C3: the check branch raised
 terminal `else` and preserved the same file as operator-customized at exit 0.
 `--check-only` therefore demanded a state the installer refused to produce, and
 the manifest-declared entry point could not reach exit 0 on a host carrying any
-preserve-class divergence. Reported by doe-claude-em against
+preserve-class divergence. Reported by coordinator-content-repo-em against
 `settings-manifest.md` — a `.md`, so outside the `.py`/`.sh` force-overwrite
 classes.
 

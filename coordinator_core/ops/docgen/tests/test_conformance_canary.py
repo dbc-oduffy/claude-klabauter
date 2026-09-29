@@ -47,7 +47,7 @@ from typing import Callable
 import pytest
 
 from coordinator_core.ops.emit.doe_drift import DoeResolveError, resolve_doe_clone
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
 _TRUTHY = {"1", "true", "yes"}
 
@@ -71,11 +71,11 @@ def _resolve_docgen_doe_clone() -> None:
     resolve_doe_clone()
 
 
-def _resolve_contract_blocks_doe_root() -> None:
-    root, present = doe_root_and_present()
+def _resolve_contract_blocks_content_root() -> None:
+    root, present = content_root_and_present()
     if not present:
         raise DoeResolveError(
-            f"sibling DoE-claude checkout not resolvable (resolved root={root!r})"
+            f"sibling coordinator-content-repo checkout not resolvable (resolved root={root!r})"
         )
 
 
@@ -90,7 +90,7 @@ LANES: list[tuple[str, str, Callable[[], None]]] = [
         "contract-blocks-header-style",
         "contract_blocks/header_style byte-identity lane "
         "(subagent_sandbox/tests/test_provision_report_contract_blocks_byte_identity.py)",
-        _resolve_contract_blocks_doe_root,
+        _resolve_contract_blocks_content_root,
     ),
 ]
 

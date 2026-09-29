@@ -14,7 +14,7 @@ The cost is never merely a wrong stamp. Where identity feeds a gate it is an inp
 to an anti-forgery decision, so a session's own correctly-trailered commits read as
 foreign: ``review_trail.write`` refused every slice of a fully-reviewed partitioned
 close and the close shipped with no trail at all
-(cross-repo/inbox/2026-08-19-doe-claude-em-review-trail-write-refuses-own-commits.md).
+(cross-repo/inbox/2026-08-19-coordinator-content-repo-em-review-trail-write-refuses-own-commits.md).
 
 WHY NO BEHAVIOURAL TEST CATCHES IT, and why this file is an AST test instead.
 ``cc_invoke`` spawns the COLD subprocess with the caller's own ``os.environ``, so a

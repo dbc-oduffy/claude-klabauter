@@ -2,8 +2,8 @@
 (`coordinator_core.pickup_assemble._run_git`) vs. the real `git` CLI it
 replaced on the read-only `brief` path.
 
-Spec backlink: DoE-claude:pln-canonical-resolution-engine-6eea37
-task W0-2 + AC-6/AC-8 (DoE-claude).
+Spec backlink: coordinator-content-repo:pln-canonical-resolution-engine-6eea37
+task W0-2 + AC-6/AC-8 (coordinator-content-repo).
 
 Additive-before-destructive (plan body): this test file lands BEFORE the
 spawn bodies were deleted from `_run_git` — by the time this file is read,

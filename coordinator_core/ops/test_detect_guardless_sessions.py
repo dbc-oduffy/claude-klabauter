@@ -69,9 +69,9 @@ def test_is_guarded_false_when_substring_only_not_a_flag(monkeypatch):
 def test_is_guarded_uses_resolved_coordinator_plugin_dir_when_available(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
-        lambda: "p:\\doe-root\\coordinator",
+        lambda: "p:\\content-root\\coordinator",
     )
-    assert _is_guarded('claude --plugin-dir "P:\\doe-root\\coordinator"')
+    assert _is_guarded('claude --plugin-dir "P:\\content-root\\coordinator"')
     assert not _is_guarded('claude --plugin-dir "P:\\unrelated\\coordinator"')
 
 

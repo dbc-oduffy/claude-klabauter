@@ -1,10 +1,10 @@
 """
 Item 25 (2026-09-26 inbox-blitz claude-klabauter fixes, DoE thread) — the `MutateAbort`
 `_action()` raises on an unexpected status names a recovery verb instead of
-just refusing. See `state/cross-repo/archive/2026-09-23-doe-claude-em-memo-
+just refusing. See `state/cross-repo/archive/2026-09-23-coordinator-content-repo-em-memo-
 refusal-recovery-staged-in-claude-klabauter.md`: land the hint naming
 `claim-memo-stamp` and `resolve-memo` as the next step
-(`doe-claude:state/improvement-queue/2026-08-27-memo-inbox-status-open-is-
+(`coordinator-content-repo:state/improvement-queue/2026-08-27-memo-inbox-status-open-is-
 not-evidence-of-unactioned.yaml`).
 
 Real git spawn is load-bearing here — `_containment_check` resolves real

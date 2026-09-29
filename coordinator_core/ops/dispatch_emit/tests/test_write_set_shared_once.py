@@ -2,7 +2,7 @@
 into the emitted script multiple times over (preflight, executor prompt,
 commit pathspec, ...).
 
-Spec backlink: state/cross-repo/inbox/2026-09-25-doe-claude-em-engine-
+Spec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-engine-
 friction-sizing-scaffold-memo-owner-safe-commit-emit-cap.md, item 5. A row
 with ~1.2k write paths pushed the composed script's UTF-8 byte size past the
 Workflow runner's ``_WORKFLOW_SCRIPT_BYTE_CAP`` (524288) even alone -- the

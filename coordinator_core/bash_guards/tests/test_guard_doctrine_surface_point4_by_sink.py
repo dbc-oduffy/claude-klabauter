@@ -15,13 +15,13 @@ is only as good as the attacks it still refuses, so every indirection shape that
 motivated point 4 is pinned here explicitly -- including the alias chain
 (`q=$p`), which the narrowing must follow rather than treat as an unbound name.
 
-Ported from DoE-claude `9d1404fa6`'s
+Ported from coordinator-content-repo `9d1404fa6`'s
 `coordinator/tests/test_guard_doctrine_surface_point4_by_sink.py`. The one
 divergence: DoE reads its governed surface off an import-time constant, while
 this port takes the caller's resolved identifier tuple per call (module
 docstring, "GOVERNED IDENTIFIER SOURCE"), so the corpus supplies its own
 surfaces and a separate case pins that choice against the live manifest
-whenever a DoE-claude sibling checkout is resolvable -- rather than skipping
+whenever a coordinator-content-repo sibling checkout is resolvable -- rather than skipping
 the whole corpus on an install that has none.
 
 Negative-spec: this file does NOT assert on deny TEXT (that is the message
@@ -41,7 +41,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 SURFACES = [
     "global-doctrine/CLAUDE.md",
@@ -137,22 +137,22 @@ def test_unanalysable_write_families_stay_fail_closed() -> None:
 
 
 def _live_governed_surfaces() -> Optional[list]:
-    doe_root = coordinator_doe_root()
-    if not doe_root:
+    content_root = coordinator_content_root()
+    if not content_root:
         return None
-    return dispatch.resolve_governed_authoring_surfaces(str(Path(doe_root) / "coordinator"))
+    return dispatch.resolve_governed_authoring_surfaces(str(Path(content_root) / "coordinator"))
 
 
 def test_the_corpus_surface_is_live() -> None:
     """`SURFACES` is hand-held so the DENY half runs everywhere, which means it
-    can rot the moment the manifest changes. When a DoE-claude sibling checkout
+    can rot the moment the manifest changes. When a coordinator-content-repo sibling checkout
     is resolvable, compare against the live
     `<plugin_root>/governed-authoring-surfaces.json` -- never a second
     hand-written copy of it."""
     live = _live_governed_surfaces()
     if live is None:
         pytest.skip(
-            "no DoE-claude sibling checkout resolved by coordinator_doe_root(); "
+            "no coordinator-content-repo sibling checkout resolved by coordinator_content_root(); "
             "the governed-surfaces manifest cannot be read to check this corpus"
         )
     assert GOV in live, (

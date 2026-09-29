@@ -201,7 +201,7 @@ def annotate_deny(
        needs-separate-invocation-clause.md` — the leading disclaimer needed
        its own sentence, not a shared one with the bypass instruction. Fixed
        by giving the disclaimer its own leading clause (still true today).
-    2. `cross-repo/inbox/2026-08-11-doe-claude-em-guard-unlock-banner-still-
+    2. `cross-repo/inbox/2026-08-11-coordinator-content-repo-em-guard-unlock-banner-still-
        reads-as-agent-instruction.md` — leading was not sufficient. Four
        independently-dispatched agents still hit the (then-prepended) line
        and three classified it as prompt injection: an agent under a

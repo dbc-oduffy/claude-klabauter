@@ -19,7 +19,7 @@ Cadence tunes severity/depth only (day = --red-and-stale; session/week =
 a different reader call per cadence (Approach § "Cadence is a parameter,
 not three code paths").
 
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2a
+Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C2a
 
 Negative-spec:
     - Does NOT call any mutating entrypoint of the ported readers — no
@@ -65,6 +65,7 @@ from coordinator_core.ops.workday_start_cross_repo_memo_surface import (
     _list_qualifying_lines,
     _resolve_inbox_dir,
 )
+from coordinator_core.machine_profile import feature_enabled, machine_profile
 from coordinator_core.ops.check_rag_state import check_rag_state
 from coordinator_core.ops.agent_worktree_sweep import (
     _active_branch as _wt_active_branch,
@@ -223,7 +224,7 @@ def _read_addon_health(mode: str) -> ReaderResult:
 
 
 def _read_memo_surface(mode: str, *, repo_root: str | None = None) -> ReaderResult:
-    if mode == "suppress":
+    if mode == "suppress" or not feature_enabled("cross_repo_memos"):
         return ReaderResult()
 
     inbox_dir = _resolve_inbox_dir(cwd=repo_root)
@@ -263,6 +264,8 @@ def _read_memo_surface(mode: str, *, repo_root: str | None = None) -> ReaderResu
 
 
 def _read_rag_staleness() -> ReaderResult:
+    if machine_profile() != "author":
+        return ReaderResult()
     token, _exit_code = check_rag_state()
     if token not in ("stale", "unknown"):
         return ReaderResult()
@@ -353,7 +356,7 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     dir, which is session config, not repo work-state, and stays on that
     resolution chain (C1 of the orient-assemble repo-scope plan). `_read_
     addon_health` and `_read_rag_staleness` are explicitly NOT repo-scoped
-    (settings-home / DoE-root scoped) and are left untouched.
+    (settings-home / content-root scoped) and are left untouched.
     """
     addon_mode = _ADDON_HEALTH_MODE_BY_CADENCE.get(cadence, "--red-only")
     memo_mode = _MEMO_SURFACE_MODE_BY_CADENCE.get(cadence, "surface")

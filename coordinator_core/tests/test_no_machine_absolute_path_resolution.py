@@ -11,7 +11,7 @@ literal bypasses all of it.
 What provoked this gate
 ------------------------
 `coordinator_core/ops/session/tests/test_warm_start_import_cycle.py` passed
-`cwd="X:/claude-klabauter"` to `subprocess.run`. `X:\claude-klabauter` is the
+`cwd="C:/claude-klabauter"` to `subprocess.run`. `C:\claude-klabauter` is the
 Windows box's REAL engine root, so the literal was correct on the machine that
 wrote it and `FileNotFoundError`d on every POSIX box. The tests carrying it are
 marked `spawns_process` + `cadence`, so no routine run ever hit it. Same
@@ -372,7 +372,7 @@ def _format(findings: List[ResolutionFinding]) -> str:
     lines.append("")
     lines.append(
         "Resolve through the ladder instead: `Path(__file__).resolve().parents[N]` "
-        "for this repo's own root, `read_doe_root_pointer()` for the DoE sibling, "
+        "for this repo's own root, `read_content_root_pointer()` for the DoE sibling, "
         "`machine_resolver` for a registered repo."
     )
     return "\n".join(lines)
@@ -395,19 +395,19 @@ def test_no_machine_absolute_literal_reaches_host_resolution() -> None:
 
 _PLANTED_SUBPROCESS_CWD = '''
 import subprocess
-subprocess.run(["git", "status"], cwd="X:/claude-klabauter")
+subprocess.run(["git", "status"], cwd="C:/claude-klabauter")
 '''
 
 _PLANTED_MODULE_CONSTANT = r'''
 import sys
-ENGINE_ROOT = r"X:\claude-klabauter"
+ENGINE_ROOT = r"C:\claude-klabauter"
 sys.path.insert(0, ENGINE_ROOT)
 '''
 
 _PLANTED_PATH_PROBE = '''
 from pathlib import Path
-_LIVE_DOE_ROOT = "X:/DoE-claude"
-if Path(_LIVE_DOE_ROOT).is_dir():
+_LIVE_CONTENT_ROOT = "C:/coordinator-content-repo"
+if Path(_LIVE_CONTENT_ROOT).is_dir():
     pass
 '''
 
@@ -420,14 +420,14 @@ def load():
 _FIXTURE_DETECTOR_INPUT = '''
 from guard import detect
 def test_detector_fires_on_a_foreign_path():
-    assert detect("X:/DoE-claude/coordinator/hooks/x.py")
+    assert detect("C:/coordinator-content-repo/coordinator/hooks/x.py")
     assert detect({"path": r"C:\\Users\\devbox\\project"})
 '''
 
 _FIXTURE_CONSTRUCTED_NOT_RESOLVED = '''
 from pathlib import Path
 def test_translation():
-    assert translate(Path("X:/claude-klabauter/docs/plans/p.md")) == "docs/plans/p.md"
+    assert translate(Path("C:/claude-klabauter/docs/plans/p.md")) == "docs/plans/p.md"
 '''
 
 _FIXTURE_EXPECTED_MESSAGE = r'''
@@ -437,17 +437,17 @@ def test_message_shows_resolved_path():
 '''
 
 _PROSE_DOCSTRING = '''
-"""Run: cd X:/claude-klabauter && python -m pytest coordinator_core/tests
+"""Run: cd C:/claude-klabauter && python -m pytest coordinator_core/tests
 
 Historic note: the 2026-07-28 incident rewrote hooks to C:\\Users\\pm\\...
 """
 def f():
-    """Usage: python X:/claude-klabauter/tasks/probe.py"""
+    """Usage: python C:/claude-klabauter/tasks/probe.py"""
 '''
 
 _PROSE_COMMENT = '''
 import subprocess
-# On the Windows box this used to read cwd="X:/claude-klabauter"; it now
+# On the Windows box this used to read cwd="C:/claude-klabauter"; it now
 # derives the root from __file__. See C:/Users/pm for the old scratch tree.
 subprocess.run(["git", "status"], cwd=str(_REPO_ROOT))
 '''

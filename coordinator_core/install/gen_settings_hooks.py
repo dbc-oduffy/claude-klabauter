@@ -2,7 +2,7 @@
 coordinator_core.install.gen_settings_hooks — settings.json hooks-block generator.
 
 Port of: ``coordinator/bin/gen-settings-hooks.sh`` (DoE a2078a9b, 2026-07-22)
-[DoE-claude repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
+[coordinator-content-repo repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
 and emit/merge a settings.json ``hooks`` block where:
 
   - ONLY ``type=='command'`` entries WITH ``${CLAUDE_PLUGIN_ROOT}`` in their
@@ -26,7 +26,7 @@ and emit/merge a settings.json ``hooks`` block where:
     Python translation baked a registry-resolved absolute path directly into
     every command; that is the defect a 2026-07-28 incident exposed — a
     POSIX host's settings.json silently overwritten with a Windows peer's
-    baked ``X:/...`` paths by a cross-machine sync of the file, killing
+    baked ``C:/...`` paths by a cross-machine sync of the file, killing
     every coordinator hook on that host with no error surfaced anywhere. A
     same-day intermediate revision of this fix used a
     ``$(python3 .../resolve-coordinator-clone --content-root)`` command
@@ -76,11 +76,11 @@ output on re-run); ``--out`` param; fail-loud on generator business errors.
 
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave B, item gen-settings-hooks).
-Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § M1
+Spec backlink: coordinator-content-repo:pln-doe-maximalist-execution-plugi-6d808d § M1
 Mechanism: coordinator/docs/wiki/external-plugin-live-resolution.md
-    § Hook-delivery — SOLVED via settings.json [DoE-claude repo]
+    § Hook-delivery — SOLVED via settings.json [coordinator-content-repo repo]
 
-Double-fire refusal (added 2026-07-29, DoE-claude dispatch
+Double-fire refusal (added 2026-07-29, coordinator-content-repo dispatch
 state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-ba51c36f.md): ``hooks.json`` is the sole input to BOTH
 delivery surfaces this generator can produce — everything this generator can
@@ -89,7 +89,7 @@ work, ``generate()`` now asks
 :func:`coordinator_core.ops.session.guard_settings_integrity.
 detect_hook_delivery_duplication` whether plugin-side delivery is VERIFIED
 live and resolvable on THIS machine (hooks.json resolves via the canonical
-content-root resolver AND every declared script path exists on disk) and, if
+Content-root resolver AND every declared script path exists on disk) and, if
 so, refuses to generate — every hook this generator would emit is already
 being delivered, so emitting it too would fire it twice per event. This is a
 POSITIVE-evidence-only refusal: absence of evidence (unresolvable content
@@ -129,10 +129,10 @@ Negative-spec (faithful bash-oracle reproduction, NOT a fix):
     resolution (when ``--coordinator-root`` is not given) delegates to
     :func:`coordinator_core.install._shared.resolve_coordinator_root`,
     which is a strict SUPERSET of the bash oracle's own resolution order.
-    The bash oracle only tried ``machine-local get repos.doe_claude`` then
-    ``$REPO_DOE_CLAUDE`` before failing loud; the shared helper additionally
+    The bash oracle only tried ``machine-local get repos.content_root`` then
+    ``$REPO_CONTENT_ROOT`` before failing loud; the shared helper additionally
     tries an explicit ``$COORDINATOR_ROOT`` env var first and a
-    ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file as a final fallback
+    ``${CLAUDE_HOME:-$HOME}/.coordinator-content-root`` pointer file as a final fallback
     before failing loud. Every input that resolved under the bash oracle
     still resolves identically here (win-only — this can only turn a prior
     failure into a success, never the reverse); the shared helper's own
@@ -344,7 +344,7 @@ def _usage_text() -> str:
         "  -h, --help                Show this help\n"
         "\n"
         "Environment:\n"
-        "  REPO_DOE_CLAUDE           Fallback if machine-local get repos.doe_claude fails\n"
+        "  REPO_CONTENT_ROOT           Fallback if machine-local get repos.content_root fails\n"
         "\n"
         "Exit codes:\n"
         "  0  success (including operator-kill-switch no-op)\n"
@@ -762,12 +762,13 @@ def generate(
     positive_marker, is_enabled, migrated = ensure_positive_marker(resolved_out)
     if not is_enabled:
         print(
-            f"gen-settings-hooks: no positive marker ({positive_marker}) and no local "
-            "evidence this machine has generated before — leaving settings.json untouched.",
+            f"gen-settings-hooks: plugin hook delivery was not detected and generation is off "
+            f"(no marker {positive_marker}) — leaving settings.json untouched.",
             file=sys.stderr,
         )
         print(
-            "  Create that file (empty is fine) to enable coordinator hook generation on this machine.",
+            "  A plugin install delivers hooks itself and needs nothing here. Only on a machine "
+            "without plugin delivery: create that file (empty is fine) to enable generation.",
             file=sys.stderr,
         )
         _record_resolution(_HOOKS_MERGE_CLAUSE_INDEX, ())

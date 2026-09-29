@@ -5,7 +5,7 @@ engine-root sidecar `write_sidecar()` drops beside it.
 Spec backlink: state/dispatch-briefs/2026-08-22-warm-engine-and-door-install-from-published-root/C9.md
 
 WHY THIS EXISTS. Claude-klabauter ships no uninstall leg for anything it installs.
-DoE-claude's `coordinator:uninstall` reverses only coordinator-claude's own
+Coordinator-content-repo's `coordinator:uninstall` reverses only coordinator-claude's own
 writes from a hand-listed disposition table it owns -- it has no awareness
 of claude-klabauter's installs, and getting this module's removal leg named there is
 a `coordinator/bin/cross-repo-memo` (raised separately, not from inside

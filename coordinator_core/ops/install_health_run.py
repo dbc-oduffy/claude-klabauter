@@ -84,7 +84,7 @@ live under it), so an unresolvable root cannot be silently downgraded to
 "no legs ran."
 
 Port of: install-health-run.sh (DoE 290997c7, 2026-07-22)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec (deliberately reproduced, not "fixed"):
   - No `-e`-equivalent bail on the first failing sub-script — the loop must
@@ -120,6 +120,7 @@ from coordinator_core.launchable import _is_windows
 from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.ops import check_windows_ssh_binary, ensure_python3_exe_shim, seed_skill_overrides
 from coordinator_core.trusted_root_guard import is_trusted as _trusted_root
+from coordinator_core.trusted_root_guard import resolve_plugin_root as _resolve_plugin_root
 from coordinator_core.warm.settings import is_warm_enabled
 from coordinator_core.warm.supervisor import read_discovery_with_cause
 from coordinator_core.win_portability import no_console_passthrough_kwargs
@@ -534,9 +535,9 @@ def check_door_route(plugin_root: str, claude_klabauter_root: str) -> int:
     return 1
 
 
-_LAUNCH_CHAIN_NAME = "claude-doe"
+_LAUNCH_CHAIN_NAME = "claude-author"
 _LAUNCH_CHAIN_PROOF = "exec claude"
-_LAUNCH_CHAIN_SOURCE = "claude-doe.py"
+_LAUNCH_CHAIN_SOURCE = "claude-author.py"
 _LAUNCH_CHAIN_FORWARD = f'exec_cli("{_LAUNCH_CHAIN_SOURCE}")'
 
 
@@ -546,7 +547,7 @@ def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> i
 
     WHY THIS LEG EXISTS AND WHY IT IS ITS OWN. Every other leg here checks a
     thing the install was TRYING to do. This one checks the thing an install
-    keeps doing BY ACCIDENT: `claude-doe` is an ordinary name in
+    keeps doing BY ACCIDENT: `claude-author` is an ordinary name in
     `coordinator/bin/`, so every roster, glob, allowlist and cutover that
     enumerates names has swept it up at least once, and each time the box
     lost its ability to start a session until someone noticed by failing to
@@ -597,7 +598,7 @@ def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> i
     )
     print(
         "[launch-chain] remediation: run `python coordinator/bin/"
-        "install-claude-doe-wrapper.py` from the engine clone to restore it",
+        "install-claude-author-wrapper.py` from the engine clone to restore it",
         file=sys.stderr,
     )
     return 1
@@ -627,14 +628,15 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
     blob of unrelated install flags must not fail this orchestrator)."""
     check_only = "--check-only" in argv or os.environ.get("CHECK_ONLY", "").strip() not in ("", "0")
 
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or _default_plugin_root(script_path)
+    plugin_root = _resolve_plugin_root(_default_plugin_root(script_path))
 
     if not _trusted_root(plugin_root):
         site = script_path or "install-health-run.sh"
         print(
             f"ERROR: {site} '{plugin_root}' outside trusted prefix — "
-            "refusing to source; re-run coordinator:install (or set "
-            "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a sanctioned --plugin-dir spike)",
+            "refusing to source; set CLAUDE_PLUGIN_ROOT to the installed plugin "
+            "(<home>/.claude/plugins/cache/coordinator-claude/coordinator/<version>) "
+            "or set COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a sanctioned --plugin-dir spike",
             file=sys.stderr,
         )
         return 1

@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.tests.test_parity_memo_ops
 
 Parity harness — proves byte-identical frontmatter output between a FROZEN GOLDEN
-snapshot of the legacy JS CLI (DoE-claude coordinator/bin/memo-transition.js) and the
+snapshot of the legacy JS CLI (coordinator-content-repo coordinator/bin/memo-transition.js) and the
 Claude-klabauter-native Python op handler for all three memo lifecycle verbs:
 
   claim   — open → in_progress
@@ -55,13 +55,13 @@ a skip — see `coordinator_core/testing/golden.py` module docstring negative-sp
 
 Regenerating goldens (deliberate, reviewed action only):
     CAPTURE_GOLDENS=1 python3 -m pytest coordinator_core/frontmatter/tests/test_parity_memo_ops.py -q
-(requires `node` on PATH and the DoE-claude sibling checkout to be resolvable.)
+(requires `node` on PATH and the coordinator-content-repo sibling checkout to be resolvable.)
 
 Run (from the repo root):
   python3 -m pytest coordinator_core/frontmatter/tests/test_parity_memo_ops.py -v
 
 Spec backlinks:
-  DoE-claude: coordinator/bin/memo-transition.js (parity oracle, frozen — not read at
+  coordinator-content-repo: coordinator/bin/memo-transition.js (parity oracle, frozen — not read at
     ordinary test-run time)
   Port source: coordinator_core/ops/memo_transition.py
   Plan: docs/plans/2026-07-06-memo-transition-native-python-port.md § C4, AC7
@@ -80,7 +80,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
 # Real-git spawn is load-bearing: fixtures build a real git repo
@@ -90,7 +90,7 @@ from coordinator_core.testing.golden import assert_matches_golden, is_capturing,
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# JS CLI path (DoE-claude sibling repo) — only ever consulted during an explicit
+# JS CLI path (coordinator-content-repo sibling repo) — only ever consulted during an explicit
 # CAPTURE_GOLDENS=1 recapture (see `_require_oracle`/`_js_memo`).  Not resolved (and
 # not required) on an ordinary run.
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 # marker was deliberately retired rather than accidentally dropped.
 
 _NODE = shutil.which("node")
-_DOE_BIN = Path(resolve_doe_root() or "/doe-root-unresolved") / "coordinator" / "bin"
+_DOE_BIN = Path(resolve_content_root() or "/content-root-unresolved") / "coordinator" / "bin"
 _MEMO_JS = _DOE_BIN / "memo-transition.js"
 
 _GOLDEN_NAMESPACE = "parity_memo_ops"
@@ -114,7 +114,7 @@ def _require_oracle() -> None:
     docstring negative-spec). Only ever called from inside an `is_capturing()` branch."""
     if _NODE is None or not _MEMO_JS.is_file():
         raise RuntimeError(
-            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the DoE-claude "
+            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the coordinator-content-repo "
             f"sibling checkout ({_MEMO_JS}) to be resolvable — neither is needed for "
             "an ordinary (non-capture) run of this suite."
         )

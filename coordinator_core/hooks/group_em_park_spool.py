@@ -2,7 +2,7 @@
 coordinator_core.hooks.group_em_park_spool — Stop-hook engine op, the
 Group-EM wake spool producer.
 
-Purpose: warm command/native-door counterpart of DoE-claude's
+Purpose: warm command/native-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/group-em-park-spool.py` — verbatim port of its
 one-append-only producer contract. See the source script's own module
 docstring for the full PURPOSE / NEGATIVE SPEC write-up this module
@@ -46,6 +46,7 @@ from typing import Optional
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
+from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.session.receiver_state import read_receiver_state
 
 SPOOL_RELPATH = ("state", "group-em-watch-spool.jsonl")
@@ -80,8 +81,7 @@ def build_record(session_id: str, verdict: Optional[dict]) -> "Optional[dict]":
 
 def append_record(path: str, record: dict) -> None:
     line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write(line)
+    append_claimed_line(path, line.encode("utf-8"))
 
 
 @register_op("hooks.group_em_park_spool")

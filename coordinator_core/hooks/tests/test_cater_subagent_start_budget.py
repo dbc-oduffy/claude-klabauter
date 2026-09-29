@@ -38,7 +38,7 @@ primary/secondary split (cited, not re-derived):
     on the same hot path) is re-priced separately, against the real
     `coordinator:staff-eng` policy row (11 blocks, always spills), by
     `test_compose_catering_process_time_companion_write_widest_type`
-    below -- skipped without a sibling DoE-claude checkout, same gate as
+    below -- skipped without a sibling coordinator-content-repo checkout, same gate as
     `test_cater_subagent_start.py`'s own real-corpus family.
 
 This file also carries the AC9 cap-invariant regression guard
@@ -75,7 +75,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     compose_catering,
 )
 from coordinator_core.session import machinery_paths
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "cater_subagent_start.py"
 
@@ -125,7 +125,7 @@ def test_track_touched_files_keeps_ops_session_context_off_module_scope() -> Non
         "every catering fire (C3 lever 1 regression)."
     )
 
-DOE_ROOT, DOE_ROOT_PRESENT = doe_root_and_present()
+CONTENT_ROOT, CONTENT_ROOT_PRESENT = content_root_and_present()
 
 #: Widest `contract_blocks` row on disk (module docstring's own AC9 finding,
 #: cited not re-derived) -- the type this file's re-measurement (secondary
@@ -328,9 +328,9 @@ def test_compose_catering_process_time_within_ac6_ceiling(
 
 
 @pytest.mark.skipif(
-    not DOE_ROOT_PRESENT,
-    reason="sibling DoE-claude checkout not resolvable on this machine "
-    "(see coordinator_core.testing.doe_root.resolve_doe_root)",
+    not CONTENT_ROOT_PRESENT,
+    reason="sibling coordinator-content-repo checkout not resolvable on this machine "
+    "(see coordinator_core.testing.content_root.resolve_content_root)",
 )
 @pytest.mark.spawns_process
 @pytest.mark.cadence
@@ -356,7 +356,7 @@ def test_compose_catering_process_time_companion_write_widest_type(
 
     import yaml
 
-    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_file = Path(CONTENT_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
     block_names = policy_data["contract_blocks"][WIDEST_TYPE]
 
@@ -366,7 +366,7 @@ def test_compose_catering_process_time_companion_write_widest_type(
     # the share root to `.coordinator-local/subagent-share/`, so a literal
     # `state/subagent-share/<session>` cleaned a directory that is never
     # created and left the real one behind in a PEER's checkout.
-    session_dir = Path(machinery_paths.share_dir(DOE_ROOT, session_id))
+    session_dir = Path(machinery_paths.share_dir(CONTENT_ROOT, session_id))
     payload = {
         "agent_type": WIDEST_TYPE,
         "session_id": session_id,
@@ -375,12 +375,12 @@ def test_compose_catering_process_time_companion_write_widest_type(
 
     try:
         # Untimed warm-up, same rationale as the inline case above.
-        compose_catering(payload, cwd=DOE_ROOT)
+        compose_catering(payload, cwd=CONTENT_ROOT)
 
         samples = []
         for _ in range(_SAMPLE_COUNT):
             start = time.process_time()
-            compose_catering(payload, cwd=DOE_ROOT)
+            compose_catering(payload, cwd=CONTENT_ROOT)
             samples.append((time.process_time() - start) * 1000.0)
     finally:
         shutil.rmtree(session_dir, ignore_errors=True)
@@ -400,9 +400,9 @@ def test_compose_catering_process_time_companion_write_widest_type(
 
 
 @pytest.mark.skipif(
-    not DOE_ROOT_PRESENT,
-    reason="sibling DoE-claude checkout not resolvable on this machine "
-    "(see coordinator_core.testing.doe_root.resolve_doe_root)",
+    not CONTENT_ROOT_PRESENT,
+    reason="sibling coordinator-content-repo checkout not resolvable on this machine "
+    "(see coordinator_core.testing.content_root.resolve_content_root)",
 )
 @pytest.mark.spawns_process
 @pytest.mark.cadence
@@ -428,13 +428,13 @@ def test_every_catered_type_composes_under_the_char_cap(
 
     import yaml
 
-    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_file = Path(CONTENT_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
     catered_types = policy_data["contract_blocks"]
     assert catered_types, "real policy's contract_blocks map is unexpectedly empty"
 
     # The sweep resolves blocks and role framing against the REAL sibling
-    # checkout, so `cwd` has to be DOE_ROOT -- there is no synthetic corpus
+    # checkout, so `cwd` has to be CONTENT_ROOT -- there is no synthetic corpus
     # that would measure the real population. That makes the sidecar and
     # companion writes land in a PEER's working tree, which is tracked, not
     # ignored: every directory this loop creates is reconciliation work for
@@ -450,13 +450,13 @@ def test_every_catered_type_composes_under_the_char_cap(
         over_cap: list[tuple[str, int]] = []
         for agent_type, block_names in catered_types.items():
             session_id = f"budget-cap-invariant-{_sanitize(agent_type)}"
-            session_dirs.append(Path(machinery_paths.share_dir(DOE_ROOT, session_id)))
+            session_dirs.append(Path(machinery_paths.share_dir(CONTENT_ROOT, session_id)))
             payload = {
                 "agent_type": agent_type,
                 "session_id": session_id,
                 "contract_blocks": block_names,
             }
-            result = compose_catering(payload, cwd=DOE_ROOT)
+            result = compose_catering(payload, cwd=CONTENT_ROOT)
             if len(result) > ADDITIONAL_CONTEXT_CHAR_CAP:
                 over_cap.append((agent_type, len(result)))
 

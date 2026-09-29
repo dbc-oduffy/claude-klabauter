@@ -54,7 +54,7 @@ is silently outranking. The deny message is the fix for that asymmetry,
 not decoration: it names the pin, the value that violated it, and the
 resolved `coordinator/agents/<name>.md` path the pin was read from
 (`resolve_model_pins()`'s `_source_path`, ACTUALLY RESOLVED AT RUNTIME via
-`read_doe_root_pointer()` -- never a hardcoded drive-lettered path in this
+`read_content_root_pointer()` -- never a hardcoded drive-lettered path in this
 module's source; see that function's own docstring).
 
 ADVISORY. A strictly-cheaper override is not silent: it returns
@@ -105,7 +105,7 @@ treating every dispatch as unpinned. In the composed, DoE-registered path
 (`block_unenumerated_agent_type.check()` delegating to this module) this
 leg is normally unreachable in practice: the caller only delegates after
 ITS OWN roster resolution already succeeded against the identical
-`doe_root`, so a resolution failure here would already have denied one
+`content_root`, so a resolution failure here would already have denied one
 level up. It is reachable when this module's `check()` is called directly
 (as this file's own tests do), which is why the fail-closed leg is kept
 rather than assumed away.

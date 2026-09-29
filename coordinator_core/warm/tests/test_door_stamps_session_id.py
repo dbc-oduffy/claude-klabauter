@@ -1,6 +1,6 @@
 """The native door tells the server which session its caller is.
 
-Cross-repo report: `cross-repo/inbox/2026-08-29-doe-claude-em-session-identity-
+Cross-repo report: `cross-repo/inbox/2026-08-29-coordinator-content-repo-em-session-identity-
 resolves-three-ways-one-lands-on-your-session.md` and its addendum. A DoE session
 dispatching through `coordinator-invoke.exe` had thirteen `handoff.correct_body`
 writes and one `memo.send` sent-ledger receipt stamped with a LIVE claude-klabauter

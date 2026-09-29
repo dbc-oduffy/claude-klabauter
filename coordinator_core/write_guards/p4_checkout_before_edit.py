@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -36,9 +37,12 @@ def _resolve_abs_path(file_path: str, repo_root: str) -> str:
 
 
 def _is_writable(abs_path: str) -> bool:
-    if not os.path.exists(abs_path):
+    try:
+        mode = os.stat(abs_path).st_mode
+    except OSError:
+        # Missing or unstattable: nothing p4 could have made read-only; the edit itself reports.
         return True
-    return os.access(abs_path, os.W_OK)
+    return bool(mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
 
 
 def _parse_ztag(stdout: str) -> Dict[str, str]:

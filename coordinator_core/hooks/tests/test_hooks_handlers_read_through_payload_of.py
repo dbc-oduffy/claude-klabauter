@@ -12,7 +12,7 @@ while the cold DoE guard chain sends the flat event directly. Normalising at
 `ipc.py`'s dispatch core, or inside either door, would require picking ONE
 shape and rewriting every caller on the other side to match it -- that is a
 transport-contract change across a boundary this plan does not own (the cold
-chain is DoE-claude's), not a handler-body fix. `payload_of`
+chain is coordinator-content-repo's), not a handler-body fix. `payload_of`
 (`coordinator_core/_hook_envelope.py`) already normalises both shapes to one
 dict; the defect this guard exists to catch is a handler that skips that call
 and reads its params directly, so it silently no-ops on whichever shape it

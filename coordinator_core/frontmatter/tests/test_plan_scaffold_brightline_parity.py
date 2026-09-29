@@ -8,7 +8,7 @@ introduced the field, with `minItems: 1` and one `contains` branch per fleet
 brightline -- and this suite. Every plan the fleet emitted in that window was
 born without the brightlines its close-out is gated on, while DoE's other
 producer of the same block (`coordinator/templates/plans/plan.md.tmpl`)
-scaffolded all four. Found by doe-claude-c6 on 2026-08-30, from a plan of
+scaffolded all four. Found by coordinator-content-repo-c6 on 2026-08-30, from a plan of
 their own that came out of this emitter with no brightline block.
 
 The rows are LIVE, not commented out -- the opposite call from the sibling

@@ -15,7 +15,7 @@ already synthesised from the completion log) dedupe to this grain to avoid
 double-counting in week rollups. tc-3 emission owns the dedupe; this contract
 pins the shape.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

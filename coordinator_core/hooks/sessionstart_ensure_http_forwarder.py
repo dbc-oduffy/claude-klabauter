@@ -2,7 +2,7 @@
 op: ensures the resident http hook forwarder is up, without waiting on it.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude
+from coordinator-content-repo
 `coordinator/hooks/scripts/sessionstart-ensure-http-forwarder.py`. The source
 script is documented as deliberately NOT importing `coordinator_core` and NOT
 resolving an engine root — its whole job is arbitrating over the forwarder's

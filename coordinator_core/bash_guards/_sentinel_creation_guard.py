@@ -198,7 +198,8 @@ REASON_INDIRECTION = "indirection"
 INDIRECTION_REMEDY = (
     # Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window deliberately:
     "Use instead: `./path/to/script.sh` -- invoke the script, do not name "
-    "an interpreter (`bash path/to/script.sh` is what denies). For a "
+    "an interpreter (`bash path/to/script.sh` is what denies); this works "
+    "only when the file is executable and has a shebang. For a "
     "non-script payload, run its steps directly, not through an "
     "interpreter/stdin/xargs wrapper, or ask the EM/PM to run it."
 )

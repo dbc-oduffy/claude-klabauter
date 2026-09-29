@@ -155,7 +155,7 @@ def _parse_guard_literals(source: str) -> Optional[Dict[str, Any]]:
 def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
     """Stage ONE of the two-stage lazy import (reusing the shape already shipped
     by the DoE-side registry, 9 guards, and the Stop-family registry, 4 guards
-    -- DoE-claude repo's `coordinator/hooks/scripts/_guard_runner.py`'s
+    -- coordinator-content-repo repo's `coordinator/hooks/scripts/_guard_runner.py`'s
     `GuardScopeDescriptor` / `build_registry_entries`): read `CLASS`, `MATCHERS`,
     `PRIORITY` off the module's SOURCE via `ast.parse`, without importing it or
     any of its (often heavy, transitively-chained) dependencies.
@@ -512,7 +512,7 @@ def evaluate_payload_json(
     `except Exception`, that TypeError disables EVERY guard for that event --
     hard-denies included -- and the result is indistinguishable from a clean
     allow. A silent total-bypass, triggered by a caller asking for MORE
-    checking. Caught in review by doe-claude-em before it shipped.
+    checking. Caught in review by coordinator-content-repo-em before it shipped.
 
     negative-spec -- if a future signature change makes this delegate to a
     callee with different keywords, forward them explicitly like this rather

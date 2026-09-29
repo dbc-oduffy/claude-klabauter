@@ -107,7 +107,7 @@ Negative-spec:
     only its path is used, to derive the subagent transcript path. The parent
     transcript itself is never opened by this op.
 
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-engine-op-contract.md
     (sibling contract; this op documents its own empirical basis above rather
     than re-deriving hooks.subagent_zero_tool_use's — the two ops answer
     different questions over different files)

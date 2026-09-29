@@ -24,6 +24,7 @@ import ast
 import inspect
 import json
 import textwrap
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pytest
@@ -36,6 +37,8 @@ from coordinator_core.ops.warm_guard_evaluate import _verdict_from_envelope, NO_
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def _is_deny(out: Any) -> bool:
@@ -56,7 +59,7 @@ def _probe(cmd: str, tool_name: str, session_id: str = "probe", env: Optional[Di
         "tool_name": tool_name,
         "tool_input": {"command": cmd},
         "session_id": session_id,
-        "cwd": ".",
+        "cwd": _REPO_ROOT,
         # `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*` opt-out straight out
         "env": {} if env is None else env,
     }
@@ -247,7 +250,7 @@ def test_ac6a_no_opt_out_survives_a_hostile_payload():
         "tool_name": "PowerShell",
         "tool_input": {"command": "find / -name foo"},
         "session_id": "ac6a-probe",
-        "cwd": ".",
+        "cwd": _REPO_ROOT,
         "normalize": False,
         "env": {
             "COORDINATOR_ALLOW_POWERSHELL_NORMALIZE": "1",

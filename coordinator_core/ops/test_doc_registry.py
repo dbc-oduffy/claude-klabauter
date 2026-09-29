@@ -76,7 +76,7 @@ def test_partial_override_one_key_set_others_default(tmp_path):
     assert cfg.doc_verify_ignore == []
 
 
-def test_doe_claude_own_override_shape_dogfood(tmp_path):
+def test_content_root_own_override_shape_dogfood(tmp_path):
     _write_local_md(
         tmp_path,
         "human_facing_docs: [README.md, INSTALL.md, CONTEXT.md, CONTRIBUTING.md, "

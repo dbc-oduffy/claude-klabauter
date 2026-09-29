@@ -737,7 +737,7 @@ def _refuse_if_not_engine_root() -> Optional[str]:
     a branch switch that removes a gate script leaves the hook unable to run
     it, and its only offered remedy is a `COORDINATOR_OVERRIDE_PRECOMMIT_*`
     env var. That is a resolution bug teaching an operator to switch off a
-    safety gate. Observed 2026-08-26 (doe-claude-6b): three of four gates
+    safety gate. Observed 2026-08-26 (coordinator-content-repo-6b): three of four gates
     resolved, one did not, purely because a sibling checkout had moved.
 
     WHY A REFUSAL AND NOT A RESOLVER CALL IN THE HOOK. Emitting a resolver

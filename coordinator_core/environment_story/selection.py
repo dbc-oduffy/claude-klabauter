@@ -1,4 +1,4 @@
-"""Ported verbatim from DoE-claude coordinator/hooks/scripts/_environment_selection.py
+"""Ported verbatim from coordinator-content-repo coordinator/hooks/scripts/_environment_selection.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C2) -- logic
 unchanged, only the cross-module imports rewired to the package-relative
 `.story`/`.stories`. See coordinator_core/environment_story/__init__.py
@@ -65,6 +65,7 @@ script in this directory.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Callable, Optional
 
 from .story import STRICTEST_STORY, Story, resolve_environment_story

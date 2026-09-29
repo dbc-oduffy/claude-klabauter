@@ -27,7 +27,7 @@ def isolated_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(home))
-    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: None)
+    monkeypatch.setattr(rcc, "_registry_content_root", lambda: None)
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     return home
 
@@ -89,7 +89,7 @@ def test_mode_oss_present_alone_resolves_oss(isolated_home):
 def test_mode_unmarked_sole_candidate_resolves_dev(isolated_home, monkeypatch):
     candidate = isolated_home.parent / "candidate-clone"
     candidate.mkdir()
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(candidate))
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(candidate))
     assert rcc._resolve_source_mode("git-ops") == "dev"
 
 
@@ -97,7 +97,7 @@ def test_mode_dev_marker_present_resolves_dev_even_with_oss(isolated_home, monke
     candidate = isolated_home.parent / "candidate-clone"
     candidate.mkdir()
     (candidate / ".coordinator-dev-repo").write_text("")
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(candidate))
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(candidate))
     plugin_json = isolated_home / ".claude" / "plugins" / "coordinator-claude" / ".claude-plugin"
     plugin_json.mkdir(parents=True)
     (plugin_json / "plugin.json").write_text("{}")
@@ -125,12 +125,12 @@ def test_clone_root_flat_unmarked_no_manifest_resolves(isolated_home):
 
 
 def test_mode_registry_ranks_above_pointer_file(isolated_home, monkeypatch, tmp_path):
-    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: str(tmp_path / "registry-nonexistent"))
+    monkeypatch.setattr(rcc, "_registry_content_root", lambda: str(tmp_path / "registry-nonexistent"))
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     pointer_candidate = tmp_path / "pointer-candidate"
     pointer_candidate.mkdir()
     (pointer_candidate / ".coordinator-dev-repo").write_text("")
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(pointer_candidate))
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(pointer_candidate))
 
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no coordinator source found"):
         rcc._resolve_source_mode("git-ops")
@@ -139,7 +139,7 @@ def test_mode_registry_ranks_above_pointer_file(isolated_home, monkeypatch, tmp_
 def test_mode_unmarked_candidate_plus_oss_is_ambiguous(isolated_home, monkeypatch):
     candidate = isolated_home.parent / "candidate-clone"
     candidate.mkdir()
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(candidate))
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(candidate))
     plugin_json = isolated_home / ".claude" / "plugins" / "coordinator-claude" / ".claude-plugin"
     plugin_json.mkdir(parents=True)
     (plugin_json / "plugin.json").write_text("{}")
@@ -153,7 +153,7 @@ def test_mode_ambiguous_does_not_carry_no_source_found_flag(isolated_home, monke
     by a caller that only suppresses the truly-empty case."""
     candidate = isolated_home.parent / "candidate-clone"
     candidate.mkdir()
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(candidate))
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(candidate))
     plugin_json = isolated_home / ".claude" / "plugins" / "coordinator-claude" / ".claude-plugin"
     plugin_json.mkdir(parents=True)
     (plugin_json / "plugin.json").write_text("{}")
@@ -181,10 +181,10 @@ def test_clone_root_dev_env_var_with_git_wins(isolated_home, monkeypatch, tmp_pa
 
 def test_clone_root_dev_falls_through_registry_to_pointer_to_flat(isolated_home, monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    doe_root = tmp_path / "doe-root"
-    (doe_root / ".git").mkdir(parents=True)
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(doe_root))
-    assert rcc.resolve_clone_root() == str(doe_root)
+    content_root = tmp_path / "content-root"
+    (content_root / ".git").mkdir(parents=True)
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(content_root))
+    assert rcc.resolve_clone_root() == str(content_root)
 
 
 def test_clone_root_oss_mode_requires_flat_git(isolated_home, monkeypatch):
@@ -198,7 +198,7 @@ def test_clone_root_oss_mode_requires_flat_git(isolated_home, monkeypatch):
 
 def test_clone_root_fail_loud_when_nothing_resolves(isolated_home, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: "")
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: "")
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no git-backed coordinator clone found"):
         rcc.resolve_clone_root()
 
@@ -227,10 +227,10 @@ def test_content_root_dev_registry_live_path_wins_over_cache(isolated_home, monk
 
 def test_content_root_dev_pointer_appends_coordinator_subdir(isolated_home, monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    doe_root = tmp_path / "doe-root"
-    (doe_root / "coordinator").mkdir(parents=True)
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(doe_root))
-    assert rcc.resolve_content_root() == str(doe_root / "coordinator")
+    content_root = tmp_path / "content-root"
+    (content_root / "coordinator").mkdir(parents=True)
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: str(content_root))
+    assert rcc.resolve_content_root() == str(content_root / "coordinator")
 
 
 def test_content_root_oss_mode_uses_newest_cache(isolated_home, monkeypatch):
@@ -243,7 +243,7 @@ def test_content_root_oss_mode_uses_newest_cache(isolated_home, monkeypatch):
 
 def test_content_root_fail_loud_when_nothing_resolves(isolated_home, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: "")
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: "")
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no readable coordinator content root found"):
         rcc.resolve_content_root()
 
@@ -264,29 +264,29 @@ def test_newest_cache_none_when_absent(monkeypatch, tmp_path):
 def test_pointer_durable_wins_over_legacy(monkeypatch, tmp_path):
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".doe-root").write_text("/from-durable\n")
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text("/from-durable\n")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     legacy_home = tmp_path / "legacy-home"
     (legacy_home / ".claude").mkdir(parents=True)
-    (legacy_home / ".claude" / ".doe-root").write_text("/from-legacy\n")
+    (legacy_home / ".claude" / ".coordinator-content-root").write_text("/from-legacy\n")
     monkeypatch.setenv("CLAUDE_HOME", str(legacy_home))
 
-    assert rcc._read_doe_root_pointer() == "/from-durable"
+    assert rcc._read_content_root_pointer() == "/from-durable"
 
 
 def test_pointer_falls_back_to_legacy_when_durable_absent(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
     legacy_home = tmp_path / "legacy-home"
     (legacy_home / ".claude").mkdir(parents=True)
-    (legacy_home / ".claude" / ".doe-root").write_text("/from-legacy\n")
+    (legacy_home / ".claude" / ".coordinator-content-root").write_text("/from-legacy\n")
     monkeypatch.setenv("CLAUDE_HOME", str(legacy_home))
 
-    assert rcc._read_doe_root_pointer() == "/from-legacy"
+    assert rcc._read_content_root_pointer() == "/from-legacy"
 
 
 def test_pointer_empty_when_neither_present(isolated_home):
-    assert rcc._read_doe_root_pointer() == ""
+    assert rcc._read_content_root_pointer() == ""
 
 
 # the fix by BEHAVIOUR (spawn count), not timing, since timing is flaky.
@@ -318,7 +318,7 @@ def test_resolve_content_root_common_path_spawns_no_subprocess(monkeypatch, tmp_
     home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: None)
+    monkeypatch.setattr(rcc, "_registry_content_root", lambda: None)
 
     live = tmp_path / "live-content-root"
     live.mkdir()
@@ -343,7 +343,7 @@ def test_main_usage_error_unknown_flag(capsys):
 
 def test_main_resolution_failure_returns_1(isolated_home, monkeypatch, capsys):
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: "")
+    monkeypatch.setattr(rcc, "_read_content_root_pointer", lambda: "")
     assert rcc.main(["--clone-root"]) == 1
     assert "no git-backed coordinator clone found" in capsys.readouterr().err
 

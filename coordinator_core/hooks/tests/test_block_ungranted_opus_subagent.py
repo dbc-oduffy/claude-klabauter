@@ -30,8 +30,8 @@ def _agent_payload(
 
 
 def _patch_pins(monkeypatch: pytest.MonkeyPatch, pins, reason=None) -> None:
-    def _fake_resolve_model_pins(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_model_pins(*, content_root=None, home=None):
+        del content_root, home
         return (pins, reason)
 
     monkeypatch.setattr(mod, "resolve_model_pins", _fake_resolve_model_pins)
@@ -210,8 +210,8 @@ def test_sonnet_pinned_type_with_explicit_opus_override_denies(monkeypatch: pyte
 def test_composed_seam_rewrites_via_opus_gate_when_pin_leg_is_silent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (frozenset({"general-purpose"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
@@ -257,8 +257,8 @@ def test_composed_seam_rewrites_absent_subagent_type(
 def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (frozenset({"coordinator:executor"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
@@ -287,8 +287,8 @@ def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
 
 
 def test_composed_seam_passes_clean_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (frozenset({"general-purpose"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
@@ -301,7 +301,7 @@ def test_composed_seam_passes_clean_dispatch(monkeypatch: pytest.MonkeyPatch, tm
     transcript = _write_transcript(tmp_path, model="claude-sonnet-4-5")
     payload = {
         "tool_name": "Agent",
-        "tool_input": {"subagent_type": "general-purpose", "prompt": "do the thing"},
+        "tool_input": {"subagent_type": "general-purpose", "model": "sonnet", "prompt": "do the thing"},
         "transcript_path": transcript,
     }
     assert unenumerated_mod.check(payload) is None

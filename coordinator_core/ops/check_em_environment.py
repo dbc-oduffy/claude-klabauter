@@ -27,7 +27,7 @@ Division of labour (why model is "best-effort" but effort is authoritative):
     line of defence, but degrades silently if it can't resolve the transcript.
 
 Port of: check-em-environment.sh (DoE 894d4bc6, 2026-07-22)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec:
     - Effort resolution reads the FIRST matching settings file in Claude

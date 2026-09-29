@@ -3,7 +3,7 @@ forwarder self-heal, orientation-cache self-heal, and cadence-gated session
 reap.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/sweep-boot.py` — a doctrine-plane
+from coordinator-content-repo `coordinator/hooks/scripts/sweep-boot.py` — a doctrine-plane
 TRAMPOLINE whose whole job was resolving a sibling claude-klabauter checkout and
 subprocess-exec'ing into it. Every leg it trampolined into is now a same-repo
 sibling call, so the subprocess machinery this row exists to remove (Popen,

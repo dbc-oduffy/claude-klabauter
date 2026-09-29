@@ -703,7 +703,8 @@ def cs_resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolvedCommand
 # The bin script (coordinator/bin/coordinator-resolve-validation-cmd.py) used
 # to carry its OWN independent implementation, which had drifted ahead of the
 # ``cs_*``/``ResolvedCommand`` API above on three fronts: a repo-local
-# ``.venv``-first interpreter preference (``_venv_interp``), a Windows
+# ``.venv``-first interpreter preference (retired 2026-09-29 -- per-repo/
+# shared venvs are banned fleet-wide, system interpreter only), a Windows
 # ``sys.executable`` preference over probing PATH (Store App Execution Alias
 # hazard), and a return type (``ResolveResult.stdout``/``.returncode``/
 # ``.stderr``) the bin file's three in-process callers
@@ -743,30 +744,6 @@ class MalformedValue(Exception):
     quote. Bin-shape sibling of MalformedValueError above."""
 
 
-def _venv_interp(repo_root: Optional[str]) -> Optional[str]:
-    """Repo-local virtualenv interpreter, when the repo has one.
-
-    A bare `python` token means the config declined to name an interpreter,
-    so the resolver picks — and for a venv-primary repo the ambient system
-    python3 is the wrong pick: it has none of the runtime deps, so the gate
-    reports a wall of collection errors that read as test failures rather
-    than as an environment mismatch (example-retrieval-repo saw 314 of them,
-    2026-07-22). A `.venv` sitting in the repo root is an unambiguous
-    declaration of which interpreter that repo's tests expect. Returns None
-    when there is no repo root or no `.venv` — the ambient python3-first
-    path then applies unchanged.
-    """
-    if not repo_root:
-        return None
-    from coordinator_core.win_portability import is_executable
-
-    for rel in ("bin/python", "Scripts/python.exe"):
-        cand = os.path.join(repo_root, ".venv", *rel.split("/"))
-        if os.path.isfile(cand) and is_executable(cand):
-            return cand
-    return None
-
-
 def _shared_console_python() -> Optional[str]:
     """Resolve via `coordinator/bin/lib/python_interp.py`, the one shared ladder.
 
@@ -798,10 +775,12 @@ def _shared_console_python() -> Optional[str]:
 
 
 def _resolve_python_interp(repo_root: Optional[str] = None) -> Optional[str]:
-    """venv-first, then platform-appropriate interpreter resolution.
+    """Platform-appropriate SYSTEM interpreter resolution -- no venv
+    preference (PM directive, 2026-09-29: per-repo/shared venvs are banned
+    fleet-wide; system interpreter only). `repo_root` is accepted for call
+    signature compatibility with existing callers but no longer consulted.
 
-    Returns the repo-local `.venv` interpreter when present. Otherwise, on
-    Windows (`os.name == "nt"`), prefers a console CPython resolved by the
+    On Windows (`os.name == "nt"`), prefers a console CPython resolved by the
     shared ladder (`python_interp.resolve_console_python()`) over probing
     `python3` on PATH, because `shutil.which("python3")` commonly resolves to
     the Microsoft Store App Execution Alias stub on a clean Windows install.
@@ -812,9 +791,6 @@ def _resolve_python_interp(repo_root: Optional[str] = None) -> Optional[str]:
     `sys._base_executable` and then PATH. POSIX behavior is unchanged:
     `python3` is still probed first there. Returns None when nothing resolves.
     """
-    venv = _venv_interp(repo_root)
-    if venv:
-        return venv
     if os.name == "nt":
         resolved = _shared_console_python()
         if resolved:
@@ -829,7 +805,7 @@ def _resolve_python_interp(repo_root: Optional[str] = None) -> Optional[str]:
 def _normalize_python_token(cmd: str, repo_root: Optional[str] = None) -> str:
     """Interpreter-portability normalization — bin-shape sibling of
     normalize_python_token above, threading repo_root through to
-    `_resolve_python_interp` for venv-first resolution.
+    `_resolve_python_interp` (system interpreter only, no venv preference).
 
     Raises InterpreterMissing (not NoPythonInterpreterError) when the token
     is bare `python`/`python3` and no interpreter exists — callers of THIS
@@ -837,10 +813,9 @@ def _normalize_python_token(cmd: str, repo_root: Optional[str] = None) -> str:
 
     Unlike `normalize_python_token` above (which deliberately passes
     `python3` through untouched — see its docstring), this bin-shape sibling
-    ALSO normalizes a bare `python3` token: venv-first resolution here can
-    resolve to a different (repo-local `.venv`) interpreter than a bare
-    `python3` on PATH would, so leaving `python3` unnormalized would skip the
-    venv-first preference this function exists to provide.
+    ALSO normalizes a bare `python3` token, for platform portability (the
+    Windows Store-alias-vs-PATH resolution `_resolve_python_interp` already
+    performs).
     """
     for bare in ("python", "python3"):
         if cmd == bare or cmd.startswith(bare + " "):

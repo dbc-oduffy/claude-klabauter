@@ -360,7 +360,7 @@ def test_git_user_email_cache_does_not_memoize_failure(monkeypatch, tmp_path):
 # 2026-07-22: a module-level `from coordinator_core.ops.emit._slug import
 # machine_slug` in this module raced coordinator_core.ops's eager op-module
 # import (which transitively imports this module's own registry_get, via
-# doe_root_pointer). Whichever of {this module, coordinator_core.ops} a
+# content_root_pointer). Whichever of {this module, coordinator_core.ops} a
 # process imported FIRST left the other partially initialized. This only
 # reproduces in a genuinely fresh interpreter — pytest's own collection
 # already has both modules in sys.modules by the time any in-process test
@@ -408,13 +408,13 @@ def test_registry_set_appends_to_existing_file_preserving_other_keys(monkeypatch
     reg_dir = tmp_path / "reg"
     reg_dir.mkdir(parents=True)
     (reg_dir / "registry.local.toml").write_text(
-        "schema = 1\n\"repos.doe_claude\" = '/srv/DoE-claude'\n", encoding="utf-8"
+        "schema = 1\n\"repos.content_root\" = '/srv/coordinator-content-repo'\n", encoding="utf-8"
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
 
-    assert mr.registry_get("repos.doe_claude") == "/srv/DoE-claude"
+    assert mr.registry_get("repos.content_root") == "/srv/coordinator-content-repo"
     assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"
 
 
@@ -422,7 +422,7 @@ def test_registry_set_replaces_existing_key_in_place(monkeypatch, tmp_path):
     reg_dir = tmp_path / "reg"
     reg_dir.mkdir(parents=True)
     (reg_dir / "registry.local.toml").write_text(
-        "schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.doe_claude\" = '/srv/DoE-claude'\n",
+        "schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.content_root\" = '/srv/coordinator-content-repo'\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
@@ -432,7 +432,7 @@ def test_registry_set_replaces_existing_key_in_place(monkeypatch, tmp_path):
     content = (reg_dir / "registry.local.toml").read_text(encoding="utf-8")
     assert content.count('"repos.claude_klabauter"') == 1
     assert mr.registry_get("repos.claude_klabauter") == "/new/path"
-    assert mr.registry_get("repos.doe_claude") == "/srv/DoE-claude"
+    assert mr.registry_get("repos.content_root") == "/srv/coordinator-content-repo"
 
 
 def test_registry_set_same_value_is_a_true_noop(monkeypatch, tmp_path):
@@ -469,7 +469,7 @@ def test_registry_set_writes_root_key_above_a_trailing_table(monkeypatch, tmp_pa
     reg_dir = tmp_path / "reg"
     reg_dir.mkdir(parents=True)
     (reg_dir / "registry.local.toml").write_text(
-        "schema = 1\n\"repos.doe_claude\" = '/srv/DoE-claude'\n\n"
+        "schema = 1\n\"repos.content_root\" = '/srv/coordinator-content-repo'\n\n"
         "[plugin.mirrors.project-rag]\npath = '/srv/rag-mirror'\n",
         encoding="utf-8",
     )
@@ -480,7 +480,7 @@ def test_registry_set_writes_root_key_above_a_trailing_table(monkeypatch, tmp_pa
     flat = mr.merged_flat_registry()
     assert flat["p4.example-studio/sample-game.repo_root"] == "/srv/sample-game"
     assert flat["plugin.mirrors.project-rag.path"] == "/srv/rag-mirror"
-    assert flat["repos.doe_claude"] == "/srv/DoE-claude"
+    assert flat["repos.content_root"] == "/srv/coordinator-content-repo"
     assert not any(k.startswith("plugin.mirrors.project-rag.p4.") for k in flat)
 
 

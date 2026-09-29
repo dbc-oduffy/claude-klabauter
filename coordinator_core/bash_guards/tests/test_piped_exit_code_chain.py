@@ -9,7 +9,7 @@ from coordinator_core.bash_guards import dispatch_checks
 FIRES = [
     "git add -- README.md && git commit -F msg.txt | tail -3 && git push origin main",
     "git commit -F msg.txt -- a.py | tail -3",
-    "git -C X:/repo commit -F msg.txt | tail -1 && git push",
+    "git -C C:/repo commit -F msg.txt | tail -1 && git push",
     "git -c user.name=x commit -F msg.txt | tail -1 && echo ok",
     "git push origin main | tail -1 && echo done",
 ]
@@ -44,5 +44,5 @@ def test_the_named_segment_is_the_git_command_not_the_whole_chain():
 
 def test_flags_taking_a_value_do_not_hide_the_subcommand():
     assert dispatch_checks._piped_exit_code_chain(
-        "git -C X:/claude-klabauter commit -F m.txt | tail -1"
+        "git -C C:/claude-klabauter commit -F m.txt | tail -1"
     ) is not None

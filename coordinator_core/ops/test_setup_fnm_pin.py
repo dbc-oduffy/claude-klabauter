@@ -1,6 +1,6 @@
 """Characterization tests for coordinator_core.ops.setup_fnm_pin.
 
-Ported oracle: coordinator/tests/test_fnm_pin.bats (DoE-claude) — every case
+Ported oracle: coordinator/tests/test_fnm_pin.bats (coordinator-content-repo) — every case
 in that plain-bash harness has a corresponding case here, run against the
 Python port instead of the bash original, plus the same env-var injection
 seams (COORDINATOR_FNM_CMD / COORDINATOR_FNM_ABSENT) used by the bash test.

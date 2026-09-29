@@ -31,7 +31,7 @@ distinct `review-due` status excluded from the AND-reduce toward `freed`
 (D3a).
 
 C5 (`continued_into` terminus-chase) coverage, modeled on the REAL
-`lifecycle-vocab` corpus shape (`DoE-claude/archive/handoffs/2026-07/
+`lifecycle-vocab` corpus shape (`coordinator-content-repo/archive/handoffs/2026-07/
 2026-07-08_144205_roadmap-lvv-05.md`, `state/handoffs/2026-07-08_144206_
 roadmap-lvv-06.md`, and the dr084 successor `archive/handoffs/2026-07/
 2026-07-22_152437_dr084-skill-layer-dual-read.md`) rather than a synthetic
@@ -1415,7 +1415,7 @@ class TestC5ContinuedIntoPathFallback:
         terminus = _terminus(
             "shipped",
             shipped_in=_TERMINUS_SHA,
-            path="/Users/alice/X/DoE-claude/archive/handoffs/2026-07/"
+            path="/Users/alice/X/coordinator-content-repo/archive/handoffs/2026-07/"
             "2026-07-22_152437_dr084-skill-layer-dual-read.md",
         )
 

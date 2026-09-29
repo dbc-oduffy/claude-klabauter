@@ -8,8 +8,8 @@ Python engine-ification of DoE's
 Purpose (ported verbatim from the reference hook): ``~/.claude`` is a
 CONFIG-ONLY tree — harness settings, ``docs/decisions/``, and one coordinator
 bootstrap pointer. It is not a working repo and it is not a valid memo
-receiver. The canonical central receiver is ``doe-claude-em`` (registry key
-``repos.doe_claude``), inbox ``<doe_claude>/cross-repo/inbox/``.
+receiver. The canonical central receiver is ``coordinator-content-repo-em`` (registry key
+``repos.content_root``), inbox ``<content_root>/cross-repo/inbox/``.
 
 The `cross-repo-memo` CLI is NOT the hole: it already code-pins the
 ``.claude-em``, ``claude-home``, and ``coordinator-claude`` aliases onto
@@ -151,17 +151,17 @@ def _guarded_roots() -> "list[Path]":
 
 
 def _receiver_corpus_root_display() -> str:
-    """The ``<doe_claude>/cross-repo`` half of the destination inbox path
+    """The ``<content_root>/cross-repo`` half of the destination inbox path
     named in ``_deny_reason`` — resolved to the ACTUAL receiver root's
     memo-corpus root when this process can do so without spawning, falling
     back to the generic placeholder form this module's own docstring
     already uses (§ Purpose) when it cannot. Never a hardcoded
     host-specific absolute literal either way (item 30, cross-repo/archive/
-    2026-09-24-doe-claude-em-block-home-dir-memo-delivery-lost-config-
+    2026-09-24-coordinator-content-repo-em-block-home-dir-memo-delivery-lost-config-
     only.md: the prior fix attempt for this same drift hand-wrote one host
     path, which is wrong the moment this guard runs on a different box).
 
-    Uses ``coordinator_doe_root_in_process`` (rungs 1/2/2.5/2.75 only, never
+    Uses ``coordinator_content_root_in_process`` (rungs 1/2/2.5/2.75 only, never
     rung 3's ``subprocess.run``) — this function is reached only on the
     (rare) DENY path, but the module's own negative-spec still promises the
     ordinary allow path zero subprocess work, and a lazy import here must
@@ -169,21 +169,21 @@ def _receiver_corpus_root_display() -> str:
     """
     try:
         from coordinator_core.memo_corpus import receiver_inbox_root
-        from coordinator_core.ops.coordinator_doe_root import (
-            coordinator_doe_root_in_process,
+        from coordinator_core.ops.coordinator_content_root import (
+            coordinator_content_root_in_process,
         )
 
-        root, _rung = coordinator_doe_root_in_process()
+        root, _rung = coordinator_content_root_in_process()
         if root:
             corpus_root, _exists = receiver_inbox_root(root)
             return corpus_root.replace("\\", "/")
     except Exception:
         pass
-    return "<doe_claude>/cross-repo"
+    return "<content_root>/cross-repo"
 
 
 def _deny_reason(target: str) -> str:
-    # NEGATIVE SPEC -- do not offer `cross-repo-memo --to doe-claude-em
+    # NEGATIVE SPEC -- do not offer `cross-repo-memo --to coordinator-content-repo-em
     # --topic <slug> --title "<t>"` as a single-shot recipe: that one-shot
     # flag form is RETIRED (DR-210, "no legacy one-shot flag form" --
     # coordinator/bin/cross-repo-memo.py's own `send` subparser comment),
@@ -194,7 +194,7 @@ def _deny_reason(target: str) -> str:
         f"DENY {target}: ~/.claude (claude-home) is CONFIG-ONLY, not a memo "
         "receiver.\n"
         f"Deliver to {inbox} instead:\n"
-        "  cross-repo-memo draft <slug> --to doe-claude-em --title \"<t>\"\n"
+        "  cross-repo-memo draft <slug> --to coordinator-content-repo-em --title \"<t>\"\n"
         "  cross-repo-memo send <slug>"
     )
 

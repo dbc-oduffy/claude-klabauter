@@ -320,7 +320,7 @@ def test_dr_279_blast_radius_table_matches_live_registry():
 # scope row -- and the failure it produces is a partitioning bug, not an
 # error. Prompted by `push.outstanding`, which reached the published engine
 # with neither half and made the defaulted lookup print a scope nobody had
-# assigned (2026-08-26, doe-claude-94; see
+# assigned (2026-08-26, coordinator-content-repo-94; see
 # `coordinator_core/invoke/__main__.py`'s --repo arg-scope check, now gated on
 # `_registry_map.resolves()`).
 

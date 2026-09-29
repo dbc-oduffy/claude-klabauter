@@ -609,11 +609,11 @@ def _resolve_candidate(
             "resolved": False,
             "note": (
                 f"receiver {to!r} is a central receiver id "
-                f"(identity.centralReceiverIds) that resolves to the DoE-claude "
+                f"(identity.centralReceiverIds) that resolves to the coordinator-content-repo "
                 f"repo, but none of the manifest's central receiver ids is "
                 f"registered in the machine-local registry. "
                 f"Register the central repo first, e.g.: "
-                f"machine-local set repos.doe_claude <abs-path-to-DoE-claude-repo>"
+                f"machine-local set repos.content_root <abs-path-to-coordinator-content-repo-repo>"
             ),
         }
 

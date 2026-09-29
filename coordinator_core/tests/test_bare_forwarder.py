@@ -6,7 +6,7 @@ Gate 1 coverage (settings-home-first rung): forward() now tries
 CLAUDE_HOME is unset), mirroring the precedence
 used by ``coordinator_core.pyresolve._machine_local_impl``.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
     (T1b chunk B2 — bare forwarders: claude-home, coordinator-settings-home)
 
 The launchability seam stubbed here is `bare_forwarder.is_executable`, NOT

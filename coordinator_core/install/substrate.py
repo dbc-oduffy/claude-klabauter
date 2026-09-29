@@ -7,9 +7,9 @@ PATH/AppX health checks. Invoked IN-PROCESS by
 ``coordinator_core.install.maximalist`` (Phase 3 Step 1) and
 ``coordinator_core.install.first_run`` (both COLD, one-shot human/CI-invoked
 install ceremonies); also invoked as a subprocess/CLI entry via
-``coordinator/lib/install-substrate.py`` (the DoE-claude trampoline behind
+``coordinator/lib/install-substrate.py`` (the coordinator-content-repo trampoline behind
 ``coordinator/commands/install.md`` Phase 3). No SessionStart hook currently
-invokes this module — confirmed against DoE-claude's ``coordinator/hooks/hooks.json``
+invokes this module — confirmed against coordinator-content-repo's ``coordinator/hooks/hooks.json``
 2026-08-14, which registers no ``substrate``-referencing SessionStart entry.
 
 MUST be run as a subprocess/CLI entry (``python3 -m coordinator_core.install.substrate``),
@@ -21,7 +21,7 @@ of overwriting. Fail-loud on missing templates (hard precondition for
 downstream skills).
 
 Dual-anchor resolution (b644d5a9's executable-surface relocation moved
-``coordinator/lib/`` and ``coordinator/bin/`` out of DoE-claude and into
+``coordinator/lib/`` and ``coordinator/bin/`` out of coordinator-content-repo and into
 Claude-klabauter's own tree): DoE-side surfaces (``templates/``, ``whoami/``,
 ``schemas/``) still resolve off ``CLAUDE_PLUGIN_ROOT``; claude-klabauter-side surfaces
 (``coordinator/lib/``, ``coordinator/bin/``) resolve off the claude-klabauter root via
@@ -382,7 +382,7 @@ class _BinTemplatesManifest:
     def install_bin_resolvers_entries(self) -> "tuple":
         """Every entry `_install_bin_resolvers` actually installs — i.e.
         every group except `launcher_templates` (rendered elsewhere by
-        `gen_claude_doe_launcher.py`, never copied via `_install_one` —
+        `gen_claude_author_launcher.py`, never copied via `_install_one` —
         see the manifest module's own docstring on that group)."""
         return self.ml_family + self.ml_explicit + self.platform_localize
 
@@ -774,7 +774,7 @@ def _install_one(
     unchanged.
 
     Negative-spec (AC6 durability): this in-file substitution is NOT the
-    durable fix by itself. DoE-claude's landed SessionStart sweep
+    durable fix by itself. Coordinator-content-repo's landed SessionStart sweep
     (``coordinator/hooks/scripts/_bin_impl_drift.py``) byte-copies
     ``templates/bin/`` content verbatim on a genuine template change, with
     no re-bake step — so a template edit re-introduces the literal
@@ -992,7 +992,7 @@ _AGENT_FORWARDER_MARKER = f"from {_AGENT_RESOLVER_MODULE} import exec_cli"
 # are live: four extensionless forwarders carrying the pre-rename import
 # line, whose `coordinator/bin/<name>.py` targets are already deleted from
 # both trees, were confirmed on a live settings-home 2026-08-30
-# (cross-repo/inbox/2026-08-30-doe-claude-em-four-orphaned-bin-forwarders-
+# (cross-repo/inbox/2026-08-30-coordinator-content-repo-em-four-orphaned-bin-forwarders-
 # outlive-their-deleted-engine-targets.md). They reproduce exactly the
 # "carry NEITHER marker and fall through both branches ... silently
 # unsweepable forever" shape `_PRE_MARKER_LEGACY_ORPHAN_NAMES` below was
@@ -1584,7 +1584,7 @@ def _write_native_door_forwarder(
 # verified-live defect (as below) -- never speculatively.
 #
 # `scoped-git-commit` and `cross-repo-memo` added per
-# cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-coordinator-content-repo-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: both take multi-line arguments as a matter of course
 # (commit messages, memo bodies) and both are extensionless on-disk CLIs
 # (no `.py` suffix -- see `_derive_agent_helper_target_map`'s stem-dedup
@@ -1619,7 +1619,7 @@ def _write_native_door_forwarder(
 # `coordinator/bin/lib/raw_cmdline_recovery.py`, whose classifier is the piece responsible
 # for detecting an unsound capture rather than trusting it. Originating incidents:
 # state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
-# (DoE-claude tree) and docs/decisions/DR-303-windows-spawn-economics-is-a-fix-not-a-desig.md
+# (coordinator-content-repo tree) and docs/decisions/DR-303-windows-spawn-economics-is-a-fix-not-a-desig.md
 # § Residual uncertainty ("Caret recovery ... reasoned from code on macOS").
 # 2026-08-19: `freeze-review-diff.py`, `parallel-review-gate-decision.py`,
 # `parallel-review-orthogonality-guard.py`, and `wsc-coverage-gate-runner.py`
@@ -1834,7 +1834,7 @@ def _write_agent_forwarder(
 ) -> None:
     """Naked-Python forwarder that resolves and execs the claude-klabauter-resident
     CLI at ``<claude-klabauter-live-root>/coordinator/bin/<target>``, per the ratified
-    resolve-claude-klabauter-bin contract (DoE-claude
+    resolve-claude-klabauter-bin contract (coordinator-content-repo
     ``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``).
 
     ``target`` — the real on-disk filename inside ``coordinator/bin/`` this
@@ -1869,7 +1869,7 @@ def _write_agent_forwarder(
     ``_claude_home.py`` co-located-impl precedent already used elsewhere in
     this install chain.
 
-    ``b644d5a9`` (DoE, 2026-07-22) relocated DoE-claude's entire executable
+    ``b644d5a9`` (DoE, 2026-07-22) relocated coordinator-content-repo's entire executable
     surface into claude-klabauter's own ``coordinator/bin/`` — the forwarder
     this replaces still exec'd the now-empty DoE-side ``coordinator/bin/``
     and every one of the 7 agent-helper CLIs was rc=126 in the field
@@ -1880,7 +1880,7 @@ def _write_agent_forwarder(
     contract (registry-key-then-sentinel resolution rungs, `coordinator/bin`
     composition, `..`-traversal guard, on-disk existence checks, executable
     sentinel probe, distinct fail-loud messages) and for why the old
-    `.doe-root`/`CLAUDE_PLUGIN_ROOT` trust-prefix dance (`_cc_trusted` et
+    `.coordinator-content-root`/`CLAUDE_PLUGIN_ROOT` trust-prefix dance (`_cc_trusted` et
     al.) is deliberately NOT carried forward.
 
     NO `#!/bin/sh` polyglot trampoline line -- retired by the 2026-07-21 PM
@@ -1902,7 +1902,7 @@ def _write_agent_forwarder(
     via the shim vs 980ms direct, byte-identical output -- measured by
     ``coordinator/bin/check-sh-suffix-polyglot.py``'s docstring,
     source-of-record ``state/audits/2026-07-20-sh-suffixed-python-
-    trampolines.md`` in the DoE-claude clone, not this repo -- the path is
+    trampolines.md`` in the coordinator-content-repo clone, not this repo -- the path is
     qualified deliberately, and its absence here is not evidence it is
     missing), paid unconditionally on EVERY call regardless of whether
     hazard (a) is ever triggered. This function's template is installed once
@@ -1915,7 +1915,7 @@ def _write_agent_forwarder(
     content = f"""#!/usr/bin/env python3
 # coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
 # `coordinator/bin/` directory via the co-located `{resolver_module}.py`
-# shim (the ratified resolve-claude-klabauter-bin contract, DoE-claude
+# shim (the ratified resolve-claude-klabauter-bin contract, coordinator-content-repo
 # coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
 # Regenerated verbatim on every install run — do not hand-edit.
 # Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
@@ -1994,7 +1994,7 @@ exec_cli("{target}")
 
 
 # Names already installed by ml_family/ch_family/the coordinator-settings-home
-# and platform-localize install lines (all sourced from DoE-claude's
+# and platform-localize install lines (all sourced from coordinator-content-repo's
 # templates/bin or claude-klabauter's coordinator/lib/claude-home, NOT from
 # coordinator/bin/) — these run BEFORE the derived agent-helper forwarder
 # loop in _install_bin_resolvers, so a same-named entry surviving into the
@@ -2004,7 +2004,7 @@ exec_cli("{target}")
 # `machine-local` entry both live there) — exclude them unconditionally
 # rather than relying on the directory scan to never collide.
 #
-# ``claude-doe`` joins them on WINDOWS ONLY, and for a different reason: it is
+# ``claude-author`` joins them on WINDOWS ONLY, and for a different reason: it is
 # the one entry here that launches an INTERACTIVE TUI. On Windows the generic
 # forwarder emitted by this loop reaches ``claude.exe`` three hops deep
 # (cmd.exe -> python.exe -> python.exe -> claude.exe), and that nesting corrupts
@@ -2012,16 +2012,16 @@ exec_cli("{target}")
 # 1004) stop being consumed and leak into input as literal ``[I``/``[O``,
 # keystrokes misroute, and the host shell's prompt is left corrupted after exit.
 # The interactive process must be a DIRECT child of the invoking shell.
-# DoE-claude's ``gen-claude-doe-launcher.py`` renders a purpose-built
-# ``claude-doe.{cmd,ps1}`` pair into ``~/.local/bin`` that keeps the launch
+# coordinator-content-repo's ``gen-claude-author-launcher.py`` renders a purpose-built
+# ``claude-author.{cmd,ps1}`` pair into ``~/.local/bin`` that keeps the launch
 # shallow, but settings-home bin is PATH-prepended ahead of ``~/.local/bin``, so
-# the generic forwarder SHADOWED it and won every bare ``claude-doe``
+# the generic forwarder SHADOWED it and won every bare ``claude-author``
 # invocation. Excluding the name here leaves the purpose-built launcher as the
 # only copy, and the orphan prune below removes the shadow left by earlier runs.
 #
 # The guard is ``os.name`` because that purpose-built launcher is Windows-only —
-# ``gen-claude-doe-launcher.py`` exits 0 without writing on macOS/Linux. On
-# POSIX this forwarder IS the ``claude-doe`` CLI and must keep being installed;
+# ``gen-claude-author-launcher.py`` exits 0 without writing on macOS/Linux. On
+# POSIX this forwarder IS the ``claude-author`` CLI and must keep being installed;
 # excluding it unconditionally would remove the command entirely there. POSIX
 # also has no equivalent defect: its shim reaches the Python wrapper, which
 # ``os.execv``s claude in place — a genuine process replacement, adding no
@@ -2040,7 +2040,7 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
         "coordinator-settings-home",
         "platform-localize",
     }
-    | ({"claude-doe"} if os.name == "nt" else set())
+    | ({"claude-author"} if os.name == "nt" else set())
     | {"claude-home"}
 )
 
@@ -2048,16 +2048,16 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # path components, for the entries whose installed body is the SOURCE FILE'S
 # OWN BYTES rather than a body `_write_agent_forwarder` generates.
 #
-# One entry today, ``claude-doe``, and its delivery is not this module's:
-# `maximalist.py`'s Step 3.5b (`_install_claude_doe_wrapper`) points
-# ``~/.local/bin/claude-doe`` at ``<settings-home>/bin/claude-doe`` as a POSIX
-# symlink, and `coordinator_core.ops.install_claude_doe_wrapper` (run by
-# `scripts/setup.py :: install_claude_doe_launcher_chain`, AFTER the forwarder
+# One entry today, ``claude-author``, and its delivery is not this module's:
+# `maximalist.py`'s Step 3.5b (`_install_claude_author_wrapper`) points
+# ``~/.local/bin/claude-author`` at ``<settings-home>/bin/claude-author`` as a POSIX
+# symlink, and `coordinator_core.ops.install_claude_author_wrapper` (run by
+# `scripts/setup.py :: install_claude_author_launcher_chain`, AFTER the forwarder
 # loop here) `shutil.copyfile`s the wrapper source onto that path -- through the
 # symlink, onto the settings-home file. The generated forwarder this module
 # writes is therefore never the FINAL body on POSIX; the source bytes are. The
 # wrapper carries its own shebang precisely because of this delivery shape
-# (`coordinator/bin/claude-doe.py`'s file header; guard
+# (`coordinator/bin/claude-author.py`'s file header; guard
 # `install/tests/test_installed_posix_targets_have_shebang.py`).
 #
 # Declared here, as data, so a verifier can ask which installed names are
@@ -2067,7 +2067,7 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # path has one spelling. A new byte-copied member adds a row here and needs no
 # edit in either reader.
 BYTE_COPIED_BIN_SOURCES: "dict[str, tuple[str, ...]]" = {
-    "claude-doe": ("coordinator", "bin", "claude-doe.py"),
+    "claude-author": ("coordinator", "bin", "claude-author.py"),
 }
 
 
@@ -2187,7 +2187,7 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
 
     Stem-dedup: a CLI commonly ships as a ``<name>.py`` + ``<name>.cmd``
     (+ optionally ``<name>.ps1``) triplet, or as an extensionless polyglot
-    with a ``.cmd`` twin (``claude-doe``, ``verify-coverage``). Only the
+    with a ``.cmd`` twin (``claude-author``, ``verify-coverage``). Only the
     ``.py`` suffix is stripped to form the installed name; an extensionless
     entry is kept verbatim, since that IS the installed/invoked name on
     this tree.
@@ -2703,7 +2703,7 @@ def repo_key_to_env_var(machine_local_key: str) -> str:
     ``_``.
 
     Port source: ``coordinator/templates/bin/claude-machine-local.sh``
-    [DoE-claude repo] normalization comment block.
+    [coordinator-content-repo repo] normalization comment block.
     """
     suffix = machine_local_key[len("repos."):] if machine_local_key.startswith("repos.") else machine_local_key
     table = str.maketrans("abcdefghijklmnopqrstuvwxyz.-", "ABCDEFGHIJKLMNOPQRSTUVWXYZ__")
@@ -3016,7 +3016,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
         return 1
     plugin_root = Path(plugin_root_env)
 
-    # DoE-side precondition only — templates/ is the last surface DoE-claude's
+    # DoE-side precondition only — templates/ is the last surface coordinator-content-repo's
     # CLAUDE_PLUGIN_ROOT still owns (b644d5a9 relocated lib/ and bin/ into
     # claude-klabauter's own coordinator/ tree; requiring lib/ here as well would be a
     # vestigial check that always passes on a post-relocation DoE checkout and
@@ -3532,7 +3532,7 @@ def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> N
 
     AC6's durable half (docs/plans/2026-08-16-registry-read-stops-costing-a-process.md).
     The in-file ``__PYTHON_BIN__`` bake the static families now receive is NOT
-    durable: DoE-claude's ``coordinator/hooks/scripts/_bin_impl_drift.py`` sweep
+    durable: coordinator-content-repo's ``coordinator/hooks/scripts/_bin_impl_drift.py`` sweep
     byte-copies template content verbatim on a genuine template change and
     performs no re-bake, so it overwrites that substitution. This sidecar is the
     durable surface precisely because the sweep only iterates DoE's own
@@ -4117,7 +4117,7 @@ def _install_bin_resolvers(
     # `.cmd` twins are sourced from claude-klabauter's OWN coordinator/bin/, resolved
     # here (in-process, importable) rather than in the emitted forwarder body
     # (which must stay self-contained path arithmetic — see
-    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (DoE-claude's
+    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (coordinator-content-repo's
     # tree) is the now-empty, dead source this repoint replaces.
     agent_bin = claude_klabauter_root_resolved / "coordinator" / "bin"
     resolve_claude_klabauter_lib = claude_klabauter_root_resolved / "coordinator" / "lib" / "resolve-claude-klabauter"
@@ -4472,7 +4472,7 @@ def _c10a_steps(
     # pointer) and C10a-2 (`coordinator.whoami_src` registry key) are
     # RETIRED (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md
     # chunk C2, item 1). `coordinator_whoami` ships no package source on any
-    # current box (state/cross-repo/archive/2026-09-12-doe-claude-em-
+    # current box (state/cross-repo/archive/2026-09-12-coordinator-content-repo-em-
     # installer-still-registers-retired-whoami-src.md), so both steps only
     # ever advertised a stale or empty seam. The sole live reader,
     # `ensure_venv._resolve_whoami_pkg`, already falls back to
@@ -4707,7 +4707,7 @@ def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settin
     namespace choice made unilaterally by this chunk (`docs/plans/
     2026-08-30-the-engine-stops-naming-its-own-repo.md` chunk C2). Chunk
     C1's cross-repo memo carrying this namespace choice to DoE was SENT and
-    is committed in DoE-claude's own tree at `DoE-claude@56998ae14`; what
+    is committed in coordinator-content-repo's own tree at `coordinator-content-repo@56998ae14`; what
     remains outstanding is DoE's ANSWER, not delivery -- tracked in the
     plan's own `## Open at close-out` section, not restated here.
     # corrected: the memo was sent, not deferred; only the reply is

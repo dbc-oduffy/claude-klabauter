@@ -24,7 +24,7 @@ Known oracle gap (faithfully preserved, NOT fixed in this port — see
 `_decode_projects_dir_name`): the projects-dir basename decode always
 backslash-joins hyphen-split tokens, even for non-drive-letter (POSIX-form)
 entries — i.e. on macOS/Linux, where Claude Code activity-record directory
-names look like `-Users-example-operator-X-DoE-claude`, Tier A's naive decode produces a
+names look like `-Users-example-operator-X-coordinator-content-repo`, Tier A's naive decode produces a
 backslash path that will not exist on disk, and there is no greedy-decode
 fallback for that shape (the oracle's own comment calls this "out of scope").
 Tier A is effectively Windows-only in practice; Tier A.5 and Tier B are the
@@ -34,8 +34,8 @@ faithful repro of the pre-port oracle's documented gap.
 Output contract (two deliberate departures from the oracle, 2026-08-14):
 
   1. Every emitted path uses forward slashes. The oracle preserved each repo's
-     first-seen native form, so a single Windows run mixed `X:/example-os-repo`
-     (registry-sourced, Tier A.5) with `X:\\DoE-claude` (filesystem-discovered,
+     first-seen native form, so a single Windows run mixed `C:/example-os-repo`
+     (registry-sourced, Tier A.5) with `C:\\coordinator-content-repo` (filesystem-discovered,
      Tier A) on adjacent lines. The consumer writes those verbatim into
      double-quoted YAML scalars in `~/.claude/working-repos.yaml`, where
      `\\D` is an invalid escape — `yaml.safe_load` raised ScannerError and
@@ -241,13 +241,15 @@ def _tier_a_greedy_decode(rest: str, drive: str, fs_root: str) -> Optional[str]:
             cand = "-".join(tokens[i:j])
             if not cand:
                 continue
-            cand_lc = cand.lower()
-            candidate_path = f"{cur}/{cand_lc}"
-            if os.path.isdir(_fs_probe_path(candidate_path)):
-                segs.append(cand)
-                cur = candidate_path
-                i = j
-                matched = True
+            for probe in dict.fromkeys((cand, cand.lower())):
+                candidate_path = f"{cur}/{probe}"
+                if os.path.isdir(_fs_probe_path(candidate_path)):
+                    segs.append(cand)
+                    cur = candidate_path
+                    i = j
+                    matched = True
+                    break
+            if matched:
                 break
         if not matched:
             return None
@@ -345,6 +347,18 @@ def _tier_b() -> List[str]:
     return _sort_unique(results)[:30]
 
 
+def _cwd_repo() -> List[str]:
+    """The repo the invoking session sits in: found by walking up to a ``.git`` entry, no spawn."""
+    try:
+        cur = Path(os.getcwd()).resolve()
+    except OSError:
+        return []
+    for cand in (cur, *cur.parents):
+        if (cand / ".git").exists():
+            return [str(cand)]
+    return []
+
+
 def discover_repo_paths() -> List[str]:
     try:
         a_out = _tier_a()
@@ -356,6 +370,7 @@ def discover_repo_paths() -> List[str]:
     except Exception as exc:  # noqa: BLE001 — never-block contract
         print(f"discover-working-repos.sh: Tier A.5 failed: {exc}", file=sys.stderr)
         a5_out = []
+    a5_out = list(a5_out) + _cwd_repo()
 
     # Tier A.5 always runs ALONGSIDE the first non-empty tier (A or B). Its
     mirror_keys = _publish_mirror_keys()

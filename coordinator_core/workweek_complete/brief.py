@@ -15,8 +15,8 @@ canonical-resolution-engine library (`coordinator_core.resolution.facade`,
 `coordinator_core.contract.decision_object.{envelope,judgment}`) rather than
 reimplementing them — see the negative-spec below.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C5
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b1-ceremony-complete-computed--9ffa54, chunk C5
 
 Consumes-manifest (C4 census, plan § Tasks C4 body) — orchestrates,
 reimplements none of the following existing atomic CLIs/scripts under
@@ -65,8 +65,8 @@ must never be a wire key/value/enum member (state/sizings/2026-08-04-persona-
 wire-vocabulary-rename.yaml; docs/decisions/DR-262 Amendment cl.3). The
 `question` field's human-facing "the Staff Engineer" reference is left as-is by design —
 persona names remain legal as presentation prose (a publish-time scrub swaps
-them), only the identifier moved. Coordinated with DoE-claude via cross-repo
-memo (cross-repo/inbox/2026-08-04-doe-claude-em-correction-the-shard-key-
+them), only the identifier moved. Coordinated with coordinator-content-repo via cross-repo
+memo (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-correction-the-shard-key-
 coupling-is-three-keys-five-files.md) — DoE's reader site moves in the same
 window, no back-compat/dual-spelling transition.
 """
@@ -283,7 +283,7 @@ def _build_directives(
     `CONSUMES_MANIFEST`.
 
     The 4b-4k guard battery (10 lettered advisory/drift gates per C4's
-    census, DoE-claude coordinator/commands/workweek-complete.md § Step
+    census, coordinator-content-repo coordinator/commands/workweek-complete.md § Step
     4b-4k guard-sweep census) collapses to one directive per underlying
     CLI/subcommand rather than one per lettered step — `hard_block` marks
     the two gates the census identified as hard-blocking (4g reverse-drift,

@@ -28,8 +28,8 @@ Exit codes (parity-critical):
       commit
 
 Port of: parse-resolves-trailer.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C4
-Doctrine: coordinator/docs/wiki/resolves-commit-trailer.md (DoE-claude)
+Spec backlink: coordinator-content-repo:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C4
+Doctrine: coordinator/docs/wiki/resolves-commit-trailer.md (coordinator-content-repo)
 
 Negative-spec (do NOT "fix" mid-port):
     - Does NOT probe git version via `git interpret-trailers --version` (not

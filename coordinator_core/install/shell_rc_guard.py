@@ -181,7 +181,7 @@ def _resolve_rc_path() -> Path:
     could not take effect and `uninstall_legs`' CLAUDE_KLABAUTER_CLONE strip leg
     (the resolver's other live caller) looked for it in the wrong file.
     The `.exe`-tolerant suffix match plus the `MSYSTEM` precedence below
-    mirror `ops/gen_claude_doe_shim.py`'s resolver, which got this right
+    mirror `ops/gen_claude_author_shim.py`'s resolver, which got this right
     first; two resolvers, one platform assumption."""
     home = Path(os.environ.get("HOME") or str(Path.home()))
     if os.environ.get("MSYSTEM"):
@@ -192,7 +192,7 @@ def _resolve_rc_path() -> Path:
     # environments where it is wrong -- containers and other non-login shells,
     # which are overwhelmingly bash and frequently have no zsh installed at
     # all, so the sentinel block lands in a `~/.zshrc` nothing will ever
-    # source. `ops/gen_claude_doe_shim.py`'s sibling resolver already
+    # source. `ops/gen_claude_author_shim.py`'s sibling resolver already
     # defaulted to bash; the two disagreed, and this is the half that was
     # wrong off Darwin.
     shell = os.environ.get("SHELL") or ("zsh" if sys.platform == "darwin" else "bash")

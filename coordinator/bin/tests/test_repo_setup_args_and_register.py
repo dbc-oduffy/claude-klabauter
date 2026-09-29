@@ -182,12 +182,18 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
                     settings_tmp,
                 ]
             )
-            with mock.patch.dict(os.environ, {"CLAUDE_HOME": home_tmp}, clear=False):
+            from coordinator_core import engine_root as _er
+
+            with mock.patch.dict(os.environ, {"CLAUDE_HOME": home_tmp}, clear=False), mock.patch.object(
+                _er, "_self_located_root", lambda: None
+            ), mock.patch.object(_er.shutil, "which", lambda _n: None):
                 os.environ.pop("REPO_CLAUDE_KLABAUTER", None)
                 os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
+                _er._reset_root_memo()
                 rc = args.func(args)
+                _er._reset_root_memo()
             self.assertEqual(rc, 1)
-
 
 class TestRegisterRepo(unittest.TestCase):
     def test_already_registered_short_circuits(self):

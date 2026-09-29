@@ -30,7 +30,7 @@ Coverage:
       frozen mapping (full sweep lives in test_records_query_parity.py)
 
 Spec backlink: pln-strang-11-c11-12-native-record-e92436 § C1a
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1c
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1c
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from textwrap import dedent
 
 import pytest
 
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
@@ -1199,13 +1199,13 @@ class TestTypeToGlobDerivedGate:
     go unqueryable until a sibling repo's goal-coverage-scan port reported
     false-empty results (see records_query.py module Negative-spec).
 
-    Skips when the DoE-claude checkout is unresolvable via the machine-local
+    Skips when the coordinator-content-repo checkout is unresolvable via the machine-local
     registry — same posture as ``test_schema_validate.py``'s ``_DOE_REPO``
     skip guard.
     """
 
-    _doe_root_str = resolve_doe_root()
-    _DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
+    _content_root_str = resolve_content_root()
+    _DOE_REPO = Path(_content_root_str) if _content_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
     # build_type_to_glob's schema-derived set and this module's _TYPE_TO_GLOB
@@ -1240,7 +1240,7 @@ class TestTypeToGlobDerivedGate:
         "prior-art-check":         "record-shaped (docs/plans/*.prior-art-check.md) — not yet wired, out of scope for this fix",
         "problem-set":             "record-shaped (docs/problems/*.md) — not yet wired, out of scope for this fix",
         "review-findings":         "record-shaped (state/review-trail/findings/*.md) — not yet wired, out of scope for this fix",
-        "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in DoE-claude's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
+        "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in coordinator-content-repo's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
         "review-sidecar":          "record-shaped (docs/plans/*.review.md) — not yet wired, out of scope for this fix",
         "run-report":              "record-shaped, wildcard-dir glob (state/subagent-share/*/*.md) — not yet wired, out of scope for this fix",
         "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator-claude/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
@@ -1251,7 +1251,7 @@ class TestTypeToGlobDerivedGate:
     def _skip_if_unresolvable(self):
         if self._SCHEMAS_DIR is None or not self._SCHEMAS_DIR.is_dir():
             pytest.skip(
-                f"DoE-claude sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
+                f"coordinator-content-repo sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
                 "— skipping derive-and-gate parity check (no live disk dependency "
                 "for an ordinary run)."
             )
@@ -1508,12 +1508,12 @@ class TestSiblingExclusionDerivedFromWiredSet:
     would silently diverge from the oracle's all-schemas filter. Fails loud
     the moment a new DoE schema breaks that equivalence.
 
-    Skips when the DoE-claude checkout is unresolvable via the machine-local
+    Skips when the coordinator-content-repo checkout is unresolvable via the machine-local
     registry — same posture as ``TestTypeToGlobDerivedGate``.
     """
 
-    _doe_root_str = resolve_doe_root()
-    _DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
+    _content_root_str = resolve_content_root()
+    _DOE_REPO = Path(_content_root_str) if _content_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
     # already excluded by the SEPARATE, dedicated `_apply_plan_filename_filter`
@@ -1522,7 +1522,7 @@ class TestSiblingExclusionDerivedFromWiredSet:
     def _skip_if_unresolvable(self):
         if self._SCHEMAS_DIR is None or not self._SCHEMAS_DIR.is_dir():
             pytest.skip(
-                f"DoE-claude sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
+                f"coordinator-content-repo sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
                 "— skipping derive-and-gate sibling-exclusion check (no live disk "
                 "dependency for an ordinary run)."
             )
@@ -2104,7 +2104,7 @@ class TestUnattachedUnionLens:
     union lens (``_query_unattached_all`` / ``UNATTACHED_TYPES``), port of
     query-records.js's ``queryUnattachedAll``.
 
-    Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C3 (AC4)
+    Spec backlink: coordinator-content-repo:pln-initiative-govern-sweep-priori-6cf808 § C3 (AC4)
     """
 
     @pytest.fixture()

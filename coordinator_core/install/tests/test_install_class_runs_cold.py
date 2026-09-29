@@ -61,7 +61,7 @@ def test_every_possible_installer_declares_its_class():
 
 
 def test_the_ruling_s_named_installers_are_install_class():
-    for name in ("coordinator-install", "coordinator-uninstall", "install-claude-doe-wrapper"):
+    for name in ("coordinator-install", "coordinator-uninstall", "install-claude-author-wrapper"):
         assert name in _INSTALL_CLASS, name
 
 

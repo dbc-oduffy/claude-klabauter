@@ -14,7 +14,7 @@ header. All are fixed; this module exists so the population stays at zero
 without anyone remembering the rule.
 
 WHAT IS SCANNED. Tracked source in one or more repo roots -- this repo by
-default, plus the DoE-claude plane when it resolves (see ``resolve_roots``).
+default, plus the coordinator-content-repo plane when it resolves (see ``resolve_roots``).
 Candidate files are selected with a handful of batched ``git grep``
 invocations per root; nothing spawns a process per file.
 
@@ -1044,25 +1044,25 @@ def resolve_roots(
         else:
             skips.append(f"--root {path!r}: not a directory")
 
-    if not any(label == "DoE-claude" for label, _ in roots):
+    if not any(label == "coordinator-content-repo" for label, _ in roots):
         try:
-            from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+            from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-            doe = coordinator_doe_root()
+            doe = coordinator_content_root()
         except Exception as exc:
             doe, exc_text = None, str(exc)
-            skips.append(f"DoE-claude: resolver unavailable ({exc_text})")
+            skips.append(f"coordinator-content-repo: resolver unavailable ({exc_text})")
         else:
             if not doe:
                 skips.append(
-                    "DoE-claude: coordinator_doe_root() resolved nothing "
-                    "(no DOE_ROOT/REPO_DOE_CLAUDE, no machine-local repos.doe_claude, "
-                    "no .doe-root pointer, no marketplace cache)"
+                    "coordinator-content-repo: coordinator_content_root() resolved nothing "
+                    "(no CONTENT_ROOT/REPO_CONTENT_ROOT, no machine-local repos.content_root, "
+                    "no .coordinator-content-root pointer, no marketplace cache)"
                 )
             elif not os.path.isdir(doe):
-                skips.append(f"DoE-claude: resolved to {doe}, which is not a directory")
+                skips.append(f"coordinator-content-repo: resolved to {doe}, which is not a directory")
             else:
-                roots.append(("DoE-claude", doe))
+                roots.append(("coordinator-content-repo", doe))
 
     return roots, skips
 
@@ -1081,7 +1081,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=[],
         metavar="PATH",
         help="Additional repo root to scan. Repeatable. This repo is always scanned; "
-        "the DoE-claude plane is added automatically when it resolves.",
+        "the coordinator-content-repo plane is added automatically when it resolves.",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 

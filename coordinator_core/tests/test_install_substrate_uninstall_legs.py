@@ -332,13 +332,13 @@ def test_remove_shim_refuses_hand_modified_legacy_block(tmp_path, monkeypatch):
 def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    expected_repo = f"{tmp_path}/X/DoE-claude"
-    expected_bin = f"{expected_repo}/coordinator/bin/claude-doe"
+    expected_repo = f"{tmp_path}/X/coordinator-content-repo"
+    expected_bin = f"{expected_repo}/coordinator/bin/claude-author"
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text(
         "some prior line\n"
         "# --- coordinator maximalist launch ---\n"
-        f'claude() {{ REPO_DOE_CLAUDE="{expected_repo}" command bash "{expected_bin}" "$@"; }}\n'
+        f'claude() {{ REPO_CONTENT_ROOT="{expected_repo}" command bash "{expected_bin}" "$@"; }}\n'
         "# --- end coordinator maximalist launch ---\n"
         "some trailing line\n",
         encoding="utf-8",
@@ -988,7 +988,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
 
 def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
@@ -1008,8 +1008,8 @@ def test_resolve_coordinator_root_env_override(tmp_path):
     assert _shared.resolve_coordinator_root(str(root)) == str(root)
 
 
-def test_resolve_coordinator_root_repo_doe_claude_nested_dev_clone(tmp_path, monkeypatch):
-    """A dev-clone-shaped `REPO_DOE_CLAUDE` (content nested under
+def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, monkeypatch):
+    """A dev-clone-shaped `REPO_CONTENT_ROOT` (content nested under
     `<repo>/coordinator`, carrying the machine-local marker) resolves to
     that nested dir -- unchanged dev-tree behavior."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
@@ -1019,14 +1019,14 @@ def test_resolve_coordinator_root_repo_doe_claude_nested_dev_clone(tmp_path, mon
     nested = repo / "coordinator"
     (nested / "templates" / "bin").mkdir(parents=True)
     (nested / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
 
     assert _shared.resolve_coordinator_root() == str(nested)
 
 
-def test_resolve_coordinator_root_repo_doe_claude_flat_published_clone(tmp_path, monkeypatch):
+def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_path, monkeypatch):
     """claude-klabauter#6 / DoE F7: a flat OSS/marketplace-shaped
-    `REPO_DOE_CLAUDE` (content directly at the repo root, no `coordinator/`
+    `REPO_CONTENT_ROOT` (content directly at the repo root, no `coordinator/`
     subdir) must resolve to the repo root itself, decided by the same
     machine-local marker probe -- never by guessing a fixed subpath."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
@@ -1035,19 +1035,19 @@ def test_resolve_coordinator_root_repo_doe_claude_flat_published_clone(tmp_path,
     repo = tmp_path / "flat-clone"
     (repo / "templates" / "bin").mkdir(parents=True)
     (repo / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
 
     assert _shared.resolve_coordinator_root() == str(repo)
 
 
-def test_resolve_coordinator_root_doe_root_pointer_rung_uses_userprofile(tmp_path, monkeypatch):
-    """Native-Windows condition for the `.doe-root` pointer-file rung
+def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp_path, monkeypatch):
+    """Native-Windows condition for the `.coordinator-content-root` pointer-file rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): HOME absent,
     only USERPROFILE set. The rung must resolve via `require_home()` rather
     than degrading to a cwd-relative pointer path when CLAUDE_HOME/HOME are
     both unset."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
@@ -1062,10 +1062,10 @@ def test_resolve_coordinator_root_doe_root_pointer_rung_uses_userprofile(tmp_pat
     coordinator_dir = userprofile_home / "coordinator"
     coordinator_dir.mkdir()
     # CLAUDE_HOME/USERPROFILE names the PARENT of `.claude`; the pointer the
-    # installer writes lives at `<home>/.claude/.doe-root` (verified against a
+    # installer writes lives at `<home>/.claude/.coordinator-content-root` (verified against a
     # live install), and `_shared.claude_dir` is now the one spelling of that.
     (userprofile_home / ".claude").mkdir()
-    (userprofile_home / ".claude" / ".doe-root").write_text(
+    (userprofile_home / ".claude" / ".coordinator-content-root").write_text(
         str(userprofile_home), encoding="utf-8"
     )
 
@@ -1664,12 +1664,12 @@ def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatc
     dot_claude = home / ".claude"
     (dot_claude / "bin").mkdir(parents=True)
     (dot_claude / "bin" / "platform-localize.sh").write_text("ours", encoding="utf-8")
-    (dot_claude / ".doe-root").write_text("ours", encoding="utf-8")
+    (dot_claude / ".coordinator-content-root").write_text("ours", encoding="utf-8")
 
     # Decoys directly under the home — an operator's own files, off limits.
     (home / "bin").mkdir()
     (home / "bin" / "platform-localize.sh").write_text("theirs", encoding="utf-8")
-    (home / ".doe-root").write_text("theirs", encoding="utf-8")
+    (home / ".coordinator-content-root").write_text("theirs", encoding="utf-8")
 
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
@@ -1679,9 +1679,9 @@ def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatc
     assert uninstall_legs.uninstall_remove_substrate("full-remove") is True
 
     assert not (dot_claude / "bin" / "platform-localize.sh").exists()
-    assert not (dot_claude / ".doe-root").exists()
+    assert not (dot_claude / ".coordinator-content-root").exists()
     assert (home / "bin" / "platform-localize.sh").read_text(encoding="utf-8") == "theirs"
-    assert (home / ".doe-root").read_text(encoding="utf-8") == "theirs"
+    assert (home / ".coordinator-content-root").read_text(encoding="utf-8") == "theirs"
 
 
 def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkeypatch):

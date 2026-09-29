@@ -22,8 +22,8 @@ must be kept in sync by hand if either changes. Mirrors the deliberate-self-cont
 precedent already established for `dev-sync.sh` / `coordinator_core.ops.dev_sync`
 in the same `dist/publish-repo-setup/` family.
 
-Port source: coordinator/dist/publish-repo-setup/name-personas.sh (DoE-claude, 291 lines)
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Port source: coordinator/dist/publish-repo-setup/name-personas.sh (coordinator-content-repo, 291 lines)
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 -- dry-run report printed, or live substitutions applied and reported.

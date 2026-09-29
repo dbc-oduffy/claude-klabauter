@@ -3,9 +3,9 @@ guard for a direct write to the DERIVED live global-doctrine copy
 (``~/.claude/CLAUDE.md``).
 
 Purpose (the failure this closes): of the four ``CLAUDE.md``-class surfaces,
-global doctrine is AUTHORED at ``global-doctrine/CLAUDE.md`` in the DoE-claude
+global doctrine is AUTHORED at ``global-doctrine/CLAUDE.md`` in the coordinator-content-repo
 repo; ``coordinator/hooks/scripts/derive-global-doctrine-live-copy.py`` (a
-PostToolUse hook, DoE-claude repo) re-derives ``~/.claude/CLAUDE.md`` from it
+PostToolUse hook, coordinator-content-repo repo) re-derives ``~/.claude/CLAUDE.md`` from it
 on every matching write to the authoring copy. There is no ``--plugin-dir``-
 style live resolution for the derived copy the way there is for
 ``skills/``/``hooks/``/``bin/``/``lib/`` — it is a plain file, kept in sync
@@ -70,8 +70,8 @@ EM or a dispatched subagent performs the write — an EM unaware of the
 re-derivation hook loses the edit exactly the same way a subagent does.
 
 Deny text: leads with the alternative (edit the authoring copy in the
-DoE-claude repo, path resolved via ``coordinator_core.machine_resolver.
-registry_get("repos.doe_claude")`` at message-render time, never a literal),
+Coordinator-content-repo repo, path resolved via ``coordinator_core.machine_resolver.
+registry_get("repos.content_root")`` at message-render time, never a literal),
 then states the consequence (silent overwrite, no error, no signal) without
 overstating severity — this guard defends against an EAGER edit landing in
 the wrong place, not a hostile one.
@@ -93,9 +93,9 @@ Override env var: ``COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE``,
 following the same rare-use escape-hatch convention every sibling
 write_guards module carries (see ``INTERFACE.md`` fidelity rule 3).
 
-Spec backlink: DoE-claude coordinator/hooks/scripts/
+Spec backlink: coordinator-content-repo coordinator/hooks/scripts/
   derive-global-doctrine-live-copy.py (the derivation this guard protects);
-  DoE-claude CLAUDE.md "Four CLAUDE.md-class surfaces, one trap" (the failure
+  coordinator-content-repo CLAUDE.md "Four CLAUDE.md-class surfaces, one trap" (the failure
   this guard names).
 Precedent (module shape — derived-vs-authoring routing, not authority):
   coordinator_core/write_guards/block_dev_side_mirror_wiki.py.
@@ -110,6 +110,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.machine_resolver import registry_get
+from coordinator_core.write_guards._guard_level import apply_level
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -210,7 +211,7 @@ def _is_derived_live_copy(file_path: str) -> bool:
 
 
 def _authoring_path() -> Optional[str]:
-    root = registry_get("repos.doe_claude")
+    root = registry_get("repos.content_root")
     if not root:
         return None
     return root.replace("\\", "/").rstrip("/") + "/global-doctrine/CLAUDE.md"
@@ -218,14 +219,7 @@ def _authoring_path() -> Optional[str]:
 
 def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
     authoring = _authoring_path()
-    target = (
-        f"edit instead: `{authoring}`"
-        if authoring
-        else (
-            "the authoring root is unregistered here — "
-            "`machine-local set repos.doe_claude <path>` names it"
-        )
-    )
+    target = f"edit instead: `{authoring}`"
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         "BLOCKED: not the authoring source — a re-derivation hook leaves "
@@ -251,10 +245,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _is_derived_live_copy(file_path):
         return None
 
-    return {
+    if _authoring_path() is None:
+        return None
+
+    denial = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(file_path, payload),
         }
     }
+    return apply_level(
+        "block-derived-global-doctrine-write",
+        denial,
+        f"{file_path} is re-derived from its authoring copy, so this edit may be overwritten.",
+    )

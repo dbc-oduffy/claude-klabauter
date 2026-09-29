@@ -69,7 +69,7 @@ _LANDED_PLAN_STATUSES = frozenset({"implemented", "landed"})
 #: (`coordinator_core/ops/fleet/archive_plans.py`) and is common across the
 #: fleet (every repo swept 2026-09-28 that has an archive/ tree at all has
 #: an archive/specs/ subtree); `archive/plans/` and `archive/completed/
-#: plans/` are alternate layouts observed in DoE-claude/example-sim-repo-md. The
+#: plans/` are alternate layouts observed in coordinator-content-repo/example-sim-repo-md. The
 #: archiver preserves the plan's original filename verbatim, so the lookup
 #: is a filename match (`<chain_slug>.md`), not a content scan.
 _ARCHIVED_PLAN_DIRS = ("archive/specs", "archive/plans", "archive/completed/plans")

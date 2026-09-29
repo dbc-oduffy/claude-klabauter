@@ -7,7 +7,7 @@ Why this exists
 ----------------
 `guard_foreign_platform_paths.py` (this package) only ever scanned
 `settings.json` -- a live, machine-executable config. On 2026-07-28/29 a
-hardcoded Windows path (`X:\\example-game-workbench-repo`) sitting in an
+hardcoded Windows path (`C:\\example-game-workbench-repo`) sitting in an
 agent-readable PROSE doctrine file caused a live session to state a false
 fact about where a repo lived: nothing in the settings.json-only guard ever
 looked at that file. PM ruling: **any concrete full-path citation anywhere
@@ -18,7 +18,7 @@ into checked-in prose is wrong on EVERY host, including the one that wrote
 it, because it names one operator's machine as if it were universal.
 
 Scope is deliberately unrestricted by file type -- `.md` is explicitly IN
-scope, unlike DoE-claude's older `coordinator/tests/test_no_absolute_path_
+scope, unlike coordinator-content-repo's older `coordinator/tests/test_no_absolute_path_
 literals.py` (Rule A/B), which carried a documented decision to exclude
 markdown as "documentary". That decision is what this incident falsifies:
 a documentary-looking line in a doctrine file is exactly the kind of
@@ -70,9 +70,9 @@ first cut of this rule, which conflated the two). The ROOT itself is not
 symmetric between the two POSIX-home-style rules and `drive-letter`:
 `/Users/` is universal, every macOS host has it, so `posix-home` never
 flags the root, only a concrete SEGMENT after it. A drive-letter root
-(`X:\`, `E:\`, ...) is itself one operator's drive mapping and exists on no
-other machine -- so a BARE drive root with nothing after it (`X:\` alone,
-"assets that don't belong on `X:\`") is a machine-specific assertion in its
+(`C:\`, `E:\`, ...) is itself one operator's drive mapping and exists on no
+other machine -- so a BARE drive root with nothing after it (`C:\` alone,
+"assets that don't belong on `C:\`") is a machine-specific assertion in its
 own right and STAYS FLAGGED; it is not exempt just for lacking a segment.
 Where symmetry DOES apply is the segment: the same placeholder word list
 `posix-home` checks (`alice`, `bob`, `username`, `you`, `me`, `foo`,
@@ -101,7 +101,7 @@ in the path token AND every segment between the root and that ellipsis is
 itself placeholder-shaped -- unlike `posix-home`'s single fixed "username
 slot", a drive-letter path has no one canonical position for "the
 interesting segment", so a worked example like "a repo, then some subpath"
-(`X:\...\topic.md`) needs the ellipsis check to look past the first segment.
+(`C:\...\topic.md`) needs the ellipsis check to look past the first segment.
 The "every segment before it must be placeholder-shaped too" qualifier is
 load-bearing, not incidental: a real citation followed by a natural
 trailing `...` (`C:\Users\example-operator\project\...`) has a genuine concrete
@@ -120,7 +120,7 @@ as the placeholder check above.
 
 `dead-registry-rung` -- scope-limited, and mention-aware within that scope
 ----------------------------------------------------------------------------
-Ported from DoE-claude's older `coordinator/tests/test_no_absolute_path_
+Ported from coordinator-content-repo's older `coordinator/tests/test_no_absolute_path_
 literals.py` (its former Rule B) when that gate was rewritten to consume
 this shared module -- the rewrite widened scope but silently dropped this
 rule's coverage for one review cycle before it was ported back in, WITH the
@@ -128,7 +128,7 @@ scope restriction its original design always carried (not a new narrowing).
 
 WHY THIS RULE IS SCOPE-LIMITED WHILE THE OTHER FOUR ARE NOT -- the harm
 model is genuinely different, not a hedge. The other four rules catch
-MACHINE-SPECIFICITY: `/Users/<user>/...` or `X:\...` names one operator's
+MACHINE-SPECIFICITY: `/Users/<user>/...` or `C:\...` names one operator's
 box, so the exact same sentence is FALSE on every other machine -- true
 regardless of whether it appears in code or prose, which is why widening
 those four to the whole corpus (including `.md`) was correct (see "Why this
@@ -151,7 +151,7 @@ construction. `_DEAD_RUNG_STRUCTURED_EXTENSIONS` (`.json`/`.toml`/`.yaml`/
 config is machine-parsed data, not documentary prose, so a match there is
 also plausibly a live read. An early revision of this scope excluded the
 structured-data extensions entirely: a corpus reconciliation against
-DoE-claude found every `.json`/`.yaml` hit under a naive whole-file scan
+Coordinator-content-repo found every `.json`/`.yaml` hit under a naive whole-file scan
 was a NARRATIVE RECORD that happens to use a structured serialization
 format -- a bug-backlog entry, a lesson, a review-sidecar finding, a task
 flight-recorder dump -- with the citation living in a free-text field
@@ -277,7 +277,7 @@ the way a bare `/fixtures/` directory match once did in this fleet's own
 
 Capture-data exemption -- a FORMAT-scoped class, not a directory allowlist
 ----------------------------------------------------------------------------
-A sibling repo (DoE-claude) asked for `state/audits/data/` and
+A sibling repo (coordinator-content-repo) asked for `state/audits/data/` and
 `state/recovery/` to be added to `_EVIDENCE_ARTIFACT_PATH_PREFIXES` above.
 That literal ask is REJECTED as written: both directories mix
 machine-generated capture data with hand-authored `.md` prose and `.py`
@@ -626,7 +626,7 @@ def _py_documentary_lines(text: str) -> Optional[Set[int]]:
 # Corpus-checked, not guessed: `body`, `summary`, `description`,
 # `suggested_fix`, `how_to_apply`, `one_liner`, `title`, `decomposition`,
 # `filled`, `scout_evidence` are every distinct key this rule's own
-# DoE-claude corpus scan found carrying a `dead-registry-rung` shape
+# coordinator-content-repo corpus scan found carrying a `dead-registry-rung` shape
 # (bug-backlog/lesson/review-sidecar/task-flight-recorder/sizing-scout
 # entries narrating a defect or an observation, never live-reading a
 # path). `rationale`, `notes`, `text`, `evidence` are included on the same
@@ -1312,9 +1312,9 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
                 root_len = m.end() - m.start()
                 # A BARE drive root is deliberately NOT exempt. `/Users/` is
                 # universal -- every macOS host has it -- which is why the posix
-                # rule tests only the segment after it. `X:\` is one operator's
+                # rule tests only the segment after it. `C:\` is one operator's
                 # drive mapping and exists on no other machine, so prose like
-                # "assets that don't belong on X:\" is itself the machine-specific
+                # "assets that don't belong on C:\" is itself the machine-specific
                 # assertion this guard exists to catch. Root-concreteness and
                 # segment-concreteness are different tests; the drive rule applies
                 # both.
@@ -1354,7 +1354,7 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
                     # escaped string supplies a bare backslash that, followed
                     # later on the same token by a `/`, phantom-matches as
                     # "mixes both separators" with no real path present
-                    # (`X:/DoE-claude/.../SKILL.md\r\n` -- the trailing `\r\n`
+                    # (`C:/coordinator-content-repo/.../SKILL.md\r\n` -- the trailing `\r\n`
                     # is the sole source of the backslash). The lookahead gate
                     # is load-bearing, not a simplification: an UNGATED cut
                     # (`\\[ntrbfv0]` alone) would also cut a REAL path at a real
@@ -1465,7 +1465,7 @@ def _maybe_relevant(text: str) -> bool:
 # foreign-identity: OUT-OF-CLASS — docstring, not agent-facing rendered text
 def scan_repo(root: Path) -> List[Finding]:
     """Scan every tracked file under `root` (any git repo -- this module is
-    not DoE-claude-specific) and return all `Finding`s. Never raises on a
+    not coordinator-content-repo-specific) and return all `Finding`s. Never raises on a
     per-file read failure; that file is simply skipped."""
     findings: List[Finding] = []
     for rel in _tracked_files(root):

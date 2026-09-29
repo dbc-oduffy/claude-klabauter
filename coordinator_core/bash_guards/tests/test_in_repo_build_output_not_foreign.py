@@ -42,7 +42,7 @@ def test_containment_true_when_target_nested_under_session():
 
 
 def test_containment_false_when_target_is_a_sibling_repo():
-    assert message._target_is_contained_in_session("DoE-claude", _SESSION_REPO) is False
+    assert message._target_is_contained_in_session("coordinator-content-repo", _SESSION_REPO) is False
 
 
 def test_containment_false_when_target_or_session_empty():
@@ -100,14 +100,14 @@ def test_subagent_message_build_output_defect_fits_the_prose_cap():
 
 
 def test_em_message_genuinely_foreign_target_unaffected():
-    text = message.render_em_message("DoE-claude", _SESSION_REPO, None, _SESSION_ID)
+    text = message.render_em_message("coordinator-content-repo", _SESSION_REPO, None, _SESSION_ID)
     assert "classification defect" not in text
     assert f"(not `{_SESSION_REPO}`)" in text
 
 
 def test_subagent_message_genuinely_foreign_target_unaffected():
     text = message.render_subagent_message(
-        "DoE-claude", _SESSION_REPO, None, _SESSION_ID, _SANDBOX_ROOT
+        "coordinator-content-repo", _SESSION_REPO, None, _SESSION_ID, _SANDBOX_ROOT
     )
     assert "classification defect" not in text
     assert f"(not `{_SESSION_REPO}`)" in text

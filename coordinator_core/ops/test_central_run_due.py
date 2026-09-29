@@ -43,10 +43,10 @@ def _make_doe_content_root(tmp_path: Path) -> Path:
     return root
 
 
-def _env_for(tmp_path: Path, doe_root: Path, central_state_root: Path, roots_file: Path) -> dict:
+def _env_for(tmp_path: Path, content_root: Path, central_state_root: Path, roots_file: Path) -> dict:
     env = dict(os.environ)
     env["CLAUDE_HOME"] = str(tmp_path)  # CLAUDE_HOME env var overrides $HOME, per oracle
-    env["COORDINATOR_ROOT"] = str(doe_root)
+    env["COORDINATOR_ROOT"] = str(content_root)
     env["CENTRAL_STATE_ROOT"] = str(central_state_root)
     env["LL_ROOTS_FILE"] = str(roots_file)
     return env
@@ -112,7 +112,7 @@ def _write_sentinel(claude_home: Path, date: str) -> None:
 
 class TestPositive:
     def test_below_threshold_reports_on_stderr(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold="150")
@@ -124,7 +124,7 @@ class TestPositive:
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text(f"{claude_home}\n{source_repo}\n")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main([], env)
 
         assert rc == 0
@@ -133,7 +133,7 @@ class TestPositive:
         assert "2026-07-01" in err
 
     def test_over_threshold_emits_central_run_due(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold=None)
@@ -145,7 +145,7 @@ class TestPositive:
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text(f"{claude_home}\n{source_repo}\n")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main(["1"], env)
 
         assert rc == 0
@@ -153,7 +153,7 @@ class TestPositive:
         assert "repo-a:2" in out
 
     def test_self_excludes_claude_home_root(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold="1")
@@ -164,7 +164,7 @@ class TestPositive:
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text(f"{claude_home}\n")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main([], env)
 
         assert rc == 0
@@ -173,14 +173,14 @@ class TestPositive:
 
 class TestNegative:
     def test_invalid_threshold_skips(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold="150")
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text("")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main(["notanumber"], env)
 
         assert rc == 0
@@ -188,13 +188,13 @@ class TestNegative:
         assert "invalid threshold 'notanumber'" in err
 
     def test_missing_config_skips(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state-absent"
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text("")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main([], env)
 
         assert rc == 0
@@ -202,7 +202,7 @@ class TestNegative:
         assert "no config at" in err
 
     def test_missing_sentinel_skips(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold="150")
@@ -210,7 +210,7 @@ class TestNegative:
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text("")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main([], env)
 
         assert rc == 0
@@ -218,7 +218,7 @@ class TestNegative:
         assert "no COMPLETE central-run sentinel found" in err
 
     def test_empty_roots_list_stays_below_threshold(self, tmp_path: Path):
-        doe_root = _make_doe_content_root(tmp_path)
+        content_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
         _write_config(central_state_root, threshold="150")
@@ -226,7 +226,7 @@ class TestNegative:
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text("")
 
-        env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
+        env = _env_for(tmp_path, content_root, central_state_root, roots_file)
         rc, out, err = _run_main([], env)
 
         assert rc == 0
@@ -258,10 +258,10 @@ class TestUnitHelpers:
         assert _resolve_threshold(["abc"], str(cfg)) is None
 
 
-def _pointer_home(tmp_path: Path, monkeypatch, doe_root: Path) -> str:
+def _pointer_home(tmp_path: Path, monkeypatch, content_root: Path) -> str:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
     monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
@@ -271,30 +271,30 @@ def _pointer_home(tmp_path: Path, monkeypatch, doe_root: Path) -> str:
 def test_content_root_pointer_rung_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
     from coordinator_core.ops.central_run_due import _resolve_doe_content_root
 
-    doe_root = tmp_path / "DoE-claude"
-    (doe_root / "coordinator").mkdir(parents=True)
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "coordinator-content-repo"
+    (content_root / "coordinator").mkdir(parents=True)
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
 
-    assert _resolve_doe_content_root(claude_home) == str(doe_root / "coordinator")
+    assert _resolve_doe_content_root(claude_home) == str(content_root / "coordinator")
 
 
 def test_content_root_pointer_rung_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
     from coordinator_core.ops.central_run_due import _resolve_doe_content_root
 
-    doe_root = tmp_path / "coordinator-claude"
-    (doe_root / ".claude-plugin").mkdir(parents=True)
-    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "coordinator-claude"
+    (content_root / ".claude-plugin").mkdir(parents=True)
+    (content_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
 
-    assert _resolve_doe_content_root(claude_home) == str(doe_root)
+    assert _resolve_doe_content_root(claude_home) == str(content_root)
 
 
 def test_content_root_pointer_rung_skips_a_bare_directory(tmp_path, monkeypatch):
     from coordinator_core.ops.central_run_due import _resolve_doe_content_root
 
-    doe_root = tmp_path / "bare"
-    doe_root.mkdir()
-    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    content_root = tmp_path / "bare"
+    content_root.mkdir()
+    claude_home = _pointer_home(tmp_path, monkeypatch, content_root)
     monkeypatch.setattr("coordinator_core.ops.central_run_due._registry_get", lambda key: None)
 
     assert _resolve_doe_content_root(claude_home) == os.path.join(

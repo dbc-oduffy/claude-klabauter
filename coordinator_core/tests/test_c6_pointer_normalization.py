@@ -13,14 +13,14 @@ Coverage:
       (the _id field was in no edge-kind set at all).
   (c) Differential-oracle agreement: coordinator_core.dag's pointer resolution (engine)
       vs. _baton_dag_oracle's independent from-scratch normalization (oracle) agree on
-      "who points at this baton" for every live baton in the DoE-claude corpus (~255
+      "who points at this baton" for every live baton in the coordinator-content-repo corpus (~255
       files) and the claude-klabauter corpus (~95 files), checked separately for the
       predecessor-family ({'predecessor', 'predecessor_id'}) and origin_handoff-family
       ({'origin_handoff', 'origin_handoff_id'}) pointer sets. Comparison is on POINTER
       RESOLUTION ONLY — no edge-kind-set is added, removed, or unified by this test;
       origin_handoff stays a deliberate explicit-opt-in edge kind exactly as before.
 
-Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d chunk C6.
+Spec backlink: coordinator-content-repo:pln-push-side-write-discipline-for-05c30d chunk C6.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from typing import Set
 import pytest
 
 from coordinator_core import dag
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 
 from . import _baton_dag_oracle as oracle
 
@@ -329,23 +329,23 @@ class TestDifferentialOracleAgreement:
         _corpus_agreement(root, oracle.ORIGIN_HANDOFF_LINK_FIELDS, {"origin_handoff"})
 
     @pytest.mark.real_home
-    def test_doe_claude_predecessor_family(self):
-        doe_root = read_doe_root_pointer()
-        if not doe_root or not os.path.isdir(os.path.join(doe_root, "state", "handoffs")):
+    def test_content_root_predecessor_family(self):
+        content_root = read_content_root_pointer()
+        if not content_root or not os.path.isdir(os.path.join(content_root, "state", "handoffs")):
             pytest.skip(
-                "DoE-claude root not resolvable via read_doe_root_pointer() on this "
-                "machine — this cross-repo differential check requires a DoE-claude "
+                "coordinator-content-repo root not resolvable via read_content_root_pointer() on this "
+                "machine — this cross-repo differential check requires a coordinator-content-repo "
                 "sibling checkout and is not part of the portable pytest surface."
             )
-        _corpus_agreement(doe_root, oracle.PREDECESSOR_LINK_FIELDS, {"predecessor"})
+        _corpus_agreement(content_root, oracle.PREDECESSOR_LINK_FIELDS, {"predecessor"})
 
     @pytest.mark.real_home
-    def test_doe_claude_origin_handoff_family(self):
-        doe_root = read_doe_root_pointer()
-        if not doe_root or not os.path.isdir(os.path.join(doe_root, "state", "handoffs")):
+    def test_content_root_origin_handoff_family(self):
+        content_root = read_content_root_pointer()
+        if not content_root or not os.path.isdir(os.path.join(content_root, "state", "handoffs")):
             pytest.skip(
-                "DoE-claude root not resolvable via read_doe_root_pointer() on this "
-                "machine — this cross-repo differential check requires a DoE-claude "
+                "coordinator-content-repo root not resolvable via read_content_root_pointer() on this "
+                "machine — this cross-repo differential check requires a coordinator-content-repo "
                 "sibling checkout and is not part of the portable pytest surface."
             )
-        _corpus_agreement(doe_root, oracle.ORIGIN_HANDOFF_LINK_FIELDS, {"origin_handoff"})
+        _corpus_agreement(content_root, oracle.ORIGIN_HANDOFF_LINK_FIELDS, {"origin_handoff"})

@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.oss_operative_strings — ratified classification data
-for DoE-claude's `_prompt_surface_locality.py` operative-string carve-out —
+for coordinator-content-repo's `_prompt_surface_locality.py` operative-string carve-out —
 the table of private sibling-repo-name literals that are LOAD-BEARING (a
 wire value a live mechanism matches against) rather than ATTRIBUTION PROSE
 (a mention that costs an OSS reader something and carries no working
@@ -16,7 +16,7 @@ The DR-141 predicate cluster that actually reads publish-locality policy
 rest named in the plan's W4-C6 row) stays DoE-resident per DR-141's
 stays-DoE-resident test and imports THIS module rather than keeping its own
 copy — this file is the classification data, not the editorial-policy
-predicate. Ported verbatim from DoE-claude
+predicate. Ported verbatim from coordinator-content-repo
 `coordinator/hooks/scripts/_oss_operative_strings.py`, with one shape
 change: `mcp_tool_prefixes()`'s doctrine-asset lookup (`mcp-topology.yaml`)
 now resolves through the coordinator-claude plugin content root instead of
@@ -77,7 +77,7 @@ every other file) — including ordinary attribution prose that happens to
 use the identical word, which is the actual defect this ratchet exists to
 catch, not a case for the exemption to swallow. Scoping to the named site
 keeps the exemption exactly as wide as its own justification and no wider.
-The entries below name DoE-claude's own tree — that is data this table
+The entries below name coordinator-content-repo's own tree — that is data this table
 carries for its DoE-resident consumer, not a path this module reads.
 
 SIBLING_REPO_RECORD is a name-keyed record assembled from TWO distinct
@@ -117,7 +117,7 @@ def _resolve_mcp_topology_path() -> Optional[Path]:
     `cater_subagent_start._resolve_role_append_snippet_path`'s own
     plugin-root probe for a different artifact rather than the retired
     `Path(__file__).resolve().parents[3]`-relative walk this module used
-    while it lived three directories under DoE-claude's own repo root
+    while it lived three directories under coordinator-content-repo's own repo root
     (`coordinator/hooks/scripts/`). Probes for THIS artifact directly at
     each rung, not a directory's mere existence — same discipline that
     function's docstring documents, for the same reason.
@@ -134,7 +134,7 @@ def _resolve_mcp_topology_path() -> Optional[Path]:
     try:
         from coordinator_core._settings_home import claude_config_dir
         from coordinator_core.data_root import content_root_for
-        from coordinator_core.doe_root_pointer import read_doe_root_pointer
+        from coordinator_core.content_root_pointer import read_content_root_pointer
     except Exception:
         return None
 
@@ -145,11 +145,11 @@ def _resolve_mcp_topology_path() -> Optional[Path]:
             return candidate
 
     try:
-        doe_root = read_doe_root_pointer()
+        content_root = read_content_root_pointer()
     except Exception:
-        doe_root = ""
-    if doe_root:
-        content_root = content_root_for(doe_root)
+        content_root = ""
+    if content_root:
+        content_root = content_root_for(content_root)
         if content_root is not None:
             candidate = content_root / "mcp-topology.yaml"
             if candidate.is_file():
@@ -206,7 +206,7 @@ def _engine_sibling_record() -> dict:
 #: machine-local registry present (the plan's Anti-scope entry rules out the
 #: candidates: `_ENGINE_REPO_NAME` answers the sibling-routing question, not
 #: the OSS-reachability one; the machine-local `repos.*` registry and
-#: `.doe-root` are runtime-detected and absent by design on a fresh install;
+#: `.coordinator-content-root` are runtime-detected and absent by design on a fresh install;
 #: `percolate-store.yaml`'s keep-set governs the publish transform, not
 #: detector input). The first name below is this repo: private, published
 #: verbatim to the OSS mirror, with no `source_map` row and never one,
@@ -215,7 +215,7 @@ def _engine_sibling_record() -> dict:
 #: forms only from a record entry's own declared `short_forms`, never from
 #: another entry's name.
 _PINNED_UNREACHABLE_RECORD: dict = {
-    "DoE-claude": {
+    "coordinator-content-repo": {
         "is_engine_sibling": False,
         "oss_reachable": False,
         "short_forms": (),
@@ -265,7 +265,7 @@ SIBLING_REPO_NAMES: tuple = tuple(
 #: Genuinely irreducible bare-literal residue. See module docstring's ENTRY
 #: CRITERION before adding to this tuple. Each entry is a
 #: (literal, file, line, reason) tuple: `file` is the repo-relative POSIX
-#: path (DoE-claude's own tree — this table's DoE-resident consumer's data,
+#: path (coordinator-content-repo's own tree — this table's DoE-resident consumer's data,
 #: not a path this module reads) and `line` the line number of the exact
 #: site the exemption covers — the literal is exempt ONLY there, never at
 #: any other occurrence of the same string, including elsewhere in the same

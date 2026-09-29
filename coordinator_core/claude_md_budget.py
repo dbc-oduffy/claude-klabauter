@@ -3,7 +3,7 @@ coordinator_core.claude_md_budget — single source of truth for the CLAUDE.md
 size budget and the GOVERNED-SURFACE discriminant.
 
 Purpose: unify the two independent, drifting literals this module replaces:
-    - DoE-claude `coordinator/hooks/scripts/check-claude-md-size.py`: 39900 hard / 39000 soft
+    - coordinator-content-repo `coordinator/hooks/scripts/check-claude-md-size.py`: 39900 hard / 39000 soft
     - claude-klabauter `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`
       ("Check 7"): 40000 hard / 38000 soft
 Both gates measured the SAME external constraint independently and had quietly
@@ -41,7 +41,7 @@ Measured 2026-07-27 via this repo's own oracle
 (`coordinator_core.ops.measure_token_envelope`, ~4-chars/token heuristic — see
 that module's docstring for why no exact tokenizer dependency is pinned):
 
-    coordinator/CLAUDE.md   (DoE-claude, dev-repo sentinel)   39,896 B  -> ~9,974 tokens
+    coordinator/CLAUDE.md   (coordinator-content-repo, dev-repo sentinel)   39,896 B  -> ~9,974 tokens
     ~/.claude/CLAUDE.md     (global)                          28,331 B  -> ~7,083 tokens
 
 Both figures are 3.5x-5x `docs/wiki/tiered-context-loading.md`'s stated Tier-0
@@ -59,7 +59,7 @@ Negative-spec — do NOT "fix" while reading this module:
       correctness/truncation ceiling — do not restore the "silent truncation"
       framing this module's derivation note explicitly debunks.
 
-Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1
+Spec backlink: coordinator-content-repo:pln-always-loaded-doctrine-envelop-cd5932 § C1
 
 C7b addendum (2026-07-31, `docs/plans/2026-07-30-boot-doctrine-cut-and-
 refill-gate.md` § C7b) -- AUDIENCE-BASED GOVERNANCE AND THE RATCHET WATERMARK.
@@ -75,7 +75,7 @@ manifest from the conventional per-repo file
 comments, blank lines ignored) when a caller does not pass one explicitly;
 an absent manifest file degrades to `[]` (only the two legacy hardcoded
 surfaces govern), never an error -- an unmanifested repo is not a broken
-repo. DoE-claude's own manifest content (its `GOVERNED_AUTHORING_SURFACES`
+repo. Coordinator-content-repo's own manifest content (its `GOVERNED_AUTHORING_SURFACES`
 tuple, `coordinator/hooks/scripts/_claude_md_ledger.py`) is DoE-owned
 working data this module does not author -- see that module's own C7a
 docstring for the enumeration.
@@ -142,8 +142,8 @@ SOFT_LIMIT_BYTES: int = 38000
 HARD_LIMIT_BYTES: int = 40000
 
 #: Repo-root sentinel that marks a checkout as the coordinator-claude DEV
-#: SOURCE repo (DoE-claude) rather than an OSS/percolated install or an
-#: unrelated sibling repo. See DoE-claude `.coordinator-dev-repo` and
+#: SOURCE repo (coordinator-content-repo) rather than an OSS/percolated install or an
+#: unrelated sibling repo. See coordinator-content-repo `.coordinator-dev-repo` and
 #: `coordinator/docs/wiki/claude-md-surfaces.md` for the discriminant this
 #: sentinel exists to support.
 DEV_REPO_SENTINEL: str = ".coordinator-dev-repo"
@@ -187,7 +187,7 @@ def is_governed_claude_md(
     Purpose: replaces a bare `os.path.basename(path) == "CLAUDE.md"` match
     (the shape `check-claude-md-size.py` used before this module existed),
     which fires on ANY file named CLAUDE.md — including a repo-scoped copy
-    (DoE-claude's own repo-root CLAUDE.md, claude-klabauter's, any sibling
+    (coordinator-content-repo's own repo-root CLAUDE.md, claude-klabauter's, any sibling
     repo's) that is not fleet-loaded and must not share this budget. See
     `coordinator/docs/wiki/claude-md-surfaces.md` for the enumerated surface
     table this function encodes.
@@ -198,7 +198,7 @@ def is_governed_claude_md(
           surface and is never governed).
         - `<repo-root>/coordinator/CLAUDE.md` where `<repo-root>` carries the
           `.coordinator-dev-repo` sentinel file at its root — i.e. the
-          DoE-claude coordinator plugin-doctrine source file specifically,
+          coordinator-content-repo coordinator plugin-doctrine source file specifically,
           never a percolated/installed copy elsewhere.
 
     Governed (True), ADDITIONALLY (C7b, AC3 -- audience, not filename), only
@@ -212,7 +212,7 @@ def is_governed_claude_md(
     NOT governed (False), even though the basename matches, absent a
     manifest entry naming it:
         - `<repo-root>/CLAUDE.md` (any repo's own project-scoped file,
-          DoE-claude's included — that file lives at repo root, not under
+          coordinator-content-repo's included — that file lives at repo root, not under
           `coordinator/`).
         - `<any-other-repo>/coordinator/CLAUDE.md` lacking the dev-repo
           sentinel (an OSS install, a percolated mirror, or any tree that
@@ -264,7 +264,7 @@ def is_claude_md_class(path: Union[str, Path]) -> bool:
     `is_governed_claude_md` discriminates for the byte-budget gate.
 
     Widens `is_governed_claude_md` (which covers 2 of the 5-6 surfaces
-    enumerated in DoE-claude `coordinator/docs/wiki/claude-md-surfaces.md` —
+    enumerated in coordinator-content-repo `coordinator/docs/wiki/claude-md-surfaces.md` —
     the wiki's surface table is this predicate's DEFINITION, re-derive from
     there before editing this docstring) to the full class:
 
@@ -299,8 +299,8 @@ def is_claude_md_class(path: Union[str, Path]) -> bool:
         True iff `path` resolves to a CLAUDE.md-class surface per the
         pattern rules above.
 
-    Spec backlink: DoE-claude DoE-claude:pln-claude-md-altitude-triage-earn-31f32e
-    § C2; class definition: DoE-claude coordinator/docs/wiki/claude-md-surfaces.md.
+    Spec backlink: coordinator-content-repo coordinator-content-repo:pln-claude-md-altitude-triage-earn-31f32e
+    § C2; class definition: coordinator-content-repo coordinator/docs/wiki/claude-md-surfaces.md.
     """
     resolved = Path(path).resolve()
 
@@ -324,7 +324,7 @@ def is_ledger_admission_scoped(path: Union[str, Path]) -> bool:
 
     `doctrine-envelope-allocation` C7 (`ff2255c1e`) introduced two
     independent enforcement points that share one predicate module
-    (`_claude_md_ledger.py`, DoE-claude): a PreToolUse hook and a CI-path
+    (`_claude_md_ledger.py`, coordinator-content-repo): a PreToolUse hook and a CI-path
     invariant test. Both currently scope themselves to `~/.claude/CLAUDE.md`
     only. `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`
     ("Check 7", this repo's own commit-time CI-tier byte-budget gate) is the
@@ -360,7 +360,7 @@ def is_ledger_admission_scoped(path: Union[str, Path]) -> bool:
         True iff `path` resolves to a CLAUDE.md-class surface per
         `is_claude_md_class`.
 
-    Spec backlink: DoE-claude DoE-claude:pln-claude-md-altitude-triage-earn-31f32e
+    Spec backlink: coordinator-content-repo coordinator-content-repo:pln-claude-md-altitude-triage-earn-31f32e
     § C3.
     """
     return is_claude_md_class(path)
@@ -377,7 +377,7 @@ def governed_surface_paths(
     to measure "the governed set" without hand-listing paths. Always includes
     the global `~/.claude/CLAUDE.md`. Includes `<repo_root>/coordinator/CLAUDE.md`
     only when `repo_root` is supplied AND carries the dev-repo sentinel — a
-    caller running from a non-DoE-claude repo (or omitting `repo_root`) gets
+    caller running from a non-coordinator-content-repo repo (or omitting `repo_root`) gets
     just the one global entry, which is correct: there is no second governed
     surface to report in that case.
 
@@ -424,7 +424,7 @@ def governed_surface_paths(
 
 # ---------------------------------------------------------------------------
 # C7b — the AC4 ratchet watermark. Grammar-compatible with (but NOT importing)
-# DoE-claude's `coordinator/hooks/scripts/_claude_md_ledger.py` -- see the
+# coordinator-content-repo's `coordinator/hooks/scripts/_claude_md_ledger.py` -- see the
 # module docstring's "C7b addendum" for why this is a re-implementation, not
 # a shared dependency.
 # ---------------------------------------------------------------------------

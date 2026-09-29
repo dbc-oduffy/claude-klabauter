@@ -334,7 +334,7 @@ class TestDriftSchemaVersions:
     verbatim from check_schema_drift_advisory, never re-parsed by this module (see
     the module docstring's "SHAPE TO AVOID" note).
 
-    Spec backlink: cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
+    Spec backlink: cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md
     """
 
     def test_drifted_entry_carries_both_versions(self, fake_doe: Path, vendored_dir: Path) -> None:
@@ -377,7 +377,7 @@ class TestDriftBumpClass:
     module never derives a hold/no-hold verdict from the class (DR-097 §
     Reconciliation — holding is axis-dependent and out of scope here).
 
-    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md
     """
 
     def test_drifted_entry_carries_bump_class_and_note(self, fake_doe: Path, vendored_dir: Path) -> None:
@@ -471,7 +471,7 @@ class TestIndeterminate:
 class TestDoeCloneAbsent:
     """No DoE clone at all -> UNRESOLVED. Graceful, not an explosion, not a fault."""
 
-    def test_unresolvable_doe_root_yields_unresolved(
+    def test_unresolvable_content_root_yields_unresolved(
         self, tmp_path: Path, vendored_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
@@ -489,9 +489,9 @@ class TestDoeCloneAbsent:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Ladder rungs that do not carry coordinator/schemas/ are rejected, not returned."""
-        monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
+        monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
         monkeypatch.setattr(
-            "coordinator_core.frontmatter.schema_drift_watch.read_doe_root_pointer",
+            "coordinator_core.frontmatter.schema_drift_watch.read_content_root_pointer",
             lambda: str(tmp_path / "also-not-there"),
         )
         # The sibling-layout rung may legitimately resolve on a dev machine; only assert
@@ -503,7 +503,7 @@ class TestDoeCloneAbsent:
     def test_env_override_wins_when_valid(
         self, fake_doe: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe))
+        monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe))
         assert resolve_doe_repo_path() == fake_doe
 
 

@@ -37,8 +37,8 @@ is named on stderr. Deliberately NOT reported: a candidate whose trailer parsed
 to a different artifact-id (the prefix-sharing narrowing in the negative-spec
 below) — that drop is correct, and reporting it would train the reader to
 ignore the line. The token, the exit code, and the stdout shape are unchanged;
-this is diagnostic, never a verdict. Raised by DoE-claude-em
-(cross-repo/archive/2026-08-13-doe-claude-em-rollup-derive-malformed-trailer-diagnostic.md).
+this is diagnostic, never a verdict. Raised by coordinator-content-repo-em
+(cross-repo/archive/2026-08-13-coordinator-content-repo-em-rollup-derive-malformed-trailer-diagnostic.md).
 
 This op's own contract is already machine-distinguishable: `no-resolving-
 commits` is a distinct token, never collapsed into `not-shipped`. The
@@ -55,7 +55,7 @@ this repo does not sweep for or repair historical trailer adoption); this
 module does not attempt to compensate for either.
 
 Port of: rollup-derive.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C5
+Spec backlink: coordinator-content-repo:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C5
 Port backlink: DoE tasks/2026-07-16-clean-slate-recon R1 DOE-PORT executor item.
 
 Negative-spec (do NOT "fix" mid-port):

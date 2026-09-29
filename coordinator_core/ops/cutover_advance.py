@@ -39,7 +39,7 @@ exists) and a call against a record already at ``retired`` is a setup
 error, not a REFUSE (there is nothing for the gate to have agreed or
 disagreed with).
 
-Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C5, D1, D4
+Spec backlink: coordinator-content-repo:pln-cutover-state-machine-a-phase--96db57 § C5, D1, D4
 
 Negative-spec:
   - Does NOT re-implement any leg of ``cutover.gate``'s two-way AGREEMENT
@@ -179,7 +179,7 @@ async def _cutover_advance(params: dict, repo_root: Optional[Path] = None) -> di
 
     Params:
         record (str, required) — path to the cutover record markdown file,
-            absolute or relative to the resolved DoE-claude worktree. Same
+            absolute or relative to the resolved coordinator-content-repo worktree. Same
             contract as `cutover.gate`'s `record` param — forwarded to it
             verbatim.
 

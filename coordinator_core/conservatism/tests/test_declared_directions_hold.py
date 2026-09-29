@@ -15,7 +15,7 @@ DECLARED AS-IS, deliberately not migrated:
      precondition: the caller supplied the wrong value and can see that it did.
      Decorating them would stretch the vocabulary to cover ordinary argument
      validation and make the declaration mean nothing.
-  5. `DoE-claude coordinator/hooks/scripts/_posture.py` is coordinator-claude's
+  5. `coordinator-content-repo coordinator/hooks/scripts/_posture.py` is coordinator-claude's
      file and may not be edited from here (this baton's anti-scope). Its
      discipline is pinned behaviourally by `test_posture_fail_direction.py`.
 

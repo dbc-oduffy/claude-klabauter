@@ -1,6 +1,6 @@
 """Reading a session's touched-file record, for the hooks that consume it.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_touch_record.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_touch_record.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4, verbatim: this
 module is self-contained (stdlib-only, `json`/`os` only, no
 cross-repo/cross-plane reference), so no adaptation was needed.

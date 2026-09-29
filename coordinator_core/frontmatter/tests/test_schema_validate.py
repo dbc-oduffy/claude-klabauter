@@ -85,14 +85,14 @@ from coordinator_core.frontmatter.schema_validate import (
     _read_bump_note,
 )
 from coordinator_core.git_scope import foreign_repo_unusable_reason
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 # The former node-oracle differential/parity suites (schema.js / schema-cli.js
 # byte-parity, de-node Gate A straggler conversion) were retired 2026-07-24 (D1 of
 # docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md) alongside
 # the oracles themselves — coordinator/bin/lib/schema.js and coordinator/bin/schema-cli.js
-# no longer exist anywhere in this repo or DoE-claude, so there is nothing left to diff
+# no longer exist anywhere in this repo or coordinator-content-repo, so there is nothing left to diff
 # against, frozen golden or otherwise. schema_validate.py's/schema_cli.py's remaining
 # standalone coverage (describe/validate behavioral cases, legacy-YAML-dialect field
 # validator, cross-field rules, drift checks below) is unaffected — none of it depended
@@ -108,15 +108,15 @@ _HANDOFF_ARCHIVED_SCHEMA = _SCHEMAS_DIR / 'handoff-archived.schema.json'
 _PLAN_SCHEMA = _SCHEMAS_DIR / 'plan.schema.json'
 _SIZING_OBJECT_SCHEMA = _SCHEMAS_DIR / 'sizing-object.schema.json'
 _RESEARCH_SYNTHESIS_SCHEMA = _SCHEMAS_DIR / 'research-synthesis.schema.json'
-# Resolved via the canonical coordinator_core.testing.doe_root pointer-file
+# Resolved via the canonical coordinator_core.testing.content_root pointer-file
 # resolver — NOT a relative-sibling-checkout guess. A hardcoded
-# parents[N]/'DoE-claude' walk hardcodes both a checkout depth and a literal
+# parents[N]/'coordinator-content-repo' walk hardcodes both a checkout depth and a literal
 # directory name; it resolves on exactly one machine/clone-layout and
 # silently fails (or resolves the WRONG tree) on any other. May be None when
 # the machine is unregistered — callers guard with
 # `_DOE_REPO is None or not _DOE_REPO.exists()`.
-_doe_root_str = resolve_doe_root()
-_DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
+_content_root_str = resolve_content_root()
+_DOE_REPO = Path(_content_root_str) if _content_root_str else None
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +670,7 @@ class TestEnumValidation:
         spinoff-roadmap/spinoff-goal/spinoff-roadmap-creator spellings and previously had no
         positive coverage here.
 
-        Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1
+        Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1
         """
         for kind in ['session-handoff', 'spinoff', 'roadmap-baton', 'goal-seed', 'roadmap-seed', 'recovery']:
             if kind in ('spinoff', 'goal-seed', 'roadmap-seed'):
@@ -940,9 +940,9 @@ class TestReadyToFireIfThenSchemaLevel:
     (d652253c) restructured it into one of four conditionals nested under a new
     top-level `allOf` array (alongside closed=>closed_reason, continued=>continued_into,
     claimed+claimed_at=>claimed_by). `_validate_json_schema_node` — a dependency-free
-    subset port of DoE-claude's schema.js — did not recurse into `allOf` until the
+    subset port of coordinator-content-repo's schema.js — did not recurse into `allOf` until the
     schema-validator-keyword-gap fix
-    (cross-repo/inbox/2026-07-25-doe-claude-em-schema-validator-keyword-gap.md), so none
+    (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-schema-validator-keyword-gap.md), so none
     of the four allOf-nested conditionals fired at the schema-shape layer for a window.
     That gap is now closed: `allOf` is a dispatched keyword, so this construct fires
     again at the shape layer, same as it did before the DR-084 P4 restructuring — this
@@ -1295,7 +1295,7 @@ class TestGraphFieldsKindGate:
 
 class TestHandoffPhaseKindGate:
     """`handoff_phase` is admitted on kind: session-handoff AND canonical
-    kind: roadmap-baton (DoE-claude DR-126; schema description `feef6527f`).
+    kind: roadmap-baton (coordinator-content-repo DR-126; schema description `feef6527f`).
 
     The retired-alias case is the load-bearing one: real roadmap batons on disk
     carry `kind: spinoff-roadmap`, so a gate written against the canonical name
@@ -1494,7 +1494,7 @@ class TestForkKindsPredecessorNoneGate:
 # ---------------------------------------------------------------------------
 # Cross-field rules — origin-axis (Rules C2-1 through C2-5)
 #
-# Port of DoE-claude coordinator/bin/lib/schema.js:1283-1553 origin_* cross-field
+# Port of coordinator-content-repo coordinator/bin/lib/schema.js:1283-1553 origin_* cross-field
 # rules; test vectors mirrored from DoE's schema.test.js (commit 70f16d4/0eef1a5).
 # ---------------------------------------------------------------------------
 
@@ -2074,7 +2074,7 @@ class TestDeliverableSpineFields:
 # singular forms unchanged in meaning and still the single-plan/single-
 # deliverable case's field. baton_role is the inheritability axis
 # (`work | record`), DoE-ratified in
-# cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md.
+# cross-repo/inbox/2026-08-19-coordinator-content-repo-em-baton-role-axis-ruling.md.
 # Spec backlink: docs/plans/2026-08-19-batons-unify-into-one-successor.md
 # AC2/AC3, chunk C3.
 # ---------------------------------------------------------------------------
@@ -3704,9 +3704,9 @@ class TestDriftCheck:
         The strip-then-compare shape encoded DoE's **2026-07-29** ruling ("I am not
         asking you to move yours ... assert parity on the `grouping_approvals` shape
         sub-object, not on the declaring filename" —
-        cross-repo/archive/2026-07-29-doe-claude-em-grouping-discriminator-correction.md).
+        cross-repo/archive/2026-07-29-coordinator-content-repo-em-grouping-discriminator-correction.md).
         DoE **superseded** that on 2026-07-31
-        (cross-repo/archive/2026-07-31-doe-claude-em-grouping-approval-vendor-home.md:
+        (cross-repo/archive/2026-07-31-coordinator-content-repo-em-grouping-approval-vendor-home.md:
         "Add plan.schema.json to your vendored set ... Drop the block from your
         vendored plan-tasks.schema.json and re-vendor that file clean from our
         HEAD"), and re-asked on 2026-08-06 when their parity gate went
@@ -3853,7 +3853,7 @@ _QUEUE_SCHEMA_PINS = {
     #   opened by committing the pin moves without these bytes.
     # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
-    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   DoE landed the stable-id spec-backlink sweep (coordinator-content-repo@3f9df69d9 +
     #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
@@ -3908,7 +3908,7 @@ _QUEUE_SCHEMA_PINS = {
     #   opened by committing the pin moves without these bytes.
     # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
-    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   DoE landed the stable-id spec-backlink sweep (coordinator-content-repo@3f9df69d9 +
     #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
@@ -3965,8 +3965,8 @@ _QUEUE_SCHEMA_PINS = {
     #   DoE 3cfaef61e: case_against on the task row (required on
     #   backlogged/wont_do) and optional on the improvement-queue entry —
     #   plan-tasks 1.5.0->1.6.0, improvement-queue 1.1.0->1.2.0, both nested-
-    #   field-additive. Asked by doe-claude-em, cross-
-    #   repo/inbox/2026-08-06-doe-claude-em-deferrals-both-sides-landed-
+    #   field-additive. Asked by coordinator-content-repo-em, cross-
+    #   repo/inbox/2026-08-06-coordinator-content-repo-em-deferrals-both-sides-landed-
     #   revendor-and-a-resolve-ergonomics-bug.md
     # Pin moved 2026-08-06 to 9b5a08fd2e0cebe22a8133a630304b1c253deabe (DoE
     # 9b5a08fd2) by bin/claude-klabauter-revendor-schema.py improvement-queue.
@@ -3974,7 +3974,7 @@ _QUEUE_SCHEMA_PINS = {
     #   claude-klabauter carried the pre-697b7d451 'not yet populated by the harvest
     #   CLI' prose, DoE 9b5a08fd2 carries the post-carry-through reading
     #   (omit-vs-empty-string rationale). Semantics unchanged — optional
-    #   either way. Re-vendor per doe-claude-em memo 2026-08-06-doe-claude-em-
+    #   either way. Re-vendor per coordinator-content-repo-em memo 2026-08-06-coordinator-content-repo-em-
     #   improvement-queue-revendor-equal-version-drift; neither side's gate
     #   catches equal-version content drift, which is the residual worth
     #   noting.
@@ -3996,7 +3996,7 @@ _QUEUE_SCHEMA_PINS = {
     #   opened by committing the pin moves without these bytes.
     # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   DoE landed the stable-id spec-backlink sweep (coordinator-content-repo@3f9df69d9 +
     #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
@@ -4034,7 +4034,7 @@ _QUEUE_SCHEMA_PINS = {
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
     # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
-    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   DoE landed the stable-id spec-backlink sweep (coordinator-content-repo@3f9df69d9 +
     #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
@@ -4107,11 +4107,11 @@ _QUEUE_SCHEMA_PINS = {
     # Pin moved 2026-08-13 to 6466d871410baa349c1836286d5a8a1f1b5b5bcb (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
     #   DoE 1.3.0 adds optional execution_basis; parity gate red per memo
-    #   2026-08-13-doe-claude-em-bump-class-deliberately-absent.md
+    #   2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md
     # Pin moved 2026-08-17 to eebef71dc77e7ea6e4e462892625b276a015639c (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
     #   PM-authorised major re-vendor: sha_range closed to hex-range grammar
-    #   (1.3.0 -> 2.0.0), per DoE memo 2026-08-15-doe-claude-em-review-trail-
+    #   (1.3.0 -> 2.0.0), per DoE memo 2026-08-15-coordinator-content-repo-em-review-trail-
     #   schema-2-0-0-revendor.md
     # Pin moved 2026-08-18 to 9e9854fc9af259112bdb2da6412b39eeb86b8633 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
@@ -4133,7 +4133,7 @@ _QUEUE_SCHEMA_PINS = {
     # the docstrings' own "may not exist yet" premise for the prior
     # live-DoE-tree read expired 2026-07-27 when this schema landed in DoE.
     # Pinned to 577a710c7 (x-schema-version 1.1.0), the ref confirmed clean
-    # and present in DoE-claude at vendor-time.
+    # and present in coordinator-content-repo at vendor-time.
     # docs/plans/2026-08-06-vendor-priority-ledger-and-priority-inte.md § C1
     'priority-ledger': "577a710c7c07cbeb0b061ebcc131dc09d2975654",
     # Vendored 2026-08-06, same wave as priority-ledger above — see that
@@ -4177,7 +4177,7 @@ _QUEUE_SCHEMA_PINS = {
 # live crash — an out-of-set scope_kind value was taking down the whole
 # coverage gate with an AssertionError. DoE is still at 1.1.0 and has not
 # moved "coordinator/schemas/review-trail.schema.json" since the pinned SHA
-# below (git diff <doe_ref> -- that path in DoE-claude is empty). Claude-klabauter's
+# below (git diff <doe_ref> -- that path in coordinator-content-repo is empty). Claude-klabauter's
 # 1.2.0 is a structural superset of DoE's 1.1.0 except for scope_kind's
 # description, deliberately rewritten because the 1.1.0 prose named "chunk"
 # as a valid example, which the 1.2.0 enum excludes.
@@ -4368,13 +4368,13 @@ def _advisory_git(repo: Path, *args: str) -> None:
 
 class TestAdvisoryLocalDoeVersions:
     """local_version/doe_version on check_schema_drift_advisory — the x-schema-version
-    read threaded through for the cross-repo ask (DoE-claude wants both sides'
+    read threaded through for the cross-repo ask (coordinator-content-repo wants both sides'
     version integers, not just a diverged/matched boolean).
 
     Every fixture here is a throwaway tmp_path git repo, never the real DoE clone —
     same discipline as coordinator_core/frontmatter/tests/test_schema_drift_watch.py.
 
-    Spec backlink: cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
+    Spec backlink: cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md
     """
 
     @pytest.fixture()
@@ -4457,7 +4457,7 @@ class TestReadBumpClass:
     JSON parse happens exactly once per string via the shared
     _parse_schema_dict/_read_schema_string_key seam (see schema_validate.py).
 
-    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md
     """
 
     def test_present_string_value(self) -> None:
@@ -4498,7 +4498,7 @@ class TestAdvisoryBumpClassPassthrough:
     doe_version. Upstream adoption of x-bump-class is deliberately partial (DR-097
     memo), so absence is an ordinary None here, never an error.
 
-    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md
     """
 
     @pytest.fixture()
@@ -4638,7 +4638,7 @@ class TestCanonicalDriftAdvisory:
     TestAdvisoryBumpClassPassthrough above and test_schema_drift_watch.py's
     fake-DoE-repo helpers.
 
-    Spec backlink: cross-repo/inbox/2026-08-03-doe-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
+    Spec backlink: cross-repo/inbox/2026-08-03-coordinator-content-repo-em-drift-normalize-yes-but-comment-survives-canonicalization.md
     """
 
     @pytest.fixture()
@@ -5707,7 +5707,7 @@ class TestRoundTripValidation:
 # ---------------------------------------------------------------------------
 # Memo cross-field rules — validate_memo_cross_fields
 #
-# Port of CROSS_FIELD_RULES['cross-repo-memo'] from DoE-claude coordinator/bin/lib/schema.js:1332-1522.
+# Port of CROSS_FIELD_RULES['cross-repo-memo'] from coordinator-content-repo coordinator/bin/lib/schema.js:1332-1522.
 # ---------------------------------------------------------------------------
 
 
@@ -6189,8 +6189,8 @@ class TestParseYamlLegacyDialect:
         }
         assert parse_yaml(text) == expected
 
-    # Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-sizing-advisory-latch-
-    # all-three-taken.md — doe-claude-em reported the advisory inventing property names
+    # Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-sizing-advisory-latch-
+    # all-three-taken.md — coordinator-content-repo-em reported the advisory inventing property names
     # off a sizing-object that parses clean under yaml.safe_load. A block scalar opened
     # ON a list item's dash line had its body parsed as a sibling mapping, so any colon
     # in the body minted a key. Negative-spec: the body is a scalar, never a mapping —
@@ -6464,7 +6464,7 @@ class TestJsonSchemaNodeEnumHintParity:
 # =============================================================================
 # allOf / oneOf / unevaluatedProperties (schema-validator-keyword-gap):
 #
-# cross-repo/inbox/2026-07-25-doe-claude-em-schema-validator-keyword-gap.md — the
+# cross-repo/inbox/2026-07-25-coordinator-content-repo-em-schema-validator-keyword-gap.md — the
 # retired JS oracle walked allOf/oneOf/unevaluatedProperties generically; the Python
 # port's _validate_json_schema_node did not, so schemas relying on those keywords were
 # SILENTLY UNDER-VALIDATED (a malformed fixture the schema author intended to reject
@@ -7032,7 +7032,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'doe_claude',
+                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'content_root',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True,
                 'note': 'proves the decision record landed',
             }],
@@ -7055,7 +7055,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'doe_claude',
+                'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'content_root',
                 'ref': 'abc1234@refs/heads/main',
             }],
         })
@@ -7105,7 +7105,7 @@ class TestGateEvidenceLegsShape:
     def test_deadline_leg_with_repo_rejected(self):
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
-            'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01', 'repo': 'doe_claude'}],
+            'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01', 'repo': 'content_root'}],
         })
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(
@@ -7125,7 +7125,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'doe_claude',
+                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'content_root',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True,
             }],
         })
@@ -7148,7 +7148,7 @@ class TestGateEvidenceLegsShape:
         mandatory repo: rule exists to prevent — ref must name both ends."""
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
-            'legs': [{'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'doe_claude', 'ref': 'abc1234'}],
+            'legs': [{'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'content_root', 'ref': 'abc1234'}],
         })
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].ref' for e in errors)
@@ -7158,7 +7158,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file_exists', 'repo': 'doe_claude',
+                'leg_id': 'l1', 'kind': 'file_exists', 'repo': 'content_root',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True, 'note': 'n',
             }],
         })
@@ -7684,7 +7684,7 @@ class TestQueueDeferralHollowGrantRejection:
 class TestQueueRuleIsClaudeKlabauterScoped:
     """`_cf_queue_disposition_shape` must not change enforcement in DoE's tree.
 
-    DoE-claude imports THIS MODULE by file path — `Path(claude_klabauter_root) /
+    coordinator-content-repo imports THIS MODULE by file path — `Path(claude_klabauter_root) /
     "coordinator_core" / "frontmatter" / "schema_validate.py"`, in live tests
     including `coordinator/tests/test_artifact_corpus_validates_against_schema.py`
     — with no re-vendor and no version gate between our edit and their next
@@ -7698,7 +7698,7 @@ class TestQueueRuleIsClaudeKlabauterScoped:
     That is Queue Terminus outcome class 4 breaking in a sibling repo.
 
     DoE asked for the rule to stay claude-klabauter-scoped and opt in on their own schedule
-    (`cross-repo/inbox/2026-08-28-doe-claude-em-doe-schema-branch-already-landed-
+    (`cross-repo/inbox/2026-08-28-coordinator-content-repo-em-doe-schema-branch-already-landed-
     and-scoping-answers.md`), and this plan adopted that as C6's decision. These
     tests are that decision's mechanical half — delete them and the seam silently
     re-opens.
@@ -7785,7 +7785,7 @@ class TestMemoCorpusRoots:
 class TestMultiLineQuotedScalars:
     """A quoted scalar spanning lines is one value, not a value plus phantom keys.
 
-    doe-claude-em memo (example-retrieval-repo-ue-addon F15): a PreToolUse advisory reported
+    coordinator-content-repo-em memo (example-retrieval-repo-ue-addon F15): a PreToolUse advisory reported
     `prime_exit_criterion.Review` and `census[3].Review` as additional properties on
     a plan whose frontmatter PyYAML accepts. Both lines sit inside a double-quoted
     scalar. The advisory is only the visible half — the parsed VALUE was truncated

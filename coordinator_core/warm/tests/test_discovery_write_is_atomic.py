@@ -8,7 +8,7 @@ the cost this transport exists to remove. `write_discovery` used to call
 window read an empty or partial file, failed to parse, and got `None` -- which
 every consumer correctly interprets as "no listener" while the listener is up.
 
-The evidence (doe-claude-5a's availability sink, 2026-08-25, n=445): two isolated
+The evidence (coordinator-content-repo-5a's availability sink, 2026-08-25, n=445): two isolated
 `no_listener` samples at 19:57:00.560Z and 19:58:00.562Z with `probe_latency_ms`
 of **0.037 and 0.031 ms**, against 116-167ms for healthy neighbours. Thirty-odd
 microseconds is three orders of magnitude short of one round trip, so nothing was

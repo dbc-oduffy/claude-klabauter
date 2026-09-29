@@ -2,7 +2,7 @@
 
 `_FINDINGS_HEADING` detection must tolerate a qualifier after the word
 (`## Findings (3 blocking)`, `## Findings table (plan order)`) — ported
-from the retired `append_integrator_dispositions` module (DoE-claude
+from the retired `append_integrator_dispositions` module (coordinator-content-repo
 docs/plans/2026-09-26-retire-review-integrator.md, row M2): the premise-check
 pass's own heading wording is `## Findings table (plan order)`, and a strict
 match refused it, silently under-counting its declared findings against the

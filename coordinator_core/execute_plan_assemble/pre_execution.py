@@ -10,7 +10,7 @@ populates the list the runner already reads.
 
 ONLY d1 (pickup-assemble stamp-check) and d2 (review-exec-auth-stamp
 authorize-invocation) are contiguous Phase-1 in the source skill
-(`coordinator/skills/execute-plan/SKILL.md`, DoE-claude). Three stop-capable
+(`coordinator/skills/execute-plan/SKILL.md`, coordinator-content-repo). Three stop-capable
 gates sit between the mint and the claim — the remaining-context gate
 (Phase 1 item 3), the Executability Gate (Phase 1.4), and the roadmap
 execution gate (Phase 1.5) — plus the vehicle/chunk-pair classification and

@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from coordinator_core.bash_guards.dispatch_checks import (
+from coordinator_core.bash_guards._rewrite_support import (
     _bt_python3_invocation,
     _bt_render_interpreter_path,
 )
@@ -71,7 +71,7 @@ def test_rendering_stays_paste_runnable_by_construction():
 
 
 def test_rendering_version_is_folded_into_the_cache_key():
-    from coordinator_core.bash_guards.dispatch_checks import (
+    from coordinator_core.bash_guards._rewrite_support import (
         _BT_INTERPRETER_RENDERING_VERSION,
         _bt_python3_invocation_cache_key,
     )

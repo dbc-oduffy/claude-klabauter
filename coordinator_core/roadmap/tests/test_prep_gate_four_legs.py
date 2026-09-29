@@ -1,8 +1,8 @@
 """
 coordinator_core/roadmap/tests/test_prep_gate_four_legs.py — the four legs ported
-from DoE-claude's ``coordinator/bin/mise-prep-gate.py`` at sha
+from coordinator-content-repo's ``coordinator/bin/mise-prep-gate.py`` at sha
 ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6`` (resolved through
-``coordinator_core.testing.doe_root.resolve_doe_root`` for any session that
+``coordinator_core.testing.content_root.resolve_content_root`` for any session that
 needs the read-side twin itself, rather than this restatement of it).
 
 Each leg gets exactly one fixture, built to trip that leg and no other —

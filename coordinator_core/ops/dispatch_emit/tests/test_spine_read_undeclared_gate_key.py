@@ -22,7 +22,7 @@ def test_row_level_awaiting_gate_refuses_rather_than_dispatching(tmp_path):
         "- id: C2\n"
         "  title: row with a plausible-looking but unread gate key\n"
         "  surface: some/surface\n"
-        "  awaiting_gate: blocked on a doe-claude schema bump\n"
+        "  awaiting_gate: blocked on a coordinator-content-repo schema bump\n"
         "- id: C3\n"
         "  title: ordinary row\n"
         "  surface: some/other-surface\n"

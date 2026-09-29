@@ -9,7 +9,7 @@ the dead PROJECT_TYPE/PROJECT_SUBTYPES coordinator.local.md frontmatter parse
 -- verified dead by full-file read; neither variable is
 referenced anywhere later in the bash source (the heredoc and the
 capability-catalog read use neither). See
-X:/DoE-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md
+C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md
 Sec 2.4.
 
 Transport: plain synchronous function, imported directly and called in-process by

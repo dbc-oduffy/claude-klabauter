@@ -1,7 +1,7 @@
 """
 coordinator_core.workstream_complete.apply — the `workstream-complete`
 computed-skill engine's MUTATING half, standalone-conformant per
-DoE-claude `coordinator/docs/wiki/computed-skills.md` § The compute/apply
+Coordinator-content-repo `coordinator/docs/wiki/computed-skills.md` § The compute/apply
 split and § What bounds a mutating apply half. Mirrors
 `coordinator_core.workday_complete.apply` and
 `coordinator_core.workweek_complete.apply`'s shape (Lineage 2, D-1 of the
@@ -38,9 +38,9 @@ see `docs/reference/plugin-local-cli-dispatch.md` for the full route and
 `cli_dispatch.py`'s own module docstring for the two-root model this
 module composes rather than re-derives.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, chunk C4
-Spec backlink (no-commit row guard): DoE-claude docs/plans/2026-07-29-pm-approved-
+Spec backlink (no-commit row guard): coordinator-content-repo docs/plans/2026-07-29-pm-approved-
 provenance-write-time-closure-gate.md, chunk C13
 
 Deviation from the workday/workweek exemplars (both noted, both forced by
@@ -139,7 +139,7 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        the empty string once its producer is confirmed landed, otherwise
        fails the directive loud the same way `.entry_path` does.
 
-No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
+No-commit row guard (coordinator-content-repo docs/plans/2026-07-29-pm-approved-
 provenance-write-time-closure-gate.md, chunk C13): before dispatching any
 directive, `apply()` checks whether the governing plan carries a
 commit-required task-spine row (disposition `open`/`coded`) that this
@@ -152,7 +152,7 @@ concerns THIS session's own commit, never a plan-spine row's. A no-commit
 row must resolve to one of five named exits (`shipped`/`spun-off`/
 `backlogged`/`wont-do`/`carried-forward`, `judgments.
 build_no_commit_row_disposition_judgment_point` — per the five-exit ruling,
-cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-ruling.md)
+cross-repo/inbox/2026-08-05-coordinator-content-repo-em-plan-tasks-five-exits-ruling.md)
 — "deferred, ignore the guard" is deliberately not a sixth option. This
 check gates the WHOLE apply, not one directive's `depends_on`: unlike
 every judgment point
@@ -339,7 +339,7 @@ _PLUGIN_LOCAL_CLIS: frozenset[str] = frozenset(
 #: The SECOND, DoE-anchored `coordinator/bin` root (docs/plans/2026-09-07-
 #: directive-resolution-reaches-a-plugin-local-cli.md, T1/T2) —
 #: `resolve_plugin_cli_script_root()` returns `None` on a box with no
-#: DoE-claude clone, never raises; `UNRESOLVED_PLUGIN_CLI_ROOT` is the
+#: coordinator-content-repo clone, never raises; `UNRESOLVED_PLUGIN_CLI_ROOT` is the
 #: sentinel `Path` that keeps this module's dispatch table's value type
 #: `Path`, never `Optional[Path]`, on such a box.
 _PLUGIN_CLI_SCRIPT_ROOT = resolve_plugin_cli_script_root() or UNRESOLVED_PLUGIN_CLI_ROOT
@@ -428,7 +428,7 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     below, a `_PLUGIN_LOCAL_CLIS` member whose resolved
     `script_path.parent == UNRESOLVED_PLUGIN_CLI_ROOT` raises
     `UnrecognizedDirective` naming the unresolved root and the ladder
-    rungs tried — this box has no DoE-claude clone (or a stale/moved one),
+    rungs tried — this box has no coordinator-content-repo clone (or a stale/moved one),
     so this one directive refuses without halting the whole run. Holds
     the same ahead-of-cache position the admission check above already
     holds, so a directive that already resolved successfully once cannot
@@ -1489,7 +1489,7 @@ def _run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
+# No-commit row guard (coordinator-content-repo docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md, chunk C13) -- see module docstring
 # § No-commit row guard for the design rationale and why this lives in
 # `apply()` rather than `__init__.py`'s `brief()`/`_build_preserved_

@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.review_stamp — mint/check the plan's `review_stamp` record.
 
-Purpose: DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1.
+Purpose: coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1.
 Binds a plan to the ONE terminal commit that carries its execute-review wave's
 verdicts, so `implemented` can never be reached with no code review recorded
 against the reviewed tree.
@@ -84,6 +84,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -546,7 +547,7 @@ def mint(
     indented = "\n".join(f"  {ln}" for ln in body_lines)
     new_fm = split.fm_text.rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
     new_text = rebuild(split, new_fm)
-    plan_path.write_text(new_text, encoding="utf-8")
+    replace_text(plan_path, new_text)
     return stamp
 
 

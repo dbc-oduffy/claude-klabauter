@@ -11,7 +11,7 @@ config, bin/ resolvers). This module is the non-skill primitive that fires the
 probes on cadence (from /workday-start Step 1.10 --full) and writes
 ~/.claude/plugins/coordinator-claude/data/doctor-last-run.json.
 
-Port of DoE-claude coordinator/bin/coordinator-doctor-sentinel.sh (989 lines, bash).
+Port of coordinator-content-repo coordinator/bin/coordinator-doctor-sentinel.sh (989 lines, bash).
 The selection grammar already delegated to a Python selector
 (coordinator_core.plugin_health.probe_select) via subprocess under the bash oracle —
 this port converts that into an in-process import, closing a spawn site that fired
@@ -48,7 +48,7 @@ P-5/P-6/P-6s (coordinator_whoami import + envelope probes) and the
 is RETIRED (scripts/setup.py declares it "no provisioning step creates it"), so a
 probe asserting its importability was a permanent false RED with a remedy
 (`bin/ensure-coordinator-venv.sh`) that no longer exists in either tree. See
-`state/cross-repo/archive/2026-09-11-doe-claude-em-doctor-p5-probes-retired-whoami.md`.
+`state/cross-repo/archive/2026-09-11-coordinator-content-repo-em-doctor-p5-probes-retired-whoami.md`.
 P-2's tomllib-availability check is preserved as a subprocess against the resolved
 interpreter for a different reason: the probe's whole point is testing the RESOLVED
 interpreter's tomllib availability, not this engine's own. P-7's mcpServers/
@@ -111,12 +111,12 @@ from typing import List, Optional, Sequence, Tuple
 from coordinator_core._settings_home import normalize_native_path, settings_home
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.machine_resolver import merged_flat_registry
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.ops import probe_onboarding_currency, verify_templates_setup_sync, verify_ue_overrides
 from coordinator_core.plugin_health.probe_select import id_to_cluster, load_probes, resolve_active_probes
 from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
@@ -181,12 +181,12 @@ def _doe_coordinator_root() -> Optional[Path]:
       1. COORDINATOR_BIN_ROOT env var (test isolation — names coordinator/bin
          directly, mirroring the bash oracle's _SCRIPT_DIR variable). Kept
          first-rung: this is sentinel's own documented test-isolation seam,
-         distinct from (and taking precedence over) the shared DoE-root ladder.
-      2. coordinator_core.ops.coordinator_doe_root.coordinator_doe_root() — the
-         same DOE_ROOT/REPO_DOE_CLAUDE/machine-local ladder every other
-         DoE-root-dependent script in the doe-root-sweep wave resolves through
-         (Review: code-reviewer — sentinel previously read ~/.claude/.doe-root
-         directly and never consulted DOE_ROOT/REPO_DOE_CLAUDE, silently
+         distinct from (and taking precedence over) the shared content-root ladder.
+      2. coordinator_core.ops.coordinator_content_root.coordinator_content_root() — the
+         same CONTENT_ROOT/REPO_CONTENT_ROOT/machine-local ladder every other
+         content-root-dependent script in the content-root-sweep wave resolves through
+         (Review: code-reviewer — sentinel previously read ~/.claude/.coordinator-content-root
+         directly and never consulted CONTENT_ROOT/REPO_CONTENT_ROOT, silently
          diverging from every other consumer in the wave).
 
     Returns None (never raises) when neither resolves — every dependent probe
@@ -198,7 +198,7 @@ def _doe_coordinator_root() -> Optional[Path]:
     if override:
         p = normalize_native_path(override)
         return p.parent if p.name == "bin" else p
-    root = coordinator_doe_root()
+    root = coordinator_content_root()
     if not root:
         return None
     # Either content layout — the published flat mirror IS its own content root,
@@ -213,7 +213,7 @@ def _doe_coordinator_root() -> Optional[Path]:
 def _claude_klabauter_bin_root() -> Path:
     """This module's own repo root's `coordinator/bin/` — where
     `doctor-probes.toml` actually lives as of the b644d5a9 executable-surface
-    migration (2026-07-22, DoE-claude -> claude-klabauter).
+    migration (2026-07-22, coordinator-content-repo -> claude-klabauter).
 
     sentinel.py already runs from INSIDE the resolved claude-klabauter root (no DoE-side
     trampoline required to reach this import), so — mirroring
@@ -225,12 +225,12 @@ def _claude_klabauter_bin_root() -> Path:
     machine-local registry lookup. This is NOT a cross-repo `__file__`-walk:
     sentinel.py and the manifest are co-located in the SAME repo post-migration.
 
-    Negative-spec: does NOT consult `coordinator_core.ops.coordinator_doe_root`
+    Negative-spec: does NOT consult `coordinator_core.ops.coordinator_content_root`
     or `coordinator_core.engine_root.coordinator_engine_root()` for this
     default — the manifest is claude-klabauter-native data now, so resolving it through
-    a sibling-repo pointer (REPO_DOE_CLAUDE / machine-local `repos.doe_claude`)
+    a sibling-repo pointer (REPO_CONTENT_ROOT / machine-local `repos.content_root`)
     would still be wrong-repo-shaped even where it happens to resolve; the
-    fix is to stop treating manifest location as a DoE-root question at all.
+    fix is to stop treating manifest location as a content-root question at all.
     """
     return Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
@@ -245,14 +245,14 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
          rung 1); honored here exactly as it was before this fix, so existing
          test-isolation usage is unaffected.
       2. Default: claude-klabauter's own `coordinator/bin/doctor-probes.toml`
-         (`_claude_klabauter_bin_root()`) — NOT the DoE-root ladder
-         (`coordinator_doe_root()` / REPO_DOE_CLAUDE / machine-local
-         `repos.doe_claude`), which is what `bin_dir_sibling` resolves to for
+         (`_claude_klabauter_bin_root()`) — NOT the content-root ladder
+         (`coordinator_content_root()` / REPO_CONTENT_ROOT / machine-local
+         `repos.content_root`), which is what `bin_dir_sibling` resolves to for
          every OTHER caller of `_doe_coordinator_root()` (P-9/P-11/P-12/P-13's
          still-DoE-owned sibling scripts, left untouched by this fix).
 
     Bug this closes: prior to this fix, the manifest's non-override default
-    was `bin_dir_sibling / "doctor-probes.toml"` — i.e. the DoE-claude clone's
+    was `bin_dir_sibling / "doctor-probes.toml"` — i.e. the coordinator-content-repo clone's
     `coordinator/bin/`. That directory stopped housing the manifest after the
     b644d5a9 migration moved the executable surface (including
     doctor-probes.toml) into claude-klabauter; every triage/full run with no
@@ -683,7 +683,7 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
 # step creates it"), so these probes were a permanent false RED whose printed
 # remedy (bin/ensure-coordinator-venv.sh) had already been deleted. Zero
 # non-doctor callers at removal. See
-# state/cross-repo/archive/2026-09-11-doe-claude-em-doctor-p5-probes-retired-whoami.md.
+# state/cross-repo/archive/2026-09-11-coordinator-content-repo-em-doctor-p5-probes-retired-whoami.md.
 
 
 def probe_p7(claude_home: Path) -> List[ProbeNote]:
@@ -961,7 +961,7 @@ def _doe_payload_root(
 
     1. `coordinator_root` when it carries the marker. On a marketplace install
        this is the right answer and stays first.
-    2. The DoE-root ladder (`coordinator_doe_root()`), when THAT carries it.
+    2. The content-root ladder (`coordinator_content_root()`), when THAT carries it.
        This is the rung the CLI path needs and did not have: `coordinator_root`
        arrives from `_doe_coordinator_root()`, whose first rung is
        COORDINATOR_BIN_ROOT — which the CLI entry sets to CLAUDE-KLABAUTER's bin. So the
@@ -982,7 +982,7 @@ def _doe_payload_root(
     if coordinator_root is not None and (coordinator_root / marker).exists():
         return coordinator_root
     try:
-        doe = coordinator_doe_root()
+        doe = coordinator_content_root()
         if doe:
             # Either content layout — a container that registered the published
             # FLAT mirror has its content at the root itself, so the bare
@@ -1505,30 +1505,30 @@ def probe_p20() -> List[ProbeNote]:
 def probe_p21() -> List[ProbeNote]:
     """Verify a durable coordinator-root pointer exists (DR-072).
 
-    Delegates to `coordinator_core.doe_root_pointer.read_doe_root_pointer_file()`
-    — the shared durable-then-legacy file-rungs reader every other `.doe-root`
+    Delegates to `coordinator_core.content_root_pointer.read_content_root_pointer_file()`
+    — the shared durable-then-legacy file-rungs reader every other `.coordinator-content-root`
     pointer consumer in this codebase already uses — rather than re-deriving
-    the two candidate paths (`<settings-home>/machine-local/.doe-root`, then
-    `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`) here. That helper checks the
+    the two candidate paths (`<settings-home>/machine-local/.coordinator-content-root`, then
+    `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`) here. That helper checks the
     durable location FIRST and returns as soon as it finds non-empty content
     there, so a pass on the durable location structurally never reaches the
     legacy fallback.
 
     Deliberately the file-rungs-only reader, not the registry-first
-    `read_doe_root_pointer()`: this probe's manifest-declared symptom is the
+    `read_content_root_pointer()`: this probe's manifest-declared symptom is the
     absence of the pointer FILE itself (DR-072), not the resolved coordinator
-    root by any means — `repos.doe_claude` registry presence is a different
+    root by any means — `repos.content_root` registry presence is a different
     condition covered by P-3/P-4, not this probe's concern.
     """
-    if read_doe_root_pointer_file():
+    if read_content_root_pointer_file():
         return []
     return [
         ProbeNote(
             "P-21",
             "red",
             "no durable coordinator-root pointer found: checked "
-            f"{settings_home() / 'machine-local' / '.doe-root'} (DR-072 durable location) "
-            "and the legacy fallback ${CLAUDE_HOME:-$HOME}/.claude/.doe-root — re-run "
+            f"{settings_home() / 'machine-local' / '.coordinator-content-root'} (DR-072 durable location) "
+            "and the legacy fallback ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root — re-run "
             "/coordinator:install to re-seed the durable coordinator-root pointer",
         )
     ]
@@ -1536,7 +1536,7 @@ def probe_p21() -> List[ProbeNote]:
 
 def _resolve_wrapper_home() -> Path:
     """Resolve the home probe_p23 checks the installed wrapper against,
-    through the SAME ladder `_install_claude_doe_wrapper`
+    through the SAME ladder `_install_claude_author_wrapper`
     (coordinator_core/install/maximalist.py) uses to pick
     `claude_home_dir` — `require_home()`'s `CLAUDE_HOME -> HOME ->
     USERPROFILE` order — rather than re-deriving a second copy of that
@@ -1566,17 +1566,17 @@ def _resolve_wrapper_home() -> Path:
 
 
 def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> List[ProbeNote]:
-    """Verify the installed claude-doe wrapper (`~/.local/bin/claude-doe`) has
-    not drifted from its repo source, `<claude_klabauter_root>/coordinator/bin/claude-doe.py`.
+    """Verify the installed claude-author wrapper (`~/.local/bin/claude-author`) has
+    not drifted from its repo source, `<claude_klabauter_root>/coordinator/bin/claude-author.py`.
 
-    Mirrors `_install_claude_doe_wrapper`'s (coordinator_core/install/maximalist.py)
+    Mirrors `_install_claude_author_wrapper`'s (coordinator_core/install/maximalist.py)
     own POSIX/Windows split. POSIX installs `wrapper_dst` as a SYMLINK onto
-    `<settings_bin>/claude-doe` — which `_install_bin_resolvers` regenerates
+    `<settings_bin>/claude-author` — which `_install_bin_resolvers` regenerates
     from the same `wrapper_src` on every install pass — so staleness there is
     structurally impossible; a symlink resolving to that well-known target (or
     straight to `wrapper_src`) is an unconditional PASS, no content read
     needed. Windows has no equivalent-cost native symlink story, so
-    `_install_claude_doe_wrapper` falls back to a `shutil.copy2` byte-copy
+    `_install_claude_author_wrapper` falls back to a `shutil.copy2` byte-copy
     that can silently drift from `wrapper_src` on any edit until the next
     install pass — this probe is that gap's regression net, closed by a
     direct byte comparison against `wrapper_src` (cheap: two file reads, no
@@ -1590,8 +1590,8 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
     registry entry that would otherwise misreport an unrelated resolver gap as
     wrapper drift.
     """
-    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"
-    wrapper_dst = wrapper_home / ".local" / "bin" / "claude-doe"
+    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-author.py"
+    wrapper_dst = wrapper_home / ".local" / "bin" / "claude-author"
     # `wrapper_home` MUST reach here via the
     # installer's own require_home() ladder (see _resolve_wrapper_home
     # below), never a re-derived Path.home(): the installer's
@@ -1603,12 +1603,12 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
 
     if not wrapper_src.is_file():
         # Not this probe's business — an absent source is a broken install
-        # elsewhere (_install_claude_doe_wrapper's own FATAL gate covers it).
+        # elsewhere (_install_claude_author_wrapper's own FATAL gate covers it).
         # Degrade gracefully rather than false-flagging the wrapper as drifted.
         return _inconclusive("P-23", f"wrapper source not found: {wrapper_src}")
 
     if wrapper_dst.is_symlink():
-        link_target = sh_bin / "claude-doe"
+        link_target = sh_bin / "claude-author"
         try:
             resolved = Path(os.readlink(wrapper_dst))
         except OSError as exc:
@@ -1621,7 +1621,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
             ProbeNote(
                 "P-23",
                 "amber",
-                f"claude-doe wrapper symlink at {wrapper_dst} points to {resolved}, "
+                f"claude-author wrapper symlink at {wrapper_dst} points to {resolved}, "
                 f"not {link_target} — resolver drift",
             )
         ]
@@ -1631,7 +1631,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
             ProbeNote(
                 "P-23",
                 "amber",
-                f"claude-doe wrapper not installed at {wrapper_dst}",
+                f"claude-author wrapper not installed at {wrapper_dst}",
             )
         ]
 
@@ -1647,9 +1647,9 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
         ProbeNote(
             "P-23",
             "amber",
-            f"claude-doe wrapper at {wrapper_dst} has drifted from its repo source "
+            f"claude-author wrapper at {wrapper_dst} has drifted from its repo source "
             f"{wrapper_src} — Windows has no symlink equivalent, so edits to "
-            "claude-doe.py are inert until the wrapper is re-published (Step 3.5b, "
+            "claude-author.py are inert until the wrapper is re-published (Step 3.5b, "
             "python scripts/setup.py)",
         )
     ]

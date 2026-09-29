@@ -1,10 +1,10 @@
 """The interpreter write-sink extractor resolves a SINGLE-ASSIGNMENT bound
 `Path("literal")` receiver — the read-modify-write idiom.
 
-Filed as a cross-repo ask by doe-claude-em
-(`cross-repo/inbox/2026-08-30-doe-claude-em-interpreter-write-sink-misses-the-
+Filed as a cross-repo ask by coordinator-content-repo-em
+(`cross-repo/inbox/2026-08-30-coordinator-content-repo-em-interpreter-write-sink-misses-the-
 bound-receiver.md`) after a claude-klabauter session wrote three files into
-DoE-claude's working tree through a `python - <<PY` heredoc and no foreign-repo
+Coordinator-content-repo's working tree through a `python - <<PY` heredoc and no foreign-repo
 bump fired, while the `git checkout` to revert them WAS correctly refused — the
 boundary held against the cleanup and not against the write.
 
@@ -52,7 +52,7 @@ def _targets(body: str) -> list:
     ]
 
 
-_FOREIGN = "X:/DoE-claude/a.md"
+_FOREIGN = "C:/coordinator-content-repo/a.md"
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ _FOREIGN = "X:/DoE-claude/a.md"
 
 def test_the_live_defect_the_read_modify_write_idiom():
     """Case 3 of the filed repro, verbatim in shape: this returned `[]` before
-    the fix and is how the three DoE-claude files were written unbumped."""
+    the fix and is how the three coordinator-content-repo files were written unbumped."""
     assert _targets(
         f'import pathlib\np = pathlib.Path("{_FOREIGN}")\np.write_text(p.read_text())'
     ) == [_FOREIGN]

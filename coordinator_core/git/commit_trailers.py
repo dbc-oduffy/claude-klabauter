@@ -33,12 +33,12 @@ chunk C10-remainder (AC18).
 Mirrors: coordinator/bin/coordinator-prepare-commit-msg (resolution logic,
 verbatim ladder + fail-safe semantics -- including the 2026-07-27
 cross-repo Deliverable-Id fallback added to both files in the same change:
-`_resolve_deliverable_id()` now re-checks DoE-claude's own git-dir, located
-via the `.doe-root` pointer convention, when the local git-dir's
+`_resolve_deliverable_id()` now re-checks coordinator-content-repo's own git-dir, located
+via the `.coordinator-content-root` pointer convention, when the local git-dir's
 `session-shape.json` lookup misses -- the structural miss for every commit
 landed directly into claude-klabauter under the DoE->claude-klabauter cross-repo write
 grant, since `session-shape.json` is written wherever `/pickup` actually
-ran (almost always DoE-claude), not wherever the eventual commit lands --
+ran (almost always coordinator-content-repo), not wherever the eventual commit lands --
 and the 2026-08-01 claimed-plan tier added to both files in this same
 change: when neither `session-shape.json` lookup yields a value,
 `_resolve_deliverable_id()` falls back to the session's claimed PLAN, the
@@ -85,7 +85,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.session import core as _session_core
 
@@ -128,7 +128,7 @@ def _resolve_session_id(git_dir: str) -> str:
     shared worktree means even a freshly-written sentinel hands session A
     the id of whichever session wrote last, so a liveness gate only makes
     it confidently wrong rather than obviously wrong; (2) its writer,
-    `session-init.py` (DoE-claude SessionStart hook), was deleted by PM
+    `session-init.py` (coordinator-content-repo SessionStart hook), was deleted by PM
     directive 2026-07-15 ("full-kill-keep-fast-orientation") -- no
     production writer survives anywhere. `git_dir` is accepted (and
     resolved by callers) purely for the Deliverable-Id lookups below, which
@@ -162,17 +162,17 @@ def _resolve_session_id(git_dir: str) -> str:
     return _session_core.attributable_session_id()
 
 
-def _resolve_doe_root() -> str:
-    """Locate DoE-claude's repo root via the `.doe-root` pointer convention
+def _resolve_content_root() -> str:
+    """Locate coordinator-content-repo's repo root via the `.coordinator-content-root` pointer convention
     (settings-home machine-local pointer first, then legacy `~/.claude`).
     Returns "" if neither resolves. No subprocess spawn -- verbatim parity
-    with the hook's `_resolve_doe_root()` (2026-07-27 cross-repo-fallback
+    with the hook's `_resolve_content_root()` (2026-07-27 cross-repo-fallback
     mirror)."""
     # `expanduser("~")` passed explicitly rather than letting the helper default
     # to ${CLAUDE_HOME:-$HOME}: this runs from a git hook, where CLAUDE_HOME may
     # be set to something unrelated to the pointer's home. Behavior-identical to
     # the inline read this replaced.
-    return read_doe_root_pointer_file(os.path.expanduser("~"))
+    return read_content_root_pointer_file(os.path.expanduser("~"))
 
 
 #: The one attribution line the engine stamps. Deliberately model-free: a
@@ -570,7 +570,7 @@ def session_holds_multiple_held_pickups(git_dir: str, session_id: str) -> bool:
     negative spec forbids.
 
     Evaluated separately per `git_dir` by `_resolve_deliverable_id` below:
-    once for the local git-dir's own pickup tier, and again for DoE-claude's
+    once for the local git-dir's own pickup tier, and again for coordinator-content-repo's
     git-dir before its own cross-repo pickup tier runs -- each reads that
     SAME git-dir's own `session-shape.json`, since `/pickup` may have run in
     either tree.
@@ -755,10 +755,10 @@ def _resolve_deliverable_id(
     gated by the ambiguity predicate `session_holds_multiple_plan_claims`
     (C2 spec § (2)), which OMITS rather than guesses whenever the session
     holds more than one plan claim and neither tier above disambiguated --
-    check `git_dir`, then fall back to DoE-claude's own git-dir -- the
+    check `git_dir`, then fall back to coordinator-content-repo's own git-dir -- the
     cross-repo case where a commit lands directly into claude-klabauter under
     the standing DoE->claude-klabauter write grant while `session-shape.json` was
-    written into DoE-claude's git-dir (wherever `/pickup` actually ran).
+    written into coordinator-content-repo's git-dir (wherever `/pickup` actually ran).
     When all of those miss (or the ambiguity gate fired), fall back to the
     session's claimed PLAN (tier 3 -- see
     `_resolve_deliverable_id_from_claimed_plan`), the same-session
@@ -807,9 +807,9 @@ def _resolve_deliverable_id(
         deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
         if deliverable_id:
             return deliverable_id
-    doe_root = _resolve_doe_root()
-    if doe_root:
-        doe_git_dir = os.path.join(doe_root, ".git")
+    content_root = _resolve_content_root()
+    if content_root:
+        doe_git_dir = os.path.join(content_root, ".git")
         if os.path.normpath(doe_git_dir) != os.path.normpath(
             git_dir
         ) and not session_holds_multiple_held_pickups(doe_git_dir, session_id):

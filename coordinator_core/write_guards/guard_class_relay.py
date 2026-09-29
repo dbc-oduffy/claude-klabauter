@@ -77,7 +77,7 @@ def detect_class_transition(
 
 import re as _re
 
-_MEMO_TO = "doe-claude-em"
+_MEMO_TO = "coordinator-content-repo-em"
 
 _MEMO_SEAM = "claude-klabauter-guard-semantics / DoE-hooks-and-tests boundary"
 

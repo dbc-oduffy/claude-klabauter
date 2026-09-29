@@ -137,7 +137,7 @@ def test_substitute_for_mapped_repo_family(tmp_path: Path) -> None:
 
 
 def test_marker_line_untouched() -> None:
-    tmp = "line: X:\\claude-klabauter\\coordinator foreign-path-ok: documented incident evidence\n"  # abs-path-ok: synthetic test fixture
+    tmp = "line: C:\\claude-klabauter\\coordinator foreign-path-ok: documented incident evidence\n"  # abs-path-ok: synthetic test fixture
     # Exercised directly against the lower-level hit scan/classifier rather
     # than through sweep()+a real file, mirroring how
     # test_guard_concrete_path_citations exercises detect_in_text directly.
@@ -273,7 +273,7 @@ def test_only_family_restricts_apply(tmp_path: Path) -> None:
     target = tmp_path / "doc.md"
     target.write_text(
         "a: /Users/example-operator/X/claude-klabauter/coordinator/foo\n"  # abs-path-ok: synthetic test fixture
-        "b: X:\\example-retrieval-repo\\addon\n",  # abs-path-ok: synthetic test fixture
+        "b: C:\\example-retrieval-repo\\addon\n",  # abs-path-ok: synthetic test fixture
         encoding="utf-8",
     )
     result = sweep(
@@ -285,7 +285,7 @@ def test_only_family_restricts_apply(tmp_path: Path) -> None:
     )
     text = target.read_text(encoding="utf-8")
     assert "claude-klabauter:coordinator/foo" in text
-    assert "X:\\example-retrieval-repo\\addon" in text  # abs-path-ok: synthetic test fixture -- unmodified because --only excluded it
+    assert "C:\\example-retrieval-repo\\addon" in text  # abs-path-ok: synthetic test fixture -- unmodified because --only excluded it
 
 
 # ---------------------------------------------------------------------------
@@ -573,8 +573,8 @@ def test_config_family_replacement_keeps_the_trailing_subpath(tmp_path: Path) ->
 def test_idempotency_drive_letter_and_mixed_separator_shapes(tmp_path: Path) -> None:
     target = tmp_path / "note.md"
     target.write_text(
-        "drive form: X:\\claude-klabauter\\coordinator\\foo.py\n"  # abs-path-ok: synthetic test fixture
-        "mixed form: X:\\example-retrieval-repo/addon\\bits\n",  # abs-path-ok: synthetic test fixture
+        "drive form: C:\\claude-klabauter\\coordinator\\foo.py\n"  # abs-path-ok: synthetic test fixture
+        "mixed form: C:\\example-retrieval-repo/addon\\bits\n",  # abs-path-ok: synthetic test fixture
         encoding="utf-8",
     )
     files = _list_files(["note.md"])
@@ -627,9 +627,9 @@ def test_detection_parity_with_guard() -> None:
     fixture_lines = [
         "see /Users/example-operator/X/claude-klabauter/coordinator/foo.py for details",  # abs-path-ok: synthetic test fixture
         "see /Users/<username>/project for a placeholder segment",  # abs-path-ok: synthetic test fixture -- placeholder segment must not flag
-        "root at X:\\claude-klabauter\\coordinator",  # abs-path-ok: synthetic test fixture
+        "root at C:\\claude-klabauter\\coordinator",  # abs-path-ok: synthetic test fixture
         "installed at C:\\Program Files\\Vendor\\tool.exe",  # abs-path-ok: synthetic test fixture -- well-known root must not flag
-        "example root X:\\some-project\\...\\coordinator",  # abs-path-ok: synthetic test fixture -- ellipsis segment must not flag
+        "example root C:\\some-project\\...\\coordinator",  # abs-path-ok: synthetic test fixture -- ellipsis segment must not flag
         r"share \\fileserver\share is documentation",  # abs-path-ok: synthetic test fixture -- placeholder host must not flag
         r"share \\buildbox\artifacts is a real host",  # abs-path-ok: synthetic test fixture
         "mixed C:\\Users/example-operator\\claude-klabauter here",  # abs-path-ok: synthetic test fixture

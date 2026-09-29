@@ -3,7 +3,7 @@ frontmatter value and check it against the closed vocabulary contract.
 
 Purpose: `<repo>/coordinator/contract/doctrine-status-vocabulary.json` closes the
 `status:` field at a fixed vocabulary (`active`, `deprecated`, `distilled`,
-`shipped`, `stub` in DoE-claude's own governance corpus). Nothing previously checked a
+`shipped`, `stub` in coordinator-content-repo's own governance corpus). Nothing previously checked a
 page's value against that contract -- a ninth spelling could land tomorrow
 and nothing would notice. This module is the read-and-check half; the CLI
 at `coordinator/bin/check-doctrine-status.py` is the exit-code half.
@@ -15,7 +15,7 @@ exit-2 "unusable contract" path.
 
 THREE PAGE CLASSES ARE SILENT, BY DESIGN. Absence of frontmatter, and
 frontmatter without a `status:` key, are never violations -- this is the
-frontmatter-backfill rejection (DoE-claude
+frontmatter-backfill rejection (coordinator-content-repo
 `docs/plans/2026-08-30-doctrine-governance-tier-2.md` Anti-scope), enforced
 mechanically here rather than left as a convention a future editor could
 violate by accident. Only a page that HAS a `status:` key with a value
@@ -24,7 +24,7 @@ outside the contract's vocabulary is a violation.
 Frontmatter parsing reuses `coordinator_core.agent_frontmatter.split_frontmatter`
 via an ordinary package import -- this module and its sibling both now live
 inside the engine package, so the by-file-location `importlib` load
-DoE-claude's own copy needed (its `coordinator/` tree carries no
+Coordinator-content-repo's own copy needed (its `coordinator/` tree carries no
 `__init__.py`) no longer applies here.
 
 PATH RESOLUTION -- SESSION REPO CLASS. `WIKI_ROOT`/`CONTRACT_PATH` no longer derive
@@ -41,11 +41,11 @@ Negative-spec: no CLI, no output formatting, no exit codes, no directory
 walk caching -- pure functions over paths/text returning structured
 results, so a caller (the CLI, or a test) can assert on data. No staleness,
 no git history, no second unrelated concern sharing this module -- the
-earlier DoE-claude draft's `doctrine_governance.py` bundled two unrelated
+earlier coordinator-content-repo draft's `doctrine_governance.py` bundled two unrelated
 things and needed a third chunk to reunite them; this module is
 deliberately narrow.
 
-Spec backlink: DoE-claude docs/plans/2026-08-30-doctrine-governance-tier-2.md, chunk C2.
+Spec backlink: coordinator-content-repo docs/plans/2026-08-30-doctrine-governance-tier-2.md, chunk C2.
 docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C2.
 """
 from __future__ import annotations

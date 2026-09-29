@@ -4,7 +4,7 @@ coordinator_core.ops.priority_set — the SOLE writer of a priority-ledger entry
 
 Purpose: writes one authored priority assignment to
 ``<coordinator-state-root --central>/priority-ledger/<target_id>.yaml`` — the
-one-file-per-target ledger schema authored in DoE-claude at
+one-file-per-target ledger schema authored in coordinator-content-repo at
 ``coordinator/schemas/priority-ledger.schema.json`` (C1 of the same plan wave).
 Every write goes through this op; there is no second writer of this directory.
 
@@ -44,7 +44,7 @@ Schema location: this op vendors a local copy of ``priority-ledger.schema.json``
 under ``coordinator_core/frontmatter/schemas/`` (handoff_transition's
 ``handoff.schema.json`` precedent), pin-tracked in
 ``coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS``.
-DoE-claude remains the schema's AUTHOR — this is a vendored copy, not a fork —
+Coordinator-content-repo remains the schema's AUTHOR — this is a vendored copy, not a fork —
 and drift from DoE's tree is caught by the pin's gating tamper-check plus
 ``schema_drift_watch``'s advisory probe, never by a live read of DoE's working
 tree at call time. Resolution is a fixed path against the vendored directory
@@ -71,7 +71,7 @@ Registered as ``priority.set``, classified ``OpClass.MUTATING``
 (coordinator_core/op_scopes.py — same class as ``ping`` / ``goal.set_kr_status``:
 the ledger root is resolved centrally, not derived from a caller repo_root).
 
-Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C3
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 § C3
 """
 
 from __future__ import annotations

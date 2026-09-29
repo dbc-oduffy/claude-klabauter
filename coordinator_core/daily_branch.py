@@ -229,7 +229,7 @@ def record_day_branch_designation(repo_root, branch: str) -> bool:
         else:
             sep = "" if text.endswith("\n") or not text else "\n"
             new_text = text + sep + f"[coordinator]\n\tdayBranch = {branch}\n"
-        config_path.write_text(new_text, encoding="utf-8")
+        config_path.write_text(new_text, encoding="utf-8", newline="\n")
         return True
     except Exception:  # noqa: BLE001 - best-effort; caller falls back to lazy re-resolve
         return False

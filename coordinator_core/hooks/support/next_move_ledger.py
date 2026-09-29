@@ -1,6 +1,6 @@
 """Per-session ledger of resolved-but-undischarged next moves.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_next_move_ledger.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_next_move_ledger.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4. ADAPTATION (the
 class-1 site named in this package's own `__init__.py` docstring): DoE's
 copy resolved the consuming repo root via a sibling-import of

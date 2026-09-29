@@ -196,7 +196,7 @@ def test_accessor_no_longer_falls_back_now_the_window_is_closed(monkeypatch, cap
 
 def test_carveout_precedence_pins_the_new_name_only():
     """AC13's pin, POST-C14: cc_invoke's hand-duplicated rung must read the new name and
-    must NOT fall back -- the same edit the accessor took. Requested by doe-claude-em as
+    must NOT fall back -- the same edit the accessor took. Requested by coordinator-content-repo-em as
     an engine-axis-suffix pin rather than a literal-equality one, because their own ladder
     leads with REPO_CLAUDE_KLABAUTER on the LOCATOR axis and pinning them equal would pin
     the wrong claim.

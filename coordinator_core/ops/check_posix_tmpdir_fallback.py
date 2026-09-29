@@ -2,9 +2,9 @@
 for the "hardcoded POSIX /tmp fallback" recurrence.
 
 Purpose: this exact shape has already broken Windows twice — once fixed at
-`coordinator_core/ops/gen_claude_doe_launcher.py:247-249` (2026-07-17,
+`coordinator_core/ops/gen_claude_author_launcher.py:247-249` (2026-07-17,
 code-reviewer Finding 1) and NOT swept to its sibling module
-`coordinator_core/ops/gen_doe_root_pointer.py:281`, which carried the
+`coordinator_core/ops/gen_content_root_pointer.py:281`, which carried the
 identical bug until the 2026-07-28 dispatch that authored this guard. A
 one-site fix with no recurrence check is exactly the failure mode that let
 it happen twice; this module is the cheap AST-scanned tripwire so a third

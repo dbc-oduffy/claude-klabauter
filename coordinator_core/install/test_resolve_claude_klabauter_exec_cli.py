@@ -32,7 +32,7 @@ _spec.loader.exec_module(resolve_claude_klabauter)
 _FIXTURE_TARGET_NAME = "fixture-cli"
 
 #: enumerates its subjects in `COLD_PATH_MODULES` — and `_resolve_claude_klabauter.py`
-_REMEDIATION_TEXT = "run python3 <engine-clone>/scripts/setup.py"
+_REMEDIATION_TEXT = "scripts/setup.py to repair the plugin tree"
 
 
 class _OSNameProxy:
@@ -251,6 +251,7 @@ def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
     assert result.returncode == 127
     assert "is missing" in result.stderr
     assert _REMEDIATION_TEXT in result.stderr
+    assert "<engine-clone>" not in result.stderr
 
 
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
@@ -305,6 +306,7 @@ def test_missing_target_exits_127_with_remediation_message(os_name, tmp_path, mo
     assert result.returncode == 127
     assert "is missing" in result.stderr
     assert _REMEDIATION_TEXT in result.stderr
+    assert "<engine-clone>" not in result.stderr
 
 
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
@@ -407,6 +409,7 @@ def test_posix_branch_execv_oserror_of_any_cause_still_exits_127(tmp_path, monke
     err = capsys.readouterr().err
     assert "is missing or not executable" in err
     assert _REMEDIATION_TEXT in err
+    assert "<engine-clone>" not in err
 
 
 def test_run_target_in_process_puts_target_dir_on_sys_path(tmp_path):
@@ -449,3 +452,32 @@ def test_run_target_dir_insert_is_falsifiable(tmp_path):
 
     with pytest.raises(ModuleNotFoundError):
         runpy.run_path(str(target), run_name="__main__")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execv leg")
+def test_forwarder_target_can_import_bin_lib_modules_from_a_bare_env(tmp_path):
+    settings_home = tmp_path / "settings-home"
+    bin_dir = settings_home / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy(_MODULE_PATH, bin_dir / "_resolve_claude_klabauter.py")
+    forwarder = _write_forwarder(bin_dir, "fwd-under-test", _FIXTURE_TARGET_NAME)
+    (settings_home / "machine-local").mkdir()
+
+    claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
+    coord_bin = claude_klabauter_root / "coordinator" / "bin"
+    (coord_bin / "lib").mkdir(parents=True)
+    _write_sentinel(coord_bin)
+    (coord_bin / "lib" / "cc_invoke_probe.py").write_text("VALUE = 'ok'\n", encoding="utf-8")
+    (coord_bin / _FIXTURE_TARGET_NAME).write_text(
+        "import cc_invoke_probe\nprint(cc_invoke_probe.VALUE)\n", encoding="utf-8"
+    )
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"[repos]\nclaude_klabauter = '{claude_klabauter_root}'\n", encoding="utf-8"
+    )
+
+    env = {k: v for k, v in os.environ.items() if k not in (
+        "PYTHONPATH", "COORDINATOR_ENGINE_ROOT", "MACHINE_LOCAL_REGISTRY_DIR")}
+    env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
+    result = subprocess.run([sys.executable, str(forwarder)], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.stdout.strip() == "ok", result.stderr

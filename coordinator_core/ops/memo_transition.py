@@ -1,13 +1,13 @@
 """
 coordinator_core.ops.memo_transition — memo lifecycle transition op (memo.transition op).
 
-Purpose: Native Python port of DoE-claude coordinator/bin/memo-transition.js — atomic
+Purpose: Native Python port of coordinator-content-repo coordinator/bin/memo-transition.js — atomic
 cross-repo-memo lifecycle frontmatter transitions. Implements ``claim``, ``action``, and
 ``release`` verbs that mutate memo state using the coordinator_core frontmatter primitives,
 byte-faithful to the node oracle. Also implements ``resolve``, a native-only verb with no
 JS mirror (see Parity note below). No subprocess / node reach-back.
 
-Parity oracle: DoE-claude coordinator/bin/memo-transition.js — covers claim/action/release
+Parity oracle: coordinator-content-repo coordinator/bin/memo-transition.js — covers claim/action/release
 only. ``resolve`` is a native-only composition introduced by C1 of
 docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md; claude-klabauter owns
 cross-repo-memo tooling outright post-strangler-cut (DR-210), so this verb has no JS-side
@@ -1720,7 +1720,7 @@ async def _handler(
                  Accepts a memo at status "open" OR "delivered" (see below).
         lift   : (no additional params) — draft→open, the one receiver-side move a
                  hand-delivered ``status: draft`` memo has no other way to reach
-                 (state/cross-repo/archive/2026-09-02-doe-claude-em-outbound-defects-
+                 (state/cross-repo/archive/2026-09-02-coordinator-content-repo-em-outbound-defects-
                  batch.md § "A hand-delivered draft memo is unclosable by its
                  receiver"). Idempotent no-op when already open.
         close  : at (str, ISO timestamp) — actioned→closed, the previously-unreachable

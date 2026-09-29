@@ -110,10 +110,10 @@ class TestAnnotateDenyDoesNotNameACodename:
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
         return gus.annotate_deny(out, SID, GUARD, "doc-display-text", **kwargs)
 
-    def test_no_doe_claude_codename(self):
+    def test_no_content_root_codename(self):
         out = self._fire()
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "DoE-claude" not in reason
+        assert "coordinator-content-repo" not in reason
 
     def test_no_placeholder_codename(self):
         out = self._fire()
@@ -121,12 +121,12 @@ class TestAnnotateDenyDoesNotNameACodename:
         assert "example-doctrine-repo" not in reason
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
-        import coordinator_core.doe_root_pointer as doe_root_pointer_mod
+        import coordinator_core.content_root_pointer as content_root_pointer_mod
 
-        doe_root = tmp_path / "doe-claude"
-        (doe_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
+        content_root = tmp_path / "coordinator-content-repo"
+        (content_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
         monkeypatch.setattr(
-            doe_root_pointer_mod, "read_doe_root_pointer", lambda: str(doe_root)
+            content_root_pointer_mod, "read_content_root_pointer", lambda: str(content_root)
         )
         out_with_checkout = self._fire()
         reason_with_checkout = out_with_checkout["hookSpecificOutput"]["permissionDecisionReason"]
@@ -135,7 +135,7 @@ class TestAnnotateDenyDoesNotNameACodename:
         reason_without_checkout = out_without_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert reason_with_checkout == reason_without_checkout
-        assert "DoE-claude" not in reason_with_checkout
+        assert "coordinator-content-repo" not in reason_with_checkout
         assert reason_with_checkout.startswith("denied: reason")
 
 

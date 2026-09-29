@@ -8,7 +8,7 @@ parity with the golden-oracle behavior captured from the retired bash script
 during the port (byte-diffed stdout/stderr + exit codes, see the port's own
 completion record).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
 Port of: migrate-state-to-claude-klabauter.sh (DoE b5a4192c, 2026-07-20)
 """
 

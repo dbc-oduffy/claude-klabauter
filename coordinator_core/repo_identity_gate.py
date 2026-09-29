@@ -102,7 +102,7 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
          could otherwise carry an unrelated session's record. Either check
          failing on both legs is UNRESOLVED, never MATCH -- the
          wrongful-takeover shape `harness_registry`'s own negative-spec
-         defends against (`DoE-claude@642195ba` / `88929bea`).
+         defends against (`coordinator-content-repo@642195ba` / `88929bea`).
       3. compare -- CONTAINMENT, not equality: is the anchor `cwd` (at
          arbitrary depth -- a launch from `<repo_root>/coordinator_core`
          measures exactly that) contained within `repo_root`? Resolved via

@@ -1,7 +1,7 @@
 """
 coordinator_core.orient_assemble.tests.test_envelope_schema_conformance —
 C3 AC(b): the assembler's envelope validates against the DoE schema-of-
-record (DoE-claude/schemas/decision-object.schema.json, DR-047 — not
+record (coordinator-content-repo/schemas/decision-object.schema.json, DR-047 — not
 Claude-klabauter-resident).
 
 Two layers: (1) `brief(cadence)`'s own skeleton output for every cadence,
@@ -11,7 +11,7 @@ monkeypatched to deterministic fixtures) — so schema conformance is
 checked against the actual shapes the readers emit, not just the empty
 C1 skeleton.
 
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
+Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 """
 
 from __future__ import annotations
@@ -27,21 +27,21 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
 )
 from coordinator_core.orient_assemble import CADENCES, brief
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
-_doe_root, _doe_present = doe_root_and_present()
+_content_root, _doe_present = content_root_and_present()
 
 
 def _schema_path():
     from pathlib import Path
 
-    return Path(_doe_root) / "schemas" / "decision-object.schema.json"
+    return Path(_content_root) / "schemas" / "decision-object.schema.json"
 
 
 @pytest.fixture(scope="module")
 def schema():
     if not _doe_present or not _schema_path().exists():
-        pytest.skip("sibling DoE-claude checkout with schemas/decision-object.schema.json not found")
+        pytest.skip("sibling coordinator-content-repo checkout with schemas/decision-object.schema.json not found")
     return json.loads(_schema_path().read_text(encoding="utf-8"))
 
 

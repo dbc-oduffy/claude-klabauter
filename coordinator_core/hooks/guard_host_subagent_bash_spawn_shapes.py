@@ -3,7 +3,7 @@
 host subagent-Bash-spawn-shapes decline guard.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-host-subagent-bash-spawn-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-host-subagent-bash-spawn-
 shapes.py`, the sibling of `guard-host-subagent-bash-ban.py` — same
 `guard-not-a-hook-entrypoint` header, same fold into
 `preuse-bash-dispatch.py`'s in-process guard registry, same

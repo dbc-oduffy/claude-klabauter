@@ -88,6 +88,7 @@ from __future__ import annotations
 import importlib
 import json as _json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -329,7 +330,7 @@ def _git_repo_setup(cmd_template: str) -> Callable[[Path, pytest.MonkeyPatch], D
     def setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
         repo = _build_load_bearing_repo(scratch_dir)
         return {
-            _CMD_OVERRIDE_KEY: cmd_template % repo,
+            _CMD_OVERRIDE_KEY: cmd_template % shlex.quote(str(repo).replace("\\", "/")),
             _CWD_OVERRIDE_KEY: str(repo),
         }
 
@@ -727,12 +728,21 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_git_repo_setup("git -C %s status"),
     ),
     CorpusRow(
+        "destructive-git-revert",
+        "destructive-git-revert-whole-tree-restore-fire",
+        "git -C <repo> restore .",
+        True,
+        _DENY,
+        False,
+        setup=_git_repo_advisory_setup("git -C %s restore ."),
+    ),
+    CorpusRow(
         # ADVISORY_REWRITE (see that row in `ADVISORY_REWRITE_ROWS` below).
         # CONFINEMENT_DENY-registered guard would short-circuit
         "destructive-git-revert",
-        "destructive-git-revert-advisory-input-no-fire",
+        "destructive-git-revert-whole-tree-stash-fire",
         "git -C <repo> stash",
-        False,
+        True,
         _DENY,
         False,
         setup=_git_repo_advisory_setup("git -C %s stash"),
@@ -965,6 +975,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     # `test_confinement_deny_band_shape._EXTRA_FIRING_ROWS`. Identity-gated on
     # "IDENTITY-GATE POSTURE" section.
     CorpusRow(
+        "block-subagent-findings-reject",
+        "block-subagent-findings-reject-fire",
+        "python3 -m coordinator_core.ops.review_findings_ledger reject F1 reason",
+        True,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    CorpusRow(
+        "block-subagent-findings-reject",
+        "block-subagent-findings-reject-control",
+        "python3 -m coordinator_core.ops.review_findings_ledger verify",
+        False,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    CorpusRow(
         "block-subagent-grant-acquisition",
         "block-subagent-grant-acquisition-fire",
         'python3 -m coordinator_core.session.claude_md_grant grant pm "test reason"',
@@ -1155,17 +1183,6 @@ def _noncanonical_branch_creation_hazard_setup(
 
 ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
-        # registered in ADVISORY_REWRITE, after every CONFINEMENT_DENY
-        # `destructive-git-revert` row in `CONFINEMENT_ROWS` above, which
-        "destructive-git-revert-advisory",
-        "destructive-git-revert-advisory-fire",
-        "git -C <repo> stash",
-        True,
-        _REWRITE,
-        False,
-        setup=_git_repo_advisory_setup("git -C %s stash"),
-    ),
-    CorpusRow(
         "destructive-git-revert-advisory",
         "destructive-git-revert-advisory-control",
         "git -C <repo> status",
@@ -1179,29 +1196,20 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "destructive-git-revert-advisory",
         "destructive-git-revert-advisory-reset-fire",
-        "git -C <repo> reset --hard",
+        "git -C <repo> reset --hard HEAD",
         True,
         _REWRITE,
         False,
-        setup=_git_repo_advisory_setup("git -C %s reset --hard"),
+        setup=_git_repo_advisory_setup("git -C %s reset --hard HEAD"),
     ),
     CorpusRow(
         "destructive-git-revert-advisory",
-        "destructive-git-revert-advisory-checkout-dot-fire",
-        "git -C <repo> checkout .",
+        "destructive-git-revert-advisory-checkout-force-fire",
+        "git -C <repo> checkout -f",
         True,
         _REWRITE,
         False,
-        setup=_git_repo_advisory_setup("git -C %s checkout ."),
-    ),
-    CorpusRow(
-        "destructive-git-revert-advisory",
-        "destructive-git-revert-advisory-restore-dot-fire",
-        "git -C <repo> restore .",
-        True,
-        _REWRITE,
-        False,
-        setup=_git_repo_advisory_setup("git -C %s restore ."),
+        setup=_git_repo_advisory_setup("git -C %s checkout -f"),
     ),
     CorpusRow(
         # advisory` immediately above -- same CONFINEMENT_DENY shadowing
@@ -1680,7 +1688,10 @@ _HOOKS_BAND = proxy_band("hooks")
 
 
 def _wg_lookup() -> Dict[str, Any]:
-    guards, import_failed = write_guards_engine._discover_guards()
+    with pytest.MonkeyPatch.context() as env_mp:
+        for flag in write_guards_engine._ENV_GATED_GUARDS.values():
+            env_mp.setenv(flag, "1")
+        guards, import_failed = write_guards_engine._discover_guards()
     assert not import_failed, (
         "write_guards module(s) failed to import during corpus fire: %s" % import_failed
     )
@@ -1808,12 +1819,45 @@ def _wg_cutover_phase_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[st
     }
 
 
+def _wg_strict_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True, **no_console_passthrough_kwargs())
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(scratch_dir / "app.py"), "content": "x = 1\n"},
+        "session_id": "sess-corpus-strict-dispatch",
+        "cwd": str(scratch_dir),
+    }
+
+
+def _wg_sizing_schema_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True, **no_console_passthrough_kwargs())
+    target = scratch_dir / "state" / "sizings" / "s.yaml"
+    target.parent.mkdir(parents=True)
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "pm_resolution: not-a-mapping\n"},
+        "cwd": str(scratch_dir),
+    }
+
+
+def _wg_process_time_figure_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True, **no_console_passthrough_kwargs())
+    target = scratch_dir / "docs" / "research" / "note.md"
+    target.parent.mkdir(parents=True)
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "The op took 900 ms of process time.\n"},
+        "cwd": str(scratch_dir),
+    }
+
+
 def _wg_derived_global_doctrine_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     #: Set both HOME and USERPROFILE (not delenv USERPROFILE) so the
     #: USERPROFILE (falling back to HOMEDRIVE/HOMEPATH), never HOME; a bare
     #: `delenv("USERPROFILE")` left `Path.home()` nothing to resolve and it
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
+    mp.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(scratch_dir / "authoring"))
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(scratch_dir / ".claude" / "CLAUDE.md"), "content": "x"},
@@ -2366,7 +2410,7 @@ def _wg_foreign_family_sidecar_write_fire(
     return {
         "tool_name": "Write",
         "tool_input": {
-            "file_path": "state/subagent-share/sess-fff/coordinatorreview-integrator.siblingagent0123.md",
+            "file_path": "state/subagent-share/sess-fff/coordinator-review-integrator.siblingagent0123.md",
             "content": "integrated_from: [x]\n",
         },
         "cwd": str(scratch_dir),
@@ -2517,6 +2561,12 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_derived_global_doctrine_write", "fire", True, _wg_derived_global_doctrine_fire
     ),
     WriteGuardRow("block_derived_global_doctrine_write", "control", False, _wg_benign),
+    WriteGuardRow("block_em_strict_dispatch_code_write", "fire", True, _wg_strict_dispatch_fire),
+    WriteGuardRow("block_em_strict_dispatch_code_write", "control", False, _wg_benign),
+    WriteGuardRow("block_sizing_object_schema_violation", "fire", True, _wg_sizing_schema_fire),
+    WriteGuardRow("block_sizing_object_schema_violation", "control", False, _wg_benign),
+    WriteGuardRow("nudge_unattributed_process_time_figure", "fire", True, _wg_process_time_figure_fire),
+    WriteGuardRow("nudge_unattributed_process_time_figure", "control", False, _wg_benign),
     WriteGuardRow("block_dev_repo_sentinel_write", "fire", True, _wg_dev_repo_sentinel_fire),
     WriteGuardRow("block_dev_repo_sentinel_write", "control", False, _wg_benign),
     WriteGuardRow("block_dev_side_mirror_wiki", "fire", True, _wg_dev_side_mirror_wiki_fire),
@@ -2678,8 +2728,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         False,
         _wg_benign,
         unverified_reason=(
-            "AC2-registration-only: this guard's real fire reads DoE-claude's live schema "
-            "corpus/registry manifest off a sibling checkout (coordinator_doe_root()) -- not "
+            "AC2-registration-only: this guard's real fire reads coordinator-content-repo's live schema "
+            "corpus/registry manifest off a sibling checkout (coordinator_content_root()) -- not "
             "reproducible from a synthetic scratch dir without standing up that sibling tree, "
             "which is more environment state than this row is worth per the plan's own "
             "lighter-path sanction."
@@ -2875,6 +2925,9 @@ from coordinator_core.hooks import nudge_named_agent_report_delivery as _hook_nu
 from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_unauthorized_handoff
 from coordinator_core.hooks import postuse_advisory_dispatch as _hook_postuse_advisory_dispatch
 from coordinator_core.hooks import example_retrieval_repo_detect as _hook_example_retrieval_repo_detect
+from coordinator_core.hooks import flag_em_poll_in_flight as _hook_flag_em_poll_in_flight
+from coordinator_core.hooks import guard_terminal_review as _hook_guard_terminal_review
+from coordinator_core.hooks import preuse_search_dispatch as _hook_preuse_search_dispatch
 from coordinator_core.hooks import receiver_state_sensor as _hook_receiver_state_sensor
 from coordinator_core.hooks import subagent_sidecar_fill_check as _hook_subagent_sidecar_fill_check
 from coordinator_core.hooks import suggest_sonnet_research as _hook_suggest_sonnet_research
@@ -3066,7 +3119,7 @@ def _fire_block_unenumerated_agent_type() -> Optional[Dict[str, Any]]:
 
 
 def _fire_block_unenumerated_agent_type_control() -> Optional[Dict[str, Any]]:
-    payload = {"tool_name": "Agent", "tool_input": {}}
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git status"}}
     return _to_envelope_or_none(_hook_block_unenumerated_agent_type.check(payload))
 
 
@@ -3079,7 +3132,7 @@ def _fire_enforce_agent_model_pin() -> Optional[Dict[str, Any]]:
         mp.setattr(
             _hook_enforce_agent_model_pin,
             "resolve_model_pins",
-            lambda *, doe_root=None: (
+            lambda *, content_root=None: (
                 {
                     "coordinator:executor": {
                         "model": "sonnet",
@@ -3101,7 +3154,7 @@ def _fire_enforce_agent_model_pin_control() -> Optional[Dict[str, Any]]:
         mp.setattr(
             _hook_enforce_agent_model_pin,
             "resolve_model_pins",
-            lambda *, doe_root=None: ({}, None),
+            lambda *, content_root=None: ({}, None),
         )
         payload = {
             "tool_name": "Agent",
@@ -3221,6 +3274,92 @@ def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
 # the UNINITIALIZED banner string for a scratch dir carrying a `.project-rag/
 # `_find_marker_upward`'s `_MAX_LEVELS=6` walk on a real developer box and
 # absent so this row exercises the UNINITIALIZED banner path regardless of
+def _git_scratch_repo(scratch: str) -> None:
+    subprocess.run(["git", "init", "-q", scratch], check=True, **no_console_passthrough_kwargs())
+
+
+def _fire_flag_em_poll_in_flight_with(transcript_tools: List[str], run_in_flight: bool) -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-fepif-", dir=_neutral_scratch_parent()) as scratch:
+            session_id = "sess-fepif"
+            if run_in_flight:
+                (Path(scratch) / ("workflow-run-%s-t1.json" % session_id)).write_text(
+                    _json.dumps({"run_id": "run-1"}), encoding="utf-8"
+                )
+            transcript = Path(scratch) / "transcript.jsonl"
+            transcript.write_text(
+                "".join(
+                    _json.dumps(
+                        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}}
+                    )
+                    + "\n"
+                    for name in transcript_tools
+                ),
+                encoding="utf-8",
+            )
+            mp.setattr(_hook_flag_em_poll_in_flight, "_tmpdir", lambda: scratch)
+            payload = {
+                "tool_name": "TaskList",
+                "session_id": session_id,
+                "transcript_path": str(transcript),
+            }
+            return _to_envelope_or_none(_run_maybe_async(_hook_flag_em_poll_in_flight._handler(payload)))
+
+
+def _fire_flag_em_poll_in_flight() -> Optional[Dict[str, Any]]:
+    return _fire_flag_em_poll_in_flight_with(["TaskList"], run_in_flight=True)
+
+
+def _fire_flag_em_poll_in_flight_control() -> Optional[Dict[str, Any]]:
+    return _fire_flag_em_poll_in_flight_with(["Bash"], run_in_flight=True)
+
+
+def _fire_guard_terminal_review_with(commit_path: str) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gtr-", dir=_neutral_scratch_parent()) as scratch:
+        _git_scratch_repo(scratch)
+        (Path(scratch) / commit_path).write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", scratch, "add", commit_path], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(
+            ["git", "-C", scratch, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+             "-m", "work", "-m", "Session-Id: sess-gtr"],
+            check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        payload = {"payload": {"session_id": "sess-gtr", "cwd": scratch, "stop_hook_active": False}}
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_terminal_review._guard_terminal_review_handler(payload)))
+
+
+def _fire_guard_terminal_review() -> Optional[Dict[str, Any]]:
+    return _fire_guard_terminal_review_with("app.py")
+
+
+def _fire_guard_terminal_review_control() -> Optional[Dict[str, Any]]:
+    return _fire_guard_terminal_review_with("notes.md")
+
+
+def _fire_preuse_search_dispatch_with(tool_name: str) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-psd-", dir=_neutral_scratch_parent()) as scratch:
+        _git_scratch_repo(scratch)
+        rag_dir = Path(scratch) / ".project-rag"
+        rag_dir.mkdir()
+        (rag_dir / "graph.db").write_text("", encoding="utf-8")
+        payload = {
+            "tool_name": tool_name,
+            "tool_input": {"pattern": "def parse_widget"},
+            "session_id": "11111111-2222-3333-4444-555555555555",
+            "cwd": scratch,
+        }
+        return _to_envelope_or_none(_run_maybe_async(_hook_preuse_search_dispatch._handler(payload)))
+
+
+def _fire_preuse_search_dispatch() -> Optional[Dict[str, Any]]:
+    return _fire_preuse_search_dispatch_with("Grep")
+
+
+def _fire_preuse_search_dispatch_control() -> Optional[Dict[str, Any]]:
+    return _fire_preuse_search_dispatch_with("Bash")
+
+
 def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
     real_find_marker_upward = _hook_example_retrieval_repo_detect._find_marker_upward
 
@@ -3232,7 +3371,7 @@ def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".project-rag")
-        (scratch_dir / ".project-rag" / "manifest.json").write_text("{}", encoding="utf-8")
+        (scratch_dir / ".project-rag" / "state.json").write_text("{}", encoding="utf-8")
         with unittest.mock.patch.object(
             _hook_example_retrieval_repo_detect, "_find_marker_upward", _stub_find_marker_upward
         ):
@@ -4139,7 +4278,7 @@ def _fire_preuse_agent_dispatch() -> Optional[Dict[str, Any]]:
 
 
 def _fire_preuse_agent_dispatch_control() -> Optional[Dict[str, Any]]:
-    payload = {"tool_name": "Agent", "tool_input": {}}
+    payload = {"tool_name": "Bash", "tool_input": {"command": "true"}}
     return _to_envelope_or_none(_run_maybe_async(_hook_preuse_agent_dispatch._handler(payload)))
 
 
@@ -4249,9 +4388,11 @@ def _fire_session_start_guard_plane_check() -> Optional[Dict[str, Any]]:
 
 
 def _fire_session_start_guard_plane_check_control() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_session_start_guard_plane_check._handler({}))
-    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("CLAUDE_CODE_REMOTE", raising=False)
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_session_start_guard_plane_check._handler({}))
+        )
 
 
 def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
@@ -4342,7 +4483,12 @@ def _fire_stop_dispatch() -> Optional[Dict[str, Any]]:
 
 def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sd-ctrl-", dir=_neutral_scratch_parent()) as scratch:
-        os.makedirs(os.path.join(scratch, ".git"))
+        subprocess.run(["git", "init", "-q", scratch], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(
+            ["git", "-C", scratch, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"],
+            check=True,
+            **no_console_passthrough_kwargs(),
+        )
         payload = {
             "payload": {
                 "session_id": "sess-%s" % uuid.uuid4().hex,
@@ -4435,7 +4581,7 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow(
         "block_unenumerated_agent_type",
-        "control-no-subagent-type",
+        "control-non-agent-tool",
         False,
         _fire_block_unenumerated_agent_type_control,
     ),
@@ -4499,6 +4645,12 @@ HOOK_ROWS: List[HookRow] = [
         False,
         _fire_postuse_advisory_dispatch_control,
     ),
+    HookRow("flag_em_poll_in_flight", "fire-second-poll", True, _fire_flag_em_poll_in_flight),
+    HookRow("flag_em_poll_in_flight", "control-intervening-tool", False, _fire_flag_em_poll_in_flight_control),
+    HookRow("guard_terminal_review", "fire-unreviewed-code-commit", True, _fire_guard_terminal_review),
+    HookRow("guard_terminal_review", "control-doc-only-commit", False, _fire_guard_terminal_review_control),
+    HookRow("preuse_search_dispatch", "fire-first-grep", True, _fire_preuse_search_dispatch),
+    HookRow("preuse_search_dispatch", "control-non-search-tool", False, _fire_preuse_search_dispatch_control),
     HookRow("example_retrieval_repo_detect", "fire-uninitialized", True, _fire_example_retrieval_repo_detect),
     HookRow("example_retrieval_repo_detect", "control-no-marker", False, _fire_example_retrieval_repo_detect_control),
     HookRow(

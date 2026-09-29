@@ -13,7 +13,7 @@ than absent and invisible. If this test goes green with `is_placeholder` gutted,
 the scaffolder is free to emit a stub that certifies itself — the exact
 form-filling failure the bar exists to prevent.
 
-Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
 """
 
 from __future__ import annotations

@@ -66,7 +66,7 @@ newly-added query-bin class, which states the same pinning explicitly in
 `_query_bin_targets()`'s docstring.
 
 Targets one entrypoint per hook family, each a cold interpreter spawned by a
-DoE-claude `coordinator/hooks/scripts/*.py` PLUMBING wrapper on every matching
+Coordinator-content-repo `coordinator/hooks/scripts/*.py` PLUMBING wrapper on every matching
 tool call:
 
     1. `preuse-bash-dispatch.py`      -> coordinator_core.bash_guards.dispatch.evaluate_payload_json
@@ -112,16 +112,16 @@ _coordinator_core_lazy_ops`, see its own module docstring) mirroring
 `coordinator_core.ops`'s. At authorship, `postuse-advisory-dispatch.py` never
 armed that channel, so this entrypoint paid the package's default-eager path
 (all 15 `hooks.*` modules, 765 newly-imported modules total, 412.5ms process
-time) -- and, being DoE-claude-tree territory, was out of scope for this
+time) -- and, being coordinator-content-repo-tree territory, was out of scope for this
 (claude-klabauter-side) gate to fix directly.
 <!-- Review: coordinator:code-reviewer ab67e1fde9751a8ff -- paragraph was stale,
 contradicting the numbers a few hundred lines below it. -->
-That gap is CLOSED: `postuse-advisory-dispatch.py` (DoE-claude tree) now calls
+That gap is CLOSED: `postuse-advisory-dispatch.py` (coordinator-content-repo tree) now calls
 `_arm_lazy_ops()` before importing its target, same as `preuse-bash-dispatch.py`
 and `preuse-write-dispatch.py`. Re-measured 2026-08-31: 73 newly-imported
 modules, 101.6ms process time / 2.00 procs per call (`batched_process_time_ms`,
 K=20) -- under CLAUDE.md's 200ms per-process bar. The fix landed entirely on
-the DoE-claude side; nothing in claude-klabauter's own tree changed, which is why this
+the coordinator-content-repo side; nothing in claude-klabauter's own tree changed, which is why this
 paragraph went stale here unnoticed -- the durable lesson for the next reader
 of a cross-tree residual note is to re-check the OTHER tree before trusting
 this file's account of it.

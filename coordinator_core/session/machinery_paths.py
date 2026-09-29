@@ -105,7 +105,7 @@ def machinery_path_prefixes() -> tuple:
     legacy roots alike.
 
     Decided NOT to gravestone: the premise "the legacy root is retired"
-    does not hold -- DoE-claude's `coordinator/hooks/scripts/_plan_path_bridge.py`
+    does not hold -- coordinator-content-repo's `coordinator/hooks/scripts/_plan_path_bridge.py`
     module and several reviewer-sidecar writers there still cite and match
     live `state/subagent-share/<session>/...` paths, so a census keyed on
     `.coordinator-local` alone would silently miss every legacy-root

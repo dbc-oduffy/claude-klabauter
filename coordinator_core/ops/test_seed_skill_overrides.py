@@ -4,7 +4,7 @@ naked-Python port of coordinator/bin/install-health/seed-skill-overrides.sh
 (DoE-owned bash drop-in).
 
 Golden oracle captured by running the bash script directly against a fresh
-CLAUDE_HOME (with .doe-root planted to satisfy the trusted-root guard):
+CLAUDE_HOME (with .coordinator-content-root planted to satisfy the trusted-root guard):
 positive fresh-seed, positive --check-only (no write), positive
 deep-research-sentinel-present run preserving sibling settings.json keys,
 negative missing-helper (graceful degrade, exit 0), negative untrusted
@@ -29,16 +29,16 @@ from coordinator_core.ops import seed_skill_overrides as subject  # noqa: E402
 
 @pytest.fixture
 def trusted_env(tmp_path, monkeypatch):
-    """A CLAUDE_HOME whose .doe-root points at a fake trusted coordinator checkout,
+    """A CLAUDE_HOME whose .coordinator-content-root points at a fake trusted coordinator checkout,
     plus a coordinator/bin/seed-skill-overrides.py helper stub that writes a
     marker into settings.json so we can assert it actually ran."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
 
-    doe_root = tmp_path / "doe-checkout"
-    plugin_root = doe_root / "coordinator"
+    content_root = tmp_path / "doe-checkout"
+    plugin_root = content_root / "coordinator"
     (plugin_root / "bin").mkdir(parents=True)
-    (home / ".claude" / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
 
     helper = plugin_root / "bin" / "seed-skill-overrides.py"
     helper.write_text(
@@ -91,10 +91,10 @@ def test_check_only_env_var_no_write(trusted_env, monkeypatch):
 def test_missing_helper_degrades_gracefully(tmp_path, monkeypatch, capsys):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    doe_root = tmp_path / "doe-checkout"
-    plugin_root = doe_root / "coordinator"
+    content_root = tmp_path / "doe-checkout"
+    plugin_root = content_root / "coordinator"
     (plugin_root / "bin").mkdir(parents=True)
-    (home / ".claude" / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.delenv("CHECK_ONLY", raising=False)
 

@@ -5,7 +5,7 @@ WHY THIS FILE EXISTS. `guard-doctrine-surface-bash-write`'s deny text ends in
 a `coordinator/docs/wiki/guard-message-concision.md#...` citation. DoE's
 cold twin runs that literal through `_message_envelope.resolve_wiki_citation()`
 and rewrites it to an absolute local path; the port used to emit the bare
-literal unchanged, which 404s for a reader outside the DoE-claude checkout.
+literal unchanged, which 404s for a reader outside the coordinator-content-repo checkout.
 This file pins the fix: the CALLER (`dispatch.py`) now resolves the citation
 per call, off that call's own `plugin_root`, and passes the result down to
 `check()` -- the guard module itself stays free of resolution machinery.
@@ -24,20 +24,20 @@ FINDING B). That measurement went stale the same day: DoE widened
 `_WIKI_CITATION_RE` to admit nested segments, so cold now resolves the exact
 anchor this repo's two subagent guards carry. `_WIKI_CITATION_RE` above was
 widened to match, and the parity assertion below is now LIVE -- compared
-against DoE-claude's OWN resolver run on the identical input, never a
+against coordinator-content-repo's OWN resolver run on the identical input, never a
 hand-written expected string, so a future re-narrowing or re-widening on
 DoE's side is caught by re-running this test, not by re-reading a comment.
 
 PARITY, NOT A BETTER REGEX. Assertions compare the resolved output against
-DoE-claude's OWN `_message_envelope.resolve_wiki_citation()` run on the
+Coordinator-content-repo's OWN `_message_envelope.resolve_wiki_citation()` run on the
 identical input, imported directly from the sibling checkout (never a
 hand-written expected string) -- matching cold's regex semantics is the
 pinned criterion, whatever that regex currently is.
 
-Opt-in on the DoE-claude sibling checkout, same shape as
+Opt-in on the coordinator-content-repo sibling checkout, same shape as
 `test_folded_guard_transport_parity.py`: every case importing the cold
 resolver skips (never silently passes) on an install with no sibling repo
-resolved by `coordinator_doe_root()`.
+resolved by `coordinator_content_root()`.
 """
 from __future__ import annotations
 
@@ -50,14 +50,14 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as _guard
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-_DOE_ROOT = coordinator_doe_root()
-_DOE_HOOKS_DIR = Path(_DOE_ROOT) / "coordinator" / "hooks" / "scripts" if _DOE_ROOT else None
+_CONTENT_ROOT = coordinator_content_root()
+_DOE_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
 
 _SKIP_REASON = (
-    "opt-in fixture: no DoE-claude sibling checkout resolved by "
-    "coordinator_doe_root() -- this file compares the warm resolver's "
+    "opt-in fixture: no coordinator-content-repo sibling checkout resolved by "
+    "coordinator_content_root() -- this file compares the warm resolver's "
     "output against cold's own `_message_envelope.resolve_wiki_citation()`, "
     "which lives only in that sibling repo."
 )
@@ -86,21 +86,21 @@ _FLAT_ANCHOR = _guard._WIKI_ANCHOR
 _NESTED_ANCHOR = "coordinator/docs/wiki/coordinator-tripwires/some-page.md#slug"
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 class TestParityWithCold:
     def test_flat_anchor_resolves_to_cold_absolute_path(self) -> None:
         cold = _load_cold_message_envelope()
         expected = cold.resolve_wiki_citation(_FLAT_ANCHOR)
         assert expected != _FLAT_ANCHOR
 
-        actual = dispatch.resolve_wiki_citation(_FLAT_ANCHOR, str(Path(_DOE_ROOT) / "coordinator"))
+        actual = dispatch.resolve_wiki_citation(_FLAT_ANCHOR, str(Path(_CONTENT_ROOT) / "coordinator"))
         assert actual == expected
 
     def test_nested_anchor_matches_colds_own_resolution(self) -> None:
         cold = _load_cold_message_envelope()
         expected = cold.resolve_wiki_citation(_NESTED_ANCHOR)
 
-        actual = dispatch.resolve_wiki_citation(_NESTED_ANCHOR, str(Path(_DOE_ROOT) / "coordinator"))
+        actual = dispatch.resolve_wiki_citation(_NESTED_ANCHOR, str(Path(_CONTENT_ROOT) / "coordinator"))
         assert actual == expected
 
 

@@ -184,12 +184,12 @@ def test_a_commit_in_owner_repo_gate_stamps_with_its_row_withheld(tmp_path):
   title: Reaches out
   body: Do the named work and pin it with a test.
   change_kind: code-edit
-  surface: DoE-claude/coordinator/schemas/plan.schema.json
+  surface: coordinator-content-repo/coordinator/schemas/plan.schema.json
   writes: []
   queue_scope: project
   disposition: open
   external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: someone commits there
       requires: {pg.REQUIRES_COMMIT}
 """
@@ -290,12 +290,12 @@ def test_withheld_rows_land_in_findings_as_ids(tmp_path):
   title: Waits on a sibling
   body: Do the named work and pin it with a test.
   change_kind: code-edit
-  surface: DoE-claude/coordinator/bin/mise-prep-gate.py
+  surface: coordinator-content-repo/coordinator/bin/mise-prep-gate.py
   writes: []
   queue_scope: project
   disposition: open
   external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: the gate script lands
       requires: {pg.REQUIRES_LANDED}
 """

@@ -2,7 +2,7 @@
 MultiEdit|NotebookEdit) write-guard op.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/preuse-write-dispatch.py`. That
+from coordinator-content-repo `coordinator/hooks/scripts/preuse-write-dispatch.py`. That
 script's whole job was PLUMBING: resolve a SIBLING claude-klabauter checkout from a
 doctrine-plane repo (`_engine_root.resolve_claude_klabauter_root`), place it on
 `sys.path`, import `coordinator_core.write_guards.engine` across that

@@ -153,7 +153,7 @@ def test_inline_dev_source_install_is_silent_even_with_unreachable_key(tmp_path)
     config_dir.mkdir()
     doe_clone = tmp_path / "doe-clone"
     (doe_clone / "coordinator").mkdir(parents=True)
-    (config_dir / ".doe-root").write_text(str(doe_clone), encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(str(doe_clone), encoding="utf-8")
     _write_settings(config_dir, {"coordinator-claude@local": True})
 
     text = evaluate_settings_integrity(config_dir)
@@ -281,7 +281,7 @@ def test_guardless_sessions_fires_and_names_pid(monkeypatch):
 
     text = evaluate_guardless_sessions()
     assert "17152" in text
-    assert "claude-doe" in text
+    assert "claude-author" in text
 
 
 def test_guardless_sessions_silent_when_all_guarded(monkeypatch):
@@ -293,7 +293,7 @@ def test_guardless_sessions_silent_when_all_guarded(monkeypatch):
             observed=[
                 ProcessObservation(
                     pid=43052,
-                    command_line='claude.exe --plugin-dir X:/DoE-claude/coordinator',
+                    command_line='claude.exe --plugin-dir C:/coordinator-content-repo/coordinator',
                     guarded=True,
                 )
             ],
@@ -353,7 +353,7 @@ def test_evaluate_settings_integrity_composes_guardless_session_banner(
 
     text = evaluate_settings_integrity(config_dir)
     assert "17152" in text
-    assert "claude-doe" in text
+    assert "claude-author" in text
 
 
 def test_evaluate_settings_integrity_own_config_banner_survives_guardless_composition(
@@ -389,7 +389,7 @@ def test_is_inline_install_true_on_flat_published_mirror(tmp_path):
     mirror = tmp_path / "coordinator-claude"
     (mirror / ".claude-plugin").mkdir(parents=True)
     (mirror / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
-    (config_dir / ".doe-root").write_text(str(mirror), encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(str(mirror), encoding="utf-8")
 
     assert _gsi.is_inline_install(config_dir) is True
 
@@ -399,26 +399,26 @@ def test_is_inline_install_false_on_bare_directory(tmp_path):
     config_dir.mkdir()
     bare = tmp_path / "bare"
     bare.mkdir()
-    (config_dir / ".doe-root").write_text(str(bare), encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(str(bare), encoding="utf-8")
 
     assert _gsi.is_inline_install(config_dir) is False
 
 
-@pytest.mark.parametrize("migrated_body", ["", "/nonexistent/DoE-claude\n"])
+@pytest.mark.parametrize("migrated_body", ["", "/nonexistent/coordinator-content-repo\n"])
 def test_non_live_migrated_rung_does_not_shadow_live_legacy(tmp_path, monkeypatch, migrated_body):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     settings_home = tmp_path / "settings_home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".doe-root").write_text(migrated_body, encoding="utf-8")
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text(migrated_body, encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-    doe = tmp_path / "DoE-claude"
+    doe = tmp_path / "coordinator-content-repo"
     (doe / "coordinator").mkdir(parents=True)
-    (config_dir / ".doe-root").write_text(str(doe) + "\n", encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(str(doe) + "\n", encoding="utf-8")
 
     assert _gsi.is_inline_install(config_dir) is True
 
-    (config_dir / ".doe-root").write_text("/nonexistent/legacy\n", encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text("/nonexistent/legacy\n", encoding="utf-8")
     assert _gsi.is_inline_install(config_dir) is False
 
 
@@ -428,7 +428,7 @@ def test_flat_mirror_install_is_silent_even_with_unreachable_key(tmp_path):
     mirror = tmp_path / "coordinator-claude"
     (mirror / ".claude-plugin").mkdir(parents=True)
     (mirror / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
-    (config_dir / ".doe-root").write_text(str(mirror), encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(str(mirror), encoding="utf-8")
     _write_settings(config_dir, {"coordinator-claude@local": True})
 
     assert evaluate_settings_integrity(config_dir) == ""

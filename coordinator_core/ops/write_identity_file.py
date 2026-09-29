@@ -171,7 +171,7 @@ def _serialize(doc: dict) -> str:
         if key == "version":
             continue
         ordered[key] = value
-    body = yaml.safe_dump(ordered, sort_keys=False, default_flow_style=False)
+    body = yaml.safe_dump(ordered, sort_keys=False, default_flow_style=False, allow_unicode=True)
     return f"{_HEADER_COMMENT}\n{body}"
 
 

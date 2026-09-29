@@ -28,11 +28,11 @@ tree" — this module only proposes the set that check runs against.
 
 Cross-repo consequence (staff-eng finding 5, EM-accepted): each allowlisted
 name is resolved to a `.py` body under the CONFIGURED bin roots —
-`repos.claude_klabauter` and `repos.doe_claude` in the machine-local
+`repos.claude_klabauter` and `repos.content_root` in the machine-local
 registry (`coordinator_core.machine_resolver.registry_get`), both SIBLING
 WORKING TREES, not this repo. Neither this module nor C2's parity test can
 be made to pass or fail by a claude-klabauter commit alone: an edit landed only in
-klabauter's or DoE-claude's own `coordinator/bin/` changes this derivation's
+klabauter's or coordinator-content-repo's own `coordinator/bin/` changes this derivation's
 answer with no corresponding commit here. GREEN IS THE DANGEROUS POLARITY: a
 newly stdin-reading DoE entrypoint whose body this derivation cannot resolve
 (bin root unset, tree absent, or the file missing) silently drops off the
@@ -64,7 +64,7 @@ _ALLOWLIST_PATH = _REPO_ROOT / "coordinator_core" / "ops" / "warm_entrypoint_all
 #: The two machine-local registry keys naming the sibling working trees this
 #: derivation resolves entrypoint bodies under. Neither is this repo -- see
 #: the module docstring's Cross-repo consequence section.
-_BIN_ROOT_REGISTRY_KEYS = ("repos.claude_klabauter", "repos.doe_claude")
+_BIN_ROOT_REGISTRY_KEYS = ("repos.claude_klabauter", "repos.content_root")
 
 #: Hand-maintained exclusion the derivation honours (a name enrolled by a
 #: docstring/comment/dead-branch match, or otherwise a known false positive
@@ -153,7 +153,7 @@ def derive_stdin_reading_entrypoints() -> "frozenset[str]":
 
 
 # Every test below is a READ-ONLY parity oracle against the live sibling
-# working trees (`repos.claude_klabauter` / `repos.doe_claude`), the exact
+# working trees (`repos.claude_klabauter` / `repos.content_root`), the exact
 # shape `coordinator_core/conftest.py`'s `_quarantine_real_home` docstring
 # names as the sanctioned use of `@pytest.mark.real_home`: this suite's
 # autouse home quarantine redirects every registry read into an empty
@@ -176,7 +176,7 @@ def test_derivation_runs_and_returns_non_empty_set():
     neither sibling clone is a portability fact, not a derivation defect."""
     if not configured_bin_roots():
         pytest.skip(
-            "neither repos.claude_klabauter nor repos.doe_claude resolves to an "
+            "neither repos.claude_klabauter nor repos.content_root resolves to an "
             "existing coordinator/bin on this machine"
         )
     result = derive_stdin_reading_entrypoints()

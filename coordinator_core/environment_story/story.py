@@ -1,4 +1,4 @@
-"""Ported verbatim from DoE-claude coordinator/hooks/scripts/_environment_story.py
+"""Ported verbatim from coordinator-content-repo coordinator/hooks/scripts/_environment_story.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C2) -- this module's
 own logic is unchanged; only its home moved. See coordinator_core/environment_story/__init__.py
 for the family's shape.

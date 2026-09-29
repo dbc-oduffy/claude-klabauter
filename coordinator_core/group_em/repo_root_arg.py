@@ -8,7 +8,7 @@ while watching nothing, through nine live peer transitions
 An unreadable repo root and a genuinely quiet repo emitted the identical line.
 
 THE MANGLING IS ORDINARY, WHICH IS WHY A TYPE CHECK IS NOT ENOUGH. The spelling
-a Windows-hosted agent reaches for is `X:\example-game-workbench-repo`. Through the
+a Windows-hosted agent reaches for is `C:\example-game-workbench-repo`. Through the
 Bash tool, `\c` and `\u` are eaten before the module ever sees the argument,
 leaving `X:example-game-workbench-repo` -- which is not a typo Python can see. It is a
 DRIVE-RELATIVE path, a real Windows path shape that resolves against the current
@@ -59,7 +59,7 @@ def resolve_repo_root_arg(value: object) -> str:
         resolved = os.path.abspath(raw)
         raise RepoRootArgError(
             f"--repo-root {raw!r} is not an absolute, drive-anchored path; it "
-            f"resolves to {resolved!r}. Pass forward slashes: X:/name"
+            f"resolves to {resolved!r}. Pass forward slashes: C:/name"
         )
 
     resolved = os.path.abspath(os.path.normpath(raw))

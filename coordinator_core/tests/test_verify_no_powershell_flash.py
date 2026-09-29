@@ -4,7 +4,7 @@ The bash oracle was a thin `exec` shim over the canonical
 `verify-no-console-flash.sh` guard. That guard's own port (C6, the POSIX-exec
 drain) renamed the canonical guard to `verify-no-console-flash.py` and this
 shim's own `_CANONICAL_GUARD_NAME` was corrected to match
-(cross-repo/archive/2026-08-28-doe-claude-em-verify-no-powershell-flash-
+(cross-repo/archive/2026-08-28-coordinator-content-repo-em-verify-no-powershell-flash-
 trampolines-to-a-file-that-no-longer-exists.md) — the module's own docstring
 already named the `.py`, only the constant had not caught up. These tests
 exercise the shim's delegation contract in isolation, using a fake

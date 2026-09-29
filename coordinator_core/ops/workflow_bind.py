@@ -74,7 +74,7 @@ Reply fields:
     bound_keys (list) — sorted top-level keys of the bound args, so a caller
                         can assert what it bound without re-parsing the text.
 
-Spec backlink: DoE-claude `coordinator/skills/plan-blitz/SKILL.md` § Fire the
+Spec backlink: coordinator-content-repo `coordinator/skills/plan-blitz/SKILL.md` § Fire the
 wave, whose veneer `skills/plan-blitz/emit-wave-fire.py` is the first consumer.
 """
 

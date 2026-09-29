@@ -56,16 +56,12 @@ from pathlib import PurePosixPath
 from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
+from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.ipc import register_op
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
 from coordinator_core.session.mode_resolution import resolve_mode
-
-_DOC_DATA_EXTENSIONS: frozenset[str] = frozenset([
-    ".md", ".yaml", ".yml", ".json", ".txt", ".toml",
-    ".csv", ".lock", ".cfg", ".ini",
-])
 
 GENERATES: list = []
 

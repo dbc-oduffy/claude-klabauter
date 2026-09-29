@@ -969,7 +969,7 @@ def test_receipt_under_second_share_root_only_still_counts(monkeypatch, tmp_path
 
 
 # ---------------------------------------------------------------------------
-# MK2 (DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md): a
+# MK2 (coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md): a
 # plan-bearing close whose governing plan carries a valid review_stamp is
 # discharged by the stamp alone -- no per-reviewer receipt required, and
 # supersession is never re-checked (a later foreign commit to a declared

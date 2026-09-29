@@ -82,7 +82,7 @@ class TestBashCrossRepoDenyIsSentinelClearable:
         decision, out = _decision(_cross_repo_payload("sess-deny-1", repos))
         assert decision == "deny"
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "yours to grant in-band" in reason
+        assert "machine-local set coordinator.guard_level warn" in reason
         assert "cross-repo-memo" in reason
         assert "guard-unlock-" not in reason, (
             "deny reason must never hand out a pasteable unlock recipe (AC-2)"

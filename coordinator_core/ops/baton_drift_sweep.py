@@ -240,7 +240,7 @@ Negative-spec (FIFTH LEG / C1):
 
 Spec backlink (FIFTH LEG / C1): pln-retained-supersede-finishes-it-d1deb5 § Tasks C1, AC1-AC3.
 
-Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § D2d
+Spec backlink: coordinator-content-repo:pln-push-side-write-discipline-for-05c30d § D2d
 Spec backlink (SECOND LEG): cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 3.
 Spec backlink (C5): pln-stranded-baton-drainage-make-t-f4a679 § C5.

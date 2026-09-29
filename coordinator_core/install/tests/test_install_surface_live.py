@@ -92,10 +92,10 @@ _FIVE_STATIC_SHIM_NAMES = (
 
 
 def _resolve_real_doe_bin_templates() -> "Path | None":
-    doe_root_raw = machine_resolver.registry_get("repos.doe_claude")
-    if not doe_root_raw:
+    content_root_raw = machine_resolver.registry_get("repos.content_root")
+    if not content_root_raw:
         return None
-    candidate = Path(doe_root_raw) / "coordinator" / "templates" / "bin"
+    candidate = Path(content_root_raw) / "coordinator" / "templates" / "bin"
     return candidate if candidate.is_dir() else None
 
 
@@ -124,8 +124,8 @@ def _snapshot_static_family(bin_dst: Path) -> "dict[str, tuple[int, str]]":
 def _skip_reason_if_unavailable() -> "str | None":
     if _resolve_real_doe_bin_templates() is None:
         return (
-            "no real DoE-claude templates/bin/ resolvable on this box "
-            "(repos.doe_claude registry key absent, or the checkout lacks "
+            "no real coordinator-content-repo templates/bin/ resolvable on this box "
+            "(repos.content_root registry key absent, or the checkout lacks "
             "coordinator/templates/bin/) -- environment gap, not a test failure"
         )
     if not _resolve_real_ch_bin().is_dir():

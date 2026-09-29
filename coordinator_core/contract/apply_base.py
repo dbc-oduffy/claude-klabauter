@@ -22,8 +22,8 @@ any consumer-specific mutating primitive (`_run_git`, archive-stamp
 calls, etc. — `scoped_commit` takes a `run_git` callable, never shells
 out itself).
 
-Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C2
+Contract: coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C2
 
 DR-092 (ACCEPTED): un-defers this module once a second real apply/dispatch
 half exists — B4's `baton_assemble` is that named trigger. `apply_base` is
@@ -315,8 +315,8 @@ def normalize_decisions(decisions: dict[str, Any]) -> tuple[dict[str, Any], list
     authorised this yet", so a wrong-shaped payload read as a policy
     decision: `backlog-grind-assemble apply bug-blitz --wave-path ...
     --granularity per-item` landed no commit directive and said nothing
-    about why (bug-blitz run bb-20260831-100946, DoE-claude memo
-    2026-08-31-doe-claude-em-blitz-apply-verb-emits-no-commit-directive).
+    about why (bug-blitz run bb-20260831-100946, coordinator-content-repo memo
+    2026-08-31-coordinator-content-repo-em-blitz-apply-verb-emits-no-commit-directive).
 
     Negative spec:
     - A dict entry is NEVER rewritten, including one carrying no
@@ -586,7 +586,7 @@ def resolve_explicit_session_id(
     and into `repo_identity_gate.compute_repo_identity_gate`, an anti-forgery
     input. Measured 2026-08-30 (abs-path-ok: verbatim captured op output — the
     root IS the evidence): `baton-assemble.exe apply handoff <plan>` refused with
-    `sid=a12e2a71… session_root=X:\\DoE-claude verdict=MISMATCH` for a call
+    `sid=a12e2a71… session_root=C:\\coordinator-content-repo verdict=MISMATCH` for a call
     made by a claude-klabauter session, leaving that session unable to author a
     handoff by the one sanctioned route
     (`state/bug-backlog/2026-08-30-baton-assemble-apply-resolves-a-foreign-session-identity.yaml`).

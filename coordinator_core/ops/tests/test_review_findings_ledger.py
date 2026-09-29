@@ -1,5 +1,5 @@
 """Tests for coordinator_core.ops.review_findings_ledger — the
-reviewer-applies-own-findings ledger op (DoE-claude
+reviewer-applies-own-findings ledger op (coordinator-content-repo
 docs/plans/2026-09-26-retire-review-integrator.md, row M2).
 """
 
@@ -260,6 +260,20 @@ def test_targets_add_dedupes_and_persists(tmp_path):
     assert again == ["a/b.py", "c/d.py", "e/f.py"]
     target_file = tmp_path / ".git" / "coordinator-sessions" / "session-1" / "review-targets.txt"
     assert target_file.read_text(encoding="utf-8").splitlines() == ["a/b.py", "c/d.py", "e/f.py"]
+
+
+def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path):
+    m.targets_add(tmp_path, "session-1", ["a.py"])
+    merged = m.targets_add(tmp_path, "session-1", ["b.py"], agent_key="agent-x")
+    assert merged == ["b.py"]
+    base = tmp_path / ".git" / "coordinator-sessions" / "session-1"
+    assert (base / "review-targets.agent-x.txt").read_text(encoding="utf-8") == "b.py\n"
+    assert (base / "review-targets.txt").read_text(encoding="utf-8") == "a.py\n"
+
+
+def test_targets_add_refuses_a_path_shaped_agent_key(tmp_path):
+    with pytest.raises(m.LedgerError, match="agent-key"):
+        m.targets_add(tmp_path, "session-1", ["a.py"], agent_key="../evil")
 
 
 def test_targets_add_refuses_absolute_path(tmp_path):

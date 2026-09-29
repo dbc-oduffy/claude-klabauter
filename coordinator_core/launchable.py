@@ -45,7 +45,7 @@ Call sites become::
     run([*resolve_launchable(script), *args])
 
 Resolution order (Windows only -- see the POSIX note below):
-    1. ``<script>.cmd`` twin, if present. ``DoE-claude/coordinator/bin/`` deliberately
+    1. ``<script>.cmd`` twin, if present. ``coordinator-content-repo/coordinator/bin/`` deliberately
        ships ``.cmd`` twins alongside its shebang scripts (see
        ``coordinator_core.install.substrate`` Step C10a-2) precisely because
        CreateProcess cannot exec a shebang. Prefer the twin when it exists: it is the

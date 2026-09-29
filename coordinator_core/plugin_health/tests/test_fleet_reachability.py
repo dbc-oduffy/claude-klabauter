@@ -3,15 +3,15 @@ coordinator_core.plugin_health.tests.test_fleet_reachability
 
 Coverage for the fleet-reachability delete-safety gate (see
 fleet_reachability.py's own module docstring for the `c79e66cd` regression
-this closes: claude-klabauter deleted `lint-frontmatter.js` while a DoE-claude skill
+this closes: claude-klabauter deleted `lint-frontmatter.js` while a coordinator-content-repo skill
 still cited `bin/lint-frontmatter`).
 
 Every scenario uses tmp_path fixtures standing in for claude-klabauter's
-coordinator/bin/ and DoE-claude's coordinator/{skills,commands,hooks,
-pipelines} — never the operator's actual claude-klabauter/DoE-claude checkouts (see
+coordinator/bin/ and coordinator-content-repo's coordinator/{skills,commands,hooks,
+pipelines} — never the operator's actual claude-klabauter/coordinator-content-repo checkouts (see
 `check_fleet_reachability`'s explicit-override params). The skip-masking
 guard tests use monkeypatch instead of the real machine-local registry, so
-this suite's outcome does not depend on whether `repos.doe_claude` happens
+this suite's outcome does not depend on whether `repos.content_root` happens
 to be registered on the machine running it.
 
 Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 D3
@@ -48,13 +48,13 @@ def _write_claude_klabauter_oracle(agent_bin: Path, filename: str) -> None:
     (agent_bin / filename).write_text("#!/usr/bin/env python3\nprint('hi')\n")
 
 
-def _write_doe_fence(doe_root: Path, subdir: str, filename: str, body: str) -> None:
+def _write_doe_fence(content_root: Path, subdir: str, filename: str, body: str) -> None:
     """`filename` may itself be a nested relative path (e.g.
     `tests/some-doc.md`) to stand in for a real DoE sub-subdirectory -- the
     parent of the FINAL target path is created, not just `d`, so a nested
     `filename` lands correctly instead of raising on a missing intermediate
     directory."""
-    d = doe_root / "coordinator" / subdir
+    d = content_root / "coordinator" / subdir
     target = d / filename
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(body, encoding="utf-8")
@@ -62,13 +62,13 @@ def _write_doe_fence(doe_root: Path, subdir: str, filename: str, body: str) -> N
 
 def test_clean_no_missing_qualified_and_extensioned(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "foo.py")
     _write_claude_klabauter_oracle(agent_bin, "bar.js")
-    _write_doe_fence(doe_root, "skills", "SKILL.md", "Run `coordinator/bin/foo` then `coordinator/bin/bar.js`.")
+    _write_doe_fence(content_root, "skills", "SKILL.md", "Run `coordinator/bin/foo` then `coordinator/bin/bar.js`.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.skipped is False
@@ -77,20 +77,20 @@ def test_clean_no_missing_qualified_and_extensioned(tmp_path: Path):
 
 def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
     """The exact break shape: claude-klabauter's coordinator/bin/ has no
-    lint-frontmatter oracle in any form, but a DoE-claude skill still cites
+    lint-frontmatter oracle in any form, but a coordinator-content-repo skill still cites
     `coordinator/bin/lint-frontmatter` — the gate MUST fail loud, not warn."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "query-records.js")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "skills",
         "handoff-SKILL.md",
         "Validate with `coordinator/bin/lint-frontmatter.js --file \"$HANDOFF_FILE\"`.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert result.skipped is False
@@ -99,12 +99,12 @@ def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
 
 def test_extension_normalization_qualified_citation_matches_js_oracle(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "query-records.js")
-    _write_doe_fence(doe_root, "commands", "workday-start.md", "Run two `coordinator/bin/query-records` calls.")
+    _write_doe_fence(content_root, "commands", "workday-start.md", "Run two `coordinator/bin/query-records` calls.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -118,18 +118,18 @@ def test_non_oracle_subdir_and_placeholder_tokens_filtered(tmp_path: Path):
     filter deleted. Namespace-qualified to `coordinator/bin/lib/schema.js`
     so the "lib" subdir-name filter is the thing actually proven here."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "skills",
         "percolate-SKILL.md",
         "Every `coordinator/bin/...` CLI (`percolate-gate`, `publish`) is reached via "
         "`coordinator/bin/lib/schema.js` internals — no separate resolution needed.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     # "..." and "lib" (a subdir, not a CLI) must not surface as missing
     # oracles — only genuine bare-name citations count as demand, and this
@@ -140,13 +140,13 @@ def test_non_oracle_subdir_and_placeholder_tokens_filtered(tmp_path: Path):
 
 def test_hooks_and_pipelines_dirs_are_swept(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "present.py")
-    _write_doe_fence(doe_root, "hooks", "pre-commit.md", "Invokes `coordinator/bin/hook-only-tool`.")
-    _write_doe_fence(doe_root, "pipelines", "deep-research.md", "Invokes `coordinator/bin/pipeline-only-tool`.")
+    _write_doe_fence(content_root, "hooks", "pre-commit.md", "Invokes `coordinator/bin/hook-only-tool`.")
+    _write_doe_fence(content_root, "pipelines", "deep-research.md", "Invokes `coordinator/bin/pipeline-only-tool`.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert sorted(result.missing) == ["hook-only-tool", "pipeline-only-tool"]
@@ -160,12 +160,12 @@ def test_qualified_citation_trailing_period_does_not_swallow_punctuation(tmp_pat
     for a real, reachable oracle. Namespace-qualified (2026-07-27) so this
     stays a genuine demand under `_is_namespace_qualified_citation`."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "query-records.js")
-    _write_doe_fence(doe_root, "skills", "SKILL.md", "See coordinator/bin/query-records.")
+    _write_doe_fence(content_root, "skills", "SKILL.md", "See coordinator/bin/query-records.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -176,12 +176,12 @@ def test_cmd_extension_normalizes_to_match_claude_klabauter_oracle(tmp_path: Pat
     citation must normalize to the same stem as the `.py` claude-klabauter oracle,
     not false-positive as missing. Namespace-qualified (2026-07-27)."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "query-records.py")
-    _write_doe_fence(doe_root, "skills", "SKILL.md", "Windows: `coordinator/bin/query-records.cmd`.")
+    _write_doe_fence(content_root, "skills", "SKILL.md", "Windows: `coordinator/bin/query-records.cmd`.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -191,11 +191,11 @@ def test_missing_doe_subdir_is_not_an_error(tmp_path: Path):
     """A leaner DoE checkout missing e.g. pipelines/ entirely must not raise
     — the sweep skips absent subdirs rather than failing."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
     _write_claude_klabauter_oracle(agent_bin, "present.py")
-    (doe_root / "coordinator" / "skills").mkdir(parents=True)
+    (content_root / "coordinator" / "skills").mkdir(parents=True)
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
 
@@ -211,12 +211,12 @@ def test_reserved_name_on_disk_is_not_reported_missing(tmp_path: Path):
     fix restored disk-existence visibility independent of the
     forwarder-installability question."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "machine-local")
-    _write_doe_fence(doe_root, "skills", "SKILL.md", "Run `coordinator/bin/machine-local get repos.foo`.")
+    _write_doe_fence(content_root, "skills", "SKILL.md", "Run `coordinator/bin/machine-local get repos.foo`.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -237,12 +237,12 @@ def test_extra_oracle_dir_oracle_is_not_reported_missing(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin" / "coordinator" / "bin"
     repo_root_bin = tmp_path / "claude-klabauter-bin" / "bin"
     coordinator_lib = tmp_path / "claude-klabauter-bin" / "coordinator" / "lib"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(repo_root_bin, "claude-klabauter-doctor-probe.py")
     _write_claude_klabauter_oracle(coordinator_lib, "resolve-coordinator-clone.py")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "workday-start.md",
         "Written by claude-klabauter's `coordinator/bin/claude-klabauter-doctor-probe.py`; reached via "
@@ -252,7 +252,7 @@ def test_extra_oracle_dir_oracle_is_not_reported_missing(tmp_path: Path):
     result = fr.check_fleet_reachability(
         agent_bin=agent_bin,
         extra_oracle_dirs=[repo_root_bin, coordinator_lib],
-        doe_root=doe_root,
+        content_root=content_root,
     )
 
     assert result.ok is True
@@ -267,11 +267,11 @@ def test_extra_oracle_dirs_not_auto_populated_when_agent_bin_overridden(tmp_path
     name only present in a sibling dir the caller did not pass stays
     genuinely missing."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
-    _write_doe_fence(doe_root, "skills", "SKILL.md", "Run `coordinator/bin/claude-klabauter-doctor-probe.py` first.")
+    _write_doe_fence(content_root, "skills", "SKILL.md", "Run `coordinator/bin/claude-klabauter-doctor-probe.py` first.")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert result.missing == ["claude-klabauter-doctor-probe"]
@@ -287,17 +287,17 @@ def test_bare_citation_with_no_qualifier_is_not_demand(tmp_path: Path):
     NO on-disk entry anywhere, yet the gate must NOT fail, because the
     citation was never namespace-qualified."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "workday-start.md",
         "Repos with paired cross-repo writers ship a `bin/check-fixture-sync.sh` "
         "that byte-compares declared fixtures against sibling-repo copies.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -309,16 +309,16 @@ def test_qualified_citation_of_a_truly_absent_oracle_still_fails(tmp_path: Path)
     A genuinely NAMESPACE-QUALIFIED citation of an oracle with no live
     claude-klabauter entry anywhere and no ledger explanation still fails loud."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "install.md",
         "Per DR-047, claude-klabauter owns `coordinator/bin/shell-init-guard.py`, already ported.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert result.missing == ["shell-init-guard"]
@@ -335,17 +335,17 @@ def test_retired_artifact_backlink_bare_citation_is_not_demand(tmp_path: Path):
     without any prose interpretation of "no longer exists" / "formerly" --
     already excludes them from demand."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "install.md",
         "`bin/ensure-coordinator-venv.sh` no longer exists — it was deleted once "
         "venv provisioning was ported natively.",
     )
     _write_doe_fence(
-        doe_root,
+        content_root,
         "pipelines",
         "handoff-archival.md",
         "the guarded native call, formerly `bin/coordinator-handoff-archive.sh "
@@ -353,7 +353,7 @@ def test_retired_artifact_backlink_bare_citation_is_not_demand(tmp_path: Path):
         "claude-klabauter seam is absent.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -369,22 +369,22 @@ def test_excluded_file_class_citations_are_not_demand(tmp_path: Path):
     (`coordinator/hooks/tests/block-destructive-rm.security-review.md`, a
     code-review artifact, not a hook DoE ever tells an agent to invoke)."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_doe_fence(
-        doe_root,
+        content_root,
         "hooks",
         "tests/block-destructive-rm.security-review.md",
         "Reviewer note: consider adding `coordinator/bin/hypothetical-reviewer-only-tool`.",
     )
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "CHANGELOG.md",
         "- Added `coordinator/bin/hypothetical-changelog-only-tool` in this release.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -397,16 +397,16 @@ def test_review_named_skill_file_is_not_excluded(tmp_path: Path):
     (`commands/parallel-code-review.md`, `commands/enrich-and-review.md`).
     A citation inside one of those must still register as demand."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "parallel-code-review.md",
         "Dispatches reviewers via `coordinator/bin/parallel-review-gate-decision`.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert result.missing == ["parallel-review-gate-decision"]
@@ -420,18 +420,18 @@ def test_shebang_and_system_path_citations_are_not_demand(tmp_path: Path):
     install.md's bash-version-probe prose ("`#!/usr/bin/env bash`",
     "`/bin/bash`") and hook test fixtures' "#!/bin/sh" shebang literals."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "install.md",
         "Resolves via `#!/usr/bin/env bash` — check the PATH-resolved bash, not `/bin/bash`. "
         "A stray `#!/bin/sh` shebang mention too.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -445,17 +445,17 @@ def test_home_dir_bin_citations_are_not_demand(tmp_path: Path):
     indistinguishable from a real citation without recognizing the
     canonical `$HOME`/`~` home-directory markers."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "install.md",
         'Probe for it on PATH, falling back to `$HOME/bin/scc` (also `~/bin/scc`).',
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -477,18 +477,18 @@ def test_glob_wildcard_family_reference_is_not_demand(tmp_path: Path):
     Namespace-qualified so the glob-truncation filter is the thing actually
     proven here."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
     _write_doe_fence(
-        doe_root,
+        content_root,
         "commands",
         "update-docs.md",
         "Run every snippet-sync verifier (`coordinator/bin/verify-*-sync.sh` convention) and "
         "`coordinator/bin/wsc-*.sh`.",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -501,16 +501,16 @@ def test_non_markdown_file_is_not_swept(tmp_path: Path):
     DoE-internal test scaffolding, never a fenced Markdown demand -- the
     sweep must not treat arbitrary Python source as a citation surface."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
-    doe_hooks = doe_root / "coordinator" / "hooks"
+    doe_hooks = content_root / "coordinator" / "hooks"
     doe_hooks.mkdir(parents=True)
     (doe_hooks / "test_something.py").write_text(
         '"""(coordinator/bin/foo.sh) must NOT be swallowed."""\n', encoding="utf-8"
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is True
     assert result.missing == []
@@ -522,11 +522,11 @@ def test_ledger_retired_entry_explains_a_missing_name(tmp_path: Path):
     failure -- the natural join this gate's dispatch brief named as the
     likely right fix for a DoE-side stale citation of a retired artifact."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
     ledger_path = tmp_path / "relocation-ledger.json"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
-    _write_doe_fence(doe_root, "commands", "install.md", "Reached via `coordinator/bin/resolve-coordinator-clone`.")
+    _write_doe_fence(content_root, "commands", "install.md", "Reached via `coordinator/bin/resolve-coordinator-clone`.")
     ledger_path.write_text(
         json.dumps(
             {
@@ -544,7 +544,7 @@ def test_ledger_retired_entry_explains_a_missing_name(tmp_path: Path):
         encoding="utf-8",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root, ledger_path=ledger_path)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root, ledger_path=ledger_path)
 
     assert result.ok is True
     assert result.missing == []
@@ -556,18 +556,18 @@ def test_ledger_moved_entry_explains_a_missing_name(tmp_path: Path):
     residual-blind-spots note on what this gate does and does not verify
     about a `"moved"` entry's destination."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
     ledger_path = tmp_path / "relocation-ledger.json"
 
     _write_claude_klabauter_oracle(agent_bin, "unrelated.py")
-    _write_doe_fence(doe_root, "commands", "install.md", "Reached via `coordinator/bin/old-name.sh`.")
+    _write_doe_fence(content_root, "commands", "install.md", "Reached via `coordinator/bin/old-name.sh`.")
     ledger_path.write_text(
         json.dumps(
             {
                 "entries": [
                     {
                         "disposition": "moved",
-                        "old_repo": "coordinator-claude (DoE-claude)",
+                        "old_repo": "coordinator-claude (coordinator-content-repo)",
                         "old_path": "bin/old-name.sh",
                         "new_repo": "claude_klabauter",
                         "new_path": "coordinator/bin/new-name.py",
@@ -583,7 +583,7 @@ def test_ledger_moved_entry_explains_a_missing_name(tmp_path: Path):
         encoding="utf-8",
     )
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root, ledger_path=ledger_path)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root, ledger_path=ledger_path)
 
     assert result.ok is True
     assert result.missing == []
@@ -594,13 +594,13 @@ def test_ledger_silent_on_name_reports_genuine_missing(tmp_path: Path):
     unmet fleet demand -- the ledger must not manufacture coverage it
     was never given; this stays FAIL, exactly the pre-ledger contract."""
     agent_bin = tmp_path / "claude-klabauter-bin"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
     ledger_path = tmp_path / "relocation-ledger.json"
 
-    _write_doe_fence(doe_root, "commands", "install.md", "Reached via `coordinator/bin/genuinely-gone-tool`.")
+    _write_doe_fence(content_root, "commands", "install.md", "Reached via `coordinator/bin/genuinely-gone-tool`.")
     ledger_path.write_text(json.dumps({"entries": []}), encoding="utf-8")
 
-    result = fr.check_fleet_reachability(agent_bin=agent_bin, doe_root=doe_root, ledger_path=ledger_path)
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root, ledger_path=ledger_path)
 
     assert result.ok is False
     assert result.missing == ["genuinely-gone-tool"]
@@ -612,8 +612,8 @@ def test_skip_when_claude_klabauter_root_unresolvable(tmp_path: Path, monkeypatc
     `bin_inventory_gate.py` also consumes), so the unresolvable-root case is
     patched at ITS `coordinator_engine_root` import, not on `fr` directly.
     C14 renamed `coordinator_claude_klabauter_root` to `coordinator_engine_root`."""
-    doe_root = tmp_path / "doe"
-    doe_root.mkdir()
+    content_root = tmp_path / "doe"
+    content_root.mkdir()
 
     def _raise():
         raise RuntimeError("no claude-klabauter root")
@@ -622,17 +622,17 @@ def test_skip_when_claude_klabauter_root_unresolvable(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(oracle_surface, "coordinator_engine_root", _raise)
 
-    result = fr.check_fleet_reachability(doe_root=doe_root)
+    result = fr.check_fleet_reachability(content_root=content_root)
 
     assert result.ok is True
     assert result.skipped is True
 
 
-def test_skip_when_doe_root_unresolvable(tmp_path: Path, monkeypatch):
+def test_skip_when_content_root_unresolvable(tmp_path: Path, monkeypatch):
     agent_bin = tmp_path / "claude-klabauter-bin"
     agent_bin.mkdir()
 
-    monkeypatch.setattr(fr, "read_doe_root_pointer", lambda: "")
+    monkeypatch.setattr(fr, "read_content_root_pointer", lambda: "")
 
     result = fr.check_fleet_reachability(agent_bin=agent_bin)
 
@@ -640,10 +640,10 @@ def test_skip_when_doe_root_unresolvable(tmp_path: Path, monkeypatch):
     assert result.skipped is True
 
 
-def test_skip_masking_guard_noop_when_doe_claude_unregistered(monkeypatch):
+def test_skip_masking_guard_noop_when_content_root_unregistered(monkeypatch):
     monkeypatch.setattr(fr, "registry_get", lambda key: None)
     # Must not raise, regardless of what check_fleet_reachability would do —
-    # this persona (repos.doe_claude not registered) legitimately has
+    # this persona (repos.content_root not registered) legitimately has
     # nothing to compare.
     fr.assert_registered_implies_no_skip()
 
@@ -673,7 +673,7 @@ def test_skip_masking_guard_passes_when_registered_and_gate_ran(monkeypatch):
     fr.assert_registered_implies_no_skip()
 
 
-@pytest.mark.real_home  # live-tree oracle: resolves repos.doe_claude via the machine-local
+@pytest.mark.real_home  # live-tree oracle: resolves repos.content_root via the machine-local
 # registry, which the suite-root `_quarantine_real_home` autouse fixture would otherwise hide,
 # turning this into an unconditional skip. Read-only (registry lookup + delete-time sweep, no
 # writes), which is the marker's own sanctioned use per conftest.py's docstring.
@@ -683,25 +683,25 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
     a concurrent chunk mutating coordinator/bin/ elsewhere in this repo)."""
     from coordinator_core.machine_resolver import registry_get as real_registry_get
 
-    if not real_registry_get("repos.doe_claude"):
-        pytest.skip("repos.doe_claude not registered on this machine")
+    if not real_registry_get("repos.content_root"):
+        pytest.skip("repos.content_root not registered on this machine")
 
     fr.assert_registered_implies_no_skip()
 
 
-def _raw_bin_token_count(doe_root: Path) -> int:
+def _raw_bin_token_count(content_root: Path) -> int:
     """A deliberately unfiltered sibling of `fr._doe_demand_tokens` over the
     same swept subdirectories: every narrowing filter the production sweep
     applies (file-class exclusion, namespace-qualification, system-path
     exclusion, glob-truncation exclusion) is skipped here, so this count can
     only ever be >= the production `demand_count` and moves with this
-    machine's own DoE-claude corpus size rather than a value fixed at the
+    machine's own coordinator-content-repo corpus size rather than a value fixed at the
     time some other assertion was written. Exists only to give
     `test_live_tree_reachability_ok_on_this_machine_when_registered` a
     churn-tolerant regression floor -- never a stand-in for the production
     sweep's own precision."""
     names: set[str] = set()
-    coordinator_dir = fr.content_root_for(doe_root)
+    coordinator_dir = fr.content_root_for(content_root)
     if coordinator_dir is None:
         return 0
     for subdir in fr._SWEEP_SUBDIRS:
@@ -725,7 +725,7 @@ def _raw_bin_token_count(doe_root: Path) -> int:
 # Marked @pytest.mark.real_home as of 2026-07-27 (commit b1bc5789's own follow-up): the
 # remaining three false positives from the scan-side-widening pass -- check-fixture-sync,
 # coordinator-handoff-archive, ensure-coordinator-venv -- are now resolved and verified,
-# not fabricated. Each was confirmed against DoE-claude's actual citing lines (not
+# not fabricated. Each was confirmed against coordinator-content-repo's actual citing lines (not
 # guessed) to be a citation this gate SHOULD NOT treat as demand: check-fixture-sync is
 # a per-consumer-repo convention (`workday-start.md`'s "Repos ... ship a
 # `bin/check-fixture-sync.sh`"), and ensure-coordinator-venv / coordinator-handoff-archive
@@ -744,7 +744,7 @@ def _raw_bin_token_count(doe_root: Path) -> int:
 @pytest.mark.real_home
 def test_live_tree_reachability_ok_on_this_machine_when_registered():
     """The ONLY test in this file that
-    asserts `result.ok` against REAL (unmocked) claude-klabauter + DoE-claude disk
+    asserts `result.ok` against REAL (unmocked) claude-klabauter + coordinator-content-repo disk
     state, closing the gap where every content-asserting test above uses
     synthetic tmp_path fixtures and the pre-existing
     test_ci_no_silent_skip_on_this_machine_when_registered deliberately
@@ -752,13 +752,13 @@ def test_live_tree_reachability_ok_on_this_machine_when_registered():
     c79e66cd-shaped regression (an oracle deleted from coordinator/bin/
     while a real DoE fence still cites it) would pass this entire suite.
 
-    Gated on repos.doe_claude being registered (same skip-cleanly-otherwise
+    Gated on repos.content_root being registered (same skip-cleanly-otherwise
     pattern as test_ci_no_silent_skip_on_this_machine_when_registered) so
-    this cannot fail in an OSS-consumer checkout with no DoE-claude root."""
+    this cannot fail in an OSS-consumer checkout with no coordinator-content-repo root."""
     from coordinator_core.machine_resolver import registry_get as real_registry_get
 
-    if not real_registry_get("repos.doe_claude"):
-        pytest.skip("repos.doe_claude not registered on this machine")
+    if not real_registry_get("repos.content_root"):
+        pytest.skip("repos.content_root not registered on this machine")
 
     result = fr.check_fleet_reachability()
 
@@ -774,7 +774,7 @@ def test_live_tree_reachability_ok_on_this_machine_when_registered():
     # coverage a first-class, asserted fact instead of something visible
     # only in stdout.
     #
-    # A fixed floor here drifts with this machine's own DoE-claude corpus
+    # A fixed floor here drifts with this machine's own coordinator-content-repo corpus
     # size — a box with a leaner checkout than the one this assertion was
     # originally calibrated against trips a floor that was never actually
     # about THIS box's state. The floor is instead a fraction of
@@ -787,11 +787,11 @@ def test_live_tree_reachability_ok_on_this_machine_when_registered():
     # collapse `demand_count` far below this floor long before reaching
     # zero) while tolerating ordinary fleet churn (new/retired skills, doc
     # reshuffles) that moves both counts together.
-    raw_baseline = _raw_bin_token_count(fr._resolve_doe_root())
+    raw_baseline = _raw_bin_token_count(fr._resolve_content_root())
     floor = max(1, raw_baseline // 4)
     assert result.demand_count >= floor, (
         f"fleet-reachability demand sweep found only {result.demand_count} citation(s) against "
-        f"real DoE-claude disk state — expected >= {floor} (a quarter of the unfiltered baseline "
+        f"real coordinator-content-repo disk state — expected >= {floor} (a quarter of the unfiltered baseline "
         f"of {raw_baseline}); this is the vacuous-pass shape Finding 1 closes (a demand-filter "
         "regression could zero doe_demand and still report ok=True)"
     )

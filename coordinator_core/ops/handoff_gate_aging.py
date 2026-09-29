@@ -18,7 +18,7 @@ aging § Thresholds) into a single fail-loud tool call.
 
 RETIREMENT OF THE STANDALONE BATCH NAG (2026-07-27, docs/plans/2026-07-26-
 gate-resolution-widen-and-migrate.md § C16): `workday-start.md` Step 1.2 no
-longer force-invokes this module as a daily batch nag. Evidence: DoE-claude
+longer force-invokes this module as a daily batch nag. Evidence: coordinator-content-repo
 `state/audits/2026-07-27-gate-resolver-dry-run.md` (run label "post-C12c
 re-run") shows `coordinator_core.reconcile.gate_eval` already surfaces every
 `awaiting_gate` handoff that needs a human look on EVERY resolver pass,
@@ -70,7 +70,7 @@ for any direct/ad-hoc CLI run):
 `parse-error`; else rc 0. Never reached without the flag.
 
 Port of: handoff-gate-aging.sh (DoE 67202df6, 2026-07-16)
-Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C5c
+Spec backlink: coordinator-content-repo:pln-handoff-spinoff-machinery-robu-0d0f15 § C5c
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
 
 Negative-spec (STALE predicate, `check_one`/`scan`/`main` — pre-existing, unchanged):

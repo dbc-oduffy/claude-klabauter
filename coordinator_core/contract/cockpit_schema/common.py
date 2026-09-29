@@ -7,7 +7,7 @@ day-grained periods. Centralising these here keeps the emitted JSON Schema
 `format`/`pattern` hints consistent across every entity, mirroring the Zod
 source's own centralisation rationale.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

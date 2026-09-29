@@ -8,7 +8,7 @@ Before this, the door forwarded a fixed fifteen names and no override key was
 among them, so `COORDINATOR_OVERRIDE_*` / `COORDINATOR_ALLOW_*` set in a
 session arrived at the guard as "not requested": every Bash-guard override on
 the box read as a hard wall through the door, while the cold path honoured it
-(measured by doe-claude-79 against `hooks.preuse_bash_dispatch`).
+(measured by coordinator-content-repo-79 against `hooks.preuse_bash_dispatch`).
 
 Negative spec: does not run `door.c` (Windows-only; its binary legs are in
 `test_door_stamps_declared_env_set.py`), and does not re-test guard verdicts.

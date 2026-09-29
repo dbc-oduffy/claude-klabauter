@@ -157,6 +157,7 @@ from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
+from coordinator_core.machine_profile import feature_refusal
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet.archive_actioned_memos import memo_archive_dest
 from coordinator_core.ops.fleet._common import (
@@ -303,7 +304,7 @@ _SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
 _SENT_LEDGER_MAX_ROWS = 250
 
 #: The OTHER half of the bound, and the half that bites in most repos.
-#: claude-klabauter and DoE-claude are two halves of one delivery system and send
+#: claude-klabauter and coordinator-content-repo are two halves of one delivery system and send
 #: constantly, so the row cap above evicts for them every few days. Almost
 #: every other repo sends a handful of memos a month: 250 rows there is not
 #: 2.5 days, it is a year or more, and a row cap alone would leave those
@@ -652,7 +653,7 @@ def _compose_delivered_content(
 
     if not has_prose_body(body):
         # A scaffold composed and never written back. On 2026-08-19 one
-        # reached DoE-claude as frontmatter plus four empty comment blocks,
+        # reached coordinator-content-repo as frontmatter plus four empty comment blocks,
         # `summary:` holding a fragment of the draft warning itself; the four
         # items its title advertised existed nowhere and had to be re-sent.
         # Every OTHER required-field check here is a shape check the sender
@@ -1547,6 +1548,10 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         return validated  # exit_code:1 setup-error envelope
     dry_run, topic = validated
 
+    refusal = feature_refusal("cross_repo_memos")
+    if refusal:
+        return build_setup_error_result(_MODE, dry_run, refusal)
+
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
@@ -1708,7 +1713,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     except OSError:
         self_send = False
     if not dry_run and not self_send:
-        qualifiers = _repo_qualifier_names(all_repos)
+        sender_name = sender_worktree.name.lower()
+        qualifiers = _repo_qualifier_names(all_repos) | {sender_name}
         unqualified = _unqualified_path_citations(body, qualifiers)
         if unqualified:
             # Repo-qualify at send time rather than refuse-then-let-an-

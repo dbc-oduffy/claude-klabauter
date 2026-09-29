@@ -19,30 +19,30 @@ Two live layouts (mirrors coordinator_data_root.py's docstring):
                      migration DoE layout, and any OSS install that ships
                      both halves together). Free, no registration.
   2. Split-repo    — coordinator_core lives in claude-klabauter while the data
-                     dir stayed in DoE-claude. Resolve the DoE root via
-                     `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`.
+                     dir stayed in coordinator-content-repo. Resolve the DoE root via
+                     `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`.
 
 Rung 1 first so the co-located case costs nothing and needs no registration.
 
 Deliberate divergence from coordinator_data_root.py, not an oversight: rung 2
-here delegates to `coordinator_doe_root()` — the already-ratified, richer
-full-ladder DoE-root resolver (REPO_DOE_CLAUDE env override -> machine-local
-registry `repos.doe_claude` (canonical) -> `plugin.mirrors.coordinator-claude.
+here delegates to `coordinator_content_root()` — the already-ratified, richer
+full-ladder content-root resolver (REPO_CONTENT_ROOT env override -> machine-local
+registry `repos.content_root` (canonical) -> `plugin.mirrors.coordinator-claude.
 live_path` fallback -> the native `resolve_coordinator_clone` port, which itself
-covers the `.doe-root` pointer file and flat-layout rungs) that 9+ other
+covers the `.coordinator-content-root` pointer file and flat-layout rungs) that 9+ other
 coordinator_core callers already bind to — NOT
-`coordinator_core.doe_root_pointer.read_doe_root_pointer()` (a narrower 3-rung
+`coordinator_core.content_root_pointer.read_content_root_pointer()` (a narrower 3-rung
 resolver: registry -> durable-file -> legacy-file, with no env-var rung of its
 own) and NOT a re-implementation of coordinator_data_root.py's own
-`DOE_ROOT`-env + `coordinator_registry.doe_root()` chain. Re-deriving that
-DOE_ROOT-env check here would mint a SECOND override name for the same concept
+`CONTENT_ROOT`-env + `coordinator_registry.content_root()` chain. Re-deriving that
+CONTENT_ROOT-env check here would mint a SECOND override name for the same concept
 inside one process — worse than the cross-file naming divergence it would
-"fix". `REPO_DOE_CLAUDE` is coordinator_core's own already-established
-override convention (see `coordinator_core.ops.coordinator_doe_root`'s
+"fix". `REPO_CONTENT_ROOT` is coordinator_core's own already-established
+override convention (see `coordinator_core.ops.coordinator_content_root`'s
 docstring and its existing importers); this module reuses it rather than
 adding a competing one.
 
-Negative-spec: this module does NOT reimplement `coordinator_doe_root()`'s
+Negative-spec: this module does NOT reimplement `coordinator_content_root()`'s
 resolution chain (env -> registry -> mirror fallback -> clone-root port) —
 that chain lives in exactly one place, and this module calls it rather than
 duplicating it.
@@ -57,7 +57,7 @@ Public API:
 
 Spec backlink: cross-repo/archive/2026-07-22-claude-central-em-executable-surface-migrated-and-76-op-ask.md
                (the originating memo; in cross-repo/inbox/ until the boot sweep moves it)
-DR backlink:   docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md (DoE-side)
+DR backlink:   docs/decisions/DR-047-content-engine-boundary-redraw-contract-vs-e.md (DoE-side)
 Sibling:       coordinator/bin/lib/coordinator_data_root.py (bin/-side twin; the two
                modules MUST stay behaviorally consistent for the same dir_name,
                modulo the env-override-name divergence documented above)
@@ -67,19 +67,19 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
     # The publish pre-swap FUNCTION gate imports this file as a FLAT, top-level
     # `data_root` module in a hermetic, OSS-shaped subprocess whose PYTHONPATH is
     # `coordinator_core` package to import through there BY CONSTRUCTION, so a
-    coordinator_doe_root = None  # type: ignore[assignment]
+    coordinator_content_root = None  # type: ignore[assignment]
 
 
-def _resolve_doe_root():
-    resolver = coordinator_doe_root
+def _resolve_content_root():
+    resolver = coordinator_content_root
     if resolver is None:
-        from coordinator_core.ops.coordinator_doe_root import (  # noqa: PLC0415
-            coordinator_doe_root as resolver,
+        from coordinator_core.ops.coordinator_content_root import (  # noqa: PLC0415
+            coordinator_content_root as resolver,
         )
     return resolver()
 
@@ -101,7 +101,7 @@ def _colocated_root() -> Path:
     — a DIFFERENT namespace than the bin/lib twin, which resolves
     `<repo>/coordinator/<dir_name>`. For `dir_name="docs"` that silently
     returned claude-klabauter's OWN `docs/` tree (which exists) instead of ever
-    consulting DoE-claude's `coordinator/docs/` — no error, just the wrong
+    consulting coordinator-content-repo's `coordinator/docs/` — no error, just the wrong
     answer. See `coordinator_core/test_data_root.py`'s parity test.
     """
     return Path(__file__).resolve().parent.parent / "coordinator"
@@ -115,11 +115,11 @@ def data_root(dir_name: str) -> Path:
       1. Co-located — `<coordinator-root>/<dir_name>`, where `<coordinator-
          root>` is computed identically to `_colocated_root()` above. Free,
          no registration, wins whenever both halves ship together.
-      2. DoE-resident — `<coordinator_doe_root()>/coordinator/<dir_name>`
-         (private layout), falling back to `<coordinator_doe_root()>/<dir_name>`
+      2. DoE-resident — `<coordinator_content_root()>/coordinator/<dir_name>`
+         (private layout), falling back to `<coordinator_content_root()>/<dir_name>`
          (OSS-flat layout, F2 fix 2026-08-08 -- see below), delegating the
-         REPO_DOE_CLAUDE/registry/mirror/clone-root resolution to
-         `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`
+         REPO_CONTENT_ROOT/registry/mirror/clone-root resolution to
+         `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`
          (never reimplemented here — see module docstring).
 
     Raises RuntimeError, naming `dir_name` and all candidate paths tried
@@ -130,14 +130,14 @@ def data_root(dir_name: str) -> Path:
     if colocated.is_dir():
         return colocated
 
-    doe = _resolve_doe_root()
+    doe = _resolve_content_root()
     if not doe:
         raise RuntimeError(
             f"coordinator_core.data_root: cannot resolve data dir {dir_name!r}. "
             f"Rung 1 (co-located) tried: {colocated} (not found). "
-            "Rung 2 (DoE-resident) failed: coordinator_doe_root() could not "
-            "resolve REPO_DOE_CLAUDE (env override, machine-local registry "
-            "repos.doe_claude, plugin.mirrors.coordinator-claude.live_path, "
+            "Rung 2 (DoE-resident) failed: coordinator_content_root() could not "
+            "resolve REPO_CONTENT_ROOT (env override, machine-local registry "
+            "repos.content_root, plugin.mirrors.coordinator-claude.live_path, "
             "and the resolve_coordinator_clone fallback all unresolved)."
         )
 

@@ -7,7 +7,7 @@ subcommand (over the `coordinator/bin/review-findings-ledger.py` trampoline,
 rejection call, or to widen the write-target set a confined reviewer may
 touch.
 
-SPEC: DoE-claude `docs/plans/2026-09-26-retire-review-integrator.md`, row M3
+SPEC: coordinator-content-repo `docs/plans/2026-09-26-retire-review-integrator.md`, row M3
 (§ Contract's `reject`/`targets` subcommand text; § Design decision 1 for why
 `targets` widens what `write_guards.block_confined_agent_write` (M1) admits).
 

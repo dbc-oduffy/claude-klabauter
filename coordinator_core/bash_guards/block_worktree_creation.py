@@ -97,12 +97,12 @@ Observed live 2026-07-29 -- a dispatched reviewer's findings heredoc, which
 named this file by filename and quoted a `git worktree add` example, was
 denied while persisting via the sanctioned Bash-redirect path. See
 `state/bug-backlog/2026-07-29-worktree-guard-false-denies-documents-naming-
-guard-files.yaml` (DoE-claude) for the incident. Anti-bypass: an interpreter
+guard-files.yaml` (coordinator-content-repo) for the incident. Anti-bypass: an interpreter
 FED by a heredoc (`bash <<'EOF' ... EOF`) is untouched by this strip -- the
 residual `bash <<'EOF'` line survives stripping and a real `git worktree
 add` invocation outside the heredoc body still denies exactly as before.
 
-Spec: fleet-wide structural git-worktree ban, main-loop leg (DoE-claude
+Spec: fleet-wide structural git-worktree ban, main-loop leg (coordinator-content-repo
 dispatch, 2026-07-28) -- companion to `block_subagent_destructive_action.py`'s
 pre-existing identity-gated `git worktree add` denial.
 

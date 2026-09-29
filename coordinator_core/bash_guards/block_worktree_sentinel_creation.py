@@ -19,7 +19,7 @@ approval sentinel.
 
 This guard closes the Bash-level leg for the worktree sentinel. The
 file-write leg (Write/Edit/MultiEdit/NotebookEdit) is closed separately in
-DoE-claude's `coordinator/hooks/scripts/guard-worktree-sentinel-write.py`.
+Coordinator-content-repo's `coordinator/hooks/scripts/guard-worktree-sentinel-write.py`.
 
 NOT IDENTITY-GATED -- fires for every caller, EM included, same posture as
 `block_approval_sentinel_creation.py` and `block_worktree_creation.py`: the
@@ -61,23 +61,30 @@ message discipline). Leads with the sanctioned alternative (scoped-parallel
 dispatch into the same tree), then names PM permission as the path to
 genuine branch-level isolation.
 
-Spec: git-worktree-ban sentinel un-creatable-by-agent guard (DoE-claude
+Spec: git-worktree-ban sentinel un-creatable-by-agent guard (coordinator-content-repo
 dispatch, 2026-07-28) -- companion to the sibling DoE-side hooks that read
 this sentinel to gate the worktree ban's override.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
-    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     SentinelCreationDetector,
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards.block_subagent_destructive_action import (
+    _normalize_executable_basename,
+    _tokenize_full_command,
+)
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
+from coordinator_core.machine_profile import LEVEL_VERB, apply_guard_level
+
+GUARD_NAME = "block-worktree-sentinel-creation"
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -88,6 +95,98 @@ PRIORITY = 41
 _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
+
+_RISK_DIRECT = (
+    "this command creates or modifies the worktree-ban override file, which "
+    "only the PM may create; an agent creating it grants itself worktree isolation."
+)
+_RISK_INDIRECTION = (
+    "this command's payload runs through an interpreter, stdin or xargs "
+    "wrapper the guard could not read, so it might create the worktree-ban "
+    "override file (PM-created only) unseen."
+)
+
+#: Heads that cannot write a file (no redirects except to /dev/null are
+#: allowed alongside them). `sh`/`bash` qualify only in the `-c <payload>`
+#: form, whose payload is checked in turn.
+_READ_ONLY_HEADS = frozenset(
+    {
+        "jq", "cat", "echo", "printf", "head", "tail", "grep", "wc", "sort",
+        "uniq", "cut", "tr", "ls", "stat", "test", "[", "true", "false",
+        "pwd", "basename", "dirname", "date", "printenv",
+    }
+)
+_SHELL_HEADS = frozenset({"sh", "bash", "dash"})
+_OUT_REDIRECT_RE = re.compile(r"^\d*>{1,2}(?P<rest>.*)$")
+_CMD_SUBST_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+_PREFIX_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_MAX_READ_ONLY_DEPTH = 3
+
+
+def _tokens_are_read_only(cmd: str, depth: int) -> bool:
+    if depth > _MAX_READ_ONLY_DEPTH:
+        return False
+    tokens = _tokenize_full_command(cmd)
+    if not tokens:
+        return False
+    segment: List[str] = []
+    segments: List[List[str]] = []
+    for tok in tokens:
+        if tok in ("|", "||", "&&", ";", "&", "\n"):
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(tok)
+    if segment:
+        segments.append(segment)
+    return bool(segments) and all(_segment_is_read_only(seg, depth) for seg in segments)
+
+
+def _segment_is_read_only(seg: List[str], depth: int) -> bool:
+    i = 0
+    while i < len(seg) and _PREFIX_ASSIGN_RE.match(seg[i]):
+        i += 1
+    if i >= len(seg):
+        return False
+    head = _normalize_executable_basename(seg[i])
+    rest = seg[i + 1 :]
+    j = 0
+    while j < len(rest):
+        m = _OUT_REDIRECT_RE.match(rest[j])
+        if m:
+            target = m.group("rest")
+            if not target and "&" not in rest[j]:
+                j += 1
+                target = rest[j] if j < len(rest) else ""
+            if target not in ("/dev/null", "&1", "&2") and not target.startswith("&"):
+                return False
+        elif "<(" in rest[j] or ">(" in rest[j]:
+            return False
+        j += 1
+    for tok in seg:
+        for m in _CMD_SUBST_RE.finditer(tok):
+            if not _tokens_are_read_only(m.group(1) or m.group(2) or "", depth + 1):
+                return False
+    if head in _READ_ONLY_HEADS:
+        return True
+    if head in _SHELL_HEADS:
+        if len(rest) >= 2 and rest[0] == "-c":
+            payload = rest[1]
+            inner = _CMD_SUBST_RE.fullmatch(payload)
+            if inner:
+                return True
+            return "$(" not in payload and _tokens_are_read_only(payload, depth + 1)
+        return False
+    return False
+
+
+def is_read_only_compound(cmd: str) -> bool:
+    """True when `cmd` names no override file and every command in it (pipes,
+    `sh -c` literals, `$(...)` substitutions) is a non-writing read."""
+    if ".coordinator-override-worktree" in cmd:
+        return False
+    return _tokens_are_read_only(cmd, 0)
 
 
 def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
@@ -106,16 +205,18 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
-            "[worktree guard] BLOCKED: interpreter/stdin/xargs indirection "
-            "this guard cannot examine -- NOT because the payload was "
-            "found to touch the sentinel. Shape: %s\n\n%s"
-            % (safe_shape, INDIRECTION_REMEDY)
+            "BLOCKED (override-file guard): payload unreadable (%s); it "
+            "might create the PM-only worktree-ban override file unseen.\n\n"
+            "Use instead: read-only commands (`jq`, `cat`, `echo`, `grep`, "
+            "`head`, `ls`, no file redirect), directly or in `sh -c`; "
+            "`./path/to/script.sh` if executable with a shebang.\n\n"
+            "Lower this guard: `%s`." % (safe_shape, LEVEL_VERB)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
-        "BLOCKED: this command would create or modify a "
-        "worktree-ban override file; agents cannot self-grant. Dispatch "
-        "scoped-parallel edits instead; isolation needs EM+PM approval."
+        "BLOCKED: creates/modifies a worktree-ban override file. Use "
+        "scoped-parallel edits instead; isolation needs EM+PM.\n\n"
+        "Lower it: `%s`." % LEVEL_VERB
     )
 
 
@@ -153,10 +254,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not deny:
         return None
 
-    return {
+    if reason_class == REASON_INDIRECTION and is_read_only_compound(cmd):
+        return None
+
+    envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
         }
     }
+    risk = _RISK_INDIRECTION if reason_class == REASON_INDIRECTION else _RISK_DIRECT
+    return apply_guard_level(GUARD_NAME, envelope, risk=risk[0].upper() + risk[1:])

@@ -118,7 +118,7 @@ _METADATA_KEYS = frozenset({
     # vocabulary (49 members: 46 coordinator command verbs plus
     # `other-command`, `hand-authored`, `unresolved`), each carrying a
     # `group` for consumer-side facet grouping. Authored and owned in
-    # DoE-claude and vendored here with handoff.schema.json 7.1.0 — a
+    # coordinator-content-repo and vendored here with handoff.schema.json 7.1.0 — a
     # DECLARATION consumed by readers and a parity test on their side, never
     # a value-shape constraint this validator could enforce. Deliberately
     # single-point: re-enumerating the vocabulary on this side would create a
@@ -129,7 +129,7 @@ _METADATA_KEYS = frozenset({
     # Declares which sibling repos read this schema's records as an external
     # contract (e.g. research-claim.schema.json's `["example-market-data-repo"]`)
     # — annotation for humans/memos, not a value-shape constraint. See
-    # DoE-claude coordinator/docs/wiki/coordinator-tripwires.md
+    # coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md
     # "RESEARCH-CLAIMS-JSON-IS-AN-EXTERNAL-CONTRACT".
     "x-external-consumers",
     # Declares the markdown body sections expected BELOW the frontmatter

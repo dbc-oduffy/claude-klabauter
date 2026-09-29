@@ -18,7 +18,7 @@ the translated match expression rejects a differently-cased name that a
 naively-`fnmatch.fnmatch`'d version would have accepted on Windows.
 
 Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-
-storms.md row BX-16 (DoE-claude); sibling fidelity fix to this same
+storms.md row BX-16 (coordinator-content-repo); sibling fidelity fix to this same
 dispatch's grep-dialect-conflation correction
 (`test_bx16_grep_dialect_fidelity.py`).
 """
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import fnmatch
 
+from coordinator_core.bash_guards import find_exec_rewrite as fer
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
 
@@ -37,7 +38,7 @@ def test_find_exec_rewrite_uses_fnmatchcase_not_fnmatch():
         "only_files": True,
         "exec_argv": ["rm"],
     }
-    rewrite = dc._bt_find_exec_python_rewrite(parsed)
+    rewrite = fer._bt_find_exec_python_rewrite(parsed)
     assert "fnmatch.fnmatchcase(fn," in rewrite
     assert "fnmatch.fnmatch(fn," not in rewrite
 

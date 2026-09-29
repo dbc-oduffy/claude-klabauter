@@ -34,7 +34,7 @@ era ported from coordinator/bin/query-records.js (2026-07-22, see
 schema_validate.py build_type_to_glob for the line-cited registry-derivation
 port).
 Spec backlink: docs/plans/2026-06-23-deliverable-type-schema-taxonomy.md
-§ Decision 3 + C4 (DoE-claude repo).
+§ Decision 3 + C4 (coordinator-content-repo repo).
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
 import from the DoE-side polyglot trampoline (template-variant #1, mirrors
@@ -119,9 +119,9 @@ _DELIBERATE_DIVERGENCES = frozenset(
      "cross-repo-memo.schema.json", "handoff-archived.schema.json"}
 )
 
-# DR-047 schema-format-migration note (2026-07, DoE-claude commit 758de78b
+# DR-047 schema-format-migration note (2026-07, coordinator-content-repo commit 758de78b
 # "schema: migrate 8 legacy .yaml schemas to first-class .schema.json"):
-# DoE-claude's live schemas/ dir has since migrated ALL schema files from
+# coordinator-content-repo's live schemas/ dir has since migrated ALL schema files from
 # schemas/*.yaml to schemas/*.schema.json (JSON Schema, applies_to: still a
 # top-level string field, now JSON-quoted rather than YAML-bare). Both
 # extensions are recognised here so the gate keeps working across the

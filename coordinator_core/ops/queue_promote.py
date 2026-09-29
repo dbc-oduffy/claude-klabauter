@@ -2,13 +2,13 @@
 coordinator_core.ops.queue_promote — lessons-outbox appender (queue.promote op).
 
 Purpose: Port of coordinator-lesson-promote. Writes ONE YAML entry to
-``<doe_root>/state/lessons-outbox/<ISO-ts-safe>-<slug>.yaml`` for drain by the
-/learn-lessons --central procedure. DoE-claude is the central lessons repo — the
+``<content_root>/state/lessons-outbox/<ISO-ts-safe>-<slug>.yaml`` for drain by the
+/learn-lessons --central procedure. Coordinator-content-repo is the central lessons repo — the
 outbox is NOT claude-klabauter-rooted (see the "Claude-Klabauter root" note below, corrected
-2026-07-22 after 72 outbox YAMLs from a DoE-claude session landed in claude-klabauter's own
+2026-07-22 after 72 outbox YAMLs from a coordinator-content-repo session landed in claude-klabauter's own
 ``state/lessons-outbox/`` — cross-repo contamination from a misrouted root).
 
-Byte-parity target: ``[DoE-claude] coordinator/bin/coordinator-lesson-promote``.
+Byte-parity target: ``[coordinator-content-repo] coordinator/bin/coordinator-lesson-promote``.
 
 This is a DISTINCT writer op from ``queue.append``. Its write contract diverges
 materially (design decision, strang-08 Design decisions section):
@@ -24,8 +24,8 @@ materially (design decision, strang-08 Design decisions section):
     - Write:       upgraded to atomic temp+os.replace (non-observable output-byte change;
                    legacy was plain open() — atomicity is safe to add, not a parity break).
     - Env override: ``LESSON_PROMOTE_OUTBOX_ROOT`` (not QUEUE_APPEND_OUTPUT_ROOT).
-    - DoE root: NO cwd fallback on unresolvable DoE-claude root (C12 negative-spec,
-      mirrored onto the DoE-rooted seam — same negative-spec as the claude-klabauter-rooted
+    - DoE root: NO cwd fallback on unresolvable coordinator-content-repo root (C12 negative-spec,
+      mirrored onto the ContentRooted seam — same negative-spec as the claude-klabauter-rooted
       queue.append central scope, just against the DoE resolver instead).
 
 Output path: ``<outbox_root>/<ISO-ts-safe>-<slug>-<digest12>.yaml``
@@ -43,16 +43,16 @@ No in-memory state retained (store-less-ness invariant).
 
 Caller repo_root threading (F1): handler third arg receives ``git_common_dir(caller_worktree)``
 via ``_OP_KEY_SCOPE: common_dir`` (ipc.py). The outbox root always routes to the
-DoE-claude central root (lessons-outbox is central state owned by DoE-claude, NOT
+Coordinator-content-repo central root (lessons-outbox is central state owned by coordinator-content-repo, NOT
 Claude-klabauter — claude-klabauter is just one of many senders), so ``caller_worktree`` is not used for
-path routing — but the DoE-claude root MUST be resolvable; unresolvable → WARN+skip
+path routing — but the coordinator-content-repo root MUST be resolvable; unresolvable → WARN+skip
 exit 0.
 
 Registered as ``queue.promote`` in ops/__init__.py and classified ``OpClass.MUTATING``
 in authz/classification.py (same dispatch, strang-08 C1+C2).
 
 Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C2
-Parity oracle: [DoE-claude] coordinator/bin/coordinator-lesson-promote
+Parity oracle: [coordinator-content-repo] coordinator/bin/coordinator-lesson-promote
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 """
 
@@ -76,7 +76,7 @@ from typing import Optional
 from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 from coordinator_core.frontmatter.schema_validate import describe as _describe_schema
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.telemetry import op_latency
 
@@ -100,7 +100,7 @@ def _is_oss_publish_mirror(root: str) -> bool:
     """True if `root` carries the OSS publish-mirror marketplace marker
     (``.claude-plugin/plugin.json``) — the SAME marker
     ``coordinator_core._content_root_primitive.FLAT_CONTENT_ROOT_MARKER``
-    and ``coordinator_doe_root.py``'s own flat-layout/marketplace-cache/
+    and ``coordinator_content_root.py``'s own flat-layout/marketplace-cache/
     plugin-root rungs already use to recognize a marketplace-clone/OSS-mirror
     layout. Reused rather than a second hand-rolled probe
     (claude-klabauter#39 asks for exactly this reuse).
@@ -139,25 +139,25 @@ def _outbox_root_override() -> "str | None":
     return override
 
 
-def _outbox_root(doe_root: Optional[str] = None) -> str:
+def _outbox_root(content_root: Optional[str] = None) -> str:
     """Return the lessons-outbox directory path.
 
     Resolution:
         1. ``LESSON_PROMOTE_OUTBOX_ROOT`` env var (test isolation).
-        2. ``<doe_root>/state/lessons-outbox/`` for a caller-resolved ``doe_root``
+        2. ``<content_root>/state/lessons-outbox/`` for a caller-resolved ``content_root``
            param — the CLI resolves the root once (honouring the CALLER's
-           ``DOE_ROOT``) and validates ``--target-wiki`` against that same root, so
+           ``CONTENT_ROOT``) and validates ``--target-wiki`` against that same root, so
            the write must land there too (claude-klabauter#33). Read as a param,
            never from this process's env: under the warm engine that env belongs
            to whichever session spawned the server.
-        3. ``<doe_root>/state/lessons-outbox/`` via ``coordinator_doe_root()`` — the
-           lessons-outbox is central state owned by DoE-claude (the central lessons
+        3. ``<content_root>/state/lessons-outbox/`` via ``coordinator_content_root()`` — the
+           lessons-outbox is central state owned by coordinator-content-repo (the central lessons
            repo), NOT claude-klabauter. Matches the documented CLI oracle contract
            (``coordinator-lesson-promote``'s ``_outbox_root()``, which resolves via
-           ``coordinator_registry.doe_root()``).
+           ``coordinator_registry.content_root()``).
 
     Raises:
-        _DoeUnresolvable — when the DoE-claude root is unresolvable and no env override.
+        _DoeUnresolvable — when the coordinator-content-repo root is unresolvable and no env override.
         _OssMirrorWriteRefused (a _DoeUnresolvable subclass) — when the resolved root
             is the OSS publish mirror, not a working tree (claude-klabauter#39).
 
@@ -166,18 +166,18 @@ def _outbox_root(doe_root: Optional[str] = None) -> str:
     mirrored here against the DoE-side resolver.
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C12 / AC13
-    Parity oracle: [DoE-claude] coordinator/bin/coordinator-lesson-promote § _outbox_root
+    Parity oracle: [coordinator-content-repo] coordinator/bin/coordinator-lesson-promote § _outbox_root
     """
     override = _outbox_root_override()
     if override:
         return override
-    doe = doe_root or coordinator_doe_root()
+    doe = content_root or coordinator_content_root()
     if doe is None:
         raise _DoeUnresolvable(
-            "repos.doe_claude not set in machine-local registry and REPO_DOE_CLAUDE env var not set"
+            "repos.content_root not set in machine-local registry and REPO_CONTENT_ROOT env var not set"
         )
     if _is_oss_publish_mirror(doe):
-        source = "caller-resolved doe_root param" if doe_root else "repos.doe_claude machine-local registry key"
+        source = "caller-resolved content_root param" if content_root else "repos.content_root machine-local registry key"
         raise _OssMirrorWriteRefused(
             f"refusing to write lessons-outbox into {doe!r}: found the OSS publish-mirror "
             f"marker .claude-plugin/plugin.json there (resolved via {source}) — the OSS "
@@ -310,7 +310,7 @@ def promote_lesson(
     caller_worktree: Optional[Path] = None,
     entry_id: Optional[str] = None,
     created: Optional[str] = None,
-    doe_root: Optional[str] = None,
+    content_root: Optional[str] = None,
 ) -> dict:
     _validate_change_kind(change_kind)
 
@@ -325,7 +325,7 @@ def promote_lesson(
         else:
             from_repo = "unknown-sender-em"
 
-    outbox = _outbox_root(doe_root)
+    outbox = _outbox_root(content_root)
     os.makedirs(outbox, exist_ok=True)
 
     fields: dict = {
@@ -399,7 +399,7 @@ def _queue_promote_handler(
 
     Optional params:
         scope_tags (list or comma-separated str), evidence (str), from_repo (str),
-        doe_root (str — the caller's resolved DoE root; see ``_outbox_root``).
+        content_root (str — the caller's resolved DoE root; see ``_outbox_root``).
 
     Returns:
         {out_path: str, entry_id: str, from_repo: str, change_kind: str, target_wiki: str}
@@ -428,13 +428,13 @@ def _queue_promote_handler(
             evidence=evidence,
             from_repo=params.get("from_repo"),
             caller_worktree=caller_worktree,
-            doe_root=params.get("doe_root") or None,
+            content_root=params.get("content_root") or None,
         )
     except _DoeUnresolvable as exc:
         logger.warning(
-            "queue.promote: DoE-claude root unresolvable — skipping write: %s. "
-            "Remediation: set REPO_DOE_CLAUDE or run "
-            "'machine-local set repos.doe_claude /path/to/DoE-claude'.",
+            "queue.promote: coordinator-content-repo root unresolvable — skipping write: %s. "
+            "Remediation: set REPO_CONTENT_ROOT or run "
+            "'machine-local set repos.content_root /path/to/coordinator-content-repo'.",
             exc,
         )
         return {"skipped": True, "reason": str(exc)}

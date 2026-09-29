@@ -248,12 +248,12 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     anchor = _init_repo(tmp_path, "anchor")
-    doe_root = _init_repo(tmp_path, "doe-claude")
+    content_root = _init_repo(tmp_path, "coordinator-content-repo")
     reg_dir = tmp_path / "registry"
     _write_registry(reg_dir)
     session_id = "sess-parity-lessons-outbox"
 
-    lessons_dir = doe_root / "state" / "lessons-outbox"
+    lessons_dir = content_root / "state" / "lessons-outbox"
     lessons_dir.mkdir(parents=True)
     lessons_file = lessons_dir / "some-lesson.yaml"
     lessons_file.write_text("id: x\n", encoding="utf-8")

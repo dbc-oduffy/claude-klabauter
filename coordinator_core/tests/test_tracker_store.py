@@ -3968,7 +3968,7 @@ _COCKPIT_SKIP_REASON = (
 def _cockpit_conformance_vectors_path():
     """Resolve cockpit's live conformance fixture via the machine-local
     registry (the same direct-tomllib ``registry_get`` seam
-    ``doe_root_pointer.py`` binds ``repos.doe_claude`` reads to — reused
+    ``content_root_pointer.py`` binds ``repos.content_root`` reads to — reused
     here rather than authoring a second resolver). Returns the resolved
     ``Path`` or ``None`` if the clone or the fixture file can't be found.
     """

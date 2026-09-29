@@ -135,7 +135,7 @@ Reuse (no reimplementation of tested internals):
     directly, not through this op).
   - coordinator_core.ops.fleet._common.handoff_archive_dest / archive_and_commit / Move
 
-Terminal-state precondition (DoE-claude, 2026-07-26, plan C7): the git-mv
+Terminal-state precondition (coordinator-content-repo, 2026-07-26, plan C7): the git-mv
 block at the tail of this op (all modes that reach it — chain, stamp_shipped,
 supersede; stamp_only never reaches it, it returns before the move) is now
 gated on the CANDIDATE'S OWN on-disk deployment_state already being terminal
@@ -708,7 +708,7 @@ def _attested_succession_refusal(
     # `status: open` by construction. Full reasoning: DR-242 section 7 header.
     #
     # Negative-spec: do NOT "restore" a literal clause-2 check. It looks like
-    # fidelity to A2 and it reintroduces the DoE-claude defect;
+    # fidelity to A2 and it reintroduces the coordinator-content-repo defect;
     # `test_admits_a_never_claimed_predecessor_and_a_freshly_minted_successor`
     # is the pin. Clause 3 below is FAIL-CLOSED on the id pair to carry the
     # exclusion clause 2 was doing.
@@ -1029,7 +1029,7 @@ def _supersede_continued(
         # pickup_ready → false (§ pickup_ready cleared on supersede).
         # `continued` is a terminal deployment_state, so the same "two fields
         # are one logical state" reasoning that closed this hazard on `close`
-        # (2026-08-10, cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-
+        # (2026-08-10, cross-repo/inbox/2026-08-10-coordinator-content-repo-em-reconcile-
         # close-terminal-and-scrub-key.md § 1) and on `ship`
         # (handoff_transition._ship § pickup_ready cleared on ship) applies
         # here — a superseded baton left advertising pickup_ready:true is the
@@ -1610,7 +1610,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     superseded = False
 
     # ------------------------------------------------------------------
-    # successor_path resolution (DoE-claude, 2026-07-26) — resolves the
+    # successor_path resolution (coordinator-content-repo, 2026-07-26) — resolves the
     # SUCCESSOR's own sha internally, BEFORE the scope-derived-selection
     # warning below (so that warning correctly no-ops once resolution
     # succeeds — stamp_kind is no longer "scope-derived" at that point).
@@ -1648,7 +1648,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 mode,
             )
 
-    # DR-096 (DoE-claude, 2026-07-26): scope-derivation is retired as the
+    # DR-096 (coordinator-content-repo, 2026-07-26): scope-derivation is retired as the
     # PREFERRED write-time strategy but survives as a narrowing legacy path
     # here — this op has no `--sha` call shape, so every stamp attempt with
     # no caller-supplied sha silently fell into `kind="scope-derived"`

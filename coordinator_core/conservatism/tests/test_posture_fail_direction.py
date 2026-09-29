@@ -1,6 +1,6 @@
 """
 Behavioural pin for the fail direction of
-`DoE-claude coordinator/hooks/scripts/_posture.py`.
+`coordinator-content-repo coordinator/hooks/scripts/_posture.py`.
 
 This file exists because that module's docstring declares its direction
 load-bearing -- "an unreadable identity file degrades to 'change nothing',
@@ -9,12 +9,12 @@ gap; this is the assertion.
 
 Read the vocabulary note in `coordinator_core.conservatism`'s docstring first.
 These tests assert the BEHAVIOUR and never the name of the anchor constant
-`_posture.py` carries -- a rename on their side (e.g. DoE-claude 4026b4250,
+`_posture.py` carries -- a rename on their side (e.g. Coordinator-content-repo 4026b4250,
 `_FAIL_OPEN_POSTURE` -> `_MOST_CAUTIOUS_POSTURE`) does not need an edit here.
 
 Why it lives in claude-klabauter's tree and not DoE's: this baton's anti-scope forbids
-authoring in `DoE-claude`, and the assertion does not need to. It resolves the
-sibling root through the existing `coordinator_doe_root` ladder (~39ms, no
+authoring in `coordinator-content-repo`, and the assertion does not need to. It resolves the
+sibling root through the existing `coordinator_content_root` ladder (~39ms, no
 spawn on a registered box) and loads the module by path -- the same
 import-by-path shape claude-klabauter already uses for `frontmatter/schema_validate.py`.
 It SKIPS rather than fails when the sibling is unresolvable, because an
@@ -31,13 +31,13 @@ import sys
 
 import pytest
 
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 _ANCHOR = "precision"
 
 
 def _load_posture():
-    root = coordinator_doe_root()
+    root = coordinator_content_root()
     if not root:
         pytest.skip("coordinator-claude sibling root unresolvable on this box")
     path = os.path.join(root, "coordinator", "hooks", "scripts", "_posture.py")

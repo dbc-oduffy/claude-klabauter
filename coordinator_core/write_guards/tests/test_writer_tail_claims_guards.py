@@ -47,7 +47,7 @@ def test_capture_guard_forensics_claims_its_dump_through_the_seam(tmp_path, monk
     monkeypatch.setenv(_SESSION_ENV_VAR, sid)
 
     payload = {"tool_name": "Edit", "tool_input": {"file_path": str(repo / "state" / "handoffs" / "x.md")}, "cwd": str(repo)}
-    forensics = {"doe_root": None, "matched_schema_name": "handoff", "schemas_dir": str(guard._VENDORED_SCHEMAS_DIR)}
+    forensics = {"content_root": None, "matched_schema_name": "handoff", "schemas_dir": str(guard._VENDORED_SCHEMAS_DIR)}
 
     with cli_entry.recording_declared_writes(cwd=str(repo)):
         guard._capture_guard_forensics(payload, forensics, capture_reason="deny", deny_reason="test")

@@ -5,7 +5,7 @@ surface) so every surface speaks with one voice.
 
 Spec backlink: pln-narrow-the-write-confinement-b-d10f79,
 chunk C2, "Destination-class axis in the message module, owner-aware
-publish copy". Ported deliverable of DoE-claude's `{C2, C12}` group,
+publish copy". Ported deliverable of coordinator-content-repo's `{C2, C12}` group,
 reduced here to `{C2}` (C12 shipped DoE-side, `6d0a8c4fa`).
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Under the plan's "Design
@@ -196,9 +196,11 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PurePath
 from typing import Any, Dict, Optional
 
+from coordinator_core.machine_profile import LEVEL_VERB as _LEVEL_VERB, apply_guard_level
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 
 #: The two POSITIVELY RESOLVED agent classes this module's contrast copy is
@@ -319,6 +321,8 @@ def _classification_defect_notice(target_repo: str, session_repo: str, report_to
     wrapper). Returns `None` (render normally) when the invariant holds.
     """
     if not _target_is_contained_in_session(target_repo, session_repo):
+        return None
+    if target_repo != session_repo and os.path.lexists(os.path.join(target_repo, ".git")):
         return None
     if target_repo == session_repo:
         contrast = f"target equals session repo, `{target_repo}`"
@@ -511,9 +515,8 @@ def render_em_message(
     message = (
         "Coordinator guard — instead: writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
-        "is yours to grant in-band — `DR-298`, no PM utterance needed. "
-        "Beyond your remit? cross-repo-memo is the sanctioned channel. "
-        "Confirm state first: `git ls-remote <remote>`."
+        "is refused at guard level strict. Send `cross-repo-memo`, warn "
+        f"with `{_LEVEL_VERB}`, or check `git ls-remote <remote>`."
     )
     if _target_repo_is_outside_any_repo(target_repo):
         message += _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE
@@ -798,3 +801,24 @@ def render_bump_message(
     if agent_class == AGENT_CLASS_UNKNOWN:
         return render_unknown_message(target_repo, session_repo, gitdir, session_id, raw_target, surface)
     return render_em_message(target_repo, session_repo, gitdir, session_id, raw_target, surface)
+
+
+CROSS_REPO_WARN_RISK = (
+    "This write lands outside the current repo. A session started in the "
+    "target repo acts with that repo's full context, so a substantial "
+    "cross-repo change is usually better made from there."
+)
+
+
+def apply_cross_repo_level(
+    guard_name: str,
+    envelope: Optional[Dict[str, Any]],
+    *,
+    gitdir: Optional[Path] = None,
+    session_id: str = "",
+    risk: str = CROSS_REPO_WARN_RISK,
+) -> Optional[Dict[str, Any]]:
+    """Map a bump guard's deny through its guard level: strict keeps the deny,
+    warn allows with one advisory per session, off allows silently."""
+    once = (gitdir, session_id) if gitdir is not None and session_id else None
+    return apply_guard_level(guard_name, envelope, risk=risk, once=once)

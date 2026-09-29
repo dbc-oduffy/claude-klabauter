@@ -35,68 +35,68 @@ def test_untrusted_outside_any_anchor():
     assert not is_trusted("/tmp/evil", env=env)
 
 
-def test_trusted_under_doe_root_sentinel(tmp_path, monkeypatch):
+def test_trusted_under_content_root_sentinel(tmp_path, monkeypatch):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "\n")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "\n")
     env = {"HOME": str(home)}
-    assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
+    assert is_trusted(str(tmp_path / "coordinator-content-repo" / "coordinator"), env=env)
 
 
-def test_doe_root_itself_is_trusted(tmp_path):
+def test_content_root_itself_is_trusted(tmp_path):
     """A standalone coordinator-claude clone is its own plugin root, so the
-    cloud pre-boot passes CLAUDE_PLUGIN_ROOT == repos.doe_claude exactly."""
+    cloud pre-boot passes CLAUDE_PLUGIN_ROOT == repos.content_root exactly."""
     (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
+    (tmp_path / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
     env = {"HOME": str(tmp_path)}
     assert is_trusted(str(tmp_path / "coordinator-claude"), env=env)
     assert not is_trusted(str(tmp_path / "coordinator-claude-evil"), env=env)
 
 
-def test_doe_root_trailing_slash_normalized(tmp_path):
+def test_content_root_trailing_slash_normalized(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "/\n")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "/\n")
     env = {"HOME": str(home)}
-    assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
+    assert is_trusted(str(tmp_path / "coordinator-content-repo" / "coordinator"), env=env)
 
 
 @pytest.mark.skipif(
     os.name == "nt",
     reason="POSIX-only bash-oracle parity quirk. On Windows the guard normalizes "
-    "separators/case for prefix comparison (a `.doe-root` written with forward "
+    "separators/case for prefix comparison (a `.coordinator-content-root` written with forward "
     "slashes must still match a backslashed CLAUDE_PLUGIN_ROOT), which also "
     "collapses this pathological `//` case. Windows behavior is asserted by "
     "test_windows_separator_and_case_normalization below.",
 )
-def test_doe_root_only_single_trailing_slash_stripped(tmp_path):
+def test_content_root_only_single_trailing_slash_stripped(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "//\n")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "//\n")
     env = {"HOME": str(home)}
-    assert not is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
-    assert is_trusted(str(tmp_path / "DoE-claude") + "//coordinator", env=env)
+    assert not is_trusted(str(tmp_path / "coordinator-content-repo" / "coordinator"), env=env)
+    assert is_trusted(str(tmp_path / "coordinator-content-repo") + "//coordinator", env=env)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
 def test_windows_separator_and_case_normalization(tmp_path):
     """Regression: the DoE-clone trust anchor was dead on Windows.
 
-    `.doe-root` is written with forward slashes (`X:/DoE-claude`) while
+    `.coordinator-content-root` is written with forward slashes (`C:/coordinator-content-repo`) while
     CLAUDE_PLUGIN_ROOT arrives from the harness with backslashes
-    (`X:\\DoE-claude\\coordinator`), so the textual prefix match never fired and
+    (`C:\\coordinator-content-repo\\coordinator`), so the textual prefix match never fired and
     the guard fail-loud-rejected a legitimately-trusted dev clone — which
     blocked the documented cold-bootstrap install entirely.
     """
     home = tmp_path
     (home / ".claude").mkdir()
-    doe = tmp_path / "DoE-claude"
-    (home / ".claude" / ".doe-root").write_text(str(doe).replace("\\", "/") + "\n")
+    doe = tmp_path / "coordinator-content-repo"
+    (home / ".claude" / ".coordinator-content-root").write_text(str(doe).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
 
     assert is_trusted(str(doe / "coordinator"), env=env)
     assert is_trusted(str(doe / "coordinator").upper(), env=env)
-    assert not is_trusted(str(tmp_path / "DoE-claude-evil" / "coordinator"), env=env)
+    assert not is_trusted(str(tmp_path / "coordinator-content-repo-evil" / "coordinator"), env=env)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
@@ -105,29 +105,29 @@ def test_windows_backslash_traversal_is_rejected(tmp_path):
     assert not is_trusted(str(tmp_path / ".claude") + "\\..\\..\\tmp\\evil", env=env)
 
 
-def test_missing_doe_root_sentinel_is_not_an_error(tmp_path):
+def test_missing_content_root_sentinel_is_not_an_error(tmp_path):
     env = {"HOME": str(tmp_path)}
-    assert not is_trusted(str(tmp_path / "DoE-claude"), env=env)
+    assert not is_trusted(str(tmp_path / "coordinator-content-repo"), env=env)
 
 
-def test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors(tmp_path):
-    """DR-071: the settings-home registry `repos.doe_claude` key is the
+def test_registry_repos_content_root_ranks_above_content_root_file_mirrors(tmp_path):
+    """DR-071: the settings-home registry `repos.content_root` key is the
     canonical anchor and must outrank BOTH the durable file mirror and the
-    legacy `.doe-root` file — all three deliberately hold DIFFERENT values so
+    legacy `.coordinator-content-root` file — all three deliberately hold DIFFERENT values so
     a false pass (any anchor happening to match) is impossible."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f"\"repos.doe_claude\" = '{registry_root}'\n"
+        f"\"repos.content_root\" = '{registry_root}'\n"
     )
     durable_root = tmp_path / "from-durable"
-    (settings_home_dir / "machine-local" / ".doe-root").write_text(str(durable_root) + "\n")
+    (settings_home_dir / "machine-local" / ".coordinator-content-root").write_text(str(durable_root) + "\n")
 
     home = tmp_path / "home"
     legacy_root = tmp_path / "from-legacy"
     (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / ".doe-root").write_text(str(legacy_root) + "\n")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(legacy_root) + "\n")
 
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
@@ -177,7 +177,7 @@ def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path):
     (settings_home_dir / "machine-local").mkdir(parents=True)
     clone = tmp_path / "coordinator-claude"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f"\"repos.doe_claude\" = '{clone}'\n"
+        f"\"repos.content_root\" = '{clone}'\n"
     )
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
@@ -202,7 +202,7 @@ def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
     (settings_home_dir / "machine-local").mkdir(parents=True)
     clone = tmp_path / "clones" / "coordinator-claude"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f"\"repos.doe_claude\" = '{clone}'\n"
+        f"\"repos.content_root\" = '{clone}'\n"
     )
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
@@ -273,21 +273,21 @@ def test_settings_home_resolves_with_only_userprofile_set():
     assert result == os.path.join("C:\\Users\\tester", ".coordinator-claude-settings")
 
 
-def test_doe_root_durable_rung_resolves_with_only_userprofile_set(tmp_path):
+def test_content_root_durable_rung_resolves_with_only_userprofile_set(tmp_path):
     """The direct F2 regression: the durable settings-home rung has a
     correct, present value, and the ONLY env var set is USERPROFILE (no
     HOME, no CLAUDE_HOME) -- exactly the shape of a native-Windows shell
     invocation. Pre-fix, `_home_from_env`'s equivalent inline lookup ignored
     USERPROFILE, so `_settings_home_dir_from_env` returned "", which skipped
-    this rung (and every other `_doe_root` rung) entirely and made
+    this rung (and every other `_content_root` rung) entirely and made
     `is_trusted` reject a legitimately trusted clone."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
-    doe_root = tmp_path / "DoE-claude"
-    (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
+    content_root = tmp_path / "coordinator-content-repo"
+    (settings_home_dir / "machine-local" / ".coordinator-content-root").write_text(str(content_root) + "\n")
     env = {"USERPROFILE": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
-    assert is_trusted(str(doe_root / "coordinator"), env=env)
+    assert is_trusted(str(content_root / "coordinator"), env=env)
 
 
 def test_settings_home_never_relative_when_home_fully_absent():
@@ -350,13 +350,13 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
     regression."""
     env = {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings-home")}
     with pytest.raises(UntrustedRootError):
-        coordinator_trusted_root_guard(mode="fail-loud", root=str(tmp_path / "DoE-claude" / "coordinator"), env=env)
+        coordinator_trusted_root_guard(mode="fail-loud", root=str(tmp_path / "coordinator-content-repo" / "coordinator"), env=env)
     err = capsys.readouterr().err
     assert "EMPTY" in err
     assert "home:" in err
-    assert "doe_root resolved to:" in err
+    assert "content_root resolved to:" in err
     assert "claude_klabauter_root resolved to:" in err
-    assert "registry repos.doe_claude" in err
+    assert "registry repos.content_root" in err
     assert "scripts/setup.py" in err
     assert "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 would mask it" in err
 
@@ -366,8 +366,8 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     (home / ".claude").mkdir(parents=True)
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
-    doe_root = tmp_path / "DoE-claude"
-    (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
+    content_root = tmp_path / "coordinator-content-repo"
+    (settings_home_dir / "machine-local" / ".coordinator-content-root").write_text(str(content_root) + "\n")
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
@@ -377,7 +377,7 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     with pytest.raises(UntrustedRootError):
         coordinator_trusted_root_guard(mode="fail-loud", root="/tmp/evil", env=env)
     err = capsys.readouterr().err
-    assert "DoE-claude" in err
+    assert "coordinator-content-repo" in err
     assert "at least one anchor above resolved EMPTY" not in err
 
 
@@ -414,7 +414,7 @@ def test_fail_open_untrusted_existing_dir_warning_includes_diagnostics(tmp_path,
     env = _env()
     coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     err = capsys.readouterr().err
-    assert "doe_root resolved to:" in err
+    assert "content_root resolved to:" in err
 
 
 def test_fail_open_untrusted_empty_root_stays_silent(capsys):
@@ -451,7 +451,7 @@ def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        "\"repos.doe_claude\" = '/'\n"
+        "\"repos.content_root\" = '/'\n"
     )
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
@@ -490,14 +490,14 @@ def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path):
     assert not is_trusted(f"{engine}/../../tmp/evil", env=env)
 
 
-def _write_plugin_mirror_registry(tmp_path, mirror_root, *, doe_root=None):
+def _write_plugin_mirror_registry(tmp_path, mirror_root, *, content_root=None):
     """A settings-home registry naming the SERVED mirror, and optionally a
     DIFFERENT authoring tree — the cloud shape, where the two diverge."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True, exist_ok=True)
     lines = [f"\"plugin.mirrors.coordinator-claude.live_path\" = '{mirror_root}'"]
-    if doe_root is not None:
-        lines.append(f"\"repos.doe_claude\" = '{doe_root}'")
+    if content_root is not None:
+        lines.append(f"\"repos.content_root\" = '{content_root}'")
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         "\n".join(lines) + "\n"
     )
@@ -507,7 +507,7 @@ def _write_plugin_mirror_registry(tmp_path, mirror_root, *, doe_root=None):
 def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
     mirror = tmp_path / "coordinator-claude-mirror"
     authoring = tmp_path / "authoring-tree"
-    settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror, doe_root=authoring)
+    settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror, content_root=authoring)
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
     assert is_trusted(str(mirror), env=env)
@@ -549,7 +549,7 @@ def test_diagnostics_name_the_mirror_anchor_without_calling_its_absence_the_defe
     capsys, tmp_path
 ):
     settings_home_dir = _write_plugin_mirror_registry(
-        tmp_path, tmp_path / "mirror", doe_root=tmp_path / "authoring"
+        tmp_path, tmp_path / "mirror", content_root=tmp_path / "authoring"
     )
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 

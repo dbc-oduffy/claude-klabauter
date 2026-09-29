@@ -28,7 +28,7 @@ from coordinator_core.ops.ceremony.push import PushOutcome
 def _envelope(monkeypatch, outcome: PushOutcome) -> dict:
     monkeypatch.setattr(po, "push_outstanding", lambda *a, **k: outcome)
     monkeypatch.setattr(po, "main_worktree_root", lambda p: Path(p))
-    return po._handler({}, repo_root=Path("X:/nonexistent"))
+    return po._handler({}, repo_root=Path("C:/nonexistent"))
 
 
 def test_a_failed_push_carries_its_reason(monkeypatch):

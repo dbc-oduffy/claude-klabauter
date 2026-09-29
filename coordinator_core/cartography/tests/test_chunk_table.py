@@ -19,7 +19,7 @@ Coverage:
   (f) op wrapper — schema_version-pinned atomic write, unknown-forward-version
       read fails loud, matching-version silent; import-guard + registry
 
-Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-chunk-table-producer-seam.md
 """
 
 from __future__ import annotations

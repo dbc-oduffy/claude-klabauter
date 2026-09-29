@@ -13,7 +13,7 @@ operator's time and reads as the guard being broken rather than the advice being
 
 One of those sites was a TEST asserting `"cross-repo-memo --to" in reason` -- it pinned the
 dead shape in place rather than catching it, which is why per-site fixes alone do not close
-this. Found by `doe-claude-cb`, 2026-08-26, who hit the same class on their own surfaces;
+this. Found by `coordinator-content-repo-cb`, 2026-08-26, who hit the same class on their own surfaces;
 their half is pinned by `test_memo_channel_has_no_one_shot_fallback.py`.
 
 WHY THIS RENDERS MESSAGES RATHER THAN GREPPING THE TREE. The first version of this test
@@ -67,7 +67,7 @@ def _rendered_guard_messages():
     yield "deny._memo_offer_message", deny._memo_offer_message()
     yield (
         "deny._own_inbox_deny_message",
-        deny._own_inbox_deny_message("claude-klabauter-em", "doe-claude-em"),
+        deny._own_inbox_deny_message("claude-klabauter-em", "coordinator-content-repo-em"),
     )
     yield (
         "deny._own_inbox_deny_message(no-to)",
@@ -75,7 +75,7 @@ def _rendered_guard_messages():
     )
     yield (
         "deny._memo_routing_offer_message",
-        deny._memo_routing_offer_message("doe-claude-em"),
+        deny._memo_routing_offer_message("coordinator-content-repo-em"),
     )
     yield (
         "deny._memo_routing_offer_message(unresolved)",
@@ -120,10 +120,10 @@ def test_the_detector_would_catch_the_shapes_it_is_named_for():
     A detector proven only against messages it has already fixed is in that same position.
     """
     for sample in (
-        'cross-repo-memo --to doe-claude-em --topic slug --title "x"',
+        'cross-repo-memo --to coordinator-content-repo-em --topic slug --title "x"',
         "cross-repo-memo --to <em> --topic <slug> --body-file body.md",
-        'cross-repo-memo --kind proposal --to doe-claude-em --title "x"',
-        'cross-repo-memo --to doe-claude-em --title "x" < body.md',
+        'cross-repo-memo --kind proposal --to coordinator-content-repo-em --title "x"',
+        'cross-repo-memo --to coordinator-content-repo-em --title "x" < body.md',
         "cross-repo-memo draft <slug> --to <em> --body-file body.md",
     ):
         assert _retired_offers(sample), sample
@@ -132,14 +132,14 @@ def test_the_detector_would_catch_the_shapes_it_is_named_for():
 def test_the_detector_does_not_flag_the_live_grammar_or_self_reference():
     """Each of these was a false positive in the grep-the-tree first draft."""
     for sample in (
-        'cross-repo-memo draft <slug> --to doe-claude-em --title "x"',
+        'cross-repo-memo draft <slug> --to coordinator-content-repo-em --title "x"',
         "cross-repo-memo send <slug>",
         "cross-repo-memo compose <slug>",
         "cross-repo-memo list",
         "cross-repo-memo reconcile --apply",
         "cross-repo-memo --supersedes <path> send <topic>",
         "cross-repo-memo --list-receivers",
-        "cross-repo-memo --check-addressee doe-claude-em",
+        "cross-repo-memo --check-addressee coordinator-content-repo-em",
         'cross-repo-memo draft <slug> --to <em> --title "x" --kind fyi --summary "s"',
         # The CLI reporting on its own flags -- not an offer to run anything.
         "cross-repo-memo: --summary is 174 chars, cap is 120",
@@ -153,7 +153,7 @@ def test_the_detector_does_not_flag_the_live_grammar_or_self_reference():
 # --- Live doc surfaces -------------------------------------------------------
 #
 # The guard-message tests above cover what a GUARD hands an operator. They do not
-# cover what a DOC hands one, and `doe-claude-cb` found two live doc surfaces still
+# cover what a DOC hands one, and `coordinator-content-repo-cb` found two live doc surfaces still
 # offering the retired form after the code half was clean -- including
 # `cross-repo/README.md`, which had it under a heading reading "Legacy one-shot".
 #
@@ -223,7 +223,7 @@ def test_no_live_doc_offers_a_retired_invocation():
 
 
 def test_the_allowlist_covers_the_surfaces_this_was_found_on():
-    """Regression pin: both files `doe-claude-cb` found must be in scope.
+    """Regression pin: both files `coordinator-content-repo-cb` found must be in scope.
 
     The channel README carried the dead form under a heading reading "Legacy
     one-shot" -- a fallback presented as live, directly beneath the working path.

@@ -1,0 +1,247 @@
+"""machine_profile.py -- the two machine-local settings that gate author-only behaviour.
+
+``coordinator.machine_profile`` is ``consumer`` or ``author``. An explicit
+registry value wins; absent, the box is ``author`` when any registered
+``repos.*`` path carries a ``.coordinator-dev-repo`` sentinel at its root,
+else ``consumer``.
+
+``coordinator.guard_level`` is ``strict``, ``warn`` or ``off``, with a
+per-guard override ``coordinator.guard_level.<guard-name>``. Absent, it is
+``strict`` for an author box and ``warn`` for a consumer box. It applies to
+non-destructive guards only; irreversible-harm guards never consult it.
+
+Reads go through the in-process registry reader
+(``machine_resolver.registry_get``): no subprocess, no ``machine-local`` CLI.
+Results are cached per process, keyed on the registry directory, the two
+registry files' mtimes and the ``MACHINE_LOCAL_COORDINATOR_*`` env
+overrides, so a ``machine-local set`` is visible to a resident engine on its
+next call.
+
+``coordinator.feature.cross_repo_memos`` and ``coordinator.feature.publishing``
+are ``on`` or ``off``; absent, ``on`` for an author box and ``off`` for a
+consumer box (``feature_enabled``). ``coordinator.feature.doctrine_edit_gate``
+is ``off`` on every profile until set ``on``: the doctrine-edit approval gate
+does not fire unless enabled.
+
+Change the level with ``machine-local set coordinator.guard_level warn``
+(or ``strict`` / ``off``); one guard with
+``machine-local set coordinator.guard_level.<guard-name> off``.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+from coordinator_core import machine_resolver
+
+PROFILE_KEY = "coordinator.machine_profile"
+LEVEL_KEY = "coordinator.guard_level"
+
+PROFILES = ("consumer", "author")
+LEVELS = ("strict", "warn", "off")
+
+DEV_REPO_SENTINEL = ".coordinator-dev-repo"
+
+#: The plain verb that lowers a guard, quoted verbatim in advisory and deny text.
+LEVEL_VERB = "machine-local set coordinator.guard_level warn"
+
+_ENV_PREFIX = "MACHINE_LOCAL_COORDINATOR_"
+
+_cache: Dict[Tuple[Any, ...], Dict[str, str]] = {}
+
+
+def reset_cache() -> None:
+    _cache.clear()
+
+
+def _mtime(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
+def _cache_key() -> Tuple[Any, ...]:
+    reg_dir = machine_resolver.registry_dir()
+    env = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith(_ENV_PREFIX)))
+    return (
+        str(reg_dir),
+        _mtime(reg_dir / "registry.toml"),
+        _mtime(reg_dir / "registry.local.toml"),
+        env,
+    )
+
+
+def _slot() -> Dict[str, str]:
+    key = _cache_key()
+    slot = _cache.get(key)
+    if slot is None:
+        _cache.clear()
+        slot = _cache[key] = {}
+    return slot
+
+
+def _registered_repo_has_sentinel() -> bool:
+    try:
+        flat = machine_resolver.merged_flat_registry()
+    except Exception:  # noqa: BLE001 -- unreadable registry degrades to consumer
+        return False
+    for key, value in flat.items():
+        if not key.startswith("repos.") or not isinstance(value, str) or not value:
+            continue
+        try:
+            if (Path(value) / DEV_REPO_SENTINEL).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _explicit(key: str, allowed: Tuple[str, ...]) -> Optional[str]:
+    try:
+        raw = machine_resolver.registry_get(key)
+    except Exception:  # noqa: BLE001
+        return None
+    value = (raw or "").strip().lower()
+    return value if value in allowed else None
+
+
+def machine_profile() -> str:
+    """``consumer`` or ``author``; explicit registry key, else sentinel-derived."""
+    slot = _slot()
+    cached = slot.get("profile")
+    if cached is not None:
+        return cached
+    value = _explicit(PROFILE_KEY, PROFILES) or (
+        "author" if _registered_repo_has_sentinel() else "consumer"
+    )
+    slot["profile"] = value
+    return value
+
+
+FEATURE_KEY = "coordinator.feature."
+FEATURES = ("cross_repo_memos", "publishing", "doctrine_edit_gate")
+_FEATURE_LABEL = {
+    "cross_repo_memos": "cross-repo memos",
+    "publishing": "publishing (percolate)",
+    "doctrine_edit_gate": "the doctrine-edit approval gate",
+}
+
+#: Unset default per feature: ``"profile"`` follows the machine profile
+#: (on for author, off for consumer); ``"off"`` is off on every profile.
+_FEATURE_DEFAULT = {
+    "cross_repo_memos": "profile",
+    "publishing": "profile",
+    "doctrine_edit_gate": "off",
+}
+
+
+def _feature_default(name: str) -> str:
+    default = _FEATURE_DEFAULT[name]
+    if default == "profile":
+        return "on" if machine_profile() == "author" else "off"
+    return default
+
+
+def feature_enabled(name: str) -> bool:
+    """Whether feature ``name`` (see ``FEATURES``) is on.
+
+    Explicit ``coordinator.feature.<name>`` (``on``/``off``) wins; absent, the
+    ``_FEATURE_DEFAULT`` entry decides.
+    """
+    if name not in _FEATURE_LABEL:
+        raise KeyError(name)
+    slot = _slot()
+    memo = "feature:" + name
+    cached = slot.get(memo)
+    if cached is None:
+        cached = _explicit(FEATURE_KEY + name, ("on", "off")) or _feature_default(name)
+        slot[memo] = cached
+    return cached == "on"
+
+
+def feature_refusal(name: str) -> Optional[str]:
+    """One-line refusal when feature ``name`` is off on this machine, else ``None``."""
+    if feature_enabled(name):
+        return None
+    return (
+        f"{_FEATURE_LABEL[name]} is off on this machine; "
+        f"enable it with: machine-local set {FEATURE_KEY}{name} on"
+    )
+
+
+def guard_level(guard_name: str) -> str:
+    """``strict``, ``warn`` or ``off`` for ``guard_name``.
+
+    Per-guard key beats the global key; absent both, the profile default.
+    """
+    slot = _slot()
+    memo = "level:" + guard_name
+    cached = slot.get(memo)
+    if cached is not None:
+        return cached
+    level = (
+        _explicit(LEVEL_KEY + "." + guard_name, LEVELS)
+        or _explicit(LEVEL_KEY, LEVELS)
+        or ("strict" if machine_profile() == "author" else "warn")
+    )
+    slot[memo] = level
+    return level
+
+
+def apply_guard_level(
+    guard_name: str,
+    deny_envelope: Optional[Dict[str, Any]],
+    *,
+    risk: str,
+    once: Optional[Tuple[Any, str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Map a guard's deny envelope through its configured level.
+
+    strict returns the deny unchanged; warn returns an allow envelope whose
+    ``additionalContext`` is a one-line advisory naming ``risk`` and the verb
+    that changes the level; off returns ``None`` (silent allow). The advisory
+    text is constant per guard so the dispatcher's per-session advisory dedupe
+    delivers it once per session; a caller outside that dispatcher passes
+    ``once=(gitdir, session_id)`` to get the same once-per-session delivery
+    from a marker under ``gitdir`` (a repeat warn returns ``None``).
+    """
+    if deny_envelope is None:
+        return None
+    level = guard_level(guard_name)
+    if level == "strict":
+        return deny_envelope
+    if level == "off":
+        return None
+    if once is not None and _already_warned(guard_name, once):
+        return None
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": (
+                "Advisory (%s, level warn): %s "
+                "Stricter: `machine-local set coordinator.guard_level strict`; "
+                "silence: `machine-local set coordinator.guard_level.%s off`."
+                % (guard_name, risk.strip(), guard_name)
+            ),
+        }
+    }
+
+
+def _already_warned(guard_name: str, once: Tuple[Any, str]) -> bool:
+    """True when this session already received ``guard_name``'s warning;
+    records the first delivery. Fails open (returns False) on any error."""
+    gitdir, session_id = once
+    try:
+        from coordinator_core.bash_guards import _advisory_dedupe as dedupe
+
+        key = guard_name + "__guard-level-warn"
+        if dedupe.already_advised(gitdir, session_id, key):
+            return True
+        dedupe.mark_advised(gitdir, session_id, key)
+    except Exception:  # noqa: BLE001 -- a marker fault must never swallow the warning
+        return False
+    return False

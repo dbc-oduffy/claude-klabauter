@@ -221,7 +221,7 @@ def test_apply_stage_claim_with_refused_stamp_does_not_satisfy_d2(
     tmp_path, as_session, holder_reads_live
 ):
     """THE regression this module was repaired for (cross-repo/inbox/
-    2026-08-13-doe-claude-em-pickup-already-satisfied-masks-a-refused-write.md):
+    2026-08-13-coordinator-content-repo-em-pickup-already-satisfied-masks-a-refused-write.md):
     `apply.py::apply` promotes the claim dir to `apply` stage UNCONDITIONALLY,
     before `d2`'s directive (`archive-stamp-cli claim-handoff`) ever runs — so
     an `apply`-stage claim dir is reachable on a REFUSED stamp attempt exactly

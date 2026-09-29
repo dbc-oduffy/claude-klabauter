@@ -31,7 +31,7 @@ OBSERVATION MUST NOT DISTURB THE SUBJECT. Three things this sampler never does:
 - **Never the C door (`coordinator-invoke.exe`).** On any doubt the door falls straight
   through to cold Python and propagates its exit code, printing nothing — a dead listener
   and a live one produce the same visible success, so a door-based probe reads "up" even
-  when the subject is stone dead. (DoE-claude
+  when the subject is stone dead. (coordinator-content-repo
   `docs/research/2026-08-25-http-listener-availability.md` § (b), reached independently
   for the pipe transport.)
 - **Never POST /hook.** The hook path runs real guard dispatch; sampling it would put

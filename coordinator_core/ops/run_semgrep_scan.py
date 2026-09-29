@@ -58,7 +58,7 @@ as a side-effect. Registration across the other three surfaces (_EAGER_OP_MODULE
 _OP_KEY_SCOPE / _registry_map.py) lands in the separate EM-serial registration pass.
 
 Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
-Port source: DoE-claude agents/security-audit-worker.md:53 (bash fence)
+Port source: coordinator-content-repo agents/security-audit-worker.md:53 (bash fence)
 
 Negative-spec:
     - Does NOT scan the whole tree — always diff-scoped against `diff_base`.

@@ -104,7 +104,7 @@ class TestCheckSchemaVersionBump:
 
         assert commit_tripwires.check_schema_version_bump() is None
 
-    def test_doe_root_unresolvable_fails_open(self, monkeypatch):
+    def test_content_root_unresolvable_fails_open(self, monkeypatch):
         monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: None)
         assert commit_tripwires.check_schema_version_bump() is None
 
@@ -192,7 +192,7 @@ class TestCheckBinShPolyglot:
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_doe_root_unresolvable_fails_open(self, monkeypatch):
+    def test_content_root_unresolvable_fails_open(self, monkeypatch):
         monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: None)
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
@@ -764,7 +764,7 @@ class TestRegistrationQuadBaselinePruning:
 # ---------------------------------------------------------------------------
 # Check 13 -- check_staged_pathspec_divergence
 #
-# Spec: SC-DR-015 (DoE-claude coordinator/docs/wiki/scoped-safety-commits.md
+# Spec: SC-DR-015 (coordinator-content-repo coordinator/docs/wiki/scoped-safety-commits.md
 # § SC-DR-015). Empirical basis: commit 506748a0.
 # ---------------------------------------------------------------------------
 

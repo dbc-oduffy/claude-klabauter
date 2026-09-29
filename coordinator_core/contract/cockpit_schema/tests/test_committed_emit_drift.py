@@ -26,7 +26,7 @@ DoE-contract entity. Tracked: `state/improvement-queue/2026-07-17-commit-closure
 No per-entity change belongs in this file; if `CommitClosure` is ever promoted, registering
 it in `ENTITY_SCHEMAS` is sufficient for this generic loop to pick it up.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def test_every_committed_schema_file_matches_fresh_emit(tmp_path, schema_dir):
     assert drifted == [], (
         "committed DoE cockpit-contract schema/*.json is out of sync with the claude-klabauter "
         f"pydantic source.\nOut-of-sync files: {', '.join(drifted)}\n"
-        "Remediation: re-run emit_schema.py and commit the result in DoE-claude's "
+        "Remediation: re-run emit_schema.py and commit the result in coordinator-content-repo's "
         "coordinator/cockpit-contract/schema/."
     )
 

@@ -18,13 +18,13 @@ since: at the time of that PIVOT, the module's own SessionEnd-hook trigger
 was still registered, so an unattended, unconfirmed commit could fire with
 nobody watching, and "offer" briefly read as a misnomer for what the module
 had become. That trigger registration has since been retired — verified this
-session against the DoE-claude repo's `coordinator/hooks/hooks.json`, whose
+session against the coordinator-content-repo repo's `coordinator/hooks/hooks.json`, whose
 `SessionEnd` array registers only `sessionend-archive-session.py`, not this
 module. Every surviving caller today is an EM-initiated ceremony
 (`/handoff`'s dirty-tree residue and `/quick-wrap` step 1) — a session, not a
 stop event, choosing to commit while still running and still able to answer
 for it. `/workstream-complete` was named here as a third caller until
-2026-08-27 and never was one: doe-claude-em read the skill on their side and
+2026-08-27 and never was one: coordinator-content-repo-em read the skill on their side and
 found one `SKILL.md`, no residue directory, and no hit for this mechanism
 under any name — its dirty-tree handling is its own case-a/b/c classification
 and its commit tail routes through `snippets/scoped-commit-route.md`. A
@@ -45,7 +45,7 @@ without committing — `/workday-complete`'s dirty-tree sweep
 (`coordinator_core/ops/workday_complete_step2_5_dirty_tree.py`) is the named
 backstop for that case, and retiring the unattended trigger was accepted on
 exactly that basis. See `docs/wiki/scoped-safety-commits.md` § 3b.
-`coordinator/hooks/scripts/sessionend-auto-commit.py` (DoE-claude side) still
+`coordinator/hooks/scripts/sessionend-auto-commit.py` (coordinator-content-repo side) still
 exists on disk but is NO LONGER REGISTERED and no longer calls this module —
 do not read it as a live caller.
 
@@ -108,7 +108,7 @@ THE ``invoker`` PARAMETER IS DELETED (2026-08-27) and must not come back
 without a producer. It framed a commit three ways — ``"unattended"`` (a
 stop-event rescue), ``"attended"`` (a deliberate ceremony), and undeclared.
 The SessionEnd registration that was ``"unattended"``'s only real caller was
-retired, no engine caller ever passed any value, and doe-claude-em confirmed
+retired, no engine caller ever passed any value, and coordinator-content-repo-em confirmed
 neither surviving ceremony call site passes one or intends to. It was kept for
 a while on the theory that it was a wire surface a sibling's skills named — that
 theory was never checked with the sibling, and was wrong.
@@ -273,7 +273,7 @@ Stated here because an unstated cost is the one nobody defends when it grows.
     do not enter this budget, and a reader must not "fix" this module by
     routing its answer through them.
 
-Spec backlink: DoE-claude state/sizings/2026-07-31-safe-commit-offer-at-
+Spec backlink: coordinator-content-repo state/sizings/2026-07-31-safe-commit-offer-at-
 session-stop-events.yaml
 """
 
@@ -576,7 +576,7 @@ class Reconciliation(TypedDict):
     having it. It answers ONLY "did the ledger-versus-tree check run on this
     call" — never "did the ledger and the tree agree". A permanently
     non-empty ``claimed_absent`` is expected on a repo that closes queue
-    entries by ``git mv`` (doe-claude-em, 2026-08-29, citing their SC-DR-021
+    entries by ``git mv`` (coordinator-content-repo-em, 2026-08-29, citing their SC-DR-021
     d1: the deletion side of an archival move can never be self-reported, so
     the population is by construction and forever). Had this been a health
     flag it would read red in steady state, and a signal that is always red
@@ -598,7 +598,7 @@ class Reconciliation(TypedDict):
     claimed_absent: List[str]
     unclaimed: List[str]
     # claims — the adoption CANDIDATE set, enumerated in full here while
-    # not the rendering: doe-claude-em's SC-DR-022 half 1 permits an operator
+    # not the rendering: coordinator-content-repo-em's SC-DR-022 half 1 permits an operator
 
 
 class CommitOfferReport(TypedDict):
@@ -940,7 +940,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     in production, forever. There is no agent-liveness primitive anywhere
     in this repo (no pid, no start/stop marker under `.agents/<aid>/`) and
     building one is out of scope here (it needs a real dispatch-completion
-    hook, which lives in doe-claude's tree). C5 (this chunk) replaces the
+    hook, which lives in coordinator-content-repo's tree). C5 (this chunk) replaces the
     liveness check with a RECENCY check instead: a claim is treated as
     in-flight only while its most recent touch-record timestamp for this
     path/session falls inside ``liveness._ABANDONMENT_WINDOW_SEC`` (the
@@ -1421,7 +1421,7 @@ def _reconcile_offer(
     ``safe_paths: 0, excluded: 0`` -- indistinguishable from a clean tree,
     with the dirty files nowhere in the answer. The bucket that names them
     already existed (2026-08-29) but only on the COMMIT path, i.e. only after
-    the decision it informs was already taken. Reported by doe-claude-em
+    the decision it informs was already taken. Reported by coordinator-content-repo-em
     2026-08-30 as the third recorded occurrence.
 
     REPORT-ONLY on `unclaimed`, exactly like its post-commit twin: the caller
@@ -1679,7 +1679,7 @@ async def commit_session_offer_async(
     EM-initiated ceremonies, so this verb reads as what it is: commit the
     offer this session computed for itself. There is deliberately NO
     backward-compatible alias — the old name has no caller outside this repo
-    (DoE-claude's retired `sessionend-auto-commit.py` mentions it in prose
+    (coordinator-content-repo's retired `sessionend-auto-commit.py` mentions it in prose
     only, never imports it), and an alias would preserve the ambiguity this
     rename exists to remove.
 
@@ -1896,7 +1896,7 @@ def _log_failed_groups_diagnostic(
 ) -> None:
     """Best-effort write to the SAME
     ``coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log`` file
-    the SessionEnd hook (`DoE-claude/coordinator/hooks/scripts/
+    the SessionEnd hook (`coordinator-content-repo/coordinator/hooks/scripts/
     sessionend-auto-commit.py._log_diagnostic`) appends to, naming WHICH
     groups failed and why -- not merely that something did. Never raises; a
     diagnostics-write failure must not break the op's own return path.
@@ -2356,7 +2356,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     as JSON: the first `k=v` token is swallowed as that positional and fails
     with `Invalid params_json: Expecting value: line 1 column 1`, and a second
     token is rejected outright as `unrecognized arguments`. This module's own
-    docstring prescribed the `k=v` form until 2026-08-27 and doe-claude-em's
+    docstring prescribed the `k=v` form until 2026-08-27 and coordinator-content-repo-em's
     executor copied it verbatim into a repoint that was dead on arrival; it
     fails loud, so nothing shipped, but a caller-facing example is a contract
     and this one was wrong.

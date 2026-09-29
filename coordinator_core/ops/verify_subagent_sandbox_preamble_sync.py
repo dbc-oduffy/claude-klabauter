@@ -48,7 +48,7 @@ see the trampoline's own comment block):
 
 Port of: verify-subagent-sandbox-preamble-sync.sh (DoE b5a4192c, 2026-07-20;
          255 lines)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
 import from the DoE-side polyglot trampoline (template-variant #1, mirrors
@@ -99,7 +99,7 @@ Negative-spec (deliberate divergences / faithfully-reproduced oracle shape):
 
 from __future__ import annotations
 
-GENERATES = []  # writes into a fixed list of DoE-claude coordinator/agents/*.md consumer files under coord_root (COORDINATOR_CONTENT_ROOT) -- a different repo, never a path inside claude-klabauter's own tree
+GENERATES = []  # writes into a fixed list of coordinator-content-repo coordinator/agents/*.md consumer files under coord_root (COORDINATOR_CONTENT_ROOT) -- a different repo, never a path inside claude-klabauter's own tree
 
 import os
 import re
@@ -243,7 +243,7 @@ def extract_block(file_path: str) -> Tuple[int, str, str]:
     negative-spec). Delegates the actual marker-slice logic to
     `coordinator_core.text.sentinel_blocks.extract_block`, itself a
     byte-parity port of `coordinator/bin/lib/sentinel-blocks.js`'s
-    `extractBlock` (DoE-claude `coordinator/bin/lib/sentinel-blocks.js:80-89`,
+    `extractBlock` (coordinator-content-repo `coordinator/bin/lib/sentinel-blocks.js:80-89`,
     `findMarkers` at :28-68) — same exact-substring marker lookup and
     line-boundary consumption, no regex.
 

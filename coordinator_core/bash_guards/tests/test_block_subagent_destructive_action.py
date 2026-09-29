@@ -3506,7 +3506,7 @@ def test_fail_open_logging_failure_does_not_raise_or_change_verdict(monkeypatch)
 
 def test_machine_local_set_denies_executor():
     payload = _payload(
-        "machine-local set repos.doe_claude /evil", agent_type="coordinator:executor"
+        "machine-local set repos.content_root /evil", agent_type="coordinator:executor"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3517,7 +3517,7 @@ def test_machine_local_set_denies_executor():
 
 def test_machine_local_set_denies_code_reviewer():
     payload = _payload(
-        "machine-local set repos.doe_claude /evil", agent_type="coordinator:code-reviewer"
+        "machine-local set repos.content_root /evil", agent_type="coordinator:code-reviewer"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3534,7 +3534,7 @@ def test_machine_local_set_denies_unresolved_unknown_subagent_type(monkeypatch):
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: "")
-    payload = _payload("machine-local set repos.doe_claude /evil", agent_type=None)
+    payload = _payload("machine-local set repos.content_root /evil", agent_type=None)
     payload["agent_id"] = "deadbeef0123"
     result = guard.check(payload)
     assert result is not None
@@ -3559,8 +3559,8 @@ def test_machine_local_other_write_subcommands_deny(cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        "machine-local get repos.doe_claude",
-        "machine-local has repos.doe_claude",
+        "machine-local get repos.content_root",
+        "machine-local has repos.content_root",
         "machine-local keys --prefix repos",
         "machine-local path",
         "machine-local dir",
@@ -3573,7 +3573,7 @@ def test_machine_local_read_subcommands_allow(cmd):
 
 def test_machine_local_path_prefixed_spelling_denies():
     payload = _payload(
-        "/usr/local/bin/machine-local set repos.doe_claude /evil",
+        "/usr/local/bin/machine-local set repos.content_root /evil",
         agent_type="coordinator:executor",
     )
     result = guard.check(payload)
@@ -3583,7 +3583,7 @@ def test_machine_local_path_prefixed_spelling_denies():
 
 def test_machine_local_windows_cmd_twin_spelling_denies():
     payload = _payload(
-        "machine-local.cmd set repos.doe_claude /evil", agent_type="coordinator:executor"
+        "machine-local.cmd set repos.content_root /evil", agent_type="coordinator:executor"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3592,7 +3592,7 @@ def test_machine_local_windows_cmd_twin_spelling_denies():
 
 def test_machine_local_chained_segment_denies():
     payload = _payload(
-        "ls -la ; machine-local set repos.doe_claude /evil",
+        "ls -la ; machine-local set repos.content_root /evil",
         agent_type="coordinator:executor",
     )
     result = guard.check(payload)
@@ -3605,7 +3605,7 @@ def test_machine_local_set_em_main_loop_unaffected():
     # identity-resolution cost is paid.
     payload = {
         "tool_name": "Bash",
-        "tool_input": {"command": "machine-local set repos.doe_claude /evil"},
+        "tool_input": {"command": "machine-local set repos.content_root /evil"},
         "session_id": "sess1",
     }
     assert guard.check(payload) is None
@@ -3617,7 +3617,7 @@ def test_machine_local_set_mutation_check_matcher_removed_flips_to_allow(monkeyp
     # exact same payload from deny to allow.
     monkeypatch.setattr(guard, "_MACHINE_LOCAL_WRITE_SUBCOMMANDS", frozenset())
     payload = _payload(
-        "machine-local set repos.doe_claude /evil", agent_type="coordinator:executor"
+        "machine-local set repos.content_root /evil", agent_type="coordinator:executor"
     )
     assert guard.check(payload) is None
 
@@ -4027,7 +4027,7 @@ class TestLegacyPushForceScanIgnoresWrapperOwnFlags:
 
 
 class TestV2DockerKillDbClientMatchers:
-    """Item 23 / memo D2 (cross-repo/archive/2026-09-23-doe-claude-em-
+    """Item 23 / memo D2 (cross-repo/archive/2026-09-23-coordinator-content-repo-em-
     destructive-action-v2-gap-still-open.md): docker destructive verbs,
     kill/pkill of a non-liveness-check shape, and DB-client DROP/TRUNCATE.
     Each class gets a deny test and a read-only-sibling allow test.

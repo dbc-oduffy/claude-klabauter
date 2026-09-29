@@ -18,13 +18,13 @@ The Bash-commit claim-release leg (`_release_claims_on_bash_commit_sync`, R03 of
 docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md) narrows itself on
 tool_name == "Bash" plus a `git commit -- <paths>` match, also never contributing
 advisory text — see its own docstring. DORMANT IN PRODUCTION TODAY (traced
-2026-09-26, review-integration on this row): DoE-claude's dispatcher stub
+2026-09-26, review-integration on this row): coordinator-content-repo's dispatcher stub
 (coordinator/hooks/scripts/postuse-advisory-dispatch.py) never maps
-`tool_input.command` into params for any tool_name, and DoE-claude's
+`tool_input.command` into params for any tool_name, and coordinator-content-repo's
 hooks.json matcher for this dispatcher does not include `Bash` at all
 (`Write|Edit|MultiEdit|NotebookEdit|Agent|Workflow`) — so the hook process
 is never invoked on a Bash PostToolUse event, and even if it were, `command`
-would arrive as "". Both are DoE-claude-side wiring fixes, outside this
+would arrive as "". Both are coordinator-content-repo-side wiring fixes, outside this
 engine repo; see test_real_doe_wrapper_shape_never_forwards_command_for_bash
 in test_postuse_bash_commit_releases_claims.py.
 
@@ -717,7 +717,7 @@ def _check_context_pressure_sync(
     # from "mise-en-place run, tail then handoff" — the sentinel's own
     # `mode` field (mise-en-place | autonomous) already carries that
     # distinction and was previously discarded here.
-    # cross-repo/archive/2026-08-03-doe-claude-em-mise-continuance-context-pressure-text.md
+    # cross-repo/archive/2026-08-03-coordinator-content-repo-em-mise-continuance-context-pressure-text.md
     # `sentinel_content` is read ONCE here and reused below for both the
     # mise-en-place branch and the RED-band "Autonomous run:" clause (C5):
     # `autonomous_run` above only answers "does the sentinel exist", which is
@@ -819,7 +819,7 @@ def _check_context_pressure_sync(
         # appending a checkpoint clause to text that still says "run /handoff"
         # delivers the exact nudge the PM switched the mode on to remove, at
         # the moment a long run is most likely to take it.
-        # (Reported by doe-claude-41, observed firing twice in one session.)
+        # (Reported by coordinator-content-repo-41, observed firing twice in one session.)
         if mise_continuance:
             # CONTINUANCE terminal (docs/plans/2026-08-02-mise-completion-
             # semantics.md, AC14/C8): name the tail explicitly rather than a
@@ -835,7 +835,7 @@ def _check_context_pressure_sync(
             # compaction IS the continuation primitive, picking up means a new
             # container and a fresh clone: the handoff is the expensive path
             # there, not the safe one, so the run commits, checkpoints and
-            # keeps going. DoE-claude docs/decisions/DR-cloud-is-a-venue-where-
+            # keeps going. Coordinator-content-repo docs/decisions/DR-cloud-is-a-venue-where-
             # compaction-is-the-continuation-primitive.md.
             if compaction_warnings_variant == "informational":
                 return (
@@ -1557,7 +1557,7 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
 # armed" is the wrong question -- a record of an arming event is a record of
 # the last boundary, never of now, and only a COUNT of live subscriptions or
 # a standing poller answers "is it live right now". That signal does not
-# exist in this repo: it is doe-claude-41's C3 (their plan), scoped out here
+# exist in this repo: it is coordinator-content-repo-41's C3 (their plan), scoped out here
 # per the C10 brief's "we own the PUSH, they own the RECORD" split, and
 # building a second one here would be the duplication that split exists to
 # prevent. So this leg answers the narrower, honestly-answerable question in
@@ -1818,14 +1818,14 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
 # a contract test outside this row's own writes scope.
 #
 # NOT YET LIVE (traced 2026-09-26, review-integration on this row): `command`
-# reaching params as a FLAT key presumes DoE-claude's dispatcher stub
+# reaching params as a FLAT key presumes coordinator-content-repo's dispatcher stub
 # (coordinator/hooks/scripts/postuse-advisory-dispatch.py) maps
 # `tool_input.command` into it the same way it already maps `file_path`/
 # `content` for a Write event -- it does not, for any tool_name. Worse,
-# DoE-claude's hooks.json matcher for this dispatcher
+# coordinator-content-repo's hooks.json matcher for this dispatcher
 # (`Write|Edit|MultiEdit|NotebookEdit|Agent|Workflow`) omits `Bash` entirely,
 # so the hook process is not even invoked on a Bash PostToolUse event today.
-# Both are DoE-claude-side fixes (hooks.json + the dispatcher stub), outside
+# Both are coordinator-content-repo-side fixes (hooks.json + the dispatcher stub), outside
 # this engine repo's write scope -- see
 # test_real_doe_wrapper_shape_never_forwards_command_for_bash. Until they
 # land, this leg is correct but dormant: it never releases a claim in
@@ -2049,14 +2049,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     Folding the fourth check in retires DoE's separate PostToolUse(Write)
     registration for nudge-unauthorized-handoff.py — one interpreter start per
-    Write instead of two (cross-repo/inbox/2026-08-06-doe-claude-em-postuse-fold-
+    Write instead of two (cross-repo/inbox/2026-08-06-coordinator-content-repo-em-postuse-fold-
     nudge-unauthorized-handoff.md). It requires DoE's dispatcher stub to map
     tool_input.file_path and tool_input.content into params; absent those, the
     fourth check stays silent and the other three are unaffected.
 
     The Bash-commit claim-release leg reads its command text directly from
     params["command"] (`tool_input.command`, MAPPED HERE IN CONTRACT ONLY --
-    DoE-claude's dispatcher stub does not yet map it for any tool_name, nor
+    coordinator-content-repo's dispatcher stub does not yet map it for any tool_name, nor
     does its hooks.json matcher include Bash; see the module comment above
     `_release_claims_on_bash_commit_sync` for the traced gap) —
     `_handler`'s params set is now seven fields (session_id, transcript_path,
@@ -2151,7 +2151,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # disk on a box running ~50 concurrent sessions, so a transient read failure is
     # the expected case, not the exotic one.
     #
-    # Found by doe-claude-1d while carrying this property into their hook-transport
+    # Found by coordinator-content-repo-1d while carrying this property into their hook-transport
     # plan, after `agent_postuse_dispatch` (the PostToolUse(Agent) fan-in) was built
     # with it. The concurrency reasoning above is correct and answers a different
     # question; failure isolation simply was not the axis. Every fan-in in this

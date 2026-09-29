@@ -66,7 +66,7 @@ the wire param as the direct-override tier):
       under <common_dir>/coordinator-sessions/. Unsound under concurrency
       (last-writer-wins across concurrent sessions sharing one worktree —
       see coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND
-      its sole writer (session-init.py, the DoE-claude SessionStart hook)
+      its sole writer (session-init.py, the coordinator-content-repo SessionStart hook)
       was deleted by PM directive 2026-07-15 — no production writer
       survives. Falls through to P6 directly now.
   P6: REMOVED (KS-5, 2026-08-07) — was a last-6-digits-of-epoch fallback

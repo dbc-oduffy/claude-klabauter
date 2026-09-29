@@ -7,7 +7,7 @@ Discharges AC7: "The audit's 25-row oracle is a fixture in this repo, with each
 row's expected verdict, so the false-positive rate is measurable here rather
 than by re-reading a sibling repo's audit." This module reads the ported
 fixture (`fixtures/stale_record_triage_oracle.yaml`, itself a port of
-DoE-claude `state/audits/2026-07-20-stale-record-triage.md` § Group C) and
+Coordinator-content-repo `state/audits/2026-07-20-stale-record-triage.md` § Group C) and
 computes the false-positive rate straight from that static table.
 
 Also asserts the AC11 precondition every downstream chunk (C6, C7) depends on:
@@ -59,7 +59,7 @@ def _load_oracle() -> Dict[str, Any]:
 
 def test_fixture_loads_and_declares_its_source() -> None:
     oracle = _load_oracle()
-    assert oracle["source"] == "DoE-claude state/audits/2026-07-20-stale-record-triage.md"
+    assert oracle["source"] == "coordinator-content-repo state/audits/2026-07-20-stale-record-triage.md"
     assert oracle["source_section"] == "Group C -- auto-reconcile surfaced records"
     assert isinstance(oracle["rows"], list)
     assert len(oracle["rows"]) == oracle["ported_total_rows"]

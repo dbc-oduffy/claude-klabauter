@@ -70,7 +70,7 @@ the rare legitimate raw-pid use this guard cannot distinguish (e.g.
 interactive process-management tooling entirely unrelated to session/claim
 liveness that merely happens to share the same two flag spellings).
 
-Spec backlink: DoE ``DoE-claude:pln-claude-md-altitude-triage-earn-31f32e``
+Spec backlink: DoE ``coordinator-content-repo:pln-claude-md-altitude-triage-earn-31f32e``
 § C14/RAW-PID-LIVENESS-GUARD.
 Tripwire entry: DoE ``coordinator/docs/wiki/coordinator-tripwires.md``
 § RAW-PID-LIVENESS.

@@ -36,7 +36,7 @@ resolver rather than a second independent ladder). On any
 resolution failure, `_resolve_plugin_root` returns "" — the caller treats this as the
 oracle's own fail-loud ERROR path.
 
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 Port of: sync-plugin-wiki.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
@@ -154,7 +154,7 @@ def _home_dir() -> str:
 def _resolve_plugin_root() -> str:
     """PLUGIN_ROOT resolution — see module docstring. `CLAUDE_PLUGIN_ROOT` env var
     wins immediately (matches the oracle's own rung 1); everything past it
-    (COORDINATOR_ROOT, registry live_path, versioned cache, .doe-root pointer,
+    (COORDINATOR_ROOT, registry live_path, versioned cache, .coordinator-content-root pointer,
     flat-layout manifest) is delegated to the shared native port of
     `resolve-coordinator-clone.sh --content-root`
     (`coordinator_core.resolve_coordinator_clone.resolve_content_root`). Returns
@@ -249,7 +249,7 @@ def main(argv: List[str]) -> int:
     plugin_root = _resolve_plugin_root()
     if not plugin_root:
         print(
-            "ERROR: ~/.claude/.doe-root missing/invalid — re-run coordinator:install",
+            "ERROR: ~/.claude/.coordinator-content-root missing/invalid — re-run coordinator:install",
             file=sys.stderr,
         )
         return 1

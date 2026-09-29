@@ -3,7 +3,7 @@ coordinator_core.install.tests.test_wsc_close_forwarder_stays_deleted
 
 Purpose: `wsc-close.py` was renamed to `coordinator/bin/archive-session-scope.py`
 and its temporary forwarder (`wsc-close.py` + `.cmd`) deleted once the
-cross-repo caller (DoE-claude's `sessionend-archive-session.py::_archive`)
+cross-repo caller (coordinator-content-repo's `sessionend-archive-session.py::_archive`)
 was repointed -- see `docs/install/relocation-ledger.json`'s `wsc-close.py`
 entry (`disposition: "moved"`, `forwarder: "none"`). `bin_inventory_gate.py`
 catches an UN-RECORDED disappearance but has no opinion about the reverse

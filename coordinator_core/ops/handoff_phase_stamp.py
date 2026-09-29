@@ -12,7 +12,7 @@ frontmatter (``plan_path``, the SOLE v1 value-source; see Decision D1,
 PM's ruling ("claude-klabauter owns the marking, the skill just carries the invocation" —
 DR-210 § Decision 1), this op is claude-klabauter's authoritative write path for the
 execution-baton overlay. Docstring correction (2026-08-31, cross-repo/archive/
-2026-08-20-doe-claude-em-stamp-phase-execution-value-source-is-unsatisfiable.md):
+2026-08-20-coordinator-content-repo-em-stamp-phase-execution-value-source-is-unsatisfiable.md):
 the DoE ``/handoff`` SKILL.md does NOT currently invoke this op — zero
 invocations found anywhere in the DoE tree at the time this was reported. This
 op is latent: nothing calls it yet, so the value-source question the same

@@ -95,7 +95,7 @@ It is NOT remote-only, and an earlier revision of this docstring was
 wrong to say there is no local workaround: from bundle 2.1.232 the gate
 predicate short-circuits `true` on the `CLAUDE_CODE_HARBOR_KITE`
 environment variable ahead of both the platform check and the GrowthBook
-read, and `coordinator/bin/claude-doe.py` sets it for every session it
+read, and `coordinator/bin/claude-author.py` sets it for every session it
 launches. Nothing in THIS module can pin or force the gate -- that is a
 launch-time concern, not a resolver concern -- but a caller reading a
 `not_reachable` from here must not conclude the switch is out of the

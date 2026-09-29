@@ -21,7 +21,7 @@ Verdict semantics:
 
 Cost contract (load-bearing — this runs in every repo's daily ceremony on
 every machine): the DoE clone root is resolved LOCALLY FIRST, with ZERO
-network calls (`_resolve_doe_root_local`, reusing
+network calls (`_resolve_content_root_local`, reusing
 `coordinator_core.ops.emit.doe_drift.resolve_doe_clone`'s bootstrap-safe
 direct-TOML-read registry ladder — no `machine-local` CLI subprocess, no
 `__file__`/git-toplevel self-location). Only when a DoE clone resolves
@@ -48,7 +48,7 @@ branch the DoE clone happened to be checked out to):
       so a consumer can see the scope the verdict depends on rather than
       inferring it.
     - Does NOT reimplement `coordinator/bin/lib/coordinator_registry.py`'s
-      `doe_root()` — that helper's module-level import has its own
+      `content_root()` — that helper's module-level import has its own
       side-effecting manifest load (and, on the split-repo layout, an
       unconditional `machine-local` CLI subprocess probe at IMPORT time) and
       calls `sys.exit(2)` on failure, neither of which this read-only,
@@ -71,7 +71,7 @@ branch the DoE clone happened to be checked out to):
       probe then computes a FRESH/STALE/DIVERGED verdict against the LOCAL
       repo while every emitted field names DoE. Every call therefore runs with
       `coordinator_core.git_scope.scoped_git_env()`, and `_compute` gates the
-      whole probe on `foreign_repo_unusable_reason(doe_root)` — which also
+      whole probe on `foreign_repo_unusable_reason(content_root)` — which also
       confirms the resolved git dir lies inside the DoE tree — so an
       unanswerable probe degrades to UNKNOWN instead of emitting a confident
       DIVERGED about somebody else's history. See `coordinator_core/git_scope.py`
@@ -81,7 +81,7 @@ branch the DoE clone happened to be checked out to):
       degrades to `UNKNOWN` with the exception summary in `reason`. A broken
       freshness probe must never break the daily ceremony in any repo.
 
-Spec backlink: DoE-claude ceremony Step 10 Final Summary line (2026-07-25 ask)
+Spec backlink: coordinator-content-repo ceremony Step 10 Final Summary line (2026-07-25 ask)
 """
 
 from __future__ import annotations
@@ -161,18 +161,18 @@ def _unknown(checked_at: str, reason: str) -> dict[str, Any]:
 
 # Step 1 — LOCAL-ONLY root resolution (no network, no CLI subprocess).
 
-def _resolve_doe_root_local() -> Optional[Path]:
-    """DOE_ROOT env -> REPO_DOE_CLAUDE env -> machine-local `repos.doe_claude`
+def _resolve_content_root_local() -> Optional[Path]:
+    """CONTENT_ROOT env -> REPO_CONTENT_ROOT env -> machine-local `repos.content_root`
     (direct TOML read via `doe_drift.resolve_doe_clone`, bootstrap-safe: no
     subprocess).
 
     Precedence is strict and NON-FALLTHROUGH: an explicit env override is a
     DIRECTIVE, not a hint.
-        1. DOE_ROOT set (non-empty after `.strip()`) -> that is the answer.
+        1. CONTENT_ROOT set (non-empty after `.strip()`) -> that is the answer.
            If it does not resolve to an existing directory, resolution FAILS
            (raises `_FreshnessProbeError` naming the var and the bad path) —
-           REPO_DOE_CLAUDE and the registry are NEVER consulted.
-        2. Else REPO_DOE_CLAUDE set (non-empty) -> same rule: wins outright,
+           REPO_CONTENT_ROOT and the registry are NEVER consulted.
+        2. Else REPO_CONTENT_ROOT set (non-empty) -> same rule: wins outright,
            or fails hard without falling through to the registry.
         3. Else -> the machine-local registry (current behaviour, unchanged).
     An empty/whitespace-only value is treated as UNSET, not as a directive.
@@ -184,7 +184,7 @@ def _resolve_doe_root_local() -> Optional[Path]:
     env override is set but bad — never silently substitutes a different
     clone for the one the operator named.
     """
-    for env_name in ("DOE_ROOT", "REPO_DOE_CLAUDE"):
+    for env_name in ("CONTENT_ROOT", "REPO_CONTENT_ROOT"):
         raw = os.environ.get(env_name, "").strip()
         if raw:
             candidate = Path(raw).expanduser()
@@ -194,7 +194,7 @@ def _resolve_doe_root_local() -> Optional[Path]:
                 f"{env_name} is set to {raw!r} but that is not an existing "
                 "directory — an explicit env override is a directive, not a "
                 "hint, so resolution fails here rather than falling through "
-                "to REPO_DOE_CLAUDE or the machine-local registry"
+                "to REPO_CONTENT_ROOT or the machine-local registry"
             )
     try:
         return doe_drift.resolve_doe_clone()
@@ -202,7 +202,7 @@ def _resolve_doe_root_local() -> Optional[Path]:
         return None
 
 
-def _ls_remote_release_tag(doe_root: Path) -> str:
+def _ls_remote_release_tag(content_root: Path) -> str:
     """One bounded `git ls-remote origin refs/tags/cockpit-contract-release`
     against the DoE clone. Returns the raw ls-remote SHA (a TAG-OBJECT sha
     for an annotated tag — callers must peel before using it as a commit).
@@ -213,7 +213,7 @@ def _ls_remote_release_tag(doe_root: Path) -> str:
     """
     try:
         result = subprocess.run(
-            ["git", "-C", str(doe_root), "ls-remote", "origin", _RELEASE_REF],
+            ["git", "-C", str(content_root), "ls-remote", "origin", _RELEASE_REF],
             capture_output=True,
             text=True,
             timeout=_LS_REMOTE_TIMEOUT_SECONDS,
@@ -245,7 +245,7 @@ def _ls_remote_release_tag(doe_root: Path) -> str:
     return output.split()[0]
 
 
-def _peel_to_commit(doe_root: Path, sha: str) -> str:
+def _peel_to_commit(content_root: Path, sha: str) -> str:
     """`git rev-parse <sha>^{commit}` — ls-remote returns the TAG-OBJECT sha
     for an annotated tag, and `merge-base` exits 128 ("Not a commit") on a
     tag object, silently breaking the ancestry test downstream. Peel first,
@@ -266,7 +266,7 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
     """
     try:
         result = subprocess.run(
-            ["git", "-C", str(doe_root), "rev-parse", f"{sha}^{{commit}}"],
+            ["git", "-C", str(content_root), "rev-parse", f"{sha}^{{commit}}"],
             capture_output=True,
             text=True,
             timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
@@ -287,10 +287,10 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
     return peeled
 
 
-def _current_ref_label(doe_root: Path) -> str:
+def _current_ref_label(content_root: Path) -> str:
     try:
         result = subprocess.run(
-            ["git", "-C", str(doe_root), "symbolic-ref", "--short", "-q", "HEAD"],
+            ["git", "-C", str(content_root), "symbolic-ref", "--short", "-q", "HEAD"],
             capture_output=True,
             text=True,
             timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
@@ -306,10 +306,10 @@ def _current_ref_label(doe_root: Path) -> str:
     return "HEAD (detached)"
 
 
-def _candidate_sha(doe_root: Path) -> str:
+def _candidate_sha(content_root: Path) -> str:
     try:
         result = subprocess.run(
-            ["git", "-C", str(doe_root), "log", "-1", "--format=%H", "HEAD",
+            ["git", "-C", str(content_root), "log", "-1", "--format=%H", "HEAD",
              "--", _SCHEMA_DIR_RELPATH],
             capture_output=True,
             text=True,
@@ -335,10 +335,10 @@ def _candidate_sha(doe_root: Path) -> str:
     return sha
 
 
-def _contract_version_at(doe_root: Path, sha: str) -> Optional[str]:
+def _contract_version_at(content_root: Path, sha: str) -> Optional[str]:
     try:
         result = subprocess.run(
-            ["git", "-C", str(doe_root), "show", f"{sha}:{_SCHEMA_FILE_RELPATH}"],
+            ["git", "-C", str(content_root), "show", f"{sha}:{_SCHEMA_FILE_RELPATH}"],
             capture_output=True,
             text=True,
             timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
@@ -366,7 +366,7 @@ def _contract_version_at(doe_root: Path, sha: str) -> Optional[str]:
     return str(version) if version is not None else None
 
 
-def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Optional[bool]:
+def _is_ancestor(content_root: Path, ancestor_sha: str, descendant_sha: str) -> Optional[bool]:
     """`git merge-base --is-ancestor ancestor_sha descendant_sha`.
 
     Returns True/False on a definite answer, None when indeterminate (git
@@ -379,7 +379,7 @@ def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Opti
     re-derivation.
     """
     verdict, _reason = git_predicate(
-        doe_root,
+        content_root,
         ["merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
         timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
     )
@@ -388,46 +388,46 @@ def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Opti
     return verdict == PROBE_YES
 
 
-def _doe_clone_unusable_reason(doe_root: Path) -> Optional[str]:
-    return foreign_repo_unusable_reason(doe_root)
+def _doe_clone_unusable_reason(content_root: Path) -> Optional[str]:
+    return foreign_repo_unusable_reason(content_root)
 
 
 def _compute(checked_at: str) -> dict[str, Any]:
     try:
-        doe_root = _resolve_doe_root_local()
+        content_root = _resolve_content_root_local()
     except _FreshnessProbeError as exc:
         return _unknown(checked_at, str(exc))
-    if doe_root is None:
+    if content_root is None:
         return _unknown(
             checked_at,
-            "no DoE clone resolvable on this machine (checked DOE_ROOT, "
-            "REPO_DOE_CLAUDE, and the machine-local repos.doe_claude "
+            "no DoE clone resolvable on this machine (checked CONTENT_ROOT, "
+            "REPO_CONTENT_ROOT, and the machine-local repos.content_root "
             "registry) — freshness check skipped; this is the expected, "
             "zero-network path on a consumer machine with no DoE clone",
         )
 
     # emit a confident FRESH/STALE/DIVERGED verdict labelled with DoE's path.
-    unusable = _doe_clone_unusable_reason(doe_root)
+    unusable = _doe_clone_unusable_reason(content_root)
     if unusable is not None:
         return _unknown(
             checked_at,
-            f"the DoE clone at {doe_root} could not be read as a git repository "
+            f"the DoE clone at {content_root} could not be read as a git repository "
             f"({unusable}) — freshness could not be determined; this is NOT a "
             "claim that the published tag is stale or diverged",
         )
 
     try:
-        raw_sha = _ls_remote_release_tag(doe_root)
+        raw_sha = _ls_remote_release_tag(content_root)
     except _FreshnessProbeError as exc:
         return _unknown(checked_at, str(exc))
 
     try:
-        published_peel = _peel_to_commit(doe_root, raw_sha)
+        published_peel = _peel_to_commit(content_root, raw_sha)
     except _FreshnessProbeError as exc:
         return _unknown(checked_at, str(exc))
 
     try:
-        candidate_sha = _candidate_sha(doe_root)
+        candidate_sha = _candidate_sha(content_root)
     except _FreshnessProbeError as exc:
         return _entry(
             "UNKNOWN", checked_at, str(exc), None,
@@ -436,14 +436,14 @@ def _compute(checked_at: str) -> dict[str, Any]:
 
     candidate_ref: Optional[str] = None
     try:
-        candidate_ref = _current_ref_label(doe_root)
+        candidate_ref = _current_ref_label(content_root)
     except Exception:  # noqa: BLE001 - best-effort annotation, never load-bearing
         candidate_ref = "HEAD (unresolvable)"
 
     published_version: Optional[str] = None
     candidate_version: Optional[str] = None
     try:
-        published_version = _contract_version_at(doe_root, published_peel)
+        published_version = _contract_version_at(content_root, published_peel)
     except _FreshnessProbeError:
         pass
 
@@ -463,11 +463,11 @@ def _compute(checked_at: str) -> dict[str, Any]:
         )
 
     try:
-        candidate_version = _contract_version_at(doe_root, candidate_sha)
+        candidate_version = _contract_version_at(content_root, candidate_sha)
     except _FreshnessProbeError:
         pass
 
-    is_descendant = _is_ancestor(doe_root, published_peel, candidate_sha)
+    is_descendant = _is_ancestor(content_root, published_peel, candidate_sha)
     if is_descendant is True:
         return _entry(
             "STALE",

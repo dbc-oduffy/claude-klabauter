@@ -212,28 +212,28 @@ def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path, capsys):
     assert "blocked.md" in captured.err
 
 
-def _doe_claude_fixture(tmp_path):
+def _content_root_fixture(tmp_path):
     d = tmp_path / "doe-em"
     d.mkdir()
     (d / "notes.md").write_text(
-        "This tree references doe-claude-em in a role-id context.\n"
+        "This tree references coordinator-content-repo-em in a role-id context.\n"
     )
     return d
 
 
-def test_no_exempt_absent_doe_claude_still_exempt_today(tmp_path, capsys):
-    d = _doe_claude_fixture(tmp_path)
-    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"))
+def test_no_exempt_absent_content_root_still_exempt_today(tmp_path, capsys):
+    d = _content_root_fixture(tmp_path)
+    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"))
     assert rc == 0
     captured = capsys.readouterr()
     assert "no private codenames to check" in captured.err
 
 
-def test_no_exempt_flag_reveals_doe_claude_leak(tmp_path, capsys):
-    d = _doe_claude_fixture(tmp_path)
+def test_no_exempt_flag_reveals_content_root_leak(tmp_path, capsys):
+    d = _content_root_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "doe_claude", str(d)],
-        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"),
+        ["--no-exempt", "content_root", str(d)],
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"),
     )
     assert rc == 1
     captured = capsys.readouterr()
@@ -275,15 +275,15 @@ def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
     assert hit_line in captured.err
 
 
-def test_no_exempt_env_var_reveals_doe_claude_leak(tmp_path, capsys):
+def test_no_exempt_env_var_reveals_content_root_leak(tmp_path, capsys):
     """AC2: COORDINATOR_CODENAME_NO_EXEMPT env channel re-admits the slug ->
     exit 1, hit report cites the file in path:lineno:line shape."""
-    d = _doe_claude_fixture(tmp_path)
+    d = _content_root_fixture(tmp_path)
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
-            COORDINATOR_CODENAME_NO_EXEMPT="doe_claude",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
+            COORDINATOR_CODENAME_NO_EXEMPT="content_root",
         ),
     )
     assert rc == 1
@@ -294,38 +294,38 @@ def test_no_exempt_env_var_reveals_doe_claude_leak(tmp_path, capsys):
 
 
 def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
-    d = _doe_claude_fixture(tmp_path)
+    d = _content_root_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "doe_claude", str(d)],
+        ["--no-exempt", "content_root", str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
-            COORDINATOR_CODENAME_NO_EXEMPT="doe_claude",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
+            COORDINATOR_CODENAME_NO_EXEMPT="content_root",
         ),
     )
     assert rc == 1
 
 
 def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys):
-    d = _doe_claude_fixture(tmp_path)
+    d = _content_root_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "doe-claude", str(d)],
-        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"),
+        ["--no-exempt", "coordinator-content-repo", str(d)],
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"),
     )
     assert rc == 2
     captured = capsys.readouterr()
     assert "not in KEEPSET" in captured.err
-    assert "doe-claude" in captured.err
+    assert "coordinator-content-repo" in captured.err
     assert "project_rag" in captured.err
-    assert "doe_claude" in captured.err
+    assert "content_root" in captured.err
     assert "coordinator" in captured.err
 
 
 def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
-    d = _doe_claude_fixture(tmp_path)
+    d = _content_root_fixture(tmp_path)
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
             COORDINATOR_CODENAME_NO_EXEMPT="not_a_real_keepset_slug",
         ),
     )
@@ -354,7 +354,7 @@ def test_no_exempt_flag_missing_value_exits_two(capsys):
 def test_extra_positional_after_no_exempt_exits_two(tmp_path, capsys):
     d = tmp_path / "extra"
     d.mkdir()
-    rc = main(["--no-exempt", "doe_claude", str(d), "extra-positional"], env=_env())
+    rc = main(["--no-exempt", "content_root", str(d), "extra-positional"], env=_env())
     assert rc == 2
 
 

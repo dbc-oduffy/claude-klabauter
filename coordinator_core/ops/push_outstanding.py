@@ -741,7 +741,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'push.outstanding' handler -- the cadence-surface entry point.
 
     This is the ONLY way the cadence surfaces reach `push_outstanding()`. Four
-    of the six live in the DoE-claude repo and can call claude-klabauter solely through
+    of the six live in the coordinator-content-repo repo and can call claude-klabauter solely through
     the op registry, so an unregistered primitive is unreachable by every
     caller this plan exists to serve.
 
@@ -788,7 +788,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     parent, the commit may ALREADY be on the remote" signal
     (`state/bug-backlog/2026-08-19-push-retry-reports-push-failed-on-a-subp-
     4400dc2697d0.yaml`). Dropping it left every op-registry caller -- which is
-    all six cadence surfaces, four of them in DoE-claude -- unable to tell a
+    all six cadence surfaces, four of them in coordinator-content-repo -- unable to tell a
     definite reject from an indeterminate one, the exact distinction that
     decides whether re-pushing is safe.
 

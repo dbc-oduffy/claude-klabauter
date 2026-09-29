@@ -14,9 +14,9 @@ Idempotent and enduring: each milestone timestamp is set ONCE (first
 occurrence wins) and never overwritten on re-run, so re-running /setup or
 re-taking the tour does not rewrite history.
 
-Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (DoE-claude)
+Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (coordinator-content-repo)
 Port of: coordinator-setup-state.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Commands:
     record <milestone>   set <milestone>_at if unset (atomic, first-write-wins)

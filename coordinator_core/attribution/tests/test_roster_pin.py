@@ -1,19 +1,19 @@
-"""Pins the generated persona roster against DoE-claude's live agent files —
+"""Pins the generated persona roster against coordinator-content-repo's live agent files —
 a silent guard against roster drift. Resolves DoE through
-`coordinator_core.doe_root_pointer`, never `claude_machine_local` (which does
+`coordinator_core.content_root_pointer`, never `claude_machine_local` (which does
 not exist and made this test skip on every box). Runtime code must never
-read DoE-claude's tree; this test is the one sanctioned reader.
+read coordinator-content-repo's tree; this test is the one sanctioned reader.
 """
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.attribution.roster import PERSONA_NAMES, derive_persona_names
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 
 
 def _find_doe_agents_dir():
-    root = read_doe_root_pointer()
+    root = read_content_root_pointer()
     if not root:
         return None
     agents_dir = Path(root) / "coordinator" / "agents"
@@ -24,7 +24,7 @@ def _find_doe_agents_dir():
 def test_roster_matches_doe_agents_when_present():
     agents_dir = _find_doe_agents_dir()
     if agents_dir is None:
-        pytest.skip("DoE-claude checkout not reachable from this environment")
+        pytest.skip("coordinator-content-repo checkout not reachable from this environment")
 
     agent_texts = [
         p.read_text(encoding="utf-8") for p in sorted(agents_dir.glob("*.md"))

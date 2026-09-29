@@ -503,7 +503,7 @@ class TestProducerSet:
     def test_capture_record_carries_exactly_two_keys(self, tmp_path):
         """The capture-side record is `typed_command` + `captured_at`, and nothing else.
 
-        DoE-claude's landed `session-shape.schema.json` (x-schema-version 1.1.0)
+        coordinator-content-repo's landed `session-shape.schema.json` (x-schema-version 1.1.0)
         declares this object `additionalProperties: false` with both keys
         required, so an extra key here is a hard validation failure on their
         side rather than a harmless addition. `op_identity` in particular

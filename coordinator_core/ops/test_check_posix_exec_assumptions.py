@@ -39,7 +39,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     EXEMPTIONS,
     IMPLICIT_ENCODING_CLASSES,
     PREFIX_EXCLUDABLE_CLASSES,
-    REPO_DOE_CLAUDE,
+    REPO_CONTENT_ROOT,
     REPO_CLAUDE_KLABAUTER,
     REPORT_ONLY_CLASSES,
     TIER_A_CLASSES,
@@ -1929,7 +1929,7 @@ def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_pat
     entries were deleted from EXEMPTIONS in favour of one prefix. The class
     they named must still be invisible -- migrating a carve-out must not
     quietly re-expose what it covered."""
-    repo = _repo_with_preserved_tree(tmp_path, "DoE-claude", _DOE_PREFIX)
+    repo = _repo_with_preserved_tree(tmp_path, "coordinator-content-repo", _DOE_PREFIX)
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",
@@ -1940,7 +1940,7 @@ def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_pat
 
     result = scan(repo)
 
-    assert repo_key_for_root(repo) == REPO_DOE_CLAUDE
+    assert repo_key_for_root(repo) == REPO_CONTENT_ROOT
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",

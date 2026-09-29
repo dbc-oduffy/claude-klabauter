@@ -149,22 +149,22 @@ def test_machine_local_dir_is_settings_home_slash_machine_local(monkeypatch):
 
 def test_normalize_native_path_converts_msys_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert normalize_native_path("/x/DoE-claude") == Path("X:/DoE-claude")
+    assert normalize_native_path("/x/coordinator-content-repo") == Path("C:/coordinator-content-repo")
 
 
 def test_normalize_native_path_converts_cygdrive_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert normalize_native_path("/cygdrive/x/DoE-claude") == Path("X:/DoE-claude")
+    assert normalize_native_path("/cygdrive/x/coordinator-content-repo") == Path("C:/coordinator-content-repo")
 
 
 def test_normalize_native_path_leaves_native_forward_slash_form_unchanged(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert normalize_native_path("X:/DoE-claude") == Path("X:/DoE-claude")
+    assert normalize_native_path("C:/coordinator-content-repo") == Path("C:/coordinator-content-repo")
 
 
 def test_normalize_native_path_leaves_native_backslash_form_unchanged(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert normalize_native_path(r"X:\DoE-claude") == Path(r"X:\DoE-claude")
+    assert normalize_native_path(r"C:\coordinator-content-repo") == Path(r"C:\coordinator-content-repo")
 
 
 def test_normalize_native_path_handles_empty_string(monkeypatch):
@@ -179,12 +179,12 @@ def test_normalize_native_path_leaves_relative_path_unchanged(monkeypatch):
 
 def test_normalize_native_path_is_noop_on_posix(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: False)
-    assert normalize_native_path("/x/DoE-claude") == Path("/x/DoE-claude")
+    assert normalize_native_path("/x/coordinator-content-repo") == Path("/x/coordinator-content-repo")
 
 
 def test_normalize_native_path_drive_root_no_trailing_path(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert normalize_native_path("/x") == Path("X:/")
+    assert normalize_native_path("/x") == Path("C:/")
 
 
 def test_legacy_machine_local_dir_is_claude_home_slash_machine_local(monkeypatch):
@@ -344,32 +344,32 @@ def test_claude_config_divergence_raises_on_genuine_divergence(tmp_path, monkeyp
 
 def test_native_path_form_repairs_msys_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert native_path_form("/x/DoE-claude") == "X:/DoE-claude"
+    assert native_path_form("/x/coordinator-content-repo") == "C:/coordinator-content-repo"
 
 
 def test_native_path_form_repairs_cygdrive_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert native_path_form("/cygdrive/x/DoE-claude") == "X:/DoE-claude"
+    assert native_path_form("/cygdrive/x/coordinator-content-repo") == "C:/coordinator-content-repo"
 
 
 def test_native_path_form_preserves_native_backslash_form_byte_identical(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert native_path_form(r"C:\Users\dev\DoE-claude") == r"C:\Users\dev\DoE-claude"
+    assert native_path_form(r"C:\Users\dev\coordinator-content-repo") == r"C:\Users\dev\coordinator-content-repo"
 
 
 def test_native_path_form_preserves_native_forward_slash_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert native_path_form("X:/DoE-claude") == "X:/DoE-claude"
+    assert native_path_form("C:/coordinator-content-repo") == "C:/coordinator-content-repo"
 
 
 def test_native_path_form_preserves_trailing_separator(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: True)
-    assert native_path_form("X:/DoE-claude/") == "X:/DoE-claude/"
+    assert native_path_form("C:/coordinator-content-repo/") == "C:/coordinator-content-repo/"
 
 
 def test_native_path_form_is_noop_on_posix(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home._is_windows", lambda: False)
-    assert native_path_form("/x/DoE-claude") == "/x/DoE-claude"
+    assert native_path_form("/x/coordinator-content-repo") == "/x/coordinator-content-repo"
 
 
 def test_native_path_form_leaves_empty_string_empty(monkeypatch):

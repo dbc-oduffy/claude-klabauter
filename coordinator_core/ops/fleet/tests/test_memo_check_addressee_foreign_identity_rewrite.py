@@ -13,7 +13,7 @@ memo command. The rendered note is INCIDENTAL (the diagnosis is fully actionable
 without naming which repo the id resolves to), so the repo name is swapped for a
 generic phrase, following the shape `forwarder_drift.py`'s skip-line rewrite used.
 
-Negative-spec: the rendered note must never contain the literal `DoE-claude`,
+Negative-spec: the rendered note must never contain the literal `coordinator-content-repo`,
 in any casing this function could plausibly emit, while still surfacing the
 receiver id and the `identity.centralReceiverIds` attribute path the reader
 needs to act on the diagnosis.
@@ -26,7 +26,7 @@ from pathlib import Path
 from coordinator_core.ops.fleet import memo_check_addressee as mca
 
 
-def test_unresolved_central_id_note_never_names_doe_claude(monkeypatch):
+def test_unresolved_central_id_note_never_names_content_root(monkeypatch):
     monkeypatch.setattr(mca, "read_redirect_aliases", lambda: set())
     monkeypatch.setattr(mca, "read_central_receiver_ids", lambda: {"central-hub"})
     monkeypatch.setattr(
@@ -39,8 +39,8 @@ def test_unresolved_central_id_note_never_names_doe_claude(monkeypatch):
 
     note = candidate["note"]
     assert note is not None
-    assert "DoE-claude" not in note
-    assert "doe-claude" not in note.lower()
+    assert "coordinator-content-repo" not in note
+    assert "coordinator-content-repo" not in note.lower()
 
 
 def test_unresolved_central_id_note_stays_actionable(monkeypatch):

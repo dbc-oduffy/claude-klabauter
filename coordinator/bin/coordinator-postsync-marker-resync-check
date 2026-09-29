@@ -80,6 +80,7 @@ POSIX-only execution assumptions are a portability defect class per the
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -116,7 +117,7 @@ def _resolve_meta_repo() -> str:
 
         return str(_claude_home.claude_home_dir())
     except Exception:
-        base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+        base = os.environ.get("CLAUDE_HOME") or str(Path.home())
         return os.path.join(base, ".claude")
 
 

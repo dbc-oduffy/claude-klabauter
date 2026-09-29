@@ -2,10 +2,10 @@
 coordinator/scripts/lib/prereq_probe.sh's SSOT functional-prerequisite probe
 suite for the coordinator install Step Zero gate.
 
-Port source: coordinator/scripts/lib/prereq_probe.sh [DoE-claude repo] — the
+Port source: coordinator/scripts/lib/prereq_probe.sh [coordinator-content-repo repo] — the
 bash oracle, and all of `coordinator/scripts/lib/` alongside it (including
 its self-sourced siblings manifest_reader.sh + step_zero_emit.sh), is RETIRED
-and no longer exists in DoE-claude. This module is now the SSOT
+and no longer exists in coordinator-content-repo. This module is now the SSOT
 functional-prerequisite probe suite for every consumer, Python-side callers
 and vendoring siblings alike — not a parallel implementation shadowing a
 still-live bash original. Composes with
@@ -25,7 +25,7 @@ no_console_creationflags` — itself inside this closure, which is why
 `win_portability.py` is required rather than incidental; `win_portability.py`
 itself is stdlib-only (`os`, `stat`, `pathlib`, `typing`). Caveat:
 `probe_all()` reaches `probe_skill_frontmatter_valid`, whose two
-function-local imports (`coordinator_core.ops.coordinator_doe_root`,
+function-local imports (`coordinator_core.ops.coordinator_content_root`,
 `coordinator_core.frontmatter.schema_validate`) sit outside this closure —
 a vendor calling `probe_all()` wholesale needs those two modules too.
 
@@ -421,7 +421,7 @@ def probe_node() -> str:
     or the session hot path needs a Node runtime, and this repo forbids one for
     its own work outright.
 
-    Advisory rather than DELETED, because node is not unused: DoE-claude's
+    Advisory rather than DELETED, because node is not unused: coordinator-content-repo's
     ceremony-gate JS suite (`.test.js` under `coordinator/tests/`, which pytest
     does not collect) still runs under it. That makes node
     required-for-ceremonies and not-required-for-install -- so the row stays and
@@ -853,7 +853,7 @@ def shell_login_env_reconstruction_source() -> str:
 # Verifies a representative skill file (coordinator-claude's own
 # coordinator/skills/setup/SKILL.md) has parseable YAML frontmatter with a
 # non-empty description field. Reads the OPERATOR's coordinator-claude
-# installation tree (resolved via coordinator_doe_root()), not the caller's
+# installation tree (resolved via coordinator_content_root()), not the caller's
 # own dispatching repo — "none" scope-verdict, same class as probe_ue's
 # EXAMPLE_GAME_REPO_UE_ROOT read.
 # ---------------------------------------------------------------------------
@@ -868,13 +868,13 @@ def _check_skill_frontmatter_valid() -> dict:
     block does not parse, or its "description" field is empty/absent. Never
     raises — read failures fold into an ok=False/error result.
     """
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    doe_root = coordinator_doe_root()
-    if not doe_root:
-        return {"ok": False, "error": "coordinator-claude root unresolvable (coordinator_doe_root() returned None)"}
+    content_root = coordinator_content_root()
+    if not content_root:
+        return {"ok": False, "error": "coordinator-claude root unresolvable (coordinator_content_root() returned None)"}
 
-    skill_path = Path(doe_root).joinpath(*_SKILL_FRONTMATTER_CHECK_REL_PATH)
+    skill_path = Path(content_root).joinpath(*_SKILL_FRONTMATTER_CHECK_REL_PATH)
     if not skill_path.is_file():
         return {"ok": False, "error": f"representative skill file not found: {skill_path}"}
 

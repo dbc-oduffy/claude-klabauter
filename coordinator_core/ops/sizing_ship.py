@@ -72,7 +72,7 @@ sizing the close commit's own committed-path set names. That closes the
 `spec-dispatch`/`plan`-routed sizing that ships without ever entering
 quick-wrap's `dispatch`-routed closure path remains unwired — the
 workstream-complete ceremony body such a sizing would need still lives in
-DoE-claude and still needs a cross-repo memo, out of scope for this
+Coordinator-content-repo and still needs a cross-repo memo, out of scope for this
 engine-primitive.
 
 Scope, deliberately narrow (same "one value, its applier, its consumers, one

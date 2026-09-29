@@ -37,8 +37,8 @@ def _agent_payload(
 
 
 def _patch_pins(monkeypatch: pytest.MonkeyPatch, pins, reason=None) -> None:
-    def _fake_resolve_model_pins(*, doe_root=None):
-        del doe_root
+    def _fake_resolve_model_pins(*, content_root=None):
+        del content_root
         return (pins, reason)
 
     monkeypatch.setattr(mod, "resolve_model_pins", _fake_resolve_model_pins)

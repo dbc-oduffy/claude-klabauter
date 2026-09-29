@@ -133,7 +133,7 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
 
     Does NOT reject other symbolic refs (branch names, tags, "origin/main")
     — those are not the reproduced/observed shape (100% of the ~20 known-bad
-    on-disk records use literal "HEAD" specifically; see DoE-claude
+    on-disk records use literal "HEAD" specifically; see coordinator-content-repo
     state/review-trail/*.json), and rejecting them would risk excluding
     legitimately-scoped historical records this fix has no evidence exist.
     """

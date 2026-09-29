@@ -38,7 +38,7 @@ try/except mirrors at the Python-function level rather than the shell-guard
 level).
 
 The two carve-outs below are one rule applied twice, not two independent
-patches: a maintainer-only signal (`.doe-root`, the harness's own
+patches: a maintainer-only signal (`.coordinator-content-root`, the harness's own
 installed-plugins registry) may be used to CLASSIFY which install shape a
 machine has, but its ABSENCE must never be read as evidence the install is
 UNHEALTHY — polarity, not provenance. This module is DR-117's worked
@@ -47,7 +47,7 @@ signal's absence treated as a diagnosis), and `d19dbe78` is the fix DR-117
 generalizes from (a disjoint, harness-native classify-only branch added
 alongside the first, not a replacement for it — see DR-117's anti-scope).
 See `docs/decisions/DR-117-maintainer-signals-may-classify-never-diagnose.md`
-(DoE-claude repo; tripwire `MAINTAINER-SIGNAL-DIAGNOSIS` in
+(coordinator-content-repo repo; tripwire `MAINTAINER-SIGNAL-DIAGNOSIS` in
 `coordinator/docs/wiki/coordinator-tripwires.md`) for the rule in full — a
 blunter "no DoE-specific signal in shipped code" framing was considered and
 rejected there (it would misflag `resolve_coordinator_clone._resolve_source_mode`,
@@ -66,20 +66,20 @@ shape; see the inline comment at the check site for why the two OTHER
 in-tree candidates (`gen_settings_hooks.positive_marker_path()`,
 `guard_settings_integrity._plugin_side_reachable()`/
 `detect_hook_delivery_duplication()`) were rejected. This carve-out covers
-ONLY the DoE-maintainer `--plugin-dir` dev-install shape (a `.doe-root`
+ONLY the DoE-maintainer `--plugin-dir` dev-install shape (a `.coordinator-content-root`
 pointer).
 
 Marketplace/OSS-install carve-out (added 2026-07-31, closing the gap the
-paragraph above left open): `.doe-root` is a DoE-maintainer-specific signal
+paragraph above left open): `.coordinator-content-root` is a DoE-maintainer-specific signal
 — the coordinator plugin ships to many users through the marketplace/OSS
-path who have no `.doe-root` at all, so for that MAJORITY install shape the
+path who have no `.coordinator-content-root` at all, so for that MAJORITY install shape the
 probe still false-positived and armed a kill switch that then required a
 hand-delete (the arm was self-masking: `generate()` checks the marker AHEAD
 of its plugin-delivery check, so the banner's own "re-run the installer"
 remedy was a no-op). `run_self_probe` now ALSO checks
 `_is_marketplace_install_live` — an additional OR-branch alongside
 `is_inline_install`, not a replacement for it; the two cover DISJOINT
-install shapes (`.doe-root` dev installs vs. marketplace/OSS installs) —
+install shapes (`.coordinator-content-root` dev installs vs. marketplace/OSS installs) —
 before re-arming. The signal: the harness's OWN installed-plugins registry
 (`<claude_home>/plugins/installed_plugins.json`, read via
 `guard_settings_integrity.read_installed_plugin_records` — reused, not
@@ -93,7 +93,7 @@ STATTED, never trusted bare: the JSON record persists on disk happily after
 the coordinator tree it names has been destroyed, so the record ALONE is
 the exact useless signal that cannot separate "healthy plugin install" from
 "destroyed tree" (same failure mode `is_inline_install`'s own docstring
-already rejects for a stale `.doe-root` pointer). A destroyed marketplace
+already rejects for a stale `.coordinator-content-root` pointer). A destroyed marketplace
 cache dir still fails the stat and still falls through to the arm path, so
 the true-positive detection this probe exists to preserve is unchanged. See
 `_is_marketplace_install_live`'s own docstring for the full requirement
@@ -124,7 +124,7 @@ bare `#`-comment marker previously did, on every boot).
 
 Spec backlink: coordinator_core.install.gen_settings_hooks (kill-switch /
     positive-marker polarity inversion, same 2026-07-28 dispatch).
-Spec backlink: DR-117 (DoE-claude, maintainer signals may classify, never
+Spec backlink: DR-117 (coordinator-content-repo, maintainer signals may classify, never
     diagnose) — the general rule both carve-outs in this module instantiate;
     see the paragraph above `_is_marketplace_install_live`'s discussion for
     how this module is DR-117's worked example.
@@ -198,7 +198,7 @@ def _is_marketplace_install_live(config_dir: Path) -> bool:
     """Marketplace/OSS-install carve-out (added 2026-07-31, closing the gap
     the inline-install carve-out above left open): is a `coordinator@`-
     prefixed plugin actually loading via the harness's own
-    installed-plugins registry, independent of `.doe-root`?
+    installed-plugins registry, independent of `.coordinator-content-root`?
 
     True iff ALL of:
       - `<config_dir>/plugins/installed_plugins.json` names a
@@ -217,7 +217,7 @@ def _is_marketplace_install_live(config_dir: Path) -> bool:
     JSON record persists on disk happily after the actual plugin tree
     (`installPath`) has been destroyed — a record's mere PRESENCE is
     exactly the same useless signal `is_inline_install`'s own docstring
-    rejects for `.doe-root` (a pointer file surviving a destroyed clone).
+    rejects for `.coordinator-content-root` (a pointer file surviving a destroyed clone).
     Statting `installPath` (and its `hooks/hooks.json`) is what makes this
     check discriminate "healthy marketplace install" from "destroyed
     tree" — a destroyed tree fails the stat and this function correctly
@@ -281,7 +281,7 @@ _BANNER_REARMED = """
 ║     until this is fixed, rather than bricking hooks again next run.
 ║
 ║  Action: re-run the coordinator installer (or `/coordinator:setup`) once
-║  this machine's DoE-claude clone location is confirmed, then delete
+║  this machine's coordinator-content-repo clone location is confirmed, then delete
 ║  {marker} to re-enable.
 ╚══════════════════════════════════════════════════════════════════╝
 

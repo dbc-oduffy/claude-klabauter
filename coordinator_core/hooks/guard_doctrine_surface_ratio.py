@@ -5,7 +5,7 @@ tier, ADVISORY ONLY on the ratio path; denies only a new file that overruns
 its admission cap.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/guard-doctrine-surface-ratio.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/guard-doctrine-surface-ratio.py`.
 That script ran as an in-process guard body enrolled into a second,
 doctrine-plane-resident guard registry (`_guard_runner.REAL_GUARD_REGISTRY`),
 fired via `preuse-write-dispatch.py`'s own dispatch, with the same double-

@@ -2,7 +2,7 @@
 still present in HEAD and on disk.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-phantom-staged-deletion-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-phantom-staged-deletion-
 precommit.py`. One shape change, forced by the port: the source
 `sys.path.insert` + bare `from _phantom_staged_deletion import ...`
 (DoE's flat `hooks/scripts/` sibling-script import) becomes an ordinary

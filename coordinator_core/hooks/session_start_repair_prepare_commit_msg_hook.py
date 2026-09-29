@@ -3,7 +3,7 @@ SessionStart(startup-only) op: self-heals a stale `SCRIPT=` path in the native
 git `prepare-commit-msg` hook this session's repo already has installed.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude
+from coordinator-content-repo
 `coordinator/hooks/scripts/session-start-repair-prepare-commit-msg-hook.py`.
 The installed `.git/hooks/prepare-commit-msg` shim hardcodes an absolute
 `SCRIPT=` path to `coordinator/bin/coordinator-prepare-commit-msg`, resolved
@@ -89,13 +89,13 @@ def _git_hooks_dir(cwd: str) -> str:
 def _candidate_script_paths(repo_root: str) -> "list[str]":
     candidates = [str(Path(repo_root) / _SCRIPT_RELATIVE)]
 
-    doe_root_pointer = Path.home() / ".claude" / ".doe-root"
+    content_root_pointer = Path.home() / ".claude" / ".coordinator-content-root"
     try:
-        doe_root = doe_root_pointer.read_text(encoding="utf-8").strip()
+        content_root = content_root_pointer.read_text(encoding="utf-8").strip()
     except Exception:
-        doe_root = ""
-    if doe_root:
-        candidates.append(str(Path(doe_root) / _SCRIPT_RELATIVE))
+        content_root = ""
+    if content_root:
+        candidates.append(str(Path(content_root) / _SCRIPT_RELATIVE))
 
     try:
         from coordinator_core.engine_root import coordinator_engine_root

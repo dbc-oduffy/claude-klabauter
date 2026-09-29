@@ -2,7 +2,7 @@
 file (a file whose mere ABSENCE gates a guarded capability) from being
 created or modified through Write/Edit/MultiEdit/NotebookEdit.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_sentinel_write_guard.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_sentinel_write_guard.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3.
 
 Why this exists

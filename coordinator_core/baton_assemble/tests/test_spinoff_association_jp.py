@@ -103,7 +103,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
 
     `associate` collected the plan id and sizing slug as `decision_note` prose
     and nothing read it, so the minted spinoff carried the association
-    nowhere. Reported from example-cockpit-repo via DoE-claude. The answer now
+    nowhere. Reported from example-cockpit-repo via coordinator-content-repo. The answer now
     travels as STRUCTURED keys into `governing_plan` / `sizing_object` -- not
     into `origin_plan_id`, which is the backward-looking progenitor rung this
     judgment point's own comment already declares itself distinct from.

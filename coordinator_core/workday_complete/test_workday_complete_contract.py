@@ -33,7 +33,7 @@ see `brief.py`'s "AC10 fix" comment block.
 
 Run scoped only:
     python3 -m pytest coordinator_core/workday_complete/test_workday_complete_contract.py -q
-Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § AC10
+Spec backlink: coordinator-content-repo:pln-b1-ceremony-complete-computed--9ffa54 § AC10
 """
 
 from __future__ import annotations

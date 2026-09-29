@@ -11,7 +11,7 @@ to exist, only the source line to be there (per C6's own brief).
 This is what stops a future tightening pass (a blanket suppression, a lint auto-fix, a
 find-and-replace) from quietly eating a message that has to carry a foreign-repo name to remain
 actionable — the audit's own sample makes the point: `queue_promote.py`'s
-`"machine-local set repos.doe_claude /path/to/DoE-claude"` and `state_root.py`'s `"engine.source_root
+`"machine-local set repos.content_root /path/to/coordinator-content-repo"` and `state_root.py`'s `"engine.source_root
 <path-to-live-claude-klabauter>"` are the remedy, not noise beside it. Re-run after the disposition
 half (C6) to prove no subject-class site regressed.
 
@@ -80,7 +80,7 @@ def _read(rel_path: str) -> str:
 
 _SUBJECT_SITES = [
     ("coordinator_core/engine_root.py", "broken or partial claude-klabauter checkout"),
-    ("coordinator_core/ops/coordinator_doe_root.py", "machine-local set repos.doe_claude /path/to/DoE-claude"),
+    ("coordinator_core/ops/coordinator_content_root.py", "machine-local set repos.content_root /path/to/coordinator-content-repo"),
     ("coordinator_core/ops/check_rag_state.py", "python3 <claude-klabauter>/scripts/setup.py"),
     ("coordinator_core/ops/generate_repomap.py", "python3 <claude-klabauter>/scripts/setup.py"),
     ("coordinator_core/ops/generate_repomap.py", "Install the coordinator-claude plugin"),
@@ -92,10 +92,10 @@ _SUBJECT_SITES = [
     # abs-path-ok: literal marker copied from the cited source file's own message text, not a
     # path this test resolves or joins.
     ("coordinator_core/resolve_coordinator_clone.py", "flat ~/.claude/plugins/coordinator-claude"),
-    ("coordinator_core/plugin_health/forwarder_drift.py", "DoE-claude coordinator/ dir"),
+    ("coordinator_core/plugin_health/forwarder_drift.py", "coordinator-content-repo coordinator/ dir"),
     ("coordinator_core/write_guards/nudge_session_display_name_as_identifier.py", '"claude-klabauter"'),
-    ("coordinator_core/ops/check_generator_output_staleness.py", 'f"DoE-claude@{sha}"'),
-    ("coordinator_core/ops/check_generator_output_staleness.py", 'f"DoE-claude:{pair.artifact}"'),
+    ("coordinator_core/ops/check_generator_output_staleness.py", 'f"coordinator-content-repo@{sha}"'),
+    ("coordinator_core/ops/check_generator_output_staleness.py", 'f"coordinator-content-repo:{pair.artifact}"'),
 ]
 
 
@@ -123,7 +123,7 @@ def test_row_14_ruling_is_recorded_and_left_alone():
     # single-repo-only tuple (which would mean someone narrowed it under this plan's cover).
     text = _read("coordinator_core/write_guards/nudge_session_display_name_as_identifier.py")
     assert '"claude-klabauter"' in text
-    assert '"doe-claude"' in text
+    assert '"coordinator-content-repo"' in text
 
 
 # ---------------------------------------------------------------------------

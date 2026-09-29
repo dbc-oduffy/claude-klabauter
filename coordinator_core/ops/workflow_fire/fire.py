@@ -4,7 +4,7 @@ mechanism plus the on-disk fire registry.
 
 Purpose: fires exactly ONE detached ``claude -p`` child process per
 emitted workflow script, resolves ``--plugin-dir`` the way the
-``claude-doe`` shim does (never hardcoded), bounds the child with
+``claude-author`` shim does (never hardcoded), bounds the child with
 ``--max-turns``, confirms liveness (or an immediate non-zero exit) before
 returning, and records the fire in a JSON registry under
 ``<git-common-dir>/coordinator-sessions/workflow-fires/`` — the run handle
@@ -383,7 +383,7 @@ def _native_plugin_dir() -> Optional[str]:
     """Resolve the coordinator plugin root in-process, no subprocess spawn.
 
     House precedent: ``coordinator_core.bash_guards.commit_tripwires.
-    _resolve_doe_coordinator_root`` (same ``coordinator_doe_root()`` resolve,
+    _resolve_doe_coordinator_root`` (same ``coordinator_content_root()`` resolve,
     same ``content_root_for`` layout gate -- both the private authoring tree
     and the published flat mirror qualify, so a container that registered the
     flat mirror still resolves a plugin dir). Primary path here rather than a
@@ -393,20 +393,20 @@ def _native_plugin_dir() -> Optional[str]:
     failure; ``resolve_plugin_dir`` decides what a ``None`` means.
     """
     try:
-        from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
         from coordinator_core.data_root import content_root_for
     except Exception:
         return None
     try:
-        doe_root = coordinator_doe_root()
+        content_root = coordinator_content_root()
     except Exception:
         return None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     return str(content_root) if content_root is not None else None
 
 
-def _shim_plugin_dir(shim_bin: str = "claude-doe") -> Optional[str]:
-    """Subprocess fallback -- invokes the ``claude-doe`` SHIM, never bare
+def _shim_plugin_dir(shim_bin: str = "claude-author") -> Optional[str]:
+    """Subprocess fallback -- invokes the ``claude-author`` SHIM, never bare
     ``claude``. ``--print-plugin-dir`` is a shim flag; the raw ``claude``
     binary a bare ``shutil.which("claude")`` resolves to on Windows does
     not understand it (fails loud with "unknown option", not silently).
@@ -433,12 +433,12 @@ def _shim_plugin_dir(shim_bin: str = "claude-doe") -> Optional[str]:
 def resolve_plugin_dir() -> str:
     """Resolve the coordinator plugin root.
 
-    Primary path: the native, in-process ``coordinator_doe_root()``
+    Primary path: the native, in-process ``coordinator_content_root()``
     resolver (``_native_plugin_dir``) -- no subprocess spawn. Falls back to
-    shelling out to the ``claude-doe`` SHIM (never bare ``claude`` --
+    shelling out to the ``claude-author`` SHIM (never bare ``claude`` --
     ``--print-plugin-dir`` is a shim flag the raw binary does not
     understand) only if the native path fails; the shim binary name is
-    fixed (``"claude-doe"``, see ``_shim_plugin_dir``) and is not a
+    fixed (``"claude-author"``, see ``_shim_plugin_dir``) and is not a
     parameter here, since no caller has ever needed to vary it and a
     decorative parameter that looked like it controlled resolution was
     itself a defect (see removed ``claude_bin`` param -- reviewed away).
@@ -462,7 +462,7 @@ def resolve_plugin_dir() -> str:
 
     raise PluginDirResolutionError(
         "could not resolve the coordinator plugin dir: neither the native "
-        "coordinator_doe_root() resolver nor the claude-doe shim's "
+        "coordinator_content_root() resolver nor the claude-author shim's "
         "--print-plugin-dir yielded an existing directory"
     )
 
@@ -1013,7 +1013,7 @@ def fire_workflow(
 
     The parameter name has now misled two readers into assuming it is the
     child's working directory (2026-08-30, claude-klabauter-em and
-    doe-claude-e8, independently). It is documented rather than renamed
+    coordinator-content-repo-e8, independently). It is documented rather than renamed
     because it is a published engine seam; a rename is a breaking change to
     every caller and belongs in its own plan.
     Raises ``ScriptNotFoundError``, ``RepoRootUnresolvableError``,

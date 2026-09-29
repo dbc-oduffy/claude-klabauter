@@ -184,10 +184,10 @@ _SESSION_ID_ENV_KEYS: tuple = (
 # below requires before relaxing the perimeter — see also
 # _make_git_env's docstring.
 #
-# - COORDINATOR_SETTINGS_HOME: coordinator-prepare-commit-msg (_resolve_doe_root)
+# - COORDINATOR_SETTINGS_HOME: coordinator-prepare-commit-msg (_resolve_content_root)
 #   and the live post-commit hook both read
-#   ${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.doe-root;
-#   without it they silently resolve the wrong .doe-root.
+#   ${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.coordinator-content-root;
+#   without it they silently resolve the wrong .coordinator-content-root.
 # - USERPROFILE, HOMEDRIVE, HOMEPATH: on native Windows HOME is normally
 #   unset, so without these git-for-Windows cannot find global .gitconfig
 #   (no user.email) and `git commit` fails outright.
@@ -1508,7 +1508,7 @@ async def _resync_main_index_for_moves(
     this now converts that lesson into engine behaviour via the lesson's own
     literal invocation — a single `git restore --staged -- <src> <dst>` covering
     BOTH paths in one call, rather than the two-step `--remove` / `--cacheinfo`
-    approximation this comment used to describe. See also DoE-claude coordinator/docs/wiki/
+    approximation this comment used to describe. See also coordinator-content-repo coordinator/docs/wiki/
     concurrent-em-hazards.md and coordinator/docs/wiki/scoped-safety-commits.md
     for "staged = claimed, unstaged = contestable" on a shared tree — the framing
     this resync's guarantee is built to preserve.

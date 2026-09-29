@@ -17,8 +17,8 @@ apply.py most closely (a cadence/mode-selected brief, no single claimed
 artifact path, `Path.cwd()`-resolved repo root, its own `_run_git`) rather
 than `pickup_assemble`'s artifact-path-resolved shape.
 
-Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
+Contract: coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C4. D-3 (the granularity policy this module's commit verbs
 implement) and the Hard-constraints review-gate risk constraint (bug-
 blitz's commit directives depend_on an EM judgment point) live in that

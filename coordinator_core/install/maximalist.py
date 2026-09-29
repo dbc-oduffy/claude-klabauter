@@ -3,16 +3,16 @@ coordinator_core.install.maximalist — cold maximalist coordinator install
 phase-sequence orchestrator.
 
 Naked-Python port of ``coordinator/scripts/install-maximalist.sh``
-[DoE-claude repo] — the F11 "hand-run ~15 scripts in order" collapse into
+[coordinator-content-repo repo] — the F11 "hand-run ~15 scripts in order" collapse into
 ONE re-runnable command. The DoE-side polyglot trampoline (same filename,
 ``.sh`` KEPT per the template-variant #1 convention § "avoid N caller edits
 with zero functional benefit", since ``README.md``/``INSTALL.md``/the
 packageability manifest's ``programmatic_entry_point`` hardcode
 ``coordinator/scripts/install-maximalist.sh`` verbatim) self-resolves
-``CLAUDE_PLUGIN_ROOT``/``REPO_DOE_CLAUDE`` from its own on-disk location with
+``CLAUDE_PLUGIN_ROOT``/``REPO_CONTENT_ROOT`` from its own on-disk location with
 no plugin-registration dependency of its own, exports them into
 ``os.environ`` (mirroring the bash oracle's own ``export
-CLAUDE_PLUGIN_ROOT``/``export REPO_DOE_CLAUDE``) — but THIS module (the
+CLAUDE_PLUGIN_ROOT``/``export REPO_CONTENT_ROOT``) — but THIS module (the
 orchestration body it imports) is claude-klabauter-resident post-port (DR-047), so
 the real precondition to reach ``main()`` here is: claude-klabauter cloned AND
 ``repos.claude_klabauter`` registered via machine-local, OR ``CLAUDE_KLABAUTER_ROOT``
@@ -56,8 +56,8 @@ Documented divergence from the bash oracle (structural, not a scope-drop):
     the subprocess's PYTHONPATH) is moot here and is not reproduced.
   - 2026-07-21 (retire-all-bash C13): the remaining ten ``["bash", ...]``
     per-phase subprocess spawns (detect-existing-claude-home,
-    install-health-run, gen-doe-root-pointer, gen-claude-doe-shim,
-    gen-claude-doe-launcher, register-coordinator-mirror,
+    install-health-run, gen-content-root-pointer, gen-claude-author-shim,
+    gen-claude-author-launcher, register-coordinator-mirror,
     check-install-singularity, capture-fan-out-threshold,
     platform-localize, coordinator-setup-state record setup_concluded) are
     now **direct in-process calls**, same idiom as Step 3.5c's
@@ -209,13 +209,13 @@ What this does:
   install phase sequence, end-to-end, in the exact order documented in
   coordinator/commands/install.md:
     1.  install-substrate.sh           (Phase 3 Step 1 -- machine-local substrate)
-    2.  seed repos.doe_claude registry (best-effort, self-resolved clone path)
+    2.  seed repos.content_root registry (best-effort, self-resolved clone path)
     3.  install-health-run.sh          (Phase 3 Step 1b -- drop-in health scripts;
                                           after the seed, which its trust guard reads)
-    4.  gen-doe-root-pointer.sh        (Step 3.5a.1 -- ~/.claude/.doe-root pointer)
-    5.  gen-claude-doe-shim.sh         (Step 3.5a.2 -- claude() shell shim)
-    6.  claude-doe wrapper install     (Step 3.5b -- ~/.local/bin/claude-doe)
-    6.5 gen-claude-doe-launcher.sh     (Step 3.5b.2 -- Windows-only launcher; no-op elsewhere)
+    4.  gen-content-root-pointer.sh        (Step 3.5a.1 -- ~/.claude/.coordinator-content-root pointer)
+    5.  gen-claude-author-shim.sh         (Step 3.5a.2 -- claude() shell shim)
+    6.  claude-author wrapper install     (Step 3.5b -- ~/.local/bin/claude-author)
+    6.5 gen-claude-author-launcher.sh     (Step 3.5b.2 -- Windows-only launcher; no-op elsewhere)
         (4-6.5 skip when the clone is the standalone plugin -- no DoE root to point at)
     7.  gen-settings-hooks.sh          (Step 3.5c -- settings.json hook block)
     8.  register-coordinator-mirror.sh (Step 5 -- plugin.mirrors registration)
@@ -339,7 +339,7 @@ def _parse_args(argv: Sequence[str]) -> Optional[Dict[str, bool]]:
 #: launched process itself -- can tell "the interpreter never launched" (127,
 #: FileNotFoundError) and "it launched but ran past its budget" (124,
 #: TimeoutExpired) apart from "it launched, ran, and returned this code" (any
-#: other value). cross-repo/inbox/2026-08-10-doe-claude-em-exit3-residuals-
+#: other value). cross-repo/inbox/2026-08-10-coordinator-content-repo-em-exit3-residuals-
 #: are-both-yours-and-one-refutes.md, item 1.
 _RUN_RC_NOTE = {
     124: ", timed out",
@@ -636,7 +636,7 @@ def _environ_patched(env: Dict[str, str]):
     """Temporarily overlay ``env`` onto ``os.environ`` for an in-process phase.
 
     The orchestrator builds a per-install ``env`` dict (CLAUDE_PLUGIN_ROOT,
-    REPO_DOE_CLAUDE, CHECK_ONLY, PATH, ...) that subprocess phases receive via
+    REPO_CONTENT_ROOT, CHECK_ONLY, PATH, ...) that subprocess phases receive via
     ``env=``. In-process phases read ``os.environ`` directly, so a phase ported
     off a subprocess must see the same variables or its resolution order
     silently changes. Restores the prior environment on exit, including
@@ -753,7 +753,7 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
     earlier pass deferred the Windows fix on the mistaken belief that it
     was. Its only caller runs ``subprocess.run(..., capture_output=True)``
     for a ``claude-home plugins`` query. The console-input-mode defect that
-    makes launch-chain depth load-bearing belongs to ``claude-doe`` /
+    makes launch-chain depth load-bearing belongs to ``claude-author`` /
     ``claude.exe`` (see ``93089e568``), a different artifact reached
     through a different function. Do not import that caution here.
     """
@@ -1127,9 +1127,9 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
 def _is_standalone_plugin_clone(doe_clone: str) -> bool:
     """True when the coordinator clone is the published plugin itself
     (`.claude-plugin/plugin.json` at its root, no `coordinator/` subdir) rather
-    than a DoE-claude working repo.
+    than a coordinator-content-repo working repo.
 
-    The `.doe-root` pointer and the claude-doe shim, wrapper and launcher exist
+    The `.coordinator-content-root` pointer and the claude-author shim, wrapper and launcher exist
     to launch `claude --plugin-dir <DoE>/coordinator` for someone working ON the
     doctrine repo. A consumer (coordinator-claude + klabauter, e.g. the cloud
     pre-boot) loads the plugin through the marketplace instead, has no DoE root
@@ -1191,7 +1191,7 @@ def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: b
     return claude_md_created, rules_created
 
 
-def _install_claude_doe_wrapper(
+def _install_claude_author_wrapper(
     coord_root: str,
     claude_home_dir: str,
     check_only: bool,
@@ -1199,14 +1199,14 @@ def _install_claude_doe_wrapper(
     claude_klabauter_root: str,
     settings_bin: str,
 ) -> None:
-    """Step 3.5b -- make the claude-doe wrapper reachable at ``~/.local/bin/claude-doe``.
+    """Step 3.5b -- make the claude-author wrapper reachable at ``~/.local/bin/claude-author``.
     Pure-Python inline (the bash oracle does this inline too, not via a sub-script).
 
     ``wrapper_src`` is deliberately NOT derived from ``coord_root`` (the
     resolved DoE-clone ``coordinator/`` dir) -- the executable ``bin/``
     surface migrated wholesale to claude-klabauter in commit ``b644d5a9``
-    (2026-07-22), so ``claude-doe`` now lives at
-    ``<claude_klabauter_root>/coordinator/bin/claude-doe.py``, not under the DoE clone.
+    (2026-07-22), so ``claude-author`` now lives at
+    ``<claude_klabauter_root>/coordinator/bin/claude-author.py``, not under the DoE clone.
     ``coord_root`` still correctly houses ``templates/`` (DoE doctrine
     content, untouched by that migration) for the sibling shim/launcher
     generators, so this split is DR-047's contract/engine boundary, not an
@@ -1214,16 +1214,16 @@ def _install_claude_doe_wrapper(
     ``Path(__file__)``-derived constant) so tests can redirect it to an
     isolated fixture tree instead of this module's real on-disk location.
 
-    POSIX (C2): ``~/.local/bin/claude-doe`` is a SYMLINK onto
-    ``<settings_bin>/claude-doe`` -- the shim ``_install_bin_resolvers``
+    POSIX (C2): ``~/.local/bin/claude-author`` is a SYMLINK onto
+    ``<settings_bin>/claude-author`` -- the shim ``_install_bin_resolvers``
     (``substrate.py``, invoked earlier in this same install pass at Phase 3
     Step 1) generates by re-execing this same ``wrapper_src`` -- rather than
     a second ``shutil.copy2`` of the source binary. Two delivery mechanisms
     installing two independent copies of the same CLI under two names can
     drift (one four-days-stale in production the day this was found: a
-    Jul-21 bash build at ``~/.local/bin/claude-doe`` alongside a Jul-24
+    Jul-21 bash build at ``~/.local/bin/claude-author`` alongside a Jul-24
     Python port resolved by the settings-home shim); a symlink makes that
-    staleness structurally impossible -- ``~/.local/bin/claude-doe`` always
+    staleness structurally impossible -- ``~/.local/bin/claude-author`` always
     resolves to whatever the shim loop last wrote, because it IS that
     artifact under a second name. ``settings_bin`` is passed in by the
     caller (computed once in ``_run_body``, the same value used for the F2
@@ -1231,11 +1231,11 @@ def _install_claude_doe_wrapper(
     one source of truth for the settings-home ``bin/`` directory.
 
     Consequence of that symlink, named because a verifier has to know it:
-    ``coordinator_core.ops.install_claude_doe_wrapper`` (the launcher-chain
-    step `scripts/setup.py :: install_claude_doe_launcher_chain` runs after
+    ``coordinator_core.ops.install_claude_author_wrapper`` (the launcher-chain
+    step `scripts/setup.py :: install_claude_author_launcher_chain` runs after
     the forwarder loop) ``shutil.copyfile``s ``wrapper_src`` onto
-    ``~/.local/bin/claude-doe`` -- i.e. THROUGH this symlink, onto the
-    settings-home file. The final POSIX body at ``<settings_bin>/claude-doe``
+    ``~/.local/bin/claude-author`` -- i.e. THROUGH this symlink, onto the
+    settings-home file. The final POSIX body at ``<settings_bin>/claude-author``
     is therefore the wrapper source's own bytes, not the generated
     trampoline. `substrate.BYTE_COPIED_BIN_SOURCES` declares that shape (and
     is where ``wrapper_src`` below is derived from), so
@@ -1271,9 +1271,9 @@ def _install_claude_doe_wrapper(
     F2 PATH-prepend's own resolution the moment ``COORDINATOR_SETTINGS_HOME``
     is overridden.
     """
-    orch.phase_header("claude-doe wrapper install (Step 3.5b -- ~/.local/bin/claude-doe)")
-    wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])
-    wrapper_dst = os.path.join(claude_home_dir, ".local", "bin", "claude-doe")
+    orch.phase_header("claude-author wrapper install (Step 3.5b -- ~/.local/bin/claude-author)")
+    wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])
+    wrapper_dst = os.path.join(claude_home_dir, ".local", "bin", "claude-author")
     local_bin = os.path.dirname(wrapper_dst)
 
     if not os.path.isfile(wrapper_src):
@@ -1283,9 +1283,9 @@ def _install_claude_doe_wrapper(
     if os.name == "nt":
         if check_only:
             if os.path.isfile(wrapper_dst):
-                print(f"claude_doe_wrapper: ready ({wrapper_dst})")
+                print(f"claude_author_wrapper: ready ({wrapper_dst})")
             else:
-                print(f"claude_doe_wrapper: would install ({wrapper_dst})")
+                print(f"claude_author_wrapper: would install ({wrapper_dst})")
             return
 
         os.makedirs(local_bin, exist_ok=True)
@@ -1300,7 +1300,7 @@ def _install_claude_doe_wrapper(
         # temp dir, so it stays on the same volume and `os.replace` is a
         # true atomic rename rather than a non-atomic cross-volume
         # copy+delete.
-        tmp_dst = os.path.join(local_bin, f"claude-doe.tmp-{os.getpid()}")
+        tmp_dst = os.path.join(local_bin, f"claude-author.tmp-{os.getpid()}")
         try:
             # A5: preserve/force exec bits explicitly -- shutil.copy2 preserves mode
             # from source (mirrors `cp -p`), but the trailing chmod belt-and-braces
@@ -1312,30 +1312,30 @@ def _install_claude_doe_wrapper(
         except OSError as exc:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_dst)
-            print(f"FATAL: failed to install claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
+            print(f"FATAL: failed to install claude-author wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
             sys.exit(1)
         try:
             os.replace(tmp_dst, wrapper_dst)
         except OSError as exc:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_dst)
-            print(f"FATAL: failed to install claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
+            print(f"FATAL: failed to install claude-author wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        print(f"claude_doe_wrapper: installed ({wrapper_dst})")
+        print(f"claude_author_wrapper: installed ({wrapper_dst})")
         path_env = os.environ.get("PATH", "")
         if f":{local_bin}:" not in f":{path_env}:":
             print(f"  NOTE: {local_bin} is not yet on PATH -- add to your login rc for new terminals:")
             print('    export PATH="$HOME/.local/bin:$PATH"   # e.g. append to ~/.zprofile')
         return
 
-    link_target = os.path.join(settings_bin, "claude-doe")
+    link_target = os.path.join(settings_bin, "claude-author")
 
     if check_only:
         if os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target:
-            print(f"claude_doe_wrapper: ready (symlink {wrapper_dst} -> {link_target})")
+            print(f"claude_author_wrapper: ready (symlink {wrapper_dst} -> {link_target})")
         else:
-            print(f"claude_doe_wrapper: would symlink {wrapper_dst} -> {link_target}")
+            print(f"claude_author_wrapper: would symlink {wrapper_dst} -> {link_target}")
         return
 
     os.makedirs(local_bin, exist_ok=True)
@@ -1350,7 +1350,7 @@ def _install_claude_doe_wrapper(
         # state this function exists to repair, and worse than a no-op
         # failure. `os.replace()` is POSIX rename(2), which atomically
         # replaces an existing symlink/regular file with the new symlink, so
-        # there is never a window with no claude-doe at all; the prior
+        # there is never a window with no claude-author at all; the prior
         # covers-all-four-non-terminal-states comment about `os.path.lexists`
         # no longer applies -- `os.replace` overwrites absent, stale-file,
         # broken-symlink, and wrong-target destinations uniformly, with no
@@ -1359,18 +1359,18 @@ def _install_claude_doe_wrapper(
         try:
             os.symlink(link_target, tmp_dst)
         except OSError as exc:
-            print(f"FATAL: failed to symlink claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
+            print(f"FATAL: failed to symlink claude-author wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
             sys.exit(1)
         try:
             os.replace(tmp_dst, wrapper_dst)
         except OSError as exc:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_dst)
-            print(f"FATAL: failed to symlink claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
+            print(f"FATAL: failed to symlink claude-author wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
             sys.exit(1)
-        print(f"claude_doe_wrapper: linked ({wrapper_dst} -> {link_target})")
+        print(f"claude_author_wrapper: linked ({wrapper_dst} -> {link_target})")
     else:
-        print(f"claude_doe_wrapper: already linked ({wrapper_dst} -> {link_target})")
+        print(f"claude_author_wrapper: already linked ({wrapper_dst} -> {link_target})")
 
     path_env = os.environ.get("PATH", "")
     if f":{local_bin}:" not in f":{path_env}:":
@@ -1389,7 +1389,7 @@ def run(
 ) -> int:
     """Core orchestration entry -- callable directly (e.g. from tests) without
     going through argv parsing. ALWAYS returns an int exit code, even though
-    internally `run_required` phases (and the claude-doe wrapper's missing-
+    internally `run_required` phases (and the claude-author wrapper's missing-
     source guard) signal failure via `sys.exit`, matching the bash oracle's
     own `exit "$rc"` inside the `run_required` helper -- that SystemExit is
     caught at the bottom of this function and converted to a return value so
@@ -1408,7 +1408,7 @@ def run(
     to the run, and covers any phase that writes env without this fix noticing.
 
     ``claude_klabauter_root`` is REQUIRED (not defaulted here) -- the phases it feeds
-    (``claude-doe`` wrapper install) resolve
+    (``claude-author`` wrapper install) resolve
     real subprocess/file-copy targets, so silently defaulting to
     ``Path(__file__).resolve().parents[2]`` inside this function would make
     every direct-call test (this module's own coverage in
@@ -1441,7 +1441,7 @@ def _run_body(
 ) -> int:
     # Root of the home-resolution seam: three downstream consumers derive real
     # filesystem targets from this one value (the settings-home/PATH prepend,
-    # coordinator-identity.yaml, and the ~/.local/bin/claude-doe wrapper
+    # coordinator-identity.yaml, and the ~/.local/bin/claude-author wrapper
     # destination), so a "" here silently anchors all three at the filesystem
     # root rather than failing. `main()` — the real-install entry point — never
     # passes claude_home_dir, so the env ladder below IS the production path.
@@ -1458,19 +1458,19 @@ def _run_body(
 
     # Root write-side seam for the DoE clone path form. The DoE-side trampoline
     # resolves this under Git-Bash on Windows, where `pwd` yields the MSYS mount
-    # form (`/x/DoE-claude`); handed on verbatim it is re-read by native-Windows
-    # node / py.exe consumers as drive-relative `X:\x\DoE-claude` (doubled
-    # drive), which is how `repos.doe_claude` and the `.doe-root` pointer came to
+    # form (`/x/coordinator-content-repo`); handed on verbatim it is re-read by native-Windows
+    # node / py.exe consumers as drive-relative `C:\x\coordinator-content-repo` (doubled
+    # drive), which is how `repos.content_root` and the `.coordinator-content-root` pointer came to
     # hold an unresolvable path. Normalizing once HERE covers every downstream
-    # derivation in one place -- the REPO_DOE_CLAUDE env overlay handed to child
+    # derivation in one place -- the REPO_CONTENT_ROOT env overlay handed to child
     # phases, the `.coordinator-dev-repo` sentinel probe, and the
-    # `machine-local set repos.doe_claude` seed that gen_doe_root_pointer later
+    # `machine-local set repos.content_root` seed that gen_content_root_pointer later
     # reads. No-op off Windows and on already-native paths.
     doe_clone = native_path_form(doe_clone)
 
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = coord_root
-    env["REPO_DOE_CLAUDE"] = doe_clone
+    env["REPO_CONTENT_ROOT"] = doe_clone
     env["CHECK_ONLY"] = "1" if check_only else ""
     if check_only or non_interactive:
         env["COORDINATOR_NON_INTERACTIVE"] = "1"
@@ -1588,15 +1588,15 @@ def _run_body(
     # -- Phase 3 Step 1c -- Windows Defender process-exclusion offer --
     _defender_offer(check_only, non_interactive, orch)
 
-    # -- Phase 3 Step 3 (partial) -- best-effort seed repos.doe_claude --
+    # -- Phase 3 Step 3 (partial) -- best-effort seed repos.content_root --
     if check_only:
-        current = _registry_get_for_check("repos.doe_claude")
+        current = _registry_get_for_check("repos.content_root")
         if current == doe_clone:
-            orch.skip_note(f"repos.doe_claude registry key already seeded and verified ({doe_clone})")
+            orch.skip_note(f"repos.content_root registry key already seeded and verified ({doe_clone})")
         else:
-            orch.skip_note(f"Seed repos.doe_claude registry key -- check-only (would seed: {doe_clone})")
+            orch.skip_note(f"Seed repos.content_root registry key -- check-only (would seed: {doe_clone})")
     else:
-        orch.phase_header("Seed repos.doe_claude registry key (best-effort)")
+        orch.phase_header("Seed repos.content_root registry key (best-effort)")
         # Resolve to a concrete argv rather than passing the bare name through to
         # subprocess: shutil.which honours PATHEXT (so it happily finds
         # machine-local.cmd on Windows) but CreateProcess does NOT, so the bare
@@ -1609,17 +1609,17 @@ def _run_body(
             found = shutil.which("machine-local")
             ml_argv = [found] if found else None
         if ml_argv:
-            rc = _run([*ml_argv, "set", "repos.doe_claude", doe_clone], env=env)
+            rc = _run([*ml_argv, "set", "repos.content_root", doe_clone], env=env)
             if rc == 0:
-                _verify_registry_seed("repos.doe_claude", doe_clone)
+                _verify_registry_seed("repos.content_root", doe_clone)
             else:
                 print(
-                    "WARN: machine-local set repos.doe_claude failed -- REPO_DOE_CLAUDE env override still in effect for this run",
+                    "WARN: machine-local set repos.content_root failed -- REPO_CONTENT_ROOT env override still in effect for this run",
                     file=sys.stderr,
                 )
         else:
             print(
-                "NOTE: machine-local not yet on PATH in this shell -- REPO_DOE_CLAUDE env override covers this run; "
+                "NOTE: machine-local not yet on PATH in this shell -- REPO_CONTENT_ROOT env override covers this run; "
                 "open a new shell and re-run to persist the registry key.",
                 file=sys.stderr,
             )
@@ -1683,7 +1683,7 @@ def _run_body(
 
     # -- Phase 3 Step 1b -- install-health-run --
     # Runs AFTER both registry seeds above, never before: its trusted-root
-    # guard anchors on `repos.doe_claude` / `repos.claude_klabauter`, so on a
+    # guard anchors on `repos.content_root` / `repos.claude_klabauter`, so on a
     # fresh home an earlier slot refuses the coordinator clone as untrusted
     # and aborts the whole chain before gen-settings-hooks (claude-klabauter#15).
     # Retired the ["bash", install-health-run.sh] spawn (C13): that DoE-side
@@ -1711,7 +1711,7 @@ def _run_body(
     # re-applies git config to an already-registered repo either. Placed
     # immediately after the `repos.claude_klabauter` seed above: that is the
     # last point in this chain where the registry is guaranteed to carry at
-    # least `repos.doe_claude` and `repos.claude_klabauter`, which the sweep
+    # least `repos.content_root` and `repos.claude_klabauter`, which the sweep
     # below enumerates via `_registry_repo_roots` (same source
     # `ensure_hooks_fleet` reads for hooks). WARN-only, never blocks the
     # install, matching scripts/setup.py::apply_git_perf_config's own
@@ -1732,42 +1732,42 @@ def _run_body(
 
     if _is_standalone_plugin_clone(doe_clone):
         orch.skip_note(
-            "DoE launch chain (Steps 3.5a.1-3.5b.2 -- .doe-root pointer, claude-doe shim, "
-            f"wrapper, launcher) -- {doe_clone} is the standalone plugin, not a DoE-claude "
+            "DoE launch chain (Steps 3.5a.1-3.5b.2 -- .coordinator-content-root pointer, claude-author shim, "
+            f"wrapper, launcher) -- {doe_clone} is the standalone plugin, not a coordinator-content-repo "
             "working repo; the plugin loads through the marketplace"
         )
     else:
-        # -- Step 3.5a.1 -- gen-doe-root-pointer --
-        # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that DoE-side
+        # -- Step 3.5a.1 -- gen-content-root-pointer --
+        # Retired the ["bash", gen-content-root-pointer.sh] spawn (C13): that DoE-side
         # script was only a thin polyglot trampoline back into THIS repo's
-        # coordinator_core.ops.gen_doe_root_pointer -- called in-process now.
-        from coordinator_core.ops.gen_doe_root_pointer import (  # local import: avoid import cost on --help
-            main as _gen_doe_root_pointer_main,
+        # coordinator_core.ops.gen_content_root_pointer -- called in-process now.
+        from coordinator_core.ops.gen_content_root_pointer import (  # local import: avoid import cost on --help
+            main as _gen_content_root_pointer_main,
         )
 
         pointer_args = ["--check-only"] if check_only else []
         orch.run_required_py(
-            "gen-doe-root-pointer (Step 3.5a.1 -- ~/.claude/.doe-root pointer)",
-            _gen_doe_root_pointer_main,
+            "gen-content-root-pointer (Step 3.5a.1 -- ~/.claude/.coordinator-content-root pointer)",
+            _gen_content_root_pointer_main,
             pointer_args,
             env=env,
         )
 
-        # -- Step 3.5a.2 -- gen-claude-doe-shim --
-        # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that DoE-side
+        # -- Step 3.5a.2 -- gen-claude-author-shim --
+        # Retired the ["bash", gen-claude-author-shim.sh] spawn (C13): that DoE-side
         # script was only a thin polyglot trampoline back into THIS repo's
-        # coordinator_core.ops.gen_claude_doe_shim -- called in-process now.
-        from coordinator_core.ops.gen_claude_doe_shim import (  # local import: avoid import cost on --help
-            _default_shell_family as _gen_claude_doe_shim_default_family,
-            main as _gen_claude_doe_shim_main,
+        # coordinator_core.ops.gen_claude_author_shim -- called in-process now.
+        from coordinator_core.ops.gen_claude_author_shim import (  # local import: avoid import cost on --help
+            _default_shell_family as _gen_claude_author_shim_default_family,
+            main as _gen_claude_author_shim_main,
         )
 
-        # `gen_claude_doe_shim.main()` has no co-located DoE-side script path of
+        # `gen_claude_author_shim.main()` has no co-located DoE-side script path of
         # its own to derive the oracle's `${_script_dir}/../templates/shell/...`
         # default from -- its own docstring says the DoE trampoline resolves
         # that default and always passes `--template` explicitly. `coord_root`
         # (this repo's resolved DoE-clone `coordinator/` dir) is exactly that
-        # default location: `<coord_root>/templates/shell/claude-doe-shim.sh.tmpl`
+        # default location: `<coord_root>/templates/shell/claude-author-shim.sh.tmpl`
         # -- `templates/` is DoE doctrine content, unaffected by the b644d5a9
         # `bin/` migration, so `coord_root` (not `claude_klabauter_root`) is correct here.
         # D7 cold-install dogfood fix (2026-07-24): this call site previously
@@ -1775,19 +1775,19 @@ def _run_body(
         # hard-failed this required phase with "no default resolvable". `
         # --check-only` is listed first so it stays a literal prefix of the
         # logged argv line (test_c13_check_only_forwarded_to_each_native_phase
-        # substring-matches "gen-claude-doe-shim --check-only").
+        # substring-matches "gen-claude-author-shim --check-only").
         # The template must follow the SHELL FAMILY, not be hardcoded. The generator
         # copies template bytes verbatim but names its destination from the family
         # (`_shim_filename`), and that family defaults to "powershell" on native
         # Windows. A hardcoded `.sh.tmpl` here therefore wrote 62 lines of bash into
-        # `claude-doe-shim.ps1`, whose dot-source defines no `claude()` at all — a
+        # `claude-author-shim.ps1`, whose dot-source defines no `claude()` at all — a
         # plugin-less session on every launch, with the profile's sentinel block
         # present and correct so nothing downstream reported a problem.
         # `--shell` is passed explicitly rather than left to the default so the
         # template and the family cannot drift apart again from this call site.
-        _shim_family = _gen_claude_doe_shim_default_family()
+        _shim_family = _gen_claude_author_shim_default_family()
         _shim_tmpl_name = (
-            "claude-doe-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-doe-shim.sh.tmpl"
+            "claude-author-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-author-shim.sh.tmpl"
         )
         _shim_tmpl = os.path.join(coord_root, "templates", "shell", _shim_tmpl_name)
         shim_args = (["--check-only"] if check_only else []) + [
@@ -1797,25 +1797,25 @@ def _run_body(
             _shim_family,
         ]
         orch.run_required_py(
-            "gen-claude-doe-shim (Step 3.5a.2 -- claude() shell shim)",
-            _gen_claude_doe_shim_main,
+            "gen-claude-author-shim (Step 3.5a.2 -- claude() shell shim)",
+            _gen_claude_author_shim_main,
             shim_args,
             env=env,
         )
 
-        # -- Step 3.5b -- claude-doe wrapper install --
-        _install_claude_doe_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)
+        # -- Step 3.5b -- claude-author wrapper install --
+        _install_claude_author_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)
 
-        # -- Step 3.5b.2 -- gen-claude-doe-launcher --
-        # Retired the ["bash", gen-claude-doe-launcher.sh] spawn (C13): that
+        # -- Step 3.5b.2 -- gen-claude-author-launcher --
+        # Retired the ["bash", gen-claude-author-launcher.sh] spawn (C13): that
         # DoE-side script was only a thin polyglot trampoline back into THIS
-        # repo's coordinator_core.ops.gen_claude_doe_launcher -- called
+        # repo's coordinator_core.ops.gen_claude_author_launcher -- called
         # in-process now.
-        from coordinator_core.ops.gen_claude_doe_launcher import (  # local import: avoid import cost on --help
-            main as _gen_claude_doe_launcher_main,
+        from coordinator_core.ops.gen_claude_author_launcher import (  # local import: avoid import cost on --help
+            main as _gen_claude_author_launcher_main,
         )
 
-        # Same class of bug as the shim call site above: `gen_claude_doe_launcher`
+        # Same class of bug as the shim call site above: `gen_claude_author_launcher`
         # has no co-located script path to derive its `--template-dir` default
         # from, and expects the DoE trampoline to pass it explicitly (default
         # location: `<coord_root>/templates/bin` -- also DoE doctrine content,
@@ -1824,8 +1824,8 @@ def _run_body(
         _launcher_tmpl_dir = os.path.join(coord_root, "templates", "bin")
         launcher_args = (["--check-only"] if check_only else []) + ["--template-dir", _launcher_tmpl_dir]
         orch.run_required_py(
-            "gen-claude-doe-launcher (Step 3.5b.2 -- Windows claude-doe.cmd/.ps1 launcher)",
-            _gen_claude_doe_launcher_main,
+            "gen-claude-author-launcher (Step 3.5b.2 -- Windows claude-author.cmd/.ps1 launcher)",
+            _gen_claude_author_launcher_main,
             launcher_args,
             env=env,
         )
@@ -1881,7 +1881,7 @@ def _run_body(
         try:
             # The generator resolves the coordinator root and the default --out
             # from the environment; run it under the same env the subprocess
-            # form received (REPO_DOE_CLAUDE / PATH / CLAUDE_PLUGIN_ROOT) so
+            # form received (REPO_CONTENT_ROOT / PATH / CLAUDE_PLUGIN_ROOT) so
             # resolution order is unchanged by going in-process.
             with _environ_patched(env):
                 hooks_status = generate()
@@ -1919,7 +1919,7 @@ def _run_body(
         elif hooks_status == "skipped (clone absent)":
             orch.skip_note(
                 f"{_hooks_desc} -- DoE clone not resolved yet; complete Step 3.5a "
-                "(gen-doe-root-pointer / repos.doe_claude seed) first, then re-run."
+                "(gen-content-root-pointer / repos.content_root seed) first, then re-run."
             )
         else:
             print("  NOTE: SessionStart hooks take effect at next Claude Code boot (settings.json")
@@ -2213,10 +2213,10 @@ def main(argv: List[str]) -> int:
         return 0
 
     coord_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    doe_clone = os.environ.get("REPO_DOE_CLAUDE")
+    doe_clone = os.environ.get("REPO_CONTENT_ROOT")
     if not coord_root or not doe_clone:
         print(
-            "install-maximalist: CLAUDE_PLUGIN_ROOT and REPO_DOE_CLAUDE must both be set "
+            "install-maximalist: CLAUDE_PLUGIN_ROOT and REPO_CONTENT_ROOT must both be set "
             "by the caller (the DoE-side trampoline self-resolves and exports both before "
             "invoking this module).",
             file=sys.stderr,
@@ -2249,12 +2249,12 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="maximalist",
     source_module="coordinator_core.install.maximalist",
     clauses=(
-        # Clause 1 — `_install_claude_doe_wrapper` (Step 3.5b): the one
+        # Clause 1 — `_install_claude_author_wrapper` (Step 3.5b): the one
         # place this ORCHESTRATOR writes directly rather than delegating to
         # a declaring writer module. POSIX: `os.symlink` + atomic
-        # `os.replace` onto `~/.local/bin/claude-doe`, pointed at
-        # `<settings-home>/bin/claude-doe`. Windows: `shutil.copy2` of the
-        # wrapper binary from `<claude-klabauter-live-root>/coordinator/bin/claude-doe.py`
+        # `os.replace` onto `~/.local/bin/claude-author`, pointed at
+        # `<settings-home>/bin/claude-author`. Windows: `shutil.copy2` of the
+        # wrapper binary from `<claude-klabauter-live-root>/coordinator/bin/claude-author.py`
         # to a same-directory temp path, `os.chmod` on that temp path, then
         # atomic `os.replace` onto the same destination (no native symlink
         # story assumed — see the function's own docstring). One entry
@@ -2264,14 +2264,14 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
-                    path="<install-base>/.local/bin/claude-doe",
+                    path="<install-base>/.local/bin/claude-author",
                     reason=(
-                        "claude-doe wrapper install (Step 3.5b): POSIX "
+                        "claude-author wrapper install (Step 3.5b): POSIX "
                         "symlinks this path onto "
-                        "<settings-home>/bin/claude-doe (atomic "
+                        "<settings-home>/bin/claude-author (atomic "
                         "os.replace of a temp symlink); Windows instead "
                         "shutil.copy2's the wrapper binary from "
-                        "<claude-klabauter-live-root>/coordinator/bin/claude-doe.py to a "
+                        "<claude-klabauter-live-root>/coordinator/bin/claude-author.py to a "
                         "same-directory temp path, chmods +x, then "
                         "publishes with an atomic os.replace onto this "
                         "path. Written in-line by this orchestrator, not "
@@ -2315,8 +2315,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     ),
 )
 """This module is a genuine ORCHESTRATOR for every OTHER phase — Phase 3
-Step 1 (install-substrate), install-health-run, gen-doe-root-pointer,
-gen-claude-doe-shim, gen-claude-doe-launcher, gen-settings-hooks,
+Step 1 (install-substrate), install-health-run, gen-content-root-pointer,
+gen-claude-author-shim, gen-claude-author-launcher, gen-settings-hooks,
 register-coordinator-mirror, ensure-coordinator-venv, scaffold-canonical-
 structure, check-install-singularity, capture-fan-out-threshold,
 platform-localize, and coordinator-setup-state are each called in-process
@@ -2325,13 +2325,13 @@ WRITE_SURFACE — re-declaring their clauses here would double-count every
 entry in the emitted manifest, the exact caller-vs-delegate duplication
 this debt item exists to remove.
 
-`_install_claude_doe_wrapper` (Step 3.5b, clause 1 above) is the one
-exception: it writes `~/.local/bin/claude-doe` directly, in-line in this
+`_install_claude_author_wrapper` (Step 3.5b, clause 1 above) is the one
+exception: it writes `~/.local/bin/claude-author` directly, in-line in this
 module, rather than through a declaring delegate — so it is this writer's
 own surface to declare, not double-counted with anyone else's.
 
 Not declared here (deliberately, not an oversight):
-  - The best-effort `repos.doe_claude` / `repos.claude_klabauter`
+  - The best-effort `repos.content_root` / `repos.claude_klabauter`
     machine-local seed blocks (`_run([*ml_argv, "set", ...])`) shell out to
     the external `machine-local` CLI, a SEPARATE top-level package
     (`coordinator_core.machine_resolver`/its CLI entry point) outside

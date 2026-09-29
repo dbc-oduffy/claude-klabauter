@@ -485,38 +485,21 @@ def test_split_caller_tie_reports_the_full_caller_breakdown():
     assert finding["caller"] in finding["callers"]
 
 
-def test_headline_does_not_tell_a_network_arm_to_delete_itself():
+def test_a_network_arm_is_not_a_budget_breach():
+    """Remote latency is not local work: a `.network` arm never ranks, however slow."""
     summary = breach_report(
         entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
     )
-    text = summary["headline"]
-
-    assert "push.outstanding.network" in text
-    assert "delete" not in text.lower()
-    assert "round trip" in text.lower()
-    assert summary["totals"]["breaching_ops"] == 1
+    assert summary["totals"]["breaching_ops"] == 0
+    assert "push.outstanding.network" not in (summary["headline"] or "")
 
 
-def test_network_remedy_does_not_become_a_denylist_of_op_names():
-    assert "round trip" in op_budget_breaches._remedy_for("anything.at.all.network")
-    for op in ("push.outstanding", "network.thing"):
-        remedy = op_budget_breaches._remedy_for(op)
-        assert "delete" in remedy.lower(), remedy
-        assert "rebuild" in remedy.lower(), remedy
-        assert "process time" in remedy.lower(), remedy
-
-
-def test_network_headline_still_obeys_the_standing_register_rules():
+def test_only_the_declared_suffix_exempts_an_op():
     summary = breach_report(
-        entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
+        entries=[_complete("network.thing", 30_000.0), _complete("push.outstanding", 30_000.0)],
+        now=BASE_T,
     )
-    text = summary["headline"]
-
-    for banned in ("timeout", "increase", "raise", "grace", "budget to", "retry"):
-        assert banned not in text.lower(), f"headline names {banned!r}: {text}"
-    for banned in ("sorry", "unfortunately", "please note", "harmless", "as normal"):
-        assert banned not in text.lower()
-    assert len(text.encode("utf-8")) <= 220
+    assert summary["totals"]["breaching_ops"] == 2
 
 
 def _worst_case_summary(op):

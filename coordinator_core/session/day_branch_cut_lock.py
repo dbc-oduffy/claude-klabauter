@@ -17,8 +17,8 @@ lock file placed INSIDE the common dir, the same placement
 used (2026-08-30, overengineering-reviewer finding 1 -- that record's sole
 writer was already gravestoned, so the read half followed it out).
 
-    Negative-spec — do NOT key this on a hashed path string. ``X:\\DoE-claude``,
-    ``X:/DoE-claude``, a substituted-drive view and a UNC view all denote the
+    Negative-spec — do NOT key this on a hashed path string. ``C:\\coordinator-content-repo``,
+    ``C:/coordinator-content-repo``, a substituted-drive view and a UNC view all denote the
     same tree and hash differently, and sessions reach the tree by different
     routes (harness cwd, ``CLAUDE_PROJECT_DIR``, a ``-C`` argument). A hash
     mismatch fails OPEN: two sessions take two different locks, both "win",
@@ -44,9 +44,9 @@ writer was already gravestoned, so the read half followed it out).
     the handle open. A held handle turns a reaper's or a takeover's unlink into
     a sharing violation.
 
-Spec backlink: DoE-claude ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md``
+Spec backlink: coordinator-content-repo ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md``
 chunk C2, delivered to this repo by cross-repo memo
-``2026-08-18-doe-claude-em-day-branch-cut-tree-invariant-engine-work.md``.
+``2026-08-18-coordinator-content-repo-em-day-branch-cut-tree-invariant-engine-work.md``.
 """
 
 from __future__ import annotations
@@ -76,7 +76,10 @@ class CutLockVerdict(NamedTuple):
 
 
 def lock_path(repo_root: str | Path) -> Path:
-    return resolve_git_common_dir(repo_root) / _LOCK_NAME
+    root = str(repo_root)
+    if os.name == "nt":
+        root = root.replace("\\", "/")
+    return resolve_git_common_dir(root) / _LOCK_NAME
 
 
 def read_record(repo_root: str | Path) -> Optional[dict]:

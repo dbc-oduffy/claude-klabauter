@@ -23,7 +23,7 @@ Detectors — exactly two, both evidence-pinned:
 
     D2 — wrong-altitude citation density. Counts `file.ext:NNN`-shaped
     citations and absolute filesystem paths (POSIX `/Users/...` and Windows
-    `X:\\...`). Fires at >= 2 combined, INDEPENDENTLY of length — in the
+    `C:\\...`). Fires at >= 2 combined, INDEPENDENTLY of length — in the
     measured session, real altitude violations occurred in messages of 10, 16
     and 29 words, so a length prefilter would miss most of them.
 
@@ -95,7 +95,7 @@ Environment variables:
         other's fired-state. The env var name kept its original "TALLY"
         spelling on purpose — same mechanism, repurposed, not replaced.
 
-Spec backlink: coordinator/docs/wiki/em-pm-communication-style.md (DoE-claude)
+Spec backlink: coordinator/docs/wiki/em-pm-communication-style.md (coordinator-content-repo)
 """
 
 from __future__ import annotations

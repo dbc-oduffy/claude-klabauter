@@ -271,6 +271,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": True,
     },
+    "quick_wrap_assemble/__init__.py::_ship_landed_dispatch_sizings": {
+        "reason": "release",
+        "confirmed": True,
+    },
     "ops/memo_transition.py::_commit_terminal_write": {
         "reason": "release",
         "confirmed": True,

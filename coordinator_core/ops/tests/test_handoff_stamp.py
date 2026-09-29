@@ -299,7 +299,7 @@ def test_kind_inserted_in_lockstep_with_shipped_in(tmp_path):
 
 def test_kind_omitted_is_rejected(tmp_path):
     """Omitting kind entirely is now REJECTED (DR-096 choke-point closure,
-    DoE-claude 2026-07-26/27 follow-up) — the op no longer accepts an
+    coordinator-content-repo 2026-07-26/27 follow-up) — the op no longer accepts an
     unstated kind from any caller; no write occurs and the file is
     untouched. Supersedes the pre-follow-up
     ``test_kind_omitted_leaves_shipped_in_kind_absent`` (which asserted the
@@ -414,7 +414,7 @@ def test_kind_force_replace_rewrites_kind_in_lockstep(tmp_path):
 
 def test_kind_force_replace_without_kind_is_rejected(tmp_path):
     """force=True with NO kind param is REJECTED (DR-096 choke-point closure,
-    DoE-claude 2026-07-26/27 follow-up) — kind is required unconditionally,
+    coordinator-content-repo 2026-07-26/27 follow-up) — kind is required unconditionally,
     including on the force-replace path; no write occurs. Supersedes the
     pre-follow-up ``test_kind_force_replace_without_kind_leaves_prior_kind_untouched``
     (which asserted the force-replace succeeded silently with kind omitted)."""
@@ -781,7 +781,7 @@ def test_idempotent_via_locked_rmw_no_write(tmp_path):
 # _repair_archived_deployment_state_handler — provenance-repair verb for an
 # ALREADY-ARCHIVED handoff's deployment_state field.
 #
-# Spec backlink: docs/plans/... (DoE-claude cross-repo memo, 2026-07-26) — 13
+# Spec backlink: docs/plans/... (coordinator-content-repo cross-repo memo, 2026-07-26) — 13
 # archived handoffs stuck at deployment_state: in_flight, hand-edited because
 # ship-handoff's state/handoffs/-only containment refuses archive/handoffs/
 # paths. Coverage:
@@ -872,7 +872,7 @@ def test_repair_archived_deployment_state_in_flight_to_shipped(tmp_path):
 def test_repair_archived_deployment_state_continued_without_continued_into_rejected(tmp_path):
     """(p) THE regression: a repair to deployment_state: continued with no
     continued_into must be rejected — this is the exact defect 10 of the 13
-    DoE-claude hand-edits produced (deployment_state: continued stamped with
+    coordinator-content-repo hand-edits produced (deployment_state: continued stamped with
     no continued_into, silently failing handoff-archived.schema.json's own
     cross-field rule). This verb must fail loud instead of reproducing it."""
     repo = _make_git_repo(tmp_path)

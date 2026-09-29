@@ -64,8 +64,8 @@ renders nothing in the marker; a run where every chunk contributes nothing
 gets no marker line at all.
 
 The ≤5 write-capable-executor cap (cross-repo memo
-archive/2026-09-11-doe-claude-em-mise-concurrency-cap-unemittable.md) is
-RETIRED (PM ruling 2026-09-27: DoE-claude docs/research/2026-09-27-beat-
+archive/2026-09-11-coordinator-content-repo-em-mise-concurrency-cap-unemittable.md) is
+RETIRED (PM ruling 2026-09-27: coordinator-content-repo docs/research/2026-09-27-beat-
 vanilla-restructure/target-design.md §12 item 3). ``_runRow`` no longer
 acquires or releases any write-slot -- every row's own ``agent()`` call
 dispatches as soon as its ``deps`` resolve. The cap's recorded rationale
@@ -163,7 +163,7 @@ Which model is a per-``agentType`` decision, not one constant. A call-site
 ``'sonnet'`` silently outranked ``git-commit-agent``'s and
 ``test-runner``'s charter tier and billed a Sonnet for mechanical work.
 ``_AGENT_MODELS`` mirrors the charter tier each definition declares
-(DoE-claude ``coordinator/agent-effort-registry.yaml``); keep the two in
+(coordinator-content-repo ``coordinator/agent-effort-registry.yaml``); keep the two in
 step when either moves.
 
 ## Tier-T only (Anti-scope)
@@ -185,7 +185,7 @@ imposed, and the refusal surfaced to plan authors as an unsatisfiable
 guard. See ``pathspec``'s module docstring § The sharp edge AC16 exists for.
 
 ## The terminal phase degrades, it never vetoes (cross-repo memo
-``empty-terminal-test-scope-degrades-not-vetoes``, doe-claude-em, 2026-08-31)
+``empty-terminal-test-scope-degrades-not-vetoes``, coordinator-content-repo-em, 2026-08-31)
 
 ``pathspec.NoTestTargetError`` is a locator blind spot, not proof of a bad
 plan: the locator is Python-test-shaped, so a build/config migration, a
@@ -236,13 +236,13 @@ call — DoE's live-tool capture found no permission-mode carrier on the
 
 ## Vehicle: EM-dispatched Agent, not a fired-and-forgotten Workflow (live upstream defect)
 
-DoE-claude's ``skills/execute-plan/SKILL.md`` § Vehicle default QUALIFIES
+Coordinator-content-repo's ``skills/execute-plan/SKILL.md`` § Vehicle default QUALIFIES
 states that a Workflow ``agent()`` spawn is not an ``Agent`` tool call, so
 injected ``contract_blocks`` never arrive on that path, and that 33 of 35
 coordinator-typed agents carry a ``contract_blocks`` row (git-commit-agent
 and atlas-clarity-reviewer carry no such row) — so a plan wave of
 coordinator-typed agents belongs on the ``Agent`` path today, not fired
-unattended as a Workflow script. Verified OPEN at DoE-claude HEAD
+unattended as a Workflow script. Verified OPEN at coordinator-content-repo HEAD
 (2026-08-14). The seam is closable and the engine leg for it already exists
 here; it is not yet closed — catering arrives once DoE's cutover lands. Until
 then, the script this module emits is a durable machine-derived wave-map
@@ -467,7 +467,7 @@ _REVIEW_PHASE_TITLE = "Review"
 _WORKFLOW_SCRIPT_BYTE_CAP = 524288
 
 # (c) The mise-en-place ceremony's <=5 write-capable-executor barrier
-# (cross-repo memo archive/2026-09-11-doe-claude-em-mise-concurrency-cap-
+# (cross-repo memo archive/2026-09-11-coordinator-content-repo-em-mise-concurrency-cap-
 # unemittable.md) is RETIRED (PM ruling 2026-09-27; C14). No slot limit, no
 # runtime semaphore: a row's own `agent()` call dispatches as soon as its
 # `deps` resolve, exactly as the DAG (`wave_map.build_waves`/
@@ -616,7 +616,7 @@ _VERIFICATION_CLAUSE_RE = re.compile(r"verification\b[^:\n]*:(?P<clause>[^\n]*)"
 #: edit a plan, run mise-prep-gate.py until PREPPED, stamp it — are exactly
 #: that. A first cut keyed on `python`/`.py`/`prints` refused all twelve of
 #: them (measured 2026-09-11 across every mise-inventory spine in claude-klabauter,
-#: example-retrieval-repo and DoE-claude) while the one true positive, D16, needs none
+#: example-retrieval-repo and coordinator-content-repo) while the one true positive, D16, needs none
 #: of those words to be caught.
 _RUN_REQUIRED_RE = re.compile(
     r"\b(pytest|unittest|falsifier|(npm|cargo|go)\s+test|cargo\s+build)\b"
@@ -682,7 +682,7 @@ class DispatchGateViolation(ValueError):
     """A row ``read_spine`` handed to the wave-builder is unschedulable by its
     own body prose, even though nothing else on the row kept it out of a wave.
 
-    Restated from DoE-claude ``coordinator/bin/emit-dispatch-workflow.py ::
+    Restated from coordinator-content-repo ``coordinator/bin/emit-dispatch-workflow.py ::
     guard_against_unschedulable_rows`` (Check B only — see
     ``_prose_contradicting_fields``'s own docstring for why Check A is not
     carried here). Raised by ``emit_script`` before ``compose_script`` writes
@@ -691,7 +691,7 @@ class DispatchGateViolation(ValueError):
 
 
 # Check B: prose asserting a state the row's own fields do not declare.
-# Restated to the letter from DoE-claude ``emit-dispatch-workflow.py``
+# Restated to the letter from coordinator-content-repo ``emit-dispatch-workflow.py``
 # (``_BLOCKED_PROSE_PATTERNS`` / ``_ALREADY_HAPPENED_PROSE_PATTERNS`` /
 # ``_prose_contradicting_fields``), which is the SSOT for which phrases
 # qualify — see that module's own extended commentary (survived a 930-row
@@ -728,7 +728,7 @@ _ALREADY_HAPPENED_PROSE_PATTERNS = (
 # (`_uncleared_execution_gate`'s own negative spec), but a gate's
 # `condition`/`closure_evidence` prose can declare discharge in shout-case
 # while `cleared` stays unset -- the boolean read alone misses that. Restated
-# from DoE-claude `emit-dispatch-workflow.py`
+# from coordinator-content-repo `emit-dispatch-workflow.py`
 # (`_GATE_DISCHARGE_CLAIM_PATTERNS`/`_prose_contradicting_fields`, commits
 # 2b3cd386e/4537df652): a `blocks: ac-closure` gate doesn't stop the
 # wave-builder from scheduling a row, so nothing else here refuses the shape
@@ -799,7 +799,7 @@ def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
     discharge) is exactly the row ``spine_read``'s Check-A exclusion has
     already dropped out of ``rows`` before this function ever runs — the
     silent-exclusion gap DoE's Check B was built to surface (restated from
-    DoE-claude ``guard_against_unschedulable_rows``, commits
+    coordinator-content-repo ``guard_against_unschedulable_rows``, commits
     2b3cd386e/4537df652). The body-prose classes below stay scoped to
     ``rows`` (dispatchable rows only), unchanged.
 
@@ -1223,7 +1223,7 @@ class PlanContext:
 #: standing in" — and on a fleet box that premise is false. A workflow inherits
 #: the DRIVER SESSION's cwd, which on a multi-repo box is routinely a sibling
 #: of the repo the script was emitted for. Measured 2026-09-10: a 23-row mise
-#: run emitted for claude-klabauter, fired from a session standing in DoE-claude,
+#: run emitted for claude-klabauter, fired from a session standing in coordinator-content-repo,
 #: returned BLOCKED from eight of ten executors against a spine that existed —
 #: in the repo they were not in — and its commit agent read the same-named file
 #: in the sibling as a cross-repo divergence and halted the run.
@@ -1437,7 +1437,7 @@ def _plan_title(plan_text: str, fallback: str) -> str:
     commented out, so the plan a caller is most likely to hand this op is
     exactly the one that mis-renders: every executor brief opened
     ``Plan: # problem_set: inline   # ratified problem-set slug or`` rather
-    than the plan's name (doe-claude-em, 2026-09-05).
+    than the plan's name (coordinator-content-repo-em, 2026-09-05).
 
     ``title:`` sits between the H1 and the file stem rather than above the H1
     because the H1 is what a reader of the rendered brief sees as the plan's
@@ -1661,9 +1661,9 @@ def _plan_context_preamble(context: PlanContext) -> str:
     the first two lines should have the second of those. An executor that
     never learns its plan's criterion is the one that builds a thing that is
     wrong in a new way -- see
-    cross-repo/archive/2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape.md.
+    cross-repo/archive/2026-08-27-coordinator-content-repo-em-prime-exit-criterion-settled-shape.md.
 
-    Named external seam: DoE-claude's ``coordinator/bin/emit-dispatch-workflow.py``
+    Named external seam: coordinator-content-repo's ``coordinator/bin/emit-dispatch-workflow.py``
     monkeypatches ``_row_prompt``, and its replacement DELEGATES to the original
     before appending -- ``_install_brief_pointers :: doe_row_prompt`` calls
     ``original_row_prompt(row, plan_path, plan_context)`` and concatenates a brief
@@ -2860,7 +2860,7 @@ def compose_script(
     flat_rows = [row for wave in waves for row in wave]
 
     # The anchor rides on `plan_context` rather than `compose_script`'s own
-    # `repo_root`: an outside composer (DoE-claude's emit-dispatch-workflow.py)
+    # `repo_root`: an outside composer (coordinator-content-repo's emit-dispatch-workflow.py)
     # builds the context and calls straight through here, so one source keeps
     # every row's prompt from disagreeing about the repo.
     repo_anchor = plan_context.repo_root if plan_context is not None else None
@@ -3299,7 +3299,7 @@ def _spec_path_for_prompt(plan_path: Path, repo_root: Optional[Path]) -> Path:
             continue
 
     # A drive-lettered path is absolute wherever it came from: on POSIX
-    # `Path("X:/...")` reads as relative, so a Windows-origin plan path reaching
+    # `Path("C:/...")` reads as relative, so a Windows-origin plan path reaching
     # a POSIX emitter would otherwise pass straight through, drive letter and all.
     if plan_path.is_absolute() or _DRIVE_PREFIX_RE.match(plan_path.as_posix()):
         parts = plan_path.parts[-3:] if len(plan_path.parts) >= 3 else plan_path.parts[1:]
@@ -3358,7 +3358,7 @@ def emit_script(
 
     This used to read "no live fragment exists yet". THAT IS NO LONGER TRUE
     and the correction matters, because it was the stated reason the call
-    site was never wired: ``DoE-claude/coordinator/contract/review-roster-
+    site was never wired: ``coordinator-content-repo/coordinator/contract/review-roster-
     fragment.json`` has existed since 2026-08-30, carrying the same
     ``lightweight``/``standard``/``full`` tiers ``derive_review_tier``
     resolves. Found 2026-09-01 by our own drift oracle over the vendored copy
@@ -3369,7 +3369,7 @@ def emit_script(
     where a production emit should READ it from. The only copy on this side
     is a hand-synced test fixture, which is right for a drift oracle and
     wrong as a production read -- an emitted script's roster would lag DoE's
-    by however long it takes a test to go red. Asked of doe-claude-em in
+    by however long it takes a test to go red. Asked of coordinator-content-repo-em in
     ``review-phases-are-unwired-not-broken``; do not answer it here by
     pointing this parameter at the fixture.
 
@@ -3404,7 +3404,7 @@ def emit_script(
         plan_text = None
 
     # Check B (`check_unschedulable_rows` / `DispatchGateViolation`), restated
-    # from DoE-claude's `guard_against_unschedulable_rows` — see that
+    # from coordinator-content-repo's `guard_against_unschedulable_rows` — see that
     # function's own docstring for why only Check B is carried. Reads the raw
     # `load_rows` dicts for `body`/`external_gate`/`disposition`, none of
     # which survive onto `EmitterRow`/`WaveRow`. Reuses `plan_text` above

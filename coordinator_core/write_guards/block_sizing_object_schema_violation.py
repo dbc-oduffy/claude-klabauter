@@ -15,7 +15,7 @@ Negative-spec:
     warn-by-default / ``COORDINATOR_SCHEMA_STRICT``-gated pair for every
     OTHER schema; this guard is a narrower, unconditional sibling for
     exactly one.
-  - Does NOT require a sibling DoE-claude checkout, a registry manifest, or
+  - Does NOT require a sibling coordinator-content-repo checkout, a registry manifest, or
     any repo-root git spawn — the schema it validates against is claude-klabauter's
     own vendored copy (``coordinator_core/frontmatter/schemas/``), and the
     path match is a path-tail regex, never a resolve-and-compare against a

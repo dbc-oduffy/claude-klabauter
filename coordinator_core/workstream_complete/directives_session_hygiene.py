@@ -33,7 +33,7 @@ coordinator/docs/wiki/computed-skills-conversion-checklist.md, so the
 next converter inherits it deliberately rather than by imitation).
 
 Step 2.96 is the LIVE completeness-checklist advisory WARN gate
-(DoE-claude coordinator/skills/workstream-complete/SKILL.md, Step 2.96,
+(coordinator-content-repo coordinator/skills/workstream-complete/SKILL.md, Step 2.96,
 ~lines 602-646) and is this module's primary acceptance condition, not a
 peripheral inclusion: a live gate needs a directive/gate home before the
 SKILL body is rewritten (C5), or it silently drops out of the ceremony
@@ -377,8 +377,8 @@ def build_terminal_handoff_sweep_directive() -> dict[str, Any]:
     """The close ceremony's mandatory drain of terminal batons out of
     `state/handoffs/`.
 
-    PM ruling (2026-09-03, carried by doe-claude-em memo
-    `cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-a-
+    PM ruling (2026-09-03, carried by coordinator-content-repo-em memo
+    `cross-repo/inbox/2026-09-03-coordinator-content-repo-em-close-verbs-must-emit-a-
     terminal-handoff-drain-directive.md`): `/workstream-complete` and
     `/quick-wrap` MUST archive completed batons at resolution. That reverses
     the prior doctrine (archival lands at the next ceremony), which left the

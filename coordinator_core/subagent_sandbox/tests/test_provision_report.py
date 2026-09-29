@@ -52,7 +52,7 @@ from coordinator_core.subagent_sandbox.provision_report import main as provision
 from coordinator_core.subagent_sandbox.provision_report import _INTEGRATOR_AGENT_TYPE
 from coordinator_core.subagent_sandbox.provision_report import _splice_review_receipt
 from coordinator_core.subagent_sandbox.provision_report import _splice_review_completion
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
 # real `git init`'d tree per this file's own module docstring so it behaves
@@ -932,7 +932,7 @@ def test_build_doc_text_divergence_is_object_not_array() -> None:
 
 # ---------------------------------------------------------------------------
 # divergence-field flow-style regression (cross-repo/inbox/
-# 2026-07-25-doe-claude-em-provision-report-divergence-flow-style.md)
+# 2026-07-25-coordinator-content-repo-em-provision-report-divergence-flow-style.md)
 # ---------------------------------------------------------------------------
 
 #: Each entry is (label, doc_text_producer, divergence_field_name). The
@@ -968,7 +968,7 @@ def test_divergence_field_parses_as_object_under_restricted_yaml_parser(
     label: str, doc_text_fn, field_name: str
 ) -> None:
     """Regression net for the flow-style ``divergence: {diverged: false}``
-    defect (cross-repo/inbox/2026-07-25-doe-claude-em-provision-report-
+    defect (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-provision-report-
     divergence-flow-style.md): this repo's restricted YAML parser
     (``coordinator_core.frontmatter.schema_validate.parse_yaml``) does NOT
     support flow-style mappings -- it parses ``{diverged: false}`` as a raw
@@ -1013,7 +1013,7 @@ def test_dispatch_feed_field_is_block_style_and_parses_as_object() -> None:
     that the field parses -- a flow-style ``dispatch_feed: {...}`` would
     still happen to parse under full-spec ``yaml.safe_load`` but silently
     fail the restricted parser, exactly the defect class recorded at
-    cross-repo/archive/2026-07-25-doe-claude-em-provision-report-
+    cross-repo/archive/2026-07-25-coordinator-content-repo-em-provision-report-
     divergence-flow-style.md.
     """
     text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")
@@ -1994,11 +1994,11 @@ def test_plan_path_stem_sanitizes_to_empty_falls_back_to_session_keyed(
 # provisioner-writes-the-sidecar-skeleton.md, C1)
 # ---------------------------------------------------------------------------
 
-_DOE_ROOT, _DOE_PRESENT = doe_root_and_present()
+_CONTENT_ROOT, _DOE_PRESENT = content_root_and_present()
 
 
 def _plan_coverage_checker_agent_path() -> Path:
-    return Path(_DOE_ROOT) / "coordinator" / "agents" / "plan-coverage-checker.md"
+    return Path(_CONTENT_ROOT) / "coordinator" / "agents" / "plan-coverage-checker.md"
 
 
 def test_plan_coverage_check_skeleton_emits_ten_headings_and_the_counts_line() -> None:
@@ -2007,7 +2007,7 @@ def test_plan_coverage_check_skeleton_emits_ten_headings_and_the_counts_line() -
 
     THIS ENGINE IS THE SOURCE OF TRUTH for these strings, and the assertion
     is deliberately against ``_PLAN_COVERAGE_CHECK_SKELETON`` rather than
-    against DoE-claude's ``coordinator/agents/plan-coverage-checker.md``.
+    against coordinator-content-repo's ``coordinator/agents/plan-coverage-checker.md``.
 
     The first revision of this test read the headings live out of that agent
     file, on the reasoning that the consumer prompt stayed canonical and any
@@ -2017,7 +2017,7 @@ def test_plan_coverage_check_skeleton_emits_ten_headings_and_the_counts_line() -
     template the whole change removes), so a guard reading them would have
     gone red the moment the trim landed, and keeping them to satisfy the
     guard would have cancelled the saving. The two were mutually exclusive.
-    Caught by doe-claude-em on receipt of the emitted bytes, before either
+    Caught by coordinator-content-repo-em on receipt of the emitted bytes, before either
     side trimmed anything.
 
     Ownership follows emission: the provisioner is now the component that
@@ -2063,14 +2063,14 @@ def test_agent_prompt_does_not_re_add_the_emitted_skeleton() -> None:
     defect.
 
     MARKED ``pending_fix`` DELIBERATELY, and this is not a broken test: it is
-    red until doe-claude-em lands the trim this engine change exists to
+    red until coordinator-content-repo-em lands the trim this engine change exists to
     enable, which is their commit to make in their own repo on their own
     schedule (no cross-repo commit grant exists -- DR-127 retired it). Remove
     this marker once their trim lands; a green run before that means someone
     trimmed without telling us, which is itself worth knowing."""
     if not _DOE_PRESENT or not _plan_coverage_checker_agent_path().exists():
         pytest.skip(
-            "sibling DoE-claude checkout with coordinator/agents/plan-coverage-checker.md "
+            "sibling coordinator-content-repo checkout with coordinator/agents/plan-coverage-checker.md "
             "not found"
         )
     agent_text = _plan_coverage_checker_agent_path().read_text(encoding="utf-8")

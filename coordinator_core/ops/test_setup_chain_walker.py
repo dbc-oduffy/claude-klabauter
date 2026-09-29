@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import setup_chain_walker as scw
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -142,31 +142,31 @@ def test_resolve_coordinator_root_ladder_noop_when_no_mirrors_registered(tmp_pat
 
 
 def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, monkeypatch):
-    doe_root = tmp_path / "doe-claude"
-    plugin_root = doe_root / "coordinator"
+    content_root = tmp_path / "coordinator-content-repo"
+    plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
     (plugin_root / "templates" / "bin").mkdir(parents=True)
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(content_root) if key == "engine.working_repos.content_root" else None)
 
     resolved = scw._resolve_coordinator_root_ladder([])
     assert resolved is not None
-    assert resolved == (plugin_root, "engine.working_repos.doe_claude registry key")
+    assert resolved == (plugin_root, "engine.working_repos.content_root registry key")
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, monkeypatch):
-    doe_root = tmp_path / "doe-claude"
-    plugin_root = doe_root / "coordinator"
+    content_root = tmp_path / "coordinator-content-repo"
+    plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
     (plugin_root / "templates" / "bin").mkdir(parents=True)
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(content_root) if key == "engine.working_repos.content_root" else None)
     monkeypatch.setattr(
         "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
         lambda target_root, env=None: str(Path(target_root).resolve()) == str(plugin_root.resolve()),
@@ -176,10 +176,10 @@ def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, 
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_missing_positive_evidence(tmp_path, monkeypatch):
-    doe_root = tmp_path / "doe-claude"
-    doe_root.mkdir()
+    content_root = tmp_path / "coordinator-content-repo"
+    content_root.mkdir()
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(content_root) if key == "engine.working_repos.content_root" else None)
 
     assert scw._resolve_coordinator_root_ladder([]) is None
 
@@ -192,13 +192,13 @@ def test_resolve_coordinator_root_ladder_rung3_fail_open_when_key_absent(monkeyp
 
 
 def test_resolve_coordinator_root_ladder_flag_and_env_outrank_registry(tmp_path, monkeypatch):
-    doe_root = tmp_path / "doe-claude"
-    plugin_root = doe_root / "coordinator"
+    content_root = tmp_path / "coordinator-content-repo"
+    plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
     (plugin_root / "templates" / "bin").mkdir(parents=True)
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(content_root) if key == "engine.working_repos.content_root" else None)
 
     flag_tree = tmp_path / "flag-checkout"
     flag_tree.mkdir()
@@ -645,12 +645,12 @@ def test_pf_emit_row_present_maps_ndjson_status_pass(capsys):
 # CLAUDE_KLABAUTER_ROOT alone is NOT sufficient (_resolve_claude_klabauter_root falls through to
 # the machine-local registry rung); the COORDINATOR_SETTINGS_HOME + HOME
 
-_DOE_SETUP_PY = Path(resolve_doe_root() or "/doe-root-unresolved") / "coordinator" / "scripts" / "setup.py"
+_DOE_SETUP_PY = Path(resolve_content_root() or "/content-root-unresolved") / "coordinator" / "scripts" / "setup.py"
 
 
 @pytest.mark.skipif(
     not _DOE_SETUP_PY.is_file(),
-    reason="DoE-claude sibling repo (coordinator/scripts/setup.py) not present at this layout",
+    reason="coordinator-content-repo sibling repo (coordinator/scripts/setup.py) not present at this layout",
 )
 def test_trampoline_transport_failure_has_dedicated_exit_code_and_remediation(tmp_path):
     env = dict(os.environ)

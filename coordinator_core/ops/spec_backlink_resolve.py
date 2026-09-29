@@ -30,7 +30,7 @@ Peer-repo (`<repo>:`-qualified) resolution is LAZY: the peer index is built
 only when a queried id actually carries a `<repo>:` prefix, never eagerly,
 since most calls this plan drives before C7 (cross-repo citation) lands are
 local-only. The peer root is resolved via
-`coordinator/bin/lib/coordinator_registry.py::doe_root()` — NOT
+`coordinator/bin/lib/coordinator_registry.py::content_root()` — NOT
 `cc_invoke.py::_resolve_claude_klabauter_root()`, which resolves the engine root (this
 repo, dispatch axis) and has zero peer-repo awareness (see the plan's
 enrich-once correction).
@@ -66,7 +66,7 @@ Negative-spec (hard-won):
     typed MISS until C2/C5 close that gap — never a guessed path.
   - Does NOT glob per-citation. The index is built exactly once per invocation
     (module-level `_build_index` call per handler invocation, not per lookup).
-  - Does NOT eagerly build the peer-repo (DoE-claude) index. Only a `<repo>:`-prefixed
+  - Does NOT eagerly build the peer-repo (coordinator-content-repo) index. Only a `<repo>:`-prefixed
     query triggers it.
   - Does NOT treat literal YAML `null` or an absent key as a real id — both count as
     "record lacks an id" (mirrors AC2's definition) and are excluded from the index.
@@ -94,7 +94,7 @@ _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
 
 # Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
-_RECOGNIZED_PEER_REPO = "DoE-claude"
+_RECOGNIZED_PEER_REPO = "coordinator-content-repo"
 
 
 def _hit(path: str, queried_id: str) -> dict:
@@ -273,16 +273,16 @@ def build_index(worktree_root: Path) -> _BacklinkIndex:
     return index
 
 
-def _doe_root_path() -> Optional[Path]:
+def _content_root_path() -> Optional[Path]:
     try:
-        from coordinator.bin.lib.coordinator_registry import doe_root
+        from coordinator.bin.lib.coordinator_registry import content_root
     except ImportError as exc:
-        logger.warning("spec_backlink_resolve: could not import doe_root(): %s", exc)
+        logger.warning("spec_backlink_resolve: could not import content_root(): %s", exc)
         return None
     try:
-        root = doe_root()
+        root = content_root()
     except Exception as exc:  # noqa: BLE001 — a peer-root resolution failure is a typed miss
-        logger.warning("spec_backlink_resolve: doe_root() failed: %s", exc)
+        logger.warning("spec_backlink_resolve: content_root() failed: %s", exc)
         return None
     if not root:
         return None
@@ -378,7 +378,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
 
     `worktree_root` is THIS repo's worktree root (already derived by the
     caller via main_worktree_root(repo_root)). A `<repo>:`-qualified id
-    triggers a lazy peer-repo index build rooted at doe_root() instead of
+    triggers a lazy peer-repo index build rooted at content_root() instead of
     scanning worktree_root — the peer index is never built for a local-only
     query.
 
@@ -386,8 +386,8 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
     (Review: code-reviewer P2): an unrecognized qualifier (typo, wrong case,
     a repo this resolver has no peer index for) is a typed miss carrying
     `reason="unrecognized_repo_qualifier"`, never silently routed to the
-    DoE-claude peer index — refuse rather than guess, matching the emit
-    side, which only ever produces the fixed `"DoE-claude:"` literal.
+    coordinator-content-repo peer index — refuse rather than guess, matching the emit
+    side, which only ever produces the fixed `"coordinator-content-repo:"` literal.
     """
     queried_id = (queried_id or "").strip()
     if not queried_id:
@@ -397,7 +397,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
         repo, _sep, bare_id = queried_id.partition(":")
         if repo != _RECOGNIZED_PEER_REPO:
             return _miss(queried_id, reason="unrecognized_repo_qualifier")
-        peer_root = _doe_root_path()
+        peer_root = _content_root_path()
         if peer_root is None or not peer_root.is_dir():
             return _miss(queried_id)
         peer_index = build_index(peer_root)
@@ -418,7 +418,7 @@ def _resolve_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         id (str) — a `pln-<slug>-<hash>` or `dlv-<slug>-<hash>` id, optionally
-                   `<repo>:`-qualified for a named peer repo (e.g. DoE-claude).
+                   `<repo>:`-qualified for a named peer repo (e.g. Coordinator-content-repo).
 
     Returns one of three typed outcome shapes:
         {"outcome": "hit",       "queried_id": ..., "path": "<str>"}

@@ -13,7 +13,7 @@ pipeline.
 The one step that must not be left to a human is the link repair. A plan stamped
 `approved` that no FK ties to its baton is a silent no-op — the baton reads
 `needs_plan: true` forever, every later sweep re-plans it, and its approval opens
-the planning gate of nothing. Measured twice on DoE-claude: once on a plan this
+the planning gate of nothing. Measured twice on coordinator-content-repo: once on a plan this
 pipeline authored, and once on a 457-line plan authored months earlier by hand
 (`pcli-06`), which the gate reported as unplanned for exactly this reason. Both
 symptoms read as "not planned yet", which is indistinguishable from the honest
@@ -28,7 +28,7 @@ Consumed by ``coordinator_core.ops.roadmap_blitz_land`` (the ``roadmap.blitz_lan
 op). Pure-ish: reads the corpus through ``plan_gate``, writes only the records the
 wave result names, each under ``locked_rmw``.
 
-Spec backlink: DoE-claude coordinator/skills/plan-blitz/SKILL.md § The flow, step 4.
+Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md § The flow, step 4.
 
 Negative-spec:
   - Does NOT decide anything. `ready`/`pulled`/`replan` are the EM's verdicts,
@@ -1239,7 +1239,7 @@ def land_wave(
 _VERDICT_KEYS = ("ready", "pulled", "replan", "surfacedToPm", "dispatched", "routedElsewhere")
 
 #: The ONLY routes that produce a plan document — mirrors `PLANNABLE_ROUTES` in
-#: DoE-claude `coordinator/workflows/plan-blitz.mjs`. Every other route is a different
+#: coordinator-content-repo `coordinator/workflows/plan-blitz.mjs`. Every other route is a different
 #: room and carries no `planPath` by construction: `dispatch` (the wave's Dispatch phase
 #: already did the work), and the `ROUTE_EXITS` set — `pm-decision`, `shape`, `roadmap`,
 #: `goal-setting` — none of which gets a sizing object or a planner.

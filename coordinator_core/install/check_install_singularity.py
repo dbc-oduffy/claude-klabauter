@@ -2,7 +2,7 @@
 coordinator_core.install.check_install_singularity — canonical-install-locus
 invariant probe.
 
-Port of DoE-claude coordinator/lib/check-install-singularity.sh: enforces that
+Port of coordinator-content-repo coordinator/lib/check-install-singularity.sh: enforces that
 exactly one canonical coordinator tree is reachable. Two shapes are
 recognized:
   Pre-cutover (~/.claude shape): canonical tree =
@@ -86,7 +86,7 @@ Spec backlink:
   tasks/install-friction-triage/cluster-B-path-venv-registration.md § ISSUE #4
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
   (BIG_PORT Wave B, item check-install-singularity)
-Port of: coordinator/lib/check-install-singularity.sh [DoE-claude repo]
+Port of: coordinator/lib/check-install-singularity.sh [coordinator-content-repo repo]
 """
 
 from __future__ import annotations
@@ -158,15 +158,15 @@ def _to_plugin_root(raw: str) -> str:
     Windows separator normalization: backslashes are folded to forward
     slashes (via ``_norm_sep``) BEFORE the suffix/basename tests. Without
     this the tests are forward-slash-only, so a native-Windows content root
-    (``X:\\DoE-claude\\coordinator``, the shape ``CLAUDE_PLUGIN_ROOT`` carries)
+    (``C:\\coordinator-content-repo\\coordinator``, the shape ``CLAUDE_PLUGIN_ROOT`` carries)
     fails both ``basename == "coordinator"`` and ``endswith("/coordinator")``
     and is NOT normalized to plugin-root level — while the registry's
     ``live_path`` for the same tree (stored forward-slashed,
-    ``X:/DoE-claude/coordinator``) IS. The one tree then enters ``_TreeSet``
+    ``C:/coordinator-content-repo/coordinator``) IS. The one tree then enters ``_TreeSet``
     at two different levels, reads as 2 distinct canonical paths, and the gate
     hard-fails a correct install with "accidental split" naming
-    ``X:\\DoE-claude`` and ``X:\\DoE-claude\\coordinator`` — the two halves of
-    the SAME clone. This is the one-level-offset trap (DoE-claude's plugin root
+    ``C:\\coordinator-content-repo`` and ``C:\\coordinator-content-repo\\coordinator`` — the two halves of
+    the SAME clone. This is the one-level-offset trap (coordinator-content-repo's plugin root
     is the ``coordinator/`` subdir, not the repo root) reached via a path-syntax
     bug rather than a real split.
 
@@ -316,7 +316,7 @@ def _has_parent_child_pair(paths: List[str]) -> bool:
     other (parent/child), rather than being genuinely distinct trees?
 
     This is the shape a single repo takes when its plugin root is a
-    subdirectory of its own repo root (e.g. DoE-claude's ``coordinator/``
+    subdirectory of its own repo root (e.g. Coordinator-content-repo's ``coordinator/``
     under the repo root) and something upstream (a separator/case/
     trailing-slash mismatch — see ``_to_plugin_root``'s docstring for a
     concrete instance) kept the two spellings of the SAME tree from
@@ -618,7 +618,7 @@ def run() -> Tuple[int, str, str]:
             remedy = (
                 "The paths below are a PARENT and a CHILD of each other, not two separate "
                 "installs -- this is the one-level-offset shape a single repo takes when its "
-                "plugin root is a subdirectory of its own repo root (e.g. DoE-claude's "
+                "plugin root is a subdirectory of its own repo root (e.g. Coordinator-content-repo's "
                 "coordinator/ under the repo root). Do NOT remove either path: they are the "
                 "SAME clone counted at two levels, and deleting one deletes part of the "
                 "other. Likely cause: a path-separator/case/trailing-slash mismatch between "

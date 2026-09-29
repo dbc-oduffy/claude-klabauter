@@ -16,9 +16,9 @@ exists — `cockpit-contract/schema/` (the byte-frozen contract) survives, and
 skip guards key on the PRESENCE OF THE SPECIFIC REQUIRED ARTIFACT
 (`SCHEMA_AVAILABLE`), not merely `DOE_AVAILABLE` (clone-root presence).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-Recipe: DoE-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-T4e-cockpit-contract.md § T4e-d
-Parity oracle: DoE-claude coordinator/cockpit-contract/test/*.ts (vitest, retired 7cca4d4c — historical parity
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Recipe: coordinator-content-repo scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-T4e-cockpit-contract.md § T4e-d
+Parity oracle: coordinator-content-repo coordinator/cockpit-contract/test/*.ts (vitest, retired 7cca4d4c — historical parity
 reference only, no longer present at that path)
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ DOE_CLONE: Path | None = _try_resolve_doe_clone()
 DOE_AVAILABLE: bool = DOE_CLONE is not None
 
 skip_no_doe = pytest.mark.skipif(
-    not DOE_AVAILABLE, reason="DoE clone not available on this machine (repos.doe_claude unset)"
+    not DOE_AVAILABLE, reason="DoE clone not available on this machine (repos.content_root unset)"
 )
 
 if DOE_AVAILABLE:

@@ -237,13 +237,13 @@ def test_valid_fixture_resolves_bin_dir(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _settings_home() HOME guard (2026-07-28). The Windows claude-doe.cmd -> `bash
+# _settings_home() HOME guard (2026-07-28). The Windows claude-author.cmd -> `bash
 # -c` launch chain is a non-login cmd-spawned env that can present with
 # COORDINATOR_SETTINGS_HOME/CLAUDE_HOME/HOME all empty; the prior body then
 # emitted a garbage path ("~/.coordinator-claude-settings"), whose shell
 # equivalent ("$HOME/..." with empty $HOME) collapsed to
 # "/.coordinator-claude-settings" — a Windows current-drive-root write (a stray
-# 0-byte X:\.coordinator-claude-settings was created that way). The resolver must
+# 0-byte C:\.coordinator-claude-settings was created that way). The resolver must
 # consult USERPROFILE and otherwise fail loud, never emit a junk path.
 # ---------------------------------------------------------------------------
 def test_settings_home_prefers_claude_home(monkeypatch, tmp_path):
@@ -302,7 +302,7 @@ def test_standalone_shim_imports_no_coordinator_core(shim_path: Path):
     module-scope package import to ``_resolve_claude_klabauter.py``. Every one of the
     ~334 bareword CLIs on PATH then died with ``ModuleNotFoundError:
     coordinator_core`` before the ladder's first line — including
-    ``~/.local/bin/claude-doe``, i.e. launching Claude Code itself. The
+    ``~/.local/bin/claude-author``, i.e. launching Claude Code itself. The
     prose contract was already in that module's docstring; nothing enforced
     it, so a mechanical sweep walked straight through.
 
@@ -417,7 +417,7 @@ def test_resolve_claude_klabauter_shim_importable_standalone_via_subprocess(tmp_
     could not import until AFTER it had already found the tree it exists to
     find. Every one of ~334 bareword CLIs on PATH died with
     ``ModuleNotFoundError: No module named 'coordinator_core'`` before the
-    resolution ladder's first line, including ``~/.local/bin/claude-doe``,
+    resolution ladder's first line, including ``~/.local/bin/claude-author``,
     i.e. launching Claude Code itself. Fixed in commit ``a41aaaad`` (the
     import is now lazy, behind path resolution) — this test is the
     differential proof the fix has a durable regression guard: reverting the
@@ -468,7 +468,7 @@ _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
 
 # ---------------------------------------------------------------------------
 # DR-132 two-tier ladder — `resolve_claude_klabauter_root_with_class()`. Mirrors
-# DoE-claude `coordinator/hooks/scripts/_engine_root.py`'s
+# coordinator-content-repo `coordinator/hooks/scripts/_engine_root.py`'s
 # `resolve_claude_klabauter_root_with_class()` step order; a conformance fixture
 # (chunk C8) drives both implementations against the same registry-state
 # cases, so drift here WILL be caught cross-repo.

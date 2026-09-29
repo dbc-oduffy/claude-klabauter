@@ -443,8 +443,8 @@ def test_run_returns_none_on_oserror():
         assert pp._run(["definitely-not-a-binary"]) is None
 
 
-def _write_skill_file(doe_root, *, description="a description", with_frontmatter=True):
-    skill_path = doe_root.joinpath("coordinator", "skills", "setup", "SKILL.md")
+def _write_skill_file(content_root, *, description="a description", with_frontmatter=True):
+    skill_path = content_root.joinpath("coordinator", "skills", "setup", "SKILL.md")
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     if with_frontmatter:
         skill_path.write_text(
@@ -458,14 +458,14 @@ def _write_skill_file(doe_root, *, description="a description", with_frontmatter
 def test_check_skill_frontmatter_valid_ok(tmp_path):
     _write_skill_file(tmp_path)
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         result = pp._check_skill_frontmatter_valid()
     assert result == {"ok": True, "error": None}
 
 
-def test_check_skill_frontmatter_valid_doe_root_unresolvable():
-    with mock.patch("coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=None):
+def test_check_skill_frontmatter_valid_content_root_unresolvable():
+    with mock.patch("coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=None):
         result = pp._check_skill_frontmatter_valid()
     assert result["ok"] is False
     assert "unresolvable" in result["error"]
@@ -473,7 +473,7 @@ def test_check_skill_frontmatter_valid_doe_root_unresolvable():
 
 def test_check_skill_frontmatter_valid_file_missing(tmp_path):
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         result = pp._check_skill_frontmatter_valid()
     assert result["ok"] is False
@@ -483,7 +483,7 @@ def test_check_skill_frontmatter_valid_file_missing(tmp_path):
 def test_check_skill_frontmatter_valid_no_frontmatter(tmp_path):
     _write_skill_file(tmp_path, with_frontmatter=False)
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         result = pp._check_skill_frontmatter_valid()
     assert result["ok"] is False
@@ -493,7 +493,7 @@ def test_check_skill_frontmatter_valid_no_frontmatter(tmp_path):
 def test_check_skill_frontmatter_valid_empty_description(tmp_path):
     _write_skill_file(tmp_path, description="")
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         result = pp._check_skill_frontmatter_valid()
     assert result["ok"] is False
@@ -503,7 +503,7 @@ def test_check_skill_frontmatter_valid_empty_description(tmp_path):
 def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path):
     _write_skill_file(tmp_path)
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         first = pp._check_skill_frontmatter_valid()
         second = pp._check_skill_frontmatter_valid()
@@ -513,7 +513,7 @@ def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path):
 def test_probe_skill_frontmatter_valid_pass(tmp_path):
     _write_skill_file(tmp_path)
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         rec = _parse(pp.probe_skill_frontmatter_valid())
     assert rec["status"] == "pass"
@@ -521,7 +521,7 @@ def test_probe_skill_frontmatter_valid_pass(tmp_path):
 
 def test_probe_skill_frontmatter_valid_warn_on_missing_file(tmp_path):
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         rec = _parse(pp.probe_skill_frontmatter_valid())
     assert rec["status"] == "warn"
@@ -531,7 +531,7 @@ def test_probe_skill_frontmatter_valid_warn_on_missing_file(tmp_path):
 def test_op_probe_skill_frontmatter_valid_handler(tmp_path):
     _write_skill_file(tmp_path)
     with mock.patch(
-        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(tmp_path)
     ):
         result = pp._probe_skill_frontmatter_valid_op({})
     assert result == {"ok": True, "error": None}

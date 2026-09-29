@@ -28,8 +28,8 @@ and retyped — the EM fills a blank in a file it is already holding.
 survives only as the crash-resume/audit surface (the Director of Engineering review, F6); the file is
 the primary path.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-bz-rebuild-pickup-to-embody-th-037313, chunks C2a + C2b + C2c + C2d
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-bz-rebuild-pickup-to-embody-th-037313, chunks C2a + C2b + C2c + C2d
 
 Security-load-bearing (the Director of Engineering review F1 / the Staff Engineer second-pass finding #1, AC9e):
 the executable universe this module can reach is a CLOSED CONSTRUCTION, not an
@@ -439,7 +439,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
             raise RuntimeError(
                 f"archive-stamp-cli {verb} {args[1]}: {result.get('error', 'failed')}"
             )
-        # Durable stamp-landed marker (cross-repo/inbox/2026-08-13-doe-claude-
+        # Durable stamp-landed marker (cross-repo/inbox/2026-08-13-coordinator-content-repo-
         # em-pickup-already-satisfied-masks-a-refused-write.md) — written ONLY
         # here, after `ok` has confirmed `cs_claim_handoff`'s underlying
         # `handoff_transition._claim` genuinely landed the frontmatter mutation
@@ -1108,7 +1108,7 @@ def apply(
         if not judgment_points and brief_result.exit_code != _BRIEF_EXIT_OK and not directives:
             # brief()'s live-claim-holder stand-down (both branches — see
             # `pickup_assemble.__init__.py`'s memo and handoff stand-down
-            # blocks, cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-
+            # blocks, cross-repo/inbox/2026-08-17-coordinator-content-repo-em-memo-claim-
             # fires-after-the-em-can-already-act.md, commit `3c779cde2`)
             # lands exactly HERE whenever no durable frontmatter claim
             # stamp exists yet — the normal case for a peer holding only

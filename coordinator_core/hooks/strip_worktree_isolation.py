@@ -1,6 +1,6 @@
 """coordinator_core.hooks.strip_worktree_isolation — PreToolUse(Workflow) op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/strip-worktree-isolation.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/strip-worktree-isolation.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9. Mechanical
 port — all computation already landed at W4-C4 as
 `coordinator_core.hooks.support.worktree_isolation_strip` (`compute_strip`,

@@ -14,7 +14,7 @@ docstring for provenance. Do NOT duplicate those primitives inside a per-guard
 module; import them from here.
 
 Public surface: `guard_roster` / `GuardRosterEntry` (see `roster.py`), the
-payload-free enumeration DoE-claude's `x-effective-delivery` emitter reads
+payload-free enumeration coordinator-content-repo's `x-effective-delivery` emitter reads
 across the plane boundary (`docs/reference/hook-delivery-manifest.md`).
 Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C2.
 """

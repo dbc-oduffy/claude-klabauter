@@ -2,7 +2,7 @@
 
 Purpose
 -------
-`coordinator/bin/publish.py` maps to NO test target under DoE-claude's
+`coordinator/bin/publish.py` maps to NO test target under coordinator-content-repo's
 `emit-dispatch-workflow.py::_map_written_path_to_test_target` stem convention
 (`tests/test_<stem>.py`) -- even though publish.py has dozens of topic-scoped
 `test_publish_<topic>.py` files that DO cover it. Because the emitter's
@@ -17,7 +17,7 @@ every call), and the token index's writer/reader root mismatch silently
 forced a 1250ms full-scan fallback for any subdirectory dest.
 
 This guard is deliberately narrow: it does not sweep every historical plan.
-`emit-dispatch-workflow.py` lives in a sibling repo (DoE-claude) and is not
+`emit-dispatch-workflow.py` lives in a sibling repo (coordinator-content-repo) and is not
 ours to change, and a repo-wide sweep of every plan/surface would go red
 across a lot of pre-existing work nobody has bandwidth to close today --
 exactly the shape of guard that gets marked `designed_red` or deleted, and
@@ -33,7 +33,7 @@ Negative-spec:
   - Does NOT sweep every plan or every file under `coordinator/bin/` --
     only the named `HOT_PATH_SURFACES` allowlist. Widening that allowlist
     is a deliberate, per-surface decision, not this test's job.
-  - Does NOT alter, patch, or import from DoE-claude's
+  - Does NOT alter, patch, or import from coordinator-content-repo's
     `emit-dispatch-workflow.py`. It re-imports the resolution function from
     THIS repo's own `coordinator_core.ops.dispatch_emit.pathspec`, which is
     the seam the DoE shim delegates to unchanged for this specific
@@ -84,7 +84,7 @@ DECLARED_UNTESTED: dict[str, str] = {
         "c7a03bd3079e.yaml (proposed_action: make a chunk whose surface has no "
         "runnable test target an emitter refusal or an explicit "
         "declared-untested disposition -- this allowlist is that disposition "
-        "on OUR side until the emitter, owned by DoE-claude and not ours to "
+        "on OUR side until the emitter, owned by coordinator-content-repo and not ours to "
         "change, grows one of its own)."
     ),
 }

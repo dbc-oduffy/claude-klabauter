@@ -1,6 +1,6 @@
 """
 Fixture-drift guard: every ``ml_bin / "<name>"`` source literal in
-``coordinator_core.install.substrate`` names a file the DoE-claude repo
+``coordinator_core.install.substrate`` names a file the coordinator-content-repo repo
 actually ships under ``coordinator/templates/bin/``. The 2026-07-22
 platform-localize.sh -> {.py,.cmd} rename regression shipped BECAUSE the
 ``test_install_substrate_uninstall_legs.py`` fixture stubbed a filename
@@ -8,10 +8,10 @@ substrate.py no longer installs, and nothing cross-checked the fixture
 against DoE's real listing — this test is that cross-check, so a future
 rename trips a red test here instead of a silent green-tests-dead-path.
 
-Resolves the real DoE-claude checkout the same way the install hubs do
+Resolves the real coordinator-content-repo checkout the same way the install hubs do
 (``coordinator_core.install._shared.resolve_coordinator_root``); skips
 cleanly when unresolvable on this machine (e.g. a CI box without a sibling
-DoE-claude clone).
+Coordinator-content-repo clone).
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ _ML_BIN_LITERAL_RE = re.compile(r'ml_bin\s*/\s*"([^"]+)"')
 
 
 def _ml_bin_names_from_source() -> list:
-    """Names substrate.py sources from ``ml_bin`` (DoE-claude's
+    """Names substrate.py sources from ``ml_bin`` (coordinator-content-repo's
     ``templates/bin/``) — the union of any remaining bare ``ml_bin /
     "<name>"`` source literals (regex scan, e.g. ``_render_python3_cmd``'s
     template read) and `coordinator/lib/bin-templates-manifest.py`'s
@@ -44,7 +44,7 @@ def _ml_bin_names_from_source() -> list:
     that function's docstring). ``_CH_FAMILY_FILES`` (sourced from
     ``ch_bin``, not ``ml_bin``), ``_RM_FAMILY_FILES`` (sourced from
     ``resolve_claude_klabauter_lib``), and the manifest's own ``LAUNCHER_TEMPLATE_
-    FILES`` group (rendered by ``gen_claude_doe_launcher.py``, never copied
+    FILES`` group (rendered by ``gen_claude_author_launcher.py``, never copied
     via ``_install_one`` / never referenced as an ``ml_bin / "<name>"``
     literal in substrate.py) are deliberately excluded — this guard is
     scoped to names substrate.py itself sources from ``ml_bin``, matching
@@ -69,15 +69,15 @@ def test_ml_bin_literals_present_in_source():
     assert "platform-localize.cmd" in names
 
 
-@pytest.mark.real_home  # live-tree oracle: resolves the real DoE-claude coordinator root via
-# `_shared.resolve_coordinator_root` (registry_get / .doe-root pointer), which the suite-root
+@pytest.mark.real_home  # live-tree oracle: resolves the real coordinator-content-repo coordinator root via
+# `_shared.resolve_coordinator_root` (registry_get / .coordinator-content-root pointer), which the suite-root
 # `_quarantine_real_home` autouse fixture would otherwise hide, turning this into an
 # unconditional skip. Read-only (Path.is_file/is_dir checks only, no writes).
 def test_ml_bin_literals_exist_in_real_doe_templates_bin():
     try:
         coordinator_root = _shared.resolve_coordinator_root()
     except RuntimeError as exc:
-        pytest.skip(f"DoE-claude coordinator root unresolvable on this machine: {exc}")
+        pytest.skip(f"coordinator-content-repo coordinator root unresolvable on this machine: {exc}")
 
     templates_bin = Path(coordinator_root) / "templates" / "bin"
     if not templates_bin.is_dir():
@@ -88,5 +88,5 @@ def test_ml_bin_literals_exist_in_real_doe_templates_bin():
     assert missing == [], (
         f"substrate.py names {missing} under ml_bin, but they do not exist "
         f"at {templates_bin} — source-of-truth drift between substrate.py "
-        "and DoE-claude's real templates/bin/ listing"
+        "and coordinator-content-repo's real templates/bin/ listing"
     )

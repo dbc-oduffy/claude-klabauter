@@ -22,7 +22,7 @@ Coverage:
 POSIX guard mirrors test_goal_kr_status.py: skipped if neither fcntl nor
 msvcrt is available (locked_rmw's lock-backend requirement).
 
-Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C3
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 § C3
 """
 
 from __future__ import annotations

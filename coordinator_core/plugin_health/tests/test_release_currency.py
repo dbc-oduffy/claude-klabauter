@@ -1,7 +1,7 @@
 """
 coordinator_core.plugin_health.tests.test_release_currency
 
-Pytest port of DoE-claude coordinator/lib/release-currency.sh's
+Pytest port of coordinator-content-repo coordinator/lib/release-currency.sh's
 `release_currency_probe` (bash oracle, retired on cutover — see git log) and of
 sentinel.py's `probe_p19` result->ProbeNote rewire. Exercises every status string
 (source_is_live/current/behind/behind-clone/differs/offline), the three surviving

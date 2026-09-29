@@ -13,7 +13,7 @@ than serve a pre-commit cached False forever.
 
 Also covers the 2026-07-29 build_git_history_cache widening (dropping --diff-filter=A,
 adding --no-renames) — regression coverage for a follow-on defect measured against
-DoE-claude, where the ADD-only priming pass left handoffs.collect() spawning 314 unique
+Coordinator-content-repo, where the ADD-only priming pass left handoffs.collect() spawning 314 unique
 per-path `git log --all -- <path>` fallback subprocesses because it never caught a path
 renamed into its final name.
 

@@ -20,7 +20,7 @@ Also pins the span contract: the returned span is the fence-BODY span
 
 Spec backlinks:
   coordinator_core/frontmatter/body_blocks.py
-  coordinator/bin/coordinator-harvest-deferrals (DoE-claude, lines 317-372)
+  coordinator/bin/coordinator-harvest-deferrals (coordinator-content-repo, lines 317-372)
   coordinator/bin/tests/fixtures/plan-tasks-spine/fixture_expectations.py
 """
 from __future__ import annotations

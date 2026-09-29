@@ -41,7 +41,7 @@ def _rules(findings):
 
 
 def test_drive_letter_flagged() -> None:
-    hits = detect_in_text(r"the repo lives at X:\example-game-workbench-repo on that box")
+    hits = detect_in_text(r"the repo lives at C:\example-game-workbench-repo on that box")
     assert any(f.rule == "drive-letter" for f in hits)
 
 
@@ -145,7 +145,7 @@ def test_mixed_separators_flagged() -> None:
 
 
 def test_ellipsis_exempts_a_true_shape_illustration() -> None:
-    hits = detect_in_text(r"see X:\...\topic.md for the shape")
+    hits = detect_in_text(r"see C:\...\topic.md for the shape")
     assert not hits
 
 
@@ -171,7 +171,7 @@ def test_unc_escape_artifact_not_flagged() -> None:
 
 def test_mixed_separators_escape_artifact_not_flagged() -> None:
     hits = detect_in_text(
-        r'"path": "X:/DoE-claude/coordinator/skills/x/SKILL.md\r\n"'
+        r'"path": "C:/coordinator-content-repo/coordinator/skills/x/SKILL.md\r\n"'
     )
     assert not any(f.rule == "mixed-separators" for f in hits)
 
@@ -229,34 +229,34 @@ def test_marker_embedded_mid_word_does_not_exempt_the_line() -> None:
 
 
 def test_marker_with_reason_exempts_line() -> None:
-    line = r"X:\example-game-workbench-repo  # abs-path-ok: quoting the 2026-07-28 incident"
+    line = r"C:\example-game-workbench-repo  # abs-path-ok: quoting the 2026-07-28 incident"
     assert not detect_in_text(line)
 
 
 def test_bare_marker_without_reason_does_not_exempt() -> None:
     trailing_colon_no_reason = "abs-path-ok:"
-    line = "X:\\example-game-workbench-repo  # " + trailing_colon_no_reason
+    line = "C:\\example-game-workbench-repo  # " + trailing_colon_no_reason
     hits = detect_in_text(line)
     assert any(f.rule == "drive-letter" for f in hits)
 
 
 def test_new_violations_ignores_unchanged_legacy_citation() -> None:
-    before = "legacy: X:\\some-repo\nunrelated line\n"
-    after = "legacy: X:\\some-repo\nunrelated line, now edited\n"
+    before = "legacy: C:\\some-repo\nunrelated line\n"
+    after = "legacy: C:\\some-repo\nunrelated line, now edited\n"
     assert new_violations(before, after) == []
 
 
 def test_new_violations_flags_freshly_introduced_citation() -> None:
-    before = "legacy: X:\\some-repo\n"
-    after = "legacy: X:\\some-repo\nnew one: /Users/realperson/x\n"
+    before = "legacy: C:\\some-repo\n"
+    after = "legacy: C:\\some-repo\nnew one: /Users/realperson/x\n"
     new = new_violations(before, after)
     assert len(new) == 1
     assert new[0].rule == "posix-home"
 
 
 def test_new_violations_flags_a_duplicate_of_an_existing_citation() -> None:
-    before = "X:\\some-repo\n"
-    after = "X:\\some-repo\nX:\\some-repo\n"
+    before = "C:\\some-repo\n"
+    after = "C:\\some-repo\nC:\\some-repo\n"
     new = new_violations(before, after)
     assert len(new) == 1
 
@@ -345,13 +345,13 @@ def test_dead_registry_rung_skipped_on_unparseable_python() -> None:
 
 
 def test_review_trail_diff_transcript_is_exempt() -> None:
-    text = "-legacy: X:\\some-repo\n+legacy: repo-alias:some-repo\n"
+    text = "-legacy: C:\\some-repo\n+legacy: repo-alias:some-repo\n"
     hits = detect_in_text(text, filename="state/review-trail/diffs/corpus-path-sweep.diff")
     assert not hits
 
 
 def test_subagent_share_sidecar_is_exempt() -> None:
-    text = "Finding: drive-letter citation at foo.md:3 -- `X:\\Users\\realperson\\notes.txt`\n"
+    text = "Finding: drive-letter citation at foo.md:3 -- `C:\\Users\\realperson\\notes.txt`\n"
     hits = detect_in_text(
         text, filename="state/subagent-share/some-session/coordinatorcode-reviewer-abc.md"
     )
@@ -366,7 +366,7 @@ def test_review_findings_output_is_exempt() -> None:
     `state/review-trail/diffs/` case covers. Same "guaranteed to transcribe,
     not originate" property as its two sibling prefixes."""
     text = (
-        "**Working directory:** X:\\some-repo\n"
+        "**Working directory:** C:\\some-repo\n"
         "-legacy: C:\\Users\\realperson\\.claude\n"
     )
     assert not detect_in_text(text, filename="state/review-findings/20260627T120301Z/deps.md")
@@ -376,7 +376,7 @@ def test_review_findings_output_is_exempt() -> None:
 
 
 def test_review_trail_hand_authored_note_is_not_exempt() -> None:
-    text = "the repo lives at X:\\example-game-workbench-repo\n"
+    text = "the repo lives at C:\\example-game-workbench-repo\n"
     hits = detect_in_text(
         text, filename="state/review-trail/2026-07-01-boundary-union-finding.md"
     )
@@ -384,7 +384,7 @@ def test_review_trail_hand_authored_note_is_not_exempt() -> None:
 
 
 def test_evidence_artifact_exemption_is_prefix_scoped_not_ambient() -> None:
-    text = "the repo lives at X:\\example-game-workbench-repo\n"
+    text = "the repo lives at C:\\example-game-workbench-repo\n"
     hits = detect_in_text(text, filename="state/handoffs/some-handoff.md")
     assert any(f.rule == "drive-letter" for f in hits)
 
@@ -420,7 +420,7 @@ def test_json_outside_prefix_is_exempt_on_format_alone() -> None:
 
 
 def test_jsonl_outside_prefix_is_exempt_on_format_alone() -> None:
-    """The sent-ledger case DoE-claude named: `.jsonl` matching
+    """The sent-ledger case coordinator-content-repo named: `.jsonl` matching
     `_CAPTURE_DATA_EXTENSIONS` exactly but living outside every prefix."""
     text = '{"delivery_commit_reason": "fatal: /Users/realperson/X/claude-klabauter/x"}\n'
     hits = detect_in_text(text, filename="state/memo-outbox/sent-ledger.jsonl")
@@ -441,7 +441,7 @@ def test_yaml_scalar_exempt_via_content_model_not_extension() -> None:
 
 def test_new_violations_evidence_artifact_filename_exempts_both_sides() -> None:
     before = "no findings yet\n"
-    after = "Finding: drive-letter citation -- `X:\\Users\\realperson\\notes.txt`\n"
+    after = "Finding: drive-letter citation -- `C:\\Users\\realperson\\notes.txt`\n"
     new = new_violations(
         before, after, filename="state/subagent-share/some-session/coordinatorcode-reviewer-abc.md"
     )

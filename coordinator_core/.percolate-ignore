@@ -29,7 +29,7 @@
 # consulted while that tree is assembled. It becomes live one stage later,
 # when coordinator/bin/publish.py's `dispatch_mirror_like`
 # (publish.py:1772-1815) loads it (publish.py:1790-1791) and hands it to
-# DoE-claude's `setup/publish_sync.py::sync_mirror`, which consults it
+# coordinator-content-repo's `setup/publish_sync.py::sync_mirror`, which consults it
 # symmetrically on BOTH the copy phase (Phase 1, `ignore.matches(...)` at
 # publish_sync.py:512) and the destination delete phase (Phase 2,
 # `ignore.matches(...)` at publish_sync.py:537) — an ignored file is neither

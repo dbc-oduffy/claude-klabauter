@@ -95,7 +95,7 @@ prefix is a graceful-skip (treated as accepted, not rejected) — this guard
 exists to catch obviously-wrong future dates (a mis-generated or hand-typed
 filename), NOT to police timezone offset or clock drift. Filename timestamp
 prefixes are producer-dependent and this guard cannot know which producer
-wrote a given filename: DoE-claude's `/handoff` and `/spinoff` skills
+wrote a given filename: coordinator-content-repo's `/handoff` and `/spinoff` skills
 (`coordinator/skills/handoff/SKILL.md`, ~line 146) stamp LOCAL wall-clock
 time via `$(date +%Y-%m-%d)_$(date +%H%M%S)`, while this repo's own
 `coordinator_core/ops/handoff_author_fork.py` `_fork_handoff_filename`
@@ -281,7 +281,7 @@ def reject_future_dated(
 
     ``tz_ambiguity`` (default ``_FILENAME_TZ_AMBIGUITY``) exists because
     filename date/time prefixes are producer-dependent (LOCAL time from
-    DoE-claude's `/handoff`+`/spinoff` skills vs. UTC from this repo's own
+    coordinator-content-repo's `/handoff`+`/spinoff` skills vs. UTC from this repo's own
     `handoff_author_fork.py`) — see the module-level constant's docstring
     for the full rationale and the confirmed real-world case it fixes.
     ``skew`` (default ``_FUTURE_DATE_SKEW``) remains the separate, small
@@ -383,8 +383,8 @@ def _already_terminal_no_op(relpath: str, fm: dict[str, Any]) -> bool:
     still be sitting in `state/handoffs/` when the stamp step runs — either
     way `shipped_in` must not be written, so this branch does NOT require
     the archive-prefix location check the shipped branch requires.
-    Reported as a real defect by doe-claude-em (2026-08-13,
-    `cross-repo/inbox/2026-08-13-doe-claude-em-wsc-tail-consumed-stamp-refuses-archived-baton.md`);
+    Reported as a real defect by coordinator-content-repo-em (2026-08-13,
+    `cross-repo/inbox/2026-08-13-coordinator-content-repo-em-wsc-tail-consumed-stamp-refuses-archived-baton.md`);
     the location-independence gap (a non-shipped-terminal candidate still
     unarchived in `state/handoffs/` falling through to a loud stamp
     refusal) surfaced live 2026-08-20 via a cancelled placeholder-successor

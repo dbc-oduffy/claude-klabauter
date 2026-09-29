@@ -10,7 +10,7 @@ prose met any markdown code span in it:
 
     python - <<'PY'
     addition = \"\"\"  The reason is the one this repo's own <gov> states ...
-      it pins `('X:/mirror', 'resolved-engine')` as the HEALTHY answer ...\"\"\"
+      it pins `('C:/mirror', 'resolved-engine')` as the HEALTHY answer ...\"\"\"
     io.open('state/bug-backlog/x.yaml','w').write(s + addition)
     PY
 
@@ -81,7 +81,7 @@ ALLOW_CASES = [
             "import io\n"
             'addition = """  AMENDED today.\n'
             f"\n  The reason is the one this repo's own {GOV} states from the other\n"
-            "  side; it pins `('X:/mirror', 'resolved-engine')` as the healthy answer.\n"
+            "  side; it pins `('C:/mirror', 'resolved-engine')` as the healthy answer.\n"
             '  """\n'
             f"io.open('{UNGOVERNED}','w').write(addition)"
         ),

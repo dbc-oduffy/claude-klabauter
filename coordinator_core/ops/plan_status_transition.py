@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.plan_status_transition — plan-lifecycle status stamp (stamp-implemented).
 
-Purpose: native Python port of DoE-claude coordinator/bin/plan-status-transition.js —
+Purpose: native Python port of coordinator-content-repo coordinator/bin/plan-status-transition.js —
 the authorized writer of a plan's ``status:`` frontmatter field when a plan finishes
 execution. Deliberately thin, single-verb CLI (mirrors the JS oracle's own framing:
 a plan's lifecycle has exactly one mutating transition today, not the multi-verb
@@ -21,7 +21,7 @@ stamps-implemented-without-reading-the-ac-table.md): an explicit,
 self-documenting override of `stamp-implemented`'s own completeness verdict
 (the AC-open-rows advisory `_ac_open_rows_warning` prints -- advisory only,
 never a gate, per the binding contract at `state/cross-repo/archive/2026-
-08-27-doe-claude-em-ac-table-disposition.md`: "It reports and never
+08-27-coordinator-content-repo-em-ac-table-disposition.md`: "It reports and never
 blocks... The emission names the table's advisory standing") -- the sanctioned
 successor to two independently-invented, mutually-divergent frontmatter
 spellings (`status_stamped_by`/`status_stamped_reason` in one repo,
@@ -71,7 +71,7 @@ reachable from any sweep/cascade/ceremony tail, and is not present in the
 node oracle" below.
 
 Divergence from the node oracle (2026-08-06, C2): ``plan-status-transition.js``
-no longer exists on disk in DoE-claude (see cross-repo/archive/2026-07-22-
+no longer exists on disk in coordinator-content-repo (see cross-repo/archive/2026-07-22-
 Claude-klabauter-em-plan-status-transition-wired-node-spawn-gone.md -- it was
 declared deletable once this module's ``stamp-implemented`` had zero
 remaining claude-klabauter callers routed through it). There is therefore no live
@@ -103,8 +103,8 @@ Addendum (Q4, PM-ratified 2026-08-04): hanging a cascade off this CLI's `main()`
 that claim deliberately -- this is now the true single writer both DoE's polyglot
 trampoline and claude-klabauter's own ceremony callers meet at, so it owns the third outcome above.
 
-Port source: coordinator/bin/plan-status-transition.js (DoE-claude)
-Parity oracle: DoE-claude coordinator/bin/plan-status-transition.js (node, hand-run
+Port source: coordinator/bin/plan-status-transition.js (coordinator-content-repo)
+Parity oracle: coordinator-content-repo coordinator/bin/plan-status-transition.js (node, hand-run
     golden-oracle diff during port -- not the coordinator/bin/plan-status-transition.test.js
     file, which was not re-run by this port).
 
@@ -117,7 +117,7 @@ Negative-spec:
     - No @register_op / no registry wiring -- this is a plain module with a
       main(argv) CLI entry point, called by the DoE-side polyglot trampoline via
       direct in-process import (template-variant #1: safe-leaf early-win port),
-      NOT a JSON-RPC op. See docs/wiki (DoE-claude) port template for the
+      NOT a JSON-RPC op. See docs/wiki (coordinator-content-repo) port template for the
       direct-import-vs-registered-op discriminator.
     - RETIRED (2026-08-04, C6 Addendum Q4, PM-ratified): "no locking, single-writer,
       not a concurrent-mutation hot path" no longer holds now that a successful
@@ -339,7 +339,7 @@ def _strip_unquoted_trailing_comment(raw: Optional[str]) -> Optional[str]:
 
     Negative-spec: does not STRIP a comment trailing a *closing* quote (e.g.
     ``"draft"  # note``) -- full quote-tracking (mirroring
-    ``schema.js:stripInlineComment`` in DoE-claude) is out of scope for this
+    ``schema.js:stripInlineComment`` in coordinator-content-repo) is out of scope for this
     bounded, module-local fix. Left untouched here (returned verbatim, comment
     included), that shape is detected and fail-louded with a clear diagnostic
     by the caller (``_stamp_implemented``) rather than surfaced as a garbled
@@ -1166,7 +1166,7 @@ def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
     (P129-C2 -- docs/plans/2026-09-12-the-direct-stamp-verb-refuses-what-
     close-out-refuses.md), built from the lifted `_ac_advisory_text`
     helper close-out itself calls, per `state/cross-repo/archive/2026-08-
-    27-doe-claude-em-ac-table-disposition.md` (accepted): "The emission
+    27-coordinator-content-repo-em-ac-table-disposition.md` (accepted): "The emission
     names the table's advisory standing." No "WARNING" token, and no gate
     -- see that memo's other binding constraint, quoted at this module's
     own `--override-reason` paragraph.
@@ -1547,7 +1547,7 @@ def _stamp_implemented(opts: _Opts) -> int:
                     "not discharge this refusal."
                 )
 
-        # Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-
+        # Review-stamp refusal (MK1, coordinator-content-repo docs/plans/2026-09-27-review-
         # inside-execute-plan.md): a SUBJECT plan (approved strictly after
         # review_stamp.is_subject_plan's cutoff; the slate's own delivery is
         # exempt) cannot reach `implemented` without a valid `review_stamp`

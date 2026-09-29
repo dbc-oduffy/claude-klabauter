@@ -1,7 +1,7 @@
 """
 test_orphaned_schema_refusal — proves `assert_no_orphaned_schema` actually fires.
 
-Subject: the defect DoE-claude found during the 4.0.0 `file_attribution` drop.
+Subject: the defect coordinator-content-repo found during the 4.0.0 `file_attribution` drop.
 `emit_schemas` writes one file per CURRENT registry entity and never prunes, so a
 retired entity's `*.schema.json` survives in the directory the
 `cockpit-contract-release` tag publishes — well-formed, unmarked, and

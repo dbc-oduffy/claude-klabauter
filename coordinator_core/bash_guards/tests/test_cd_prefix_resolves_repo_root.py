@@ -181,7 +181,7 @@ class TestDestructiveRevertFollowsLeadingCd:
         fixture = _make_repo(str(tmp_path / "fixture"))
 
         monkeypatch.chdir(outer)
-        cmd = f"cd {fixture} && git checkout -q ."
+        cmd = f"cd {fixture} && git checkout -q -f"
         result = check_destructive_git_revert(cmd, "s1", {"cwd": outer})
         assert result is None, (
             "checkout in a clean fixture repo must not be blocked on the "

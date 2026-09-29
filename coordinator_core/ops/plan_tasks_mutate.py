@@ -78,7 +78,7 @@ Verb contracts:
     grouping with no approval block makes every governed-plan `spun_off`
     resolve permanently unsatisfiable rather than merely PM-gated; the key
     could not originate here either, plan.schema.json being vendored
-    byte-for-byte from DoE-claude under `check_schema_drift`. It arrived on
+    byte-for-byte from coordinator-content-repo under `check_schema_drift`. It arrived on
     2026-08-30 with plan.schema.json 2.13.0, and
     `check_plan_tasks_grouping_approval` widened that day. This gate did NOT
     — it kept keying on the legacy frozenset for both legs until 2026-09-04,
@@ -698,7 +698,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     naming the alternative (`--verb resolve`), not a bare denial.
 
     The offer names the VERB and stops there (2026-08-14, consult memo
-    cross-repo/archive/2026-08-14-doe-claude-em-stamp-reserved-field-refusal-carries-retired-pm-approval-offer.md).
+    cross-repo/archive/2026-08-14-coordinator-content-repo-em-stamp-reserved-field-refusal-carries-retired-pm-approval-offer.md).
     It used to trail "needs pm_approved: true stamped on the row first" —
     the retired `_PM_APPROVAL_OFFER` shape (see its banner below `resolve`)
     printed by the one verb that sets that field, so the refusal supplied
@@ -926,7 +926,7 @@ def _dispatch_spun_off(task_id: str, disposition_ref: Optional[str], worktree: P
     This does NOT create the spinoff artifact itself — that write lands
     separately, before `resolve` is ever called for this row (the `/spinoff`
     authoring surface; see `coordinator/bin/spinoff-deliverable-and-commit.py`
-    in DoE-claude). What this function computes is the VERIFIED, canonical
+    in coordinator-content-repo). What this function computes is the VERIFIED, canonical
     repo-relative form of the ref: it resolves the caller-supplied path
     against `worktree`, confirms a real file exists there, and re-derives the
     ref via `_to_repo_relative` rather than trusting the literal string —

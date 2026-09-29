@@ -549,7 +549,7 @@ def _resolve_machine_local() -> str | None:
     if found:
         return found
 
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.path.expanduser("~")
+    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
     candidate_dirs = [
         os.environ.get("COORDINATOR_SETTINGS_HOME", ""),
         os.path.join(home, ".coordinator-claude-settings"),
@@ -1987,12 +1987,7 @@ _LAUNCH_CHAIN_PROBE = "claude-klabauter.launch.shim_chain"
 
 
 def _launch_chain_claude_home() -> Path:
-    return Path(
-        os.environ.get("CLAUDE_HOME")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or str(Path.home())
-    )
+    return Path(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~"))
 
 
 def _run_probe_launch_chain() -> _ProbeResult:
@@ -2911,7 +2906,7 @@ def _resolve_settings_home() -> Path:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return Path(override)
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.path.expanduser("~")
+    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
     return Path(home) / ".coordinator-claude-settings"
 
 

@@ -1,7 +1,7 @@
 """Shared resolution of an installed settings-home CLI forwarder, plus the argv
 form that actually launches whichever variant resolved.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_forwarder_resolve.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_forwarder_resolve.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3.
 
 Why this module exists: several SessionStart hooks each carried their own

@@ -12,9 +12,9 @@ only caller authorized to act on a `clear`/`narrow` verdict, via C8's
 `gate-cascade-clear` verb.
 
 STRUCTURED-PATH LOAD-BEARING RULES (converges with
-`DoE-claude/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70's
+`coordinator-content-repo/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70's
 gate-cascade design; rule 3 sourced from the tc-4 regression lesson
-`DoE-claude/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`):
+`coordinator-content-repo/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`):
     (1) CLEAR predicate = ALL `blocked_by` members are `shipped` SPECIFICALLY, not
         merely terminal ({shipped, abandoned, continued, closed} is the terminal set
         for stopping re-evaluation, but abandoned/continued/closed never count toward
@@ -432,7 +432,7 @@ ready until X is done" — would gate every spinoff on its own origin baton,
 exactly backwards from the roadmap-fork design: spinoffs exist precisely so
 their work can proceed independently of the parent session's continued
 progress, not chained behind it. Live-corpus verification (2026-07-27): 30 of
-33 gated (`awaiting_gate`) batons under `DoE-claude/state/handoffs/` carry a
+33 gated (`awaiting_gate`) batons under `coordinator-content-repo/state/handoffs/` carry a
 non-`none` `predecessor` and/or a non-null `origin_*` field — 91% of the live
 corpus would trip a naive implementation that conflated lineage with gating.
 

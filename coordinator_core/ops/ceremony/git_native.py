@@ -1004,7 +1004,7 @@ def diff_quiet(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> 
     # `commit_gates`' EOL-phantom filter, which exists precisely to absorb
     # phantom-dirty entries; the flag would leave every phantom permanently
     # dirty and re-filtered on each ceremony (the flapping-count symptom in
-    # DoE-claude's bash-on-windows-gotchas.md § 11). The contention win here is
+    # coordinator-content-repo's bash-on-windows-gotchas.md § 11). The contention win here is
     # small anyway -- this is a narrow per-path diff, not the whole-tree status
     # scan the adoption pass targets.
     args = ["diff", "--quiet"]
@@ -4097,7 +4097,7 @@ def commit_scoped(
            2026-08-10-a-commit-trailer-that-names-the-session.md) this branch
            never opened `msg_file` at all and relied entirely on the
            `prepare-commit-msg` hook; AC18 (2026-08-14, cross-repo memo
-           `2026-08-14-doe-claude-em-scoped-git-commit-drops-session-id-
+           `2026-08-14-coordinator-content-repo-em-scoped-git-commit-drops-session-id-
            trailer.md`) ended that reliance after a hook non-fire landed a
            commit with no `Session-Id:` at all, silently.
 

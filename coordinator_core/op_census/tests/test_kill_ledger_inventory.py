@@ -136,7 +136,7 @@ def test_cross_plane_cut_must_say_so_in_the_status() -> None:
     """The escape from CONTESTED is earned by the entry stating the cross-plane
     fact — never by the classifier inferring one from liveness alone."""
     stated = kli.parse_ledger(
-        _entry("removed — by DoE-claude, not by this repo, reconstructed here after the fact.",
+        _entry("removed — by coordinator-content-repo, not by this repo, reconstructed here after the fact.",
                title="`hooks.example_op`")
     )
     kli.classify(stated, live_ops=frozenset({"hooks.example_op"}), suspended_ops=frozenset())
@@ -148,7 +148,7 @@ def test_cross_plane_cut_must_say_so_in_the_status() -> None:
 
     both_planes = kli.parse_ledger(
         _entry(
-            "removed — both planes: DoE-claude deregistered it 2026-08-16 "
+            "removed — both planes: coordinator-content-repo deregistered it 2026-08-16 "
             "(b33a06c6a); claude-klabauter's handler deleted 2026-09-11 (abc1234).",
             title="`hooks.example_op`",
         )

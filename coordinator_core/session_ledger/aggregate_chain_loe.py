@@ -26,7 +26,7 @@ aggregation per DR-014 effort-isolation, exactly as the bash oracle excludes it.
 
 Two callers into this module:
   - The CLI trampoline (``coordinator/bin/aggregate-chain-loe.py``,
-    DoE-claude) calls this module's own ``main()`` directly, in-process —
+    coordinator-content-repo) calls this module's own ``main()`` directly, in-process —
     this is a cold ceremony-only caller, so there is no daemon-RPC overhead
     to justify (mirrors ``regenerate-orientation-cache``'s trampoline shape,
     NOT ``cc_invoke()``/``route()``). A former extensionless sibling

@@ -258,7 +258,7 @@ class TestMissingDraft:
         assert result["exit_code"] == 1
 
     def test_draft_with_no_prose_body_is_refused(self, tmp_path, monkeypatch, capsys):
-        # Regression, DoE-claude 2026-08-19: a scaffold composed and never
+        # Regression, coordinator-content-repo 2026-08-19: a scaffold composed and never
         # written back was delivered as frontmatter plus empty comment blocks,
         # its title advertising four items the body did not carry. Refuse at
         # the last step before the write into someone else's repo.
@@ -1416,7 +1416,7 @@ class TestLedgerIsABoundedRing:
 class TestLedgerIsBoundedInTimeToo:
     """The row cap alone leaves a RARE sender's ledger unbounded in time.
 
-    claude-klabauter and DoE-claude send constantly, so 250 rows is ~2.5 days here and
+    claude-klabauter and coordinator-content-repo send constantly, so 250 rows is ~2.5 days here and
     the row cap is the bound that bites. Every other repo sends a handful a
     month, where 250 rows is a year or more -- these tests are that repo's,
     not ours.

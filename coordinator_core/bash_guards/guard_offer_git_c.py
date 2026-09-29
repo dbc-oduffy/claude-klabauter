@@ -186,6 +186,27 @@ def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List
     return (" ".join(pieces), unanchored)
 
 
+def _offer_round_trips(original_cmd: str, suggestion: str, targets: List[str]) -> bool:
+    """True iff ``suggestion`` re-tokenizes to the original command's tokens
+    with only the ``cd <target>`` prefix dropped and ``-C <target>`` added."""
+    orig = _bt_tokenize_full_command(original_cmd.replace("\\\n", " "))
+    sug = _bt_tokenize_full_command(suggestion)
+    if orig is None or sug is None:
+        return False
+    drop = {"cd", "-C", *targets}
+
+    def _core(tokens: List[str]) -> List[str]:
+        tokens = [os.path.basename(t) if t.endswith("/git") else t for t in tokens]
+        if "git" not in tokens:
+            return tokens
+        tokens = tokens[tokens.index("git") + 1 :]
+        return [
+            t for t in tokens if t not in drop and not (t and set(t) <= _OFFER_SEP_TOKEN_CHARS)
+        ]
+
+    return _core(orig) == _core(sug)
+
+
 @declares_safe_direction(
     SafeDirection.FALL_BACK,
     because=(
@@ -292,6 +313,12 @@ def check_offer_git_c(
         return None
 
     ml_bail = "\n" in original_cmd
+    _raw_target = _offer_strip_q(_offer_trim(seg0_stripped[2:]))
+    suggestion_ok = _offer_round_trips(
+        original_cmd, suggestion, (target, _raw_target, qt)
+    )
+    if not suggestion_ok:
+        ml_bail = True
 
     prefix0_present = bool(prefix0)
     prefix1_only = bool(prefix1) and not prefix0_present
@@ -391,11 +418,18 @@ def check_offer_git_c(
             "retry-and-retool loop (docs/wiki/tool-output-flakiness-protocol.md § "
             "Not this protocol — blocked / no-return). 'git -C' is the exact, "
             "prompt-free equivalent.\n\n"
-            "Did you mean:\n  %s\n%s\n\n"
+            "%s%s\n\n"
             "Note: the follower commands after the first ';' / '&&' / newline "
             "no longer run with '%s' as cwd. If a follower references a "
             "relative path that was anchored at the cd target, prefix the path "
-            "with '%s/'." % (suggestion, residual_note, target, target)
+            "with '%s/'." % (
+                ("Did you mean:\n  %s\n" % suggestion)
+                if suggestion_ok
+                else "Add '-C %s' after 'git' and drop the 'cd'.\n" % qt,
+                residual_note,
+                target,
+                target,
+            )
         )
         + _cd_note_suffix
     )

@@ -454,7 +454,7 @@ schema = 1
 
 
 def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
-    assert _key_matches_regen_entry("engine.working_repos.doe_claude", "engine.working_repos")
+    assert _key_matches_regen_entry("engine.working_repos.content_root", "engine.working_repos")
 
 
 def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():

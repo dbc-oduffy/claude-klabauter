@@ -9,7 +9,7 @@ write-confinement DENY enforcement; DR-058 removed that enforcement as friction-
 was gutted from this package in lockstep). This note now pins only the surviving
 provision-and-emit contract below.
 
-DoE (`~/.claude`, source repo `DoE-claude`) owns the **policy contract**
+DoE (`~/.claude`, source repo `coordinator-content-repo`) owns the **policy contract**
 (`coordinator/subagent-sandbox-policy.yaml`) and the **spawn-hook plumbing** that invokes this
 package; claude-klabauter owns the **provisioning engine** itself. A drift on DoE's side of this
 surviving surface is a detectable break here, not a silent divergence.
@@ -174,14 +174,14 @@ revert it to a list. **Emit block style, never flow style (`{diverged: false}` o
 `coordinator_core.frontmatter.schema_validate.parse_yaml` (this repo's restricted YAML parser,
 which is what actually gates schema validation downstream) does not support flow-style mappings
 and parses one as a raw string instead of a dict, silently tripping the object-shaped check on
-every provisioned sidecar (see `cross-repo/inbox/2026-07-25-doe-claude-em-provision-report-
+every provisioned sidecar (see `cross-repo/inbox/2026-07-25-coordinator-content-repo-em-provision-report-
 divergence-flow-style.md`).
 
 **Shipped rule — commit-phase pathspec provenance.** The pcli-04 emitter has landed and
 `dispatch_feed` is live: an emitted Workflow interleaves `coordinator:git-commit-agent` phases
 between executor waves — one commit phase immediately following each executor wave, per the
 emitter's own composition (`coordinator_core/ops/dispatch_emit/emit.py`). DoE took the "not yet
-dispatchable" banner down 2026-08-12 (DR-153, DoE-claude `79be06759`), discharging SC-DR-021's
+dispatchable" banner down 2026-08-12 (DR-153, coordinator-content-repo `79be06759`), discharging SC-DR-021's
 consumer-repo condition, and their `execute-plan` RACI now names the EM Accountable for every
 commit with the Responsible keystroke delegable. **Every emitted commit phase's pathspec MUST
 carry real provenance** — the preceding wave's executor-reported touched-file set, or the chunk's
@@ -190,7 +190,7 @@ survey, never an invented set. This binds harder here than in a consumer repo be
 population (c) is unchanged: **a path written by a raw Bash heredoc carries no session claim and is
 denied at runtime.** An emitted commit phase whose pathspec covers engine-authored state will be
 refused, correctly. The executor-wave case works only because executors author via `Write`/`Edit`.
-Source: `cross-repo/inbox/2026-08-12-doe-claude-em-emitter-emits-commit-phases.md`.
+Source: `cross-repo/inbox/2026-08-12-coordinator-content-repo-em-emitter-emits-commit-phases.md`.
 
 **`--type` axis / template registry (SUBSUME):** the CLI grows an optional `--type` argument
 (`choices=["run-report", "review-findings", "assessment", "staff-eng-review"]`, `default:
@@ -276,7 +276,7 @@ change.
 ## Plan-derivable `report_sidecar` for five named emitters (SUBSUME)
 
 Additive refinement of the **provision-and-emit contract** above (canonical spec
-`state/subagent-share/conductor/seam-adjudication.md` § 2.7, DoE-claude, absorbed from G2's
+`state/subagent-share/conductor/seam-adjudication.md` § 2.7, coordinator-content-repo, absorbed from G2's
 D0/Z2). This is **not** part of the `contract_blocks` injection seam below — it changes the
 *value* an already-eligible `subagent_type` resolves for `report_sidecar`, not the grammar of
 a new key. It is documented here because it lands in the same engine function and collides in
@@ -299,7 +299,7 @@ session-keyed home is precisely where the next reader will not look. The Opus re
 are excluded because their output is a session judgment on work in flight, keyed to the session
 that asked — not because "review" appears in the role. `coordinator:plan-reviewer` (DoE DR-133,
 the M-tier rung between the mechanical pre-flights and the personas) sits on the durable side and
-was added 2026-08-06 on that reading; see `cross-repo/archive/2026-08-05-doe-claude-em-plan-reviewer-lens-registration.md`
+was added 2026-08-06 on that reading; see `cross-repo/archive/2026-08-05-coordinator-content-repo-em-plan-reviewer-lens-registration.md`
 (that `coordinator:plan-coverage-checker` already resolves to a `review-findings`-shaped
 `report_type_map` entry — the same template family `plan-review-check` joins — is the load-bearing
 precedent, pinned in-repo by `_G2_LENS_EXPECTED_TEMPLATE_TYPES` in
@@ -354,11 +354,11 @@ this, and both are correct by construction:
   ephemeral, run-scoped output. The absence of a stem is the correct signal here, not a gap to
   fill.
 
-<!-- The preceding block was widened 2026-07-25 after doe-claude-em read the older wording — which
+<!-- The preceding block was widened 2026-07-25 after coordinator-content-repo-em read the older wording — which
      illustrated the plan-less case with docs-checker's code-review dispatch alone — as leaving
      plan-less provisioning an unstated case, and asked whether their two /bug-sweep sites were
      silently broken. They are not. The rule was always general; only the illustration was narrow.
-     Reply memo: DoE-claude cross-repo/inbox/2026-07-25-claude-klabauter-em-planless-dispatch-sidecar-answer.md -->
+     Reply memo: coordinator-content-repo cross-repo/inbox/2026-07-25-claude-klabauter-em-planless-dispatch-sidecar-answer.md -->
 
 Regression coverage for the plan-less fallback:
 `coordinator_core/subagent_sandbox/tests/test_provision_report.py`
@@ -392,7 +392,7 @@ payload supplies, unchanged. The session-keyed path below this leg is not touche
 ## `contract_blocks` / `injected_prompt_blocks` — dispatch-time prompt-block injection (SUBSUME)
 
 Additive second seam alongside the provision-and-emit contract above, per the canonical
-spec (`state/subagent-share/conductor/seam-adjudication.md` § 2.3, DoE-claude). Where
+spec (`state/subagent-share/conductor/seam-adjudication.md` § 2.3, coordinator-content-repo). Where
 `report_sidecar` provisions a per-session doc, this seam assembles a **pre-resolved chunk
 of dispatch-prompt text** the DoE spawn-hook appends verbatim to a subagent's brief — the
 engine-side collapse of what used to be N independently-pasted, sentinel-synced copies of
@@ -555,7 +555,7 @@ A sidecar's home is `state/subagent-share/<session_id>/<key>.md` and its idempot
 one re-fires SubagentStart under a new session id, misses that catch, and — before this index
 — was scaffolded a second, EMPTY sidecar while its populated one was orphaned under the old
 id. Observed live 2026-08-29 on a resumed `coordinator:review-integrator`, reported by
-doe-claude-6c: the run report read as lost work.
+Coordinator-content-repo-6c: the run report read as lost work.
 
 The orphan is the worse half. `coordinator/bin/reap-stale-subagent-sidecars.py` gates
 preservation **per session directory** on that session being live, so the populated sidecars

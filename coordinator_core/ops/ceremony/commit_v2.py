@@ -412,7 +412,7 @@ def _pre_commit_gates(
     worktree but still tracked -- pass it in `deleted_paths` to commit the
     deletion", and only a path git does not track falls through to the
     errno-shaped `cannot read`. The stale quote cost a real reader real
-    time -- doe-claude-em read it on 2026-08-31 while verifying a cross-repo
+    time -- coordinator-content-repo-em read it on 2026-08-31 while verifying a cross-repo
     memo, concluded the refusal gave the caller no route, and filed an ask
     for a fix that had landed in the very tree they were reading. A
     docstring that quotes a message verbatim is a copy that goes stale

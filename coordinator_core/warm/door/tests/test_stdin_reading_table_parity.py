@@ -21,7 +21,7 @@ too (the door would pay a needless cold fall-through for it). Symmetric
 set equality is the whole check -- no third list is threaded through.
 
 UNRESOLVABLE-ROOTS DISPOSITION (staff-eng finding 5, carried over from the
-cut C2): when neither `repos.claude_klabauter` nor `repos.doe_claude`
+cut C2): when neither `repos.claude_klabauter` nor `repos.content_root`
 resolves to an existing `coordinator/bin` on this box, this test SKIPS
 with a stated reason. It never asserts empty-equals-table in that case --
 that would be a false red for an environment fact unrelated to whether
@@ -80,7 +80,7 @@ def test_door_core_table_matches_derivation_exactly():
     docstring for what a mismatch in either direction means at runtime."""
     if not configured_bin_roots():
         pytest.skip(
-            "neither repos.claude_klabauter nor repos.doe_claude resolves to an "
+            "neither repos.claude_klabauter nor repos.content_root resolves to an "
             "existing coordinator/bin on this machine -- cannot compute the "
             "semantic side of this parity check"
         )

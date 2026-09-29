@@ -50,7 +50,7 @@ def _run_lister(
 
 def _example_game_repo_registry(reg_dir: Path, *, backslash: bool = False) -> None:
     reg_dir.mkdir(parents=True, exist_ok=True)
-    source_path = r"X:\\example-game-workbench-repo" if backslash else "X:/example-game-workbench-repo"
+    source_path = r"C:\\example-game-workbench-repo" if backslash else "C:/example-game-workbench-repo"
     (reg_dir / "registry.local.toml").write_text(
         "[plugin.mirrors.example-game-repo]\n"
         'propagation_mode = "copy_install"\n'
@@ -65,7 +65,7 @@ def _example_game_repo_registry_cmdless(reg_dir: Path) -> None:
     (reg_dir / "registry.local.toml").write_text(
         "[plugin.mirrors.example-game-repo]\n"
         'propagation_mode = "copy_install"\n'
-        'source_path = "X:/example-game-workbench-repo"\n',
+        'source_path = "C:/example-game-workbench-repo"\n',
         encoding="utf-8",
     )
 
@@ -75,13 +75,13 @@ def test_no_scope_emits_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     _example_game_repo_registry(reg_dir)
     out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, [])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_consumer_repo_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
-    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:/example-retrieval-repo"])
+    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "C:/example-retrieval-repo"])
     assert rc == 0
     assert out == ""
 
@@ -89,9 +89,9 @@ def test_consumer_repo_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_own_source_repo_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
-    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:/example-game-workbench-repo"])
+    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "C:/example-game-workbench-repo"])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_meta_repo_checks_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +99,7 @@ def test_meta_repo_checks_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     _example_game_repo_registry(reg_dir)
     out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", str(tmp_path / ".claude")])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_meta_repo_windows_drive_form(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +109,7 @@ def test_meta_repo_windows_drive_form(tmp_path: Path, monkeypatch: pytest.Monkey
         monkeypatch, reg_dir, "/c/Users/operator", ["--scope-repo", "C:/Users/operator/.claude"], ostype="msys"
     )
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_own_repo_msys_form_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +117,7 @@ def test_own_repo_msys_form_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     _example_game_repo_registry(reg_dir)
     out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "/x/example-game-workbench-repo"])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_consumer_scopes_out_cmdless_plugin_no_misconfig(
@@ -125,7 +125,7 @@ def test_consumer_scopes_out_cmdless_plugin_no_misconfig(
 ) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry_cmdless(reg_dir)
-    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:/example-retrieval-repo"])
+    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "C:/example-retrieval-repo"])
     assert rc == 0
 
 
@@ -161,13 +161,13 @@ def test_production_metarepo_cross_drive(tmp_path: Path, monkeypatch: pytest.Mon
         monkeypatch, reg_dir, "/c/Users/alice", ["--scope-repo", "C:/Users/alice/.claude"], ostype="msys"
     )
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_backslash_source_path_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir, backslash=True)
-    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:/example-game-workbench-repo"])
+    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "C:/example-game-workbench-repo"])
     assert rc == 0
     assert "example-game-repo|" in out
 
@@ -175,9 +175,9 @@ def test_backslash_source_path_matches(tmp_path: Path, monkeypatch: pytest.Monke
 def test_trailing_backslash_scope_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
-    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:\\example-game-workbench-repo\\"])
+    out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "C:\\example-game-workbench-repo\\"])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out
 
 
 def test_no_registry_file_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +210,7 @@ def test_double_quote_in_cmd_warns_but_emits(tmp_path: Path, monkeypatch: pytest
     (reg_dir / "registry.local.toml").write_text(
         "[plugin.mirrors.example-game-repo]\n"
         'propagation_mode = "copy_install"\n'
-        'source_path = "X:/example-game-workbench-repo"\n'
+        'source_path = "C:/example-game-workbench-repo"\n'
         "reverse_drift_cmd = 'bash -c \"echo hi\"'\n",
         encoding="utf-8",
     )
@@ -221,11 +221,11 @@ def test_double_quote_in_cmd_warns_but_emits(tmp_path: Path, monkeypatch: pytest
 
 
 def test_norm_path_windows_drive_lowercases() -> None:
-    assert _norm_path("X:/Claude-Unreal-Example-Game-Repo") == "/x/example-game-workbench-repo"
+    assert _norm_path("C:/Claude-Unreal-Example-Game-Repo") == "/x/example-game-workbench-repo"
 
 
 def test_norm_path_windows_backslash_to_forward() -> None:
-    assert _norm_path(r"X:\example-game-workbench-repo") == "/x/example-game-workbench-repo"
+    assert _norm_path(r"C:\example-game-workbench-repo") == "/x/example-game-workbench-repo"
 
 
 def test_norm_path_drive_relative() -> None:
@@ -241,8 +241,8 @@ def test_norm_path_msys_form_folds_under_msys_ostype() -> None:
 
 
 def test_norm_path_trailing_separator_stripped() -> None:
-    assert _norm_path("X:/example-game-workbench-repo/") == "/x/example-game-workbench-repo"
-    assert _norm_path("X:\\example-game-workbench-repo\\") == "/x/example-game-workbench-repo"
+    assert _norm_path("C:/example-game-workbench-repo/") == "/x/example-game-workbench-repo"
+    assert _norm_path("C:\\example-game-workbench-repo\\") == "/x/example-game-workbench-repo"
 
 
 def test_norm_path_posix_case_preserved() -> None:
@@ -256,10 +256,10 @@ def test_row_only_in_tracked_registry_visible(tmp_path: Path, monkeypatch: pytes
     (reg_dir / "registry.toml").write_text(
         "[plugin.mirrors.example-game-repo]\n"
         'propagation_mode = "copy_install"\n'
-        'source_path = "X:/example-game-workbench-repo"\n'
+        'source_path = "C:/example-game-workbench-repo"\n'
         'reverse_drift_cmd = "bash bin/check-reverse-drift.sh"\n',
         encoding="utf-8",
     )
     out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, [])
     assert rc == 0
-    assert "example-game-repo|X:/example-game-workbench-repo|" in out
+    assert "example-game-repo|C:/example-game-workbench-repo|" in out

@@ -110,8 +110,8 @@ never globbing or scanning a directory for anything matching the pattern.
 path only; runnability is a separate question this module has no way to
 answer directly, so the answer is read from
 ``coordinator:test-runner``'s own agent definition instead (read-only
-citation, not an edit — that file is a DoE-claude-owned surface this
-plan's Anti-scope forbids touching): DoE-claude
+citation, not an edit — that file is a coordinator-content-repo-owned surface this
+plan's Anti-scope forbids touching): coordinator-content-repo
 ``coordinator/agents/test-runner.md`` § "Runner Resolution" (its
 ecosystem table plus the instruction to "Read the manifest... before
 inventing a command") names scoped invocation shapes for JS/TS
@@ -168,7 +168,7 @@ refuses — one uncovered ``.py`` among the docs is an omission, and prose
 wave-mates do not excuse it.
 
 Cross-repo provenance: two repos hit the original cut independently
-(``doe-claude-em`` 2026-08-18, ``example-retrieval-repo-ue-addon-em`` 2026-08-20, the
+(``coordinator-content-repo-em`` 2026-08-18, ``example-retrieval-repo-ue-addon-em`` 2026-08-20, the
 latter with its plan's stated product deliverable unwritten). The
 intermediate narrowing at ``2eab5b522`` — a written path that IS a test
 maps to itself — cleared only spines that happen to author their own test,
@@ -256,7 +256,7 @@ to that row's prefix. A prefix contributes no terminal test target: its
 files have no name to map at emit time.
 
 Source: state/improvement-queue/2026-09-11-dispatch-emit-takes-a-writes-under-prefi-309100e2b36b.yaml
-(proposed by doe-claude-em).
+(proposed by coordinator-content-repo-em).
 
 ## The executed premise this module's output inherits (AC14)
 

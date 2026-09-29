@@ -77,13 +77,13 @@ Path resolution: "published" class (§ Path resolution,
 docs/plans/2026-09-18-doe-holds-no-scripts.md) with no seam to fix on
 arrival -- `repo_root` is a REQUIRED caller-supplied argument on every
 public function here, never derived from this module's own `__file__` or
-any ambient probe, so this module's read of the DoE-claude@b644d5a9 lesson
+any ambient probe, so this module's read of the coordinator-content-repo@b644d5a9 lesson
 that wave the rest of this chunk fixes does not apply to it: nothing here
 ever resolved a path from its own location in the first place.
 
 Spec backlink: `archive/handoffs/2026-08/2026-08-14_120000_roadmap-gem-03.md`,
 `state/handoffs/2026-08-30-2026-08-29_190000_roadmap-gem-11.md` AC5.
-Arrived from DoE-claude coordinator/lib/receiver_state_reader.py
+Arrived from coordinator-content-repo coordinator/lib/receiver_state_reader.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C6).
 """
 

@@ -282,7 +282,7 @@ python coordinator_core/warm/door/build.py <engine_root> [--python <interpreter>
 
 `<engine_root>` must be a **published** engine tree — one carrying
 `coordinator_core/_engine_stamp` (see `warm.engine_root.is_engine_root`).
-The live working tree (`X:\claude-klabauter`) is never a warm-server host
+The live working tree (`C:\claude-klabauter`) is never a warm-server host
 (DR-315 §2) and `build.py` refuses to build against it.
 
 This does two separate things that happen to share one command:
@@ -335,7 +335,7 @@ version:
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (...)",
   "built_at": "2026-08-21T11:49:29+00:00",
-  "engine_root": "X:\\claude-klabauter"
+  "engine_root": "C:\\claude-klabauter"
 }
 ```
 
@@ -402,7 +402,7 @@ point of it being a per-build-machine default). So:
   and error, for what to pass.
 
 **Running `--verify` from a PUBLISHED MIRROR clone (e.g.
-`X:\claude-klabauter`) is safe, but a manual `sha256sum door.c` there is
+`C:\claude-klabauter`) is safe, but a manual `sha256sum door.c` there is
 NOT — these are two different checks with two different answers, and
 conflating them reads as tampering that isn't there.** Percolate's
 publish content transform rewrites every `claude-klabauter`-shaped identifier
@@ -494,7 +494,7 @@ one process (`door.exe` itself) runs when the fast path succeeds.
 
 ## Verification (2026-08-21, session 1c9c881e)
 
-Built against `X:\claude-klabauter` (the published mirror — the only warm
+Built against `C:\claude-klabauter` (the published mirror — the only warm
 host, per DR-315 §2). Derived pipe name compared directly against Python's
 own computation on that clone, both before and after the runtime-sidecar
 revision — byte-identical in every run, engine token differing only when
@@ -542,7 +542,7 @@ above): proven with a temporary, opt-in debug print of the constructed
 fallback command line (added, exercised, then removed — never shipped),
 combined with a one-line, throwaway-only patch to an ISOLATED copy of
 `coordinator-invoke.py` (a hardlinked/copied clone beside
-`X:\claude-klabauter`, never the real published mirror or the live tree)
+`C:\claude-klabauter`, never the real published mirror or the live tree)
 printing `coordinator_core.__file__` from inside the spawned child. Run
 from a neutral cwd, with no warm server started for that isolated clone
 at all (forcing the fallback deterministically, without touching the real
@@ -550,7 +550,7 @@ fleet server):
 
 ```
 DOOR_DEBUG_CMDLINE (temporary): <python.exe> <isolated-root>\coordinator\bin\coordinator-invoke.py ping
-PROBE coordinator_core.__file__: X:\claude-klabauter\coordinator_core\__init__.py
+PROBE coordinator_core.__file__: C:\claude-klabauter\coordinator_core\__init__.py
 ```
 
 The probe resolved to the REAL published mirror, not the isolated clone

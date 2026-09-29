@@ -19,8 +19,8 @@ Verified here by ACTUALLY EXECUTING the generated payload via a real `bash
 -c` subprocess (not just reading/compiling it) -- this is how the defect was
 originally caught (fold a real apostrophe in, watch the outer quote break).
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9
-row BX-16 (DoE-claude); this file's own coverage supersedes the "compile
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9
+row BX-16 (coordinator-content-repo); this file's own coverage supersedes the "compile
 under current interpreter" checks in `test_bx16_multiprobe_and_headtail_
 rewrite.py`'s `TestGeneratedPayloadShellSafety` for the apostrophe case
 specifically -- those pin quote-content ABSENCE, this file pins quote-content

@@ -125,7 +125,7 @@ def test_a_row_with_nothing_to_execute_is_withheld(tmp_path, body_line):
 
 
 def test_a_row_the_emitter_would_refuse_to_route_is_withheld(tmp_path):
-    """DoE-claude#75: a row writing both a plan body and code certified PREPPED
+    """coordinator-content-repo#75: a row writing both a plan body and code certified PREPPED
     and was then refused whole by dispatch. The gate now asks the emitter's own
     routing predicate and refuses with its message."""
     (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
@@ -472,7 +472,7 @@ def _external_plan(tmp_path, gate_block: str = "") -> Path:
   title: Reaches out
   body: Call the sibling repo's gate once it clears.
   change_kind: code-edit
-  surface: DoE-claude/coordinator/bin/mise-prep-gate.py
+  surface: coordinator-content-repo/coordinator/bin/mise-prep-gate.py
   writes: []
   queue_scope: project
   disposition: open
@@ -484,13 +484,13 @@ def test_a_row_naming_a_sibling_repo_without_a_gate_is_not_prepped(tmp_path):
     report = _gate(tmp_path, _external_plan(tmp_path))
     deps = report["classes"]["EXTERNAL_DEPS"]
     assert deps["kind"] == "external-dep-undeclared"
-    assert "DoE-claude" in deps["detail"]
+    assert "coordinator-content-repo" in deps["detail"]
     assert report["verdict"] == pg.NOT_PREPPED
 
 
 def test_a_gate_with_no_requires_is_not_prepped(tmp_path):
     block = """  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: the schema lands
 """
     report = _gate(tmp_path, _external_plan(tmp_path, block))
@@ -523,7 +523,7 @@ def test_landed_work_withholds_its_own_row_and_the_plan_still_certifies(tmp_path
     """Row granularity, deliberately: refusing the plan would discard every
     schedulable row alongside the blocked one."""
     block = f"""  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: the schema lands
       requires: {pg.REQUIRES_LANDED}
 """
@@ -544,7 +544,7 @@ def test_commit_in_owner_repo_withholds_its_row_and_the_plan_still_certifies(tmp
     made, finally applied to the other value.
     """
     block = f"""  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: someone commits there
       requires: {pg.REQUIRES_COMMIT}
 """
@@ -559,12 +559,12 @@ def test_a_commit_gated_row_says_so_rather_than_only_being_withheld(tmp_path):
     difference can live — and they route differently: one waits for a peer's landing, the other
     needs a cross-repo commit dispatched under per-session assent."""
     commit_block = f"""  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: someone commits there
       requires: {pg.REQUIRES_COMMIT}
 """
     landed_block = f"""  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: they land the op
       requires: {pg.REQUIRES_LANDED}
 """
@@ -592,7 +592,7 @@ def test_no_predicate_produces_the_retired_refused_verdict():
 
 def test_a_cleared_gate_is_not_a_finding(tmp_path):
     block = """  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: the schema lands
       cleared: true
 """
@@ -606,7 +606,7 @@ def test_closure_evidence_alone_does_not_clear_a_gate(tmp_path):
     else; the two readers must agree or a gate's visibility depends on which one
     saw it first."""
     block = """  external_gate:
-    - owner_repo: DoE-claude
+    - owner_repo: coordinator-content-repo
       condition: the schema lands
       closure_evidence: a memo I have not sent
 """
@@ -684,7 +684,7 @@ def test_writing_deeper_does_not_buy_the_created_root_exemption(tmp_path):
 
 
 def test_a_settings_home_write_is_not_an_undeclared_cross_repo_dependency(tmp_path):
-    """Ported alongside `_is_settings_home_path` (DoE-claude `ff446da1b`, "the
+    """Ported alongside `_is_settings_home_path` (coordinator-content-repo `ff446da1b`, "the
     settings home is not another team's tree"). A row writing under the
     machine-local settings home is not a nameless path into a sibling repo's
     tree, so it must pass EXTERNAL_DEPS with no `external_gate` -- matching
@@ -709,7 +709,7 @@ def test_the_repo_s_own_name_is_never_a_sibling(tmp_path):
     own = tmp_path / "claude-klabauter"
     own.mkdir()
     assert "claude-klabauter" not in pg.fleet_siblings(own)
-    assert "DoE-claude" in pg.fleet_siblings(own)
+    assert "coordinator-content-repo" in pg.fleet_siblings(own)
 
 
 def _plan_with(root: Path, spine: str, slug: str) -> Path:
@@ -730,32 +730,32 @@ def test_the_fleet_list_carries_every_name_including_the_doctrine_repo(tmp_path)
     repo drops it and standing anywhere else keeps it. The read-side twin now
     carries the same eight, which is what makes the two halves return the same
     verdict on a corpus that is neither of them."""
-    assert "DoE-claude" in pg.FLEET_REPOS
-    doctrine = tmp_path / "DoE-claude"
+    assert "coordinator-content-repo" in pg.FLEET_REPOS
+    doctrine = tmp_path / "coordinator-content-repo"
     doctrine.mkdir()
-    assert "DoE-claude" not in pg.fleet_siblings(doctrine)
+    assert "coordinator-content-repo" not in pg.fleet_siblings(doctrine)
     assert "claude-klabauter" in pg.fleet_siblings(doctrine)
 
 
 def test_the_repo_s_own_name_is_subtracted_case_insensitively(tmp_path):
-    """A clone at `doe-claude/` and one at `DoE-claude/` are the same repo. A
+    """A clone at `coordinator-content-repo/` and one at `coordinator-content-repo/` are the same repo. A
     case-sensitive subtraction would report every self-naming row in the
     lower-case clone as a cross-repo dependency."""
-    own = tmp_path / "doe-claude"
+    own = tmp_path / "coordinator-content-repo"
     own.mkdir()
-    assert "DoE-claude" not in pg.fleet_siblings(own)
+    assert "coordinator-content-repo" not in pg.fleet_siblings(own)
 
 
 def test_a_sibling_named_in_a_different_case_is_still_caught(tmp_path):
     """Defect 2. The corpus does not agree with itself on case — example-retrieval-repo's own
-    plans and cross-repo archive spell the doctrine repo `doe-claude` 1207 times
-    against `DoE-claude` 1052 — so a case-sensitive `==`/`startswith` left a row
+    plans and cross-repo archive spell the doctrine repo `coordinator-content-repo` 1207 times
+    against `coordinator-content-repo` 1052 — so a case-sensitive `==`/`startswith` left a row
     declaring a genuine cross-repo surface in the corpus's own spelling unseen by
     the SIBLING-NAME leg entirely."""
     for value in (
-        "doe-claude/coordinator/bin/thing.py",
-        "DOE-CLAUDE@coordinator/bin/thing.py",
-        "Doe-Claude",
+        "coordinator-content-repo/coordinator/bin/thing.py",
+        "COORDINATOR-CONTENT-REPO@coordinator/bin/thing.py",
+        "coordinator-content-repo",
     ):
         spine = (
             "- id: C1\n  title: t\n  change_kind: code-edit\n"
@@ -847,7 +847,7 @@ def test_an_unreplaced_placeholder_path_is_its_own_defect_no_gate_clears(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# EXTERNAL_DEPS — external_reads_ungated (mirrors DoE-claude
+# EXTERNAL_DEPS — external_reads_ungated (mirrors coordinator-content-repo
 # coordinator/bin/mise-prep-gate.py's "Declaration 3b" cases)
 # ---------------------------------------------------------------------------
 
@@ -875,21 +875,18 @@ def test_a_matching_ungated_reads_entry_clears_the_reads_hit(tmp_path):
     assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
 
 
-def test_a_matching_ungated_consumes_entry_clears_the_consumes_hit(tmp_path):
-    """DoE parity (commit 92ca01682): `consumes:`/`reads_at_head:` clear
-    exactly as `reads:` does -- the schema refuses a row mixing `reads` with
-    either, so a plan authored with `consumes:` must get the same
-    external_reads_ungated relief a `reads:`-authored row gets."""
-    spine = (
-        "- id: C1\n  title: t\n  change_kind: code-edit\n"
-        "  surface: docs/x.md\n  writes: [docs/x.md]\n"
-        "  consumes: [example-retrieval-repo/coordinator_core/x.py]\n"
+@pytest.mark.parametrize("field", ["reads_at_head", "consumes"])
+def test_reads_at_head_and_consumes_are_sibling_checked_and_ungatable(tmp_path, field):
+    spine = _reads_spine("").replace("  reads:", f"  {field}:")
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+    entries = (
         "  external_reads_ungated:\n"
         "    - path: example-retrieval-repo/coordinator_core/x.py\n"
         "      owner_repo: example-retrieval-repo\n"
-        "      reason: read-only, examined, nothing to land\n"
-        "  queue_scope: project\n  disposition: open\n"
+        "      reason: read-only, examined\n"
     )
+    spine = _reads_spine(entries).replace("  reads:", f"  {field}:")
     report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
     assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
 
@@ -1203,12 +1200,12 @@ def test_a_date_typed_created_is_not_a_schema_defect(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Parity leg: writes-archive-refused-in-wave (DoE-claude mise-prep-gate.py)
+# Parity leg: writes-archive-refused-in-wave (coordinator-content-repo mise-prep-gate.py)
 # ---------------------------------------------------------------------------
 
 
 def test_a_row_writing_under_archive_is_refused_in_wave(tmp_path):
-    """DoE-claude ``mise-prep-gate.py``'s ``writes-archive-refused-in-wave``
+    """coordinator-content-repo ``mise-prep-gate.py``'s ``writes-archive-refused-in-wave``
     leg, restated here (2026-09-18-doe-holds-no-scripts, leg 1). A row writing
     under ``archive/`` outside the guard's own carve-outs is BLOCKED at
     dispatch time by `block_subagent_archive_write`; the bar must catch it at

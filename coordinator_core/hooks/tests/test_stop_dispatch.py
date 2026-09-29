@@ -10,7 +10,7 @@ wrappers over previously-handler-less library modules
 fan-in calls directly — they lost their `@register_op` registrations
 (overengineering-reviewer/Kira, 2026-08-31: no registration, dispatch site,
 or cross-module caller found for any of the four op keys, in claude-klabauter or
-DoE-claude) but are otherwise unchanged.
+Coordinator-content-repo) but are otherwise unchanged.
 
 Obligations, per this chunk's dispatch brief:
   (a) `hooks.stop_dispatch` is registered and resolvable through
@@ -77,7 +77,6 @@ def test_stop_dispatch_op_registers_and_resolves_through_op_for_path() -> None:
         assert op_for_path(HOOK_PATH + "/" + name) == name
 
     for name in (
-        "hooks.guard_kira_verdict_routed",
         "hooks.stop_em_report_altitude",
         "hooks.nudge_harness_directive_dispatch",
         "hooks.nudge_unrouted_sizing",

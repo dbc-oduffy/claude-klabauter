@@ -1,6 +1,6 @@
 """
 coordinator_core/roadmap/tests/test_prep_gate_doe_port.py — behaviors ported from
-DoE-claude's retired `coordinator/tests/test_mise_prep_authoring_bar.py`
+Coordinator-content-repo's retired `coordinator/tests/test_mise_prep_authoring_bar.py`
 (deleted at DoE commit 292feda38, which shimmed `mise-prep-gate.py` to this
 engine) that the engine's own `test_prep_gate.py`/`test_prep_gate_four_legs.py`
 did not already assert under a different name.

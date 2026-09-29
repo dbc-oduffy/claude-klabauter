@@ -33,3 +33,15 @@ import pytest
 def assume_a_fleet_machine(monkeypatch):
     monkeypatch.setenv("COORDINATOR_CAP_FLEET_PRESENT", "1")
     yield
+
+
+@pytest.fixture(autouse=True)
+def assume_an_author_machine(monkeypatch):
+    """Pin the author profile for suites that assert author-only behaviour; a
+    test wanting consumer sets ``MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE=consumer``."""
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "author")
+    machine_profile.reset_cache()
+    yield
+    machine_profile.reset_cache()

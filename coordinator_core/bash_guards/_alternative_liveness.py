@@ -70,7 +70,7 @@ NEGATIVE-SPEC -- what this module deliberately does NOT do
   coverage is unverified, not merely "should work". Say so, do not imply
   otherwise.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9
 Sibling: ``_guard_coverage.py`` (reach measurement); ``tests/test_deny_message_
 accuracy.py`` (sampled message-vs-trigger correspondence, BX-12).
 
@@ -146,6 +146,7 @@ from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
 from coordinator_core.bash_guards import block_subagent_grant_acquisition
 from coordinator_core.bash_guards import block_subagent_guard_grant
+from coordinator_core.bash_guards import block_subagent_findings_reject
 from coordinator_core.bash_guards import check_raw_pid_liveness
 from coordinator_core.bash_guards import guard_powershell_via_bash
 from coordinator_core.bash_guards import guard_grep_via_bash
@@ -459,7 +460,7 @@ def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
         target = os.path.join(repo, "f.txt")
         with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("hello\nuncommitted edit\n")
-        return _dc.check_destructive_git_revert_advisory("git -C %s stash" % repo, "altlive-probe")
+        return _dc.check_destructive_git_revert_advisory("git -C %s checkout -f" % repo, "altlive-probe")
 
 
 def _trigger_check_git_commit_safe_commit_advise_amend() -> Optional[Dict[str, Any]]:
@@ -544,9 +545,8 @@ def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
     orig_hazard = _dc._is_hazard_repo
     _dc._is_hazard_repo = lambda git_root: True
     try:
-        return _dc.check_blanket_git_add(
-            "git -C %s add -A" % _ALTLIVE_HAZARD_CWD, "altlive-probe"
-        )
+        with _scratch_git_repo() as repo:
+            return _dc.check_blanket_git_add("git -C %s add -A" % repo, "altlive-probe")
     finally:
         _dc._is_hazard_repo = orig_hazard
 
@@ -569,10 +569,35 @@ def _trigger_p4_verb_fence() -> Optional[Dict[str, Any]]:
         p4_verb_fence._is_p4_gated = orig_gated
 
 
+def _trigger_check_destructive_git_clean() -> Optional[Dict[str, Any]]:
+    """Drives ``git clean`` against a scratch repo holding one untracked
+    load-bearing file, so the fire never depends on the ambient tree."""
+    with _scratch_git_repo() as repo:
+        os.makedirs(os.path.join(repo, "state"))
+        with open(os.path.join(repo, "state", "orientation_cache.md"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("untracked\n")
+        return _dc.check_destructive_git_clean(
+            "git -C %s clean -fdx" % shlex.quote(repo.replace("\\", "/")), "altlive-probe"
+        )
+
+
+def _trigger_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
+    """Overwrites an EXISTING ``CLAUDE.md`` in a scratch repo: creating a
+    missing one is a carve-out and stays silent, so the fire needs the file
+    present in the payload cwd."""
+    with _scratch_git_repo() as repo:
+        with open(os.path.join(repo, "CLAUDE.md"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("existing\n")
+        return guard_doctrine_surface_bash_write.check(
+            _payload("echo x > CLAUDE.md", agent_id=None, cwd=repo),
+            ["CLAUDE.md", "MEMORY.md", "coordinator.local.md", "AGENTS.md"],
+        )
+
+
 LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_no_verify": lambda: _dc.check_no_verify('git commit --no-verify -m "x"', "altlive-probe"),
     "check_runaway_find": lambda: _dc.check_runaway_find("find / -name '*.py'", "altlive-probe"),
-    "check_destructive_git_clean": lambda: _dc.check_destructive_git_clean("git clean -fdx", "altlive-probe"),
+    "check_destructive_git_clean": _trigger_check_destructive_git_clean,
     "check_destructive_rm": _trigger_destructive_rm,
     "check_destructive_git_revert": _trigger_destructive_git_revert,
     "check_destructive_git_revert_advisory": _trigger_destructive_git_revert_advisory,
@@ -624,7 +649,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_worktree_sentinel_creation": lambda: block_worktree_sentinel_creation.check(
         _payload("touch .coordinator-override-worktree-guard", agent_id=None)
     ),
-    "block_approval_sentinel_creation": lambda: block_approval_sentinel_creation.check(
+    "block_approval_sentinel_creation": lambda: block_approval_sentinel_creation.check_ungated(
         _payload("touch .coordinator-doctrine-edit-approved", agent_id=None)
     ),
     "block_disarm_marker_sentinel_creation": lambda: block_disarm_marker_sentinel_creation.check(
@@ -648,10 +673,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         )
     ),
     # `governed_surfaces` is a REQUIRED positional the live caller
-    "guard_doctrine_surface_bash_write": lambda: guard_doctrine_surface_bash_write.check(
-        _payload("echo x > CLAUDE.md", agent_id=None),
-        ["CLAUDE.md", "MEMORY.md", "coordinator.local.md", "AGENTS.md"],
-    ),
+    "guard_doctrine_surface_bash_write": _trigger_doctrine_surface_bash_write,
     # named untriggerable: the gate's UNTRIGGERED pin is a SUPPRESSION
     "guard_host_subagent_bash_ban": lambda: _trigger_host_subagent_policy_guard(
         guard_host_subagent_bash_ban, "subagent_bash_policy", "rg TODO"
@@ -666,7 +688,11 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("k" + "ill -0 $PID", agent_id=None)
     ),
     "guard_inprocess_search": lambda: guard_inprocess_search.check(
-        _payload('grep -rn "TODO" coordinator_core/search/', agent_id=None),
+        _payload(
+            'grep -rn "TODO" coordinator_core/search/',
+            agent_id=None,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(_pkg.__file__))),
+        ),
         host_is_windows=True,
     ),
     "guard_grep_via_bash": lambda: guard_grep_via_bash.check(
@@ -697,6 +723,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     # check`'s own "IDENTITY-GATE POSTURE" docstring section: it denies on
     # (this guard's `_GATED_SUBCOMMANDS` check reads only the first token
+    "block_subagent_findings_reject": lambda: block_subagent_findings_reject.check(
+        _payload("python3 -m coordinator_core.ops.review_findings_ledger reject x")
+    ),
     "block_subagent_guard_grant": lambda: block_subagent_guard_grant.check(
         _payload(
             'python3 -m coordinator_core.session.em_guard_grant grant "note"'
@@ -779,7 +808,7 @@ def discover_write_guard_names() -> List[str]:
 def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
     """Fires the warn-mode schema-validation leg with a `state/handoffs/*.md`
     write carrying no frontmatter at all -- the simplest deterministic
-    `build_violation_payload_advisory` trigger, needing no DoE-claude
+    `build_violation_payload_advisory` trigger, needing no coordinator-content-repo
     sibling checkout (the schema-validation leg matches purely off
     claude-klabauter's own vendored `_VENDORED_SCHEMAS_DIR`; `_load_doe_registry()`
     fails open when the DoE root is unresolvable, per that guard's own
@@ -1040,7 +1069,7 @@ def _split_alternative_text(text: str) -> List[str]:
     message, preserving Windows path separators.
 
     `shlex.split(text, posix=True)` treats a backslash as an ESCAPE, so
-    ``git -C X:\\claude-klabauter\\coordinator_core status`` tokenizes its path as
+    ``git -C C:\\claude-klabauter\\coordinator_core status`` tokenizes its path as
     ``X:claude_klabautercoordinator_core`` -- a path that cannot exist, which
     made the alternative execute, fail with "cannot change to", and grade DEAD.
     Disabling `escape` keeps POSIX quote handling (a quoted multi-word argument
@@ -1800,6 +1829,28 @@ def _source_override_env_vars(fn: Callable, _seen: Optional[set] = None, _depth:
         for name in set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", src)):
             candidate = getattr(module, name, None)
             if inspect.isfunction(candidate) and inspect.getmodule(candidate) is module:
+                found.extend(_source_override_env_vars(candidate, _seen, _depth + 1))
+    # A thin wrapper that lazily imports its body from a sibling guard module
+    # (kept out of dispatch_checks.py by the line ratchet) names its override
+    # there, so follow function-local `from coordinator_core.bash_guards.X
+    # import f` into that module.
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").startswith("coordinator_core.bash_guards.")
+        ):
+            continue
+        try:
+            sibling = importlib.import_module(node.module)
+        except Exception:
+            continue
+        for alias in node.names:
+            if alias.name == "operator_override_note" or not re.search(
+                r"\b%s\s*\(" % re.escape(alias.asname or alias.name), src
+            ):
+                continue
+            candidate = getattr(sibling, alias.name, None)
+            if inspect.isfunction(candidate):
                 found.extend(_source_override_env_vars(candidate, _seen, _depth + 1))
     return found
 

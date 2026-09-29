@@ -1,6 +1,6 @@
 """coordinator_core.hooks.observe_config_change — ConfigChange hook, OBSERVE ONLY.
 
-Port of: DoE-claude `coordinator/hooks/scripts/observe-config-change.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/observe-config-change.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict (state/audits/doe-script-arrivals/W4-C1-hook-reach-spike.md):
 command/native-door — no coordinator/bin shim (W4-C16 lands the single

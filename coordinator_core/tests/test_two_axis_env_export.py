@@ -15,7 +15,7 @@ behave exactly as it did before.
 So the most important assertions here are the NEGATIVE ones: that the dispatch
 variable is untouched. A future edit that makes the split "cleaner" by
 repointing the shared variable would pass every positive test in this file and
-break the mirror, the settings home, and DoE-claude silently.
+break the mirror, the settings home, and coordinator-content-repo silently.
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def _force_the_registry_read_through_the_stubbed_path(monkeypatch):
     So the stub was reached only while the primary happened to miss. Alone,
     under the quarantined HOME, it does; in the tier, once any earlier test in
     the worker warms that memo with this box's real `repos.claude_klabauter`, the
-    primary answers `X:/claude-klabauter` and the stub is never called at all --
+    primary answers `C:/claude-klabauter` and the stub is never called at all --
     which is exactly how these four failed: a `KeyError: 'key'` from a spy that
     never ran, a locator reading the real repo instead of `/src/checkout`, and
     the locator present in an env the test had arranged to be unresolvable.

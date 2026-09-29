@@ -70,8 +70,8 @@ _guard_roster_provider: GuardRosterProvider = _live_guard_roster
 # Measured 2026-09-24, Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,
 # CPython 3.11.15, against dispatch.py post-P070-C3's eager-import shed.
 _EAGER_IMPORT_CEILING = 21
-_DISPATCH_CHECKS_LINE_CEILING = 12131
-_REGISTERED_ENTRY_CEILING = 53
+_DISPATCH_CHECKS_LINE_CEILING = 11284
+_REGISTERED_ENTRY_CEILING = 54  # + block-subagent-findings-reject (RRI-M3)
 
 
 def _count_module_scope_imports(source: str) -> int:
@@ -151,11 +151,11 @@ def test_dispatch_checks_line_ratchet_green_at_head() -> None:
 def test_dispatch_checks_line_ratchet_reds_on_synthetic_growth(
     tmp_path, monkeypatch
 ) -> None:
-    """AC7 leg 2, red: a synthetic copy of dispatch_checks.py, ten lines
-    over the pin. Never touches the tracked file."""
+    """AC7 leg 2, red: a synthetic copy of dispatch_checks.py, grown past the pin
+    by a full pin's worth of lines. Never touches the tracked file."""
     synthetic = tmp_path / "dispatch_checks.py"
     original = _DISPATCH_CHECKS_PY_PATH.read_text(encoding="utf-8")
-    extra_lines = "\n".join(f"# synthetic-growth-{i}" for i in range(10)) + "\n"
+    extra_lines = "\n".join(f"# synthetic-growth-{i}" for i in range(_DISPATCH_CHECKS_LINE_CEILING)) + "\n"
     synthetic.write_text(original + extra_lines, encoding="utf-8")
     monkeypatch.setattr(
         sys.modules[__name__], "_DISPATCH_CHECKS_PY_PATH", synthetic

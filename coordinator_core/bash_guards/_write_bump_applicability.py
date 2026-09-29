@@ -3,7 +3,7 @@ point all three write-confinement bump guards (`bump_foreign_repo_write.py`
 [C4], `bump_outside_repo_write.py` [C5], `write_guards.bump_out_of_repo_tool_write`
 [C7]) consult before deciding whether to bump at all.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C2, "Applicability -- anchor on a value agents cannot move,
 resolve the two no-bump conditions".
 
@@ -75,7 +75,7 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     carries, including its Windows-without-`HOME`-set fix) rather than a
     literal `os.path.join(os.environ["HOME"], ".claude")`. This module does
     NOT call `trusted_root_guard.is_trusted()` -- that predicate also trusts
-    the DoE-claude and claude-klabauter anchors, which would wrongly hand the
+    the coordinator-content-repo and claude-klabauter anchors, which would wrongly hand the
     fleet-recovery hatch to every session launched in either of THIS
     plan's own two working repos. Only the home-resolution helper is
     reused; the trust decision itself is this module's own, narrower one.
@@ -83,7 +83,7 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     `machine_resolver._load_toml` / `_flatten` over EVERY `repos.*` entry
     in the machine-local registry (`registry.local.toml` takes precedence
     over `registry.toml`, matching every other reader in this package) --
-    not the two named keys (`repos.doe_claude`, `repos.claude_klabauter`)
+    not the two named keys (`repos.content_root`, `repos.claude_klabauter`)
     `trusted_root_guard.py` reads. Those two are a fixed pair for a fixed
     trust decision; this module's job is "is the target ANY repo the
     operator has registered", which needs the full, open-ended set.
@@ -176,7 +176,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 )
 from coordinator_core.machine_resolver import _flatten, _load_toml, registry_dir
 from coordinator_core.session.core import now_iso, session_dir
-from coordinator_core.trusted_root_guard import _home_from_env
+from coordinator_core.trusted_root_guard import _home_from_env, _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import (
     casefold_path,
     strip_extended_length_prefix,
@@ -593,6 +593,30 @@ def target_is_under_claude_home(path: str, env: Optional[dict] = None) -> bool:
     if claude_home_cf is None or target_cf is None:
         return False
     return _is_under(target_cf, claude_home_cf)
+
+
+def target_is_under_settings_home(
+    path: str, env: Optional[dict] = None, target_gitdir: Optional[Path] = None
+) -> bool:
+    """True iff `path` resolves under the coordinator settings home and no git
+    checkout rooted inside the settings home owns it. A repo that merely
+    encloses the settings home (a git-tracked `$HOME`) does not make it
+    foreign; a real checkout nested under it still does. Unresolvable inputs
+    return False, withholding the exemption."""
+    env = os.environ if env is None else env
+    settings_home = _settings_home_dir_from_env(env)
+    if not settings_home or not path:
+        return False
+    home_cf = _resolve_path(settings_home)
+    target_cf = _resolve_path(path)
+    if home_cf is None or target_cf is None or not _is_under(target_cf, home_cf):
+        return False
+    if target_gitdir is None:
+        return True
+    if target_gitdir.name != ".git":
+        return False
+    root_cf = _resolve_path(str(target_gitdir.parent))
+    return root_cf is not None and not _is_under(root_cf, home_cf)
 
 
 def anchor_subtree_contains(anchor: str, target: str) -> bool:

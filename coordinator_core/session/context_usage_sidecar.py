@@ -97,7 +97,7 @@ def _safe_stem(session_id: str) -> str:
 def sidecar_path(session_id: str) -> Path:
     """Return the context-usage sidecar path for ``session_id``.
 
-    Resolves DoE-claude's `coordinator/bin/statusline.py` record — the sole
+    Resolves coordinator-content-repo's `coordinator/bin/statusline.py` record — the sole
     live producer, registered as this machine's `statusLine`. It publishes to
     the settings home's ``state/context-window/`` directory, one
         ``<session_id>.json`` per session
@@ -131,7 +131,7 @@ def write_usage(session_id: str, context_window_block: dict[str, Any], *, now: f
     """Serialise ``context_window_block`` plus a wall-clock ``captured_at``
     stamp of ``now`` to the sidecar for ``session_id``, atomically.
 
-    The live producer is DoE-claude's statusline, not this function; this
+    The live producer is coordinator-content-repo's statusline, not this function; this
     writer exists so tests and any future claude-klabauter-side producer emit the exact
     record shape `read_usage` consumes, rather than a second convention.
 

@@ -12,7 +12,7 @@ Observed live 2026-08-19 — `cross-repo-memo send` against a running warm
 server printed `route_mutation: op='memo.send' refused (exit_code=1, failed=0)`
 and nothing else, while `COORDINATOR_WARM=0` on the identical invocation
 printed the full `scoped_to.sha does not resolve` reason. Reported by
-doe-claude-em as a CLI-forwarder defect; the forwarder reads stderr on the
+Coordinator-content-repo-em as a CLI-forwarder defect; the forwarder reads stderr on the
 rc==0 path correctly (`coordinator/bin/lib/cc_invoke.py :: route_mutation`) and
 there was simply nothing on the stream.
 
@@ -21,7 +21,7 @@ attaches to the transport frame, client re-emits and pops — plus the negative
 spec that the cold path is unchanged and the frozen `result` envelope is never
 expanded.
 
-Spec backlink: cross-repo/inbox/2026-08-19-doe-claude-em-warm-engine-seam-async-declined.md
+Spec backlink: cross-repo/inbox/2026-08-19-coordinator-content-repo-em-warm-engine-seam-async-declined.md
 """
 
 from __future__ import annotations

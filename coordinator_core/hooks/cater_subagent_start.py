@@ -3,7 +3,7 @@ coordinator_core.hooks.cater_subagent_start -- engine-side catering
 composer for a SubagentStart payload (C2,
 docs/plans/2026-08-21-catering-rides-subagentstart.md).
 
-DoE-claude's former PreToolUse(Agent) hook (`enforce-agent-dispatch-mode.py`)
+Coordinator-content-repo's former PreToolUse(Agent) hook (`enforce-agent-dispatch-mode.py`)
 used to compose its own catering legs for an `Agent`-tool child, but those
 legs (including the named-teammate clause, `_compose_teammate_clause`) were
 retired from that hook at `10cd4cda9` (2026-08-21, -1001 lines).
@@ -68,9 +68,9 @@ used to claim one. Earlier revisions cited
 `_compose_sidecar_offer_text` / `_compose_sidecar_miss_text` in DoE's
 `enforce-agent-dispatch-mode.py` as the surviving twin of these strings.
 Those functions are GONE: that hook's own docstring says sidecar
-provisioning is "retired from this leg entirely" (read at DoE-claude
+provisioning is "retired from this leg entirely" (read at coordinator-content-repo
 `work/machine-a/2026-08-22to31`, file at `d29ee0aa9d`), and the identifiers
-appear nowhere under `X:/DoE-claude/coordinator/hooks/`. `SubagentStart`
+appear nowhere under `C:/coordinator-content-repo/coordinator/hooks/`. `SubagentStart`
 is the SOLE catering path for every child, as this docstring's own opening
 already states -- the two halves contradicted each other and the citation
 half was the stale one.
@@ -84,7 +84,7 @@ re-derive the obligation from this paragraph's history --
 that divergence is intentional here and unresolved there, tracked
 separately from the marker-line guarantee above.
 
-CONTRACT CHANGE (2026-08-21, agreed with doe-claude-6d, bug-backlog
+CONTRACT CHANGE (2026-08-21, agreed with coordinator-content-repo-6d, bug-backlog
 `2026-08-21-named-dispatch-catering-resolves-contrac-0755d38ec8ea.yaml`):
 `payload["contract_blocks"]` now arrives in one of TWO shapes, and this
 module resolves which shape it got before handing anything to
@@ -568,7 +568,7 @@ def _resolve_role_append_snippet_path() -> Optional[Path]:
     THIRD rung ADDED to the two shapes this function already probed --
     `<claude_config_dir>/plugins/coordinator-claude` in both known shapes
     (DoE dev-clone nested under `coordinator/`, marketplace/OSS-mirror at
-    that root directly), then the fleet's own `.doe-root` pointer file (the
+    that root directly), then the fleet's own `.coordinator-content-root` pointer file (the
     rung this defect's fleet-box case needs: a plugin root whose live clone
     sits OUTSIDE `.claude` entirely, where `<claude_config_dir>/plugins/
     coordinator-claude` holds only `coordinator/bin`). Does NOT add
@@ -610,12 +610,12 @@ def _resolve_role_append_snippet_path() -> Optional[Path]:
             return found
 
     try:
-        pointer = machine_local_dir() / ".doe-root"
-        doe_root = pointer.read_text(encoding="utf-8").strip()
+        pointer = machine_local_dir() / ".coordinator-content-root"
+        content_root = pointer.read_text(encoding="utf-8").strip()
     except OSError:
-        doe_root = ""
-    if doe_root:
-        content_root = content_root_for(doe_root)
+        content_root = ""
+    if content_root:
+        content_root = content_root_for(content_root)
         if content_root is not None:
             found = _artifact_at(content_root)
             if found is not None:
@@ -863,7 +863,7 @@ def _write_miss_sentinel(
         # multi-repo plan-blitz dispatch is a REAL repo that is simply not
         # this dispatch's target -- exactly how klabauter#47's "durable
         # wrong record" gets written: `_guard_kira_verdict_routed`
-        # (DoE-claude `hooks/stop_dispatch.py`) then reads a sentinel filed
+        # (coordinator-content-repo `hooks/stop_dispatch.py`) then reads a sentinel filed
         # under the wrong repo's `state/subagent-share/` and reports a
         # false owed-route or a false in-flight verdict off it. So this leg
         # refuses BEFORE the walk when the caller gave it no target at all,

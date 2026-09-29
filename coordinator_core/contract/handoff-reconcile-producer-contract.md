@@ -14,7 +14,7 @@
 > routing path documented below in the pre-rebuild sections are **GONE**, not reduced — there is no
 > shipping-verdict half left to call. Measured (AC5, `benchmarks/process_time.py`,
 > `k=20`/`k=7`): **431.25 ms cold CLI, 125.0 ms warm median (k=7, min 109.4), 0 spawns, `procs_per_call` 1.0** —
-> under the 500 ms brightline on both instruments, warm being the serving path for DoE-claude, the
+> under the 500 ms brightline on both instruments, warm being the serving path for coordinator-content-repo, the
 > only live consumer.
 >
 > **Status: WIRED AND FIRING, observation-only.** The op, the `reconcile/` compute package, and
@@ -24,7 +24,7 @@
 > "not yet wired to a live caller… there is no `workday-start` (or other) call site invoking this
 > op today". There is: DoE's `coordinator/commands/workday-start.md` § 1.10.6 makes it a Step -0.9
 > judgment point (`### Auto-Reconcile`, after `### Addon Health`), routing through this repo's
-> `coordinator/bin/check-auto-reconcile.py`. Confirmed by `doe-claude-em` 2026-08-25, and by the
+> `coordinator/bin/check-auto-reconcile.py`. Confirmed by `coordinator-content-repo-em` 2026-08-25, and by the
 > op-latency sink: **65 fires in 24 h, all `outcome=ok`, across 5 sessions**.
 >
 > **The call site and the arming flip were never coupled** — observation-only was *designed* to
@@ -48,7 +48,7 @@
 > **RATIFIED** by DoE (2026-07-13, `cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md`),
 > same path the cartography op names walked from provisional to ratified.
 >
-> **Boundary authority.** `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
+> **Boundary authority.** `/Users/example-operator/X/coordinator-content-repo/docs/decisions/DR-047-content-engine-boundary-redraw-contract-vs-e.md`
 > is the operative DoE↔claude-klabauter boundary authority underlying this op's design: **claude-klabauter owns the
 > engine** (the compute — matcher, evaluator, orchestration, the fail-closed reader), **DoE owns
 > the policy** (the threshold/data — the `auto-reconcile-policy.yaml` file DoE authors against
@@ -67,7 +67,7 @@
 > - Compute engines: `coordinator_core/reconcile/commit_reality.py` (C2, DEC-1),
 >   `coordinator_core/reconcile/gate_eval.py` (C3), `coordinator_core/reconcile/policy_loader.py` (C9)
 > - Policy grammar pin: `coordinator_core/contract/auto-reconcile-policy.grammar.md`
-> - Boundary authority: `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
+> - Boundary authority: `/Users/example-operator/X/coordinator-content-repo/docs/decisions/DR-047-content-engine-boundary-redraw-contract-vs-e.md`
 > - Batch-orchestration compliance precedent:
 >   `docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md` (D2(ii)/Invariant-3)
 > - Cadence rationale: `docs/decisions/DR-215-coordinator-core-command-type-execution-model.md` § 6
@@ -200,7 +200,7 @@ matcher behavior with zero claude-klabauter code change.
 writes) and covers both the STRUCTURED path (`blocked_by:[stub-id,...]` graph edges on
 `kind: spinoff-roadmap` handoffs) and the PROSE fallback path (free-text `gate_dependency`
 one-liner on other handoff kinds). Load-bearing rules, converging with
-`DoE-claude/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70:
+`coordinator-content-repo/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70:
 
 - **All-shipped → `clear`.** ALL `blocked_by` members must be `shipped` SPECIFICALLY — `abandoned`
   is terminal (stops re-evaluation) but never counts toward clearing.
@@ -215,7 +215,7 @@ one-liner on other handoff kinds). Load-bearing rules, converging with
   `verdict=narrow` (caller stays `awaiting_gate`, `blocked_by` mutates down via C8). This is the
   tc-4 regression guard (`blocked_by:[tc-1, tc-5]` must NOT flip to `ready_to_fire` when only
   `tc-1` shipped), sourced from the tc-4 regression lesson
-  `DoE-claude/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`.
+  `coordinator-content-repo/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`.
 - **`gate_cleared_by` provenance.** Shipped blockers' SHAs (`shipped_in`) are collected as
   `cleared_by_shas` and handed to C8, which appends them to the handoff's `gate_cleared_by:` array
   as the audit trail for which commits cleared which edges.
@@ -283,8 +283,8 @@ Structured `blocked_by` edges evaluated by C3/routed by C8 are intended to retir
 manual check in DoE's `/pickup` skill Step 3d — but only the **structured-edge** portion; prose/
 cross-repo-memo gates keep EM judgment, and the `awaiting_gate` aging check (14d/7d) is preserved
 regardless (this op computes verdicts, it does not track aging). Quoted **verbatim** (not
-paraphrased) from `coordinator/skills/pickup/SKILL.md` (DoE-claude repo, ~lines 180-186), sourced
-from `state/lessons.md` commit `a8b2aba0` 2026-06-27 (DoE-claude repo):
+paraphrased) from `coordinator/skills/pickup/SKILL.md` (coordinator-content-repo repo, ~lines 180-186), sourced
+from `state/lessons.md` commit `a8b2aba0` 2026-06-27 (coordinator-content-repo repo):
 
 > **Deliverable scope paths (REQUIRED — plan doc untouched ≠ deliverable unshipped):** A plan or
 > stub doc can be untouched while its actual output artifacts have already shipped (or vice-versa).

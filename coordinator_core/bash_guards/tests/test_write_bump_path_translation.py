@@ -66,7 +66,7 @@ def test_resolve_relative_version_independent_for_msys_absolute_target(
     result = shapes.resolve_relative(
         "/x/claude-klabauter", "/x/claude-klabauter/scratch/t.txt"
     )
-    assert result == "X:\\claude-klabauter\\scratch\\t.txt"
+    assert result == "C:\\claude-klabauter\\scratch\\t.txt"
 
 
 def test_resolve_relative_end_to_end_on_live_interpreter(monkeypatch):
@@ -75,7 +75,7 @@ def test_resolve_relative_end_to_end_on_live_interpreter(monkeypatch):
     result = shapes.resolve_relative(
         "/x/claude-klabauter", "/x/claude-klabauter/scratch/t.txt"
     )
-    assert result == "X:\\claude-klabauter\\scratch\\t.txt"
+    assert result == "C:\\claude-klabauter\\scratch\\t.txt"
 
 
 def test_translate_msys_path_drive_mount_to_native(_windows_ntpath):
@@ -150,7 +150,7 @@ def test_resolve_relative_untranslatable_base_returns_none(_windows_ntpath):
 # normalize to the IDENTICAL string and walk to the IDENTICAL nearest
 def test_resolve_relative_can_construct_mixed_separator_target(_windows_ntpath):
     result = shapes.resolve_relative("/x/claude-klabauter", "scratch/t.txt")
-    assert result == "X:\\claude-klabauter\\scratch/t.txt"
+    assert result == "C:\\claude-klabauter\\scratch/t.txt"
 
 
 def test_nearest_existing_ancestor_normalizes_mixed_separator_target_before_any_walk(
@@ -168,15 +168,15 @@ def test_nearest_existing_ancestor_normalizes_mixed_separator_target_before_any_
     POSIX-artifact miss of exactly the kind F6 warns a repro must not rest
     on) so this proves the NORMALIZED-STRING-level claim, not a filesystem
     coincidence of the box this suite happens to run on."""
-    existing = {"X:\\claude-klabauter"}
+    existing = {"C:\\claude-klabauter"}
     monkeypatch.setattr(os.path, "isdir", lambda p: p in existing)
 
     mixed = shapes.resolve_relative("/x/claude-klabauter", "scratch/t.txt")
     pure = shapes.resolve_relative("/x/claude-klabauter", "scratch\\t.txt")
-    assert mixed == "X:\\claude-klabauter\\scratch/t.txt"
-    assert pure == "X:\\claude-klabauter\\scratch\\t.txt"
+    assert mixed == "C:\\claude-klabauter\\scratch/t.txt"
+    assert pure == "C:\\claude-klabauter\\scratch\\t.txt"
     assert mixed != pure
 
     mixed_ancestor = shapes.nearest_existing_ancestor(mixed)
     pure_ancestor = shapes.nearest_existing_ancestor(pure)
-    assert mixed_ancestor == pure_ancestor == "X:\\claude-klabauter"
+    assert mixed_ancestor == pure_ancestor == "C:\\claude-klabauter"

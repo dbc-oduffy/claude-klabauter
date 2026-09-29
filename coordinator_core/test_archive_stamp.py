@@ -511,7 +511,7 @@ class TestStampShippedIn:
         _assert_shipped_in(hp, second_sha)
 
     def test_a_missing_kind_beside_an_identical_sha_is_filled(self, tmp_path, capsys):
-        """The repair this verb's name promises. DoE-claude, 2026-09-11: an XS
+        """The repair this verb's name promises. Coordinator-content-repo, 2026-09-11: an XS
         executor hand-wrote `shipped_in` and no `shipped_in_kind`, leaving a
         terminal record schema-invalid and unarchivable, while this verb exited 0
         writing nothing — the skip branch keys on the value and never sees the
@@ -3314,7 +3314,7 @@ class TestRepairArchivedDeploymentState:
     parsing itself (covered separately, mock-only, in
     coordinator/bin/tests/test_archive_stamp_cli_repair_archived_deployment_state.py).
 
-    Spec backlink: DoE-claude cross-repo memo, 2026-07-26 — 13 archived
+    Spec backlink: coordinator-content-repo cross-repo memo, 2026-07-26 — 13 archived
     handoffs stuck at deployment_state: in_flight, hand-edited because
     ship-handoff's state/handoffs/-only containment refuses archive/handoffs/
     paths. This is the AC the whole verb exists to satisfy: an archived

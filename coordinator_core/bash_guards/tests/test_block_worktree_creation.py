@@ -159,7 +159,7 @@ class TestHeredocBodyIsNotShellText:
     misread as a real invocation.
 
     `state/bug-backlog/2026-07-29-worktree-guard-false-denies-documents-
-    naming-guard-files.yaml` (DoE-claude).
+    naming-guard-files.yaml` (coordinator-content-repo).
     """
 
     def test_plain_mention_of_add_and_filename_in_heredoc_body_allows(self):

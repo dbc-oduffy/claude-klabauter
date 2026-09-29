@@ -13,7 +13,7 @@ default), never absent (DECISIONS.md § D9). `open_pr_count` is GitHub-only
 (tc-4 connector populates it); non-GitHub producers (e.g. tc-3 local emission)
 emit null.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

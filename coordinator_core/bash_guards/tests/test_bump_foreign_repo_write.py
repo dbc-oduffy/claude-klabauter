@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards.bump_foreign_repo_write -- the
 Bash-surface CROSS-REPO write-confinement speed bump (C4).
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C4 "Cross-repo detection and registration". Re-founded on the
 real anchor path by
 docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md, chunk
@@ -413,7 +413,7 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
     Those verbs sit in `_GIT_WRITE_SUBCOMMANDS` because their write
     spellings do mutate; `_DUAL_MODE_READ_PREDICATES` vetoes the bump for
     the read spellings only. `git branch --show-current` is the specific
-    command the DoE-claude memo named: an EM verifying a peer's branch
+    command the coordinator-content-repo memo named: an EM verifying a peer's branch
     before memoing them is doing exactly what this fleet's doctrine tells
     them to do, and it must not read as an attempted write."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
@@ -2177,6 +2177,66 @@ def test_expansion_valued_write_or_cd_target_yields_no_candidate(command, tmp_pa
     assert list(guard._iter_write_sink_candidates(command, str(tmp_path))) == []
 
 
+def test_decoy_substitution_prefix_does_not_hide_a_literal_sink(tmp_path):
+    cmd = ": $(true)/etc/x; echo hi > /etc/x"
+    cands = list(guard._iter_write_sink_candidates(cmd, str(tmp_path)))
+    assert any(c[2] == "/etc/x" for c in cands)
+
+
+def test_nested_substitution_prefix_is_skipped(tmp_path):
+    cmd = "echo hi > $(dirname $(pwd))/x"
+    assert list(guard._iter_write_sink_candidates(cmd, str(tmp_path))) == []
+
+
 def test_literal_redirect_after_cd_still_yields_a_candidate(tmp_path):
     cands = list(guard._iter_write_sink_candidates("cd sub && echo hi > out.txt", str(tmp_path)))
     assert len(cands) == 1 and cands[0][2] == "out.txt"
+
+
+def _consumer(monkeypatch):
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    machine_profile.reset_cache()
+
+
+def test_consumer_level_warns_once_per_session_instead_of_denying(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-warn-1")
+    _consumer(monkeypatch)
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+
+    first = guard.check_bump_foreign_repo_write(cmd, "sess-warn-1", str(repos["anchor"]), {})
+    hso = first["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "full context" in hso["additionalContext"]
+    assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
+    assert "DR-298" not in hso["additionalContext"]
+    again = guard.check_bump_foreign_repo_write(cmd, "sess-warn-1", str(repos["anchor"]), {})
+    assert again is None
+
+
+def test_off_level_is_silent_and_strict_override_denies(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-warn-2")
+    _consumer(monkeypatch)
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
+    assert guard.check_bump_foreign_repo_write(cmd, "sess-warn-2", str(repos["anchor"]), {}) is None
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
+    denied = guard.check_bump_foreign_repo_write(cmd, "sess-warn-2", str(repos["anchor"]), {})
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "DR-298" not in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_settings_home_inside_a_git_tracked_home_is_not_foreign(tmp_path, monkeypatch):
+    anchor = _init_repo(tmp_path, "anchor")
+    home_repo = _init_repo(tmp_path, "home-repo")
+    settings_home = home_repo / ".coordinator-claude-settings"
+    settings_home.mkdir()
+    sandbox_home(monkeypatch, tmp_path / "unrelated-home")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    session_start.write_session_start_record("sess-tracked-home", launch_cwd=str(anchor))
+
+    ok = f"echo note >> {_posix(settings_home / 'notes.md')}"
+    assert guard.check_bump_foreign_repo_write(ok, "sess-tracked-home", str(anchor), {}) is None
+    elsewhere = f"echo note >> {_posix(home_repo / 'other.md')}"
+    assert guard.check_bump_foreign_repo_write(elsewhere, "sess-tracked-home", str(anchor), {}) is not None

@@ -14,7 +14,7 @@ included — and the outcome is byte-indistinguishable from a clean allow. A sil
 total guard bypass, triggered by a caller asking for MORE checking, discoverable
 only by noticing that nothing ever fired again.
 
-That came within one commit of shipping: this repo asked doe-claude-em to pass
+That came within one commit of shipping: this repo asked coordinator-content-repo-em to pass
 the keyword at their call site, having verified the aggregation behaviour against
 `evaluate()` directly and never through this seam. They caught it in review. This
 test is the artifact that stops the gap reopening, since the two functions can

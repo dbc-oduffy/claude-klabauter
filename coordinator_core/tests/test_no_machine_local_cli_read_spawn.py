@@ -120,34 +120,34 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/claude-doe.py:597",
-        "coordinator/bin/claude-doe.py:618",
-        "coordinator/bin/lib/git_hook_install.py:199",
+        "coordinator/bin/claude-author.py:599",
+        "coordinator/bin/claude-author.py:620",
+        "coordinator/bin/lib/git_hook_install.py:131",
         "coordinator/lib/resolve-coordinator-clone.py:225",
-        "coordinator_core/engine_root.py:193",
-        "coordinator_core/ops/gen_claude_doe_shim.py:415",
-        "coordinator_core/ops/gen_doe_root_pointer.py:146",
-        "coordinator_core/ops/new_project_scaffold.py:164",
-        "coordinator_core/ops/render_template_tree.py:99",
-        "coordinator_core/ops/repo_bootstrap.py:135",
+        "coordinator_core/engine_root.py:161",
+        "coordinator_core/ops/gen_claude_author_shim.py:365",
+        "coordinator_core/ops/gen_content_root_pointer.py:112",
+        "coordinator_core/ops/new_project_scaffold.py:151",
+        "coordinator_core/ops/render_template_tree.py:60",
+        "coordinator_core/ops/repo_bootstrap.py:123",
         # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
         # two sites, see "2026-08-20 C3 WIDENING" note below.
-        "coordinator/bin/lib/coordinator_registry.py:174",
-        "coordinator/bin/lib/coordinator_registry.py:439",
+        "coordinator/bin/lib/coordinator_registry.py:137",
+        "coordinator/bin/lib/coordinator_registry.py:349",
         # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
         # helper family below -- same shape, previously invisible. See note below.
-        "coordinator/bin/coordinator-lesson-add.py:207",
-        "coordinator/bin/fan-out-dispatch.py:372",
-        "coordinator/bin/gen-claude-klabauter-live-root-pointer.py:139",
+        "coordinator/bin/coordinator-lesson-add.py:131",
+        "coordinator/bin/fan-out-dispatch.py:322",
+        "coordinator/bin/gen-claude-klabauter-live-root-pointer.py:126",
         # The shared `_machine_local_get` helper: the per-module copies that
         # delegate to it are one site here, not one each.
-        "coordinator_core/_claude_klabauter_root.py:104",
+        "coordinator_core/_claude_klabauter_root.py:100",
         # `cc_invoke.py:396` moved (not converted) to `engine_bootstrap.py:197`
         # in the C2 CLI-bootstrap-tax module split -- see the "cc_invoke.py
         # helper family" note below.
-        "coordinator/bin/lib/engine_bootstrap.py:197",
-        "coordinator/bin/tests/test_claude_machine_local.py:110",
-        "coordinator/bin/workday-start-step0.py:206",
+        "coordinator/bin/lib/engine_bootstrap.py:176",
+        "coordinator/bin/tests/test_claude_machine_local.py:85",
+        "coordinator/bin/workday-start-step0.py:157",
         # `repos.<key>` resolved via the 4-rung autodiscovery ladder, same
         # correctness-boundary class as the other `repos.*` rows above (see
         # "2026-08-16 REPOS.* LADDER-LOSS FIX" below) -- `registry_get` only
@@ -172,17 +172,17 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # (`cruft-sweep.py`), `_registry_repo_roots` (`git_hook_install.py`), and
 # seven of the sixteen C7 rows (`bootstrap_repo.py`,
 # `capture_fan_out_threshold.py`, `central_run_due.py`,
-# `check_registry_codename_leak.py`, `gen_doe_root_pointer.py`'s
+# `check_registry_codename_leak.py`, `gen_content_root_pointer.py`'s
 # `plugin.mirrors.coordinator-claude.source_path` row,
 # `new_project_scaffold.py`'s `_register_repo` verify-read row,
 # `setup_seed_health_ledger.py`) are fully converted (flat `registry_get`,
 # no CLI subprocess at all) and NOT in this set. The other five C7
-# `repos.*` rows (`gen_claude_doe_shim.py`, `gen_doe_root_pointer.py`'s
-# `repos.doe_claude` row, `new_project_scaffold.py`'s `_resolve_doe_root`
+# `repos.*` rows (`gen_claude_author_shim.py`, `gen_content_root_pointer.py`'s
+# `repos.content_root` row, `new_project_scaffold.py`'s `_resolve_content_root`
 # row, `render_template_tree.py`, `repo_bootstrap.py`) are back IN this set
 # as ladder-preserving fallback compositions -- see the 2026-08-16
 # REPOS.* LADDER-LOSS FIX note below for why.
-# C7b converted the four C7 EXCEPTIONS (`coordinator_doe_root.py:158`,
+# C7b converted the four C7 EXCEPTIONS (`coordinator_content_root.py:158`,
 # `ensure_doe_clone.py:68`, `install_shell_init_guard_seam.py:138`,
 # `verify_ue_overrides.py:121`): each site's own test suite now seeds the
 # machine-local registry FILE (`MACHINE_LOCAL_REGISTRY_DIR` + a scratch
@@ -204,14 +204,14 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # relies on `machine_local_bin=None` determinism, so nothing was silently
 # stopped from being exercised) -- removed from the inventory, row above.
 #
-# `claude-doe.py:358`/`:379` were NOT converted: the module's own header and
+# `claude-author.py:358`/`:379` were NOT converted: the module's own header and
 # `_machine_local_argv` docstring state it is installed STANDALONE and cannot
 # import `coordinator_core` -- the same correctness boundary as the
 # `check_machine_local_regeneratability.py` exception above, just enforced by
 # the install shape rather than a ladder-autodiscovery gap.
 #
 # `resolve_coordinator_clone.py:143` (the shared `_machine_local_get` helper)
-# was NOT converted: both its callers (`_registry_doe_claude`,
+# was NOT converted: both its callers (`_registry_content_root`,
 # `_registry_live_path`) already try `machine_resolver.registry_get` FIRST,
 # and the module's own docstrings on those two functions document the CLI
 # subprocess as a genuine fallback rung for reset-safety (the CLI's
@@ -226,7 +226,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 #
 # `test_engine_root_conformance.py:71` is a TEST whose own `_machine_local_get`
 # mirrors `coordinator_core.engine_root`'s Rung 2 CLI fallback for
-# `engine.working_repos.doe_claude` -- `coordinator_core/engine_root.py:179`
+# `engine.working_repos.content_root` -- `coordinator_core/engine_root.py:179`
 # is the production site it pins, and that site is held by the one-engine
 # plan (this plan's Out of scope), so both stay unconverted together, in
 # lockstep, until that plan converts the production site, not on its
@@ -238,20 +238,20 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # of `coordinator_core/`, `coordinator/bin/`, and `bin/`, not of the live
 # tree. Widening the roots surfaced three sites, none previously inventoried:
 #
-# `coordinator/lib/resolve-coordinator-clone.py:225` (`_registry_doe_claude`)
+# `coordinator/lib/resolve-coordinator-clone.py:225` (`_registry_content_root`)
 # WAS PARTIALLY CONVERTED: it now tries `machine_resolver.registry_get`
 # (via this module's own pre-existing `_import_registry_get()` bootstrap,
 # the same rung `_registry_live_path` in this file already used) FIRST,
 # zero-spawn on the happy path, falling through to the `machine-local` CLI
 # shell-out only when the in-process reader is unavailable or empty. The
-# `subprocess.run([..., "get", "repos.doe_claude"], ...)` shape is
+# `subprocess.run([..., "get", "repos.content_root"], ...)` shape is
 # unavoidably still present in source, so the collector still flags it --
 # same disposition class as `coordinator_core/resolve_coordinator_clone.py:143`
 # (a genuine, deliberately-retained fallback rung), except this call site
 # carries NO test of its own asserting the fallback fires (searched
 # `coordinator/tests/test_resolve_coordinator_clone.py` and
 # `coordinator/tests/test_resolve_coordinator_clone_source_mode.py` --
-# neither exercises `_registry_doe_claude`), so the fallback is kept
+# neither exercises `_registry_content_root`), so the fallback is kept
 # un-deleted rather than removed on no evidence it is safe to drop.
 #
 # `coordinator/lib/percolate/resolve_target.py:215` (`_machine_local_get`)
@@ -315,17 +315,17 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # is destructive-adjacent (re-clone/re-register of a repo the CLI's ladder
 # would have recognized).
 #
-# `coordinator_core/ops/gen_claude_doe_shim.py:414`,
-# `coordinator_core/ops/gen_doe_root_pointer.py:127`,
+# `coordinator_core/ops/gen_claude_author_shim.py:414`,
+# `coordinator_core/ops/gen_content_root_pointer.py:127`,
 # `coordinator_core/ops/new_project_scaffold.py:159`,
 # `coordinator_core/ops/render_template_tree.py:96` -- all resolve
-# `repos.doe_claude` for install/scaffold gating. Verified live, not
-# hypothetical: the DoE-claude sibling repo (`repos.doe_claude`'s registry
+# `repos.content_root` for install/scaffold gating. Verified live, not
+# hypothetical: the coordinator-content-repo sibling repo (`repos.content_root`'s registry
 # target) carries a repo-root `.coordinator-dev-repo` marker with
-# `slug: doe-claude`, so the CLI's rung-2 autodiscovery is a real,
+# `slug: coordinator-content-repo`, so the CLI's rung-2 autodiscovery is a real,
 # load-bearing path for this exact key on a real machine -- the
-# `REPO_DOE_CLAUDE` env rung each site already preserved does not cover it.
-# `gen_doe_root_pointer.py`'s own module
+# `REPO_CONTENT_ROOT` env rung each site already preserved does not cover it.
+# `gen_content_root_pointer.py`'s own module
 # docstring negative-spec ("does NOT reimplement the machine-local
 # registry.toml/registry.local.toml parser -- shells out to the
 # `machine-local` CLI... so the registry-merge logic has exactly one
@@ -370,7 +370,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # the live census: its own `_machine_local_get` (now just `registry_get(key)`
 # at line 63) was converted to a pure in-process read -- the test module's
 # own docstring states this is deliberate, "so the module-scope
-# `_resolve_doe_root()` call below stays zero-spawn without a spawn-shaped
+# `_resolve_content_root()` call below stays zero-spawn without a spawn-shaped
 # call node anywhere in this file." The production site it used to pin,
 # `coordinator_core/engine_root.py` (now line 191, held by the one-engine
 # plan per this file's Out of scope), is UNCHANGED and still spawns --
@@ -397,7 +397,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # the `cmd = [sys.executable, impl, "get", key]` -> `subprocess.run(cmd)` shape)
 # and `coordinator/bin/lib/coordinator_registry.py:431` (the module-scope
 # `for _ml_cand in _mlir_machine_local_bin_candidates(): ... subprocess.run(
-# [_ml_cand, "get", "repos.doe_claude"])` bootstrap loop) are this dispatch's
+# [_ml_cand, "get", "repos.content_root"])` bootstrap loop) are this dispatch's
 # own two named targets (this plan's § Problem). Both already try
 # `machine_resolver`/`machine_local_impl_resolve`'s in-process reader FIRST
 # (`_mlir_registry_get`) and only fall through to the CLI spawn on a miss --

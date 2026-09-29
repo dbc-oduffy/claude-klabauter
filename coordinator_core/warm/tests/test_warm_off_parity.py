@@ -48,7 +48,7 @@ spawn WOULD have been debounced.
 
 THE CLAUSE THIS FILE COULD NOT REACH, STATED PLAINLY. "The guard's exit code is
 preserved" is a fact about the REAL hook script's process exit code
-(`preuse-bash-dispatch.py`), which lives in DoE-claude's repo, not this one --
+(`preuse-bash-dispatch.py`), which lives in coordinator-content-repo's repo, not this one --
 this repo owns `try_warm_guard_dispatch` and the guard chain it falls back to,
 not the cold script that turns a verdict into `sys.exit()`. What this file
 verifies instead, as the claude-klabauter-side half of that guarantee: `try_warm_guard_

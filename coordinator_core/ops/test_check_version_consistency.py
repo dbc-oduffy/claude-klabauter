@@ -188,10 +188,10 @@ def test_bad_root_reproduces_oracle_double_message_bug(tmp_path, capsys):
 
 
 def _make_v3_bundle(root: Path, pver: str, mver: str, cver: str, name: str = "coordinator-claude") -> None:
-    """DoE-claude's real v3 source layout: the bundle lives under
+    """coordinator-content-repo's real v3 source layout: the bundle lives under
     `<root>/coordinator/.claude-plugin/`, with the CHANGELOG one level below
     that at `dist/publish-repo-toplevel/` — mirrors the actual on-disk shape
-    (verified at DoE-claude@HEAD, 2026-09-24) rather than a hand-typed guess."""
+    (verified at coordinator-content-repo@HEAD, 2026-09-24) rather than a hand-typed guess."""
     bundle = root / "coordinator"
     (bundle / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (bundle / ".claude-plugin" / "plugin.json").write_text(

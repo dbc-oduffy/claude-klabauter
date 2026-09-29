@@ -75,24 +75,24 @@ _EVIDENCE_KINDS = frozenset(
 
 # committed_by -> sibling_fact repo id. Closed table, verified against the live
 # ledger (2026-07-26 survey): every one of the 31 records is committed_by one of
-# DoE-claude's two EM personas — "claude-central-em" (legacy) or "doe-claude-em"
-# (current) — both the SAME sibling clone, repo id "doe_claude". A committed_by
+# coordinator-content-repo's two EM personas — "claude-central-em" (legacy) or "coordinator-content-repo-em"
+# (current) — both the SAME sibling clone, repo id "content_root". A committed_by
 # this table has never seen is a new sibling, not a guessable one; it resolves
 # to "not yet resolvable", not a repo-id guess.
 _COMMITTED_BY_TO_REPO_ID = {
-    "claude-central-em": "doe_claude",
-    "doe-claude-em": "doe_claude",
+    "claude-central-em": "content_root",
+    "coordinator-content-repo-em": "content_root",
 }
 
 # One backfilled record ("2026-07-13-doe-to-land-report-sidecar-consuming-hal-
 # 43e1dbc3e01c.yaml") authored its `file:` evidence with a leading repo-name
-# segment ("file:DoE-claude/coordinator/hooks/scripts/enforce-agent-dispatch-
+# segment ("file:coordinator-content-repo/coordinator/hooks/scripts/enforce-agent-dispatch-
 # mode.py") even though `sibling_fact.resolve_leg`'s `file_exists` already
 # roots at the resolved clone directory — leaving the prefix in would double
 # the repo directory into the resolved path. Stripping it here is a named
 # correction for a known C12a corpus quirk, not a general normalization rule.
 _REPO_NAME_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
-    "doe_claude": ("DoE-claude/",),
+    "content_root": ("coordinator-content-repo/",),
 }
 
 

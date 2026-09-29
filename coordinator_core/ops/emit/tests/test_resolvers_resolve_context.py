@@ -134,7 +134,7 @@ class TestRegistryCoordinatorRoot:
         ml = tmp_path / "settings-home" / "machine-local"
         ml.mkdir(parents=True)
         (ml / "registry.local.toml").write_text("schema = 1\n", encoding="utf-8")
-        (ml / "registry.toml").write_text(f"[repos]\ndoe_claude = '{doe}'\n", encoding="utf-8")
+        (ml / "registry.toml").write_text(f"[repos]\ncontent_root = '{doe}'\n", encoding="utf-8")
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
         assert _registry_coordinator_root() == doe / "coordinator"
 

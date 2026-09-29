@@ -1,7 +1,7 @@
 """coordinator_core.hooks.mise_autofire — auto-fire for the wide run's run-id
 minting, the mise-side twin of `pickup_autofire.py`.
 
-Port of: DoE-claude `coordinator/hooks/scripts/mise-autofire.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/mise-autofire.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict: command/native-door — no coordinator/bin shim, no http
 registration.

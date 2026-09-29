@@ -6,7 +6,7 @@ straight from a plan, so `/review --surface plan` gets one dispatchable
 artifact instead of an EM hand-assembling reviewer calls (see plan docstring,
 ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md`` task C3).
 It is the ONE place in this plan's surface that touches disk (the write) and
-the ONE place that touches the sibling DoE-claude clone at runtime
+the ONE place that touches the sibling coordinator-content-repo clone at runtime
 (``load_fragment()``, below) — every other module in ``review_mint`` (
 ``roster.py``, ``compose.py``) is pure.
 
@@ -18,7 +18,7 @@ compose script text for that tier's stages (``compose.compose``) -> write the
 composed ``.mjs`` to a caller-named, path-guarded ``output_path``.
 
 ``load_fragment()`` resolves the sibling root via
-``coordinator_core.doe_root_pointer.read_doe_root_pointer()`` and joins
+``coordinator_core.content_root_pointer.read_content_root_pointer()`` and joins
 ``coordinator/contract/review-roster-fragment.json`` onto it — never a
 hardcoded cross-repo path (plan Anti-scope "Do not hardcode a cross-repo
 absolute path"). ``dispatch.emit`` (C4) does NOT call this function; it keeps
@@ -51,7 +51,7 @@ filesystem access to the sidecar the agent wrote -- the written-this-run half
 of the contract is coordinator-claude's charter obligation
 (``sidecar-emission-contract.md`` / ``sidecar-frontmatter-contract.md``);
 this op's leg is the echo check only. Cross-repo memo:
-``cross-repo/inbox/2026-08-19-doe-claude-em-run-nonce-closes-the-gate-freshness-gap.md``.
+``cross-repo/inbox/2026-08-19-coordinator-content-repo-em-run-nonce-closes-the-gate-freshness-gap.md``.
 
 Wire params:
     plan_path (str, required)     — plan file to derive the review tier from.
@@ -103,7 +103,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.cartography._guard import PathEscapeError
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -135,7 +135,7 @@ class ReviewTierUndeterminedError(ValueError):
 
 
 def load_fragment(repo_root: Optional[Path] = None) -> dict:
-    """Resolve the sibling DoE-claude root, read its shipped review-roster
+    """Resolve the sibling coordinator-content-repo root, read its shipped review-roster
     fragment, and return the parsed dict.
 
     The ONLY place in this plan's surface that touches the sibling clone at
@@ -143,14 +143,14 @@ def load_fragment(repo_root: Optional[Path] = None) -> dict:
     sibling root does not resolve or the fragment file is absent -- never a
     silently empty/fabricated fragment.
     """
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         raise FileNotFoundError(
-            "review.mint_workflow could not resolve the DoE-claude sibling "
-            "root (read_doe_root_pointer() returned empty) -- cannot load "
+            "review.mint_workflow could not resolve the coordinator-content-repo sibling "
+            "root (read_content_root_pointer() returned empty) -- cannot load "
             f"{_REVIEW_ROSTER_FRAGMENT_RELPATH}"
         )
-    fragment_path = Path(doe_root) / _REVIEW_ROSTER_FRAGMENT_RELPATH
+    fragment_path = Path(content_root) / _REVIEW_ROSTER_FRAGMENT_RELPATH
     if not fragment_path.is_file():
         raise FileNotFoundError(
             f"review roster fragment not found at {fragment_path}"
@@ -299,7 +299,7 @@ def _review_mint_workflow(params: dict, repo_root: Optional[Path] = None) -> dic
     Raises:
         ValueError — if ``plan_path`` or ``output_path`` is missing.
         ReviewTierUndeterminedError — if no review tier can be derived.
-        FileNotFoundError — if the sibling DoE-claude root or its fragment
+        FileNotFoundError — if the sibling coordinator-content-repo root or its fragment
         file cannot be resolved (``load_fragment()``).
         roster.RosterFragmentError — if the fragment is malformed for the
         derived tier, propagated uncaught.

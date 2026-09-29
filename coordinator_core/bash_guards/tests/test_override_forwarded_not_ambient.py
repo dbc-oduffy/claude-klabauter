@@ -18,7 +18,7 @@ frozen at server start and shared by every session on the box. Two failures at o
 
 The pin below is the second case: a server whose OWN environ carries an override that the
 forwarded event does NOT, asserting the guard does not see it. Converged on independently
-by claude-klabauter-88 and doe-claude-74 before either had spoken to the other, which is why
+by claude-klabauter-88 and coordinator-content-repo-74 before either had spoken to the other, which is why
 it is worded as its own file rather than folded into a broader suite.
 """
 

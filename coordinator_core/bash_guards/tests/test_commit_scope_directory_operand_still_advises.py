@@ -32,11 +32,13 @@ shared box nothing and stays off the spawning-tests ratchet.
 
 from __future__ import annotations
 
-import os
 import shlex
+from pathlib import Path
 
 from coordinator_core.bash_guards import commit_tripwires as ct
 from coordinator_core.bash_guards import dispatch_checks as dc
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 #: The command from the 2026-08-03 incident, in its original shape: two file
 #: operands followed by two directory operands, under `-o`, with a quoted
@@ -49,7 +51,7 @@ INCIDENT_CMD = (
 
 
 def _payload():
-    return {"cwd": os.getcwd()}
+    return {"cwd": _REPO_ROOT}
 
 
 def _advises(cmd: str) -> bool:
@@ -193,7 +195,7 @@ def test_the_incident_command_is_now_visible_to_check_13():
 def test_the_incident_operands_classify_as_a_sweep():
     """The unit-level statement of the same fact: the two directory operands
     are what make this a sweep, and the two file operands do not rescue it."""
-    assert dc._bt_commit_scope_is_sweeping(shlex.split(INCIDENT_CMD), os.getcwd())
+    assert dc._bt_commit_scope_is_sweeping(shlex.split(INCIDENT_CMD), _REPO_ROOT)
 # ---------------------------------------------------------------------------
 # The sweep advisory's own override key
 # ---------------------------------------------------------------------------
@@ -238,7 +240,7 @@ def test_the_sweep_override_is_registered_in_the_operator_reference():
 #
 # Two independent field reports of the same defect: example-retrieval-repo-em 2026-09-02
 # ("the commit guard says 'names no scope' at a command that named one"), and
-# doe-claude-em 2026-09-04, which reproduced it by calling the check function
+# coordinator-content-repo-em 2026-09-04, which reproduced it by calling the check function
 # directly -- no dispatcher, no `cd` prefix -- and so retired the theory that
 # `offer-git-c`'s rewrite short-circuit was the cause.
 #

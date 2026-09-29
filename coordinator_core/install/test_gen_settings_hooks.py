@@ -13,7 +13,7 @@ gen-settings-hooks.test.sh (DoE c3322493, 2026-07-22) tests (a)-(g) 1:1 by
 assertion intent, re-derived against the ported Python entrypoints, not
 copy-pasted jq queries.
 
-Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § M1
+Spec backlink: coordinator-content-repo:pln-doe-maximalist-execution-plugi-6d808d § M1
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave B, item gen-settings-hooks)
 """
@@ -51,7 +51,7 @@ from coordinator_core.install.gen_settings_hooks import (
 )
 from coordinator_core.ops.session.guard_foreign_platform_paths import detect_foreign_platform_paths
 from coordinator_core.ops.session.guard_settings_integrity import HookDeliveryReport
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 # `generate()` reaches `guard_settings_integrity.detect_hook_delivery_duplication`
 # -> `resolve_coordinator_clone.resolve_content_root`'s registry-fallback rung,
@@ -62,7 +62,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # Matches a Windows drive-letter absolute path (``C:\`` or ``C:/``) anywhere
 # in a string — the portability regression this whole test module guards
-# against (2026-07-28 incident: `X:/DoE-claude/...` baked into a macOS
+# against (2026-07-28 incident: `C:/coordinator-content-repo/...` baked into a macOS
 # host's settings.json).
 _DRIVE_LETTER_RE = re.compile(r"[A-Za-z]:[\\/]")
 
@@ -133,8 +133,8 @@ _PORTABLE_EXPR = hook_root_env_expr(windows=(os.name == "nt"))
 
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 _COLOCATED_FIXTURES = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
-_DOE_ROOT = Path(resolve_doe_root() or "/doe-root-unresolved")
-_DOE_FIXTURES = _DOE_ROOT / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
+_CONTENT_ROOT = Path(resolve_content_root() or "/content-root-unresolved")
+_DOE_FIXTURES = _CONTENT_ROOT / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
 
 if (_COLOCATED_FIXTURES / "hooks.json").is_file():
     _ORACLE_FIXTURES = _COLOCATED_FIXTURES
@@ -1025,7 +1025,7 @@ def test_resolve_settings_out_path_uses_home_when_set(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------------------
 # Portability regression suite (2026-07-28) — a POSIX host's settings.json
-# was silently overwritten with a Windows peer's baked `X:/DoE-claude/...`
+# was silently overwritten with a Windows peer's baked `C:/coordinator-content-repo/...`
 # hook-command paths by a cross-machine sync of the file, killing every
 # coordinator hook there with no error surfaced anywhere. These tests assert
 # the structural invariant that makes that class of failure impossible:
@@ -1120,7 +1120,7 @@ def test_assert_portable_command_fails_loud_on_residual_cpr():
 def test_assert_portable_command_fails_loud_on_drive_letter():
     with pytest.raises(GenSettingsHooksError, match=r"[Dd]rive-letter"):
         _assert_portable_command(
-            "python3 X:/DoE-claude/coordinator/hooks/scripts/x.py", event="SessionStart"
+            "python3 C:/coordinator-content-repo/coordinator/hooks/scripts/x.py", event="SessionStart"
         )
 
 
@@ -1324,7 +1324,7 @@ def test_generates_when_content_root_cannot_be_resolved_at_all(
 ):
     # No CLAUDE_PLUGIN_ROOT, no COORDINATOR_ROOT -- and the autouse
     # `_quarantine_real_home` fixture already points HOME at an empty
-    # quarantine dir, so the registry/`.doe-root`-pointer rungs of
+    # quarantine dir, so the registry/`.coordinator-content-root`-pointer rungs of
     # `resolve_content_root()` cannot find anything either. This is the
     # "content root cannot be resolved at all" case.
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
@@ -1645,7 +1645,7 @@ def test_cross_surface_pin_detect_foreign_platform_paths_clean_for_posix_shape(
 def test_cross_surface_pin_detect_foreign_platform_paths_clean_for_windows_shape():
     # Illustrative Windows-shaped placeholder paths for a detector fixture,
     # never a real host -- see the module-level comment above.
-    windows_root = "C:/Users/Jane/DoE-claude/coordinator"  # abs-path-ok: illustrative placeholder, not a real host
+    windows_root = "C:/Users/Jane/coordinator-content-repo/coordinator"  # abs-path-ok: illustrative placeholder, not a real host
     windows_python = "C:/Users/Jane/.venv/Scripts/python.exe"  # abs-path-ok: illustrative placeholder, not a real host
     windows_settings = {
         "env": {

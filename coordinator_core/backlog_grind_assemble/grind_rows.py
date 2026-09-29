@@ -538,7 +538,7 @@ def cmd_close(rest: list[str]) -> int:
     # mutated row with a digest that no longer matched the manifest.
     archive_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = archive_dir / f".{row_path.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(new_text, encoding="utf-8")
+    tmp_path.write_text(new_text, encoding="utf-8", newline="\n")
     os.replace(tmp_path, new_path)
     _declare_before_unlink(row_path, repo_root)
     row_path.unlink()
@@ -692,7 +692,7 @@ def cmd_run_record(rest: list[str]) -> int:
 
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+    tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp_path, target)
     _declare_under_repo_root(target, repo_root)
 

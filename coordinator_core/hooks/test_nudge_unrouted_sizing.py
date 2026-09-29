@@ -797,7 +797,7 @@ def test_execute_plan_is_never_a_routable_route():
 
 def test_goal_setting_is_never_a_routable_route():
     # deliberately excluded from `_ROUTABLE_ROUTES` -- `coordinator:goal-
-    # setting` is PM-GATED (DoE-claude coordinator/skills/goal-setting/
+    # setting` is PM-GATED (coordinator-content-repo coordinator/skills/goal-setting/
     # SKILL.md frontmatter `description: "PM-GATED. ..."`), so nudging an EM
     # arbitrary and invite a later "fix" widening `_ROUTABLE_ROUTES` to
     assert "goal-setting" not in m._ROUTABLE_ROUTES

@@ -9,7 +9,7 @@ and the dispatch-chain wiring.
 Pure Python -- no shell spawns, no git repo required.
 
 Spec backlink: coordinator_core/bash_guards/block_subagent_findings_reject.py
-Spec backlink: DoE-claude docs/plans/2026-09-26-retire-review-integrator.md, row M3
+Spec backlink: coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md, row M3
 """
 
 from __future__ import annotations

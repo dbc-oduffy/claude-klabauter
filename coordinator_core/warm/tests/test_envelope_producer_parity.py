@@ -14,7 +14,7 @@ That instance is fixed. The class is not: at the time this module was
 written `client.py` stamps four envelope-level fields and `door.c` stamps
 three, and nothing but a human diff would have noticed either divergence.
 Spec: docs/plans/2026-08-30-the-warm-envelope-s-two-producers-cannot.md § C1
-Raised by: cross-repo/inbox/2026-08-30-doe-claude-em-warm-envelope-has-two-producers-and-no-parity-check.md
+Raised by: cross-repo/inbox/2026-08-30-coordinator-content-repo-em-warm-envelope-has-two-producers-and-no-parity-check.md
 
 FIVE LEGS, none of which may be dropped.
 

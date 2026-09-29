@@ -135,12 +135,12 @@ def test_split_path_list_never_uses_literal_colon_on_windows_shaped_input(monkey
 
 
 def test_split_path_folds_backslash_windows_native_form():
-    result = split_path("X:\\DoE-claude\\coordinator", maxsplit=1, from_right=True)
-    assert result == ["X:/DoE-claude", "coordinator"]
+    result = split_path("C:\\coordinator-content-repo\\coordinator", maxsplit=1, from_right=True)
+    assert result == ["C:/coordinator-content-repo", "coordinator"]
 
 
 def test_split_path_matches_purewindowspath_parent_and_name():
-    raw = "X:\\DoE-claude\\coordinator"
+    raw = "C:\\coordinator-content-repo\\coordinator"
     result = split_path(raw, maxsplit=1, from_right=True)
 
     pwp = PureWindowsPath(raw)
@@ -151,8 +151,8 @@ def test_split_path_matches_purewindowspath_parent_and_name():
 
 
 def test_split_path_msys_mount_form_already_forward_slash_unaffected():
-    result = split_path("/x/DoE-claude/coordinator", maxsplit=1, from_right=True)
-    assert result == ["/x/DoE-claude", "coordinator"]
+    result = split_path("/x/coordinator-content-repo/coordinator", maxsplit=1, from_right=True)
+    assert result == ["/x/coordinator-content-repo", "coordinator"]
 
 
 def test_split_path_posix_form_unaffected_by_fold():
@@ -161,7 +161,7 @@ def test_split_path_posix_form_unaffected_by_fold():
 
 
 def test_split_path_left_split_matches_model_helper():
-    raw = "X:\\a\\b\\c"
+    raw = "C:\\a\\b\\c"
     assert split_path(raw) == win_portability._model_windows_split(raw)
 
 
@@ -343,3 +343,18 @@ def test_run_forwarding_merges_stderr_into_stdout_for_same_fileno_less_target(mo
     assert calls["stdout"] == subprocess.PIPE
     assert calls["stderr"] == subprocess.STDOUT
     assert buf.getvalue() == "merged output\n"
+
+
+def test_is_executable_on_nt_follows_pathext_suffix(tmp_path, monkeypatch):
+    from coordinator_core import win_portability as wp
+
+    monkeypatch.setattr(wp, "_is_windows", lambda: True)
+    monkeypatch.delenv("PATHEXT", raising=False)
+    for name in ("a.CMD", "b.txt"):
+        (tmp_path / name).write_text("x")
+    assert wp.is_executable(tmp_path / "a.CMD")
+    assert not wp.is_executable(tmp_path / "b.txt")
+    (tmp_path / "c.PS1").write_text("x")
+    assert not wp.is_executable(tmp_path / "c.PS1")
+    monkeypatch.setenv("PATHEXT", ".ps1")
+    assert wp.is_executable(tmp_path / "c.PS1")

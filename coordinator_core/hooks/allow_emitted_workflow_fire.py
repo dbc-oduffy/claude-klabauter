@@ -1,7 +1,7 @@
 """coordinator_core.hooks.allow_emitted_workflow_fire — PreToolUse(Workflow)
 op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/allow-emitted-workflow-
+Ported from coordinator-content-repo `coordinator/hooks/scripts/allow-emitted-workflow-
 fire.py` per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9.
 Auto-approves a `Workflow` fire whose script carries a VERIFYING emission
 receipt, and stays silent for everything else — the friction-removal

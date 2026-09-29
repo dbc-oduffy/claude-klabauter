@@ -20,7 +20,7 @@ def _load_setup_template_manifest(claude_klabauter_root: Path):
     else").
 
     The manifest lives in claude-klabauter's OWN ``coordinator/lib/`` tree (b644d5a9's
-    executable-surface relocation moved ``lib/`` out of the DoE-claude
+    executable-surface relocation moved ``lib/`` out of the coordinator-content-repo
     ``CLAUDE_PLUGIN_ROOT`` entirely), so this resolves off ``coordinator_claude_klabauter_root()``,
     not ``plugin_root`` — a future reader must NOT "restore" plugin_root
     resolution here on the theory that lib/ files belong under the plugin root;

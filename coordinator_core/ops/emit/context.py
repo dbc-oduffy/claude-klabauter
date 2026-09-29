@@ -15,7 +15,7 @@ stay observable).  Only an UNDERIVABLE ``repo_root`` (None or non-existent direc
 raises — that is the corruption/aliasing case.  ``coordinator_root`` is irrelevant for
 attribution — it resolves via ``resolve_coordinator_root()`` to the LIVE post-W4.2-cutover
 coordinator script/lib clone (``<claude-klabauter-live-root>/coordinator`` on a current install; the
-DoE-claude clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
+Coordinator-content-repo clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
 ``resolvers.resolve_coordinator_root``'s docstring).
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1
@@ -189,7 +189,7 @@ def resolve_repo_name(repo_root: Optional[Path]) -> str:  # Body guards None; an
 
     ``repo_root`` MUST be the root of the emitting working tree.  Do NOT pass
     ``coordinator_root`` (the resolved coordinator script/lib clone — see
-    ``resolve_coordinator_root()``, NOT the DoE-claude clone on a current install) — it
+    ``resolve_coordinator_root()``, NOT the coordinator-content-repo clone on a current install) — it
     would attribute the wrong tree.
 
     Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C1 / AC5 / Q-B
@@ -222,7 +222,7 @@ class EmitContext:
         coordinator_root   — the live post-W4.2-cutover coordinator script/lib clone,
                              resolved via ``resolve_coordinator_root()`` (rung 2:
                              ``<claude-klabauter-live-root>/coordinator`` on a current install; the
-                             DoE-claude clone's ``coordinator/bin`` is empty post-migration
+                             coordinator-content-repo clone's ``coordinator/bin`` is empty post-migration
                              and is never consulted — see that function's docstring).
                              NOT the emitting repo; do NOT use for slug attribution.
         central_state_root — per-repo state root: ``<repo_root>/state``; output/sentinel dir.
@@ -391,7 +391,7 @@ class EmitContext:
         (local-only / air-gapped repo), emits ``local/<basename>`` (Q-B hybrid, AC5).
         Only raises when ``repo_root`` is underivable (None or non-existent directory).
         Do NOT pass ``coordinator_root`` (the resolved coordinator script/lib clone — see
-        ``resolve_coordinator_root()``, NOT the DoE-claude clone on a current install) — it
+        ``resolve_coordinator_root()``, NOT the coordinator-content-repo clone on a current install) — it
         would attribute the wrong tree.  ``git_branch``/``git_sha`` reflect the main
         worktree HEAD (intended).
         # Old text said "raises on no remote"; Q-B hybrid returns local/<basename> instead.

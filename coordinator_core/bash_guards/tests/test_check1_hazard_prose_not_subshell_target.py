@@ -4,10 +4,10 @@ Both directions are pinned deliberately. A strip rule loose enough to clear the
 false positives below is loose enough to drop a real deny, so the REAL_* cases
 are the load-bearing half of this file, not decoration.
 
-Origin: DoE-claude hit this writing DR-144 -- a decision record whose subject is
+Origin: coordinator-content-repo hit this writing DR-144 -- a decision record whose subject is
 guard coverage was denied for naming the hazard it documents. Reported via
-cross-repo memo 2026-08-19-doe-claude-em-check1-hazard-prose-false-positive-
-reproduced-and-bounded.md; see DR-144 in DoE-claude for the doctrine side.
+cross-repo memo 2026-08-19-coordinator-content-repo-em-check1-hazard-prose-false-positive-
+reproduced-and-bounded.md; see DR-144 in coordinator-content-repo for the doctrine side.
 
 Negative spec: markdown `code span` backticks and shell `command substitution`
 backticks are the same character, so CHECK 1's subshell arm cannot separate them

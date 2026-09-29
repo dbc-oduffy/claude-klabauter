@@ -2,7 +2,7 @@
 write-confinement speed bump's tool-surface leg: `Write`/`Edit`/`MultiEdit`/
 `NotebookEdit`.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C7, "Tool-surface guard — Write/Edit/MultiEdit".
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Read the plan's "Design
@@ -33,7 +33,7 @@ staying soft. That theory was never actually true: `bump_foreign_repo_write.
 check_bump_foreign_repo_write` composes its own `_deny()` envelope --
 `permissionDecision: "deny"`, a REAL block -- for exactly the payload shape
 this module handles, verified by driving both surfaces through the live
-seam (DoE-claude repo's `coordinator/hooks/scripts/preuse-write-dispatch.py`
+seam (coordinator-content-repo repo's `coordinator/hooks/scripts/preuse-write-dispatch.py`
 -- abs-path-ok: illustrative prose naming the verification entry point, not
 a runtime path reference) with an identical foreign-repo target in the SAME
 session. `GuardBand.
@@ -179,7 +179,7 @@ VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
 `check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
 anchor` gate the Bash siblings use (see "ONE CLEAR, ONE SET OF HATCHES"
 below): a hand-typed `session_id` that was never passed through the
-SessionStart hook (`session-start-write-bump-anchor.py`, DoE-claude repo)
+SessionStart hook (`session-start-write-bump-anchor.py`, coordinator-content-repo repo)
 has no anchor record and no live `CLAUDE_PROJECT_DIR`, so `resolve_launch_
 anchor` returns `None` and this guard ALLOWS -- correctly, by the same
 fail-open contract every function in `_write_bump_applicability.py`/
@@ -299,10 +299,10 @@ finding #2 names, not a fix for it.
 LESSONS-OUTBOX IS NOT A MISWRITE, EVEN THOUGH IT IS A FOREIGN REPO
 (cross-repo write-bump false positive, observed live 2026-08-03).
 `coordinator-lesson-promote` (`ops/queue_promote.py`, `queue.promote`) writes
-a universal lesson's durable home to `<doe_root>/state/lessons-outbox/
-<id>.yaml` BY DESIGN -- DoE-claude is the central lessons repo, not the
+a universal lesson's durable home to `<content_root>/state/lessons-outbox/
+<id>.yaml` BY DESIGN -- coordinator-content-repo is the central lessons repo, not the
 session's own repo, and there is no in-repo alternative destination (see
-`queue_promote.py`'s own module docstring, "DoE-claude is the central
+`queue_promote.py`'s own module docstring, "coordinator-content-repo is the central
 lessons repo"). Before this fix, every `Edit` to a freshly-promoted
 lessons-outbox record tripped this guard and pointed the agent at
 `cross-repo-memo` -- advice that is WRONG for this artifact class: a memo
@@ -317,7 +317,7 @@ deliberately NOT gated on which repo the segment resolves inside (contrast
 below, both of which fire only when the target has NO git repo). The whole
 point of this exemption is that the target IS a foreign repo -- gating it on
 "no repo" would exempt nothing real, since `queue.promote` always writes
-into an actual DoE-claude checkout.
+into an actual coordinator-content-repo checkout.
 
 DO NOT WIDEN THIS TO `cross-repo/inbox/` OR `cross-repo/outbox/`. Those
 paths are the memo channel, and this repo's own CLAUDE.md is explicit that
@@ -332,7 +332,7 @@ nothing broader.
 PARITY -- BASH SURFACE DOES NOT YET EXEMPT THIS CASE. As of this fix,
 `_write_bump_applicability.py` (the shared C2 module both Bash guards
 consume) carries no lessons-outbox exemption of its own, so a Bash-surface
-`echo >> <doe_root>/state/lessons-outbox/<id>.yaml` still bumps while this
+`echo >> <content_root>/state/lessons-outbox/<id>.yaml` still bumps while this
 tool-surface guard now stands down for the equivalent `Edit`/`Write`. This
 mirrors the SAME shape as the settings-home fix immediately below (DoE
 finding #2) BEFORE that fix landed here -- a real, currently-open parity
@@ -510,6 +510,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     target_is_publish_destination,
     target_is_registered_repo,
     target_is_under_claude_home,
+    target_is_under_settings_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     effective_session_id,
@@ -525,6 +526,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 )
 from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
+    apply_cross_repo_level,
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
     SURFACE_TOOL,
@@ -618,7 +620,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     immediately below, this predicate is NOT gated on `target_gitdir is
     None` -- the whole point of this exemption is the target IS a foreign
     repo (`coordinator-lesson-promote` always writes into an actual
-    DoE-claude checkout), so requiring "no repo" would exempt nothing real.
+    coordinator-content-repo checkout), so requiring "no repo" would exempt nothing real.
 
     Path-shape only, via a simple casefolded split -- matches a subdirectory
     under `state/lessons-outbox/` too (e.g. the `drained/` subdirectory
@@ -976,6 +978,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _target_is_under_settings_home(translated_file_path or "", target_gitdir):
             return None
 
+        if target_is_under_settings_home(
+            translated_file_path or "", target_gitdir=target_gitdir
+        ):
+            return None
+
         own_repo_cwd_gitdir = (
             own_repo_write_gitdir(payload_cwd, payload) if own_gitdir is None else None
         )
@@ -1075,12 +1082,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             )
             return None
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": message,
-            }
-        }
+        return apply_cross_repo_level(
+            "bump-out-of-repo-tool-write",
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": message,
+                }
+            },
+            gitdir=marker_gitdir,
+            session_id=effective_sid or session_id,
+        )
     except Exception:
         return None

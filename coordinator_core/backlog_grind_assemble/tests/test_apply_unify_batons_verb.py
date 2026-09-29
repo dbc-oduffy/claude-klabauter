@@ -89,7 +89,7 @@ def test_handler_delegates_to_the_routed_path_and_reports_its_result(monkeypatch
 
     directive = _reader_directive(["state/handoffs/a.md"], fallback=2)
     prepared = bga_apply._prepare_directives_for_dispatch([directive])[0]
-    repo_root = Path("X:/nonexistent-repo")
+    repo_root = Path("C:/nonexistent-repo")
 
     report = bga_apply._CLI_DISPATCH[directive["cli"]](prepared["args"], repo_root)
 
@@ -112,7 +112,7 @@ def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch):
     )[0]
 
     try:
-        bga_apply._CLI_DISPATCH["unify-batons"](prepared["args"], Path("X:/nope"))
+        bga_apply._CLI_DISPATCH["unify-batons"](prepared["args"], Path("C:/nope"))
     except RuntimeError as exc:
         assert "mint failed" in str(exc)
     else:  # pragma: no cover - the assertion this test exists for
@@ -125,7 +125,7 @@ def test_predicate_off_keeps_the_verb_a_reporting_no_op(monkeypatch):
     prepared = bga_apply._prepare_directives_for_dispatch(
         [_reader_directive(["state/handoffs/a.md"])]
     )[0]
-    report = bga_apply._CLI_DISPATCH["unify-batons"](prepared["args"], Path("X:/nope"))
+    report = bga_apply._CLI_DISPATCH["unify-batons"](prepared["args"], Path("C:/nope"))
 
     assert report["unified"] is False
     assert report["reason"] == "routing-disabled"

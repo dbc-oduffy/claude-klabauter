@@ -7,9 +7,9 @@ the corpus with no assembler at all, so 100% of its entry gate was re-derived by
 Opus-tier EM at every light close — and its skill body carried five `engine-gap`
 markers naming fields no producer emitted.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: state/handoffs/2026-08-14-fact-layer-library-sweep.md § Specification
-Fold-in ask: cross-repo/archive/2026-08-14-doe-claude-em-quick-wrap-has-no-assembler-at-all.md
+Fold-in ask: cross-repo/archive/2026-08-14-coordinator-content-repo-em-quick-wrap-has-no-assembler-at-all.md
 Governing ruling: docs/decisions/DR-306-a-computed-fact-left-in-prose-is-break.md
 
 Registration seam: consumed by the `coordinator/bin/quick-wrap-assemble` trampoline via
@@ -144,6 +144,7 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.session.safe_commit_offer import commit_session_offer_async
 from coordinator_core.ops.session_commits import resolve_session_commits
+from coordinator_core.session import scope as session_scope
 from coordinator_core.session import session_facts
 from coordinator_core.sibling_fact import _resolve_archive_handoffs_fallback_reasoned
 from coordinator_core.workstream_complete.directives_session_hygiene import (
@@ -484,7 +485,7 @@ _RECOVERY_KIND = "recovery"
 
 
 def _is_ancestry_null(raw: Any) -> bool:
-    """True for the on-disk spellings DoE-claude `coordinator/skills/quick-wrap/
+    """True for the on-disk spellings coordinator-content-repo `coordinator/skills/quick-wrap/
     SKILL.md`'s `‡` footnote treats as "no ancestor here" for a chain-root
     baton's `predecessor:`/`forked_from:`: absent (`None`), present-but-empty,
     or the literal `none`/`null` scalar (case-insensitive)."""
@@ -807,8 +808,8 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
             "depends_on": None,
         }
     )
-    # d4 — the terminal-handoff drain. PM ruling 2026-09-03 (doe-claude-em
-    # memo `cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-
+    # d4 — the terminal-handoff drain. PM ruling 2026-09-03 (coordinator-content-repo-em
+    # memo `cross-repo/inbox/2026-09-03-coordinator-content-repo-em-close-verbs-must-emit-
     # a-terminal-handoff-drain-directive.md`): both close verbs MUST archive
     # completed batons out of `state/handoffs/` at resolution, reversing the
     # prior "the next ceremony sweeps it" doctrine that left the interval
@@ -1235,6 +1236,11 @@ def _ship_landed_dispatch_sizings(
         )
         try:
             commit_paths(root, shipped, message)
+            if sid:
+                try:
+                    session_scope.release_committed_claims(sid, list(shipped), cwd=str(root))
+                except Exception:  # noqa: BLE001 -- release is bookkeeping; the commit has landed
+                    pass
         except CommitRefused as exc:
             failure_notes.append(
                 f"commit refused for {', '.join(shipped)}: {exc}"

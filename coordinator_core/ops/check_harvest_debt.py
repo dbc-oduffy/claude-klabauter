@@ -13,7 +13,7 @@ specs_dir-relative there) and serve different consumers; do not conflate or
 merge them.
 
 Port of: check-harvest-debt.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Matching strategy (INTENTIONALLY basename-only, not specs_dir-relative):
 the distill-log records archive/specs/<basename>.md (the pre-YYYY-MM-subdir

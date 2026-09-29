@@ -20,7 +20,7 @@ def _flat_mirror(root: Path) -> Path:
 
 
 def test_the_private_authoring_tree_resolves_to_its_coordinator_subdir(tmp_path):
-    root = _private_tree(tmp_path / "DoE-claude")
+    root = _private_tree(tmp_path / "coordinator-content-repo")
     assert content_root_for(str(root)) == root / "coordinator"
 
 
@@ -46,17 +46,17 @@ def test_a_flat_directory_without_its_plugin_manifest_is_not_a_content_root(tmp_
 
 
 @pytest.mark.parametrize("empty", ["", None])
-def test_an_unresolved_doe_root_is_none_never_a_raise(empty):
+def test_an_unresolved_content_root_is_none_never_a_raise(empty):
     assert content_root_for(empty) is None
 
 
 def test_a_path_argument_is_accepted_as_well_as_a_string(tmp_path):
-    root = _private_tree(tmp_path / "DoE-claude")
+    root = _private_tree(tmp_path / "coordinator-content-repo")
     assert content_root_for(root) == root / "coordinator"
 
 
 def test_a_trailing_separator_does_not_defeat_the_probe(tmp_path):
-    root = _private_tree(tmp_path / "DoE-claude")
+    root = _private_tree(tmp_path / "coordinator-content-repo")
     assert content_root_for(str(root) + os.sep) == root / "coordinator"
 
 
@@ -66,8 +66,8 @@ def test_a_degenerate_all_slash_root_fails_closed_not_cwd(degenerate):
 
 
 def test_a_symlinked_content_root_still_resolves(tmp_path):
-    real = _private_tree(tmp_path / "real-DoE-claude")
-    link = tmp_path / "linked-DoE-claude"
+    real = _private_tree(tmp_path / "real-coordinator-content-repo")
+    link = tmp_path / "linked-coordinator-content-repo"
     link.symlink_to(real)
     assert content_root_for(str(link)) == link / "coordinator"
 

@@ -158,7 +158,7 @@ def test_chunk_check_skips_comment_and_blank_lines(tmp_path):
 
 def test_run_no_args_runs_static_only(tmp_path):
     repo = _make_repo(tmp_path)
-    stdout, stderr, rc = run([], doe_root=str(repo))
+    stdout, stderr, rc = run([], content_root=str(repo))
     assert rc == 0
     assert stderr == []
     assert any("OK (static)" in line for line in stdout)
@@ -168,7 +168,7 @@ def test_run_chunk_manifest_runs_static_then_chunk(tmp_path):
     repo = _make_repo(tmp_path)
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\n", encoding="utf-8")
-    stdout, stderr, rc = run(["--chunk-manifest", str(manifest)], doe_root=str(repo))
+    stdout, stderr, rc = run(["--chunk-manifest", str(manifest)], content_root=str(repo))
     assert rc == 0
     assert any("OK (static)" in line for line in stdout)
     assert any("OK (chunks)" in line for line in stdout)
@@ -178,37 +178,37 @@ def test_run_static_fail_short_circuits_before_chunk_check(tmp_path):
     lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path / "agents")
     assert passed is False
     stdout, stderr, rc = run(
-        ["--chunk-manifest", "/does/not/matter.tsv"], doe_root=str(tmp_path)
+        ["--chunk-manifest", "/does/not/matter.tsv"], content_root=str(tmp_path)
     )
     assert rc == 1
     assert not any("chunk" in line.lower() for line in stdout if "Skill" not in line and "manifest" not in line.lower())
 
 
 def test_run_unknown_arg_goes_to_stderr(tmp_path):
-    stdout, stderr, rc = run(["--bogus"], doe_root=str(tmp_path))
+    stdout, stderr, rc = run(["--bogus"], content_root=str(tmp_path))
     assert rc == 1
     assert stdout == []
     assert any("unknown argument" in line for line in stderr)
 
 
 def test_run_missing_chunk_manifest_value_goes_to_stderr(tmp_path):
-    stdout, stderr, rc = run(["--chunk-manifest"], doe_root=str(tmp_path))
+    stdout, stderr, rc = run(["--chunk-manifest"], content_root=str(tmp_path))
     assert rc == 1
     assert stdout == []
     assert any("requires a path argument" in line for line in stderr)
 
 
-def test_run_unresolvable_doe_root_fails_with_business_code(tmp_path):
-    stdout, stderr, rc = run([], doe_root="")
+def test_run_unresolvable_content_root_fails_with_business_code(tmp_path):
+    stdout, stderr, rc = run([], content_root="")
     assert rc == 1
-    assert any("could not resolve the DoE-claude repo root" in line for line in stdout)
+    assert any("could not resolve the coordinator-content-repo repo root" in line for line in stdout)
 
 
 def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path, monkeypatch, capsys):
     repo = _make_repo(tmp_path)
     import coordinator_core.ops.verify_parallel_review_lens_orthogonality as mod
 
-    monkeypatch.setattr(mod, "_resolve_doe_root", lambda: str(repo))
+    monkeypatch.setattr(mod, "_resolve_content_root", lambda: str(repo))
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 0

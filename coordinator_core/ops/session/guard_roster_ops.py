@@ -4,9 +4,9 @@ coordinator_core.ops.session.guard_roster_ops — eager listing seam for the
 the six ops brought over from the `~/.claude` advisory/nudge command hooks.
 
 NEGATIVE SPEC — this is NOT carrier membership. It does not enumerate what
-DoE-claude's `postuse-advisory-dispatch.py` delivers, and must never be read
+Coordinator-content-repo's `postuse-advisory-dispatch.py` delivers, and must never be read
 as though it does. Verified against DoE's live `hooks.json` on 2026-08-13
-(memo 2026-08-13-doe-claude-em-advisory-carrier-boundary-diverges-and-script-tail-answer.md):
+(memo 2026-08-13-coordinator-content-repo-em-advisory-carrier-boundary-diverges-and-script-tail-answer.md):
 that carrier issues exactly two `dispatch_message()` calls —
 `hooks.postuse_advisory_dispatch` and `hooks.track_touched_files` (the latter
 bookkeeping, not advisory) — so exactly one of the six names below is

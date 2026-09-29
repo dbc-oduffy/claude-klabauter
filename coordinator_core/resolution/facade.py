@@ -49,7 +49,7 @@ Negative-spec:
     implementation of that trust-core, tested exactly once
     (``coordinator_core/test_trusted_root_guard.py``).
   - Does NOT author a fourth TOML/sentinel parser — composes the
-    already-shipped readers (``coordinator_core.trusted_root_guard._doe_root``
+    already-shipped readers (``coordinator_core.trusted_root_guard._content_root``
     / ``._claude_klabauter_root``, which themselves reuse
     ``coordinator_core.machine_resolver._flatten`` / ``._load_toml``) rather
     than re-implementing registry/sentinel resolution here.
@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from coordinator_core.trusted_root_guard import (
-    _doe_root,
+    _content_root,
     _claude_klabauter_root,
     _claude_klabauter_root_rungs,
     _settings_home_dir_from_env,
@@ -109,12 +109,12 @@ def resolve_operator_config(*, env: dict | None = None) -> dict:
     ``coordinator_core/resolution/test_facade.py``'s AC-2 regression test).
 
     Composes the already-shipped registry/sentinel readers
-    (``trusted_root_guard._doe_root``/``._claude_klabauter_root``, themselves built on
+    (``trusted_root_guard._content_root``/``._claude_klabauter_root``, themselves built on
     ``machine_resolver._flatten``/``._load_toml``) rather than re-deriving a
     fourth parser.
 
     Returns a plain dict: ``{settings_home, claude_klabauter_bin, claude_klabauter_root,
-    doe_root}``. Raises ``OperatorConfigError`` naming the first corrupt
+    content_root}``. Raises ``OperatorConfigError`` naming the first corrupt
     value found (checked in that same order).
     """
     env = os.environ if env is None else env
@@ -124,13 +124,13 @@ def resolve_operator_config(*, env: dict | None = None) -> dict:
     claude_klabauter_bin = _checked(
         "claude_klabauter_bin", os.path.join(claude_klabauter_root, "coordinator", "bin")
     )
-    doe_root = _checked("doe_root", _doe_root(env))
+    content_root = _checked("content_root", _content_root(env))
 
     return {
         "settings_home": settings_home,
         "claude_klabauter_bin": claude_klabauter_bin,
         "claude_klabauter_root": claude_klabauter_root,
-        "doe_root": doe_root,
+        "content_root": content_root,
     }
 
 

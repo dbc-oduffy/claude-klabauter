@@ -51,7 +51,7 @@ Cause taxonomy (checked in this order -- first match wins):
     (a legitimate own-deletion; belongs in the C6 gate, must reach zero). No
     such claim is ``deletion-unattributable`` -- the sweep shape itself
     (a peer's file removed with no claim from anyone), evidenced live at
-    DoE-claude `ffd4372b8` (see the plan chunk body for the full incident).
+    coordinator-content-repo `ffd4372b8` (see the plan chunk body for the full incident).
     This bucket is REPORTED but must NEVER gate the C6 flip: counting it
     would hold the flip closed with evidence of the exact harm the flip
     exists to deny.

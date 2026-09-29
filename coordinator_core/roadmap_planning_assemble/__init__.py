@@ -1,6 +1,6 @@
 """
 coordinator_core.roadmap_planning_assemble — the `roadmap-planning-assemble`
-computed-skill engine (DR-047 computed-skills contract: DoE-claude
+computed-skill engine (DR-047 computed-skills contract: coordinator-content-repo
 coordinator/docs/wiki/computed-skills.md), spine seam.
 
 Purpose: computes the mechanical routing over `roadmap-planning`'s
@@ -11,12 +11,12 @@ narration, next_move} per the contract's Decision-Object Schema-of-Record.
 The sprint-scoped half (everything inside one sprint) is a SEPARATE
 assembler (`sprint_planning_assemble`, chunk C11) — this module computes
 only the census rows whose `seam` is `spine` or `both`
-(DoE-claude state/plan-sidecars/roadmap-planning.census-steps.md, schema
+(coordinator-content-repo state/plan-sidecars/roadmap-planning.census-steps.md, schema
 2.0.0, source_sha 1e598af754b15144a717673cd1b90002e5b6ee61).
 
 Spec backlink: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md,
 chunk C10. Source memo:
-cross-repo/inbox/2026-08-20-doe-claude-em-roadmap-sprint-split-assembler-ops.md.
+cross-repo/inbox/2026-08-20-coordinator-content-repo-em-roadmap-sprint-split-assembler-ops.md.
 
 Consumes manifest (13 ops, corrected census — NOT 25, DoE's original count
 was wrong): 3 literal-name (`roadmap-number-stubs`, `audit-roadmap`,

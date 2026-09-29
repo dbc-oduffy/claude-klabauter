@@ -239,6 +239,10 @@ def _list_md_files(outbox_dir: str) -> List[str]:
 
 
 def main(argv: List[str]) -> int:
+    from coordinator_core.machine_profile import feature_enabled
+
+    if not feature_enabled("cross_repo_memos"):
+        return 0
     repo_root_arg = argv[0] if argv else ""
 
     lines: List[str] = []

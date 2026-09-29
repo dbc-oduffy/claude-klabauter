@@ -67,7 +67,7 @@ def _capture_real_engine_root():
     REAL (un-quarantined) HOME.
 
     Same capture-before-quarantine shape as `coordinator_core/conftest.py`'s
-    own `_REAL_USER_SITE` and `_capture_real_doe_root`, for the same class of
+    own `_REAL_USER_SITE` and `_capture_real_content_root`, for the same class of
     reason. `resolve_engine_root_for_install` walks a home-anchored ladder
     (`machine-local repos.claude_klabauter`, then the published-mirror probe),
     and conftest monkeypatches HOME/USERPROFILE per test -- so resolving it

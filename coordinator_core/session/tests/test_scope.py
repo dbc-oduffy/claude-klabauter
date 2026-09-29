@@ -32,7 +32,7 @@ than a single session in isolation. Never re-point this test at the LIVE
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-t4a-coordinator-session-hub.md § scope.py
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 """
 
 from __future__ import annotations
@@ -1029,7 +1029,7 @@ class TestFastArmFailOpen:
         assert result == "README.md"
 
 
-_PRE_C1_SCOPE_SHA = "5a1c79035"
+_PRE_C1_SCOPE_SHA = "pre-C1 (parent of 63dd54fc87)"
 
 
 def _load_pre_c1_scope_module():
@@ -1042,16 +1042,7 @@ def _load_pre_c1_scope_module():
     (``core.quotepath=false`` and the extended-length-prefix strip) that
     predate C1's guard -- see scope.py's own module docstring -- so this is
     genuinely "guard absent", not "bugs present"."""
-    repo_root = Path(__file__).resolve().parents[3]
-    result = subprocess.run(
-        ["git", "show", f"{_PRE_C1_SCOPE_SHA}:coordinator_core/session/scope.py"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=True,
-        **no_console_creationflags(),
-    )
-    source = result.stdout
+    source = (Path(__file__).parent / "fixtures" / "pre_c1_scope.py.txt").read_text(encoding="utf-8")
     module_name = "_pre_c1_scope_for_differential_test"
     module = types.ModuleType(module_name)
     module.__dict__["__name__"] = module_name
@@ -1060,7 +1051,7 @@ def _load_pre_c1_scope_module():
     # dataclass decorators inside this source find it there.
     sys.modules[module_name] = module
     try:
-        exec(compile(source, f"<git-show:{_PRE_C1_SCOPE_SHA}:scope.py>", "exec"), module.__dict__)
+        exec(compile(source, "<fixtures/pre_c1_scope.py.txt>", "exec"), module.__dict__)
     finally:
         sys.modules.pop(module_name, None)
     return module
@@ -1249,44 +1240,44 @@ class TestRelpathFailureBenignPredicate:
         monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
         monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: ("X:", p))
         exc = OSError("boom")
-        assert scope._relpath_failure_is_benign(exc, "X:/a/b.py", "X:/repo") is False
+        assert scope._relpath_failure_is_benign(exc, "C:/a/b.py", "C:/repo") is False
 
     def test_valueerror_same_drive_is_not_benign(self, monkeypatch):
         monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
         monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: ("X:", p))
         exc = ValueError("simulated")
         assert (
-            scope._relpath_failure_is_benign(exc, "X:/outside/x.py", "X:/repo")
+            scope._relpath_failure_is_benign(exc, "C:/outside/x.py", "C:/repo")
             is False
         )
 
     def test_valueerror_cross_drive_is_benign(self, monkeypatch):
-        drives = {"C:/outside/x.py": "C:", "X:/repo": "X:"}
+        drives = {"C:/outside/x.py": "C:", "C:/repo": "X:"}
         monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
         monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
         exc = ValueError("simulated")
         assert (
-            scope._relpath_failure_is_benign(exc, "C:/outside/x.py", "X:/repo")
+            scope._relpath_failure_is_benign(exc, "C:/outside/x.py", "C:/repo")
             is True
         )
 
     def test_valueerror_cross_drive_case_insensitive(self, monkeypatch):
-        drives = {"c:/outside/x.py": "c:", "X:/repo": "X:"}
+        drives = {"c:/outside/x.py": "c:", "C:/repo": "X:"}
         monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
         monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
         exc = ValueError("simulated")
         assert (
-            scope._relpath_failure_is_benign(exc, "c:/outside/x.py", "X:/repo")
+            scope._relpath_failure_is_benign(exc, "c:/outside/x.py", "C:/repo")
             is True
         )
 
     def test_valueerror_same_drive_case_insensitive_is_not_benign(self, monkeypatch):
-        drives = {"x:/outside/x.py": "x:", "X:/repo": "X:"}
+        drives = {"x:/outside/x.py": "x:", "C:/repo": "X:"}
         monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
         monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
         exc = ValueError("simulated")
         assert (
-            scope._relpath_failure_is_benign(exc, "x:/outside/x.py", "X:/repo")
+            scope._relpath_failure_is_benign(exc, "x:/outside/x.py", "C:/repo")
             is False
         )
 

@@ -1,6 +1,6 @@
 """Tests for `coordinator_core.group_em.atomic_record` -- the shared holder-record primitives.
 
-Ported from DoE-claude `coordinator/tests/test_atomic_record.py` (W2-C1). Zero subprocess spawns:
+Ported from coordinator-content-repo `coordinator/tests/test_atomic_record.py` (W2-C1). Zero subprocess spawns:
 every case calls the module's functions in-process against a `tmp_path`-scoped directory. This
 suite pins the atomic-write path, repo-key derivation, and the OS-lock primitive in isolation.
 """

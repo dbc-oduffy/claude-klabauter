@@ -16,7 +16,7 @@ code and re-reads a file per invocation, so a cookie regenerated at engine boot
 suits it. A hook fire cannot read anything: a `type: "http"` registration's only
 channel into the caller's environment is an interpolated header, so whatever the
 door accepts must already be in the session's environment before the first fire,
-placed there by the `claude-doe` launcher. A session's environment is FIXED AT
+placed there by the `claude-author` launcher. A session's environment is FIXED AT
 LAUNCH with no re-export channel, and a publish evicts the listener (AC18,
 measured 7h04m stale with health green throughout). A boot-rotated value is
 therefore dead for every session launched before the next publish -- which is

@@ -34,7 +34,7 @@ OUTPUT: a per-goal proposed-status report (string, mirrors the bash script's std
 plus (non-dry-run only) a rewritten proposed-re-assessment comment block appended to
 each active goal artifact with movement KRs. Does NOT overwrite the live `status` field.
 
-KR-suggestion source (DR-130, doe-claude:coordinator/schemas/kr-suggestion.schema.json):
+KR-suggestion source (DR-130, coordinator-content-repo:coordinator/schemas/kr-suggestion.schema.json):
 a fourth, fully optional signal — any producer resident in this repo may drop a
 ``state/kr-suggestions/<date>-<slug>.yaml`` record ahead of a weekly re-assessment run.
 Unlike the three sources ``_gather_signal`` folds into ``all_signal_text`` for keyword
@@ -51,9 +51,9 @@ absolute paths (mirrors cartography.*/percolate.* "none"-scope ops — no repo_r
 state access; the trampoline resolves both paths itself, exactly as the original bash
 script derived SCRIPT_DIR/REPO_ROOT from its own BASH_SOURCE location).
 
-Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C6
-Port of: coordinator/bin/reassess-goal-krs.sh (DoE-claude)
-Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 1 (DoE-claude)
+Spec backlink: coordinator-content-repo:pln-per-repo-okr-goal-setting-syst-80bced § C6
+Port of: coordinator/bin/reassess-goal-krs.sh (coordinator-content-repo)
+Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 1 (coordinator-content-repo)
 
 Negative-spec (hard-won, preserve exactly):
   - Does NOT overwrite the goal artifact's live `status:` field — writes only a
@@ -240,7 +240,7 @@ def strip_inline_comment(value: str) -> str:
     `process_kr_entry` compares status exactly, that defeated the only
     transition this op owns (`not-started -> in-progress`) for every scaffolded
     goal, at any amount of movement signal, and defeated the
-    `weekly_perceptible` compare alongside it. Reported by doe-claude-em
+    `weekly_perceptible` compare alongside it. Reported by coordinator-content-repo-em
     2026-09-06; parity with the bash original is not worth reproducing here.
 
     Escape sequences inside double quotes (``\\"``) are not interpreted — a

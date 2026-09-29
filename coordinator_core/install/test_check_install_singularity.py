@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.install.check_install_singularity.
 
-Independently re-derives the oracle's own AC coverage (DoE-claude
+Independently re-derives the oracle's own AC coverage (coordinator-content-repo
 coordinator/lib/tests/test-check-install-singularity.sh T1-T12) against a
 synthetic ~/.claude layout, rather than re-asserting the port's own
 transcription — each test builds a fresh filesystem fixture representing one
@@ -264,11 +264,11 @@ def test_to_plugin_root_leaves_non_coordinator_basename():
 
 
 def test_has_parent_child_pair_detects_offset_shape():
-    assert sut._has_parent_child_pair(["X:/DoE-claude", "X:/DoE-claude/coordinator"])
+    assert sut._has_parent_child_pair(["C:/coordinator-content-repo", "C:/coordinator-content-repo/coordinator"])
 
 
 def test_has_parent_child_pair_false_for_genuinely_distinct_trees():
-    assert not sut._has_parent_child_pair(["X:/DoE-claude", "X:/other/coordinator-claude"])
+    assert not sut._has_parent_child_pair(["C:/coordinator-content-repo", "C:/other/coordinator-claude"])
 
 
 def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, monkeypatch):
@@ -305,19 +305,19 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
     assert "remove the extra tree" in text.lower()
 
 
-# only, so a native-Windows `CLAUDE_PLUGIN_ROOT` (`X:\DoE-claude\coordinator`)
+# only, so a native-Windows `CLAUDE_PLUGIN_ROOT` (`C:\coordinator-content-repo\coordinator`)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
 def test_to_plugin_root_windows_backslash_normalizes_like_forward_slash():
-    forward = sut._to_plugin_root("X:/DoE-claude/coordinator")
-    backslash = sut._to_plugin_root("X:\\DoE-claude\\coordinator")
-    assert backslash == forward == "X:/DoE-claude"
+    forward = sut._to_plugin_root("C:/coordinator-content-repo/coordinator")
+    backslash = sut._to_plugin_root("C:\\coordinator-content-repo\\coordinator")
+    assert backslash == forward == "C:/coordinator-content-repo"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
 def test_to_plugin_root_windows_double_trailing_backslash_not_stripped():
-    assert sut._to_plugin_root("X:\\foo\\coordinator\\\\") == "X:/foo/coordinator/"
+    assert sut._to_plugin_root("C:\\foo\\coordinator\\\\") == "C:/foo/coordinator/"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="backslash is a legal POSIX filename character")

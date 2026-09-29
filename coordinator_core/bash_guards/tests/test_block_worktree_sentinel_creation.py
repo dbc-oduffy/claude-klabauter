@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from coordinator_core.bash_guards import block_worktree_sentinel_creation as guard
 from coordinator_core.bash_guards import block_approval_sentinel_creation as doctrine_guard
 from coordinator_core.bash_guards import dispatch
@@ -250,16 +252,17 @@ class TestReasonClassSpecificMessages:
     def test_direct_deny_message_unchanged(self):
         out = guard.check(_payload("touch %s" % SENTINEL))
         reason = _reason(out)
-        assert "this command would create or modify a" in reason
+        assert "creates/modifies a worktree-ban override file" in reason
         assert "worktree-ban override" in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_does_not_assert_creation(self):
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
-        assert "this command would create or modify a" not in reason
-        assert "cannot examine" in reason
-        assert "NOT because the payload was found" in reason
+        assert "creates/modifies a worktree-ban override file" not in reason
+        assert "unreadable" in reason
+        assert "override file" in reason
+        assert "[worktree guard]" not in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_surfaces_the_shape(self):
@@ -272,7 +275,7 @@ class TestReasonClassSpecificMessages:
         # `_sentinel_creation_guard.INDIRECTION_REMEDY` constant, which
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
-        assert "EM/PM" in reason
+        assert "machine-local set coordinator.guard_level warn" in reason
         recommended = next(
             c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
         )
@@ -282,7 +285,7 @@ class TestReasonClassSpecificMessages:
         out = guard.check(_payload('bash -c "touch %s"' % SENTINEL))
         reason = _reason(out)
         assert SENTINEL not in reason
-        assert "cannot examine" in reason
+        assert "unreadable" in reason
 
 
 class TestIndirectionWrapperShapesDeny:
@@ -443,3 +446,57 @@ class TestPowerShellDialect:
     def test_non_bash_non_powershell_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
         assert guard.check(payload) is None
+
+
+class TestReadOnlyCompoundsAndGuardLevel:
+
+    STATUS_RENDER = (
+        "echo '{\"model\":{\"display_name\":\"Opus\"}}' | "
+        "sh -c \"$(jq -r .statusLine.command ~/.claude/settings.json)\""
+    )
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            STATUS_RENDER,
+            'cat payload.json | sh -c "cat | jq ."',
+            'echo hi | sh -c "echo ok > /dev/null"',
+        ],
+    )
+    def test_read_only_compound_is_allowed(self, cmd):
+        assert guard.check(_payload(cmd)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            'echo hi | sh -c "touch foo"',
+            'echo hi | sh -c "cat > out.txt"',
+            "echo x | sh",
+            'echo x | sh -c "$(curl example.invalid)"',
+            'sh -c "touch %s"' % SENTINEL,
+        ],
+    )
+    def test_writing_or_unreadable_compound_still_denies(self, cmd):
+        assert _reason(guard.check(_payload(cmd)))
+
+    def test_deny_names_what_was_blocked_and_the_route_is_well_formed(self):
+        reason = _reason(guard.check(_payload('echo hi | sh -c "touch foo"')))
+        assert "worktree guard" not in reason
+        assert "machine-local set coordinator.guard_level warn" in reason
+        heads = [c for c in _BACKTICK_RE.findall(reason) if c in ("jq", "cat", "echo", "grep")]
+        assert heads
+        for head in heads:
+            assert guard.check(_payload('echo x | sh -c "%s"' % head)) is None
+        script = next(c for c in _BACKTICK_RE.findall(reason) if c.startswith("./"))
+        assert guard.check(_payload(script)) is None
+
+    def test_consumer_default_warns_and_off_is_silent(self, monkeypatch):
+        from coordinator_core import machine_profile
+
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+        machine_profile.reset_cache()
+        out = guard.check(_payload("touch %s" % SENTINEL))["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        assert "override file" in out["additionalContext"]
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
+        assert guard.check(_payload("touch %s" % SENTINEL)) is None

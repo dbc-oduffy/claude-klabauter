@@ -196,7 +196,7 @@ def write_discovery(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # ATOMIC REPLACE, NOT TRUNCATE-THEN-WRITE. The lock below serialises
-    # MEASURED, not theorised (doe-claude-5a's sink, 2026-08-25, n=445): two
+    # MEASURED, not theorised (coordinator-content-repo-5a's sink, 2026-08-25, n=445): two
     # healthy neighbours -- thirty-odd MICROSECONDS, three orders of magnitude
     # mkstemp in the TARGET'S OWN DIRECTORY so `os.replace` is a same-volume
     with locked_write.held_lock(path, holder_label="warm.supervisor"):
@@ -572,8 +572,8 @@ def record_is_skewed(record: dict, root: Path) -> bool:
         -> the POST lands, `_serve_line` answers ENGINE_SKEW (-32002)
         -> the guard does not run, and nothing denies
 
-    That is `DoE-claude http_hook_forwarder.py`'s live shape, traced by
-    `doe-claude-b4` 2026-08-26. The forwarder's own "no backend is a trigger,
+    That is `coordinator-content-repo http_hook_forwarder.py`'s live shape, traced by
+    `coordinator-content-repo-b4` 2026-08-26. The forwarder's own "no backend is a trigger,
     not just a verdict" doctrine never engages, because the backend DID answer
     -- with a non-verdict, relayed verbatim, allow included.
 

@@ -64,7 +64,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir  # noqa: E402
 # The ACTUAL repo this test file lives in -- never a fixture's tmp_path.
 # `push-failures.log` there is a real, append-only forensic record read by
 # operators and by the Stop-time mid-session tripwire
-# (`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude); a test
+# (`runtime-tripwire-em-check.py::_check_push_failures`, coordinator-content-repo); a test
 # that manufactures rows in it degrades that signal for every consumer, on
 # every suite run (2026-08-19 incident: a fabricated "2 push failure(s)"
 # diverted a live session that had none). Every test in this module must
@@ -361,7 +361,7 @@ def test_classify_error_vanished_temp_pack_is_transient_contention_not_spawn_err
     stderr_text = (  # abs-path-ok: fixture stderr text, verbatim from the bug record, not a real path
         "fatal: git push failed to spawn: FileNotFoundError: [Errno 2] "
         "No such file or directory: "
-        "'X:\\claude-klabauter\\.git\\objects\\pack\\.tmp-35812-pack-37ef5fe6abc.pack'\n"
+        "'C:\\claude-klabauter\\.git\\objects\\pack\\.tmp-35812-pack-37ef5fe6abc.pack'\n"
     )
     assert auto_push.classify_error(stderr_text) == "transient-contention"
     assert "transient-contention" in auto_push._RETRYABLE_CLASSES
@@ -771,7 +771,7 @@ def test_attempts_for_ref_lock_is_a_per_class_override_not_max_attempts():
 def test_backoff_seconds_ref_lock_cumulative_reach_exceeds_longest_observed_burst():
     # Assert against the jitter FLOOR (random.uniform(0, 0.5) can be 0), not a
     # sampled value -- otherwise this test is flaky by construction. The
-    # ceiling must clear the longer of the two observed bursts: doe-claude-em's
+    # ceiling must clear the longer of the two observed bursts: coordinator-content-repo-em's
     # 45s and this repo's own 70s (.git/push-failures.log, 2026-08-30, 29
     # ref-lock ladders between 11:26:32Z and 11:27:42Z).
     floor_total = sum(min(2 ** n, 30) for n in range(1, 7))
@@ -813,7 +813,7 @@ def test_backoff_seconds_gh_transient_unchanged_envelope():
 # auto_push.py's "cockpit-contract release publish" section for the
 # fleet-wide-firing defect this guard exists to prevent
 # (cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md,
-# DoE-claude).
+# coordinator-content-repo).
 # ---------------------------------------------------------------------------
 
 

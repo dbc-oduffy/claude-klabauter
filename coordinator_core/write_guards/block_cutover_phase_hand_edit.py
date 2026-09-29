@@ -55,7 +55,7 @@ Negative-spec:
     no opinion on whether an advance IS correct, only on whether it went
     through the sanctioned op.
 
-Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 (chunk C4d, D1, D3, D4)
+Spec backlink: coordinator-content-repo:pln-cutover-state-machine-a-phase--96db57 (chunk C4d, D1, D3, D4)
 """
 
 from __future__ import annotations

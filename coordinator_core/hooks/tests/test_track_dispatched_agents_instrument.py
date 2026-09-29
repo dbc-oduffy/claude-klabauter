@@ -281,7 +281,7 @@ class TestTypeSpellingIsFoldedForTheComparisonOnly:
     AMBIGUOUS arm whenever those two spelled one agent differently, and four
     bash guards read AMBIGUOUS as hostile.
 
-    Origin: cross-repo/archive/2026-08-18-doe-claude-em-normalize-the-type-
+    Origin: cross-repo/archive/2026-08-18-coordinator-content-repo-em-normalize-the-type-
     comparison-not-the-write.md.
     """
 

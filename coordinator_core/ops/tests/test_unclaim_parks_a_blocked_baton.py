@@ -7,7 +7,7 @@ so a claimed+blocked node whose holder died aborted on
 nothing able to clear it. It now routes through `_apply_derived_readiness`, the
 TIGHTEN-ONLY seam that already parks exactly this shape.
 
-Origin: cross-repo/inbox/2026-08-31-doe-claude-em-reaper-unclaims-blocked-baton-
+Origin: cross-repo/inbox/2026-08-31-coordinator-content-repo-em-reaper-unclaims-blocked-baton-
 to-ready-to-fire.md.
 
 Run: python3 -m pytest coordinator_core/ops/tests/test_unclaim_parks_a_blocked_baton.py -q

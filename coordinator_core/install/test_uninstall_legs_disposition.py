@@ -53,7 +53,7 @@ class TestClassifyEntryDisposition:
 
     def test_attempted_ok_none_is_deliberately_not_reversed(self):
         record = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/doe-claude/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-content-repo/checkout"),
             attempted_ok=None,
             reason="full-remove mode never deletes <DoE>/coordinator source (PM-gated)",
         )
@@ -137,7 +137,7 @@ class TestBuildDispositionReportTotalCoverage:
                 reason="reversed",
             ),
             classify_entry_disposition(
-                _entry(kind="file-path", path="/doe-claude"),
+                _entry(kind="file-path", path="/coordinator-content-repo"),
                 attempted_ok=None,
                 reason="deliberate policy",
             ),
@@ -242,7 +242,7 @@ class TestRenderUninstallDryRunReport:
             reason="dry-run preview — a real run would reverse this entry",
         )
         genuinely_deliberate = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/doe-claude/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-content-repo/checkout"),
             attempted_ok=None,
             reason="full-remove mode never deletes <DoE>/coordinator source (PM-gated)",
         )
@@ -252,7 +252,7 @@ class TestRenderUninstallDryRunReport:
         assert "reversed (1):" in text
         assert "deliberately-not-reversed (1):" in text
         assert "gc.autoDetach" in text
-        assert "/some/doe-claude/checkout" in text
+        assert "/some/coordinator-content-repo/checkout" in text
         assert would_reverse.disposition != genuinely_deliberate.disposition
 
     def test_marker_rule_2_override_still_fires_in_preview(self):
@@ -394,7 +394,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
             reason="dry-run preview — a real run would reverse this entry",
         )
         genuinely_deliberate = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/doe-claude/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-content-repo/checkout"),
             attempted_ok=None,
             reason="full-remove mode never deletes <DoE>/coordinator source (PM-gated)",
         )
@@ -410,7 +410,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "deliberately-not-reversed (1):" in text
         assert "cannot-reverse-safely (1):" in text
         assert "gc.autoDetach" in text
-        assert "/some/doe-claude/checkout" in text
+        assert "/some/coordinator-content-repo/checkout" in text
         assert "configure_git" in text
         dispositions = {
             would_reverse.disposition,

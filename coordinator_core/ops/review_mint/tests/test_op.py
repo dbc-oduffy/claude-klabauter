@@ -4,7 +4,7 @@ Tests for coordinator_core.ops.review_mint.op ("review.mint_workflow").
 Spec backlink: pln-the-review-skill-mints-its-own-26e933 § C3.
 Pure op-boundary tests -- ``load_fragment()`` is monkeypatched to a
 caller-injected fixture dict, exactly like C1/C2's own tests never touch
-the sibling DoE-claude clone (see plan Anti-scope "Do not hardcode a
+the sibling coordinator-content-repo clone (see plan Anti-scope "Do not hardcode a
 cross-repo absolute path"; C5's ``test_roundtrip.py`` is the sibling-clone
 round trip, out of this file's scope).
 """
@@ -223,14 +223,14 @@ def test_review_mint_workflow_propagates_a_malformed_fragment(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def test_load_fragment_raises_when_doe_root_unresolved(monkeypatch):
-    monkeypatch.setattr(review_mint_op, "read_doe_root_pointer", lambda: "")
+def test_load_fragment_raises_when_content_root_unresolved(monkeypatch):
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: "")
     with pytest.raises(FileNotFoundError):
         review_mint_op.load_fragment()
 
 
 def test_load_fragment_raises_when_fragment_file_absent(tmp_path, monkeypatch):
-    monkeypatch.setattr(review_mint_op, "read_doe_root_pointer", lambda: str(tmp_path))
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(tmp_path))
     with pytest.raises(FileNotFoundError):
         review_mint_op.load_fragment()
 
@@ -241,7 +241,7 @@ def test_load_fragment_reads_and_parses_the_real_relpath(tmp_path, monkeypatch):
     (fragment_dir / "review-roster-fragment.json").write_text(
         '{"schema": "review-roster-fragment", "tiers": {}}', encoding="utf-8"
     )
-    monkeypatch.setattr(review_mint_op, "read_doe_root_pointer", lambda: str(tmp_path))
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(tmp_path))
     fragment = review_mint_op.load_fragment()
     assert fragment == {"schema": "review-roster-fragment", "tiers": {}}
 

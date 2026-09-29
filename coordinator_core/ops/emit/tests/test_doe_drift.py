@@ -12,7 +12,7 @@ Covers every acceptance criterion from strang-02:
 
   AC_Q-b:
     - Fixture read from ``coordinator/cockpit-contract/conformance/emission-conformance.json``
-      in the DoE local clone at ``repos.doe_claude``; NOT co-vendored in claude-klabauter's _vendor/.
+      in the DoE local clone at ``repos.content_root``; NOT co-vendored in claude-klabauter's _vendor/.
 
   AC_NORMALIZER:
     - Live run with runtime-varying provenance matches the normalized golden via _normalize.
@@ -30,7 +30,7 @@ Covers every acceptance criterion from strang-02:
       a warning and does NOT raise (graceful ref-absent path).
 
 Spec backlink: state/handoffs/2026-07-04_201949_roadmap-strang-02.md
-Oracle: /Users/example-operator/X/DoE-claude/coordinator/docs/wiki/emission-conformance-contract.md
+Oracle: /Users/example-operator/X/coordinator-content-repo/coordinator/docs/wiki/emission-conformance-contract.md
 
 Note: tests that require a live DoE clone use ``resolve_doe_clone()`` and skip
 gracefully when the clone is absent (CI portability).  Tests that call envelope.emit()

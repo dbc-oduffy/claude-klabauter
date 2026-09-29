@@ -5,8 +5,8 @@ The op has no `repo` parameter: its target worktree is keyed from the caller
 never the resolution source. Before this refusal an unrecognised `repo` key was
 accepted silently, so a call naming one repo committed against another.
 
-Measured live: a dispatched committer on a DoE-claude wave passed a `repo` key
-naming DoE-claude and the op resolved its pathspec under claude-klabauter, the
+Measured live: a dispatched committer on a coordinator-content-repo wave passed a `repo` key
+naming coordinator-content-repo and the op resolved its pathspec under claude-klabauter, the
 session's own tree, reporting `cannot read
 state/2026-09-10-completion-entry-post-quote-oracle.md: [Errno 2] No such file
 or directory` against a path that exists in the repo it named. The

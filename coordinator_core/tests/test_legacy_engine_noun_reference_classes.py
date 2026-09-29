@@ -195,7 +195,7 @@ def test_generator_refuses_a_new_renameable_local_row_outside_the_slice_list(
     `importlib` by path, refuses a fixture RENAMEABLE-LOCAL line absent from the
     recorded slice list, and admits it only with the explicit per-file flag."""
     repo_root = tmp_path / "repo"
-    doe_root = tmp_path / "doe"
+    content_root = tmp_path / "doe"
     klabauter_root = tmp_path / "klabauter"
 
     coordinator_dir = repo_root / "coordinator"
@@ -204,7 +204,7 @@ def test_generator_refuses_a_new_renameable_local_row_outside_the_slice_list(
     new_file.write_text("claude_klabauter_local_helper = 1\n", encoding="utf-8")
 
     _init_bare_git_repo(repo_root)
-    _init_bare_git_repo(doe_root)
+    _init_bare_git_repo(content_root)
     _init_bare_git_repo(klabauter_root)
 
     module = _load_generator_module()
@@ -221,8 +221,8 @@ def test_generator_refuses_a_new_renameable_local_row_outside_the_slice_list(
     argv = [
         "--repo",
         str(repo_root),
-        "--doe-root",
-        str(doe_root),
+        "--content-root",
+        str(content_root),
         "--klabauter-root",
         str(klabauter_root),
         "--repo-sha",

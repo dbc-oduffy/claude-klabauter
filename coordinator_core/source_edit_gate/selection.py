@@ -923,6 +923,155 @@ def _classify_js_edit(original: str, edited: str) -> str:
     return "comment-only"
 
 
+_HASH_SEMANTIC_COMMENT_MARKERS = (
+    "#!",
+    "# -*- coding",
+    "#requires",
+    "# shellcheck",
+    "# yaml-language-server",
+)
+
+# Suffixes classified via the conservative hash-comment line rule (see
+# `_classify_hash_comment_edit`) -- everything using `#` as its sole comment
+# marker and lacking a local structural parser here, same treatment JS/TS
+# gets for `//`. `.dockerfile`/bare `Dockerfile` is matched by filename, not
+# suffix (see `classify_edit`), so it is not listed here.
+_HASH_COMMENT_SUFFIXES = (
+    ".ps1", ".psm1", ".sh", ".bash", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".r",
+)
+
+# Suffixes (or the bare `Dockerfile` name, handled separately) whose syntax
+# can hide a changed line inside a construct a line-by-line `#`-prefix check
+# cannot see past: a PowerShell `<# ... #>` block comment or `@'...'@`/
+# `@"..."@` here-string can contain a line that LOOKS like code (or even
+# `#`-prefixed text with no comment meaning) while a bash/dockerfile heredoc
+# body can contain arbitrary code-shaped text under a comment-free banner
+# line. `_hash_special_lines` computes, for a given side's full text, every
+# line number inside such a span; any CHANGED line landing in that set
+# forces `"code"` regardless of its own `#`-prefix shape.
+_PS1_SPECIAL_SUFFIXES = (".ps1", ".psm1")
+_SHELL_HEREDOC_SUFFIXES = (".sh", ".bash")
+
+_PS1_BLOCK_COMMENT_RE = re.compile(r"<#.*?#>", re.DOTALL)
+_PS1_HERESTRING_SQ_RE = re.compile(r"@'.*?'@", re.DOTALL)
+_PS1_HERESTRING_DQ_RE = re.compile(r'@".*?"@', re.DOTALL)
+_SHELL_HEREDOC_START_RE = re.compile(r"<<-?\s*([\"']?)(\w+)\1")
+
+
+def _ps1_special_lines(text: str) -> set:
+    """Line numbers (1-indexed) inside a PowerShell `<# ... #>` block comment
+    or `@'...'@`/`@"..."@` here-string -- see `_PS1_SPECIAL_SUFFIXES` above.
+    Not anchored to line-start for the here-string markers (a true PowerShell
+    here-string requires `@'`/`@"` to be the last token on its opening line
+    and the closing `'@`/`"@` to be the first token on its own line); this is
+    a deliberately looser match -- over-matching only means more lines are
+    conservatively treated as `"code"`, never fewer."""
+    special = set()
+    for pattern in (_PS1_BLOCK_COMMENT_RE, _PS1_HERESTRING_SQ_RE, _PS1_HERESTRING_DQ_RE):
+        for m in pattern.finditer(text):
+            start_line = text.count("\n", 0, m.start()) + 1
+            end_line = text.count("\n", 0, m.end()) + 1
+            special.update(range(start_line, end_line + 1))
+    return special
+
+
+def _shell_heredoc_lines(text: str) -> set:
+    """Line numbers (1-indexed) inside a bash/dockerfile heredoc body
+    (`<<EOF ... EOF`, `<<'EOF' ... EOF`, `<<-EOF ... EOF` with an indented
+    terminator) -- from the `<<...` opening line through its terminator
+    line, inclusive. An unterminated heredoc (malformed/truncated source)
+    conservatively spans to end-of-file rather than matching nothing."""
+    lines = text.splitlines()
+    special = set()
+    n = len(lines)
+    i = 0
+    while i < n:
+        m = _SHELL_HEREDOC_START_RE.search(lines[i])
+        if m is None:
+            i += 1
+            continue
+        delim = m.group(2)
+        allow_indent = "<<-" in lines[i]
+        start = i
+        j = i + 1
+        while j < n:
+            candidate = lines[j].strip() if allow_indent else lines[j]
+            if candidate == delim:
+                break
+            j += 1
+        end = j if j < n else n - 1
+        for k in range(start, end + 1):
+            special.add(k + 1)
+        i = end + 1
+    return special
+
+
+def _hash_special_lines(text: str, suffix: str, is_dockerfile: bool) -> set:
+    if suffix in _PS1_SPECIAL_SUFFIXES:
+        return _ps1_special_lines(text)
+    if suffix in _SHELL_HEREDOC_SUFFIXES or is_dockerfile:
+        return _shell_heredoc_lines(text)
+    return set()
+
+
+def _hash_changed_lines(original: str, edited: str) -> list:
+    """Like `_js_changed_lines`, but also returns each changed line's own
+    1-indexed line number and which side (`"orig"`/`"new"`) it belongs to --
+    `_classify_hash_comment_edit` needs the line number to check it against
+    `_hash_special_lines`, which `_js_changed_lines`'s content-only output
+    can't provide."""
+    changed = []
+    orig_no = 0
+    new_no = 0
+    for line in difflib.ndiff(original.splitlines(), edited.splitlines()):
+        tag = line[:2]
+        content = line[2:]
+        if tag == "  ":
+            orig_no += 1
+            new_no += 1
+        elif tag == "- ":
+            orig_no += 1
+            changed.append(("orig", orig_no, content))
+        elif tag == "+ ":
+            new_no += 1
+            changed.append(("new", new_no, content))
+        # "? " hint lines carry no line number of their own -- skipped.
+    return changed
+
+
+def _classify_hash_comment_edit(original: str, edited: str, suffix: str, is_dockerfile: bool) -> str:
+    """Conservative line rule for the hash-comment family (`.ps1`, `.psm1`,
+    `.sh`, `.bash`, `.toml`, `.yaml`, `.yml`, `.cfg`, `.ini`, `.r`, and bare
+    `Dockerfile`/`.dockerfile`) -- the same treatment `_classify_js_edit`
+    gives `//`-comment languages, adapted to `#`: an edit classifies
+    `"comment-only"` iff every changed line (see `_hash_changed_lines`),
+    after stripping whitespace, is empty or starts with `#`, none of those
+    changed lines carries a semantic comment a tool reads
+    (`_HASH_SEMANTIC_COMMENT_MARKERS` -- a shebang, an encoding cookie, a
+    PowerShell `#requires`, a `# shellcheck`/`# yaml-language-server`
+    directive), and none of those changed lines falls inside a PowerShell
+    block-comment/here-string span or a shell/dockerfile heredoc body on
+    EITHER side of the edit (`_hash_special_lines`) -- a line inside one of
+    those spans can look like a `#`-prefixed comment, or be entirely
+    code-shaped, while carrying the opposite runtime meaning, which this
+    line-by-line rule alone cannot distinguish. Anything else classifies
+    `"code"` -- the safe direction, same as the JS/TS family."""
+    orig_special = _hash_special_lines(original, suffix, is_dockerfile)
+    new_special = _hash_special_lines(edited, suffix, is_dockerfile)
+    for side, line_no, content in _hash_changed_lines(original, edited):
+        if line_no in (orig_special if side == "orig" else new_special):
+            return "code"
+        stripped = content.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if any(marker in lowered for marker in _HASH_SEMANTIC_COMMENT_MARKERS):
+            return "code"
+        if not stripped.startswith("#"):
+            return "code"
+    return "comment-only"
+
+
 class _DocstringStripper(ast.NodeTransformer):
     """Drops the first-statement docstring `Expr(Constant(str))` from the
     `body` of every `Module`/`ClassDef`/`FunctionDef`/`AsyncFunctionDef`
@@ -978,9 +1127,16 @@ def _parse_with_type_comments(source: str) -> ast.AST | None:
     silently vanishing as an ordinary comment would. Any parse failure
     (including a `SyntaxError` `type_comments=True` raises on a malformed
     `# type:` comment that plain `ast.parse` would tolerate) -> `None`, the
-    caller's cue to fall back to `"code"`."""
+    caller's cue to fall back to `"code"`.
+
+    `TypeIgnore` nodes carry the line they sit on, so their `lineno` is
+    zeroed: otherwise any comment inserted above a `# type: ignore` shifts
+    it and a comment-only edit compares as `"code"`."""
     try:
-        return ast.parse(source, type_comments=True)
+        tree = ast.parse(source, type_comments=True)
+        for ignore in tree.type_ignores:
+            ignore.lineno = 0
+        return tree
     except (SyntaxError, ValueError):
         try:
             return ast.parse(source)
@@ -1039,6 +1195,10 @@ def classify_edit(original: str, edited: str, rel_path: str) -> str:
         return _python_change_kind(original, edited)
     if suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
         return _classify_js_edit(original, edited)
+    name_lower = Path(rel_path).name.lower()
+    is_dockerfile = name_lower == "dockerfile" or suffix == ".dockerfile"
+    if suffix in _HASH_COMMENT_SUFFIXES or is_dockerfile:
+        return _classify_hash_comment_edit(original, edited, suffix, is_dockerfile)
     return "code"
 
 

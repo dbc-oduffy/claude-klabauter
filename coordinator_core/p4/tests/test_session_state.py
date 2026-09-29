@@ -11,7 +11,7 @@ def test_registered_workspace_with_session_returns_full_state(monkeypatch, tmp_p
         "p4.studio/repo.port": "ssl:p4.example.com:1666",
         "p4.studio/repo.user": "agent",
         "p4.studio/repo.client": "agent-ws",
-        "p4.studio/repo.client_root": "X:/p4-workspace",
+        "p4.studio/repo.client_root": "C:/p4-workspace",
     }
     monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
     meta = {
@@ -62,7 +62,7 @@ def test_sdir_omitted_returns_all_none_p4_fields(monkeypatch):
         "p4.studio/repo.port": "ssl:p4.example.com:1666",
         "p4.studio/repo.user": "agent",
         "p4.studio/repo.client": "agent-ws",
-        "p4.studio/repo.client_root": "X:/p4-workspace",
+        "p4.studio/repo.client_root": "C:/p4-workspace",
     }
     monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
 

@@ -4,7 +4,7 @@ state/initiatives/*.yaml AND the written initiative has an empty/absent
 `goals` field AND the repo has >=1 goal under state/goals/*.yaml, advise
 with matching candidate goal-ids. Never blocks the write.
 
-Port of: DoE-claude `coordinator/hooks/scripts/nudge-initiative-goals-ladder.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/nudge-initiative-goals-ladder.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict: command/native-door — no coordinator/bin shim, no http
 registration.

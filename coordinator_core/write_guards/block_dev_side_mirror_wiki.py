@@ -25,7 +25,7 @@ this package's classification test).
 
 This is otherwise a faithful port: it preserves the reference hook's
 PLUGIN_ROOT resolution (``CLAUDE_PLUGIN_ROOT`` env var, else
-``$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root")/coordinator``), trust-checked
+``$(cat "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root")/coordinator``), trust-checked
 via the canonical ``coordinator_core.trusted_root_guard.is_trusted`` (fail-open
 call-site shape — see that module for the full anchor list), the
 escape hatch, the ``~`` expansion and backslash normalization, the dev-wiki
@@ -100,29 +100,29 @@ def _claude_home() -> str:
 
 
 def _resolve_default_plugin_root(claude_home: str) -> str:
-    """``<resolved .doe-root>/coordinator`` (reference hook line 33). A
-    missing/unreadable ``.doe-root`` yields an empty resolution, so the default
+    """``<resolved .coordinator-content-root>/coordinator`` (reference hook line 33). A
+    missing/unreadable ``.coordinator-content-root`` yields an empty resolution, so the default
     degrades to the literal string ``"/coordinator"`` — that degrade is ported
     as-is, not repaired.
 
     Read order is durable-first (DR-071/DR-072), matching every other reader:
-    ``<settings-home>/machine-local/.doe-root`` then the legacy
-    ``${CLAUDE_HOME:-$HOME}/.claude/.doe-root``. The durable rung was added
+    ``<settings-home>/machine-local/.coordinator-content-root`` then the legacy
+    ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``. The durable rung was added
     2026-07-28 when the generator stopped writing the legacy target — without it
     this guard silently degrades to ``"/coordinator"``, fails its
     ``_is_trusted_root`` check, and fail-opens ALLOW on every dev-side mirror
     write.
 
     Kept as a local read rather than routed through
-    ``coordinator_core.doe_root_pointer.read_doe_root_pointer_file`` (which the
+    ``coordinator_core.content_root_pointer.read_content_root_pointer_file`` (which the
     other five relocated readers now share): this guard ports a reference hook
     line-for-line and takes ``claude_home`` as an argument, and its documented
     degrade-to-``"/coordinator"`` behavior on an absent pointer is load-bearing
     parity, not an accident to normalize away.
     """
     for candidate in (
-        machine_local_dir() / ".doe-root",
-        Path(claude_home) / ".claude" / ".doe-root",
+        machine_local_dir() / ".coordinator-content-root",
+        Path(claude_home) / ".claude" / ".coordinator-content-root",
     ):
         try:
             content = candidate.read_text(encoding="utf-8").strip()

@@ -246,9 +246,15 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
     assert rc == 1
     log_count = _git(dest_root, "rev-list", "--count", "HEAD").stdout.strip()
     assert log_count == "1", "the mutated root must gain no new commit this round"
+    # 2026-09-29 PM ruling (structural restore-or-commit invariant): a
+    # residue root's published bytes are now restored to HEAD before
+    # `main()` returns -- the mutated root is skipped from THIS round's
+    # commit exactly as before, but it is no longer left dirty for a human
+    # to reconcile, it is byte-identical with HEAD again.
     porcelain_after = _porcelain(dest_root)
-    assert "sub-a/" in porcelain_after
-    assert "sub-b/" in porcelain_after
+    assert porcelain_after == "", (
+        f"residue roots must be restored to HEAD, not left dirty: {porcelain_after!r}"
+    )
     assert "publish.py: uncommitted in" in combined
     assert str(dest_root) in combined
 
@@ -279,8 +285,13 @@ def test_gate_failure_alone_still_commits_nothing(monkeypatch, tmp_path, capsys)
     assert rc == 2
     log_count = _git(dest_root, "rev-list", "--count", "HEAD").stdout.strip()
     assert log_count == "1", "a gate failure must commit nothing, unchanged from before this fix"
+    # 2026-09-29 PM ruling: a gate failure blocks the commit exactly as
+    # before, but the swapped-and-never-committed bytes are now restored to
+    # HEAD rather than left dirty (§ mutated-root sibling test above).
     porcelain_after = _porcelain(dest_root)
-    assert "sub-a/" in porcelain_after
+    assert porcelain_after == "", (
+        f"a gate-failure residue root must be restored to HEAD, not left dirty: {porcelain_after!r}"
+    )
     assert "publish.py: uncommitted in" in combined
     assert str(dest_root) in combined
 

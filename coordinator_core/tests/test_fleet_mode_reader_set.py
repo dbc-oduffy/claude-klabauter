@@ -208,15 +208,12 @@ EXPECTED_READERS = (
     "coordinator_core.hooks.stop_dispatch",
     "coordinator_core.hooks.test_auto_push",
     "coordinator_core.hooks.test_postuse_advisory_dispatch",
-    "coordinator_core.hooks.tests.test_cater_subagent_start",
     "coordinator_core.hooks.tests.test_fleet_mode_reaches_the_hooks",
     "coordinator_core.hooks.tests.test_nudge_em_code_dispatch",
     "coordinator_core.hooks.tests.test_postuse_advisory_dispatch",
     "coordinator_core.hooks.tests.test_postuse_context_pressure",
-    "coordinator_core.hooks.tests.test_postuse_workflow_monitor_arm",
     "coordinator_core.hooks.tests.test_runtime_tripwire_em_check",
     "coordinator_core.hooks.tests.test_stop_dispatch",
-    "coordinator_core.ops.tests.test_append_integrator_dispositions",
     "coordinator_core.message_register.tests.test_register",
     "coordinator_core.ops.fleet.mode_control",
     "coordinator_core.ops.tests.test_fleet_mode_control",
@@ -251,29 +248,45 @@ EXPECTED_READERS = (
     "coordinator_core.sizing_assemble",
     "coordinator_core.sizing_assemble.test_interaction_mode_cli",
     "coordinator_core.sizing_assemble.test_interaction_mode_touchpoints",
+    # --- job-mode announce / sessionstart cluster ---------------------------
     #
-    # KNOWN, UNREMEDIATED RESIDUAL (found integrating this chunk, not
-    # introduced by it -- see this chunk's run report / dispatch-report for
-    # the full analysis): `coordinator_core.ops.sizing_accept_exit_criterion`
-    # (C4, already landed at 107eb8f329) imports
-    # `from coordinator_core.session.mode_resolution import
-    # INTERACTION_MODES` at MODULE TOP LEVEL, and `coordinator_core.ops.
-    # __init__` eagerly imports every registered op (C4's own writes:
-    # "ops/__init__ import list"). Because most of the tree imports
-    # `coordinator_core.ops` (directly or transitively), that one top-level
-    # import reaches roughly the WHOLE `coordinator_core` package through
-    # this closure -- thousands of modules, not a deliberate, named handful.
-    # Enumerating that cascade here would make this file's own floor
-    # vacuous (exactly the failure mode its module docstring warns against:
-    # "the moment a consumer outside that set reads the file, the absence
-    # stops being an absence"), so it is NOT done. Fixing it means making
-    # C4's `INTERACTION_MODES` import lazy the same way this chunk's own
-    # `_validate_interaction_mode` is -- a change to a file outside this
-    # chunk's footprint (`coordinator_core/ops/sizing_accept_exit_
-    # criterion.py`), reported rather than silently patched. Until that
-    # lands, `test_reader_set_matches_allowlist_exactly` and
-    # `test_no_denial_shaped_guard_reaches_the_record` both stay RED for a
-    # reason this chunk's own diff does not cause and cannot cure in-scope.
+    # `session_start_announce_job_mode` calls `resolve_mode("job_mode")` to
+    # announce the resolved mode as SessionStart `additionalContext`; it is
+    # advisory (context only, never a tool-call gate) and needs the resolver,
+    # so allowlisting is the disposition -- restructuring would mean
+    # re-deriving the resolver. `sessionstart_dispatch` reaches the record
+    # only by dispatching to it, with the same class. Consumers that need only
+    # a constant (`autonomous_go`, `sizing_accept_exit_criterion`, the warm
+    # door's `env_forwarding`) were restructured onto the import-free leaf
+    # `session.job_mode_env` and are NOT listed.
+    "coordinator_core.hooks.session_start_announce_job_mode",
+    "coordinator_core.hooks.sessionstart_dispatch",
+    "coordinator_core.hooks.tests.test_arrival_w4_c10",
+    "coordinator_core.hooks.tests.test_arrival_w4_c14",
+    "coordinator_core.hooks.tests.test_postuse_bash_commit_releases_claims",
+    "coordinator_core.bash_guards.tests.guard_message_exemptions",
+    "coordinator_core.benchmarks.shim_prototype_dispatcher",
+    "coordinator_core.ops.tests.test_sizing_spike_verdict",
+    "coordinator_core.tests.test_composition_budget_doc_scaffold",
+    # --- plan_assemble cluster ----------------------------------------------
+    #
+    # `plan_assemble.predicates.substrate_seven_dim` reads
+    # `sizing_assemble._PREMISE_DETENT_TSHIRTS` (a constant defined inside
+    # `sizing_assemble`, and monkeypatched there by its liveness test), so it
+    # reaches the record only through `sizing_assemble`, already allowlisted
+    # above as advisory. The predicate computes a report field for plan
+    # assembly and never gates a tool call. Moving the constant out would
+    # break that liveness test's premise, so the cluster is allowlisted.
+    "coordinator_core.plan_assemble",
+    "coordinator_core.plan_assemble.predicates.substrate_seven_dim",
+    "coordinator_core.plan_assemble.predicates.test_context",
+    "coordinator_core.plan_assemble.predicates.test_substrate_seven_dim",
+    "coordinator_core.plan_assemble.residue",
+    "coordinator_core.plan_assemble.test_residue",
+    "coordinator_core.plan_assemble.test_residue_admission",
+    "coordinator_core.plan_assemble.test_scaffold_directive_parity",
+    "coordinator_core.sizing_assemble.test_scaffold_directive_parity",
+    "coordinator_core.test_sizing_assemble",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

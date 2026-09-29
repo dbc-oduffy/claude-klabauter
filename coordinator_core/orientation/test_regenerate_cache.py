@@ -1259,7 +1259,7 @@ def test_recent_commits_caps_at_recent_commits_max(tmp_path):
 # Capabilities (2026-08-14) -- repo-declared discoverability pointers, fed
 # from coordinator.local.md's `capability_pointers:` frontmatter list via the
 # same declare-once-in-config seam `fast_test_cmd:` established.
-# Spec backlink: cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md
+# Spec backlink: cross-repo/inbox/2026-08-14-coordinator-content-repo-em-orientation-cache-capability-pointers.md
 # ---------------------------------------------------------------------------
 
 

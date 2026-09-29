@@ -2,7 +2,7 @@
 (Bash) hard-deny guard: make a host's subagent Bash ban executable, not
 prose.
 
-Port of: DoE-claude coordinator/hooks/scripts/guard-host-subagent-bash-ban.py
+Port of: coordinator-content-repo coordinator/hooks/scripts/guard-host-subagent-bash-ban.py
 (folded into DoE's ``preuse-bash-dispatch.py`` ``_run_folded_bash_guards``,
 one of the four folded guards this port registers so DoE can delete that
 in-process fold once the cold path carries it here instead).

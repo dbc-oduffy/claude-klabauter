@@ -26,8 +26,8 @@ directly — this module has no mutation opinion of its own; every directive
 here names an existing atomic `cli` this package's own `apply.py` dispatch
 table resolves.
 
-Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
+Contract: coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
 
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /

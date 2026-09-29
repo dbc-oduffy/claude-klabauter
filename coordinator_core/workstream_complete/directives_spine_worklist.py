@@ -20,11 +20,11 @@ that silent dishonest exit — it does NOT write anything, and it never
 blocks (see Negative-spec).
 
 Spec backlink: pln-workstream-complete-names-its-dc94b7,
-chunk C1. Design provenance: C13 of DoE-claude's
+chunk C1. Design provenance: C13 of coordinator-content-repo's
 docs/plans/2026-07-29-pm-approved-provenance-write-time-closure-gate.md,
 PM-ratified, handed over via docs/plans/2026-08-05-leg-a-closing-aid-
 terminal-statuses.md and delivered as ask 5 of source memo
-2026-08-05-doe-claude-em-leg-a-ac-checkbox-divestment.md.
+2026-08-05-coordinator-content-repo-em-leg-a-ac-checkbox-divestment.md.
 
 Mirrors `directives_session_hygiene.py`'s Step 2.96 completeness-
 checklist gate shape (`FREE_VALUE_KEYS`, an item NamedTuple, a gate

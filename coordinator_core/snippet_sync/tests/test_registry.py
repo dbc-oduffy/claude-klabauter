@@ -214,7 +214,7 @@ def test_resolve_consumers_sibling_plugin_file_exists_anchors_to_home_regardless
     out_live = reg.resolve_consumers(data, "foo", live_install_plugin_root)
     assert out_live == [str(live_install_target)]
 
-    source_tree_plugin_root = tmp_path / "some-other-checkout" / "DoE-claude" / "coordinator"
+    source_tree_plugin_root = tmp_path / "some-other-checkout" / "coordinator-content-repo" / "coordinator"
     out_source = reg.resolve_consumers(data, "foo", source_tree_plugin_root)
     assert out_source == [str(live_install_target)]
 
@@ -223,7 +223,7 @@ def test_resolve_consumers_sibling_plugin_file_exists_home_fallback_when_no_clau
     tmp_path, monkeypatch
 ):
     """CLAUDE_HOME unset falls back to $HOME, per the established
-    doe_root_pointer.py / trusted_root_guard.py convention.
+    content_root_pointer.py / trusted_root_guard.py convention.
     """
     fake_home = tmp_path / "plain-home"
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
@@ -276,7 +276,7 @@ def test_list_for_sibling_plugin_file_exists_matches_in_both_contexts(tmp_path, 
     )
     data = reg.load_registry(registry_path)
 
-    source_tree_plugin_root = tmp_path / "some-other-checkout" / "DoE-claude" / "coordinator"
+    source_tree_plugin_root = tmp_path / "some-other-checkout" / "coordinator-content-repo" / "coordinator"
     assert reg.list_for(data, str(live_install_target), source_tree_plugin_root) == ["foo"]
     live_install_plugin_root = fake_home / ".claude" / "plugins" / "coordinator-claude" / "coordinator"
     assert reg.list_for(data, str(live_install_target), live_install_plugin_root) == ["foo"]

@@ -444,7 +444,7 @@ def test_disposition_to_verdict_mapping_refuses_on_live_peer_and_live_unrelated(
 
 
 def test_only_the_picked_up_baton_held_does_not_unify(tmp_path, monkeypatch):
-    """The DoE-claude 2026-08-20 incident, as a decision-level repro.
+    """The coordinator-content-repo 2026-08-20 incident, as a decision-level repro.
 
     `brief()` claims the target BEFORE routing here, so the ledger already
     holds it by the time the held set resolves. Without the cardinality

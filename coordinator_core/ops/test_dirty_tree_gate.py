@@ -21,7 +21,7 @@ from coordinator_core.ops.dirty_tree_gate import (
     main,
     parse_porcelain_paths,
 )
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -56,31 +56,31 @@ def _make_repo(tmp_path: Path, name: str) -> Path:
 
 @pytest.fixture
 def isolated_plugin_root(tmp_path, monkeypatch):
-    """Point CLAUDE_PLUGIN_ROOT at the real DoE-claude coordinator/ checkout.
+    """Point CLAUDE_PLUGIN_ROOT at the real coordinator-content-repo coordinator/ checkout.
 
-    The gate's own resolution logic (CLAUDE_PLUGIN_ROOT / .doe-root) is
+    The gate's own resolution logic (CLAUDE_PLUGIN_ROOT / .coordinator-content-root) is
     exercised by _resolve_plugin_root's own unit coverage below; classifier
     behavior tests need a *working* coordinator-state-root.sh, so they point
-    straight at the sibling DoE-claude repo's coordinator/ tree.
+    straight at the sibling coordinator-content-repo repo's coordinator/ tree.
     """
     doe_coordinator = os.environ.get("DOE_COORDINATOR_ROOT")
     if not doe_coordinator:
-        doe_root = resolve_doe_root()
-        if doe_root:
-            candidate = Path(doe_root) / "coordinator"
+        content_root = resolve_content_root()
+        if content_root:
+            candidate = Path(content_root) / "coordinator"
             if candidate.is_dir():
                 doe_coordinator = str(candidate)
     if not doe_coordinator or not Path(doe_coordinator).is_dir():
-        pytest.skip("sibling DoE-claude/coordinator checkout not found")
+        pytest.skip("sibling coordinator-content-repo/coordinator checkout not found")
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", doe_coordinator)
     return doe_coordinator
 
 
-def test_resolve_plugin_root_doe_root_rung_uses_userprofile(tmp_path, monkeypatch):
-    """Native-Windows condition for the ``.doe-root`` legacy rung
+def test_resolve_plugin_root_content_root_rung_uses_userprofile(tmp_path, monkeypatch):
+    """Native-Windows condition for the ``.coordinator-content-root`` legacy rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): CLAUDE_PLUGIN_ROOT
     unset, CLAUDE_HOME/HOME both absent, only USERPROFILE set. The rung now
-    delegates to ``read_doe_root_pointer_file()``'s own default (which falls
+    delegates to ``read_content_root_pointer_file()``'s own default (which falls
     through to ``os.path.expanduser("~")``, Windows-safe) instead of a
     hand-rolled two-rung ``CLAUDE_HOME or HOME`` chain that degraded to a
     cwd-relative pointer path in exactly this condition."""
@@ -97,9 +97,9 @@ def test_resolve_plugin_root_doe_root_rung_uses_userprofile(tmp_path, monkeypatc
     doe_repo = tmp_path / "doe-repo"
     coordinator_dir = doe_repo / "coordinator"
     coordinator_dir.mkdir(parents=True)
-    doe_root_dir = userprofile_home / ".claude"
-    doe_root_dir.mkdir(parents=True)
-    (doe_root_dir / ".doe-root").write_text(str(doe_repo), encoding="utf-8")
+    content_root_dir = userprofile_home / ".claude"
+    content_root_dir.mkdir(parents=True)
+    (content_root_dir / ".coordinator-content-root").write_text(str(doe_repo), encoding="utf-8")
 
     plugin_root, err = _resolve_plugin_root()
     assert err is None, err

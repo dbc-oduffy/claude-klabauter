@@ -35,7 +35,7 @@ MACHINE_LOCAL_REGISTRY_DIR may override the default registry location for testin
 (consumed by the `machine-local` CLI itself, not read directly here — mirrors the bash
 oracle, which never reads this var either).
 
-Port source: coordinator/lib/detect-hardware.sh (DoE-claude)
+Port source: coordinator/lib/detect-hardware.sh (coordinator-content-repo)
 Spec backlink: docs/plans/2026-06-23-coordinator-install-surface-dogfood-hardening.md §C4
 
 Negative-spec:

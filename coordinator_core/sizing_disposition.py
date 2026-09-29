@@ -25,8 +25,8 @@ accepted." The deliverable_id-inheritance leg is deleted outright, not
 replaced: DR-346 names deliverable_id-resolves-to-plans as the defect
 itself, never a feature to preserve.
 
-Cross-repo ask: `cross-repo/inbox/2026-08-20-doe-claude-em-pickup-brief-
-should-emit-the-sizing-disposition.md`. Doctrine side (DoE-claude):
+Cross-repo ask: `cross-repo/inbox/2026-08-20-coordinator-content-repo-em-pickup-brief-
+should-emit-the-sizing-disposition.md`. Doctrine side (coordinator-content-repo):
 `skills/plan/SKILL.md` carve-out 1, `skills/pickup/SKILL.md`; tripwire
 `A-BATON-IS-NOT-A-SIZING-ARTIFACT`.
 """

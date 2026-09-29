@@ -3,7 +3,7 @@ phantom-staged-deletion guard: is a staged deletion in this commit about to
 erase a file that is still in HEAD and still on disk?
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-unchanged (logic-for-logic) from DoE-claude `coordinator/hooks/scripts/
+unchanged (logic-for-logic) from coordinator-content-repo `coordinator/hooks/scripts/
 _phantom_staged_deletion.py`. This is the untested-git-hook's tested half —
 see the sibling `guard_phantom_staged_deletion_precommit.py`'s own module
 docstring for why the split exists and stays: a native git pre-commit hook

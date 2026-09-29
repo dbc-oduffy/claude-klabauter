@@ -9,7 +9,7 @@ this asserts the engine chain's verdict AND deny text match the cold
 in-process script's own verdict and deny text, on a byte-identical payload.
 
 DR-147 DESIGN (guard-registration is not guard-coverage,
-DoE-claude docs/decisions/DR-147-guard-registration-is-not-guard-coverage.md):
+Coordinator-content-repo docs/decisions/DR-147-guard-registration-is-not-guard-coverage.md):
 this oracle runs against opt-in FIXTURES that are known to TRIP each guard,
 never a corpus of arbitrary/benign commands. Two of the four guards
 (`guard-host-subagent-bash-ban`, `guard-host-subagent-bash-spawn-shapes`)
@@ -33,8 +33,8 @@ rather than implementing it: it carries NO timing axis at all (verdict and
 deny-text parity only, per the plan body's own statement of "the oracle's
 real job"), and none of its four fixture commands are commit-shaped.
 
-Opt-in on ANOTHER axis too: every case below needs the actual DoE-claude
-sibling checkout on disk (`coordinator_doe_root()`) to run the cold oracle
+Opt-in on ANOTHER axis too: every case below needs the actual coordinator-content-repo
+sibling checkout on disk (`coordinator_content_root()`) to run the cold oracle
 subprocess against. On an install without that sibling repo present (e.g. a
 published OSS mirror), every case in this module skips rather than either
 silently passing (false parity) or hard-failing a suite that has no way to
@@ -57,7 +57,7 @@ import pytest
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.bash_guards._shape_classifier import Shape, SHAPE_PRECEDENCE
 from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -66,12 +66,12 @@ pytestmark = [
 
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-_DOE_ROOT = coordinator_doe_root()
-_DOE_HOOKS_DIR = Path(_DOE_ROOT) / "coordinator" / "hooks" / "scripts" if _DOE_ROOT else None
+_CONTENT_ROOT = coordinator_content_root()
+_DOE_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
 
 _SKIP_REASON = (
-    "opt-in fixture: no DoE-claude sibling checkout resolved by "
-    "coordinator_doe_root() -- the cold oracle scripts this parity check "
+    "opt-in fixture: no coordinator-content-repo sibling checkout resolved by "
+    "coordinator_content_root() -- the cold oracle scripts this parity check "
     "compares against live only in that sibling repo."
 )
 
@@ -82,7 +82,7 @@ def _cold_script(name: str) -> Path:
 
 
 def _fixture_plugin_root() -> Optional[str]:
-    return str(Path(_DOE_ROOT) / "coordinator") if _DOE_ROOT else None
+    return str(Path(_CONTENT_ROOT) / "coordinator") if _CONTENT_ROOT else None
 
 
 def _run_cold(hook_name: str, payload: Dict[str, Any], *, env: Optional[Dict[str, str]] = None) -> "tuple[int, str]":
@@ -187,17 +187,17 @@ def _assert_cold_and_warm_both_deny(
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_case1_doctrine_surface_bash_write_parity() -> None:
     """Fixture: a plain `>>` redirect targeting the governed `CLAUDE.md`
-    surface, run with `cwd` at the DoE-claude repo root -- `CLAUDE.md` is a
+    surface, run with `cwd` at the coordinator-content-repo repo root -- `CLAUDE.md` is a
     live entry of both the cold script's own `_claude_md_ledger.
     GOVERNED_AUTHORING_SURFACES` and the manifest-driven
     `governed-authoring-surfaces.json` the engine reads (verified present at
     `<plugin_root>/governed-authoring-surfaces.json` 2026-08-28). Not
     identity-gated -- fires for every caller, no coordinator.local.md
     opt-in needed."""
-    cwd = str(Path(_DOE_ROOT)) if _DOE_ROOT else None
+    cwd = str(Path(_CONTENT_ROOT)) if _CONTENT_ROOT else None
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": 'echo "x" >> CLAUDE.md'},
@@ -210,7 +210,7 @@ def test_case1_doctrine_surface_bash_write_parity() -> None:
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_case2_repo_setup_claude_home_refusal_parity() -> None:
     win_home = r"C:\Users\example-operator"
     env = {"HOME": win_home, "USERPROFILE": win_home}
@@ -225,7 +225,7 @@ def test_case2_repo_setup_claude_home_refusal_parity() -> None:
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_case3_host_subagent_bash_ban_parity(tmp_path: Path) -> None:
     """Opt-in fixture (Anti-scope: "do not let a parity oracle read
     inertness as parity"): writes its OWN `coordinator.local.md` declaring
@@ -258,7 +258,7 @@ def test_case3_host_subagent_bash_ban_parity(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_case4_host_subagent_bash_spawn_shapes_parity(tmp_path: Path) -> None:
     """Opt-in fixture, same rationale as case 3, distinct policy key
     (`subagent_bash_spawn_shapes: deny`) so the two subagent-cohort guards
@@ -286,7 +286,7 @@ def test_case4_host_subagent_bash_spawn_shapes_parity(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_case5_spawn_shapes_parity_on_the_powershell_surface(tmp_path: Path) -> None:
     """The ONLY non-Bash fixture in this module, and the reason it exists.
 
@@ -349,7 +349,7 @@ _IDENTITY_GUARDS: "tuple[tuple[str, str, str], ...]" = (
 )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 @pytest.mark.parametrize(
     "hook_name,policy_key,command", _IDENTITY_GUARDS, ids=[g[0] for g in _IDENTITY_GUARDS]
 )
@@ -379,7 +379,7 @@ def test_identity_shape_parity(
     )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_identity_axis_can_actually_fail(tmp_path: Path) -> None:
     _write_local_md(tmp_path, "subagent_bash_policy")
     payload = {
@@ -455,7 +455,7 @@ _INTENDED_DIVERGENCES: "tuple[dict, ...]" = (
 )
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 @pytest.mark.parametrize("shape", list(SHAPE_PRECEDENCE), ids=lambda s: s.value)
 def test_shape_vocabulary_parity(shape: Shape, tmp_path: Path) -> None:
     """Sweep `guard-host-subagent-bash-spawn-shapes` over every shape
@@ -551,7 +551,7 @@ def test_shape_vocabulary_axis_can_actually_fail() -> None:
             _ = incomplete[shape]
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason=_SKIP_REASON)
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason=_SKIP_REASON)
 def test_assert_helper_rejects_a_non_firing_case(tmp_path: Path) -> None:
     payload = {
         "tool_name": "Bash",
@@ -581,7 +581,7 @@ def test_citation_axis_can_actually_fail() -> None:
     period (`_message_envelope.render`'s `f"See {...}."`) must not by itself
     read as a mismatch against a port that omits it.
     """
-    resolved = "See X:/DoE-claude/coordinator/docs/wiki/guard-message-concision.md#x."
+    resolved = "See C:/coordinator-content-repo/coordinator/docs/wiki/guard-message-concision.md#x."
     unresolved = "See coordinator/docs/wiki/guard-message-concision.md#x"
 
     cold_prose, cold_anchor = _split_citation("BLOCKED: prose.\n\n" + resolved)

@@ -2,7 +2,7 @@
 manifest generator.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/emit_effective_delivery.py`. Same
+from coordinator-content-repo `coordinator/hooks/scripts/emit_effective_delivery.py`. Same
 job as the source: build the `x-effective-delivery` block
 `coordinator_core.ops.session.hook_delivery_manifest` (and, upstream of it,
 `guard_settings_integrity.detect_hook_delivery_duplication`) reads at boot,
@@ -26,8 +26,8 @@ artifact this generator reads that stays DoE-resident (it is the plugin's
 own hook-registration manifest) -- so this is now the one remaining
 cross-plane read, direction reversed from the source: DoE-resident code
 used to resolve INTO the engine; this engine-resident code now resolves
-OUT to DoE. Resolved via `coordinator_core.doe_root_pointer.
-read_doe_root_pointer()` + `coordinator_core.data_root.content_root_for()`
+OUT to DoE. Resolved via `coordinator_core.content_root_pointer.
+read_content_root_pointer()` + `coordinator_core.data_root.content_root_for()`
 -- the same registry-first/pointer-file/content-root seam
 `oss_operative_strings._resolve_mcp_topology_path` (W4-C6) already
 established for the identical displacement class, mirrored here rather
@@ -283,22 +283,22 @@ def _resolve_doe_content_root() -> Path:
     unresolved root as fatal rather than fail-open -- a manifest generator
     has no excuse for a partial or missing result."""
     try:
-        from coordinator_core.doe_root_pointer import read_doe_root_pointer
+        from coordinator_core.content_root_pointer import read_content_root_pointer
         from coordinator_core.data_root import content_root_for
     except Exception as exc:  # noqa: BLE001
-        raise EmitterError(f"cannot import DoE-root resolution seam: {exc}") from exc
+        raise EmitterError(f"cannot import content-root resolution seam: {exc}") from exc
 
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
+    content_root = read_content_root_pointer()
+    if not content_root:
         raise EmitterError(
             "DoE root did not resolve (registry/pointer-file rungs all missed) -- "
             "cannot locate hooks.json or the effective-delivery.json sidecar; "
             "aborting closed"
         )
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         raise EmitterError(
-            f"resolved DoE root {doe_root!r} carries neither content layout "
+            f"resolved DoE root {content_root!r} carries neither content layout "
             "(coordinator/ nor a flat published mirror) -- aborting closed"
         )
     return content_root
@@ -786,7 +786,7 @@ def _emission_provenance(hooks_json_path: Path) -> Dict[str, Any]:
     `hooks.json` has uncommitted edits. Plus a UTC second-precision
     `Z`-suffixed timestamp."""
     # DoE repo root is two levels above the resolved content root under the
-    # private-authoring layout (<doe_root>/coordinator/) and the content
+    # private-authoring layout (<content_root>/coordinator/) and the content
     # root itself under the flat published-mirror layout (its own .git).
     doe_content_root = hooks_json_path.parents[1]
     doe_repo_root = doe_content_root if (doe_content_root / ".git").exists() else doe_content_root.parent

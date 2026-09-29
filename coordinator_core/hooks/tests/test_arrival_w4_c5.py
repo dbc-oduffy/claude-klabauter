@@ -27,7 +27,7 @@ carrying substantial coverage from a prior attempt at this chunk) --
 `check_claude_md_size`, `derive_global_doctrine_live_copy`,
 `derive_setup_copies`, `guard_doctrine_surface_ratio_precommit`, and
 `guard_doctrine_surface_bash_write` (a byte-faithful port of a 1748-line
-DoE-claude source; this file spot-checks the security-relevant carve-outs
+Coordinator-content-repo source; this file spot-checks the security-relevant carve-outs
 named in its own module docstring rather than reproducing DoE's full
 regression suite).
 """

@@ -58,7 +58,7 @@ Public functions:
                            for the PM/session-owner path alone.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 2
-Spec backlink: DoE-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
+Spec backlink: coordinator-content-repo docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
 
 Negative-spec (path-scoped read — NEVER glob):
     Do NOT enumerate ``.git/coordinator-sessions/*/tier-u-grant.json`` (or
@@ -299,7 +299,7 @@ def revoke_tier_u_grant(
     trying.
 
     ``only_ceremony`` is the GUARDED handback a ceremony must use
-    (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-grants-belong-in-
+    (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-ceremony-grants-belong-in-
     code-not-prose.md § 1). When set, the grant is unlinked only if it was
     minted by a ceremony (``granted_by == "ceremony"``) AND that ceremony
     is this one (``ceremony == only_ceremony``). Anything else — an

@@ -41,7 +41,7 @@ def test_empty_tree_sha_is_gits_canonical_value():
 
 def test_empty_tree_is_refused_with_a_failed_result():
     refusal = _empty_private_index_refusal(
-        EMPTY_TREE_SHA, root="X:/claude-klabauter", caller="_commit_scoped_private_index"
+        EMPTY_TREE_SHA, root="C:/claude-klabauter", caller="_commit_scoped_private_index"
     )
     assert refusal is not None
     assert not refusal.ok
@@ -55,7 +55,7 @@ def test_a_real_tree_sha_passes_through():
     assert (
         _empty_private_index_refusal(
             "6be1de8a7a3b7396b84d857ca61adb932be6264d",
-            root="X:/claude-klabauter",
+            root="C:/claude-klabauter",
             caller="commit_authored_content",
         )
         is None

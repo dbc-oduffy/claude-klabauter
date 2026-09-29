@@ -18,7 +18,7 @@ Spec backlink:
     state/handoffs/2026-07-21_184526_claude_klabauter-check-addressee-verb.md
     (ratifying spinoff — carries DR-047 addressee-guard corrected behaviour).
     Parity source: DoE CLI `cross-repo-memo --check-addressee` handler
-    (DoE-claude/coordinator/bin/cross-repo-memo.py:3249-3289).
+    (coordinator-content-repo/coordinator/bin/cross-repo-memo.py:3249-3289).
     Resolver: coordinator_core/ops/fleet/_memo_resolver.py (resolve_receiver_inbox,
     suggest_nearest_receiver, read_redirect_aliases).
 

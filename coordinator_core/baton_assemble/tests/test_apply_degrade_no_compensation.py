@@ -83,7 +83,7 @@ def _never_claimed_predecessor_fm() -> list[str]:
     `handoff_archive_transition._attested_succession_refusal`. That admission
     is the whole point of
     docs/plans/2026-09-12-supersede-admits-an-apply-minted-success.md, and it
-    is what DoE-claude reported as a defect on this very shape.
+    is what coordinator-content-repo reported as a defect on this very shape.
 
     Kept because `_declining_harness` still composes it: the decline now comes
     from the SECOND half of that harness's shape, not this one.
@@ -191,7 +191,7 @@ class TestADegradeCompensatesNothing:
         `handoff_archive_transition`'s own `mode == "supersede"` choke point,
         which is where it always belonged -- this wrapper's pre-check was
         defense in depth, and keeping it as an early return is what made a
-        never-claimed predecessor unfixable (the DoE-claude defect). What this
+        never-claimed predecessor unfixable (the coordinator-content-repo defect). What this
         guard protects is unchanged and is asserted below: nothing is mutated,
         nothing is archived, and no succession edge is written."""
         harness = _declining_harness(tmp_path, monkeypatch)
@@ -388,7 +388,7 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
         the decision, and `handoff_archive_transition`'s own
         `mode == "supersede"` block makes the call. Asserting "never composed"
         pinned the early return that made a never-claimed predecessor
-        unfixable -- the DoE-claude defect. What this guard is actually for is
+        unfixable -- the coordinator-content-repo defect. What this guard is actually for is
         unchanged and asserted below: a refusal comes back as a DEGRADE, and
         the successor this run minted survives it."""
         from coordinator_core.test_baton_assemble import (

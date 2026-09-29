@@ -15,7 +15,7 @@ R3: goals are DECLARED (not inferred), captured via enhanced existing
 ceremonies (workweek-start, workday-start, HEADER.md per-repo) — tc-3 owns the
 write; this contract owns the shape.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

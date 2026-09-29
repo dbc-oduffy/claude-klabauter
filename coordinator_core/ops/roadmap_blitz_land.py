@@ -43,7 +43,7 @@ Negative-spec:
   - Does NOT re-queue `surfacedToPm`. Those await a PM answer, and retrying one
     would be answering on the PM's behalf.
 
-Spec backlink: DoE-claude coordinator/skills/plan-blitz/SKILL.md § The flow, step 4.
+Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md § The flow, step 4.
 """
 
 from __future__ import annotations

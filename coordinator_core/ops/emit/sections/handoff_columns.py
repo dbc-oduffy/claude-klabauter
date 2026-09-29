@@ -14,6 +14,8 @@ _DEPLOYMENT_RECOGNIZED = {
 
 PREDECESSOR_DEFAULT = "none"
 
+_GIT_TIMEOUT_SECS = 30
+
 
 def _coerce_legacy_abandoned(fm: dict) -> tuple[str, Optional[str], Optional[str]]:
     """Split a legacy ``deployment_state: abandoned`` record into the new terminal it earns.
@@ -61,9 +63,10 @@ def _resolve_shipped_in_dates(repo_root: Path, raw_shas: list[str]) -> dict[str,
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return {}
     if proc.returncode != 0 or not proc.stdout.strip():
         return {}

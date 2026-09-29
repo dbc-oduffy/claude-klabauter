@@ -15,7 +15,7 @@ regression only after an outward-facing event. This module's only job is
 the property neither C10 nor C11 can self-certify from inside its own
 module: that landing either assembler in-tree wires up NO in-tree caller.
 Per the source memo's own "Sequencing" section
-(cross-repo/inbox/2026-08-20-doe-claude-em-roadmap-sprint-split-assembler-
+(cross-repo/inbox/2026-08-20-coordinator-content-repo-em-roadmap-sprint-split-assembler-
 ops.md): "your delivery is effectively inert on landing... no live caller
 exists yet." This module is the structural proof of that claim, run at
 build time so a regression that prematurely wires one of these two

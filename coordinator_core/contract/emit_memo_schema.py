@@ -92,7 +92,7 @@ GENERATES = [
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
     "1.8.0 -> 1.9.0 widens the `kind` field's documented vocabulary by one "
-    "member, `friction` (closes DoE-claude "
+    "member, `friction` (closes the doctrine repo "
     "state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-"
     "bug-degrades-silently.yaml). `kind` carries no schema-level `enum` (it is "
     "validated via the cross-field rule `schema_validate._memo_cf_kind_enum`, "
@@ -149,7 +149,7 @@ MEMO_SCHEMA_BUMP_NOTE = (
     "1.5.0 -> 1.6.0 catches the constant up to a shape drift: commit "
     "0bf6d576e added `sent_by` to both emitted schemas without moving "
     "MEMO_SCHEMA_VERSION off 1.5.0, so the emitter stamped two different "
-    "shapes with one version string until this bump (DoE-claude "
+    "shapes with one version string until this bump (the doctrine repo "
     "2026-08-17 cross-repo memo, DR-097 § 3). Purely additive: one new "
     "optional property, never required — no previously-valid memo becomes "
     "invalid. "
@@ -240,7 +240,7 @@ _SUPERSEDES_DESCRIPTION = (
 
 _TO_REPO_CROSS_REPO_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
-    "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
+    "`repos.<key>` form (e.g. repos.content_root, repos.claude_klabauter, "
     "repos.project_rag — the same key family used fleet-wide for "
     "sibling-repo resolution). `to:` remains the human-readable addressee "
     "and all its existing aliases stay valid; `to_repo` disambiguates "
@@ -275,7 +275,7 @@ _SUPERSEDED_BY_ARCHIVED_MEMO_DESCRIPTION = (
 
 _TO_REPO_ARCHIVED_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
-    "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
+    "`repos.<key>` form (e.g. repos.content_root, repos.claude_klabauter, "
     "repos.project_rag). Sibling of the cross-repo-memo schema's "
     "`to_repo` field, carried through to archival so a memo bearing it "
     "still validates after `git mv` to cross-repo/archive/. `to:` "

@@ -1,4 +1,4 @@
-# Ported from DoE-claude `state/audits/2026-07-20-stale-record-triage.md` (97 lines),
+# Ported from coordinator-content-repo `state/audits/2026-07-20-stale-record-triage.md` (97 lines),
 # "## Group C — auto-reconcile surfaced records" (the `gate_eval` and `commit_reality`
 # sub-tables only). Purpose: coordinator_core/reconcile has no in-repo record of the
 # per-record verdicts a 2026-07-20 read-only triage agent reached against the daily
@@ -28,7 +28,7 @@
 # 25th record or re-tag a record to force the arithmetic to 25/15, since neither this
 # audit document nor this chunk's brief specifies what a 25th record or a 4th untagged
 # false positive would be.
-source: "DoE-claude state/audits/2026-07-20-stale-record-triage.md"
+source: "coordinator-content-repo state/audits/2026-07-20-stale-record-triage.md"
 source_section: "Group C -- auto-reconcile surfaced records"
 audit_date: "2026-07-20"
 plan_headline_total_rows: 25

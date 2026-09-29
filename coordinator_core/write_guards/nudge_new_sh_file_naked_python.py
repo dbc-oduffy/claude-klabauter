@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.nudge_new_sh_file_naked_python — advisory
 guard.
 
-Discharges DoE-claude CLAUDE.md § Runtime conventions: "Multi-OS support is
+Discharges coordinator-content-repo CLAUDE.md § Runtime conventions: "Multi-OS support is
 P0 -- macOS, Windows, Linux all first-class. Process spawns are cheap on
 some hosts and brutally expensive on others, so structural bash is a defect
 to be ported to claude-klabauter naked Python -- author new logic as naked Python,
@@ -14,7 +14,7 @@ This is a NEW guard, not a port of a DoE reference ``.sh`` hook. It follows
 the module-shape convention set by ``nudge_tasks_state_folder_split.py``
 (advisory CLASS, path-gate-only, no content reconstruction needed) and the
 NAMED-EXCEPTION TABLE shape from ``coordinator/hooks/scripts/
-_oss_operative_strings.py`` / ``guard-oss-payload-locality.py`` (DoE-claude
+_oss_operative_strings.py`` / ``guard-oss-payload-locality.py`` (coordinator-content-repo
 repo) -- a small, deliberately-edited table with the rationale carried
 alongside each entry, rather than an inline suppression marker.
 
@@ -68,7 +68,7 @@ Negative-spec:
     failure, returns ``None`` (ALLOW/no-op) -- a guard that cannot resolve
     its own detection state has no basis to advise.
 
-Spec backlink: DoE-claude CLAUDE.md § Runtime conventions
+Spec backlink: coordinator-content-repo CLAUDE.md § Runtime conventions
 Grep anchors: NEW-SH-FILE-NAKED-PYTHON
 """
 
@@ -78,6 +78,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.bash_guards._helpers import (
     is_trivial_reason as _is_trivial_reason,
     operator_override_note,
@@ -132,9 +133,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not file_path:
             return None
 
-        normalized = file_path.replace("\\", "/")
-        while "//" in normalized:
-            normalized = normalized.replace("//", "/")
+        normalized = collapse_slashes(file_path)
 
         if not normalized.lower().endswith(".sh"):
             return None

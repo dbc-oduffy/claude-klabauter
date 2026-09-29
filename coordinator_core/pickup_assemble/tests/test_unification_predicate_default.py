@@ -4,7 +4,7 @@ import coordinator_core.pickup_assemble as pa
 
 
 def test_baton_unification_routing_ships_enabled():
-    """Flipped ON at `c09345b56`, signalled to DoE-claude in the same
+    """Flipped ON at `c09345b56`, signalled to coordinator-content-repo in the same
     breath because their `skills/pickup/SKILL.md` and
     `commands/mise-en-place.md` describe the ON behaviour and landed
     same-session on that signal.

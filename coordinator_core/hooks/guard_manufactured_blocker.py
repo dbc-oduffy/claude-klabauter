@@ -3,7 +3,7 @@ coordinator_core.hooks.guard_manufactured_blocker — Stop-hook engine op,
 the manufactured-blocker check (off-altitude items in end-of-turn PM
 handoffs).
 
-Purpose: warm command/native-door counterpart of DoE-claude's
+Purpose: warm command/native-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/guard-manufactured-blocker.py` (936 lines).
 Verbatim port of that script's detection logic (C5 altitude test, C6
 decidability check, C10 declarative-stall check, and the A13 exemptions) —
@@ -40,6 +40,19 @@ Graceful degradation: any failure to read the transcript, parse posture, or
 resolve a repo root falls through toward silence (`no_advisory()`), matching
 the source script's own fail-open contract (exit 0 on every failure path).
 
+Firing cadence: an altitude-check trigger fires AT MOST ONCE PER SESSION
+(`_has_fired_this_session`, a git-common-dir sentinel under
+`coordinator-sessions/<session>/`, mirroring `em_report_altitude`'s own
+per-session tally shape) and self-discharges (`_auto_discharge_fire` records
+both the fire and its discharge in the block-discharge ledger in the same
+call) -- no manual `block-discharge record` round trip. A repeat trigger in
+the same session is silent (`no_advisory()`).
+
+Trigger predicates (`_HANDOFF_PATTERNS`/`_POSSESSIVE_PATTERNS`/
+`_OWNERSHIP_CUE_PATTERNS`) skip a match sitting in a negated clause
+("nothing is waiting on you") or inside a quoted span ("your call" quoted
+from another session) -- see `_pattern_matches`.
+
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C14
 DoE source: coordinator/hooks/scripts/guard-manufactured-blocker.py
 """
@@ -49,7 +62,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from typing import Mapping, Optional
 
 from coordinator_core import block_discharge as _block_discharge
@@ -83,6 +95,35 @@ _OWNERSHIP_CUE_PATTERNS = [
     re.compile(r"\b(?:is|'s)\s+yours\b", re.IGNORECASE),
     re.compile(r"\byours\s+to\s+\w+", re.IGNORECASE),
 ]
+
+# A trigger match is disqualified when it sits in a negated clause
+# ("nothing is waiting on you") or inside a quotation (a hand-up quoted
+# from another session's transcript, not made by this turn's speaker).
+_NEGATION_RE = re.compile(r"\b(?:nothing|no|not|never|none)\b", re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(r"[,;]")
+_QUOTE_CHARS = "\"“”`"
+
+
+def _quote_parity_odd(span: str) -> bool:
+    return sum(1 for ch in span if ch in _QUOTE_CHARS) % 2 == 1
+
+
+def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
+    """True iff `pattern` fires in `text` outside any negated clause or
+    quoted span -- the shared trigger predicate for the hand-up patterns."""
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        for m in pattern.finditer(clause):
+            prefix = clause[: m.start()]
+            if _NEGATION_RE.search(prefix):
+                continue
+            if _quote_parity_odd(prefix):
+                continue
+            return True
+    return False
+
+
+def _any_pattern_matches(patterns, text: str) -> bool:
+    return any(_pattern_matches(p, text) for p in patterns)
 
 _BARE_IDENTIFIER_PATTERNS = [
     re.compile(r"\bchunk\s+C\d+\b", re.IGNORECASE),
@@ -155,15 +196,11 @@ _POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 _TAIL_WINDOW_BYTES = 200_000
 
 _CORRECTION_TEXT = (
-    "[guard] This turn closed with a PM-handoff construct for an item the PM "
-    "would not recognise by its own nouns. Apply the altitude test "
-    "(the plan skill's B.0 un-gaming clause, on whichever route you loaded): "
-    "a genuine PM call concerns scope, deliverable, or product direction, "
-    "and states itself in the PM's vocabulary. If the PM would not recognise "
-    "the nouns, "
-    "it is an EM call -- decide it, do not hand it up. Re-close the turn "
-    "having resolved it yourself, or state the genuine PM-altitude question "
-    "plainly if one actually remains.\n"
+    "[guard] This turn closed on a PM-handoff the PM would not recognise by "
+    "its own nouns -- an unnecessary stop costs context and PM attention "
+    "neither gets back. Drive it as far as you can yourself and re-close "
+    "having resolved it, or state the genuine PM-altitude question plainly "
+    "if one remains.\n"
 )
 
 _SIZING_TOPIC_PATTERNS = [
@@ -244,11 +281,7 @@ def _final_assistant_text(transcript_path: str) -> str:
 
 
 def _matches_manufactured_blocker(text: str) -> bool:
-    for patterns in _PATTERN_GROUPS:
-        for pattern in patterns:
-            if pattern.search(text):
-                return True
-    return False
+    return any(_any_pattern_matches(patterns, text) for patterns in _PATTERN_GROUPS)
 
 
 def _external_action_pending(text: str) -> bool:
@@ -393,7 +426,7 @@ def _trigger_window_idxs(text: str) -> "tuple[list[str], set]":
     trigger_idxs = set()
     for i, sentence in enumerate(sentences):
         for patterns in _PATTERN_GROUPS:
-            if any(pattern.search(sentence) for pattern in patterns):
+            if _any_pattern_matches(patterns, sentence):
                 trigger_idxs.add(i)
                 break
     if not trigger_idxs:
@@ -429,9 +462,8 @@ def _candidate_ownership_sentence(text: str) -> "Optional[str]":
     groups = (_HANDOFF_PATTERNS, _POSSESSIVE_PATTERNS, _OWNERSHIP_CUE_PATTERNS)
     for sentence in _split_sentences(text):
         for patterns in groups:
-            for pattern in patterns:
-                if pattern.search(sentence):
-                    return sentence
+            if _any_pattern_matches(patterns, sentence):
+                return sentence
     return None
 
 
@@ -488,6 +520,74 @@ def _emit_decidability_verdict(candidate: str, text: str) -> dict:
     return no_advisory()
 
 
+_GUARD_NAME = "guard-manufactured-blocker"
+_AUTO_DISCHARGE_ACTION = "auto-discharged: this guard fires at most once per session"
+_FIRED_MARKER_FILENAME = "guard-manufactured-blocker-fired.json"
+
+
+def _fired_marker_path(payload: Mapping) -> "Optional[str]":
+    """Per-session has-fired sentinel path, mirroring
+    `em_report_altitude._tally_path`'s shape (git-common-dir
+    `coordinator-sessions/<session>/`, not `state/`, so this stays session
+    bookkeeping rather than tracked repo content). None when no home is
+    resolvable or `session_id` is unsafe as a path segment."""
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    safe_session = session_id.strip()
+    if "/" in safe_session or "\\" in safe_session or safe_session.startswith("."):
+        return None
+    repo_root = _repo_root(payload)
+    if repo_root is None:
+        return None
+    git_dir = _resolve_git_dir(os.path.join(repo_root, ".git"))
+    if not git_dir:
+        return None
+    return os.path.join(git_dir, "coordinator-sessions", safe_session, _FIRED_MARKER_FILENAME)
+
+
+def _has_fired_this_session(payload: Mapping) -> bool:
+    path = _fired_marker_path(payload)
+    if not path:
+        return False
+    try:
+        return os.path.isfile(path)
+    except OSError:
+        return False
+
+
+def _mark_fired_this_session(payload: Mapping) -> None:
+    path = _fired_marker_path(payload)
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("1")
+    except OSError:
+        pass
+
+
+def _auto_discharge_fire(payload: Mapping) -> None:
+    """Record this fire AND its discharge in the same call -- no manual
+    `block-discharge record` round trip is needed, since this guard now
+    fires at most once per session (`_has_fired_this_session` gates every
+    repeat). Best-effort: any read/write failure is swallowed, matching
+    this module's fail-open contract."""
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        session_id = "unknown-session"
+    repo_root = _repo_root(payload)
+    if repo_root is None:
+        return
+    try:
+        nonce = _block_discharge.record_fire(repo_root, session_id, _GUARD_NAME, _CORRECTION_TEXT)
+        if nonce is not None:
+            _block_discharge.record_discharge(repo_root, session_id, nonce, _AUTO_DISCHARGE_ACTION)
+    except Exception:
+        pass
+
+
 @register_op("hooks.guard_manufactured_blocker")
 def _handler(params: dict, repo_root=None) -> dict:
     payload = payload_of(params)
@@ -515,37 +615,18 @@ def _handler(params: dict, repo_root=None) -> dict:
         candidate = _candidate_ownership_sentence(text) or text
         return _emit_decidability_verdict(candidate, text)
 
+    if _has_fired_this_session(payload):
+        return no_advisory()
+
     try:
         posture = resolve_posture(_repo_root(payload))
     except Exception:
         posture = "precision"
 
+    _mark_fired_this_session(payload)
+    _auto_discharge_fire(payload)
+
     if posture in ("default", "substrate-free"):
-        session_id = payload.get("session_id")
-        if not isinstance(session_id, str) or not session_id.strip():
-            session_id = "unknown-session"
-        repo_root_for_ledger = _repo_root(payload)
-        nonce = None
-        if repo_root_for_ledger is not None:
-            try:
-                nonce = _block_discharge.record_fire(
-                    repo_root_for_ledger, session_id, "guard-manufactured-blocker", _CORRECTION_TEXT
-                )
-            except Exception:
-                nonce = None
-        if nonce is not None:
-            discharge_note = (
-                f"Recorded as {nonce}. When you have acted on this, run:\n"
-                f'  "{sys.executable}" "coordinator/bin/block-discharge.py" record --nonce {nonce} '
-                f'--action "<what you did>" --repo-root "{repo_root_for_ledger}"\n'
-            )
-        else:
-            discharge_note = (
-                f"Could not record this fire (write failed) at "
-                f"state/block-discharge/{session_id}.jsonl.\n"
-                "No nonce to discharge -- this failure is visible here, not "
-                "laundered into a clean check.\n"
-            )
-        return deny("Stop", _CORRECTION_TEXT + discharge_note)
+        return deny("Stop", _CORRECTION_TEXT)
 
     return post_advisory(_CORRECTION_TEXT)

@@ -14,7 +14,7 @@ Covers:
       NOT be gated even when staged far over the hard limit -- the live
       bug a bare basename match produces.
 
-Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(c)
+Spec backlink: coordinator-content-repo:pln-always-loaded-doctrine-envelop-cd5932 § C1(c)
 """
 
 from __future__ import annotations

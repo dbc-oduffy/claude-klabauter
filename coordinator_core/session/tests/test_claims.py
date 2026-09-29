@@ -674,7 +674,7 @@ class TestClaimArtifact:
     def test_plan_reentrant_accepted_across_session_env_precedence_drift(
         self, tmp_path, monkeypatch
     ):
-        """DoE-claude issue #85 row 11: a cloud session's harness does not
+        """coordinator-content-repo issue #85 row 11: a cloud session's harness does not
         always populate the SAME subset of the three session-id env vars on
         every subprocess spawn of a claim tool. The claim was originally
         recorded under a LOWER-precedence var's value (``CLAUDE_CODE_SESSION_
@@ -1332,7 +1332,7 @@ class TestReleaseArtifact:
         landed, nothing unwrote it, so a released plan stayed resolvable via
         `claimed_plan.resolve_claimed_plan_path`'s tier (a) and `/handoff`
         after a shipped plan failed loud on a DivergentDeliverableIdError
-        (doe-claude-em memo, 2026-08-10)."""
+        (coordinator-content-repo-em memo, 2026-08-10)."""
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
         _make_claim(repo, "plan", "p-shipped", session_id="me-sid")
@@ -1545,7 +1545,7 @@ class TestClaimDirFor:
 # ---------------------------------------------------------------------------
 # class_ == "artifact" (PATH-TOUCH claim plane widening)
 #
-# cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
+# cross-repo/inbox/2026-08-11-coordinator-content-repo-em-dead-claim-on-a-non-plan-
 # artifact-has-no-clear-path.md -- who-claims-path answers over the
 # PATH-TOUCH plane (claim_index / touched.txt T-R events), a DIFFERENT
 # store than the mkdir-based handoff/memo/plan claim-record store the

@@ -9,7 +9,7 @@ Census at HEAD (`grep -rln 'EXIT_TRANSPORT_FAIL *= *3' coordinator_core
 --include=*.py | grep -v /tests/`), `contract/apply_base.py` excluded
 (apply-side, per the row). `merge_assemble` has no `brief` CLI verb (its
 `brief()` transport branch is reachable only through `apply`, per K-114 —
-DoE-claude `coordinator/skills/merging-to-main/SKILL.md` @ 62d63adfe), so
+Coordinator-content-repo `coordinator/skills/merging-to-main/SKILL.md` @ 62d63adfe), so
 it is out of this rule's population and carries no monkeypatch case here.
 `pickup_assemble/__init__.py` no longer computes `brief` at all (moved to
 `pickup_brief.py`), so it too carries no case of its own; `pickup_brief.py`

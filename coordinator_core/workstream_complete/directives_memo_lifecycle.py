@@ -3,7 +3,7 @@ coordinator_core.workstream_complete.directives_memo_lifecycle — memo
 lifecycle (Step 2.65/2.66) + scratch self-clean (Step 2.67) slice of the
 `/workstream-complete` computed-skill directive spine.
 
-Purpose: computes the mechanical half of DoE-claude
+Purpose: computes the mechanical half of coordinator-content-repo
 `coordinator/skills/workstream-complete/SKILL.md`'s Steps 2.65-2.67 —
 cross-repo memo lifecycle bookkeeping and session-authored scratch cleanup —
 as importable, read-mostly functions the assembler
@@ -78,7 +78,7 @@ Negative-spec:
       of this bullet used to also quote the SKILL's "no reliable
       programmatic signal connects commits to memo resolution" — that
       premise was stale; see `compute_memo_resolution_attribution`'s own
-      docstring and the 2026-07-30 doe-claude-em cross-repo memo it
+      docstring and the 2026-07-30 coordinator-content-repo-em cross-repo memo it
       backlinks to. Also corrected: the census line that seeded the stale
       premise, `docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-
       workstream.node-map.md:57`, carries a dated annotation naming this
@@ -476,8 +476,8 @@ def compute_memo_resolution_attribution(repo_root: Path, sid: str) -> list[dict[
     build_memo_resolution_attribution_judgment_point`'s `recommendation`,
     never the disposition itself; this function only supplies which of
     three signals this engine itself writes fired for which archived memo.
-    Source: 2026-07-30 doe-claude-em cross-repo memo (`cross-repo/archive/
-    2026-07-30-doe-claude-em-wsc-review-trail-passthrough-and-memo-
+    Source: 2026-07-30 coordinator-content-repo-em cross-repo memo (`cross-repo/archive/
+    2026-07-30-coordinator-content-repo-em-wsc-review-trail-passthrough-and-memo-
     attribution.md`) — the prior "non-automatable" premise (see this
     module's own Negative-spec, and `judgments.py`'s pre-2026-07-30 module
     docstring) was stale: `picked_up_by`, `realized_by`, and the inbox-

@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.guard_settings_json_write — hard-deny guard.
 
-Ported from DoE-claude `coordinator/hooks/scripts/guard-settings-json-write.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/guard-settings-json-write.py`
 (faithful port, per write_guards/INTERFACE.md).
 
 PreToolUse hook (matcher: Write|Edit|MultiEdit|NotebookEdit): denies a
@@ -11,7 +11,7 @@ introduce a `hooks` block while the kill-switch marker is present.
 Why this exists
 ----------------
 On 2026-07-28 `~/.claude/settings.json` was overwritten three times with hook
-commands pointing at `X:/DoE-claude/...` -- a Windows drive path on a macOS
+commands pointing at `C:/coordinator-content-repo/...` -- a Windows drive path on a macOS
 host. A hook whose `command` names a path that does not exist on the running
 machine fails CLOSED (PreToolUse denies by default when the hook process
 itself cannot run), so once the corrupted `hooks` block landed, EVERY
@@ -42,7 +42,7 @@ Everything else is allowed silently, including a path that merely CONTAINS
 the substring "settings.json" but resolves elsewhere.
 
   (a) Foreign-platform path: the proposed content contains a Windows
-      drive-letter absolute path (`X:/`, `X:\\`, any `[A-Za-z]:[/\\]`) while
+      drive-letter absolute path (`C:/`, `C:\\`, any `[A-Za-z]:[/\\]`) while
       this hook is running on POSIX, or a POSIX `/Users/` or `/home/`
       absolute path while running on Windows. This is exactly the 2026-07-28
       incident shape -- a hook `command` string naming a path the running

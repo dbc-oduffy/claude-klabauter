@@ -41,7 +41,7 @@ This module pins:
      name, on both claim paths. `self_record()` is an ambient `CLAUDE_PID` read;
      inside a warm server that is the environment of whichever session started the
      server, so a warm-served claim resolved an uninvolved live peer's name beside a
-     correct carried id. Reported cross-repo by doe-claude-em 2026-08-30 and
+     correct carried id. Reported cross-repo by coordinator-content-repo-em 2026-08-30 and
      reproduced same-repo on that memo's own claim stamp: `picked_up_by` named the
      claimant while `claimed_by_name` named a peer that had never seen the artifact.
      Omitting on mismatch would be a fail-safe, not a fix — it would blank the field

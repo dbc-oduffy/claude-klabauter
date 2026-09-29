@@ -2,7 +2,7 @@
 op: two registered guards, one call.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/preuse-agent-dispatch.py`, a
+from coordinator-content-repo `coordinator/hooks/scripts/preuse-agent-dispatch.py`, a
 subprocess fan-in over four registered `hooks.json` scripts (each folded via
 `importlib.util.spec_from_file_location` + captured-stdout/stderr replay).
 None of that subprocess-avoidance plumbing applies here: every guard below

@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import feature_refusal
 from coordinator_core.session import machinery_paths as _machinery_paths
 from coordinator_core.ops.fleet._common import (
     build_act_result,
@@ -222,7 +223,7 @@ def _validate_scoped_to(dry_run: bool, value: Any):
 
 
 _KNOWN_REPO_PREFIXES = (
-    "project-rag", "claude-klabauter", "doe-claude", "coordinator-claude",
+    "project-rag", "claude-klabauter", "coordinator-content-repo", "coordinator-claude",
     "claude-klabauter",
 )
 
@@ -248,7 +249,7 @@ def detect_unqualified_display_names(text: Optional[str]) -> list:
 
     A display name is reused across sessions, so naming an owner by it alone
     leaves a later reader unable to find who was actually meant (2026-09-25
-    DoE-claude report, item 3). A UUID or claim-reference nearby
+    coordinator-content-repo report, item 3). A UUID or claim-reference nearby
     disambiguates it, so only the unqualified case is returned.
     """
     if not text:
@@ -675,7 +676,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
 
         On a classify_receiver:true rejection, the exit_code:1 setup-error
         envelope carries an ADDITIONAL `rejection_class` wire field (str,
-        2026-07-21 addition — DoE claude-central-em consult: their CLI
+        2026-07-21 addition — coordinator content repo-central-em consult: their CLI
         previously mapped these to distinct process exit codes and could not
         reconstruct the split once collapsed to a single exit_code:1). One of:
             "unknown_receiver"        — `to` does not resolve to any
@@ -722,6 +723,10 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
      in_reply_to, space, supersedes, summary_cap_advisory,
      display_name_advisory) = validated
+
+    refusal = feature_refusal("cross_repo_memos")
+    if refusal:
+        return build_setup_error_result(_MODE, dry_run, refusal)
 
     if classify_receiver:
         classification = _classify_receiver_for_draft(to, dry_run)

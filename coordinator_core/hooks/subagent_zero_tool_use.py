@@ -5,12 +5,12 @@ Purpose: Mechanical subagent tool-use counting, Stage 1 (write side). Counts
 `tool_use` content blocks in the subagent's own transcript JSONL
 (`agent_transcript_path`) and, ONLY on a verified count, appends one durable record to
 this session's per-session store. This is the write/decision-logic half of a
-cross-repo contract with DoE-claude — DoE owns the thin plumbing shim (hook
+cross-repo contract with coordinator-content-repo — DoE owns the thin plumbing shim (hook
 registration, the "has unsurfaced" sentinel, the surfaced-cursor) under the DR-047
 transport-seam carve-out; this op owns the counting and the durable write.
 
 Naming note (per DoE's 2026-07-25 finding, see
-cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-store-records-every-count.md):
+cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-store-records-every-count.md):
 despite the `zero_tool_use` module/op name and the record's `kind: "zero-tool-use"`
 field, this op writes ONE RECORD PER VERIFIED COUNT, not only zero. There is no
 `if tool_use_count != 0` gate here, deliberately — see "Deliberately no zero-gate"
@@ -27,7 +27,7 @@ hooks.subagent_zero_tool_use_resolve, which do this).
 The counting mechanism is spike-proven, not re-derived here: a deliberately-toolless
 agent counted 0 `tool_use` blocks; a one-call agent counted 1 — both exactly reproduced
 the harness notification's own `tool_uses` field. See
-cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md.
+cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-verdict-viable.md.
 
 Negative-spec:
     Deliberately no zero-gate: do NOT add `if tool_use_count != 0` before the
@@ -76,7 +76,7 @@ Store location: `<git_common_dir>/coordinator-sessions/<session_id>/subagent-zer
 — a sibling of the `dispatched-agents.txt` / `push-failures-cursor.txt` per-session
 convention this tree already uses (track_dispatched_agents.py, auto_push.py).
 
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations

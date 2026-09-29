@@ -80,7 +80,7 @@ Cadence decoupling — SUPERSEDED (C3, see "Boot backstop cull removal" above):
   the 12h gate here. session.boot_sweep still does NOT invoke session.reap
   directly (shape (b), folding claim-reap into boot_sweep, remains REJECTED:
   it would mix Class-B untracked rm-rf into boot_sweep's DR-211 tracked-archival
-  safety identity) — session.reap is invoked by DoE-claude's SessionStart
+  safety identity) — session.reap is invoked by coordinator-content-repo's SessionStart
   trampoline coordinator/hooks/scripts/sweep-boot.py :: _reap_sessions (boot
   cadence, registered 6c17f8275 on 2026-08-25), and after C3 that boot-path
   invocation performs no irreversible cull. That leg pre-gates on an 11h
@@ -450,7 +450,7 @@ def _reap_stale_sessions(
             # remembering to extend it, and the store that gets forgotten is
             # the one nobody is looking at.
             #
-            # Concretely: `_branch-overrides/overrides.log` (doe-claude-em,
+            # Concretely: `_branch-overrides/overrides.log` (coordinator-content-repo-em,
             # 2026-08-26) is an append-only audit trail of
             # COORDINATOR_OVERRIDE_BRANCH uses, 51 days cold, in a sibling
             # tree that runs this engine. NO code in this repo writes it —
@@ -513,8 +513,8 @@ def _reap_stale_sessions(
         # the reaper — the documented backstop for a session that died without
         # a SessionEnd, and so never archived — into the reason such a dir is
         # stranded permanently rather than merely un-archived. Measured across
-        # two trees (doe-claude-em, 2026-08-26): of the >30d unreaped dirs, 37
-        # of 37 in DoE-claude and 9 of 9 here carry no meta.json, and NONE
+        # two trees (coordinator-content-repo-em, 2026-08-26): of the >30d unreaped dirs, 37
+        # of 37 in coordinator-content-repo and 9 of 9 here carry no meta.json, and NONE
         # carries one. Absent meta.json is not a partial signal for the stuck
         # population, it is the whole discriminant.
         #

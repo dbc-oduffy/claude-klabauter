@@ -87,7 +87,7 @@ NEGATIVE-SPEC -- what this gate deliberately does NOT do
 ===========================================================================
 Design-as-offers
 ===========================================================================
-This gate operationalizes the design-as-offers doctrine (DoE-claude
+This gate operationalizes the design-as-offers doctrine (coordinator-content-repo
 ``coordinator/docs/wiki/eager-agent-calibration.md``: "Design agent-facing
 tooling as offers, not nags... lead with the better alternative, not the
 violation") as an ENFORCEMENT surface: Axis A is exactly "does this emission

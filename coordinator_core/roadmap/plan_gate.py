@@ -29,7 +29,7 @@ blocker disposition, review-approved plan.
 Consumed by ``coordinator_core.ops.roadmap_plan_gate`` (the ``roadmap.plan_gate``
 op) — this module registers nothing and writes nothing.
 
-Spec backlink: DoE-claude coordinator/skills/plan-blitz/SKILL.md § The two gates;
+Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md § The two gates;
                coordinator/docs/wiki/coordinator-tripwires/a-planning-gate-is-not-an-execution-gate.md
 
 Budget: pure reads, ZERO spawns. One bounded head-read per candidate record
@@ -1385,7 +1385,7 @@ def plan_waves(
     # for one. A baton whose plan already cleared review is not work this blitz
     # has to do: it stays a satisfied BLOCKER for its dependents (via
     # `_PLANNING_SATISFIED`) but is never itself scheduled. Including it put 18
-    # already-planned batons into DoE-claude's wave 0 on the first live run —
+    # already-planned batons into coordinator-content-repo's wave 0 on the first live run —
     # a blitz firing that wave would have re-planned every one of them, which is
     # the exact failure `_sizing_key`'s docstring warns about, arriving by a
     # different route.
@@ -2034,7 +2034,7 @@ def assemble_plan_gate(
         # Scoped to batons that NEED a plan: one that already has an approved
         # plan has no wave because it needs none, which is not the same finding
         # as a baton this pass cannot schedule. Conflating them reported 18
-        # healthy batons as unschedulable on DoE-claude's first live run.
+        # healthy batons as unschedulable on coordinator-content-repo's first live run.
         "unschedulable": sum(
             1
             for r in candidate_records

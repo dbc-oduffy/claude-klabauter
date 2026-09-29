@@ -584,7 +584,7 @@ def test_probe_p12_manifest_not_locatable_is_graceful_absent(tmp_path: Path):
     assert probe_p12(sibling_bin_dir, claude_home) == []
 
 
-def test_probe_p12_amber_when_would_create_gte_one(tmp_path: Path):
+def test_probe_p12_is_retired_and_stays_silent_when_would_create_gte_one(tmp_path: Path):
     from coordinator_core.plugin_health.sentinel import probe_p12
 
     claude_home = tmp_path / "home"
@@ -596,9 +596,7 @@ def test_probe_p12_amber_when_would_create_gte_one(tmp_path: Path):
 
     notes = probe_p12(sibling_bin_dir, claude_home)
 
-    assert len(notes) == 1
-    assert notes[0].id == "P-12"
-    assert notes[0].severity == "amber"
+    assert notes == []
 
 
 def test_probe_p12_empty_when_would_create_zero(tmp_path: Path):
@@ -848,3 +846,23 @@ class TestResolutionJournalWiring:
 
         assert rj.read_journal() == {}
         assert len(WRITE_SURFACE.clauses) == 4
+
+
+def test_consumer_only_scaffolds_just_consumer_dirs_and_reports_no_drops(tmp_path):
+    manifest_root = tmp_path / "m"
+    manifest_root.mkdir()
+    (manifest_root / "canonical-structure.yaml").write_text(
+        "entries:\n"
+        "  - path: state/handoffs/\n    creation: eager\n"
+        "  - path: tasks/\n    creation: eager\n"
+        "  - path: CLAUDE.md\n    creation: eager\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "proj"
+    root.mkdir()
+    result = scaffold_canonical_structure(root, manifest_root, consumer_only=True)
+    assert (root / "state" / "handoffs").is_dir()
+    assert (root / "docs" / "plans").is_dir()
+    assert (root / "scratch" / "subagent-sandbox").is_dir()
+    assert not (root / "tasks").exists()
+    assert result.dropped_entries == []

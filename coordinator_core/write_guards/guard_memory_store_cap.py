@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.guard_memory_store_cap — hard-deny guard.
 
-Discharges AC14 of DoE-claude's
+Discharges AC14 of coordinator-content-repo's
 ``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md`` (chunk C12).
 ``MEMORY.md`` is the one always-on boot surface previously governed by pure
 prose (``coordinator/commands/update-docs.md``'s "a pointer index, not a
@@ -118,11 +118,11 @@ catastrophic as a boot-time assertion once it is fixed. *"This repo's commits
 refuse unless CLAUDE_KLABAUTER_ROOT is pinned"* is a memory: every EM hits it, before
 anything else works.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C12, AC14.
   claude-klabauter ``state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md``,
   ``docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md``.
-Sibling guards this module's idiom is copied from (DoE-claude repo, no
+Sibling guards this module's idiom is copied from (coordinator-content-repo repo, no
   ``.sh``/``.py`` reference hook of its own — C12 is a net-new guard, not a
   port):
   ``coordinator_core/write_guards/block_home_dir_memo_delivery.py`` (home

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.fleet import capability_index as cap_index
@@ -108,8 +108,8 @@ class TestAliasedRegistryKeys:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         """Two repos.* keys legitimately point at the SAME checkout (observed live:
-        repos.doe_claude and repos.example_doctrine_repo both resolve to the
-        DoE-claude clone). Enumerating per-key rather than per-path would emit that
+        repos.content_root and repos.example_doctrine_repo both resolve to the
+        coordinator-content-repo clone). Enumerating per-key rather than per-path would emit that
         repo's capabilities twice — a duplicate a consumer computing host_repo
         asymmetry (F1c) cannot distinguish from two genuine offers."""
         host_root = tmp_path / "host-repo"
@@ -422,8 +422,8 @@ def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
     """Resolve a sibling repo root for a skip-when-absent fixture test.
 
     Env override first (pins the checkout for a specific run), then the
-    sanctioned registry resolver (`doe_root_pointer.read_doe_root_pointer()`
-    for `doe_claude`, `machine_resolver.registry_get("repos.<id>")` for
+    sanctioned registry resolver (`content_root_pointer.read_content_root_pointer()`
+    for `content_root`, `machine_resolver.registry_get("repos.<id>")` for
     everything else — see `sibling_fact.py`'s § REPO ROOT RESOLUTION) —
     never a `__file__`-anchored guess at a flat-sibling checkout layout."""
     override = os.environ.get(env_var)
@@ -435,17 +435,17 @@ def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
     return None
 
 
-_DOE_ROOT = _candidate_repo_root("DOE_CLAUDE_ROOT", read_doe_root_pointer)
+_CONTENT_ROOT = _candidate_repo_root("CONTENT_ROOT_ROOT", read_content_root_pointer)
 _EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root("EXAMPLE_RETRIEVAL_REPO_ROOT", lambda: registry_get("repos.project_rag"))
 
 
-@pytest.mark.skipif(_DOE_ROOT is None, reason="DoE-claude checkout not found — set DOE_CLAUDE_ROOT to pin it")
+@pytest.mark.skipif(_CONTENT_ROOT is None, reason="coordinator-content-repo checkout not found — set CONTENT_ROOT_ROOT to pin it")
 class TestDoeFixtures:
     def test_doe_valid_fixture_passes_schema_and_produces_one_entry(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         fixture = json.loads(
-            (_DOE_ROOT / "coordinator" / "schemas" / "fixtures" / "capability-manifest" / "valid.json")
+            (_CONTENT_ROOT / "coordinator" / "schemas" / "fixtures" / "capability-manifest" / "valid.json")
             .read_text(encoding="utf-8")
         )
         assert validate_frontmatter(fixture, cap_index._MANIFEST_SCHEMA_PATH) == []
@@ -466,7 +466,7 @@ class TestDoeFixtures:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         fixture = json.loads(
-            (_DOE_ROOT / "coordinator" / "schemas" / "fixtures" / "capability-manifest" / "missing-host_repo.json")
+            (_CONTENT_ROOT / "coordinator" / "schemas" / "fixtures" / "capability-manifest" / "missing-host_repo.json")
             .read_text(encoding="utf-8")
         )
         assert validate_frontmatter(fixture, cap_index._MANIFEST_SCHEMA_PATH) != []

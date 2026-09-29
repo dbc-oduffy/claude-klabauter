@@ -7,7 +7,7 @@ of its own and holds no dispatch state; every hook body reaches it via a
 plain `from coordinator_core.hooks.support import ...`.
 
 Arrival, not authorship: every module here is a same-behavior port from
-DoE-claude's `coordinator/hooks/scripts/_*.py` (the doctrine-plane hook
+Coordinator-content-repo's `coordinator/hooks/scripts/_*.py` (the doctrine-plane hook
 tree), landed ahead of any hook BODY move per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3 ("The shared
 helpers most hook bodies import ... land in coordinator_core/hooks/support/

@@ -7,7 +7,7 @@ Purpose: detect when a live install has fallen behind its source — git-state d
 and SHA-sentinel drift (copy_install mode). Surfaces daily via /workday-start Step
 1.10 Addon Health.
 
-Port of DoE-claude coordinator/bin/check-plugin-drift.sh (recovered pre-stub body,
+Port of coordinator-content-repo coordinator/bin/check-plugin-drift.sh (recovered pre-stub body,
 commit dd820339^ — the script had been silently replaced with an always-fail test
 stub on disk; this port restores + ports the real 977-line body, not the stub).
 Also folds in the plugin.mirrors registry reader formerly at coordinator/bin/lib/

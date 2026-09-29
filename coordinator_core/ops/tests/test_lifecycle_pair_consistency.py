@@ -22,7 +22,7 @@ never authored in frontmatter) — not this one; it does not apply here.
 `pickup_ready` DOES pair with `deployment_state` (schema: "Positive
 pickup-authorized signal") and carries no such constraint. `_close` already
 clears it on a terminal write (2026-08-10 fix, cross-repo/inbox/
-2026-08-10-doe-claude-em-reconcile-close-terminal-and-scrub-key.md § 1 —
+2026-08-10-coordinator-content-repo-em-reconcile-close-terminal-and-scrub-key.md § 1 —
 "The two fields are one logical state"). `build_ship_mutate` never did —
 this chunk's actual fix. These tests assert THAT pair — `deployment_state`
 and `pickup_ready` — after ship (`_ship` and, through it,

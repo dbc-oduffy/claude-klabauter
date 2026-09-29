@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.bash_guards.dispatch_checks import (
+from coordinator_core.bash_guards.find_exec_rewrite import (
     _bt_for_loop_find_batch_rewrite,
     _bt_parse_for_loop_find,
     check_find_exec_rewrite,

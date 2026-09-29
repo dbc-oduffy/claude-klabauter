@@ -157,8 +157,8 @@ EXCLUDED_PATHS: dict[str, str] = {
         "the retired name as a labelled second rung because an INSTALLER runs "
         "against un-migrated boxes -- precisely the population still "
         "exporting the old spelling. install_bin_forwarders and "
-        "install_claude_doe_launcher_chain additionally EXPORT both names to "
-        "child environments (requested by doe-claude-em so their own fallback "
+        "install_claude_author_launcher_chain additionally EXPORT both names to "
+        "child environments (requested by coordinator-content-repo-em so their own fallback "
         "removal could land safely) -- write sites, not read sites."
     ),
 }

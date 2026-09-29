@@ -36,7 +36,7 @@ def test_no_repo_root_is_noop() -> None:
 
 
 def test_write_under_a_sibling_git_checkout_refuses(tmp_path: Path) -> None:
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     _make_sibling_repo(tmp_path, "claude-klabauter")
     rows = [
@@ -54,7 +54,7 @@ def test_write_under_a_sibling_git_checkout_refuses(tmp_path: Path) -> None:
 
 
 def test_writes_under_prefix_also_checked(tmp_path: Path) -> None:
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     _make_sibling_repo(tmp_path, "project-rag")
     rows = [_row("R1", UNDECLARED, writes_under=["example-retrieval-repo/state/"])]
@@ -64,14 +64,14 @@ def test_writes_under_prefix_also_checked(tmp_path: Path) -> None:
 
 
 def test_write_under_own_repo_is_fine(tmp_path: Path) -> None:
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     rows = [_row("C1", ["coordinator/bin/foo.py"])]
     check_cross_repo_writes(rows, repo_root)  # does not raise
 
 
 def test_no_sibling_dir_on_disk_is_fine(tmp_path: Path) -> None:
-    repo_root = tmp_path / "DoE-claude"
+    repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
     rows = [_row("M5a", ["claude-klabauter/coordinator_core/x.py"])]
     check_cross_repo_writes(rows, repo_root)  # no such dir on disk -> no-op

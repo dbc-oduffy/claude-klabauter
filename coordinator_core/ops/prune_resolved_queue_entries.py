@@ -97,7 +97,7 @@ and relative paths work).
 
 Port of: prune-resolved-queue-entries.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-07-prune-resolved-state-bloat.md § S5
-               (lives in the DoE-claude consumer-project docs/plans/, not
+               (lives in the coordinator-content-repo consumer-project docs/plans/, not
                here — this module is the claude-klabauter-owned engine half)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 

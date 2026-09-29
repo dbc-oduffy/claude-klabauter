@@ -105,6 +105,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
             'bump-foreign-repo-write "reason"'
         )
     ),
+    "block_subagent_findings_reject": (
+        lambda mod: "python3 -m coordinator_core.ops.review_findings_ledger reject F-1"
+    ),
     "block_subagent_plan_body_bash_write": (
         lambda mod: 'Add-Content -Path docs/plans/test.md -Value "x"'
     ),

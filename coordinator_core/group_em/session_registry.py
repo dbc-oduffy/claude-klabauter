@@ -1,7 +1,7 @@
 """coordinator_core.group_em.session_registry -- shared reader for the harness session registry
 (``~/.claude/sessions/*.json``).
 
-Ported from DoE-claude `coordinator/bin/lib/session_registry.py` (W2-C1,
+Ported from coordinator-content-repo `coordinator/bin/lib/session_registry.py` (W2-C1,
 `docs/plans/2026-09-18-doe-holds-no-scripts.md`), which that module's own docstring records was
 consolidated out of `group-em-nomination.py`, `resolve-peer-address.py` and `statusline.py`, each
 of which carried a near-identical copy.

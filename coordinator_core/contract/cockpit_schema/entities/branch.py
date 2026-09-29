@@ -22,7 +22,7 @@ present in the emitted payload, carrying `null` when uncomputed (e.g.
 `ahead_by: null` before the REST compare runs). Omitting the key entirely
 fails validation. See DECISIONS.md § D9.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

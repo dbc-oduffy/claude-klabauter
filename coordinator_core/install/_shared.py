@@ -4,7 +4,7 @@ and uninstall hubs.
 
 Port of the resolution logic duplicated (by original bash design) between
 ``coordinator/lib/install-substrate.sh`` (DoE 6fb5fb37, 2026-07-22) and
-``coordinator/lib/uninstall-legs.sh`` (DoE bd5b5a96, 2026-07-19) [DoE-claude
+``coordinator/lib/uninstall-legs.sh`` (DoE bd5b5a96, 2026-07-19) [coordinator-content-repo
 repo]. The bash pairing deliberately kept these hand-synced (uninstall-legs
 re-derived install path decisions rather than sharing code) — the hitlist
 that seeded this port names that as a footgun to FIX, not reproduce, so both
@@ -14,7 +14,7 @@ Also carries the Port of: ``coordinator/lib/settings-hook-identity.sh`` (DoE
 c187f5b9, 2026-07-21) ``settings_hook_identity_inverse_strip`` (jq-based in
 bash; pure-Python JSON manipulation here — no jq subprocess).
 
-Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C2-C6.
+Spec backlink: coordinator-content-repo:pln-first-class-coordinator-uninst-15db2e § C2-C6.
 
 Negative-spec: does NOT re-implement ``coordinator_settings_home()`` — that
 seam already exists at ``coordinator_core._settings_home.settings_home`` (C1,
@@ -145,10 +145,10 @@ def claude_dir(claude_home: str) -> Path:
     `require_home` returns a $HOME SUBSTITUTE (its own docstring: "CLAUDE_HOME
     names the PARENT of `.claude` and every caller appends that segment"), and
     for a long time most call sites did not append it — targeting
-    ``<home>/settings.json``, ``<home>/bin``, ``<home>/.doe-root`` while every
+    ``<home>/settings.json``, ``<home>/bin``, ``<home>/.coordinator-content-root`` while every
     writer puts those under ``<home>/.claude/``. Those readers silently found
     nothing, and a destructive one found nothing and reported success.
-    Verified against a live install 2026-09-02: settings.json, .doe-root,
+    Verified against a live install 2026-09-02: settings.json, .coordinator-content-root,
     coordinator-identity.yaml, working-repos.yaml, machine-local, plugins/,
     bin/, shell/ and agents/ are all under ``~/.claude/``.
 
@@ -166,7 +166,7 @@ def claude_dir(claude_home: str) -> Path:
     this helper without an absolute-home check of its own.
 
     Lives here rather than in `uninstall_legs` because the segment is not an
-    uninstall fact: `resolve_coordinator_root`'s own `.doe-root` rung reads it
+    uninstall fact: `resolve_coordinator_root`'s own `.coordinator-content-root` rung reads it
     too, and that reader was missed by the first sweep precisely because the
     helper was module-local.
     """
@@ -187,7 +187,7 @@ def _strip_trailing_sep(path: str) -> str:
 
 
 def _repo_to_coordinator_content_root(repo_root: str) -> str:
-    """Map a resolved ``repos.doe_claude``-shaped repo root onto its
+    """Map a resolved ``repos.content_root``-shaped repo root onto its
     coordinator-claude CONTENT root, deciding nested-vs-flat by PLUGIN MARKER
     (``coordinator_root._resolve_plugin_root_for_machine_local``), never by
     path shape alone.
@@ -203,7 +203,7 @@ def _repo_to_coordinator_content_root(repo_root: str) -> str:
     content_root_for`` (the primitive most of its ~45 other call sites now
     use for the same join): that primitive accepts a nested
     ``<repo>/coordinator`` candidate by ``isdir`` alone, with no plugin-marker
-    probe. ``gen_doe_root_pointer.py`` already treats bare ``isdir`` as
+    probe. ``gen_content_root_pointer.py`` already treats bare ``isdir`` as
     insufficient for this exact question — it fails CLOSED unless the
     resolved root carries one of the plugin markers
     (``coordinator/templates/bin/_machine_local.py``,
@@ -230,22 +230,22 @@ def resolve_coordinator_root(
     """Resolve ``<coordinator_root>`` using the SAME seam the settings.json
     hook generator uses, so a strip's identity-key prefix matches the paths
     actually baked into settings.json. Resolution order (DR-071, 2026-07-22 —
-    the registry ``repos.doe_claude`` read is now direct-tomllib first, the
+    the registry ``repos.content_root`` read is now direct-tomllib first, the
     ``machine-local`` CLI a fallback rung, for reset-safety: the CLI's
     reader/exec bits live under the resettable ``~/.claude/bin/``, so
     "``machine-local get`` works" is not proof the registry itself is
     reachable after a reset):
 
         1. ``COORDINATOR_ROOT`` env var (explicit override).
-        2. machine-local registry ``repos.doe_claude`` — direct tomllib read
+        2. machine-local registry ``repos.content_root`` — direct tomllib read
            via ``machine_resolver.registry_get``, falling back to the
            ``machine-local get`` CLI if that can't resolve ->
            ``_repo_to_coordinator_content_root(<repo>)``.
-        3. ``REPO_DOE_CLAUDE`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
-        4. ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file ->
+        3. ``REPO_CONTENT_ROOT`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
+        4. ``${CLAUDE_HOME:-$HOME}/.coordinator-content-root`` pointer file ->
            ``_repo_to_coordinator_content_root(<repo>)``.
 
-    Rungs 2-4 each resolve a ``repos.doe_claude``-shaped REPO root first, then
+    Rungs 2-4 each resolve a ``repos.content_root``-shaped REPO root first, then
     decide nested-vs-flat CONTENT root by marker via
     ``_repo_to_coordinator_content_root`` (claude-klabauter#6 / DoE F7) —
     a dev clone nests the plugin payload under ``<repo>/coordinator``, the
@@ -264,46 +264,46 @@ def resolve_coordinator_root(
         root = _strip_trailing_sep(env_root)
 
     if not root:
-        doe_claude = registry_get("repos.doe_claude")
-        if not doe_claude:
+        content_root = registry_get("repos.content_root")
+        if not content_root:
             ml = _which("machine-local")
             if ml:
-                doe_claude = _run_quiet([ml, "get", "repos.doe_claude"])
-        if doe_claude:
-            root = _repo_to_coordinator_content_root(_strip_trailing_sep(doe_claude))
+                content_root = _run_quiet([ml, "get", "repos.content_root"])
+        if content_root:
+            root = _repo_to_coordinator_content_root(_strip_trailing_sep(content_root))
 
-    if not root and os.environ.get("REPO_DOE_CLAUDE"):
-        root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_DOE_CLAUDE"]))
+    if not root and os.environ.get("REPO_CONTENT_ROOT"):
+        root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_CONTENT_ROOT"]))
 
     if not root:
         try:
             claude_home = require_home("resolve_coordinator_root")
         except RequireHomeError:
             claude_home = ""
-        doe_root_pointer = claude_dir(claude_home) / ".doe-root"
-        if doe_root_pointer.is_file():
+        content_root_pointer = claude_dir(claude_home) / ".coordinator-content-root"
+        if content_root_pointer.is_file():
             try:
-                doe_claude = doe_root_pointer.read_text(encoding="utf-8", errors="replace")
+                content_root = content_root_pointer.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
-                print(f"_shared: cannot read {doe_root_pointer}: {exc}", file=sys.stderr)
-                doe_claude = ""
-            if "\n" in doe_claude.rstrip("\n"):
+                print(f"_shared: cannot read {content_root_pointer}: {exc}", file=sys.stderr)
+                content_root = ""
+            if "\n" in content_root.rstrip("\n"):
                 print(
-                    f"uninstall-legs: {doe_root_pointer} is malformed (multi-line) "
+                    f"uninstall-legs: {content_root_pointer} is malformed (multi-line) "
                     "— expected a single path",
                 )
-                doe_claude = ""
-            doe_claude = _strip_trailing_sep(doe_claude.strip())
-            if doe_claude:
-                root = _repo_to_coordinator_content_root(doe_claude)
+                content_root = ""
+            content_root = _strip_trailing_sep(content_root.strip())
+            if content_root:
+                root = _repo_to_coordinator_content_root(content_root)
 
     if not root or not os.path.isdir(root):
         msg = [
             "uninstall-legs: cannot determine which hook paths are "
             "coordinator-owned — resolve coordinator root or pass --coordinator-root",
-            "  Tried: COORDINATOR_ROOT env, machine-local registry repos.doe_claude",
+            "  Tried: COORDINATOR_ROOT env, machine-local registry repos.content_root",
             "         (direct read, then machine-local CLI fallback),",
-            "         REPO_DOE_CLAUDE env, ${CLAUDE_HOME:-$HOME}/.doe-root pointer.",
+            "         REPO_CONTENT_ROOT env, ${CLAUDE_HOME:-$HOME}/.coordinator-content-root pointer.",
         ]
         if root:
             msg.append(f"  Resolved candidate does not exist on disk: {root}")

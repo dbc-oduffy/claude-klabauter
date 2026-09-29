@@ -1,6 +1,6 @@
 """
 Tests for coordinator_core.ops.fleet._memo_compose's sender-identity resolution —
-the DoE `e267d18336` fix (doe-claude-bc withdrew the Ask-1 concurrence that had
+the DoE `e267d18336` fix (coordinator-content-repo-bc withdrew the Ask-1 concurrence that had
 excused a fixed `_ENGINE_ACTOR_ID = "claude-klabauter-engine"` literal in `from:`).
 
 Covers:

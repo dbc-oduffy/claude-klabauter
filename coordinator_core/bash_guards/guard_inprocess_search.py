@@ -61,7 +61,7 @@ Composed message leads with the contract, not the output (2026-08-11, envelope c
 -----------------------------------------------------------------------------------------------------
 This module used to compose `rendered + footer` -- the caller's answer first, the
 "already handled" framing last. That shape is what let a genuine leak-shaped read
-happen: `cross-repo/inbox/2026-08-11-doe-claude-em-guard-unlock-banner-still-reads-
+happen: `cross-repo/inbox/2026-08-11-coordinator-content-repo-em-guard-unlock-banner-still-reads-
 as-agent-instruction.md` Item 2 reports dispatched reviewers meeting real, correct
 results under what looked like a bare denial and having to infer, from where they
 sat in the text, that the results below were a substitution rather than a leaked
@@ -155,7 +155,7 @@ emitting the FULL paragraph -- this module's own negative-spec already forbids f
 closed, and a spurious full paragraph is a token-cost regression, never a correctness
 one.
 
-Spec backlink: DoE-claude state/audits/2026-07-29-sanctioned-search-path-design.md
+Spec backlink: coordinator-content-repo state/audits/2026-07-29-sanctioned-search-path-design.md
 Consumes: coordinator_core/search/answer.py, coordinator_core/git/git_dir.py
 """
 

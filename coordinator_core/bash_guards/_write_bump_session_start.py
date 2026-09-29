@@ -2,7 +2,7 @@
 coordinator_core.bash_guards._write_bump_session_start — SessionStart anchor record.
 
 Purpose: the write-confinement speed bump (docs/plans/2026-08-02-write-confinement-guards.md
-[DoE-claude repo], chunk C0) needs to know, later in a session and from an arbitrary Bash or
+[coordinator-content-repo repo], chunk C0) needs to know, later in a session and from an arbitrary Bash or
 tool-surface call, "what repo did this session actually launch in" — a value an ordinary `cd`
 must NOT be able to move (the Director of Engineering F1: the harness Bash tool contract states "Working directory
 persists between calls", so the live payload `cwd` drifts under an agent with no adversarial
@@ -90,19 +90,19 @@ Negative-spec:
 
 Install-surface note (2026-08-03, C0 dispatch; wiring landed 2026-08-03, C8 dispatch): the plan's
 chunk body named `coordinator_core/install/gen_settings_hooks.py` as the file to "register" this
-hook in. That generator is data-driven entirely off `coordinator/hooks/hooks.json` [DoE-claude
+hook in. That generator is data-driven entirely off `coordinator/hooks/hooks.json` [coordinator-content-repo
 repo] — it has no per-hook registration list of its own to edit (confirmed by reading the whole
 module: the only per-hook-shaped logic is the generic CPR-rewrite/portability-assert pipeline,
 which applies uniformly to every `hooks.json` entry). C8 landed the actual wiring: a
 `type=="command"` `SessionStart` entry (matcher `startup|resume|clear|compact|fork`) in
-`coordinator/hooks/hooks.json` [DoE-claude repo], plus a thin shim,
-`coordinator/hooks/scripts/session-start-write-bump-anchor.py` [DoE-claude repo], that imports
+`coordinator/hooks/hooks.json` [coordinator-content-repo repo], plus a thin shim,
+`coordinator/hooks/scripts/session-start-write-bump-anchor.py` [coordinator-content-repo repo], that imports
 this module directly (not via `coordinator_core.hooks`/`coordinator_core.ipc`, per this module's
 own "Negative-spec" above) and calls :func:`write_session_start_record` in-process. Both are
-DoE-claude-resident and were out of C0's file scope, hence this breadcrumb; it now points at the
+Coordinator-content-repo-resident and were out of C0's file scope, hence this breadcrumb; it now points at the
 landed wiring rather than describing a gap.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 § Anchor applicability
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 § Anchor applicability
     on something an agent cannot move; chunk C0.
 """
 

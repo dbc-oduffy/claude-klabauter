@@ -8,7 +8,7 @@ import pytest
 
 import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 
 
 def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,8 +23,8 @@ def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
 
 
-def _write_policy_yaml(doe_root: Path, extra_type: str = "coordinator:executor") -> None:
-    policy_dir = doe_root / "coordinator"
+def _write_policy_yaml(content_root: Path, extra_type: str = "coordinator:executor") -> None:
+    policy_dir = content_root / "coordinator"
     policy_dir.mkdir(parents=True, exist_ok=True)
     (policy_dir / "subagent-sandbox-policy.yaml").write_text(
         "report_sidecar:\n"
@@ -39,8 +39,8 @@ def _write_policy_yaml(doe_root: Path, extra_type: str = "coordinator:executor")
     )
 
 
-def _write_agents_dir(doe_root: Path, names: "list[str]") -> None:
-    agents_dir = doe_root / "coordinator" / "agents"
+def _write_agents_dir(content_root: Path, names: "list[str]") -> None:
+    agents_dir = content_root / "coordinator" / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     for name in names:
         (agents_dir / f"{name}.md").write_text(
@@ -50,8 +50,8 @@ def _write_agents_dir(doe_root: Path, names: "list[str]") -> None:
 
 
 @pytest.fixture()
-def doe_root(tmp_path: Path) -> Path:
-    root = tmp_path / "doe-claude"
+def content_root(tmp_path: Path) -> Path:
+    root = tmp_path / "coordinator-content-repo"
     _write_policy_yaml(root)
     _write_agents_dir(root, ["executor", "code-reviewer"])
     return root
@@ -114,8 +114,8 @@ def _agent_payload(subagent_type: str, name: str = "", prompt: str = "do the thi
     return {"tool_name": "Agent", "tool_input": tool_input}
 
 
-def test_resolve_roster_unions_all_three_sources(doe_root: Path, plugin_home: Path) -> None:
-    roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=str(plugin_home))
+def test_resolve_roster_unions_all_three_sources(content_root: Path, plugin_home: Path) -> None:
+    roster, reason = mod.resolve_roster(content_root=str(content_root), home=str(plugin_home))
     assert reason is None
     assert roster is not None
     assert "coordinator:executor" in roster
@@ -201,8 +201,8 @@ def test_manifest_leg_failure_does_not_blank_filesystem_legs(tmp_path: Path) -> 
     assert "game-dev:staff-game-dev" in names
 
 
-def test_resolve_roster_doe_root_unresolved_fails_closed() -> None:
-    roster, reason = mod.resolve_roster(doe_root="", home=None)
+def test_resolve_roster_content_root_unresolved_fails_closed() -> None:
+    roster, reason = mod.resolve_roster(content_root="", home=None)
     assert roster is None
     assert reason is not None
     assert "MISSING ENTIRELY" in reason
@@ -210,32 +210,32 @@ def test_resolve_roster_doe_root_unresolved_fails_closed() -> None:
 
 
 def test_resolve_roster_policy_yaml_missing_fails_closed_as_missing(tmp_path: Path) -> None:
-    root = tmp_path / "doe-claude"
+    root = tmp_path / "coordinator-content-repo"
     _write_agents_dir(root, ["executor"])
-    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    roster, reason = mod.resolve_roster(content_root=str(root), home=None)
     assert roster is None
     assert "subagent-sandbox-policy.yaml" in reason
     assert "MISSING ENTIRELY" in reason
 
 
 def test_resolve_roster_policy_yaml_unparseable_fails_closed_as_unparseable(tmp_path: Path) -> None:
-    root = tmp_path / "doe-claude"
+    root = tmp_path / "coordinator-content-repo"
     policy_dir = root / "coordinator"
     policy_dir.mkdir(parents=True)
     (policy_dir / "subagent-sandbox-policy.yaml").write_text(
         "report_sidecar: [unterminated\n", encoding="utf-8"
     )
     _write_agents_dir(root, ["executor"])
-    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    roster, reason = mod.resolve_roster(content_root=str(root), home=None)
     assert roster is None
     assert "UNPARSEABLE" in reason
     assert "subagent-sandbox-policy.yaml" in reason
 
 
 def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
-    root = tmp_path / "doe-claude"
+    root = tmp_path / "coordinator-content-repo"
     _write_policy_yaml(root)
-    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    roster, reason = mod.resolve_roster(content_root=str(root), home=None)
     assert roster is None
     assert "coordinator" in reason and "agents" in reason
     assert "MISSING ENTIRELY" in reason
@@ -267,14 +267,14 @@ def _write_mirror_tree(root: Path, extra_type: str = "coordinator:executor") -> 
 def test_resolve_roster_reads_a_mirror_clone_holding_content_at_the_root(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-claude"
     _write_mirror_tree(root)
-    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    roster, reason = mod.resolve_roster(content_root=str(root), home=None)
     assert reason is None, f"mirror layout must resolve, not fail closed: {reason}"
     assert roster is not None
     assert "coordinator:executor" in roster
 
 
-def test_resolve_roster_still_prefers_the_dev_clone_nesting(doe_root: Path) -> None:
-    roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
+def test_resolve_roster_still_prefers_the_dev_clone_nesting(content_root: Path) -> None:
+    roster, reason = mod.resolve_roster(content_root=str(content_root), home=None)
     assert reason is None
     assert roster is not None
     assert "coordinator:executor" in roster
@@ -283,14 +283,14 @@ def test_resolve_roster_still_prefers_the_dev_clone_nesting(doe_root: Path) -> N
 def test_resolve_roster_missing_in_both_shapes_still_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "empty"
     root.mkdir()
-    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    roster, reason = mod.resolve_roster(content_root=str(root), home=None)
     assert roster is None
     assert "MISSING ENTIRELY" in reason
     assert "subagent-sandbox-policy.yaml" in reason
 
 
-def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(doe_root: Path) -> None:
-    roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
+def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(content_root: Path) -> None:
+    roster, reason = mod.resolve_roster(content_root=str(content_root), home=None)
     assert reason is None
     assert roster is not None
     assert "coordinator:executor" in roster
@@ -298,8 +298,8 @@ def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(doe_root: Path) -> 
 
 
 def _patch_roster(monkeypatch: pytest.MonkeyPatch, roster, reason=None) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (roster, reason)
 
     monkeypatch.setattr(mod, "resolve_roster", _fake_resolve_roster)
@@ -386,7 +386,7 @@ def test_named_and_unnamed_fork_type_both_allowed(monkeypatch: pytest.MonkeyPatc
     assert named is None
 
 
-def test_fork_is_harness_owned_not_filesystem_derivable(doe_root: Path, plugin_home: Path) -> None:
+def test_fork_is_harness_owned_not_filesystem_derivable(content_root: Path, plugin_home: Path) -> None:
     """Pins that `fork` is carried ONLY by `_HARNESS_BUILTIN_TYPES` and never
     by any of the three filesystem-derived roster legs. A failure here means
     someone assumed the filesystem legs (policy YAML, coordinator/agents/*.md,
@@ -396,8 +396,8 @@ def test_fork_is_harness_owned_not_filesystem_derivable(doe_root: Path, plugin_h
     """
     assert "fork" in mod._HARNESS_BUILTIN_TYPES
 
-    policy_roster = mod._load_policy_roster(str(doe_root))
-    agents_roster = mod._load_agents_roster(str(doe_root))
+    policy_roster = mod._load_policy_roster(str(content_root))
+    agents_roster = mod._load_agents_roster(str(content_root))
     plugin_roster = mod._load_plugin_roster(str(plugin_home))
 
     assert "fork" not in policy_roster
@@ -406,7 +406,7 @@ def test_fork_is_harness_owned_not_filesystem_derivable(doe_root: Path, plugin_h
 
 
 def test_workflow_subagent_is_harness_owned_not_filesystem_derivable(
-    doe_root: Path, plugin_home: Path
+    content_root: Path, plugin_home: Path
 ) -> None:
     """Pins `workflow-subagent` -- the identity of an agent a Workflow script
     spawns without an `agentType` -- to `_HARNESS_BUILTIN_TYPES`. No
@@ -415,8 +415,8 @@ def test_workflow_subagent_is_harness_owned_not_filesystem_derivable(
     """
     assert "workflow-subagent" in mod._HARNESS_BUILTIN_TYPES
 
-    assert "workflow-subagent" not in mod._load_policy_roster(str(doe_root))
-    assert "workflow-subagent" not in mod._load_agents_roster(str(doe_root))
+    assert "workflow-subagent" not in mod._load_policy_roster(str(content_root))
+    assert "workflow-subagent" not in mod._load_agents_roster(str(content_root))
     assert "workflow-subagent" not in mod._load_plugin_roster(str(plugin_home))
 
 
@@ -436,32 +436,23 @@ def test_absent_subagent_type_resolves_to_harness_default(monkeypatch: pytest.Mo
     assert mod.resolve_subagent_type(payload["tool_input"]) == "general-purpose"
 
 
-def _live_doe_root_or_skip() -> str:
-    resolved = read_doe_root_pointer()
-    if not resolved:
-        pytest.skip("DoE-claude root pointer unresolved on this host")
-    if not Path(resolved).is_dir():
-        pytest.skip(f"DoE-claude sibling checkout not present on this host: {resolved}")
-    return resolved
-
-
-@pytest.mark.real_home
-def test_live_roster_allows_harness_builtins_and_regression_plugin_types() -> None:
-    # HOME/USERPROFILE into a per-test quarantine dir, and this test would
-    doe_root = _live_doe_root_or_skip()
-    roster, reason = mod.resolve_roster(doe_root=doe_root)
+def test_fixture_roster_allows_harness_builtins_and_regression_plugin_types(
+    content_root: Path, plugin_home: Path
+) -> None:
+    roster, reason = mod.resolve_roster(content_root=str(content_root), home=str(plugin_home))
     assert reason is None, reason
     assert roster is not None
     for expected in ("Explore", "Plan", "general-purpose"):
-        assert expected in roster, f"{expected!r} missing from live roster — three-source union regressed"
+        assert expected in roster, f"{expected!r} missing from roster — three-source union regressed"
     assert "example-retrieval-repo:example-retrieval-repo-researcher" in roster
     assert "feature-dev:code-explorer" in roster
 
 
-@pytest.mark.real_home
-def test_live_roster_allows_via_check_not_just_resolve_roster(monkeypatch: pytest.MonkeyPatch) -> None:
-    doe_root = _live_doe_root_or_skip()
-    monkeypatch.setattr(mod, "read_doe_root_pointer", lambda: doe_root)
+def test_fixture_roster_allows_via_check_not_just_resolve_roster(
+    monkeypatch: pytest.MonkeyPatch, content_root: Path, plugin_home: Path
+) -> None:
+    monkeypatch.setattr(mod, "read_content_root_pointer", lambda: str(content_root))
+    monkeypatch.setattr(mod, "_home_dir", lambda: str(plugin_home))
     _patch_opus_gate_noop(monkeypatch)
     for subagent_type in (
         "Explore",
@@ -471,4 +462,8 @@ def test_live_roster_allows_via_check_not_just_resolve_roster(monkeypatch: pytes
         "feature-dev:code-explorer",
     ):
         envelope = mod.check(_agent_payload(subagent_type))
-        assert envelope is None, f"check() denied enumerated type {subagent_type!r}"
+        # An unpinned type may carry an allow-with-advisory envelope; nothing else.
+        decision = (envelope or {}).get("hookSpecificOutput", {}).get("permissionDecision")
+        assert envelope is None or decision == "allow", (
+            f"check() emitted {envelope!r} for enumerated type {subagent_type!r}"
+        )

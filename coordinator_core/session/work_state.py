@@ -211,7 +211,7 @@ def _resolve_send_message_addresses(
     resolved_at` onto every dict in `candidates` IN PLACE, off ONE
     `reachability.resolve_addresses_bulk_with_availability` call for the
     whole distinct-holder set (state/handoffs/2026-08-13-session-owner-
-    reachability-registry.md § 3; cross-repo/inbox/2026-08-13-doe-claude-em-
+    reachability-registry.md § 3; cross-repo/inbox/2026-08-13-coordinator-content-repo-em-
     peer-roster-doctrine-reply.md § Counter 2; cross-repo/inbox/2026-08-15-
     example-retrieval-repo-em-peer-messaging-gate-off-vs-proven-round-trip.md §
     "Smaller, concrete: the empty-string rendering"). Factored out because

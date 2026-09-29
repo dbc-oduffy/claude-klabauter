@@ -92,7 +92,7 @@ from typing import Callable
 from coordinator_core.win_portability import no_console_creationflags
 
 from .gate_report import TestReport
-from .runner import detect_runner, find_runner_root, run_selected
+from .runner import GroupTimeout, detect_runner, find_runner_root, run_selected
 from .selection import select_test_files
 
 __all__ = ["GateResult", "run_gate"]
@@ -110,8 +110,11 @@ class GateResult:
     # the offending repo-relative paths), "candidate-run-crashed-or-empty"
     # (the candidate-side run crashed, produced an unparseable report, or
     # reported zero collected tests for a non-empty selection), or
-    # "base-run-crashed-or-empty" (same, but the base-side run). `None` for
-    # every non-indeterminate verdict -- a `"pass"`/`"fail"` never needs one.
+    # "base-run-crashed-or-empty" (same, but the base-side run), or
+    # "group-timeout" (a group's wall-clock run exceeded its budget --
+    # `detail` carries the offending `"<runner>:<root>"` group keys). `None`
+    # for every non-indeterminate verdict -- a `"pass"`/`"fail"` never needs
+    # one.
     reason: str | None = None
     # Free-form detail for `reason` (e.g. the group `(runner, root)` keys or
     # file list that triggered it) -- always a tuple, never raises on an
@@ -187,33 +190,57 @@ def _group_selected_by_runner_root(repo_root: str, selected: list) -> dict:
 
 
 def _run_groups(repo_root: str, groups: dict, *, parallel: bool = True) -> tuple:
-    """Runs each `(runner, root)` group from its own root with its own
-    config, merging structured reports into one `TestReport` keyed by
-    `<group-root>::<node_id>` (namespaced so two subpackages' identically-named
-    node ids never collide when merged). Returns `(merged_report, ok)`;
-    `ok=False` means at least one group crashed, produced no parseable
-    report, or -- for a non-empty selection -- reported zero collected tests,
-    which is indistinguishable from a mis-rooted invocation that verified
-    nothing and MUST NOT be read as a pass.
+    """Runs EVERY `(runner, root)` group from its own root with its own
+    config -- a group that crashes, produces no parseable report, or (for a
+    non-empty selection) reports zero collected tests does NOT stop the
+    other groups from running: each group is independent (its own root, own
+    config, own subprocess), so one group's failure (e.g. a monorepo
+    subpackage whose runner dependencies were never installed) carries no
+    information about whether a SIBLING group's run is trustworthy. Merges
+    every group that DID produce a usable report into one `TestReport` keyed
+    by `<group-root>::<node_id>` (namespaced so two subpackages'
+    identically-named node ids never collide when merged).
+
+    Returns `(merged_report, ok, failed_groups)`. `ok=False` means at least
+    one group failed -- `failed_groups` names ONLY the groups that actually
+    failed (a `(runner, root)` tuple each), never every group in the batch,
+    so a caller's indeterminate `detail` reflects the true failure surface
+    instead of implicating groups that ran and verified cleanly.
 
     `parallel=False` (the confirmation re-run, see `_confirm_new_failures`)
     forces every group serial (no xdist) -- each group still uses its own
-    caller-owned basetemp via `run_selected`, unchanged."""
+    caller-owned basetemp via `run_selected`, unchanged.
+
+    A group whose wall-clock run exceeds its budget raises `GroupTimeout`
+    (see `runner.py`) -- caught here and recorded in a THIRD return slot,
+    `timed_out`, distinct from `failed` (a crash/unparseable/zero-collected
+    report), so the caller can report the machine-readable `"group-timeout"`
+    reason instead of folding a hang into the generic crashed-or-empty
+    bucket. A timed-out group also counts toward `ok=False`, same as any
+    other failed group."""
     merged: TestReport = {}
+    failed: list = []
+    timed_out: list = []
     for (runner, root), test_files in groups.items():
         root_repo_rel = _root_repo_relative(repo_root, root)
         rel_files = [_rel_to_root(f, root_repo_rel) for f in test_files]
-        report = run_selected(root, rel_files, runner, parallel=parallel)
+        try:
+            report = run_selected(root, rel_files, runner, parallel=parallel)
+        except GroupTimeout:
+            timed_out.append((runner, root))
+            continue
         if report is None:
-            return {}, False
+            failed.append((runner, root))
+            continue
         if rel_files and not report:
             # Non-empty selection, zero collected -- indeterminate, never an
             # empty pass (a mis-rooted config can silently under-collect).
-            return {}, False
+            failed.append((runner, root))
+            continue
         prefix = root_repo_rel or "."
         for node_id, status in report.items():
             merged[f"{prefix}::{node_id}"] = status
-    return merged, True
+    return merged, not failed and not timed_out, tuple(failed), tuple(timed_out)
 
 
 def _file_texts_from_bytes(file_bytes: dict | None) -> dict | None:
@@ -272,9 +299,11 @@ def _confirm_new_failures(
     candidate id is treated as confirmed, matching the gate's pre-existing
     fail-closed posture for an indeterminate rerun."""
     reapply_stripped()
-    candidate_confirm, candidate_ok = _run_groups(repo_root, groups, parallel=False)
+    candidate_confirm, candidate_ok, _candidate_failed, _candidate_timed_out = _run_groups(
+        repo_root, groups, parallel=False
+    )
     restore_originals()
-    base_confirm, base_ok = _run_groups(repo_root, groups, parallel=False)
+    base_confirm, base_ok, _base_failed, _base_timed_out = _run_groups(repo_root, groups, parallel=False)
 
     if not candidate_ok or not base_ok:
         return tuple(candidate_ids), ()
@@ -334,26 +363,39 @@ def run_gate(
             verdict="indeterminate", reason="no-runner-for-selected-file", detail=no_runner_files,
         )
 
-    candidate_report, candidate_ok = _run_groups(repo_root, groups)
+    candidate_report, candidate_ok, candidate_failed, candidate_timed_out = _run_groups(repo_root, groups)
     restore_originals()
+    if candidate_timed_out:
+        return GateResult(
+            verdict="indeterminate",
+            reason="group-timeout",
+            detail=tuple(f"{runner}:{root}" for (runner, root) in candidate_timed_out),
+        )
     if not candidate_ok:
         return GateResult(
             verdict="indeterminate",
             reason="candidate-run-crashed-or-empty",
-            detail=tuple(f"{runner}:{root}" for (runner, root) in groups),
+            detail=tuple(f"{runner}:{root}" for (runner, root) in candidate_failed),
         )
 
-    base_report, base_ok = _run_groups(repo_root, groups)
+    base_report, base_ok, base_failed, base_timed_out = _run_groups(repo_root, groups)
+    if base_timed_out:
+        # Either side crashed, produced no parseable report, timed out, or
+        # reported zero collected tests for a non-empty selection -- nothing
+        # to diff, and treating that as "0 tests, nothing changed" would
+        # silently pass a run that never actually verified anything.
+        # `restore_originals()` already ran above; no `reapply_stripped()`
+        # call.
+        return GateResult(
+            verdict="indeterminate",
+            reason="group-timeout",
+            detail=tuple(f"{runner}:{root}" for (runner, root) in base_timed_out),
+        )
     if not base_ok:
-        # Either side crashed, produced no parseable report, or reported zero
-        # collected tests for a non-empty selection -- nothing to diff, and
-        # treating that as "0 tests, nothing changed" would silently pass a
-        # run that never actually verified anything. `restore_originals()`
-        # already ran above; no `reapply_stripped()` call.
         return GateResult(
             verdict="indeterminate",
             reason="base-run-crashed-or-empty",
-            detail=tuple(f"{runner}:{root}" for (runner, root) in groups),
+            detail=tuple(f"{runner}:{root}" for (runner, root) in base_failed),
         )
 
     new_failures = _new_failures(base_report, candidate_report)

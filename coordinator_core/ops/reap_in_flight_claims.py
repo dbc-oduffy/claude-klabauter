@@ -284,7 +284,7 @@ def _shipped_orphan_candidate_shas(
     P3 (no completions): the holder authored zero completion entries.
 
     P3'S COVERAGE IS NARROW BY CONSTRUCTION, AND THE WIDENING WAS DECLINED
-    (2026-08-31, this module's EM; raised by doe-claude-em, who measured it
+    (2026-08-31, this module's EM; raised by coordinator-content-repo-em, who measured it
     and left the call here). The only source of candidate shas is the dead
     holder's completion entry, written by the close ceremony — so the net's
     input is produced by the step whose non-completion defines the population

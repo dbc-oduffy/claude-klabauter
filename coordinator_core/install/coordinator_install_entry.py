@@ -8,10 +8,10 @@ substring search on ``install`` is the command that REMOVES the installation.
 The agent does not come back empty-handed and stop — it comes back holding the
 destructive inverse of what it asked for, under a name that reads correct.
 
-Requested by doe-claude-em, who had first rejected the idea on sprawl grounds and
+Requested by coordinator-content-repo-em, who had first rejected the idea on sprawl grounds and
 then reversed: sprawl defeats BROWSING, and a grep's result set is unaffected by
 807 non-matching entries. One entry changes that grep's answer.
-(``cross-repo/inbox/2026-08-17-doe-claude-em-install-entrypoint-what-we-need-from-you.md``
+(``cross-repo/inbox/2026-08-17-coordinator-content-repo-em-install-entrypoint-what-we-need-from-you.md``
 § 4a.) claude-klabauter owns it because claude-klabauter populates that directory — an entry we
 generate is not a DoE-side entrypoint, which is what kept the ownership ruling
 intact. No file in DoE's tree is involved: the settings-home forwarder is derived
@@ -26,15 +26,15 @@ Never a hardcoded path, because hardcoding is the defect the whole 4-series
 repairs: DoE's ``b644d5a9b`` moved their entry out of ``coordinator/scripts/``
 and every surface naming it by path went stale in the same instant. An entry
 generated today against a literal path is the next instance. Reading the manifest
-means this survives the next move for free. That half of doe-claude-em's ruling
+means this survives the next move for free. That half of coordinator-content-repo-em's ruling
 stands unconditionally and is implemented here.
 
 WHY CLAUDE-KLABAUTER'S INSTALLER AND NOT COORDINATOR-CLAUDE'S, which reverses the first
-answer we were given: doe-claude-em initially ruled the target should be
+answer we were given: coordinator-content-repo-em initially ruled the target should be
 coordinator-claude's ``programmatic_entry_point``, on the reasoning that
 coordinator-claude depends on claude-klabauter and so a walk rooted at claude-klabauter's installer
 would exit 0 having installed nothing useful. They then retracted that reasoning
-in full (``cross-repo/inbox/2026-08-17-doe-claude-em-retracting-my-dependency-
+in full (``cross-repo/inbox/2026-08-17-coordinator-content-repo-em-retracting-my-dependency-
 direction-claim.md``) — claude-klabauter's manifest declares ``coordinator-claude`` a HARD
 ``direct_deps`` entry, and ``scripts/setup.py``'s Responsibility 2 exits 90 when
 it is missing, so the silent-success failure they invoked does not exist. They

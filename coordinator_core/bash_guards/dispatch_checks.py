@@ -190,6 +190,20 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
+from coordinator_core.bash_guards._rewrite_support import (
+    _ENV_ASSIGNMENT_TOKEN_RE,
+    _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
+    _GIT_GLOBAL_OPT_WITH_ARG,
+    _GIT_WRAPPER_PREFIX_WORDS,
+    _advisory,
+    _allow_rewrite,
+    _bt_git_resolved_subcommand,
+    _bt_git_subcommand_start_index,
+    _bt_peel_wrapper_prefix,
+    _bt_python3_invocation,
+    _crlf_strip,
+    _override,
+)
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _BT_Shape,
     classify_command as _bt_classify_command,
@@ -215,8 +229,6 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # sibling .sh files per their own header comments).
 # ---------------------------------------------------------------------------
 
-def _crlf_strip(s: str) -> str:
-    return s.replace("\r", "") if s else s
 
 
 def _join_backslash_newlines(cmd: str) -> str:
@@ -697,8 +709,8 @@ _SPAWN_INDICATOR_TOKENS = (
 #: a spawn, holding the whole body visible to CHECK 1/2/3, which then denied
 #: the prose. Negative spec: this narrows the indicator by INTERPRETER, never
 #: by body content -- every Perl/Ruby/PHP backtick deny is retained.
-#: Reported by DoE-claude, cross-repo memo
-#: `2026-08-19-doe-claude-em-check1-hazard-prose-false-positive-reproduced-and-bounded.md`.
+#: Reported by coordinator-content-repo, cross-repo memo
+#: `2026-08-19-coordinator-content-repo-em-check1-hazard-prose-false-positive-reproduced-and-bounded.md`.
 _BACKTICK_SUBSTITUTION_INTERPRETERS = frozenset({"perl", "ruby", "php"})
 
 
@@ -1130,27 +1142,6 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-def _advisory(msg: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": msg,
-        }
-    }
-
-
-def _allow_rewrite(new_cmd: str, ctx: Optional[str] = None) -> Dict[str, Any]:
-    out: Dict[str, Any] = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": {"command": new_cmd},
-        }
-    }
-    if ctx:
-        out["hookSpecificOutput"]["additionalContext"] = ctx
-    return out
 
 
 #: Wall-clock a single dispatch may spend inside `_run_git` subprocesses
@@ -1512,45 +1503,6 @@ def _batch_show_index_blobs(
     return results
 
 
-def _override(name: str, payload: Optional[Dict[str, Any]] = None) -> bool:
-    """Inline-per-call env read -- NEVER hoist to module scope (F2, recipe
-    Sec(e) "module-level namespace collisions"). Every call site in this file
-    calls `_override("COORDINATOR_ALLOW_X", payload=...)` fresh, matching
-    bash `${VAR:-0}` at each individual guard's own call site.
-
-    RE-KEYED 2026-08-23 (C14c, prerequisite for the warm-dispatch server
-    routing C14b adds): this used to read `os.environ` unconditionally,
-    which holds ONLY because today's guard invocation is a fresh child
-    process whose environ is the actual caller's shell environ. Once guard
-    evaluation routes through a warm, long-lived server process (C14b),
-    `os.environ` is that SERVER's environ, frozen at server start and
-    shared by every session on the box -- a legitimate per-session
-    `COORDINATOR_OVERRIDE_*`/`COORDINATOR_ALLOW_*` set by one operator's
-    shell would go silently dead (not present in the server's environ),
-    and whatever the server itself happened to start under would apply,
-    invisibly, to every other session's guard evaluation. See this
-    module's own `dispatch.check_no_verify`-adjacent history and the
-    dispatching stub for the fuller incident writeup.
-
-    The fix, mirroring `block_subagent_destructive_action`'s existing
-    per-call caller-context resolution: prefer an `env` mapping carried on
-    the per-call PAYLOAD (`payload["env"]`, populated by the caller from
-    ITS OWN resolved context -- session_id/cwd/agent_id are already on that
-    same wire) over ambient process env. `payload` absent, not a dict, or
-    carrying no `env` mapping falls back to `os.environ` unchanged -- this
-    keeps every existing direct-call/test-call site (which never passes
-    `payload`) byte-identical to the pre-C14c behavior; only a caller that
-    populates `payload["env"]` (the warm-server wiring C14b will add) gets
-    the caller-keyed read.
-    """
-    env = None
-    if isinstance(payload, dict):
-        candidate = payload.get("env")
-        if isinstance(candidate, dict):
-            env = candidate
-    if env is None:
-        env = os.environ
-    return env.get(name, "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -2069,7 +2021,7 @@ def _ps_git_bypass_segments(
 
     GATED ON THE DECLARED DIALECT (AC2a retired, 2026-08-26). This scan used
     to run regardless of `tool_name`, and that was FORCED rather than chosen:
-    DoE-claude's `_rearm_command_tool_name` rewrote a genuine PowerShell
+    coordinator-content-repo's `_rearm_command_tool_name` rewrote a genuine PowerShell
     payload to `tool_name: "Bash"` before dispatch, so gating here would have
     left this surface blind on exactly the relabeled row the plan's § Problem
     measured as load-bearing. The cost was a measured Bash-leg divergence --
@@ -3747,7 +3699,7 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     That is the exact failure mode ``write_claim_record._SED_SCRIPT_RE``'s
     own note already measured: `git add -- <junk>` exits 128 and the real
     change is NOT committed, so one bad claim destroys the session's whole
-    commit. Sighted for real in cross-repo memo ``2026-08-30-doe-claude-em-
+    commit. Sighted for real in cross-repo memo ``2026-08-30-coordinator-content-repo-em-
     safe-commit-drops-subagent-written-paths.md``, which reported a bare
     ``holder.json`` in ``reconciliation.claimed_absent``, sourced from a
     pytest ``tmp_path`` outside the repo -- benign there only because an
@@ -3839,7 +3791,7 @@ def check_destructive_rm(
     #
     # Deliberately NOT gated on `dialect_from_tool_name(payload["tool_name"])
     # is Dialect.POWERSHELL`. Per this plan's own "Row 2 is the load-bearing
-    # row": DoE-claude's `_rearm_command_tool_name` rewrites a genuine
+    # row": coordinator-content-repo's `_rearm_command_tool_name` rewrites a genuine
     # `PowerShell` tool call to `tool_name: "Bash"` BEFORE this payload ever
     # reaches the dispatcher, so a real `Remove-Item -Recurse -Force .git`
     # issued from PowerShell arrives here labeled `"Bash"` -- the exact shape
@@ -4383,7 +4335,7 @@ def check_destructive_rm(
                 # Asking the parent unconditionally -- as this did until
                 # 2026-07-31 -- silently skipped (`continue`) every target
                 # whose parent happened to sit outside a repo, which is the
-                # normal shape of a checkout: `~/.claude`, `~/X/DoE-claude`,
+                # normal shape of a checkout: `~/.claude`, `~/X/coordinator-content-repo`,
                 # and `~/X/claude-klabauter` were all ALLOWED because `~` and
                 # `~/X` are not repos, while their SUBdirectories were
                 # correctly denied. The dirty-work protection existed and
@@ -5031,25 +4983,6 @@ _GR_BASE_RE = (
 )
 
 
-#: git global options taking a SPACE-SEPARATED value, which must be consumed
-#: with their operand when walking argv to the real subcommand. Kept in step
-#: with the same options `_GR_BASE_RE` above already enumerates, plus
-#: `--super-prefix` (real git global option, used by `_git_reset_invocation`'s
-#: prose-vs-invocation walk; `_GR_BASE_RE` itself has no `--super-prefix` leg
-#: since no fix has needed it there yet).
-_GIT_GLOBAL_OPT_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"}
-)
-
-#: git global options KNOWN to take no operand at all. Closed and small on
-#: purpose -- anything absent resolves as "unknown shape" and fails closed.
-_GIT_GLOBAL_OPT_NO_ARG_SIMPLE = frozenset(
-    {
-        "-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects",
-        "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-        "--icase-pathspecs", "--no-optional-locks",
-    }
-)
 
 
 #: CONSOLIDATED (2026-07-28, Finding 5, nit -- three independently-authored
@@ -5385,7 +5318,7 @@ def _check_destructive_git_revert_full(
     # Advisory floor (2026-08-05): `affected` non-empty but `deny_paths`
     # empty (no load-bearing/peer-claimed path in it) previously fell
     # through `if not deny_paths: continue` with ZERO signal -- see
-    # cross-repo/inbox/2026-08-05-doe-claude-em-unscoped-stash-has-no-
+    # cross-repo/inbox/2026-08-05-coordinator-content-repo-em-unscoped-stash-has-no-
     # main-loop-guard.md. `pending_advisory` accumulates the MOST
     # destructive such non-blocking envelope seen so far (Review:
     # staff-eng, Finding 11 -- `len(affected)` compared across segments,
@@ -5671,10 +5604,6 @@ def _check_destructive_git_revert_full(
             # and the implicit-push flag-only form (`git stash -u`), and a
             # `--`-delimited pathspec is what scopes it back to the caller's
             # own paths.
-            has_u = bool(re.search(
-                r"(^|\s)(-[a-zA-Z]*u[a-zA-Z]*|--include-untracked|-[a-zA-Z]*a[a-zA-Z]*|--all)(\s|$)",
-                after,
-            ))
             has_dashdash = bool(re.search(r"(^|\s)--(\s|$)", after))
             after_toks = after.split()
             first_tok = after_toks[0] if after_toks else ""
@@ -5985,7 +5914,7 @@ def check_destructive_git_revert_advisory(
 # repo -- 4 cross-contamination commits on work/machine-a/2026-06-14,
 # 2026-06-15). That commit removed the scope gate ENTIRELY, on the claim
 # that the 2026-06-15 plan
-# (DoE-claude docs/plans/2026-06-15-harden-safe-commit-against-sibling-add-all.md
+# (coordinator-content-repo docs/plans/2026-06-15-harden-safe-commit-against-sibling-add-all.md
 # § E1) recorded the meta-repo scope as an incidental mechanism detail with
 # no stated reason the hazard is meta-repo-specific -- that claim was false
 # (the plan states directly: "the cwd guard is what makes it a no-op in
@@ -5996,7 +5925,7 @@ def check_destructive_git_revert_advisory(
 # opt-out an operator would know to reach for.
 #
 # The corrected shape is neither the original narrow gate (missed
-# claude-klabauter, a shared tree this DoE-claude EM commits into directly and
+# claude-klabauter, a shared tree this coordinator-content-repo EM commits into directly and
 # daily, carrying the identical cross-contamination hazard) nor the
 # now-corrected blanket widening (catches every OSS consumer) -- it fires
 # only where the concurrent-session hazard is actually possible:
@@ -6068,7 +5997,7 @@ def _is_hazard_repo(git_root: str) -> bool:
     blanket ``git add -A`` can plausibly sweep a CONCURRENT session's
     in-flight edits into this commit -- the ~/.claude meta-repo (the origin
     incident's own repo), or any repo this machine's fleet registry
-    (``repos.*``) tracks (claude-klabauter, DoE-claude, and every other
+    (``repos.*``) tracks (claude-klabauter, coordinator-content-repo, and every other
     sibling repo on this machine -- see ``_hazard_registry_repo_roots``).
     An arbitrary OSS-consumer repo has neither property, so this returns
     False there and the guard stays a no-op -- restoring the load-bearing
@@ -6317,7 +6246,7 @@ def check_blanket_git_add(
         # Quote characters are stripped so a quoted operand reads as its
         # payload. The BACKSLASH strip that used to ride along here (host-
         # gated to POSIX only) is gone entirely: it deleted every separator
-        # in a drive-absolute operand on `nt` (`X:\repo` -> `X:repo`), and
+        # in a drive-absolute operand on `nt` (`C:\repo` -> `X:repo`), and
         # even gated to run only on POSIX it made a backslash-spelled
         # absolute pathspec disagree with its forward-slash twin on any
         # non-Windows host (the verdict must not depend on which host is
@@ -6558,7 +6487,12 @@ def check_blanket_git_add(
         "(SC-DR-014). Matched: %s\n\n"
         "Use instead:\n"
         "  git add -- path/to/file\n"
-        "  git commit -m <subject> -- path/to/file"
+        "  git commit -m <subject> -- path/to/file\n\n"
+        "For many files (keep only yours), use instead:\n"
+        "  git ls-files -om --exclude-standard -- <dir> > \"${TMPDIR:-/tmp}/p\"\n"
+        "  git add --pathspec-from-file=\"${TMPDIR:-/tmp}/p\"\n"
+        "  git commit -m <subject> --pathspec-from-file=\"${TMPDIR:-/tmp}/p\"\n"
+        "Gitignore `.coordinator-local/`."
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)
@@ -6588,6 +6522,37 @@ def _bt_add_resolve_subtree_dir_token(
     return abs_tok
 
 
+def _bt_no_peer_can_share_the_index(git_root: str, session_id: str) -> bool:
+    """True when no other session can be staging into this repo: it has no
+    commits yet, or ``.git/coordinator-sessions`` holds no session dir other
+    than ``session_id``. Zero-spawn (file reads only); False on any doubt."""
+    try:
+        git_dir = os.path.join(git_root, ".git")
+        with open(os.path.join(git_dir, "HEAD"), encoding="utf-8") as fh:
+            head = fh.read().strip()
+        if head.startswith("ref: "):
+            ref = head[5:].strip()
+            if not os.path.isfile(os.path.join(git_dir, *ref.split("/"))):
+                packed = os.path.join(git_dir, "packed-refs")
+                packed_text = ""
+                if os.path.isfile(packed):
+                    with open(packed, encoding="utf-8") as fh:
+                        packed_text = fh.read()
+                if (" " + ref + "\n") not in packed_text:
+                    return True
+        sessions = os.path.join(git_dir, "coordinator-sessions")
+        if not os.path.isdir(sessions):
+            return True
+        others = [
+            name
+            for name in os.listdir(sessions)
+            if name != session_id and os.path.isdir(os.path.join(sessions, name))
+        ]
+        return not others
+    except OSError:
+        return False
+
+
 def _bt_add_subtree_foreign_paths(
     abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
 ) -> List[str]:
@@ -6608,7 +6573,7 @@ def _bt_add_subtree_foreign_paths(
     soft/fail-open posture (this guard is registered fail_closed=False;
     see the override-log comment earlier in this module for the same
     posture stated explicitly)."""
-    if not session_id:
+    if not session_id or _bt_no_peer_can_share_the_index(git_root, session_id):
         return []
     rc, out = _run_git(["add", "--dry-run", "--", abs_dir], cwd)
     if rc != 0:
@@ -6665,7 +6630,7 @@ def _bt_commit_subtree_foreign_paths(
     session_id, a failed/unparseable diff, or a degraded touch-record
     projection -- same soft/fail-open posture as the add-side sibling this
     mirrors (this guard is registered fail_closed=False)."""
-    if not session_id:
+    if not session_id or _bt_no_peer_can_share_the_index(git_root, session_id):
         return []
     rc, out = _run_git(["diff", "--cached", "--name-only", "--", abs_dir], cwd)
     if rc != 0:
@@ -7032,7 +6997,7 @@ def _resolve_owner_writer_name(fact: "OwnerFact") -> Optional[str]:
     586bb605a6) VERBATIM: PROVENANCE, never ADDRESS.
 
     IDENTIFY-BY-SID, ADDRESS-BY-RESOLVED-NAME (DoE ruling 6,
-    ``2026-09-11-doe-claude-em-rulings-owed-bundle.md``): ``fact.owner`` is
+    ``2026-09-11-coordinator-content-repo-em-rulings-owed-bundle.md``): ``fact.owner`` is
     the stable identifier Check 5's owner sentence is ABOUT; the name this
     ladder returns is the address, resolved fresh at render time, not a
     permanently stable claim on either side -- neither a sid nor a name is
@@ -8618,7 +8583,7 @@ def check_validate_commit(
                 over_watermark.append((cf, size, watermark))
 
     # C7c: admit a shrinking edit on a surface already over its watermark
-    # (mirrors DoE-claude's `admission_check_for_surface`, commit 0f59b1abc)
+    # (mirrors coordinator-content-repo's `admission_check_for_surface`, commit 0f59b1abc)
     # -- refusing it leaves "raise the watermark" as the only way out. The
     # pre-edit size is read the SAME way the post-edit `size` is (a `git
     # cat-file --batch` blob read) against `HEAD`, in ONE batch across every
@@ -8898,546 +8863,9 @@ def check_validate_commit(
 # since none of these five shapes hinge on free-text pattern matching.
 # ---------------------------------------------------------------------------
 
-_FIND_EXEC_TRANSLATABLE_VERBS = frozenset({"rm", "cat", "wc"})
-
-#: Verbs where `-exec VERB ARGS {} +` is byte-identical in effect to running
-#: `-exec VERB ARGS {} \;` once per match -- a per-verb property, answered by
-#: measurement, never by rule. Deliberately a SEPARATE table from
-#: `_FIND_EXEC_TRANSLATABLE_VERBS` above: that table hand-writes a semantic
-#: equivalence to a python3 rewrite (a harder, more error-prone claim -- all
-#: three shipped entries were found wrong by measurement); this table only
-#: asks "does the '+' form's OUTPUT match the concatenation of the ';'
-#: form's per-match output", which is the narrower, purely batch-equivalence
-#: question. Widening one table by reasoning about the other is the mistake
-#: this module comment exists to head off.
-#:
-#: Measured (GNU findutils 4.11.0, this session, three files, no ARG_MAX
-#: pressure) 2026-08-31:
-#:   rm, cat, chmod, chown, touch, git add -- `+` output identical to `;`.
-#:   head, tail -- `+` prepends '==> path <==' banners the `;` form never
-#:     emits.
-#:   wc -- `+` appends a grand-total line the `;` form never emits.
-#:   grep -- multi-operand `+` prefixes every hit with 'path:' the
-#:     single-operand `;` form never emits.
-#: Anything not on this allowlist fails safe to the unchanged prose advisory
-#: below -- never a guessed batch form.
-_FIND_EXEC_BATCH_EQUIVALENT_VERBS = frozenset(
-    {"rm", "cat", "chmod", "chown", "touch", "git"}
-)
-
-
-def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
-    """`tokens` is one already-tokenized SEGMENT (post
-    `segments_from_tokens_with_pipe_flag`) whose first token is a `find`
-    invocation. Returns a parsed
-    ``{"path", "name_pattern", "only_files", "exec_argv"}`` dict, or `None`
-    if this segment carries no `-exec` this function can confidently
-    isolate.
-
-    A `;`-terminated `-exec ARGV ;` is the common case, and its terminator
-    is NEVER visible inside `tokens` here: `tokenize_full_command` treats
-    `;` as an always-separate punctuation token regardless of the shell's
-    OWN escaping (`\\;` and bare `;` tokenize identically), so
-    `segments_from_tokens_with_pipe_flag` has already consumed it as a
-    segment BOUNDARY before this function ever sees the segment -- the
-    segment's own end IS the terminator in that case, there is no
-    remaining `;` token to search for. Only the `+`-terminated form
-    (`-exec ARGV +`) leaves its terminator inside the segment, since `+` is
-    not one of the tokenizer's punctuation/separator characters. So: stop
-    `exec_argv` at a literal `+` token if one appears, else take the
-    segment's own remainder as `exec_argv` (the semicolon-consumed case)."""
-    if "-exec" not in tokens:
-        return None
-    exec_idx = tokens.index("-exec")
-    pred = tokens[1:exec_idx]
-    path = "."
-    i = 0
-    if pred and not pred[0].startswith("-"):
-        path = pred[0]
-        i = 1
-    name_pattern: Optional[str] = None
-    only_files = False
-    while i < len(pred):
-        tok = pred[i]
-        if tok == "-name" and i + 1 < len(pred):
-            name_pattern = pred[i + 1]
-            i += 2
-            continue
-        if tok == "-type" and i + 1 < len(pred):
-            only_files = pred[i + 1] == "f"
-            i += 2
-            continue
-        i += 1
-    rest = tokens[exec_idx + 1:]
-    plus_idx = rest.index("+") if "+" in rest else None
-    exec_argv = rest[:plus_idx] if plus_idx is not None else rest
-    terminator = "plus" if plus_idx is not None else "semi"
-    # Strip a literal trailing ";" for the rare case it DID survive inside
-    # the segment (e.g. a quoted `';'` operand -- tokenize_full_command
-    # respects quoting, so a quoted semicolon is one ordinary token, not a
-    # separator, and would otherwise be mistaken for part of the invoked
-    # command's own arguments).
-    if exec_argv and exec_argv[-1] == ";":
-        exec_argv = exec_argv[:-1]
-    if not exec_argv:
-        return None
-    return {
-        "path": path,
-        "name_pattern": name_pattern,
-        "only_files": only_files,
-        "exec_argv": exec_argv,
-        "terminator": terminator,
-    }
 
 
 
-def _bt_python3_invocation_cache_path() -> str:
-    """On-disk location for `_bt_python3_invocation`'s cross-process cache.
-    Prefers claude-klabauter's own `state/cache/` (this repo's disk-truth substrate,
-    never `~/.claude` -- a plane this repo owns none of, see CLAUDE.md
-    § What this repo is); falls back to the OS temp dir if `state/` cannot
-    be created (read-only checkout, permissions), matching the fail-open
-    discipline `_bt_python3_invocation` itself already promises."""
-    import tempfile
-
-    try:
-        repo_root = Path(__file__).resolve().parents[2]
-        state_dir = repo_root / "state" / "cache"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        return str(state_dir / "bt-python3-invocation-cache.json")
-    except OSError:
-        return os.path.join(tempfile.gettempdir(), "coordinator-bt-python3-invocation-cache.json")
-
-
-def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:
-    """Build the cache key this advisory's resolution actually depends on.
-
-    Mirrors `pyresolve._machine_local_get`'s own in-process memo, which keys
-    on ``(key, resolved impl path)`` rather than the lookup key alone --
-    the impl path already folds in every env var that steers *which*
-    `_machine_local.py` gets consulted. This cross-process cache widens that
-    same idea to cover every input `resolve_python_bin(prefer_windowless=
-    False)` can observe: the resolved impl path PLUS its mtime+size (so an
-    edited/rebuilt `_machine_local.py` invalidates the entry even though its
-    path string is unchanged), and the four env vars that steer or
-    short-circuit which store is read (`MACHINE_LOCAL_IMPL`, `CLAUDE_HOME`,
-    `COORDINATOR_SETTINGS_HOME`, `COORDINATOR_PYTHON`).
-
-    Returns ``None`` (never cache) on `pyresolve` import failure -- the same
-    condition `_bt_python3_invocation` itself falls open to `"python3"` on."""
-    try:
-        from coordinator_core.pyresolve import _machine_local_impl
-    except ImportError:
-        return None
-    impl = _machine_local_impl()
-    try:
-        st = os.stat(impl)
-        impl_sig: Optional[List[Any]] = [st.st_mtime_ns, st.st_size]
-    except OSError:
-        impl_sig = None
-    return [
-        impl,
-        impl_sig,
-        os.environ.get("MACHINE_LOCAL_IMPL", ""),
-        # USERPROFILE is the Windows rung, not a nicety: PowerShell and cmd.exe
-        # never set HOME or CLAUDE_HOME, so a bare read degrades to "" on every
-        # Windows host and two different machines hash to the same cache key.
-        os.environ.get("CLAUDE_HOME", os.environ.get("USERPROFILE", "")),
-        os.environ.get("COORDINATOR_SETTINGS_HOME", ""),
-        os.environ.get("COORDINATOR_PYTHON", ""),
-        # Rendering version. The key covers every input to WHICH interpreter
-        # resolves; this covers HOW the resolved path is rendered. DR-363 turned
-        # a bare absolute path into a $HOME-relative one, and without this token
-        # every box with a warm cache would keep serving the pre-DR-363 string --
-        # username and all -- until its `_machine_local.py` happened to change.
-        # Bump on any change to `_bt_render_interpreter_path`.
-        _BT_INTERPRETER_RENDERING_VERSION,
-    ]
-
-
-#: Bumped whenever `_bt_render_interpreter_path` changes shape; folded into
-#: `_bt_python3_invocation_cache_key` so a warm cross-process cache cannot serve
-#: a string rendered by the previous scheme.
-_BT_INTERPRETER_RENDERING_VERSION = 2
-
-
-def _bt_render_interpreter_path(python_bin: str) -> str:
-    """Render a resolved interpreter path for an AGENT-FACING advisory, with no
-    operator username in it.
-
-    DR-363 (rejected recommendation, PM 2026-08-26). Three guards' rewrite
-    advisories embedded the resolved absolute interpreter, which on a stock
-    Windows install is
-    ``C:/Users/<username>/AppData/Local/Programs/Python/Python313/python.exe``
-    (backslashes in the real value; written with forward slashes here so this
-    docstring carries no escape sequences).
-    The username enters from the box running the suite, never from a committed
-    byte, so nothing leaks to the mirror -- but B7's subject is what a guard puts
-    in front of an agent, and the PM refused to widen B7's exemption to cover it.
-    The requirement is *no username in the message*; this function is the
-    mechanism, and it is the ONE choke point all three advisories render through.
-
-    NEGATIVE SPEC -- what this deliberately does NOT do: it does not fall back to
-    a bare ``python3``. DR-363 § Options rules that out and the rejection does not
-    revive it: ``python3`` is frequently absent on the Windows hosts
-    ``resolve_python_bin`` exists to serve, and an advisory that does not run is
-    worse than none.
-
-    ``$HOME`` rather than ``~`` or ``%LOCALAPPDATA%``, because the rendered string
-    has to survive being pasted into either host this fleet runs:
-
-    - ``$HOME`` is defined in Git Bash AND is an automatic variable in PowerShell,
-      so one rendering covers both. ``%LOCALAPPDATA%`` expands in cmd.exe only,
-      and ``~`` does not expand inside the quotes the path needs for its spaces.
-    - Double quotes, not `shlex.quote`'s single quotes: single quotes would make
-      ``$HOME`` literal and the advisory would not run.
-    - Forward slashes, which Windows accepts throughout and which avoid the
-      backslash-as-escape trap inside a double-quoted Bash string.
-
-    An interpreter outside the user's home carries no username to remove, so it is
-    returned through `shlex.quote` exactly as before."""
-    try:
-        home = os.path.expanduser("~")
-        rel = os.path.relpath(python_bin, home)
-    except (OSError, ValueError):
-        # ValueError: relpath across drives on Windows -- not under home.
-        return shlex.quote(python_bin)
-    if rel.startswith(os.pardir) or os.path.isabs(rel):
-        return shlex.quote(python_bin)
-    return '"$HOME/%s"' % rel.replace(os.sep, "/").replace("\\", "/")
-
-
-def _bt_python3_invocation() -> str:
-    """Resolve the shell-ready interpreter prefix (e.g. ``python3``, or on a
-    python.org Windows install with no `python3.exe` on PATH, ``py -3`` or an
-    absolute ``python.exe`` path) for the BX-16 rewrite/advisory payloads
-    below, instead of hardcoding ``python3`` -- a bare ``python3`` is
-    frequently absent on stock Windows (the interpreter there is
-    ``python.exe``, or the ``py``/``pyw`` launcher; a bare ``python3`` can
-    also hit the WindowsApps Store-Python stub, see
-    ``claude-code-platform-gotchas.md``'s "orphan AppX stub" entry).
-
-    Reuses ``coordinator_core.pyresolve`` (the existing Windows-safe
-    interpreter-resolution precedent already used for the same pin-precedence
-    contract elsewhere in this package) rather than inventing a second
-    resolver. ``prefer_windowless=False`` is mandatory here -- every payload
-    this helper prefixes prints to stdout for the harness to read, and
-    ``pythonw.exe`` (the windowless preference) silently swallows stdout (see
-    that same wiki's "pythonw.exe swallows stdout/stderr" entry).
-
-    Lazy-imported and fails open to the literal ``"python3"`` (today's
-    behavior, unconditionally regenerated as an on-host verification item
-    since it cannot be executed from macOS) on ANY resolution failure --
-    ImportError, empty ``python_bin`` (nothing found), or
-    ``PythonPinInvalid`` -- mirroring this module's existing lazy-import
-    discipline (see the Finding-3 note above `_CREATIONFLAGS`): a broken
-    resolver must never crash the whole dispatcher, only this one advisory
-    rewrite's quality.
-
-    The import and the resolution call are two SEPARATE `try`/`except`
-    blocks, not one -- `PythonPinInvalid` is itself a name bound BY the
-    import this function is trying to fail open around. A single combined
-    `try: from ... import PythonPinInvalid, resolve_python_bin; ... except
-    (ImportError, PythonPinInvalid, OSError)` has to evaluate its own except
-    tuple to decide whether a raised `ImportError` matches it -- at which
-    point `PythonPinInvalid` is UNBOUND, so Python raises `UnboundLocalError`
-    instead of falling open to `"python3"`, contradicting this docstring's
-    own "on ANY resolution failure" promise. Splitting the import into its
-    own `except ImportError` (builtin name only, never unbound) guarantees
-    `PythonPinInvalid` is bound by the time the second block's `except`
-    clause can ever reference it.
-
-    CROSS-PROCESS CACHE. This fires on the fleet's highest-firing advisory,
-    so the resolution below is memoized to `_bt_python3_invocation_cache_
-    path()` keyed by `_bt_python3_invocation_cache_key()` (see that
-    function's docstring for exactly what the key covers). The read/write
-    wraps the two try/except blocks below WITHOUT touching them -- a cache
-    miss or any read failure falls straight through to the same live
-    resolution this function has always performed, and a write failure is
-    swallowed the same way: this helper's fail-open discipline is load-
-    bearing and applies identically to the cache path. The write is an
-    atomic replace (`os.replace` from a pid-suffixed temp file in the same
-    directory), never a truncate-then-write -- at 50-70 concurrent sessions
-    a torn write from a truncate is the norm, not an edge case, and a torn
-    or unreadable cache file must fall through to live resolution rather
-    than ever raise or return garbage.
-    """
-    cache_path = _bt_python3_invocation_cache_path()
-    cache_key = _bt_python3_invocation_cache_key()
-    if cache_key is not None:
-        try:
-            with open(cache_path, "r", encoding="utf-8") as fh:
-                cached = json.load(fh)
-            if isinstance(cached, dict) and cached.get("key") == cache_key:
-                cached_value = cached.get("value")
-                if isinstance(cached_value, str) and cached_value:
-                    return cached_value
-        except (OSError, ValueError):
-            # Missing, torn, or unreadable cache -- fall through to live
-            # resolution below, same as any other cache miss.
-            pass
-
-    try:
-        from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
-    except ImportError:
-        return "python3"
-    try:
-        python_bin, python_args = resolve_python_bin(prefer_windowless=False)
-    except (PythonPinInvalid, OSError):
-        return "python3"
-    if not python_bin:
-        return "python3"
-    result = " ".join(
-        [_bt_render_interpreter_path(python_bin)]
-        + [shlex.quote(tok) for tok in python_args]
-    )
-
-    if cache_key is not None:
-        try:
-            tmp_path = "%s.%d.tmp" % (cache_path, os.getpid())
-            with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump({"key": cache_key, "value": result}, fh)
-            os.replace(tmp_path, cache_path)
-        except OSError:
-            # Best-effort cache write -- a failure here just means the next
-            # firing resolves live again, not a correctness issue.
-            pass
-
-    return result
-
-
-def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
-    """Translate a parsed `-exec` invocation into a single `python3 -c`
-    one-liner, when the exec'd verb is one of `_FIND_EXEC_TRANSLATABLE_
-    VERBS` (rm/cat/wc -- the observed census/cleanup habit: delete matches,
-    print matches, count lines across matches). Returns `None` for any
-    other verb -- an arbitrary `-exec <binary>` cannot be translated
-    without knowing its semantics, and this function never guesses; the
-    caller falls back to an advisory rather than a false auto-rewrite."""
-    verb_norm = _normalize_executable_basename(parsed["exec_argv"][0])
-    if verb_norm not in _FIND_EXEC_TRANSLATABLE_VERBS:
-        return None
-    path = parsed["path"]
-    pattern = parsed["name_pattern"]
-    match_expr = (
-        # fnmatchcase, not fnmatch: fnmatch.fnmatch() normalizes case via
-        # os.path.normcase, which is a no-op on POSIX but lower-cases both
-        # sides on Windows -- silently case-INSENSITIVE there, while `find
-        # -name` (unlike `-iname`) is case-sensitive on every platform.
-        "fnmatch.fnmatchcase(fn, %s)" % json.dumps(pattern) if pattern else "True"
-    )
-    if verb_norm == "rm":
-        # `find -exec rm {} \;` prints NOTHING on success. A progress line
-        # here is not a friendlier rewrite, it is a different command: an
-        # operator who pipes or diffs this output gets a line the original
-        # never produced. Measured against real `find` 2026-08-31 -- real
-        # emitted '', this emitted '2 file(s) removed'.
-        body = (
-            "import fnmatch, os\n"
-            "for root, dirs, files in os.walk(%s):\n"
-            "    for fn in files:\n"
-            "        if %s:\n"
-            "            os.remove(os.path.join(root, fn))" % (json.dumps(path), match_expr)
-        )
-    elif verb_norm == "cat":
-        # `cat` CONCATENATES; it appends nothing. `print()` added one
-        # newline per file, so N matched files yielded N spurious newlines
-        # and a file with no trailing newline was silently given one.
-        # Measured 2026-08-31: real 'one\\ntwo\\nthree\\nfour', this
-        # 'one\\ntwo\\n\\nthree\\nfour\\n'.
-        body = (
-            "import fnmatch, os, sys\n"
-            "for root, dirs, files in os.walk(%s):\n"
-            "    for fn in files:\n"
-            "        if %s:\n"
-            '            with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as fh:\n'
-            "                sys.stdout.write(fh.read())" % (json.dumps(path), match_expr)
-        )
-    else:  # wc -- only the `-l` (line-count) form is translated
-        if "-l" not in parsed["exec_argv"][1:]:
-            return None
-        # TWO defects here, and the second is the one that matters. `find
-        # -exec wc -l {} \;` runs wc PER FILE and prints `<count> <path>`
-        # for each; a bare grand total is a different answer to a different
-        # question, and a census workflow reading it gets one number where
-        # it asked for a breakdown. And the total was itself wrong: `wc -l`
-        # counts NEWLINE CHARACTERS, while iterating a file object yields a
-        # final unterminated line as a line. Measured 2026-08-31 over two
-        # files, one without a trailing newline -- real '2 ./a.txt\\n1
-        # ./sub/b.txt\\n', this '4\\n'.
-        #
-        # Not replicated, deliberately: `wc`'s column padding (which differs
-        # between GNU and BSD/msys builds, so there is no single correct
-        # spelling) and the native path separator (normalized to `/`, since
-        # the command being replaced is a POSIX one whose output uses it on
-        # every host). Structure and counts are the contract; cosmetics are
-        # not.
-        body = (
-            "import fnmatch, os\n"
-            "for root, dirs, files in os.walk(%s):\n"
-            "    for fn in files:\n"
-            "        if %s:\n"
-            "            p = os.path.join(root, fn)\n"
-            '            with open(p, "rb") as fh:\n'
-            '                n = sum(chunk.count(b"\\n") for chunk in iter(lambda: fh.read(1 << 20), b""))\n'
-            '            print("%%d %%s" %% (n, p.replace(os.sep, "/")))'
-            % (json.dumps(path), match_expr)
-        )
-    return "%s -c %s" % (_bt_python3_invocation(), shlex.quote(body))
-
-
-def _bt_parse_for_loop_find(tokens: List[str]) -> Optional[Dict[str, Any]]:
-    """Parse `for f in $(find <path> [-name <pat>]); do <verb> "$f"; done`.
-
-    C5 of `docs/plans/2026-08-31-the-batched-form-the-guard-never-offers.md`.
-    The shape forks one process per match exactly as `-exec ... \\;` does, so
-    the spawn-budget harm this guard exists to prevent is fully present --
-    and until now fully unguarded, because `_bt_parse_find_exec_segment`
-    requires a literal `-exec` token a for-loop-wrapped find never carries.
-    The falsifier caught the guard's docstring CLAIMING to cover this shape
-    (corrected at C3); this closes the coverage that claim asserted.
-
-    DELIBERATELY NARROW, and the narrowness is the design. The plan's own
-    `case_against` argued -- correctly -- that general command-substitution
-    and loop-body parsing already belongs to
-    `guard_grep_via_bash._substitutable_rewrite`, and that building a second
-    general parser here would be the parallel-surface mistake. So this does
-    not parse loop bodies in general. It recognises ONE canonical shape and
-    returns None for everything else: a single-command body, a single
-    `$f`-style operand, no pipes, no redirects, no chaining inside the body.
-    Anything richer is not a batching question and is not answered here.
-
-    Returns ``{"path", "name_pattern", "verb_argv", "var"}`` or None.
-    """
-    if not tokens or tokens[0] != "for" or "do" not in tokens or "done" not in tokens:
-        return None
-    if len(tokens) < 6 or tokens[2] != "in":
-        return None
-
-    var = tokens[1]
-    do_idx = tokens.index("do")
-    done_idx = tokens.index("done")
-    if done_idx < do_idx:
-        return None
-
-    # --- the iterated command substitution -------------------------------
-    head = tokens[3:do_idx]
-    while head and head[-1] == ";":
-        head = head[:-1]
-    if not head or not head[0].startswith("$("):
-        return None
-    if head[0][2:] != "find":
-        return None
-    if not head[-1].endswith(")"):
-        return None
-    find_argv = [head[0][2:]] + head[1:]
-    find_argv[-1] = find_argv[-1][:-1]
-    if any("$(" in tok for tok in find_argv[1:]):
-        return None
-
-    path = None
-    name_pattern = None
-    i = 1
-    while i < len(find_argv):
-        tok = find_argv[i]
-        if tok == "-name":
-            if i + 1 >= len(find_argv):
-                return None
-            name_pattern = find_argv[i + 1].strip("'\"")
-            i += 2
-            continue
-        if tok == "-type":
-            i += 2
-            continue
-        if tok.startswith("-"):
-            # An option this parser does not model -- refuse rather than
-            # emit a rewrite that drops it. Silently changing what a
-            # command matches is the one failure worse than staying quiet.
-            return None
-        if path is None:
-            path = tok
-            i += 1
-            continue
-        return None
-    if path is None:
-        return None
-
-    # --- the loop body ---------------------------------------------------
-    body = tokens[do_idx + 1:done_idx]
-    while body and body[-1] == ";":
-        body = body[:-1]
-    if not body or ";" in body or "|" in body or "&&" in body:
-        return None
-    if any(tok in (">", ">>", "<", "&") for tok in body):
-        return None
-
-    deref = {"$" + var, "${" + var + "}", '"$' + var + '"', '"${' + var + '}"'}
-    operand_idx = [i for i, tok in enumerate(body) if tok.strip('"') in
-                   {"$" + var, "${" + var + "}"} or tok in deref]
-    if len(operand_idx) != 1 or operand_idx[0] != len(body) - 1:
-        # The loop variable must be the FINAL operand -- the same
-        # placeholder-final precondition `_bt_find_exec_batch_rewrite`
-        # applies to `{}`, and for the identical reason: anything else is
-        # not the shape `-exec ... +` is equivalent to.
-        return None
-
-    verb_argv = body[:-1]
-    if not verb_argv or any("$" in tok for tok in verb_argv):
-        return None
-
-    return {
-        "path": path,
-        "name_pattern": name_pattern,
-        "verb_argv": verb_argv,
-        "var": var,
-    }
-
-
-def _bt_for_loop_find_batch_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
-    """The `-exec ... +` equivalent of a parsed for-loop find, or None.
-
-    Reuses `_FIND_EXEC_BATCH_EQUIVALENT_VERBS` -- C2's MEASURED allowlist --
-    rather than minting a second table. A verb off that list gets no offer,
-    exactly as it does on the `-exec` side: never a guessed batch.
-    """
-    verb_argv = parsed["verb_argv"]
-    verb_norm = _normalize_executable_basename(verb_argv[0])
-    if verb_norm not in _FIND_EXEC_BATCH_EQUIVALENT_VERBS:
-        return None
-    if verb_norm == "git" and (len(verb_argv) < 2 or verb_argv[1] != "add"):
-        return None
-    argv = ["find", parsed["path"]]
-    if parsed["name_pattern"]:
-        argv += ["-name", parsed["name_pattern"]]
-    argv += ["-exec"] + list(verb_argv)
-    # `{}` and `+` are find's own syntax, never operands to quote --
-    # `shlex.join` would emit `'{}'`, which find does not recognise as the
-    # placeholder.
-    return "%s {} +" % (" ".join(shlex.quote(a) for a in argv),)
-
-
-def _bt_find_exec_batch_rewrite(tokens: List[str], parsed: Dict[str, Any]) -> Optional[str]:
-    r"""Offer the POSIX `+` batched form for a verb this session measured as
-    batch-equivalent (`_FIND_EXEC_BATCH_EQUIVALENT_VERBS`), gated on `{}`
-    being the FINAL token of the exec'd argv -- `+` only batches when the
-    placeholder is last; a `{}` mid-argv (`-exec cmd {} -flag \;`) is not
-    this shape and this function returns `None` for it, same as an
-    unrecognized verb. Returns `None` (no suggestion, no rewrite) on either
-    miss -- never a guessed batch form for a verb not on the allowlist."""
-    exec_argv = parsed["exec_argv"]
-    if not exec_argv or exec_argv[-1] != "{}":
-        return None
-    verb_norm = _normalize_executable_basename(exec_argv[0])
-    if verb_norm not in _FIND_EXEC_BATCH_EQUIVALENT_VERBS:
-        return None
-    if verb_norm == "git" and (len(exec_argv) < 2 or exec_argv[1] != "add"):
-        # Only `git add` is on the measured allowlist (same shape as `rm`);
-        # any other git subcommand is an unmeasured claim this function
-        # never guesses at.
-        return None
-    exec_idx = tokens.index("-exec")
-    new_tokens = tokens[: exec_idx + 1] + exec_argv + ["+"]
-    return shlex.join(new_tokens)
 
 
 def check_find_exec_rewrite(
@@ -9469,184 +8897,11 @@ def check_find_exec_rewrite(
     check matches; re-rendering it would leave the docstring unable to name
     what it detects.
     """
-    if not cmd:
-        return None
-    cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_FIND_EXEC", payload=payload):
-        return None
-    classification = _bt_classify_command(cmd)
-    if classification.tokens is None:
-        return None
-    if not (
-        classification.has_shape(_BT_Shape.FIND_EXEC_XARGS)
-        or classification.has_shape(_BT_Shape.FOR_LOOP)
-    ):
-        return None
-
-    segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
-    # LATENT-BUG FIX (BX-12 audit, same day): `_allow_rewrite` replaces the
-    # ENTIRE command via `updatedInput.command` -- it is only sound when the
-    # matched `find ... -exec` segment IS the whole command. Before this
-    # guard, this loop found the first `find`+`-exec` segment ANYWHERE in a
-    # `;`/`&`-joined chain and silently replaced the FULL original command
-    # (an unrelated for-loop, an unrelated `echo`, etc.) with just that one
-    # segment's python rewrite -- verified: `echo hi; find . -exec rm {} \;`
-    # and `for x in 1 2 3; do echo $x; done; find . -exec rm {} \;` both came
-    # back with `updatedInput.command` silently dropping the loop/echo and
-    # keeping only the `rm` rewrite, a silent command-corruption hazard, not
-    # merely a misdescribed message. Mirrors BX-6's own single-segment
-    # substitutable-residue rule (`guard_grep_via_bash._substitutable_
-    # rewrite`): only a lone, standalone `find ... -exec` segment (nothing
-    # chained before/after it) is auto-rewritten; a multi-segment match
-    # (including the for-loop-wraps-a-trailing-find-exec shape) degrades to
-    # an advisory that still names the specific segment, never a full-command
-    # replacement of work this function never inspected.
-    single_segment = len(segments) == 1
-    _find_exec_note = operator_override_note(
-        "COORDINATOR_ALLOW_FIND_EXEC", payload=payload, git_root=git_root
+    from coordinator_core.bash_guards.find_exec_rewrite import (
+        check_find_exec_rewrite as _impl,
     )
 
-    for_loop = _bt_parse_for_loop_find(classification.tokens)
-    if for_loop is not None:
-        loop_batch = _bt_for_loop_find_batch_rewrite(for_loop)
-        whole_command = classification.tokens[-1] == "done"
-        verb = for_loop["verb_argv"][0]
-        if loop_batch and whole_command:
-            return _allow_rewrite(
-                loop_batch,
-                (
-                    "Auto-rewritten: 'for f in $(find ...); do %s \"$f\"; done' "
-                    "forks one process PER MATCH -- the same spawn storm as "
-                    "'-exec ... ;'. The POSIX '+' form batches matches into as "
-                    "few invocations as ARG_MAX allows, with identical output "
-                    "for this verb." % (verb,)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
-            )
-        if loop_batch:
-            return _advisory(
-                (
-                    "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks "
-                    "one process PER MATCH -- '%s' does the same work in as few "
-                    "invocations as ARG_MAX allows, but this loop runs alongside "
-                    "OTHER work in the same command, so no full-command "
-                    "auto-rewrite is offered." % (verb, loop_batch)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
-            )
-        return _advisory(
-            (
-                "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks one "
-                "process PER MATCH -- the founding-incident 879-process shape on "
-                "Windows. '%s' is not on the measured batch-equivalent verb list, "
-                "so no '+' form is offered: batching it could change its output. "
-                "A single python3 -c os.walk(...) loop does the enumeration in "
-                "one process." % (verb, verb)
-            )
-            + (" %s" % _find_exec_note if _find_exec_note else "")
-        )
-    for tokens, _pipe_before in segments:
-        if not tokens or not _bt_token_matches_binary(tokens[0], "find"):
-            continue
-        parsed = _bt_parse_find_exec_segment(tokens)
-        if not parsed:
-            continue
-        if parsed["terminator"] == "plus":
-            # `-exec CMD {} +` batches matches into as few invocations as
-            # ARG_MAX allows (measured: 3 matches -> 1 invocation, GNU
-            # findutils 4.11.0) -- it does NOT fork one process per match,
-            # so the founding-incident 879-process claim below is false of
-            # this shape. An already-batched command is not this guard's
-            # business: SILENT allow, no advisory, no rewrite -- the guard
-            # has nothing to say to a command that already did the right
-            # thing.
-            continue
-        rewrite = _bt_find_exec_python_rewrite(parsed)
-        if rewrite and single_segment:
-            return _allow_rewrite(
-                rewrite,
-                (
-                    "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
-                    "process PER MATCH (the founding-incident 879-process shape "
-                    "on Windows) -> one python3 process, zero per-match forks."
-                    % (parsed["exec_argv"][0],)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
-            )
-        batch_rewrite = _bt_find_exec_batch_rewrite(tokens, parsed)
-        if rewrite and batch_rewrite:
-            # Translatable AND batch-equivalent, in a chained command. The
-            # python translation cannot be offered here -- substituting it
-            # would drop the other work in the command -- but the `+` form
-            # is a SEGMENT-local edit, so it survives chaining and is
-            # runnable as-is. Naming it is what keeps this branch from
-            # being the one place the guard states a problem and hands back
-            # only prose; the untranslatable sibling below already does it.
-            return _advisory(
-                (
-                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
-                    "forks one process PER MATCH -- the POSIX '+' form (%s) "
-                    "batches matches with identical output for this verb. "
-                    "The python3 rewrite is not offered: this segment runs "
-                    "alongside OTHER work, and replacing the whole command "
-                    "would drop it."
-                    % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
-            )
-        if rewrite:
-            return _advisory(
-                (
-                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) forks "
-                    "one process PER MATCH -- the founding-incident 879-process "
-                    "shape on Windows. A single python3 -c os.walk(...) loop "
-                    "does the same enumeration in one process, but this "
-                    "find-exec segment runs alongside OTHER work in the same "
-                    "command (a for-loop, a chained command, or both), so no "
-                    "full-command auto-rewrite is offered -- replacing the "
-                    "whole command would silently drop that other work."
-                    % (parsed["exec_argv"][0], " ".join(tokens))
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
-            )
-        if batch_rewrite and single_segment:
-            return _allow_rewrite(
-                batch_rewrite,
-                (
-                    "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
-                    "process PER MATCH -- the POSIX '+' form batches matches "
-                    "into as few invocations as ARG_MAX allows, with "
-                    "identical output for this verb."
-                    % (parsed["exec_argv"][0],)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
-            )
-        if batch_rewrite:
-            return _advisory(
-                (
-                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
-                    "forks one process PER MATCH -- the POSIX '+' form (%s) "
-                    "batches matches with identical output for this verb, "
-                    "but this find-exec segment runs alongside OTHER work in "
-                    "the same command, so no full-command auto-rewrite is "
-                    "offered."
-                    % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
-            )
-        return _advisory(
-            (
-                "Advisory: 'find ... -exec %s ... {} ;' forks one process PER "
-                "MATCH -- the founding-incident 879-process shape on Windows. "
-                "A single python3 -c os.walk(...) loop does the same "
-                "enumeration in one process; this exec'd verb has no known "
-                "translation on file, so the rewrite is not offered "
-                "automatically."
-                % (parsed["exec_argv"][0],)
-            )
-            + (" %s" % _find_exec_note if _find_exec_note else "")
-        )
-    return None
+    return _impl(cmd, session_id, payload, git_root)
 
 
 #: grep-family short flags this rewrite considers "substitutable residue"
@@ -10320,95 +9575,6 @@ def check_heredoc_repo_write_advise(
     return None
 
 
-#: BX-13 peel, reused token-wise rather than re-derived (C1a Fix 3): mirrors
-#: `_GC_CLEAN_CMD_RE`'s wrapper-prefix vocabulary (`sudo`/`command`/`time`/
-#: `exec`/`nice`/`nohup`/`ionice`/`timeout`/`stdbuf`/`which`/`type`, an `env`
-#: token, or a bare `NAME=value` assignment) -- `_bt_git_resolved_subcommand`
-#: previously required `tokens[0]` to be the git binary outright, so
-#: `GIT_INDEX_FILE=/tmp/i git commit -m x` and `nice git commit -m x` were
-#: never recognized as a git invocation at all and silently bypassed
-#: `check_git_commit_safe_commit_advise`.
-_GIT_WRAPPER_PREFIX_WORDS = frozenset(
-    {
-        "sudo", "command", "time", "exec", "nice", "nohup",
-        "ionice", "timeout", "stdbuf", "which", "type", "env",
-    }
-)
-# Known limitation: `\S*` cannot match an embedded space, so a value like
-# `GIT_INDEX_FILE="/tmp/my index"` (a single shlex token containing a
-# literal space) fails this regex and is not recognized as an env
-# assignment -- a silent under-fire on that low-likelihood, space-containing
-# path shape, not widened here.
-_ENV_ASSIGNMENT_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
-
-
-def _bt_peel_wrapper_prefix(tokens: List[str]) -> List[str]:
-    """Drop leading env-var-assignment and wrapper-binary tokens (BX-13
-    shape, see `_GIT_WRAPPER_PREFIX_WORDS` above) so a caller resolving the
-    git binary at position 0 sees the same command a shell would actually
-    exec. Stops at the first token that is neither -- never guesses past an
-    ambiguous token."""
-    i = 0
-    n = len(tokens)
-    while i < n and (
-        any(_bt_token_matches_binary(tokens[i], w) for w in _GIT_WRAPPER_PREFIX_WORDS)
-        or _ENV_ASSIGNMENT_TOKEN_RE.match(tokens[i])
-    ):
-        i += 1
-    return tokens[i:]
-
-
-def _bt_git_subcommand_start_index(tokens: List[str]) -> Optional[int]:
-    """Positional walk locating the git subcommand token, returning the
-    index of the first token AFTER it in the ORIGINAL (unpeeled) `tokens`
-    list -- so a caller that needs to keep scanning past the subcommand
-    (e.g. `_bt_commit_operand_scan`) doesn't have to re-derive the
-    wrapper-prefix offset itself. `None` on anything unresolvable; never
-    guesses.
-
-    Peels a leading env-var-assignment/wrapper-binary prefix (BX-13 shape,
-    C1a Fix 3) before resolving the git binary -- see
-    `_bt_peel_wrapper_prefix` -- and re-adds that offset to the returned
-    index. `_bt_git_resolved_subcommand` is a thin wrapper over this that
-    returns the subcommand token itself instead of an index."""
-    peeled = _bt_peel_wrapper_prefix(tokens)
-    offset = len(tokens) - len(peeled)
-    if not peeled or not _bt_token_matches_binary(peeled[0], "git"):
-        return None
-    i = 1
-    n = len(peeled)
-    while i < n:
-        tok = peeled[i]
-        if tok in _GIT_GLOBAL_OPT_WITH_ARG:
-            i += 2
-            continue
-        if tok.startswith("--") and "=" in tok:
-            i += 1
-            continue
-        if tok.startswith("-"):
-            if tok in _GIT_GLOBAL_OPT_NO_ARG_SIMPLE:
-                i += 1
-                continue
-            return None
-        return offset + i + 1
-    return None
-
-
-def _bt_git_resolved_subcommand(tokens: List[str]) -> Optional[str]:
-    """Positional git-subcommand walk over an already-tokenized segment
-    (mirrors `_seg_resolved_git_subcommand`'s walk, operating on tokens
-    directly rather than re-shlex-splitting a rejoined string -- avoids
-    re-tokenizing a `-m "multi word"` operand that the caller has no need
-    to re-parse). `None` on anything unresolvable; never guesses.
-
-    Peels a leading env-var-assignment/wrapper-binary prefix (BX-13 shape,
-    C1a Fix 3) before resolving the git binary -- see
-    `_bt_peel_wrapper_prefix`. Thin wrapper over
-    `_bt_git_subcommand_start_index`, which does the actual walk."""
-    idx = _bt_git_subcommand_start_index(tokens)
-    if idx is None:
-        return None
-    return tokens[idx - 1]
 
 
 #: `git commit` options whose VALUE is a separate following token -- skipped
@@ -10528,7 +9694,7 @@ def _bt_commit_operand_scan(
     `git commit -m -o` as the `--only` flag and fakes scope out of it.
 
     The single parser behind BOTH `--`-keyed predicates below. SC-DR-020
-    (`DoE-claude coordinator/docs/wiki/scoped-safety-commits.md`, token
+    (`coordinator-content-repo coordinator/docs/wiki/scoped-safety-commits.md`, token
     `SEPARATOR-IS-DISAMBIGUATION-NOT-SCOPE`) rules that `--` is git's
     revision/path DISAMBIGUATION token and carries no scope of its own:
     `git commit a.py -m x` and `git commit -m x -- a.py` are the same
@@ -10689,7 +9855,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     from every option set in this module.
 
     `-o`/`--only` (bare or bundled, `-om`) counts for the SAME reason, raised
-    by doe-claude-em against the rule the paragraph above states: it selects
+    by coordinator-content-repo-em against the rule the paragraph above states: it selects
     git's identical index-bypassing self-scoped mode. Verified live against
     git 2.50.1 -- `git commit -o a.txt -m x` with a peer's `b.txt` staged
     commits `a.txt` alone and leaves `b.txt` staged. A no-paths `--only` is
@@ -10703,7 +9869,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     `a.txt` and the peer's staged `b.txt`. That is precisely the sweep this
     advisory exists to catch, so `--include` must keep firing.
 
-    SC-DR-020 (doe-claude-em, 2026-08-04, `5a5fbe89f`): a BARE POSITIONAL
+    SC-DR-020 (coordinator-content-repo-em, 2026-08-04, `5a5fbe89f`): a BARE POSITIONAL
     pathspec counts too -- `git commit a.py -m x` is the same operation as
     `git commit -m x -- a.py`, verified live on git 2.54.0 (with a peer's
     `b.txt` also staged, `a.py` lands alone and `b.txt` stays staged). The
@@ -11088,7 +10254,7 @@ def _bt_probe_cwd(
     whatever the harness happened to be sitting in, not the repo the operator
     is committing to. Every probe below therefore read the wrong repository
     for the ordinary case and the right one only for the rare `-C` case,
-    inverting which commands the guard can reason about (doe-claude-em
+    inverting which commands the guard can reason about (coordinator-content-repo-em
     cross-repo memo, 2026-09-04: adding a no-op `git -C .` to an otherwise
     identical command flipped allow to deny). `_bt_commit_scope_operand_is_
     sweeping` already resolves against the payload cwd for exactly this
@@ -11147,7 +10313,7 @@ def _bt_commit_sweeping_scope_operands(
     A message that says "names no scope" at `git commit -m x -- state/` is
     false about that command, and the operator who reads it concludes the
     parser failed rather than that their directory is the problem (two
-    independent field reports: example-retrieval-repo-em 2026-09-02, doe-claude-em
+    independent field reports: example-retrieval-repo-em 2026-09-02, coordinator-content-repo-em
     2026-09-04). `--only` with no visible operand sweeps too and has no
     operand to name, so it yields an empty list and the caller falls back to
     naming the flag.
@@ -11222,7 +10388,7 @@ def _bt_compound_add_bare_commit(
     ... && git commit` -- i.e. some earlier segment of this SAME command is a
     `git add`, and the commit carries no `-a`/`-am`/`--all`.
 
-    This is the unconditional deny predicate for that shape (PM ruling,
+    This is the unconditional fire predicate (rewrite or deny) for that shape (PM ruling,
     2026-08-30). It replaces C7's deleted index probe, which gated the same
     deny on a two-`git diff --cached` set-difference proving the index held
     paths outside the command's own `git add`. The ruling drops that
@@ -11546,7 +10712,7 @@ def check_git_commit_safe_commit_advise(
     is no longer `coordinator-safe-commit`.)
 
     Two properties this check exists to hold, both of them regressions
-    found in the field (doe-claude-em, 2026-07-29 cross-repo memo, after
+    found in the field (coordinator-content-repo-em, 2026-07-29 cross-repo memo, after
     four ignored firings):
 
     - **It never fires on the ratified, both-halves scoped form.** A
@@ -11573,14 +10739,17 @@ def check_git_commit_safe_commit_advise(
       multi-session abort path bottomed out in `git add -A`. An offer must
       be better than what it replaces.
 
-    Advisory only, never a rewrite: the caller's paths are not knowable
-    from the command text, so the message states the shape and lets the
-    operator fill it -- silently synthesizing a scope inside
-    `updatedInput` is exactly the kind of clever, unverified substitution
-    `check_offer_git_c`'s own docstring warns against.
+    Never a rewrite where the caller's paths are not knowable from the
+    command text: the message states the shape and lets the operator fill
+    it -- synthesizing a scope inside `updatedInput` is exactly the kind of
+    clever, unverified substitution `check_offer_git_c`'s own docstring
+    warns against. The one shape whose paths ARE in the text -- a compound
+    whose own `git add` names literal paths -- is rewritten, below.
 
-    BARE-COMMIT-HALF DENY (PM ruling, 2026-08-30): the shape `git add
-    <paths> && git commit -m "x"` denies UNCONDITIONALLY -- see
+    BARE-COMMIT-HALF (PM ruling, 2026-08-30): the shape `git add <paths> &&
+    git commit -m "x"` never passes unscoped -- it is rewritten to carry
+    `-- <paths>` when the add names literal paths
+    (`_bt_scope_compound_commit_to_its_add`), and denied otherwise. See
     `_bt_compound_add_bare_commit`, which decides it from the command tokens
     alone and spawns nothing. The ruling REVERSES C7 PM Ruling 2, which kept
     this shape advisory whenever the session had staged the whole index
@@ -11633,6 +10802,7 @@ def check_git_commit_safe_commit_advise(
     # own the whole lifecycle between them.
     _clear_probe_fail_open_reasons()
     cmd = _crlf_strip(cmd)
+    raw_cmd = cmd
     # Dialect-aware Start-Process expansion (C8,
     # pln-the-destructive-core-learns-the-she): this entry's `matchers`
     # already declares `COMMAND_TOOL_NAMES` but `_bt_tokenize_full_command`
@@ -11782,7 +10952,7 @@ def check_git_commit_safe_commit_advise(
             # claim -- "I named a subtree and I meant that subtree" -- and an
             # operator silencing one has not decided the other. Naming follows
             # the family already established in this file
-            # (`..._BARE`, `..._AMEND`), per doe-claude-aa 2026-09-01.
+            # (`..._BARE`, `..._AMEND`), per coordinator-content-repo-aa 2026-09-01.
             # ALLOW-vs-OVERRIDE does not track advisory-vs-deny here
             # (`ALLOW_GIT_COMMIT_BARE` gates a deny), so this key survives
             # unrenamed if the advisory is ever escalated.
@@ -11844,7 +11014,7 @@ def check_git_commit_safe_commit_advise(
         # An operator reading "names no scope" at a command that names one
         # concludes the parser failed and starts permuting spellings, which
         # is what both field reports describe (example-retrieval-repo-em 2026-09-02,
-        # doe-claude-em 2026-09-04; the second reproduced it by calling this
+        # coordinator-content-repo-em 2026-09-04; the second reproduced it by calling this
         # function directly, no dispatcher and no `cd` prefix, so the
         # offer-git-c short-circuit is not the cause and reordering the chain
         # is not the fix). TEXT ONLY -- which branch fires, and therefore
@@ -11889,6 +11059,26 @@ def check_git_commit_safe_commit_advise(
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
         if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
+            from coordinator_core.bash_guards.commit_scope_rewrite import (
+                _bt_scope_compound_commit_to_its_add,
+            )
+
+            _rewritten = (
+                None
+                if _body_override or _gcsa_dialect is Dialect.POWERSHELL
+                else _bt_scope_compound_commit_to_its_add(
+                    raw_cmd, seg_tokens, segments, seg_index
+                )
+            )
+            if _rewritten is not None:
+                return _allow_rewrite(
+                    _rewritten,
+                    "Rewritten: this 'git commit' named no scope and would "
+                    "have committed the whole shared index. It now commits "
+                    "only what its own 'git add' named:\n  %s\n\n"
+                    "Next time put the paths after 'git commit -m … --'."
+                    % (_rewritten,),
+                )
             return _deny(
                 (
                     "Deny: " + _body_override
@@ -11959,7 +11149,7 @@ def check_git_commit_safe_commit_advise(
                 "Advisory: " + _body_override
                 if _body_override
                 else (
-                    "Advisory: no scope named.\n\n"
+                    "Advisory: this 'git commit' names no scope.\n\n"
                     "Use instead:\n"
                     "  git add -- <paths> && git commit -m %s -- <paths>"
                     % (subject_operand,)
@@ -11989,80 +11179,6 @@ def check_git_commit_safe_commit_advise(
 # own platform-gated guards, which consume the targets these two checks name.
 # ---------------------------------------------------------------------------
 
-#: git-fact probe forms this rewrite recognizes and batches into ONE
-#: `git status --porcelain=v2 --branch` call -- an unrecognized git
-#: subcommand (e.g. `git log`, `git diff`) makes the WHOLE banner chain fall
-#: through to the advisory skeleton rather than a partial/guessed rewrite.
-_SESSION_FACT_GIT_BRANCH_FORMS = (
-    ("rev-parse", "--abbrev-ref", "HEAD"),
-    ("branch", "--show-current"),
-)
-_SESSION_FACT_GIT_HEAD_FORMS = (("rev-parse", "HEAD"),)
-_SESSION_FACT_GIT_STATUS_FORMS = (
-    ("status",),
-    ("status", "--short"),
-    ("status", "-s"),
-    ("status", "--porcelain"),
-)
-
-
-def _bt_git_probe_kind(tokens: List[str]) -> Optional[Tuple[str, Optional[str]]]:
-    """Classify a tokenized `git ...` segment as one of the three
-    session-fact kinds this rewrite batches into a single `git status
-    --porcelain=v2 --branch` invocation (branch name, HEAD sha, dirty-file
-    status), or `None` for any other git subcommand -- never guessed.
-
-    Returns `(kind, form)`. For `kind == "branch"`, `form` distinguishes
-    which of the two original commands this segment was (`"revparse"` for
-    `git rev-parse --abbrev-ref HEAD`, `"showcurrent"` for `git branch
-    --show-current`) -- Review: code-reviewer (Finding 2) -- the two
-    commands disagree on detached-HEAD output (`rev-parse --abbrev-ref`
-    prints the literal `HEAD`; `--show-current` prints empty), so batching
-    them into one `_branch` variable with no memory of which was asked
-    silently reproduced NEITHER real command's output on detached HEAD.
-    `form` is `None` for `head_sha`/`status` (no such divergence there)."""
-    if not tokens or not _bt_token_matches_binary(tokens[0], "git"):
-        return None
-    rest = tuple(tokens[1:])
-    if rest == ("rev-parse", "--abbrev-ref", "HEAD"):
-        return ("branch", "revparse")
-    if rest == ("branch", "--show-current"):
-        return ("branch", "showcurrent")
-    if rest in _SESSION_FACT_GIT_HEAD_FORMS:
-        return ("head_sha", None)
-    if rest in _SESSION_FACT_GIT_STATUS_FORMS:
-        return ("status", None)
-    return None
-
-
-def _bt_probe_segment_kind(tokens: List[str]) -> Optional[Tuple[str, Optional[str]]]:
-    """Classify one non-piped multi-probe-banner segment as a translatable
-    session-fact probe. Returns `(kind, extra)` or `None` if this segment is
-    not one of the recognized bare-invocation forms this rewrite translates
-    -- an unrecognized flag/operand/extra-argument shape makes the WHOLE
-    command fall through to the advisory skeleton rather than a partial or
-    guessed rewrite."""
-    if not tokens:
-        return None
-    head = tokens[0]
-    rest = tokens[1:]
-    if _bt_token_matches_binary(head, "pwd") and not rest:
-        return ("pwd", None)
-    if _bt_token_matches_binary(head, "whoami") and not rest:
-        return ("whoami", None)
-    if _bt_token_matches_binary(head, "date") and not rest:
-        return ("date", None)
-    if _bt_token_matches_binary(head, "uname") and rest in ([], ["-a"]):
-        return ("uname_a" if rest == ["-a"] else "uname", None)
-    if _bt_token_matches_binary(head, "echo"):
-        if any(a.startswith("-") for a in rest):
-            return None  # `-e`/`-n` etc. change echo's own semantics -- don't guess
-        return ("echo", " ".join(rest))
-    git_kind = _bt_git_probe_kind(tokens)
-    if git_kind is not None:
-        kind, form = git_kind
-        return ("git:" + kind, form)
-    return None
 
 
 def check_multiprobe_banner_rewrite(
@@ -12071,292 +11187,13 @@ def check_multiprobe_banner_rewrite(
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """BX-16 shape 6 (BX-7's rewrite target) -- the multi-probe session-facts
-    banner (40.1% of measured forks, second only to grep-via-Bash): a
-    banner-marked chain like ``echo "=== SESSION FACTS ==="; git rev-parse
-    --abbrev-ref HEAD; git status --short; pwd; whoami; date; uname`` forks
-    ONE PROCESS PER PROBE to re-derive facts the harness already knows
-    (session-fact re-derivation rates measured at 89%/84%/71%/49% are what
-    make this worth building rather than a rule worth writing -- BX-7's own
-    body).
-
-    Auto-rewrites to a single `python3 -c` one-liner reproducing the SAME
-    facts in one process when every probe segment is one of
-    `_bt_probe_segment_kind`'s recognized forms -- batching every git fact
-    into ONE `git status --porcelain=v2 --branch` call rather than one `git`
-    fork per fact, per this dispatch's own instruction. Never denies -- see
-    this section's module comment.
-
-    Firing-shape fix (2026-08-01, C4): emits EITHER a concrete rewrite (every
-    segment recognized) OR NOTHING (`None`) -- never a prose-only advisory
-    with no `updatedInput`. The prior behavior fell back to `_advisory(...)`
-    the moment any segment was unrecognized: prose asking the agent to
-    reconsider the command, the unrecognized segment merely echoed back, no
-    concrete alternative offered. That is Axis A's exact failure mode
-    (`docs/plans/2026-08-01-advisory-firing-shape-predicate.md`), and it is
-    worse than merely uninformative here: this rewrite's ENTIRE value
-    proposition is re-deriving session facts the harness already knows, so
-    an advisory that fires on a command with NO recognized session-fact
-    probe at all (see finding below) would be asking the agent to reconsider
-    a command that never asked for a session fact in the first place --
-    syntactically Axis-A-compliant (it names an "alternative": batch into
-    python3 -c) while being substantively nonsense for that input. Falling
-    through to silence when no rewrite can be offered sidesteps that case
-    entirely: the model sees nothing, exactly as if this check did not
-    exist for the segment shape it cannot handle. `COORDINATOR_ALLOW_
-    MULTIPROBE_BANNER` still exists for the rewrite-offered branch below.
-
-    Known open finding, NOT fixed in this chunk (write-overlap boundary --
-    this chunk owns this function's emission shape, not the shape
-    classifier's recognition boundary): `_bt_classify_command`'s
-    `_BT_Shape.MULTI_PROBE_BANNER` over-triggers on chains that carry no
-    session-fact probe at all -- live-confirmed, `sed -n 1,5p a.py; echo ===;
-    sed -n 6,9p b.py` (two `sed` segments and a bare `echo` with no probe
-    shape among `_bt_probe_segment_kind`'s recognized forms) still
-    classifies as `MULTI_PROBE_BANNER` upstream of this function. Under the
-    prior advisory-fallback behavior that meant a syntactically-compliant
-    but substantively-nonsense advisory (see above); under this chunk's
-    silent-fallthrough fix it means this function correctly emits nothing
-    for that input, but only because every recognized-vs-unrecognized
-    command reaching this function is CLASSIFIED as a banner in the first
-    place by a predicate that is itself too broad. That classifier
-    over-trigger is the same over-firing defect class this plan exists to
-    close, one layer up the call stack from this function's own contract --
-    left as a follow-up finding against `_shape_classifier.MULTI_PROBE_
-    BANNER` rather than fixed in-band here, since narrowing the classifier
-    is a shape-recognition change, not this chunk's declared emission-shape
-    scope.
-    """
-    if not cmd:
-        return None
-    cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_MULTIPROBE_BANNER", payload=payload):
-        return None
-    classification = _bt_classify_command(cmd)
-    if classification.tokens is None:
-        return None
-    if (
-        classification.primary is None
-        or classification.primary.shape is not _BT_Shape.MULTI_PROBE_BANNER
-    ):
-        return None
-
-    segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
-    kinds: List[Tuple[str, Optional[str]]] = []
-    for tokens, pipe_before in segments:
-        # A piped stage inside a "banner" chain is genuinely composed
-        # (e.g. `... | tee log.txt`) rather than a bare fact probe -- treat
-        # it the same as any other unrecognized segment: advise, don't guess.
-        kind = None if pipe_before else _bt_probe_segment_kind(tokens)
-        if kind is None:
-            # Exit (b), per C4: no concrete rewrite can be offered for this
-            # segment shape, so emit NOTHING rather than a prose-only
-            # advisory naming no applicable alternative. See this
-            # function's docstring ("Firing-shape fix") for why exit (a)
-            # (advise-with-skeleton) is the defective shape this replaces.
-            return None
-        kinds.append(kind)
-
-    needs_git = any(k.startswith("git:") for k, _ in kinds)
-    lines: List[str] = ["import os"]
-    if any(k == "whoami" for k, _ in kinds):
-        lines.append("import getpass")
-    if any(k == "date" for k, _ in kinds):
-        lines.append("import time")
-    if any(k in ("uname", "uname_a") for k, _ in kinds):
-        lines.append("import platform")
-    # NOTE: every string literal in the generated payload below is
-    # double-quoted by convention, not because it is load-bearing --
-    # `shlex.quote()` at the `_allow_rewrite` call site below POSIX-escapes
-    # this whole script correctly even if it contained a raw `'` (the
-    # apostrophe-breaks-the-outer-quote defect this rewrite used to carry,
-    # fixed across all four `python3 -c` emission sites in this module).
-    # Kept double-quoted anyway for readability, not correctness.
-    if needs_git:
-        # A FAILED `git status` must never render as a CLEAN one. This call
-        # used to read `.stdout` off `subprocess.run(...)` with the return
-        # code discarded, so every non-zero exit -- `.git/index.lock` held by
-        # one of the ~50 concurrent peers this repo's load norm assumes,
-        # `fatal: not a git repository`, a mid-operation ref lock -- produced
-        # empty stdout, an empty `_status_lines`, and a banner reporting an
-        # unmodified worktree, a blank branch, and a blank HEAD, at exit 0.
-        # Observed live 2026-08-21: three agents read that fabricated clean
-        # tree as their work having been wiped, and one proposed a `git stash
-        # pop` recovery that would have been the day's only real data loss.
-        # The engine's own status reader already has the right shape --
-        # `git/divergence.py :: diverging_paths` passes `--no-optional-locks`
-        # and treats a non-zero exit as a failure rather than as an answer;
-        # this payload now matches it. `--no-optional-locks` is
-        # output-identical and lock-free per `guard_no_optional_locks.py`'s
-        # measured evidence, so it both removes this batched read from the
-        # contention it was failing on and stops it competing with the typed
-        # `git status` that same guard already rewrites.
-        lines.append("import subprocess")
-        lines.append("import sys")
-        lines.append(
-            '_gsp = subprocess.run(["git", "--no-optional-locks", "status", '
-            '"--porcelain=v2", "--branch"], capture_output=True, text=True)'
-        )
-        lines.append("if _gsp.returncode != 0:")
-        lines.append("    sys.stderr.write(_gsp.stderr or \"\")")
-        lines.append("    raise SystemExit(_gsp.returncode)")
-        lines.append("_gs = _gsp.stdout.splitlines()")
-        lines.append("_branch = _head = None")
-        lines.append("_status_lines = []")
-        lines.append("for _l in _gs:")
-        lines.append('    if _l.startswith("# branch.head "):')
-        lines.append('        _branch = _l.split(" ", 2)[2]')
-        lines.append('    elif _l.startswith("# branch.oid "):')
-        lines.append('        _head = _l.split(" ", 2)[2]')
-        lines.append('    elif _l.startswith("#"):')
-        lines.append("        continue")
-        lines.append("    else:")
-        # porcelain=v2's kind-"2"
-        # (renamed/copied) record appends a rename-score field the kind-"1"
-        # record doesn't have, THEN the two paths joined by a literal TAB
-        # (`new\told`), not another space -- a blind `_l.split(" ")` doesn't
-        # special-case this, so the "last field" it picks up is actually
-        # `"new\told"` glued together, never split into the two paths. A
-        # blind full-string split also fragments any path containing its
-        # OWN literal space before the "last field" slice is even taken.
-        # Fixed by splitting each kind on its OWN documented fixed-field
-        # count (via `maxsplit`, so the path/rename-pair remainder is never
-        # itself re-split on an embedded space), then splitting the kind-"2"
-        # remainder on the tab that actually separates its two paths --
-        # reproducing `git status --short`'s own `R  <new> -> <old>` line
-        # shape for a rename instead of the glued-together sentinel.
-        lines.append('        _kind = _l.split(" ", 1)[0]')
-        lines.append('        if _kind == "1":')
-        lines.append('            _f = _l.split(" ", 8)')
-        lines.append('            _status_lines.append(_f[1] + " " + _f[8])')
-        lines.append('        elif _kind == "2":')
-        lines.append('            _f = _l.split(" ", 9)')
-        lines.append('            _new, _old = _f[9].split("\\t", 1)')
-        lines.append(
-            '            _status_lines.append(_f[1] + " " + _new + " -> " + _old)'
-        )
-        lines.append('        elif _kind == "?":')
-        lines.append('            _status_lines.append("?? " + _l.split(" ", 1)[1])')
-        lines.append('        elif _kind == "!":')
-        lines.append('            _status_lines.append("!! " + _l.split(" ", 1)[1])')
-
-    for kind, extra in kinds:
-        if kind == "pwd":
-            # `os.sep`, never a literal backslash: on POSIX this is `"/"` and
-            # the replace is a no-op, which is what keeps a directory name
-            # containing a literal backslash (legal on POSIX, and a path
-            # component there rather than a separator) from being rewritten
-            # into a bogus nested path. On Windows it converts the native
-            # separator to the one the shell this chain was written for
-            # actually prints -- Git Bash's `pwd` emits `X:/claude-klabauter`,
-            # not `X:\claude-klabauter`, so the unconverted form was a
-            # gratuitous divergence from the command being replaced.
-            lines.append('print(os.getcwd().replace(os.sep, "/"))')
-        elif kind == "whoami":
-            lines.append("print(getpass.getuser())")
-        elif kind == "date":
-            # `%e` (space-padded
-            # day-of-month) is a glibc/BSD `strftime` EXTENSION, not part of
-            # the C89 set Python's own docs guarantee portable; the Windows
-            # CRT does not implement it and `time.strftime` raises
-            # `ValueError` there -- a bare `date` fork (which works fine on
-            # Windows Git Bash's own coreutils) would trade for a CRASHING
-            # `python3 -c` one-liner on the very platform this rewrite
-            # exists for (BX-7). Fixed portably (no platform branch needed)
-            # by computing the space-padded day with plain Python string
-            # formatting (`"%2d" % ...`) instead of asking `strftime` for
-            # it, then splicing it into the surrounding `strftime` output --
-            # preserves the real `date` command's exact space-padded-day
-            # fidelity on every platform, not merely a same-behavior-minus-
-            # padding stand-in.
-            #
-            # SINGLE-SAMPLE FIX (2026-07-29, code-reviewer Finding 2,
-            # confirmed): the original form called `time.localtime()` once
-            # for the day-of-month and then TWO separate no-arg
-            # `time.strftime()` calls, each of which internally re-samples
-            # the clock via its own `time.localtime()` -- three independent,
-            # uncorrelated reads of "now". A day/hour/minute rollover between
-            # any of those three calls could print an internally
-            # inconsistent banner (e.g. a weekday/month from before midnight
-            # glued to a day-of-month or time-of-day from after it). Sampling
-            # `time.localtime()` exactly once and deriving both `strftime`
-            # calls from that single struct_time makes the three pieces
-            # atomic with respect to each other.
-            lines.append("_now = time.localtime()")
-            lines.append("_day = \"%2d\" % _now.tm_mday")
-            lines.append(
-                'print(time.strftime("%a %b ", _now) + _day + time.strftime(" %H:%M:%S %Z %Y", _now))'
-            )
-        elif kind == "uname":
-            lines.append("print(platform.uname().system)")
-        elif kind == "uname_a":
-            # GNU coreutils'
-            # `uname -a` appends processor/hardware-platform/operating-
-            # system fields this rewrite omits. NOT adding `platform.uname()
-            # .processor` here despite that suggestion: differential
-            # execution against the real `uname -a` on this development
-            # platform (macOS/BSD userland) shows `.processor` ("arm")
-            # is NOT one of the fields real `uname -a` prints there at all
-            # -- it is a GNU-coreutils-only convention, so adding it
-            # unconditionally would trade this omission for a NEW fidelity
-            # gap on every non-GNU host, the identical "confident wrong
-            # answer" class this whole dispatch exists to close. Left as
-            # documented residue (nit, low stakes per the finding: `uname`
-            # isn't native to Windows anyway, only present via Git Bash/WSL).
-            lines.append(
-                '_u = platform.uname(); print(" ".join([_u.system, _u.node, '
-                "_u.release, _u.version, _u.machine]))"
-            )
-        elif kind == "echo":
-            lines.append("print(%s)" % json.dumps(extra))
-        elif kind == "git:branch":
-            # `# branch.head` prints
-            # the literal sentinel `(detached)` on a detached HEAD, which
-            # neither original command actually outputs verbatim: `git
-            # rev-parse --abbrev-ref HEAD` prints `HEAD` there, while `git
-            # branch --show-current` prints an empty line. `extra` (`form`,
-            # set by `_bt_git_probe_kind`) tracks which of the two this
-            # segment actually was so each gets its OWN real behavior
-            # instead of one shared, sentinel-leaking `_branch` reading.
-            if extra == "revparse":
-                lines.append(
-                    'print("HEAD" if _branch == "(detached)" else (_branch or ""))'
-                )
-            else:  # "showcurrent"
-                lines.append(
-                    'print("" if _branch in (None, "(detached)") else _branch)'
-                )
-        elif kind == "git:head_sha":
-            # `# branch.oid` prints the
-            # literal sentinel `(initial)` on an unborn/initial branch (no
-            # commits yet), where the real `git rev-parse HEAD` instead
-            # exits non-zero with NO stdout. Map the sentinel to empty
-            # output rather than printing it verbatim, matching the real
-            # command's observable (stdout-side) failure behavior.
-            lines.append('print("" if _head in (None, "(initial)") else _head)')
-        elif kind == "git:status":
-            lines.append('print("\\n".join(_status_lines))')
-
-    script = "\n".join(lines)
-    _multiprobe_note = operator_override_note(
-        "COORDINATOR_ALLOW_MULTIPROBE_BANNER", payload=payload, git_root=git_root
+    """BX-16 shape 6: rewrite a multi-probe session-facts banner chain to one
+    `python3 -c` process, or None. Body lives in `multiprobe_banner_rewrite`."""
+    from coordinator_core.bash_guards.multiprobe_banner_rewrite import (
+        check_multiprobe_banner_rewrite as _impl,
     )
-    return _allow_rewrite(
-        "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
-        (
-            # "ONE status call" names the shape the rewrite actually emits
-            # (`git status --porcelain=v2 --branch`); a bare "one call" reads
-            # as one call of some unnamed kind, which is the one thing the
-            # reader needs to know to judge the rewrite. 219 bytes of prose
-            # against the 220 cap -- a further fact belongs somewhere else in
-            # the envelope, not appended here.
-            "Auto-rewritten: this banner re-derives facts the harness already "
-            "knows, one process per probe (89%/84%/71%/49% re-derivation). "
-            "One python3 process reproduces the same facts, batching every "
-            "git fact into ONE status call."
-        )
-        + (" %s" % _multiprobe_note if _multiprobe_note else ""),
-    )
+
+    return _impl(cmd, session_id, payload, git_root)
 
 
 

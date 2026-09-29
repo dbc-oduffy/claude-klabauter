@@ -3,7 +3,7 @@
 PURPOSE. Holding the Group EM Group-EM obliges the session to be running two
 standing teammates -- `coordinator:group-em-assistant` (the warm assistant)
 and the fleet watcher. Until this module existed, that obligation was purely
-doctrinal: it was named only in DoE-claude's `skills/group-em/SKILL.md`, and
+doctrinal: it was named only in coordinator-content-repo's `skills/group-em/SKILL.md`, and
 a Group-EM that simply skipped the dispatch produced no error, no warning, and
 no record. `groupem.enter` re-runs on every tick and already emits
 `digest["gate_declaration_required"]`, the shape for an obligation the EM
@@ -35,7 +35,7 @@ the fleet watcher appears as a NAMED `general-purpose` agent,
 `{"agentType": "general-purpose", "name": "fleet-watch", ...}`. That is a
 LAUNCH-TIME artefact, not a missing agent type: the harness enumerates agent
 types once per session, and `coordinator:fleet-watch` first existed at
-DoE-claude `6eb9c0051` (2026-08-31 16:01 +0100, on that repo's
+Coordinator-content-repo `6eb9c0051` (2026-08-31 16:01 +0100, on that repo's
 `work/machine-a/2026-08-22to31`; not yet on its `origin/main`), so a session
 launched before that timestamp cannot dispatch by type and falls back to a
 named `general-purpose` dispatch, while one launched after dispatches by

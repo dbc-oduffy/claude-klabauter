@@ -2,7 +2,7 @@
 the sole `updatedInput` emitter on the Agent matcher.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`.
 That script's own docstring records catering (sidecar provisioning,
 contract-block injection, role framing) as RETIRED from this leg
 (2026-08-21) onto `SubagentStart`; what remains is PreToolUse-shaped:

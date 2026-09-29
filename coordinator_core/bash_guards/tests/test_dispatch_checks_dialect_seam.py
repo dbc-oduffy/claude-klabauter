@@ -123,7 +123,7 @@ class TestNoDialectDefaultsToBash:
 class TestPsGitBypassSegmentsDialectGate:
     """AC2a retired (2026-08-26): `_ps_git_bypass_segments` gates its
     PowerShell anti-bypass scan on the DECLARED dialect, which only became
-    correct once DoE-claude's `_rearm_command_tool_name` stopped relabeling
+    correct once coordinator-content-repo's `_rearm_command_tool_name` stopped relabeling
     genuine PowerShell payloads to `tool_name: "Bash"` ahead of dispatch
     (their D1, `47f4aedfe`).
 

@@ -4,10 +4,10 @@ join, as a LEAF module.
 is a PURE function over the filesystem — it touches no other `coordinator_core`
 module — yet before this move it lived in `coordinator_core/data_root.py`,
 which DOES import elsewhere in the package (`coordinator_core.ops.
-coordinator_doe_root`, which itself imports `coordinator_core.
+coordinator_content_root`, which itself imports `coordinator_core.
 resolve_coordinator_clone`). A module that needs the join at module level but
 sits anywhere on that import edge (`resolve_coordinator_clone.py`,
-`coordinator_core/ops/coordinator_doe_root.py`) cannot import it from
+`coordinator_core/ops/coordinator_content_root.py`) cannot import it from
 `data_root` without completing a cycle — which is exactly why those two
 modules had grown their own hand-expanded copies of the join instead
 (findings 4 and 8). Moving the join itself into a module with NO
@@ -29,7 +29,7 @@ cycle against), so splitting it further would be a leaf module for its own
 sake rather than one earned by a real constraint.
 
 WHY A SHARED PRIMITIVE AND NOT ANOTHER INLINE JOIN (see `content_root_for`
-below): the identical `Path(doe_root) / "coordinator" / ...` hardcode was
+below): the identical `Path(content_root) / "coordinator" / ...` hardcode was
 fixed pointwise in `data_root()` (see the F2 note there) and left standing at
 ~45 other call sites, each resolving correctly against a private tree and
 producing a path that cannot exist against a published mirror — which is how
@@ -44,13 +44,13 @@ from pathlib import Path
 FLAT_CONTENT_ROOT_MARKER = (".claude-plugin", "plugin.json")
 
 
-def content_root_for(doe_root) -> Path | None:
-    if not doe_root:
+def content_root_for(content_root) -> Path | None:
+    if not content_root:
         return None
-    if isinstance(doe_root, Path):
-        base = doe_root
+    if isinstance(content_root, Path):
+        base = content_root
     else:
-        raw = str(doe_root)
+        raw = str(content_root)
         base = Path(raw.rstrip("/\\") or raw)
     private = base / "coordinator"
     if private.is_dir():
@@ -60,8 +60,8 @@ def content_root_for(doe_root) -> Path | None:
     return None
 
 
-def content_root_or_private(doe_root) -> str:
-    content = content_root_for(doe_root)
+def content_root_or_private(content_root) -> str:
+    content = content_root_for(content_root)
     if content is not None:
         return str(content)
-    return os.path.join(str(doe_root), "coordinator")
+    return os.path.join(str(content_root), "coordinator")

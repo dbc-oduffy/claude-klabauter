@@ -136,7 +136,6 @@ Negative-spec:
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -151,6 +150,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
+from coordinator_core.session.claimed_write import replace_text
 
 #: Written into .git/coordinator-sessions/.commit-ledger/<handoff_id>.jsonl —
 #: inside .git/, never a tracked artifact. Same reasoning as
@@ -258,7 +258,7 @@ def _resolve_sidecar_from_transcript(transcript_path: str) -> Optional[Path]:
     candidate = PurePosixPath(raw)
     if candidate.is_absolute() or ".." in candidate.parts:
         return None
-    # A Windows drive-qualified value ("X:/...") is not absolute to
+    # A Windows drive-qualified value ("C:/...") is not absolute to
     # PurePosixPath, so it is rejected explicitly rather than joined onto the
     # worktree and silently escaping it.
     if ":" in candidate.parts[0]:
@@ -395,10 +395,7 @@ def _stamp_review_completion_sync(
             # write nothing.
             return
 
-        tmp_path = sidecar_abs.with_name(f".{sidecar_abs.name}.review-completion.tmp-{os.getpid()}")
-        with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(new_doc_text)
-        os.replace(tmp_path, sidecar_abs)
+        replace_text(sidecar_abs, new_doc_text)
 
         from coordinator_core.session.declared_writes import declare_write
 

@@ -1,7 +1,7 @@
 """The decision-object envelope: 8-key schema + the `_emit` fail-loud chokepoint.
 
 Conformance target (the DoE schema-of-record): `schemas/decision-object.schema.json`
-in DoE-claude is the contract-of-record (DR-047). `ENVELOPE_KEYS` below encodes
+in coordinator-content-repo is the contract-of-record (DR-047). `ENVELOPE_KEYS` below encodes
 that schema's 8 canonical top-level keys as a module constant rather than
 coupling this package to a cross-repo file path -- the conformance suite
 (`coordinator_core/tests/test_decision_object_envelope.py`) asserts this

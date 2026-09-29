@@ -20,7 +20,7 @@ def test_extension_axis_skip_line_uses_generic_phrasing(tmp_path: Path, monkeypa
     )
 
 
-def test_extension_axis_skip_line_never_names_doe_claude_literally(tmp_path: Path, monkeypatch):
+def test_extension_axis_skip_line_never_names_content_root_literally(tmp_path: Path, monkeypatch):
     settings_bin = tmp_path / "settings-bin"
     settings_bin.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
@@ -28,5 +28,5 @@ def test_extension_axis_skip_line_never_names_doe_claude_literally(tmp_path: Pat
     lines, _mismatch = fd._check_extension_axis(None, settings_bin)
 
     joined = "\n".join(lines)
-    assert "DoE-claude" not in joined
-    assert "doe-claude" not in joined.lower()
+    assert "coordinator-content-repo" not in joined
+    assert "coordinator-content-repo" not in joined.lower()

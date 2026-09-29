@@ -454,7 +454,7 @@ def test_baton_brief_stays_under_frozen_high_water(tmp_path, monkeypatch):
         lambda: {
             "settings_home": "/fake/settings-home",
             "claude_klabauter_bin": "/fake/settings-home/bin",
-            "doe_root": "/fake/doe-root",
+            "content_root": "/fake/content-root",
         },
     )
     artifact = _write_artifact(

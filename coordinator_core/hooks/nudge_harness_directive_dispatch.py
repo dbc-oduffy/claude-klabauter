@@ -17,7 +17,7 @@ Anthropic harness."
 
 This op is a LATE backstop, not the fix: it fires at end-of-turn, after the
 misattribution has already been spoken. Per DR-123 (`docs/decisions/
-DR-123-the-per-turn-dispatch-restatement-is-ret.md`, DoE-claude), the work of
+DR-123-the-per-turn-dispatch-restatement-is-ret.md`, coordinator-content-repo), the work of
 countering the harness line is now split three ways: the binding statement
 lives at SessionStart (`coordinator/snippets/agent-role-em.md` § How You
 Dispatch); the mid-conversation salience carrier is the once-per-session

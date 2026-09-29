@@ -58,7 +58,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.session.mode_resolution import INTERACTION_MODES
+from coordinator_core.session.job_mode_env import INTERACTION_MODES
 
 # established per-module convention (see e.g. sizing_discharge_surfaced._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (

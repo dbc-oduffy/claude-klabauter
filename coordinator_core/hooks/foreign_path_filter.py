@@ -8,7 +8,7 @@ from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import same_path
 
 _PLANE_REGISTRY_KEYS = (
-    "repos.doe_claude",
+    "repos.content_root",
     "repos.claude_klabauter",
     "repos.claude_klabauter",
 )

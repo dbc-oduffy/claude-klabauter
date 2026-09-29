@@ -168,18 +168,20 @@ _SIDECAR_LEAF_RE = machinery_paths.subagent_share_leaf_pattern()
 #: uses to sanitize the ``<label>`` component -- re-derived here rather than
 #: imported (see module docstring's negative-spec bullet); pinned equal by
 #: test_label_whitelist_matches_provision_report.
-_LABEL_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
+_LABEL_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]+")
 
 
 def _sanitize_label(value: str) -> str:
     """Reduce ``value`` (a ``subagent_type``/``agent_type`` string, e.g.
     ``coordinator:executor``) to the same sanitized form
     ``provision_report`` stamps into a sidecar's filename leaf --
-    everything outside ``[A-Za-z0-9._@-]`` dropped, nothing rejected (a
-    degenerate empty result compares equal only to another degenerate empty
-    result, which never matches a non-empty leaf label).
+    each run of characters outside ``[A-Za-z0-9._@-]`` collapsed to one
+    ``-``, ends trimmed of ``-``; a degenerate ``.``/``..`` result becomes
+    empty (empty compares equal only to another degenerate empty result,
+    which never matches a non-empty leaf label).
     """
-    return _LABEL_WHITELIST_RE.sub("", value or "")
+    sanitized = _LABEL_WHITELIST_RE.sub("-", value or "").strip("-")
+    return "" if sanitized in (".", "..") else sanitized
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:

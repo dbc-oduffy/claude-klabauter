@@ -30,7 +30,7 @@ import pytest
 from coordinator_core._content_root_primitive import (
     FLAT_CONTENT_ROOT_MARKER as _FLAT_CONTENT_ROOT_MARKER,
 )
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.frontmatter.schema_corpus import (
     DEV_REPO_SENTINEL as _DEV_REPO_SENTINEL,
 )
@@ -160,9 +160,9 @@ def test_main_no_argv_success_path(tmp_path, monkeypatch, capsys):
     assert "OK" in captured.out
 
 
-def _find_doe_root() -> Optional[Path]:
-    """Resolve the DoE-claude sibling repo's coordinator/ dir via the pointer-file
-    mechanism (coordinator_core.doe_root_pointer, DR-072) -- the established
+def _find_content_root() -> Optional[Path]:
+    """Resolve the coordinator-content-repo sibling repo's coordinator/ dir via the pointer-file
+    mechanism (coordinator_core.content_root_pointer, DR-072) -- the established
     sibling-resolution convention used across claude-klabauter's other suites, not an
     author-machine hardcoded path.
 
@@ -172,16 +172,16 @@ def _find_doe_root() -> Optional[Path]:
     exist; the caller raises loudly in that case since a recapture with no
     oracle to capture from is a hard user error, not a skip.
     """
-    pointer = read_doe_root_pointer()
+    pointer = read_content_root_pointer()
     if not pointer:
         return None
     coordinator_dir = Path(pointer) / "coordinator"
     return coordinator_dir if coordinator_dir.is_dir() else None
 
 
-def _normalize_drift_output(stderr_lines: List[str], doe_root: Path) -> List[str]:
-    root_str = str(doe_root)
-    return [line.replace(root_str, "<DOE_ROOT>") for line in stderr_lines]
+def _normalize_drift_output(stderr_lines: List[str], content_root: Path) -> List[str]:
+    root_str = str(content_root)
+    return [line.replace(root_str, "<CONTENT_ROOT>") for line in stderr_lines]
 
 
 @pytest.mark.real_home
@@ -197,51 +197,51 @@ def test_golden_oracle_parity_against_live_doe_repo():
     That was two rename maps disagreeing, not real drift: this port
     single-sources on the shared map, so all three now derive their correct
     registry type and PASS. The golden below freezes exit_code=0 / zero
-    MISSING entries against the live DoE-claude schemas/ corpus -- the 3
+    MISSING entries against the live coordinator-content-repo schemas/ corpus -- the 3
     old MISSING entries were rename-map false positives, not a real gap.
 
     Frozen to a committed golden (2026-07-22 de-node Gate A, C5; re-frozen
     same day for the false-positive fix above): the golden was captured ONCE
-    from a live `vsrs.run()` against the DoE-claude sibling checkout and
+    from a live `vsrs.run()` against the coordinator-content-repo sibling checkout and
     committed under `coordinator_core/ops/_goldens/verify_schema_registry_sync/`.
     Ordinary runs load that golden and assert its frozen content -- no live
-    DoE-claude checkout needed at test time. `vsrs.run()` itself is now fully
+    coordinator-content-repo checkout needed at test time. `vsrs.run()` itself is now fully
     native (no node subprocess at all, post de-node port), so recapture no
-    longer needs `node` on PATH either -- only the DoE-claude sibling
+    longer needs `node` on PATH either -- only the coordinator-content-repo sibling
     checkout, to read its live schemas/ dir as the recapture input. Regenerate
     deliberately via:
         CAPTURE_GOLDENS=1 python3 -m pytest \
             coordinator_core/ops/test_verify_schema_registry_sync.py -q
-    (requires the DoE-claude sibling checkout to be resolvable via the
-    .doe-root pointer file -- see coordinator_core.doe_root_pointer -- not
+    (requires the coordinator-content-repo sibling checkout to be resolvable via the
+    .coordinator-content-root pointer file -- see coordinator_core.content_root_pointer -- not
     needed for an ordinary run).
 
-    Negative-spec: does NOT `pytest.skip` when the live DoE-claude repo is
+    Negative-spec: does NOT `pytest.skip` when the live coordinator-content-repo repo is
     unavailable -- that was the exact silent-green hazard this conversion
     closes (see docs/plans/2026-07-21-parity-suites-freeze-to-goldens.md).
 
     Carries `@pytest.mark.real_home` (see `coordinator_core/conftest.py`'s
-    `_quarantine_real_home` docstring): `_find_doe_root()` resolves the
-    `.doe-root` pointer file under the real HOME, which the suite-root autouse
+    `_quarantine_real_home` docstring): `_find_content_root()` resolves the
+    `.coordinator-content-root` pointer file under the real HOME, which the suite-root autouse
     fixture otherwise redirects to a per-test throwaway dir. This is the
     documented read-only-oracle opt-out, exercised only on the
     `is_capturing()` branch -- the ordinary (golden-load) path touches neither
     HOME nor the live repo.
     """
     if is_capturing():
-        doe_root = _find_doe_root()
-        if doe_root is None:
+        content_root = _find_content_root()
+        if content_root is None:
             raise RuntimeError(
-                "CAPTURE_GOLDENS=1 recapture requires the DoE-claude sibling "
-                "checkout (resolvable via the .doe-root pointer file) to be "
+                "CAPTURE_GOLDENS=1 recapture requires the coordinator-content-repo sibling "
+                "checkout (resolvable via the .coordinator-content-root pointer file) to be "
                 "present -- not needed for an ordinary (non-capture) run."
             )
-        exit_code, stdout_lines, stderr_lines = vsrs.run(doe_root)
+        exit_code, stdout_lines, stderr_lines = vsrs.run(content_root)
         payload = {
             "exit_code": exit_code,
             "stdout_lines": stdout_lines,
-            "stderr_lines": _normalize_drift_output(stderr_lines, doe_root),
-            "schemas_checked": len(vsrs._schemas_with_applies_to(doe_root / "schemas")),
+            "stderr_lines": _normalize_drift_output(stderr_lines, content_root),
+            "schemas_checked": len(vsrs._schemas_with_applies_to(content_root / "schemas")),
         }
         assert_matches_golden(json.dumps(payload), _GOLDEN_NAMESPACE, "drift_entries", kind="json")
         expected = payload
@@ -284,7 +284,7 @@ def test_published_mirror_stand_down_names_the_evidence_and_the_remedy(tmp_path)
 
 
 def test_authoring_root_still_runs_the_comparison(tmp_path, monkeypatch):
-    root = tmp_path / "DoE-claude"
+    root = tmp_path / "coordinator-content-repo"
     _write_schema(root / "schemas", "handoff.yaml", "state/handoffs/*.yaml")
     (root / _DEV_REPO_SENTINEL).write_text("", encoding="utf-8")
     monkeypatch.setattr(vsrs, "_type_recognised", lambda *a, **kw: True)

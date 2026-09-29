@@ -1,9 +1,9 @@
 """coordinator_core.hooks.block_workflow_unmodeled_agent — PreToolUse
 (Workflow) op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/block-workflow-unmodeled-
+Ported from coordinator-content-repo `coordinator/hooks/scripts/block-workflow-unmodeled-
 agent.py` per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9.
-Closes the un-modeled `agent()` cost trap documented in DoE-claude's
+Closes the un-modeled `agent()` cost trap documented in coordinator-content-repo's
 `coordinator/docs/wiki/workflow-orchestration.md` § "Model selection:
 Sonnet by default, Opus is PM-gated": "an un-modeled agent() in an Opus
 session is a defect, not a shortcut... there is no warning, no gate, and no
@@ -48,7 +48,7 @@ port):
   `cater_subagent_start._resolve_role_append_snippet_path` already resolve
   their own doctrine-plane artifacts: probe
   `<claude-config-dir>/plugins/coordinator-claude/coordinator/<rel>` and
-  the marketplace-root sibling shape, then fall back to the `.doe-root`
+  the marketplace-root sibling shape, then fall back to the `.coordinator-content-root`
   pointer + `coordinator_core.data_root.content_root_for` rung for a
   dev-clone box. Fail-open to `None`/absent on any miss — `_resolve_call_
   site_tier`, `_tier_walked_agent_types`, `_signal_selected_agent_types`
@@ -75,7 +75,7 @@ of scope); no `transcript_path`, or the file at it is missing; session
 model undetected or not Opus-tier; `agent_n < 1`.
 
 Spec backlink: cross-repo/inbox/2026-07-13-example-store-repo-em-workflow-
-sonnet-default-guard.md (DoE-claude);
+sonnet-default-guard.md (coordinator-content-repo);
 docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 """
 
@@ -109,7 +109,7 @@ def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:
     try:
         from coordinator_core._settings_home import claude_config_dir
         from coordinator_core.data_root import content_root_for
-        from coordinator_core.doe_root_pointer import read_doe_root_pointer
+        from coordinator_core.content_root_pointer import read_content_root_pointer
     except Exception:
         return None
 
@@ -121,11 +121,11 @@ def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:
             return candidate
 
     try:
-        doe_root = read_doe_root_pointer()
+        content_root = read_content_root_pointer()
     except Exception:
-        doe_root = ""
-    if doe_root:
-        content_root = content_root_for(doe_root)
+        content_root = ""
+    if content_root:
+        content_root = content_root_for(content_root)
         if content_root is not None:
             candidate = content_root / rel
             if candidate.exists():

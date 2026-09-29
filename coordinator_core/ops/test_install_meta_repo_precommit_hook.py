@@ -210,8 +210,8 @@ def test_no_hardcoded_absolute_literal_outside_the_docstring():
     lines = source.splitlines(keepends=True)
     code_only = "".join(lines[: doc_node.lineno - 1] + lines[doc_node.end_lineno :])
     assert "plugins/coordinator-claude" not in code_only
-    assert "X:/" not in code_only
-    assert "X:\\" not in code_only
+    assert "C:/" not in code_only
+    assert "C:\\" not in code_only
 
 
 # ---------------------------------------------------------------------------
@@ -1316,10 +1316,10 @@ def test_preexisting_v1_hook_with_raw_exit_dollar_question_is_refreshed(tmp_path
 
 
 def test_detect_staged_rollback_is_not_registered():
-    """2026-08-25, peer session doe-claude-33 / PM ruling on their side:
+    """2026-08-25, peer session coordinator-content-repo-33 / PM ruling on their side:
     "Drop the gate. Do NOT keep a minimal op alive for us." This module
     installs `~/.claude`'s hook (Claude Central / the meta-repo), not
-    DoE-claude's own tree -- DoE-claude has no pre-commit hook at all and
+    coordinator-content-repo's own tree -- coordinator-content-repo has no pre-commit hook at all and
     never has. Regression guard: `detect-staged-rollback` must never be
     reintroduced into `_GATE_REGISTRY` by analogy with a future gate."""
     assert all(g.marker != "detect-staged-rollback" for g in _GATE_REGISTRY)
@@ -1404,7 +1404,7 @@ def test_comment_only_marker_does_not_suppress_the_gate(tmp_path, monkeypatch, c
     Observed live on `~/.claude`'s pre-commit, whose header comment records
     that a hand-written `check-no-illegal-paths.sh` was removed -- that
     sentence alone kept the `check-no-illegal-paths` gate off the hook on
-    every reinstall. Found by peer session doe-claude-5a, 2026-08-25.
+    every reinstall. Found by peer session coordinator-content-repo-5a, 2026-08-25.
     """
     meta = _make_meta_repo(tmp_path, monkeypatch)
     fake_bin = tmp_path / "fakebin"

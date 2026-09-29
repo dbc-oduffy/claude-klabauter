@@ -5,7 +5,7 @@ other sessions running against this repo, classifies each with claude-klabauter'
 `coordinator_core.session.receiver_state.read_receiver_state` reader where a
 stored record exists, falls back to the live in-engine peer roster's status
 plus a bounded transcript-tail read otherwise, and returns a bounded
-candidate roster for a human to look at. Ported from the DoE-claude sibling
+candidate roster for a human to look at. Ported from the coordinator-content-repo sibling
 repo's `coordinator/skills/group-em/read_pass.py` (read-only source, never
 imported from; resolve via the machine-local repo registry, not a hardcoded
 path) per `docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md` chunk
@@ -13,7 +13,7 @@ C1, layered over the already-live `session.peer_roster` read (chunk C6) in
 place of a second `claude agents --json` enumeration. The one required
 behaviour change from the source: the reader leg no longer imports
 `coordinator.lib.receiver_state_reader` (a cross-plane import into
-DoE-claude) — it calls claude-klabauter's own `read_receiver_state(sid, cwd)` instead.
+Coordinator-content-repo) — it calls claude-klabauter's own `read_receiver_state(sid, cwd)` instead.
 
 ENUMERATION SOURCE (chunk C6). `fetch_live_agents` used to spawn `claude
 agents --json` as a child process on every call — measured 856-1536ms wall,

@@ -19,8 +19,8 @@ from unittest import mock
 from coordinator_core.hooks import example_retrieval_repo_detect
 
 _FORBIDDEN_SUBSTRINGS = (
-    "DoE-claude",
-    "doe-claude",
+    "coordinator-content-repo",
+    "coordinator-content-repo",
     "cockpit",
     "example-fleet",
     "machine-b",

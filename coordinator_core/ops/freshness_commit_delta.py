@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.freshness_commit_delta — "freshness.commit_delta" JSON-RPC op.
 
-Purpose: the workday-start producer for the three cadence-shaped fields DoE-claude's
+Purpose: the workday-start producer for the three cadence-shaped fields coordinator-content-repo's
 engine-gap memo named as unproduced: `doc_commit_delta`, `test_commit_delta`,
 `bug_sweep_commit_delta` (DoE-side marker names `freshness.doc_commit_delta`,
 `freshness.test_commit_delta`, `freshness.bug_sweep_commit_delta` — one op, three

@@ -104,7 +104,7 @@ call's passed value.
 GRANT -- `COORDINATOR_OVERRIDE_AGENT_MODEL_GUARD`, non-empty in the hook
 process's OWN environment to bypass, read INLINE inside `check()` (never
 hoisted to module scope, matching `enforce_agent_model_pin`'s own
-F2-discipline convention). Name and convention mirror DoE-claude's shipped
+F2-discipline convention). Name and convention mirror coordinator-content-repo's shipped
 `BLOCK-WORKFLOW-UNMODELED-AGENT` guard
 (`hooks/scripts/block-workflow-unmodeled-agent.py`, override
 `COORDINATOR_OVERRIDE_WORKFLOW_MODEL_GUARD=1`) rather than inventing a new

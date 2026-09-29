@@ -81,7 +81,7 @@ sweeper DECLINES (returns without pushing) rather than racing.
 FEEDS THE FAILURE DETECTOR. `push_with_retry`/`push_outstanding` never call
 `auto_push.log_failure` -- that file's only two writers sit on the path
 C6/C7 delete, and the Stop-time push-failure detector
-(`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude) reads
+(`runtime-tripwire-em-check.py::_check_push_failures`, coordinator-content-repo) reads
 `.git/push-failures.log` written only by `log_failure`. A declined/failed
 sweep push records a row through `log_failure` directly so the detector
 does not go quiet on exactly the failures the cadence now owns.
@@ -113,11 +113,17 @@ from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_state import head_branch
+from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.hooks.auto_push import log_failure
 from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
 from coordinator_core.ops.push_outstanding import push_outstanding
 from coordinator_core.session.day_branch_cut_lock import holder_alive
+
+try:
+    from coordinator_core.machine_profile import machine_profile
+except ImportError:  # pragma: no cover
+    def machine_profile() -> str:
+        return "author"
 
 __all__ = [
     "PUSH_CADENCE_INTERVAL_SECS",
@@ -399,6 +405,38 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
 # parameter no caller needs and no callee uses.
 # No `drain_pending_push` call
 # here; see module docstring's DOES NOT DRAIN section for why.
+def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
+    """True when `branch` has no upstream ref and HEAD already sits at some
+    remote-tracking ref's sha: a freshly cut branch with nothing to publish."""
+    common_dir = resolve_git_common_dir(root)
+    remotes = common_dir / "refs" / "remotes"
+    try:
+        for ref in remotes.rglob("*"):
+            if ref.is_file() and ref.name != "HEAD":
+                if ref.relative_to(remotes).parts[1:] == tuple(branch.split("/")):
+                    return False
+                try:
+                    if ref.read_text(encoding="utf-8").strip() == sha:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    try:
+        packed = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for line in packed.splitlines():
+        if line and line[0] not in "#^":
+            psha, _, name = line.partition(" ")
+            if name.startswith("refs/remotes/") and not name.endswith("/HEAD"):
+                if name.split("/", 3)[3:] == [branch]:
+                    return False
+                if psha == sha:
+                    return True
+    return False
+
+
 def _sweep_one(repo_root: Union[str, Path]) -> None:
     """Push exactly one repo -- declining outright if another sweeper
     already holds this repo's lock. The per-repo bound is enforced by
@@ -413,6 +451,12 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
     parameter's own docstring in `ops.ceremony.push`.
     """
     root = Path(repo_root)
+    if machine_profile() != "author":
+        return
+    branch = head_branch(root)
+    sha = head_sha(root) if branch is not None else None
+    if branch is not None and sha is not None and _no_upstream_and_no_new_commits(root, branch, sha):
+        return
     if not _acquire_sweep_lock(root):
         return
     try:

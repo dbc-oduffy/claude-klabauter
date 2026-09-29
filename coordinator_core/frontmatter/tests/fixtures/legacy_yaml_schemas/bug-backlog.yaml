@@ -28,7 +28,7 @@ optional:
   environment: string
   why_blocked: string
   # initiative: FK to state/initiatives/<id>.yaml; nullable — absent≡null.
-  # Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C0
+  # Spec backlink: coordinator-content-repo:pln-initiative-govern-sweep-priori-6cf808 § C0
   initiative:
     type: string-or-null
   system:

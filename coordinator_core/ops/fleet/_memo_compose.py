@@ -19,7 +19,7 @@ the tree and was not when it was written.** `memo.send` is REGISTERED AND
 LIVE — `memo_send.py` exists, carries `@register_op("memo.send")`, and is
 present on all four registration surfaces in the published mirror as well as
 here; it is ABSENT from `op_budget_suspension.SUSPENDED_OPS`, whose only row
-is `session.boot_sweep`. Verified independently in the mirror by doe-claude-em
+is `session.boot_sweep`. Verified independently in the mirror by coordinator-content-repo-em
 (2026-08-26) after this docstring sent two EMs down a dead-name hunt: it was
 cited across a repo boundary as evidence that a memo op had been killed, and
 reasoning was built on it before anyone resolved the op.
@@ -99,7 +99,7 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
     2026-09-12, DoE `e267d18336`). That literal was justified in this
     module's history by a "DoE Ask-1 concurrence: consumers key on the file
     at the path, not on the writing process — an engine actor-id in from: is
-    sufficient" — doe-claude-bc WITHDREW that concurrence at `e267d18336`.
+    sufficient" — coordinator-content-repo-bc WITHDREW that concurrence at `e267d18336`.
     The publish transform rewrites repo names as a CONTENT rewrite (`claude-klabauter`
     -> `claude-klabauter`), so a literal constant is rewritable by the same
     transform regardless of what string it holds — the published engine
@@ -274,9 +274,9 @@ def _normalize_supersedes_ref(ref: str) -> str:
     therefore never portable, and the failure is silent: it simply resolves
     nowhere, so a reader cannot tell a superseded memo from a live one.
 
-    OBSERVED, not hypothetical (doe-claude-em, 2026-08-26): five memos in
+    OBSERVED, not hypothetical (coordinator-content-repo-em, 2026-08-26): five memos in
     DoE's inbox carry a `supersedes` of the form
-    `/Users/<user>/X/DoE-claude/cross-repo/inbox/<name>.md` -- a macOS-shaped
+    `/Users/<user>/X/coordinator-content-repo/cross-repo/inbox/<name>.md` -- a macOS-shaped
     absolute path for a repo that lives on a Windows drive root on the box
     that received it. DoE runs a `guard-foreign-platform-paths` hook for
     exactly this shape, but inbound memo bodies are not on its beat.

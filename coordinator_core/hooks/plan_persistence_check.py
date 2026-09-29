@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.plan_persistence_check — warm-door counterpart of
-DoE-claude's `coordinator/hooks/scripts/plan-persistence-check.py`
+Coordinator-content-repo's `coordinator/hooks/scripts/plan-persistence-check.py`
 (PostToolUse(ExitPlanMode) hook).
 
 Purpose: reads the approved plan from `tool_response.plan` and persists it to
@@ -13,7 +13,7 @@ the source script printed to stdout.
 Built against `docs/reference/warm-hook-migration.md` (candidate-selection
 input) and this plan's own C5 dispatch brief
 (`state/dispatch-briefs/2026-08-31-six-hook-scripts-become-engine-ops/C5.md`).
-Spec backlink (source script): DoE-claude's own
+Spec backlink (source script): coordinator-content-repo's own
 `docs/plans/2026-06-18-plan-persistence-hook-automation.md`.
 
 CORRECTION (coordinatorcode-reviewer.a986dd968d6771f99, Finding 1): the two
@@ -103,10 +103,10 @@ inherited or silently fixed:
      falling back to `Path.home()` when `CLAUDE_HOME` is unset.
   3. WIKI ANCHOR CITED, NOT RESOLVED — the source script's `_WIKI_ANCHOR`
      ("coordinator/docs/wiki/guard-message-concision.md#plan-persistence-check")
-     is rewritten by DoE-claude's own `_message_envelope.resolve_wiki_citation`
+     is rewritten by coordinator-content-repo's own `_message_envelope.resolve_wiki_citation`
      into an absolute path anchored at THAT repo's own `__file__`-derived
      `coordinator/` directory before being printed. This op has no reliable,
-     already-pinned way to locate DoE-claude's checkout on an arbitrary
+     already-pinned way to locate coordinator-content-repo's checkout on an arbitrary
      machine (the reverse of `coordinator_core.engine_root`'s own
      DoE-side-finds-claude-klabauter direction; no such find-DoE-from-claude-klabauter seam
      exists today), and that resolution is itself DoE-plane wiki-citation
@@ -114,7 +114,7 @@ inherited or silently fixed:
      coordinator-claude owns "every discovery-resolved surface"). The
      citation is emitted as the same repo-relative literal the source
      script authored — a known, bounded degradation (a reader outside
-     DoE-claude gets a path that does not resolve from their own cwd,
+     coordinator-content-repo gets a path that does not resolve from their own cwd,
      exactly the pre-C2-fix behavior that fix corrected) rather than an
      invented cross-repo resolver. Every OTHER guard behavior (the fail-open
      direction on every I/O error, the collision/idempotent/persisted
@@ -163,7 +163,7 @@ _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 
 #: Degraded (unresolved) verbatim from the source script's `_WIKI_ANCHOR` —
 #: see module docstring point 3 for why this op does not attempt to
-#: absolutize it the way DoE-claude's `_message_envelope.py` does.
+#: absolutize it the way coordinator-content-repo's `_message_envelope.py` does.
 _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#plan-persistence-check"
 
 #: Generator-provenance declaration (generator_provenance.py). This op fires
@@ -173,7 +173,7 @@ _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#plan-persistenc
 #: the meta-repo branch above), and the filename it writes is `<today>-
 #: <slug>.md` where `slug` is derived from the plan text (`_derive_slug`).
 #: Neither the target repo nor the target filename is fixed ahead of time,
-#: same shape as DoE-claude's `coordinator-doc-new.py` (acknowledged in
+#: same shape as coordinator-content-repo's `coordinator-doc-new.py` (acknowledged in
 #: `state/generator-provenance/unresolved-writers.json` for the identical
 #: reason: "mints an operator/title-derived doc path ... a data-dependent
 #: target set; GENERATES cannot express it"). `docs/README.md`'s append is
@@ -258,7 +258,7 @@ def _local_day() -> str:
 
 
 # ---------------------------------------------------------------------------
-# message composition — a minimal local flattener, NOT DoE-claude's
+# message composition — a minimal local flattener, NOT coordinator-content-repo's
 # `_message_envelope.compose`/`render`/280-char-ceiling machinery. That
 # module also validates alternative-block SHAPE and enforces a
 # DoE-plane-authored prose cap on hand-authored text; both are authoring-time

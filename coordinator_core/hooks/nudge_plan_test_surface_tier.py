@@ -3,7 +3,7 @@
 where a dispatch-time-only guard never sees a plan body being authored.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/nudge-plan-test-surface-tier.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/nudge-plan-test-surface-tier.py`.
 Shape changes, all forced by this row's own op contract, none a behaviour
 change:
 
@@ -28,7 +28,7 @@ suite green" into a chunk's test-surface row, the plan gets reviewed and
 ratified carrying it, and the only catch is the dispatch guard firing
 later, after the plan has already cleared review on the strength of a
 test-surface row that was never enforceable as written. See
-`coordinator/skills/plan/residue/shared-corpus.md` (a DoE-claude-resident
+`coordinator/skills/plan/residue/shared-corpus.md` (a coordinator-content-repo-resident
 skill doc; the row's constraint restated here rather than re-fetched): the
 test-surface row must name a Tier T, path-scoped surface, never the repo's
 fast tier or full suite.

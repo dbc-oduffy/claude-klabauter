@@ -1,9 +1,9 @@
 """
 coordinator_core.ops.check_pcli_drift_gate — pcli-04 drift gate: detects
 divergence between the `dispatch_feed` contract
-(DoE-claude `coordinator/schemas/run-report.schema.json`) and the captured
+(coordinator-content-repo `coordinator/schemas/run-report.schema.json`) and the captured
 live `Workflow` `agent()` option surface
-(DoE-claude `coordinator/schemas/workflow-tool-api-capture.<date>.json`),
+(coordinator-content-repo `coordinator/schemas/workflow-tool-api-capture.<date>.json`),
 plus two adjacent failure modes on the same DoE-owned schema files.
 
 Purpose: `coordinator_core/ops/dispatch_emit/` (pcli-04) generates real
@@ -73,7 +73,7 @@ answering different questions, and the tier is what reconciles them rather
 than picking a winner:
 
   - 14 is what DoE's EM accepted on 2026-08-13 against the shipped gate
-    (`cross-repo/inbox/2026-08-13-doe-claude-em-pcli-04-ceremony-step-landed.md`),
+    (`cross-repo/inbox/2026-08-13-coordinator-content-repo-em-pcli-04-ceremony-step-landed.md`),
     and it is correct while this gate's staleness leg is the ONLY leg that
     runs.
   - 90 is what DoE's PM ratified on 2026-08-14
@@ -110,7 +110,7 @@ capture's own `$comment` already warns against for hand-editing.
 
 Repo-root / DoE-clone resolution: this module imports and reuses
 `coordinator_core.ops.ensure_doe_clone.resolve_doe_clone()` (env override
-`REPO_DOE_CLAUDE`, then `machine-local get repos.doe_claude`) rather than
+`REPO_CONTENT_ROOT`, then `machine-local get repos.content_root`) rather than
 hardcoding a path or re-implementing the tiering — same division of labor as
 every other DoE-clone-resolving op in this repo.
 
@@ -395,12 +395,12 @@ def _extract_capture_opts_fields(capture: Any, capture_path: Path) -> "set[str]"
     return set(opts.keys())
 
 
-def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
-    doe_root = Path(doe_root)
-    content_root = content_root_for(doe_root)
+def run_gate(content_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
+    content_root = Path(content_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         raise GateError(
-            f"no coordinator content root under {doe_root} (neither a coordinator/ "
+            f"no coordinator content root under {content_root} (neither a coordinator/ "
             "directory nor a flat .claude-plugin/plugin.json) — schemas/ unreachable"
         )
     schemas_dir = content_root / "schemas"
@@ -461,7 +461,7 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
         )
 
     hash_reasons = compute_hash_drift(
-        doe_root,
+        content_root,
         resolution.get("hash_algorithm"),
         source_hashes,
     )
@@ -473,16 +473,16 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
 
 
 def main(argv: list[str]) -> int:  # noqa: ARG001 — no flags today; argv reserved for CLI parity
-    doe_root = resolve_doe_clone()
-    if not doe_root:
-        print("ERROR: DoE clone unresolvable (REPO_DOE_CLAUDE / repos.doe_claude not set)", file=sys.stderr)
+    content_root = resolve_doe_clone()
+    if not content_root:
+        print("ERROR: DoE clone unresolvable (REPO_CONTENT_ROOT / repos.content_root not set)", file=sys.stderr)
         return EXIT_ERROR
-    if not Path(doe_root).is_dir():
-        print(f"ERROR: DoE clone path does not exist: {doe_root}", file=sys.stderr)
+    if not Path(content_root).is_dir():
+        print(f"ERROR: DoE clone path does not exist: {content_root}", file=sys.stderr)
         return EXIT_ERROR
 
     try:
-        lines = run_gate(doe_root)
+        lines = run_gate(content_root)
     except GateError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_ERROR

@@ -32,7 +32,7 @@ preuse-write-dispatch.py's direct-import shape — no IPC round trip, no
 register_op(); this is a pure, side-effect-free banner computation, not a
 mutating op.
 
-Spec backlink: X:/DoE-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.8
+Spec backlink: C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.8
 """
 
 from __future__ import annotations

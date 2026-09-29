@@ -2,7 +2,7 @@
 coordinator_core.hooks.subagent_zero_tool_use_detect — SubagentStop
 engine op, the gate+relay leg.
 
-Purpose: warm command/native-door counterpart of DoE-claude's
+Purpose: warm command/native-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/subagent-zero-tool-use-detect.py`. That script's
 whole job — per its own module docstring's DR-047 transport-seam framing —
 was THIN PLUMBING: gate on `agent_type`/own-session membership, select

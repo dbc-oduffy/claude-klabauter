@@ -1,4 +1,4 @@
-"""Pure, stage-aware parser for DoE-claude's review-roster fragment.
+"""Pure, stage-aware parser for coordinator-content-repo's review-roster fragment.
 
 Spec: ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md`` task C1.
 

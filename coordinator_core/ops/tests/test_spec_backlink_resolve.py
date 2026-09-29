@@ -222,11 +222,11 @@ def test_ambiguous_dlv_with_no_covering_pln_is_ambiguity_not_hit_or_miss(tmp_pat
     assert set(outcome["candidates"]) == {str(path_a), str(path_b)}
 
 
-def test_peer_qualified_hit_uses_doe_root(tmp_path, monkeypatch):
+def test_peer_qualified_hit_uses_content_root(tmp_path, monkeypatch):
     """A `<repo>:pln-...` query, using the one recognized qualifier
-    (`DoE-claude:`, matching `rewrite_spec_backlinks._PEER_REPO_NAME`'s fixed
+    (`coordinator-content-repo:`, matching `rewrite_spec_backlinks._PEER_REPO_NAME`'s fixed
     emit literal), must trigger a lazy peer-repo index build rooted at
-    whatever coordinator_registry.doe_root() resolves to — never the local
+    whatever coordinator_registry.content_root() resolves to — never the local
     worktree_root — and never build the peer index for a local-only query."""
     peer_root = tmp_path / "peer-repo"
     peer_docs_plans = peer_root / "docs" / "plans"
@@ -254,7 +254,7 @@ def test_peer_qualified_hit_uses_doe_root(tmp_path, monkeypatch):
 
     import coordinator_core.ops.spec_backlink_resolve as sbr
 
-    monkeypatch.setattr(sbr, "_doe_root_path", lambda: peer_root)
+    monkeypatch.setattr(sbr, "_content_root_path", lambda: peer_root)
 
     build_calls = []
     real_build_index = sbr.build_index
@@ -265,22 +265,22 @@ def test_peer_qualified_hit_uses_doe_root(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sbr, "build_index", _tracking_build_index)
 
-    outcome = sbr.resolve(local_root, "DoE-claude:pln-peer-fixture-plan-999999")
+    outcome = sbr.resolve(local_root, "coordinator-content-repo:pln-peer-fixture-plan-999999")
     assert outcome["outcome"] == "hit"
     assert outcome["path"] == str(peer_plan)
-    assert outcome["queried_id"] == "DoE-claude:pln-peer-fixture-plan-999999"
+    assert outcome["queried_id"] == "coordinator-content-repo:pln-peer-fixture-plan-999999"
     assert peer_root in build_calls
     assert local_root not in build_calls
 
 
-def test_peer_qualified_miss_when_doe_root_unresolvable(tmp_path, monkeypatch):
+def test_peer_qualified_miss_when_content_root_unresolvable(tmp_path, monkeypatch):
     import coordinator_core.ops.spec_backlink_resolve as sbr
 
-    monkeypatch.setattr(sbr, "_doe_root_path", lambda: None)
+    monkeypatch.setattr(sbr, "_content_root_path", lambda: None)
     local_root = tmp_path / "local-repo"
     (local_root / "docs" / "plans").mkdir(parents=True)
 
-    outcome = sbr.resolve(local_root, "DoE-claude:pln-whatever-000000")
+    outcome = sbr.resolve(local_root, "coordinator-content-repo:pln-whatever-000000")
     assert outcome["outcome"] == "miss"
 
 
@@ -310,7 +310,7 @@ def test_unrecognized_repo_qualifier_is_typed_miss_not_silent_peer_hit(tmp_path,
     local_root = tmp_path / "local-repo"
     (local_root / "docs" / "plans").mkdir(parents=True)
 
-    monkeypatch.setattr(sbr, "_doe_root_path", lambda: peer_root)
+    monkeypatch.setattr(sbr, "_content_root_path", lambda: peer_root)
 
     build_calls = []
     real_build_index = sbr.build_index
@@ -321,7 +321,7 @@ def test_unrecognized_repo_qualifier_is_typed_miss_not_silent_peer_hit(tmp_path,
 
     monkeypatch.setattr(sbr, "build_index", _tracking_build_index)
 
-    outcome = sbr.resolve(local_root, "doeclaude:pln-peer-fixture-plan-999999")
+    outcome = sbr.resolve(local_root, "contentroot:pln-peer-fixture-plan-999999")
     assert outcome["outcome"] == "miss"
     assert outcome["path"] is None
     assert outcome["reason"] == "unrecognized_repo_qualifier"

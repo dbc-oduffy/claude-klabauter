@@ -44,7 +44,7 @@ class TestAC8ClosingGuard:
     check) rather than only at the resolver end (a runtime refusal, which is
     correct but late).
 
-    Per the phantom-cli-guard-seam precedent (DoE-claude
+    Per the phantom-cli-guard-seam precedent (coordinator-content-repo
     coordinator/docs/wiki/coordinator-tripwires/phantom-cli-guard-seam.md), the
     check walks each completion-family module's own DECLARED static emission
     surface -- its `CONSUMES_MANIFEST`, the closed set every `directive["cli"]`

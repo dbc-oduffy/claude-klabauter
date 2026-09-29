@@ -45,6 +45,7 @@ def _run_cli(
         "CHECK_ONLY",
     ):
         effective_env.pop(leak_guard, None)
+    effective_env["MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE"] = "author"
     if env:
         effective_env.update(env)
     return subprocess.run(
@@ -756,3 +757,29 @@ def test_write_surface_is_independent_of_this_machines_actual_registry() -> None
     if len(_writer.WRITE_SURFACE.clauses) != 3:
         raise AssertionError(f"{name}: WRITE_SURFACE clause count changed across machine states")
 
+
+
+def test_consumer_profile_seeds_nothing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        registry_dir = os.path.join(tmp, "registry")
+        repo_a = os.path.join(tmp, "repo-a")
+        os.makedirs(repo_a)
+        _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")
+        _write_registry(registry_dir, {"repo_a": repo_a})
+        settings_path = os.path.join(tmp, "settings.local.json")
+        committed_path = os.path.join(tmp, "settings.json")
+
+        result = _run_cli(
+            _base_args(settings_path, committed_path, registry_dir),
+            env={"MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE": "consumer"},
+        )
+        assert result.returncode == 0, result.stderr
+        enabled = _read_json(settings_path).get("enabledPlugins", {}) if os.path.exists(settings_path) else {}
+        assert "pluginA@marketA" not in enabled
+
+        control = _run_cli(
+            _base_args(settings_path, committed_path, registry_dir),
+            env={"MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE": "author"},
+        )
+        assert control.returncode == 0, control.stderr
+        assert "pluginA@marketA" in _read_json(settings_path).get("enabledPlugins", {})

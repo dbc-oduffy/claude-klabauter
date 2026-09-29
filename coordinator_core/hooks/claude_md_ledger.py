@@ -2,7 +2,7 @@
 admission-predicate module for the CLAUDE.md admission gate.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-verbatim from DoE-claude `coordinator/hooks/scripts/_claude_md_ledger.py` --
+verbatim from coordinator-content-repo `coordinator/hooks/scripts/_claude_md_ledger.py` --
 no DoE-repo-relative imports or paths in the source, so no shape change was
 needed beyond the module rename. `GOVERNED_AUTHORING_SURFACES` below is
 imported by `coordinator_core.hooks.guard_doctrine_surface_bash_write` and by

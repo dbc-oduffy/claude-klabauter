@@ -7,7 +7,7 @@ INTEGRATION: that ``compose_script``/``emit_script`` actually assemble
 ``wake_digest.completion_return_js`` from the right bindings for each
 terminal-phase shape (AC14), that the v5 review wave wires into the same
 digest (AC14's review half), and that ``dispatch.emit`` resolves the
-roster fragment and stage schemas through the existing DoE-root pointer
+roster fragment and stage schemas through the existing content-root pointer
 resolution rather than a guessed roster (AC22).
 
 Spec backlink: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md
@@ -328,34 +328,34 @@ def _simulate_return(
     }
 
 
-def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_doe_root(tmp_path, monkeypatch):
+def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(tmp_path, monkeypatch):
     """AC22: the plan route resolves the roster fragment and DoE's stage
-    schemas through the same DoE-root pointer ``review_mint.op.load_fragment``
+    schemas through the same content-root pointer ``review_mint.op.load_fragment``
     already uses -- never a caller-supplied fragment param, and never a
     guessed roster when the sibling root is unresolvable."""
     from coordinator_core.ops.dispatch_emit import op as op_mod
 
-    doe_root = tmp_path / "doe-claude"
-    (doe_root / "coordinator" / "contract").mkdir(parents=True)
-    (doe_root / "coordinator" / "schemas").mkdir(parents=True)
-    (doe_root / "coordinator" / "contract" / "review-roster-fragment.json").write_text(
+    content_root = tmp_path / "coordinator-content-repo"
+    (content_root / "coordinator" / "contract").mkdir(parents=True)
+    (content_root / "coordinator" / "schemas").mkdir(parents=True)
+    (content_root / "coordinator" / "contract" / "review-roster-fragment.json").write_text(
         json.dumps(_V5_FRAGMENT), encoding="utf-8"
     )
-    (doe_root / "coordinator" / "schemas" / "review-stage.schema.json").write_text(
+    (content_root / "coordinator" / "schemas" / "review-stage.schema.json").write_text(
         json.dumps({"$defs": _V5_STAGE_SCHEMAS}), encoding="utf-8"
     )
 
     from coordinator_core.ops.review_mint import op as review_op_mod
 
-    monkeypatch.setattr(op_mod, "read_doe_root_pointer", lambda: str(doe_root))
-    monkeypatch.setattr(review_op_mod, "read_doe_root_pointer", lambda: str(doe_root))
+    monkeypatch.setattr(op_mod, "read_content_root_pointer", lambda: str(content_root))
+    monkeypatch.setattr(review_op_mod, "read_content_root_pointer", lambda: str(content_root))
 
     fragment, stage_schemas = op_mod._load_review_roster_and_stage_schemas()
     assert fragment == _V5_FRAGMENT
     assert stage_schemas == _V5_STAGE_SCHEMAS
 
 
-def test_dispatch_emit_degrades_when_the_doe_root_is_unresolvable(monkeypatch):
+def test_dispatch_emit_degrades_when_the_content_root_is_unresolvable(monkeypatch):
     from coordinator_core.ops.dispatch_emit import op as op_mod
 
     def _raise():

@@ -197,16 +197,25 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
     )
 
 
-def _review_targets_file(git_root: str, session_id: str) -> Path:
-    return Path(git_root) / ".git" / "coordinator-sessions" / session_id / "review-targets.txt"
+def _review_targets_file(git_root: str, session_id: str, agent_id: str = "") -> Path:
+    """The dispatch's own `review-targets.<agent_id>.txt` when it exists (that
+    set alone confines the agent to its slice), else the session-wide file."""
+    base = Path(git_root) / ".git" / "coordinator-sessions" / session_id
+    if agent_id:
+        per_agent = base / f"review-targets.{agent_id}.txt"
+        if per_agent.is_file():
+            return per_agent
+    return base / "review-targets.txt"
 
 
-def _is_registered_review_target(git_root: str, session_id: str, candidate: Path) -> bool:
+def _is_registered_review_target(
+    git_root: str, session_id: str, candidate: Path, agent_id: str = ""
+) -> bool:
     """A candidate write is admitted when it equals a listed path exactly
     (after resolving both against ``git_root`` and casefolding) — a target
     is one file, not a tree, so this is equality, not containment. A
     missing, unreadable, or empty targets file admits nothing extra."""
-    targets_path = _review_targets_file(git_root, session_id)
+    targets_path = _review_targets_file(git_root, session_id, agent_id)
     try:
         raw = targets_path.read_text(encoding="utf-8")
     except OSError:
@@ -264,7 +273,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if contained_path(candidate, sandbox_roots) is not None:
         return None
 
-    if _is_registered_review_target(git_root, session_id, candidate):
+    if _is_registered_review_target(git_root, session_id, candidate, agent_id):
         return None
 
     return {

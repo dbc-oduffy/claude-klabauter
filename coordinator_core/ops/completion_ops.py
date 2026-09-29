@@ -630,7 +630,7 @@ async def _append_session_handler(
 # ---------------------------------------------------------------------------
 # completion.flip_to_released — per-entry release-tag resolution + frontmatter flip
 # ---------------------------------------------------------------------------
-# Byte-parity oracle: [DoE-claude] coordinator/skills/merging-to-main/SKILL.md
+# Byte-parity oracle: [coordinator-content-repo] coordinator/skills/merging-to-main/SKILL.md
 # § Step 1.65 item 3's python3 -<<'PYEOF' block. Contract provisional — see module docstring.
 # ---------------------------------------------------------------------------
 
@@ -1070,7 +1070,7 @@ _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: carrying this subject IN THIS TREE was produced by a SIBLING repo's engine
 #: committing across the tree boundary: claude-klabauter's own sends land in the
 #: receiver's tree, never here, so the sender slug is by construction foreign
-#: (empirically: claude-central-em, doe-claude-em, example-cockpit-repo-em,
+#: (empirically: claude-central-em, coordinator-content-repo-em, example-cockpit-repo-em,
 #: example-retrieval-repo-em, example-market-data-repo-em, example-retrieval-repo-ue-addon-em,
 #: example-game-repo-em, example-store-repo-em — never a claude-klabauter slug across all 602
 #: delivery commits in history).
@@ -1083,7 +1083,7 @@ _FOREIGN_DELIVERY_SUBJECT_RE = re.compile(r"^cross-repo: deliver .+ memo from \S
 _FOREIGN_DELIVERY_PATH_PREFIX = ("state/cross-repo/inbox/", "cross-repo/inbox/")
 
 #: Registry key prefix under which the machine-local registry declares every
-#: fleet repo root it knows (``"repos.doe_claude" = '/Users/…/DoE-claude'``).
+#: fleet repo root it knows (``"repos.content_root" = '/Users/…/coordinator-content-repo'``).
 #: Read through ``machine_resolver`` — the sanctioned cross-repo path-resolution
 #: substrate — never a hardcoded sibling path or a ``__file__``-relative walk.
 _REGISTRY_REPO_KEY_PREFIX = "repos."
@@ -1140,7 +1140,7 @@ def _sibling_homed_session_ids(
     ``state/subagent-share/<session-id>/`` directory, a
     ``state/ceremony/<kind>/<session-id-prefix>-<stamp>.json`` record — in the
     repo it is homed in, i.e. the tree it was launched against. A session homed
-    in DoE-claude that commits into claude-klabauter's tree therefore leaves those
+    in coordinator-content-repo that commits into claude-klabauter's tree therefore leaves those
     artifacts in DoE's tree, not here. Since completion entries are single-repo
     by construction (``completion.reconcile_commits`` enumerates a session's
     commits via ``git log --grep`` against ``main_worktree_root(repo_root)``

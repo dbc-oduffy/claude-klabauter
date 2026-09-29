@@ -14,8 +14,8 @@ naming an existing atomic CLI; `merge_assemble.apply` (the mutating half)
 recomputes this brief in-process and dispatches through
 `coordinator_core.contract.apply_base`'s shared directive-execution engine.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
 
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /

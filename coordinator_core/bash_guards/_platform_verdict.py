@@ -166,7 +166,7 @@ Negative-spec
     docstring). Only the low-level ``platform_verdict`` still renders a
     deny envelope, and only when a caller explicitly asks for one.
 
-Spec backlink: DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C6
+Spec backlink: coordinator-content-repo:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C6
 """
 
 from __future__ import annotations

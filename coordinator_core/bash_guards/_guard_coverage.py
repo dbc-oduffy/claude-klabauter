@@ -3,12 +3,12 @@ measurement of how much of its own target command class each of the
 machine-tax-shaped guards (``check_runaway_find``, ``check_offer_git_c``)
 actually fires on.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9
-row BX-11 / AC-6 (DoE-claude). BX-11's own words are the reason this module
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9
+row BX-11 / AC-6 (coordinator-content-repo). BX-11's own words are the reason this module
 exists rather than a one-off comment: "A guard that cannot state its own
 reach is how this family got to 0.44% without anyone noticing." The
 one-time hand analysis that FIRST produced 0.44% / 1.4% / 3.2% lives at
-state/plan-sidecars/2026-07-28-bash-tax-negative-space.md (DoE-claude) --
+state/plan-sidecars/2026-07-28-bash-tax-negative-space.md (coordinator-content-repo) --
 an ad-hoc scratchpad script run once against a 62,487-command, 1,389-
 transcript corpus, never re-run and never callable on demand. This module
 is that same measurement made standing: importable, re-runnable against any

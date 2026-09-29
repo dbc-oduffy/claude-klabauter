@@ -9,7 +9,7 @@ contract) and op D2 (fill residues: prose / chain_terminal / authored_by, OLD
 helpers -- no bash/node spawn (AC1/AC2).
 
 Scaffold-creation decision (plan § C7): a thin native equivalent of
-``coordinator-doc-new``'s ``_scaffold_completion`` emitter (DoE-claude
+``coordinator-doc-new``'s ``_scaffold_completion`` emitter (coordinator-content-repo
 ``coordinator/bin/coordinator-doc-new.py:1509``) -- ``completion_ops.py`` covers
 only ``completion.reconcile_commits`` (fold commits into an EXISTING entry)
 and ``plan.append_session``, neither of which covers entry CREATION, so
@@ -102,7 +102,7 @@ def _today() -> str:
 def _slug_from_title(title: str) -> str:
     """Sanitize a title into a filesystem-safe slug (<=40 chars).
 
-    Port of coordinator-doc-new's ``_slug_from_title`` (DoE-claude
+    Port of coordinator-doc-new's ``_slug_from_title`` (coordinator-content-repo
     ``coordinator/bin/coordinator-doc-new.py:473``).
     """
     slug = title.lower()
@@ -114,7 +114,7 @@ def _slug_from_title(title: str) -> str:
 def _yaml_quote(value: str) -> str:
     """Double-quote a string for YAML frontmatter, escaping backslashes/quotes/newlines.
 
-    Port of ``memo_compose._yaml_quote`` (DoE-claude ``coordinator/bin/lib/memo_compose.py:44``).
+    Port of ``memo_compose._yaml_quote`` (coordinator-content-repo ``coordinator/bin/lib/memo_compose.py:44``).
     """
     escaped = (
         value.replace("\\", "\\\\")
@@ -130,7 +130,7 @@ def _completion_entry_rel_path(title: str) -> Path:
     """Deterministic output path: archive/completed/<YYYY-MM>/<YYYY-MM-DD>-<slug>.md.
 
     Mirrors coordinator-doc-new's ``_default_output_path`` completion branch
-    (DoE-claude ``coordinator/bin/coordinator-doc-new.py:2229``).
+    (coordinator-content-repo ``coordinator/bin/coordinator-doc-new.py:2229``).
     """
     today = _today()
     slug = _slug_from_title(title)
@@ -142,7 +142,7 @@ def _scaffold_text(title: str, nature: str, chain: str | None) -> str:
     """Generate validator-clean completion-entry frontmatter + canonical body placeholder.
 
     Byte-shape port of coordinator-doc-new's ``_scaffold_completion``
-    (DoE-claude ``coordinator/bin/coordinator-doc-new.py:1509``), minus the
+    (coordinator-content-repo ``coordinator/bin/coordinator-doc-new.py:1509``), minus the
     optional ``completion_id`` field (not part of this chunk's scope --
     see the plan § C7 body).
     """

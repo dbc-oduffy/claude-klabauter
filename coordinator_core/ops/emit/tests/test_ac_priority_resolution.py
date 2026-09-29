@@ -10,7 +10,7 @@ frontmatter'd .md files on disk (dag.walk_forward reads real files); ledger
 entries injected via ``resolve_priority(..., ledger_entries=...)`` rather
 than round-tripped through ``load_priority_ledger``'s disk read.
 
-Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § Acceptance Criteria (AC3, AC4, AC6, AC7, AC8).
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 § Acceptance Criteria (AC3, AC4, AC6, AC7, AC8).
 """
 
 from __future__ import annotations

@@ -3,13 +3,13 @@ test_baton_spine_citation_repo_qualified — pins that every repo-wide
 citation of `docs/plans/2026-08-01-baton-spine-information-integrity.md`
 names its home repo.
 
-That plan was authored and committed in the sibling DoE-claude repo, never
+That plan was authored and committed in the sibling coordinator-content-repo repo, never
 in this one -- this repo's own git history has no add-commit for it under
 any name (`git log --all --diff-filter=A -- '*baton-spine-information-
 integrity*'` returns nothing), and the ONE commit here that names it as a
 spec authority (34d39afce6) trails it `Plan: docs/plans/2026-08-01-baton-
-spine-information-integrity.md (DoE-claude)`. A citing file that omits the
-`DoE-claude` qualifier reads, to any local reader, as a broken local link
+spine-information-integrity.md (coordinator-content-repo)`. A citing file that omits the
+`coordinator-content-repo` qualifier reads, to any local reader, as a broken local link
 to a path that was "never committed" -- the exact defect this test pins
 shut.
 
@@ -17,7 +17,7 @@ Spec backlink: state/bug-backlog/2026-08-10-a-dozen-plus-engine-files-and-the-fr
 
 Negative-spec:
     - Does not assert the cited plan exists anywhere on disk -- it is a
-      DoE-claude authoring-repo document, structurally unreachable from
+      coordinator-content-repo authoring-repo document, structurally unreachable from
       this repo. Only that every citation of it is repo-qualified.
     - Scoped to THIS ONE plan path, not a general spec-backlink linter --
       `coordinator_core.ops.assert_no_dangling_plan_backlinks` already owns
@@ -40,7 +40,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _TEST_REL_PATH = Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
 _PLAN_PATH = "docs/plans/2026-08-01-baton-spine-information-integrity.md"
-_QUALIFIER = "DoE-claude"
+_QUALIFIER = "coordinator-content-repo"
 _QUALIFIER_WINDOW = 20
 
 
@@ -104,7 +104,7 @@ def test_every_citation_of_the_baton_spine_plan_names_its_home_repo():
             snippet = text.splitlines()[line_no - 1].strip()
             unqualified.append((rel, line_no, snippet))
     assert not unqualified, (
-        "citation(s) of the DoE-claude-only plan "
+        "citation(s) of the coordinator-content-repo-only plan "
         f"{_PLAN_PATH!r} missing the '{_QUALIFIER}' repo qualifier -- "
         "reads as a dangling local link to a path never committed here:\n"
         + "\n".join(f"  {rel}:{line_no}: {line}" for rel, line_no, line in unqualified)

@@ -5,7 +5,7 @@ by any outside consumer without needing to reconstruct history from
 cross-repo archives.
 
 Purpose: a re-homing that changes owner repo AND runtime AND extension all at
-once (the `b644d5a9` DoE-claude -> claude-klabauter executable-surface absorption) is
+once (the `b644d5a9` coordinator-content-repo -> claude-klabauter executable-surface absorption) is
 indistinguishable from a deletion to a consumer probing the old path. The
 2026-07-26 cockpit incident (spec backlink below) shows the cost: cockpit's
 own drift gate probed a dead `../coordinator-claude/bin/...` path,
@@ -26,14 +26,14 @@ bother to consult it.
 
 Sibling of `coordinator_core.plugin_health.fleet_reachability`, not an
 extension of it. That module answers a narrower question -- "does every
-`bin/<name>` DoE-claude's OWN skills/commands/hooks/pipelines cite still have
+`bin/<name>` coordinator-content-repo's OWN skills/commands/hooks/pipelines cite still have
 a surviving claude-klabauter oracle by normalized stem" -- via a live regex sweep of
 one specific consumer's tree. It has no way to help a *different* sibling
 repo (cockpit) that hardcodes a path into its own gate, because that repo's
 citation is never swept by anything living in claude-klabauter. This module answers
 the question fleet_reachability structurally cannot: "does claude-klabauter itself
 publish a queryable record of executables that moved, so ANY outside
-prober -- not just DoE-claude's own fenced citations -- can resolve a stale
+prober -- not just coordinator-content-repo's own fenced citations -- can resolve a stale
 path mechanically instead of guessing." The two modules solve adjacent but
 distinct problems and neither subsumes the other.
 

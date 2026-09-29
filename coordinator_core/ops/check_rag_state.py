@@ -25,20 +25,44 @@ def _claude_home() -> str:
     return os.path.join(base, ".claude")
 
 
-def _read_doe_root(claude_home: str) -> str:
-    doe_root_file = os.path.join(claude_home, ".doe-root")
+def _read_content_root(claude_home: str) -> str:
+    from coordinator_core.content_root import POINTER_NAME, _LEGACY_POINTER  # compat-fallback: private-name-ok
+
+    for name in (POINTER_NAME, _LEGACY_POINTER):
+        try:
+            with open(os.path.join(claude_home, name), encoding="utf-8") as fh:
+                value = fh.read().strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _rag_configured() -> bool:
+    """A RAG is configured when a state override is injected or the registry names one."""
+    if os.environ.get("RAG_STATE") or os.environ.get("CLAUDE_RAG_STATE_FILE"):
+        return True
+    from coordinator_core.machine_resolver import registry_get
+
     try:
-        with open(doe_root_file, encoding="utf-8") as fh:
-            return fh.read().strip()
-    except OSError:
-        print(f"skip: _read_doe_root: with open(doe_root_file, encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ""
+        return bool(registry_get("repos.project_rag"))
+    except Exception:  # noqa: BLE001 -- unreadable registry means not configured
+        return False
+
+
+def _skip_on_consumer() -> bool:
+    from coordinator_core.machine_profile import machine_profile
+
+    return machine_profile() != "author" and not _rag_configured()
 
 
 def check_rag_state() -> Tuple[str, int]:
+    if _skip_on_consumer():
+        return ("", 1)
     claude_home = _claude_home()
-    doe_root = _read_doe_root(claude_home)
-    content_root = content_root_for(doe_root)
+    content_root = _read_content_root(claude_home)
+    content_root = content_root_for(content_root)
     if content_root is None:
         return ("", 1)
 
@@ -73,11 +97,11 @@ def check_rag_state() -> Tuple[str, int]:
     return ("unknown", 1)
 
 
-def _doe_root_error(doe_root: str) -> Optional[str]:
-    if content_root_for(doe_root) is not None:
+def _content_root_error(content_root: str) -> Optional[str]:
+    if content_root_for(content_root) is not None:
         return None
     return (
-        "ERROR: ~/.claude/.doe-root missing/invalid — re-run "
+        "ERROR: ~/.claude/.coordinator-content-root missing/invalid — re-run "
         "python3 <claude-klabauter>/scripts/setup.py"
     )
 
@@ -91,15 +115,17 @@ def _trust_error(plugin_root: str) -> str:
 
 
 def main(argv) -> int:  # noqa: ARG001 — takes no arguments, mirrors bash oracle
+    if _skip_on_consumer():
+        return 1
     claude_home = _claude_home()
-    doe_root = _read_doe_root(claude_home)
+    content_root = _read_content_root(claude_home)
 
-    err = _doe_root_error(doe_root)
+    err = _content_root_error(content_root)
     if err is not None:
         print(err, file=sys.stderr)
         return 1
 
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root_for(doe_root))
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root_for(content_root))
     if not _is_trusted_root(plugin_root):
         print(_trust_error(plugin_root), file=sys.stderr)
         return 1

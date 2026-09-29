@@ -17,7 +17,7 @@ cannot support a "did it complete?" check — DoE built exactly that cross-check
 (their runtime-tripwire skip-if-completed, wiki § 2026-06-09) on the old wording of
 this docstring; it was vacuous by construction and produced 189 false
 `em-side-trigger-loss` fires in this repo's own state/runtime-tripwire-fire-log.tsv.
-Source: cross-repo/inbox/2026-07-30-doe-claude-em-trigger-loss-nudge-reply.md.
+Source: cross-repo/inbox/2026-07-30-coordinator-content-repo-em-trigger-loss-nudge-reply.md.
 
 The -c compact (one-line-JSON) format is REQUIRED: downstream consumers grep
 for `"agentId":"<id>"` on a single line. Pretty-printed output would break

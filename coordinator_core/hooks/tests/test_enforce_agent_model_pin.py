@@ -9,8 +9,8 @@ import coordinator_core.hooks.block_unenumerated_agent_type as unenumerated_mod
 import coordinator_core.hooks.enforce_agent_model_pin as mod
 
 
-def _write_agent_md(doe_root: Path, name: str, *, model: str = "", effort: str = "") -> None:
-    agents_dir = doe_root / "coordinator" / "agents"
+def _write_agent_md(content_root: Path, name: str, *, model: str = "", effort: str = "") -> None:
+    agents_dir = content_root / "coordinator" / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     fm_lines = [f"name: {name}"]
     if model:
@@ -31,8 +31,8 @@ def _agent_payload(subagent_type: str, model: str = "", effort: str = "", prompt
 
 
 def _patch_pins(monkeypatch: pytest.MonkeyPatch, pins, reason=None) -> None:
-    def _fake_resolve_model_pins(*, doe_root=None):
-        del doe_root
+    def _fake_resolve_model_pins(*, content_root=None):
+        del content_root
         return (pins, reason)
 
     monkeypatch.setattr(mod, "resolve_model_pins", _fake_resolve_model_pins)
@@ -150,8 +150,8 @@ def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_unenumerated_type_denies_with_enumeration_reason_not_pin_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (frozenset({"coordinator:executor"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
@@ -169,8 +169,8 @@ def test_unenumerated_type_denies_with_enumeration_reason_not_pin_reason(monkeyp
 
 
 def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (frozenset({"coordinator:executor"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
@@ -190,12 +190,12 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
 
 
 def test_resolve_model_pins_reads_model_and_effort_from_frontmatter(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
-    _write_agent_md(doe_root, "executor", model="sonnet", effort="low")
-    _write_agent_md(doe_root, "code-reviewer", model="haiku")
-    _write_agent_md(doe_root, "unpinned-agent")
+    content_root = tmp_path / "coordinator-content-repo"
+    _write_agent_md(content_root, "executor", model="sonnet", effort="low")
+    _write_agent_md(content_root, "code-reviewer", model="haiku")
+    _write_agent_md(content_root, "unpinned-agent")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root))
     assert reason is None
     assert pins is not None
     assert pins["coordinator:executor"]["model"] == "sonnet"
@@ -205,8 +205,8 @@ def test_resolve_model_pins_reads_model_and_effort_from_frontmatter(tmp_path: Pa
 
 
 def test_resolve_model_pins_fails_closed_on_missing_agents_dir(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root))
+    content_root = tmp_path / "coordinator-content-repo"
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root))
     assert pins is None
     assert reason is not None
     assert "MISSING ENTIRELY" in reason
@@ -225,12 +225,12 @@ def _write_plugin_agent_md(home: Path, rel_path: str, name: str, *, model: str =
 
 
 def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home"
-    _write_agent_md(doe_root, "executor", model="sonnet")
+    _write_agent_md(content_root, "executor", model="sonnet")
     _write_plugin_agent_md(home, "game-dev/agents/staff-game-dev.md", "staff-game-dev", model="sonnet")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert pins["game-dev:staff-game-dev"]["model"] == "sonnet"
@@ -239,8 +239,8 @@ def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
 
     monkeypatch_target = pin_mod.resolve_model_pins
 
-    def _fake(*, doe_root=None):
-        del doe_root
+    def _fake(*, content_root=None):
+        del content_root
         return pins, None
 
     pin_mod.resolve_model_pins = _fake
@@ -255,47 +255,47 @@ def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
 
 
 def test_plugin_leg_model_inherit_declared_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home"
-    _write_agent_md(doe_root, "executor")
+    _write_agent_md(content_root, "executor")
     _write_plugin_agent_md(home, "game-dev/agents/inherits.md", "inherits", model="inherit")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert "game-dev:inherits" not in pins
 
 
 def test_plugin_leg_unorderable_declared_model_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home"
-    _write_agent_md(doe_root, "executor")
+    _write_agent_md(content_root, "executor")
     _write_plugin_agent_md(home, "game-dev/agents/typo.md", "typo", model="gpt4")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert "game-dev:typo" not in pins
 
 
 def test_plugin_leg_empty_declared_value_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home"
-    _write_agent_md(doe_root, "executor")
+    _write_agent_md(content_root, "executor")
     path = home / ".claude" / "plugins" / "game-dev" / "agents" / "blank.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\nname: blank\nmodel: \" \"\n---\nbody\n", encoding="utf-8")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert "game-dev:blank" not in pins
 
 
 def test_plugin_pin_under_pre_refresh_snapshots_not_resolved(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home"
-    _write_agent_md(doe_root, "executor")
+    _write_agent_md(content_root, "executor")
     _write_plugin_agent_md(
         home,
         "_pre-refresh-snapshots/game-dev/agents/deleted-ghost.md",
@@ -303,27 +303,27 @@ def test_plugin_pin_under_pre_refresh_snapshots_not_resolved(tmp_path: Path) -> 
         model="sonnet",
     )
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert "game-dev:deleted-ghost" not in pins
 
 
 def test_unreadable_absent_plugins_dir_leaves_leg_b_pins_intact(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     home = tmp_path / "home-with-no-claude-dir"
-    _write_agent_md(doe_root, "executor", model="sonnet")
+    _write_agent_md(content_root, "executor", model="sonnet")
 
-    pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root), home=str(home))
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(content_root), home=str(home))
     assert reason is None
     assert pins is not None
     assert pins["coordinator:executor"]["model"] == "sonnet"
 
 
 def test_resolve_roster_unaffected_by_agents_roster_refactor(tmp_path: Path) -> None:
-    doe_root = tmp_path / "doe-claude"
-    _write_agent_md(doe_root, "executor", model="sonnet")
-    policy_dir = doe_root / "coordinator"
+    content_root = tmp_path / "coordinator-content-repo"
+    _write_agent_md(content_root, "executor", model="sonnet")
+    policy_dir = content_root / "coordinator"
     policy_dir.mkdir(parents=True, exist_ok=True)
     (policy_dir / "subagent-sandbox-policy.yaml").write_text(
         "report_sidecar:\n  - coordinator:executor\n"
@@ -332,7 +332,7 @@ def test_resolve_roster_unaffected_by_agents_roster_refactor(tmp_path: Path) -> 
         "dispatch_tier:\n  coordinator:executor: review-execution\n",
         encoding="utf-8",
     )
-    roster, reason = unenumerated_mod.resolve_roster(doe_root=str(doe_root), home=None)
+    roster, reason = unenumerated_mod.resolve_roster(content_root=str(content_root), home=None)
     assert reason is None
     assert isinstance(roster, frozenset)
     assert "coordinator:executor" in roster

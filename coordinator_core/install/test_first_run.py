@@ -112,7 +112,7 @@ def _oracle_derive_key(repo_base: str) -> str:
     "repo_base",
     [
         "claude-klabauter",
-        "DoE-claude",
+        "coordinator-content-repo",
         "example_retrieval_repo-ue-addon",
         "My.Weird--Repo!!Name",
         "_leading_underscore",
@@ -739,7 +739,7 @@ def test_seed_registry_happy_path_writes_expected_entries(monkeypatch, tmp_path,
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
-        print("/x/DoE-claude")
+        print("/x/coordinator-content-repo")
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
@@ -748,18 +748,18 @@ def test_seed_registry_happy_path_writes_expected_entries(monkeypatch, tmp_path,
 
     out = capsys.readouterr().out
     assert "Registering repos.claude_klabauter = /x/claude-klabauter" in out
-    assert "Registering repos.doe_claude = /x/DoE-claude" in out
+    assert "Registering repos.content_root = /x/coordinator-content-repo" in out
 
     registry_file = registry_dir / "registry.local.toml"
     assert registry_file.is_file()
     content = registry_file.read_text(encoding="utf-8")
     assert "\"repos.claude_klabauter\" = '/x/claude-klabauter'" in content
-    assert "\"repos.doe_claude\" = '/x/DoE-claude'" in content
+    assert "\"repos.content_root\" = '/x/coordinator-content-repo'" in content
 
     from coordinator_core.machine_resolver import registry_get
 
     assert registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
-    assert registry_get("repos.doe_claude") == "/x/DoE-claude"
+    assert registry_get("repos.content_root") == "/x/coordinator-content-repo"
 
 
 def test_seed_registry_no_repos_discovered_prints_manual_hint(monkeypatch, tmp_path, capsys):
@@ -880,7 +880,7 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
-        print("/x/DoE-claude")
+        print("/x/coordinator-content-repo")
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
@@ -890,7 +890,7 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
     resolution = _resolved(_journal_env)
     assert resolution is not None
     keys = {e.key for e in resolution.entries}
-    assert keys == {"repos.claude_klabauter", "repos.doe_claude"}
+    assert keys == {"repos.claude_klabauter", "repos.content_root"}
     assert all(e.kind == "machine-local-key" for e in resolution.entries)
 
 

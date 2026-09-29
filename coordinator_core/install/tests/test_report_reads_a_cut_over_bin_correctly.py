@@ -27,7 +27,7 @@ def _write_manifest(bin_dir: Path, names: list[str]) -> None:
 
 def test_a_process_replacing_name_is_never_audited_for_currency(bin_dir):
     names = settings_home_report._names_the_installer_gives_an_image(
-        ["blocked", "claude-doe"], bin_dir
+        ["blocked", "claude-author"], bin_dir
     )
     assert names == ["blocked"]
 
@@ -48,7 +48,7 @@ def test_a_name_the_engine_carries_no_script_for_is_not_audited(bin_dir, tmp_pat
 
 def test_an_unreadable_sidecar_drops_only_the_engine_leg(bin_dir):
     names = settings_home_report._names_the_installer_gives_an_image(
-        ["blocked", "publish", "claude-doe"], bin_dir
+        ["blocked", "publish", "claude-author"], bin_dir
     )
     assert names == ["blocked", "publish"]
 

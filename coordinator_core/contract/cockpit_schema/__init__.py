@@ -7,7 +7,7 @@ superRefine → chained model_validator, present-as-null vs. optional, inline
 non-$ref JSON-Schema emission) before the remaining 27 entity schemas (T4e-b)
 and the `emit-schema.ts`-equivalent entrypoint (T4e-c) port against it.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 Freeze: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/freeze-provenance-envelope.md
 Negative-spec: this package holds pydantic MODELS only — it does not register
 Claude-klabauter ops (no `register_op` call anywhere in this tree) and central-reg

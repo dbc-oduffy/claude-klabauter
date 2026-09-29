@@ -1,7 +1,7 @@
-"""Ported from DoE-claude coordinator/hooks/scripts/_guard_enforcement_join.py
+"""Ported from coordinator-content-repo coordinator/hooks/scripts/_guard_enforcement_join.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C2) -- reader logic
 unchanged; `DEFAULT_JOIN_PATH` is rebased onto claude-klabauter's own committed join
-location (the DoE original pointed at a copy landing in the DoE-claude
+location (the DoE original pointed at a copy landing in the coordinator-content-repo
 checkout; here the artifact is the one this same repo emits -- see
 coordinator/bin/emit-guard-enforcement-join.py and
 coordinator_core/tests/test_guard_enforcement_join_covers_every_registered_guard.py,

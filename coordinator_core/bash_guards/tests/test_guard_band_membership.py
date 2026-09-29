@@ -51,6 +51,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-commit",
     "check-test-suite-invocation",
     "block-subagent-grant-acquisition",
+    "block-subagent-findings-reject",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
     # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
     "block-subagent-guard-grant",
@@ -229,7 +230,7 @@ def test_advisory_rewrite_guards_never_fail_closed():
     file. That is what happened on 2026-07-30 to a peer repo's session, while
     `grep-via-bash-guard` still carried `fail_closed=True` from its
     pre-H11(a) PLATFORM_CONDITIONED_DENY registration
-    (`cross-repo/inbox/2026-07-30-doe-claude-em-guard-grep-via-bash-
+    (`cross-repo/inbox/2026-07-30-coordinator-content-repo-em-guard-grep-via-bash-
     nameerror.md`): an advisory-only guard, by its own docstring, taking down
     unrelated commands in sessions that were not editing it.
 
@@ -379,8 +380,8 @@ _SIX_COMBINATIONS = [
         'echo "=== SESSION FACTS ==="; pwd; whoami; date',
         True,
     ),
-    ("plumbing-and-loops / head-tail-plumbing-rewrite", "find . -name '*.py' | head -n 5", False),
-    ("plumbing-and-loops / head-tail-plumbing-rewrite", "find . -name '*.py' | head -n 5", True),
+    ("plumbing-and-loops / head-tail-plumbing-rewrite", "ls -1 | head -n 5", False),
+    ("plumbing-and-loops / head-tail-plumbing-rewrite", "ls -1 | head -n 5", True),
 ]
 
 

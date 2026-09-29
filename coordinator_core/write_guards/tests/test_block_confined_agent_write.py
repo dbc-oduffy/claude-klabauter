@@ -467,3 +467,33 @@ class TestBothSandboxRootsAreHonoured:
         verdict = guard.check(_payload(tmp_path, other, tool_name="Edit"))
         assert verdict is not None
         assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestPerDispatchReviewTargets:
+    """A per-agent review-targets.<agent_id>.txt confines that dispatch to its own set."""
+
+    def _setup(self, tmp_path, monkeypatch, session_id):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, sid: raw)
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:code-reviewer")
+        )
+        base = tmp_path / ".git" / "coordinator-sessions" / session_id
+        base.mkdir(parents=True)
+        return base
+
+    def test_per_agent_set_replaces_session_set_for_that_agent(self, tmp_path, monkeypatch):
+        base = self._setup(tmp_path, monkeypatch, "sess-1")
+        (base / "review-targets.txt").write_text("slice_b.md\nslice_a.md\n", encoding="utf-8")
+        (base / "review-targets.agent-a.txt").write_text("slice_a.md\n", encoding="utf-8")
+        own = _payload(tmp_path, str(tmp_path / "slice_a.md"), tool_name="Edit", agent_id="agent-a", session_id="sess-1")
+        other = _payload(tmp_path, str(tmp_path / "slice_b.md"), tool_name="Edit", agent_id="agent-a", session_id="sess-1")
+        assert guard.check(own) is None
+        assert guard.check(other)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_agent_without_own_file_falls_back_to_session_set(self, tmp_path, monkeypatch):
+        base = self._setup(tmp_path, monkeypatch, "sess-1")
+        (base / "review-targets.txt").write_text("slice_b.md\n", encoding="utf-8")
+        (base / "review-targets.agent-a.txt").write_text("slice_a.md\n", encoding="utf-8")
+        payload = _payload(tmp_path, str(tmp_path / "slice_b.md"), tool_name="Edit", agent_id="agent-c", session_id="sess-1")
+        assert guard.check(payload) is None

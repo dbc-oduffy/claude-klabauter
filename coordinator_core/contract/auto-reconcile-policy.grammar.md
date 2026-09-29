@@ -1,7 +1,7 @@
 # `auto-reconcile-policy.yaml` grammar pin
 
 Spec backlink: `pln-claude-klabauter-auto-reconcile-pass-off-425848` § C9, DEC-1.
-Boundary authority: `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
+Boundary authority: `/Users/example-operator/X/coordinator-content-repo/docs/decisions/DR-047-content-engine-boundary-redraw-contract-vs-e.md`
 ("DoE owns rules, claude-klabauter owns machine").
 
 ## Ownership

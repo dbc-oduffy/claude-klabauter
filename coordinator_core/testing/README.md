@@ -5,7 +5,7 @@
 
 ## Purpose
 
-DoE-claude has no repo-wide full-suite runner. Its fast tier is deliberately
+Coordinator-content-repo has no repo-wide full-suite runner. Its fast tier is deliberately
 JS-contract-only and covers a small fraction of DoE's ~271 test files; the
 rest never run at any gate, and `cs_resolve_full_test_cmd` has nothing to
 resolve to because `full_test_cmd:` is unset.
@@ -49,7 +49,7 @@ code, which is **0 on RPC-success regardless of the op's structured
 code would see a green run on a failing test suite. This is a documented,
 recurring hazard class, not a novel claim:
 
-- `[DoE-claude] coordinator/docs/wiki/named-contracts-vs-incidental-flags.md:47-49`
+- `[coordinator-content-repo] coordinator/docs/wiki/named-contracts-vs-incidental-flags.md:47-49`
   — "the process exit code is not the op's result contract... a bash wrapper
   checking `$?`... silently succeeds on failure."
 - `strangle_route` propagates the transport exit code only; it does not

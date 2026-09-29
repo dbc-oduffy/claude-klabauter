@@ -44,7 +44,7 @@ def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypa
 
     ctx = server._ServerContext(name="pipe-pool", sid="sid-pool", version_state=_FakeVersionState())
     ctx._start_worker_pool(pool_size=1)
-    ctx._enqueue_connection("io-obj")
+    ctx._enqueue_connection("io-obj", admitted=False)
 
     import time
 

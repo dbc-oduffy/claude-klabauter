@@ -139,8 +139,8 @@ Negative-spec
     outlet" -- this guard degrades to a generic advisory rather than
     denying toward nothing).
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-8
-Spec backlink (shape/verdict primitives): DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C5, C6
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9 § BX-8
+Spec backlink (shape/verdict primitives): coordinator-content-repo:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C5, C6
 """
 
 from __future__ import annotations

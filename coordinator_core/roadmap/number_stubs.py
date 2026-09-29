@@ -29,7 +29,7 @@ Provides two modes:
                    Spec backlink: docs/plans/2026-07-24-computed-skills-b5-
                    planning-cluster.md § C12.
 
-Port source: coordinator/bin/roadmap-number-stubs.js (DoE-claude), 387 LoC.
+Port source: coordinator/bin/roadmap-number-stubs.js (coordinator-content-repo), 387 LoC.
 Domain vocabulary: stub, sprint, wave, topological linearization, blocked_by edge,
 dependency-monotone, (sprint, wave) slot, roadmap_id, spinoff-roadmap.
 Spec backlink: docs/plans/2026-06-28-roadmap-stub-numbering-dependency-order.md § C2

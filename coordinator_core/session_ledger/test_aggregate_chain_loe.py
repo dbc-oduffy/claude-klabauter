@@ -592,12 +592,12 @@ def test_format_oneline_row_abbreviates_session_id_leading_six():
     assert row == "2026-08-14 | a0df95 | S | 3d / 1o | did a thing"
 
 
-# B15b regression fixture — vendored inline from DoE-claude
-# `coordinator/tests/fixtures/session-ledger-two-ceremony.md` (DoE-claude
+# B15b regression fixture — vendored inline from coordinator-content-repo
+# `coordinator/tests/fixtures/session-ledger-two-ceremony.md` (coordinator-content-repo
 # @a037746a, read at authoring for @b4e1b034 per the plan's
 # `external_reads_ungated` entry). Copied here as literal row text rather
 # than read from that sibling tree at run time, per the plan's anti-scope
-# ("do not make a test read DoE-claude's tree at run time").
+# ("do not make a test read coordinator-content-repo's tree at run time").
 _TWO_CEREMONY_ROWS = (
     "2026-05-21 | 7bffa2 | XS | 0d / 0o | Reconciled the pending list "
     "(pickup-reconciliation close)\n"

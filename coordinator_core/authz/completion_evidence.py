@@ -3,7 +3,7 @@ coordinator_core.authz.completion_evidence — what a terminal ack may claim
 about a MUTATING op's own mutation, beyond "the handler returned".
 
 Ratified by docs/decisions/DR-442-completion-evidence-is-the-engine-s-record-not-the-side-effect.md,
-extending the 2026-09-09 ruling (DoE-claude state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md
+extending the 2026-09-09 ruling (coordinator-content-repo state/rulings/2026-09-09-staff-eng-rulings-run-c0d7111e.md
 § Row M11). Sparse by design: only ops for which a terminal stamp proves LESS than complete
 evidence are declared. An op absent from the registry is `ack` -- the terminal stamp is
 complete evidence its mutation happened -- and restating that default is refused (see the guard

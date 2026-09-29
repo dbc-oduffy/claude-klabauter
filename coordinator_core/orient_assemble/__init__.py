@@ -8,8 +8,8 @@ paths — `brief(cadence)` tunes severity/depth knobs (day = red-and-stale +
 reap; session = red-only + warn; week = lighter) over ONE shared compute,
 per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md` § Approach.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C1
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C1
 Registration seam: this module ships no bash veneer — it is consumed
 directly by the `coordinator/bin/orient-assemble` trampoline, mirroring
 `coordinator_core.pickup_assemble`'s template-variant #1 shape.

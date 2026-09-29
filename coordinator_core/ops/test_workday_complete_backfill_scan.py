@@ -15,7 +15,7 @@ those tests asserted on row/stderr shapes (`<day>\\t<machine>\\t...`,
 covers the per-day predicate (AC1/AC2), the full-day union span (AC3/DEC-3),
 and the DEC-5 semantic-shift case explicitly.
 
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C2
 """
 

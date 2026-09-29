@@ -4,7 +4,7 @@ handoff triage query (stale-executing-plan advisory, ready-to-fire listing,
 awaiting-gate listing) plus a fourth source, the tiered plan-orphan census
 (`_read_orphaned_plans`).
 
-Purpose: import DoE-claude's `workday-start-handoff-triage.py` CLI's
+Purpose: import coordinator-content-repo's `workday-start-handoff-triage.py` CLI's
 read-only subcommands (`_cmd_stale_plans`, `_cmd_ready`, `_cmd_awaiting_gate`)
 AS-IS — no reimplementation of their query/format logic — and translate their
 captured stdout into the shared decision-object shape, per
@@ -24,7 +24,7 @@ source CLI) is deliberately OUT OF SCOPE here — it mutates
 `tasks/orphan-sweep-notes.md` and stays ceremony/EM-dispatched, never
 assembler-owned (AC of this chunk).
 
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2b
+Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C2b
 
 Negative-spec:
     - Does NOT call `trim_orphan_sweep_notes` / `_cmd_trim_notes` — that

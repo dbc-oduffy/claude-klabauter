@@ -881,7 +881,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     the true thing, which is that the op is not there. Observed
     #     2026-08-26 on `push.outstanding`, registered in claude-klabauter and absent
     #     from the published engine the forwarder actually dispatches to
-    #     (doe-claude-94, state/bug-backlog/2026-08-26-quick-wrap-step-1-has-
+    #     (coordinator-content-repo-94, state/bug-backlog/2026-08-26-quick-wrap-step-1-has-
     #     no-working-commit-863135e32339.yaml). An unknown op now falls
     #     through to dispatch, which answers Method-not-found honestly.
     if args.repo is not None and args.op not in WORKTREE_SCOPED_OPS:
@@ -1002,7 +1002,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
             response = try_warm_dispatch(msg)
 
-            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES -- DoE-claude
+            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES -- coordinator-content-repo
             # coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-
             # passes-loudly-never-denies.md.
             #

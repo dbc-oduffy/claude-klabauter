@@ -825,7 +825,7 @@ def test_unrecognized_blocks_value_still_excludes(tmp_path):
   title: gate whose blocks value is misspelled
   surface: some/surface
   external_gate:
-    - owner_repo: doe-claude
+    - owner_repo: coordinator-content-repo
       condition: their reader lands
       blocks: exection
 """

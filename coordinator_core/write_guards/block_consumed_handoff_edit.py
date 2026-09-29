@@ -304,7 +304,7 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
             abs_cn = cn
         else:
             # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH
-            # (e.g. a drive-root `git_root` of `X:\`) survives the latter and
+            # (e.g. a drive-root `git_root` of `C:\`) survives the latter and
             # composes a double-slash prefix below (see the matching note on
             # `expected_prefix`).
             abs_cn = git_root.rstrip("/\\") + "/" + cn

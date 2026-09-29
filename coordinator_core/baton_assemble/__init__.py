@@ -152,10 +152,10 @@ C4/C5) -- this module surfaces each as a `judgment_points[]` entry built via
 that constructor -- structurally impossible to attach a verdict here).
 
 CONSUMES B0's shared resolver: `coordinator_core.resolution.facade.
-resolve_operator_config()` for settings_home/claude_klabauter_root/doe_root -- this module
+resolve_operator_config()` for settings_home/claude_klabauter_root/content_root -- this module
 does NOT define its own local `_settings_home()`.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -293,7 +293,7 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     re-anchoring on `Path(__file__).resolve().parents[n]` instead of `cwd`
     still returns *a* repo root, just the wrong one -- the engine's own
     rather than the caller's -- and is the one live defect the audit found
-    (`bash_guards/dispatch_checks.py::_bt_python3_invocation_cache_path`).
+    (`bash_guards/_rewrite_support.py::_bt_python3_invocation_cache_path`).
     """
     cwd = start or Path.cwd()
     top = show_toplevel(str(cwd))
@@ -672,7 +672,7 @@ def _compute_fresh_output_path(
         return candidate
 
     # 2026-07-29 follow-up (successor-derivation archive-collision fix, see
-    # bug-report evidence at DoE-claude state/handoffs/
+    # bug-report evidence at coordinator-content-repo state/handoffs/
     # 2026-07-29_175200_confinement-band-split-plan-awaiting-review.md §
     # Session Ledger): `_exists` must check BOTH the live `state/handoffs/`
     # location AND every known archive location, not the live location
@@ -1645,7 +1645,7 @@ def _tracking_read_frontmatter_field(
 
     Returns `(tracked_read_fn, tier_list)` -- `tier_list` is empty until the
     cascade fires a truthy `deliverable_id` read, then holds exactly one of
-    `"plan"` / `"artifact"` (the DoE-claude-cascade's own vocabulary, ported
+    `"plan"` / `"artifact"` (the coordinator-content-repo-cascade's own vocabulary, ported
     verbatim rather than reusing "predecessor" -- see module docstring at
     `resolve_lineage`). `resolve_lineage` itself relabels an `"artifact"` hit
     to a THIRD value, `"plan-input"`, when the hit's `_predecessor_file` is
@@ -1910,7 +1910,7 @@ def _scan_deliverable_collision(
     pointer, not a `predecessor:` edge -- the ancestor walk has no edge to
     follow to it at all, so without this separate kind-based skip a
     roadmap-baton root would still warn even though it is exactly the chain
-    tip's own root. DoE-claude `coordinator/docs/wiki/coordinator-
+    tip's own root. Coordinator-content-repo `coordinator/docs/wiki/coordinator-
     tripwires.md:1454` mandates this exclusion directly: "Any backfill,
     reconciler, or convergence pass over `deliverable_id` MUST exclude
     `kind: roadmap-baton` records."
@@ -5065,7 +5065,7 @@ def _predecessor_carried_items_active(root: "Optional[Path]", predecessor: "Opti
     """True iff `predecessor` (a `lineage["predecessor"]` value -- either
     root-relative or absolute, per `resolve_lineage`'s own storage
     convention) names a file whose frontmatter carries a `carried_items:`
-    value that is itself a non-empty YAML list. Mirrors `DoE-claude@HEAD:
+    value that is itself a non-empty YAML list. Mirrors `coordinator-content-repo@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py`'s
     `_carried_items_active` exactly, list-type check included
     (`isinstance(items, list) and len(items) > 0`) -- a `carried_items:`
@@ -5111,7 +5111,7 @@ def _resolve_handoff_residue_active_cases(
     root: "Optional[Path]",
 ) -> set[str]:
     """Resolve the active `case:` set for this `brief()` call, matched
-    signal-for-signal against `DoE-claude@HEAD:coordinator/hooks/scripts/
+    signal-for-signal against `coordinator-content-repo@HEAD:coordinator/hooks/scripts/
     handoff-segment-inject.py`'s `compute_active_cases` -- the consumer this
     `segments` key is meant to let retire its own copy of this computation.
     A drift here is not cosmetic: it silently changes what the consumer
@@ -5135,7 +5135,7 @@ def _resolve_handoff_residue_active_cases(
     whenever its own `_resolve_repo_root()` returns `None` (repo root
     undeterminable), and that function's docstring names the exact same
     choice ("callers degrade the `dirty-tree` case to inactive rather
-    than raising"). Verified directly against `DoE-claude@HEAD:
+    than raising"). Verified directly against `coordinator-content-repo@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py` -- this is an
     equivalent degrade path on both sides, not a signal-fidelity gap.
     `carried-items`
@@ -5401,7 +5401,7 @@ def brief(
         )
 
     # Also asserts the shared operator-config resolution seam (B0) resolves
-    # cleanly -- a corrupt settings_home/claude_klabauter_root/doe_root value fails
+    # cleanly -- a corrupt settings_home/claude_klabauter_root/content_root value fails
     # loud here rather than downstream in a directive dispatch.
     resolve_operator_config()
 
@@ -5552,7 +5552,7 @@ def brief(
     #
     # WHY STRUCTURED KEYS, NOT `decision_note` PROSE. The guidance used to ask
     # for the ids in `decision_note` and nothing read them, which is how this
-    # surfaced (example-cockpit-repo via DoE-claude, 2026-09-04). Parsing an id out
+    # surfaced (example-cockpit-repo via coordinator-content-repo, 2026-09-04). Parsing an id out
     # of free prose is the guess this module refuses everywhere else -- an
     # `associate` naming no id fails loud instead, exactly as `excise` with no
     # `decision_note` does. `decision_note` stays available and is still the

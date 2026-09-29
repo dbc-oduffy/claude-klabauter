@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.runtime_tripwire_em_check — PostToolUse(Agent) warm-door
-counterpart of DoE-claude's `coordinator/hooks/scripts/
+counterpart of coordinator-content-repo's `coordinator/hooks/scripts/
 runtime-tripwire-em-check.py`, **PostToolUse(Agent) LEG ONLY**.
 
 SCOPE FENCE (per this chunk's own dispatch brief): the source script is
@@ -13,7 +13,7 @@ leg ONLY. Do not extend it to serve UserPromptSubmit.
 
 COVERAGE ESTABLISHED FIRST (per the dispatch brief's own instruction — "check
 for a `@register_op` handler, not for a filename"), against the source
-script's own `main()` at DoE-claude HEAD:
+script's own `main()` at coordinator-content-repo HEAD:
 
     main()'s five advisory legs, and what each one costs on a PostToolUse(Agent)
     fire specifically (never on a UserPromptSubmit fire, which this module does
@@ -97,7 +97,7 @@ on the same call.
 
 Spec backlink: docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md
 (chunk C6); docs/reference/warm-hook-migration.md (candidate-selection input,
-PostToolUse Agent leg-2-of-2 row); DoE-claude `coordinator/hooks/scripts/
+PostToolUse Agent leg-2-of-2 row); coordinator-content-repo `coordinator/hooks/scripts/
 runtime-tripwire-em-check.py` (source).
 """
 

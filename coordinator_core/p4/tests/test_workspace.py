@@ -42,14 +42,14 @@ class TestIdentity:
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
             "p4.studio/repo.client": "agent-ws",
-            "p4.studio/repo.client_root": "X:/p4-workspace",
+            "p4.studio/repo.client_root": "C:/p4-workspace",
         }
         monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
         ident = workspace.identity("studio/repo")
         assert ident.port == "ssl:p4.example.com:1666"
         assert ident.user == "agent"
         assert ident.client == "agent-ws"
-        assert ident.client_root == "X:/p4-workspace"
+        assert ident.client_root == "C:/p4-workspace"
 
     def test_no_machine_local_row_raises_typed_error(self, monkeypatch):
         monkeypatch.setattr(workspace, "registry_get", lambda key: None)

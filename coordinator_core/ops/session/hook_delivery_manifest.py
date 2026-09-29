@@ -2,7 +2,7 @@
 coordinator_core.ops.session.hook_delivery_manifest — reader for the
 hook-delivery manifest block DoE's carriers publish to the
 `coordinator/hooks/effective-delivery.json` sidecar (formerly embedded
-inside `hooks.json` itself; DoE-claude 6be6a7ead/da0b96608 relocated it,
+inside `hooks.json` itself; coordinator-content-repo 6be6a7ead/da0b96608 relocated it,
 same top-level key, path only).
 
 Purpose: `guard_settings_integrity.detect_hook_delivery_duplication`

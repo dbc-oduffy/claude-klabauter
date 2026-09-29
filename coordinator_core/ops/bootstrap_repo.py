@@ -48,8 +48,8 @@ NOT part of this port. The caller computes its own coordinator root and sets
 `main()` — mirroring the rung-1
 env-override convention already used by `coordinator_core.ops.
 learn_lessons_roots._resolve_doe_content_root` / `coordinator_core.ops.
-coordinator_doe_root`. This module re-derives the same 4-rung fallback ladder
-locally (env override -> `~/.claude/.doe-root` pointer -> machine-local
+coordinator_content_root`. This module re-derives the same 4-rung fallback ladder
+locally (env override -> `~/.claude/.coordinator-content-root` pointer -> machine-local
 registry -> unconditional flat-layout fallback) rather than importing those
 modules' private underscore-prefixed helpers, consistent with how those two
 ports each carry their own local copy of the ladder.
@@ -107,7 +107,7 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core import launchable
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -175,6 +175,14 @@ Exit codes:
 )
 
 
+def _consumer_profile() -> bool:
+    try:
+        from coordinator_core.machine_profile import machine_profile
+    except ImportError:  # pragma: no cover
+        return False
+    return machine_profile() == "consumer"
+
+
 def _claude_home() -> str:
     """Mirror `CLAUDE_HOME="${CLAUDE_HOME:-$HOME}/.claude"` — the env var, when
     set, overrides $HOME (not the full .claude path). Matches the identically-
@@ -190,9 +198,9 @@ def _claude_home() -> str:
 
 
 def _content_root_rungs_2_to_4(claude_home: str) -> str:
-    doe_root = read_doe_root_pointer_file(os.path.expanduser("~"))
-    if doe_root:
-        content_root = content_root_for(doe_root)
+    content_root = read_content_root_pointer_file(os.path.expanduser("~"))
+    if content_root:
+        content_root = content_root_for(content_root)
         if content_root is not None:
             return str(content_root)
 
@@ -209,7 +217,7 @@ def _resolve_doe_content_root(claude_home: str) -> str:
     Rungs (best-effort, non-fatal):
       1. COORDINATOR_ROOT / CLAUDE_PLUGIN_ROOT env override (set by the DoE-side
          trampoline before importing this module).
-      2-4. See `_content_root_rungs_2_to_4` for the rest of the ladder (`.doe-root`
+      2-4. See `_content_root_rungs_2_to_4` for the rest of the ladder (`.coordinator-content-root`
          pointer file, machine-local registry, unconditional plugins-dir fallback).
     """
     override = os.environ.get("COORDINATOR_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -611,7 +619,9 @@ def main(argv: List[str]) -> int:
     if dry_run:
         _print(f"[bootstrap-repo dry-run] stage 3 (scaffold): would scaffold {root_path}")
         try:
-            _scaffold_result = scaffold_canonical_structure(root_path, manifest_root, dry_run=True)
+            _scaffold_result = scaffold_canonical_structure(
+                root_path, manifest_root, dry_run=True, consumer_only=_consumer_profile()
+            )
         except Exception as exc:
             _print(f"  WARN: scaffold dry-run failed -- continuing (advisory, not fatal): {exc}")
         else:
@@ -619,7 +629,9 @@ def main(argv: List[str]) -> int:
                 _print(f"  {line}")
     else:
         try:
-            _scaffold_result = scaffold_canonical_structure(root_path, manifest_root, dry_run=False)
+            _scaffold_result = scaffold_canonical_structure(
+                root_path, manifest_root, dry_run=False, consumer_only=_consumer_profile()
+            )
         except Exception as exc:
             _print(
                 f"bootstrap-repo: scaffold-canonical-structure failed: {exc}",

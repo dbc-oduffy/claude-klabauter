@@ -91,6 +91,20 @@ def _posix(p) -> str:
     return p.as_posix()
 
 
+from coordinator_core.testing.fleet_pin import assume_a_fleet_machine  # noqa: E402,F401
+
+
+@pytest.fixture(autouse=True)
+def _author_machine_profile(monkeypatch):
+    """The grant route clears a strict-level deny; pin the author profile."""
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "author")
+    machine_profile.reset_cache()
+    yield
+    machine_profile.reset_cache()
+
+
 @pytest.fixture()
 def repos(tmp_path):
     anchor = _init_repo(tmp_path, "anchor")

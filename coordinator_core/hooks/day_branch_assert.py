@@ -3,9 +3,9 @@ coordinator_core.hooks.day_branch_assert — engine-side boot assert making the
 day-branch cut a property of the TREE rather than of EM discipline.
 
 Chunks C4b (dispatch), C5 (banner mechanism), and C10 (case-(B) detection and
-warn) of DoE-claude ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md``,
+warn) of coordinator-content-repo ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md``,
 delivered here by cross-repo memo
-``2026-08-18-doe-claude-em-day-branch-cut-tree-invariant-engine-work.md``.
+``2026-08-18-coordinator-content-repo-em-day-branch-cut-tree-invariant-engine-work.md``.
 
 Split rationale: the DoE SessionStart fan-in loads guards BY FILENAME from its
 own directory, so a claude-klabauter-resident module is structurally unreachable from

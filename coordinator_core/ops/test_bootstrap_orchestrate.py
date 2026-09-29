@@ -14,7 +14,7 @@ DoE-resident siblings via `coordinator_core.ops.bootstrap_repo`
 (scaffold-canonical-structure.sh, check-install-divergence.py) that this port
 does NOT own. Tests stub minimal fakes of both under a throwaway
 `COORDINATOR_ROOT` so the suite is self-contained and does not depend on the
-sibling DoE-claude repo being checked out on the test machine. The currency
+sibling coordinator-content-repo repo being checked out on the test machine. The currency
 stamp (`lib/coordinator-currency.sh::coordinator_currency_write`) is no
 longer a DoE-resident dependency as of C19 — `_coordinator_currency_write`
 below is a native in-package reimplementation; see its own parity tests

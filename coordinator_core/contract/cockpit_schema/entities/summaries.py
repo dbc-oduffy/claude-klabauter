@@ -104,7 +104,7 @@ inject `"session-handoff"` when `kind:` is absent before emitting a
 HandoffSummary, or the (required, non-optional) `kind` field below will fail
 validation.
 
-Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
+Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
 """
 
 BatonClass = Literal["continuation", "deflection", "intention"]
@@ -122,7 +122,7 @@ from the `x-baton-class` key in the vendored `handoff.schema.json`. There is
 exactly one place a stored copy could disagree with its derivation — nowhere,
 because there is no stored copy.
 
-Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
+Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
 """
 
 
@@ -420,7 +420,7 @@ class HandoffSummary(BaseModel):
     or a ledger entry — a persisted resolved-from pointer would be a fourth
     lineage axis, and is exactly the shape the rejected priority-stamping
     design would smuggle back in (see priority-ledger.schema.json
-    NEGATIVE-SPEC (2), DoE-claude repo). This field exists precisely so
+    NEGATIVE-SPEC (2), coordinator-content-repo repo). This field exists precisely so
     that design never needs reviving. D9: nullable, never optional.
     """
     suggested_priority: str | None

@@ -1,19 +1,19 @@
 """
 coordinator_core.hooks.runtime_tripwire_stop_watcher — engine-side landing
-of DoE-claude's `coordinator/hooks/scripts/runtime-tripwire-stop-watcher.py`
+of coordinator-content-repo's `coordinator/hooks/scripts/runtime-tripwire-stop-watcher.py`
 (Runtime Tripwire asyncRewake L2 backstop).
 
 STOOD DOWN — carried forward from the source script's own docstring, and
 still true post-port: this module registers NO `hooks.<name>` op (no
 `register_op` call, not listed in `coordinator_core/hooks/__init__.py`'s
 `_EAGER_HOOK_MODULES` — that file is out of this chunk's declared footprint,
-and there is nothing to wire it to: DoE-claude's own `coordinator/hooks/
+and there is nothing to wire it to: coordinator-content-repo's own `coordinator/hooks/
 hooks.json` carries no `Stop` registration for this script either, "Stood
 down 2026-07-31 per PM ruling; reversible, comment-only mention remains in
 hooks.json"). A bug found here is latent, not live — fixing one changes no
 session's behaviour until a future, PM-ruled restoration re-registers it
 (restore procedure: `stop-dispatch.py`, unchanged by this port). This port
-exists so the code lives in claude-klabauter rather than DoE-claude, per this plan's
+exists so the code lives in claude-klabauter rather than coordinator-content-repo, per this plan's
 own "DoE holds no scripts" mandate — it does not reactivate the watcher.
 
 Self-contained (no engine op exists for this hook, same as the source
@@ -68,7 +68,7 @@ rationale.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md (chunk
 W4-C13); docs/plans/2026-06-15-runtime-tripwire-idle-em-layered-fix.md §
-C2a; docs/wiki/runtime-tripwire.md § L2; DoE-claude `coordinator/hooks/
+C2a; docs/wiki/runtime-tripwire.md § L2; coordinator-content-repo `coordinator/hooks/
 scripts/runtime-tripwire-stop-watcher.py` (source, 594 lines).
 """
 

@@ -24,8 +24,8 @@ suppression predicate against a representative envelope shaped exactly like
 its own `_advisory(...)`/`allow_advisory(...)` return, rather than through a
 live trigger command.
 
-Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
-(DoE-claude) row H6.
+Spec backlink: coordinator-content-repo:pln-os-aware-guard-advisory-defaul-060dbe
+(coordinator-content-repo) row H6.
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _cwd_for(name, tmp_path, monkeypatch):
 
 _TRIGGERS = {
     "find-exec-rewrite": "find . -exec rm {} \\;",
-    "head-tail-plumbing-rewrite": "find . -type f | head -n 5",
+    "head-tail-plumbing-rewrite": "ls -1 | head -n 5",
     "plumbing-and-loops": "find . -type f | head -n 5",
     # A DEDICATED dir, never a bare `/tmp`: this box keeps live sockets and
     "inprocess-search": "grep -rn TODO /tmp/h6-search",

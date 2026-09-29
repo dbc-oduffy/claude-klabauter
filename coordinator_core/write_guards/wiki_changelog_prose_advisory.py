@@ -11,7 +11,7 @@ if C2 reads go"). Armed only because C2's spike
 (docs/research/spike-verdicts/2026-09-10-doctrine-enforcement-surfaces-c5-perf-windows-spike.md)
 returned verdict: viable/go against DR-344's 200ms-process-time bar.
 
-Purpose: DoE-claude's own doctrine (`CLAUDE.md` § Conventions, "Doctrine is
+Purpose: coordinator-content-repo's own doctrine (`CLAUDE.md` § Conventions, "Doctrine is
 not changelog") states the rule this guard advises on: a wiki page states
 the rule as it stands, present tense -- no ruling dates, no `DR-` supersession
 chains, no "was P, now Q" phrasing. That rule currently has no artifact that

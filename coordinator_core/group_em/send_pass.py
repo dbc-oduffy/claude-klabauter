@@ -2,12 +2,12 @@
 baton `gem-14`).
 
 Ported in-plane from `coordinator/skills/group-em/send_pass.py` in the
-sibling DoE-claude repo (resolve via `repos.doe_claude`, not a hardcoded
+sibling coordinator-content-repo repo (resolve via `repos.content_root`, not a hardcoded
 drive path; plan `docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md`,
 chunk C2).
 Rationale, measurements, the superseded first shape, and the PM ruling that
 licensed the original: `docs/decisions/DR-group-em-send-narrows-on-the-obligation-ledger.md`
-(DoE-claude tree). Tripwire: `A-PAUSED-ROSTER-IS-NOT-A-NUDGE-LIST`. The rules
+(coordinator-content-repo tree). Tripwire: `A-PAUSED-ROSTER-IS-NOT-A-NUDGE-LIST`. The rules
 alone are below.
 
 **It selects and throttles. It does not send.** GATE 1/GATE 2 are declared
@@ -102,7 +102,7 @@ NEGATIVE SPEC:
 
 DECLINATION (plan `2026-08-31-the-group-em-tick-carries-standing-obligations.md`
 chunk C3, wording pinned to `coordinator/skills/group-em/SKILL.md` sha
-`8583cf8f5`, DoE-claude tree): "Each tick records a DECLINATION for every
+`8583cf8f5`, coordinator-content-repo tree): "Each tick records a DECLINATION for every
 roster entry it does not message -- which gate failed and why. A tick that
 closes on 'nothing sent' with no declination is indistinguishable from a
 tick that never looked." `decline()` writes that record, on the SAME log

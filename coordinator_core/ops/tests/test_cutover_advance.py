@@ -14,7 +14,7 @@ Async invocation follows the house convention (test_coverage_gate.py,
 test_cutover_gate_handler.py): plain sync test functions wrapping the async
 handler in `asyncio.run(...)`.
 
-Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C5
+Spec backlink: coordinator-content-repo:pln-cutover-state-machine-a-phase--96db57 § C5
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def _write_record(
             "kind": "value-vocabulary",
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
-            "repos": [{"repo": "doe-claude", "foreign": False}],
+            "repos": [{"repo": "coordinator-content-repo", "foreign": False}],
         },
     }
     if derivation_history is not None:
@@ -114,7 +114,7 @@ def _advance(params: dict, repo_root) -> dict:
 
 def _confirmed_producer_entry() -> dict:
     return {
-        "id": "doe-claude:sub/producer.py",
+        "id": "coordinator-content-repo:sub/producer.py",
         "verified_by": {"kind": "probe-op-key", "ref": "ping"},
         "verified_at": "2026-07-25",
     }
@@ -157,7 +157,7 @@ def test_advance_names_unconfirmed_consumer_on_indeterminate_signal2(tmp_path: P
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "doe-claude:sub/producer.py",
+                "id": "coordinator-content-repo:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "no.such.op"},
                 "verified_at": "2026-07-25",
             }
@@ -174,7 +174,7 @@ def test_advance_refuses_and_names_unresolvable_confirmed_id(tmp_path: Path) -> 
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "doe-claude:sub/nonexistent.py",
+                "id": "coordinator-content-repo:sub/nonexistent.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -246,7 +246,7 @@ def test_advance_preserves_existing_derivation_history_entries(git_repo_root: Pa
             {
                 "phase": "reader-widen",
                 "derived_count": 1,
-                "derived_ids": ["doe-claude:sub/producer.py"],
+                "derived_ids": ["coordinator-content-repo:sub/producer.py"],
                 "at": "2026-07-24T00:00:00Z",
             }
         ],

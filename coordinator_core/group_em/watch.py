@@ -175,7 +175,7 @@ NEGATIVE SPEC -- what this module deliberately does not do:
   inherits the empty-snapshot problem in the opposite sign and must set the
   same refusals `_current_agents` sets.
 
-FOLDED FROM DoE-claude, NOT PORTED AS A SEPARATE MODULE (W2-C1,
+FOLDED FROM coordinator-content-repo, NOT PORTED AS A SEPARATE MODULE (W2-C1,
 `docs/plans/2026-09-18-doe-holds-no-scripts.md`): `coordinator/hooks/scripts/_watch_module.py`
 resolved `watch_heartbeat` by `sys.path`-inserted file path (its own docstring: "not an importable
 package name ... resolved by file path") because the DoE-plane skills directory it lived beside
@@ -467,7 +467,7 @@ def _parked_line(
 
     IDENTIFY-BY-SID, ADDRESS-BY-RESOLVED-NAME (the same convention
     `coordinator-safe-commit.py`'s holder refusal states, per DoE ruling 6 on
-    `2026-09-11-doe-claude-em-rulings-owed-bundle.md`): the sid is the stable
+    `2026-09-11-coordinator-content-repo-em-rulings-owed-bundle.md`): the sid is the stable
     identifier this line is ABOUT, and the name is the address resolved from
     the registry at the moment this line was composed, not a permanently
     stable claim either way -- a session can be renamed, and a sid this line
@@ -477,7 +477,7 @@ def _parked_line(
     gone or been re-pointed -- the sid is exactly as likely to have stopped
     resolving as the name is to be stale. `verify before sending` is the
     honest qualifier; `re-resolve from this id` is not
-    (`DoE-claude docs/wiki/session-facade.md`, amended 2b6df17e6c, via
+    (`coordinator-content-repo docs/wiki/session-facade.md`, amended 2b6df17e6c, via
     claude-klabauter-a9).
     """
     stamped_age = _stamped_age_seconds(repo_root, session_id, now)
@@ -582,7 +582,7 @@ class WatchAlreadyHeldError(RuntimeError):
     (`watch_heartbeat.is_fresh_and_foreign`), two call sites, per that
     function's own docstring.
 
-    `cross-repo/inbox/2026-08-31-doe-claude-em-watch-arm-refusal-yes-please.md`
+    `cross-repo/inbox/2026-08-31-coordinator-content-repo-em-watch-arm-refusal-yes-please.md`
     accepts this repo's own proposal: half a handover -- crown and watcher
     both armed, each believing the other holds it -- is their doctrine's
     worse-than-neither case. Landing this is what lets the sibling repo
@@ -1093,7 +1093,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
     and correctly reported it rather than widening its own scope to fix it.
 
     Same defect class this repo already took once on the sibling plane --
-    cross-repo/inbox/2026-08-30-doe-claude-em-workflow-watch-command-is-unrunnable-outside-the-engine.md.
+    cross-repo/inbox/2026-08-30-coordinator-content-repo-em-workflow-watch-command-is-unrunnable-outside-the-engine.md.
     A watch you cannot spell on a command line is a watch nobody runs.
 
     Arm it with:

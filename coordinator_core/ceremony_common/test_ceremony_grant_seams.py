@@ -9,7 +9,7 @@ nothing). Split across three files, the one that actually bites — a write
 whose ceremony name drifts from its handback's guard — is expressible in
 neither.
 
-Spec backlink: cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-grants-
+Spec backlink: cross-repo/inbox/2026-08-04-coordinator-content-repo-em-ceremony-grants-
 belong-in-code-not-prose.md § 3 (the ask), § 1 (the guard), constraint 3
 (workday-complete is out of scope).
 """

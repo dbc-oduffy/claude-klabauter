@@ -246,7 +246,7 @@ def test_class_flip_stages_a_real_memo_draft_on_disk(tmp_path):
     draft_path = repo / ".coordinator-local" / "memo-outbox" / f"{topic}.md"
     assert draft_path.is_file()
     content = draft_path.read_text(encoding="utf-8")
-    assert "to: \"doe-claude-em\"" in content or "to: doe-claude-em" in content
+    assert "to: \"coordinator-content-repo-em\"" in content or "to: coordinator-content-repo-em" in content
     from coordinator_core.write_guards.guard_class_relay import UNCOVERED_SHAPE
     assert UNCOVERED_SHAPE in content
     assert _GUARD_PATH in content

@@ -74,7 +74,7 @@ def _write_render_template_tree_sh(bin_dir: Path) -> Path:
 
 
 @pytest.fixture()
-def doe_root(tmp_path: Path) -> Path:
+def content_root(tmp_path: Path) -> Path:
     root = tmp_path / "doe-clone"
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
@@ -89,7 +89,7 @@ def doe_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_PROJECTS_ROOT", raising=False)
 
 
@@ -124,12 +124,12 @@ def test_empty_template_no_smoke(tmp_path, monkeypatch):
     assert (target / "README.md").read_text() == "# myproj\n"
 
 
-def test_next_app_template_renders_and_seeds(tmp_path, monkeypatch, doe_root):
-    # Force the DoE-root fallback rung: co-located resolution now wins
+def test_next_app_template_renders_and_seeds(tmp_path, monkeypatch, content_root):
+    # Force the content-root fallback rung: co-located resolution now wins
     # unconditionally, so this test's fixture-authored render-template-tree.py
-    # (staged under doe_root) would otherwise never run.
+    # (staged under content_root) would otherwise never run.
     monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -184,6 +184,7 @@ def test_env_root_wins_over_default(tmp_path, monkeypatch):
 
 
 def test_default_parent_uses_home_code_projects(tmp_path, monkeypatch):
+    monkeypatch.setattr(new_project_scaffold, "_is_consumer", lambda: False)
     fake_home = tmp_path / "fake-home2"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -241,8 +242,8 @@ def test_occupied_nonempty_target_dir_fails(tmp_path):
     assert rc == 1
 
 
-def test_next_app_missing_doe_root_fails(tmp_path, monkeypatch):
-    # No REPO_DOE_CLAUDE, no machine-local on PATH -> DoE root unresolvable.
+def test_next_app_missing_content_root_fails(tmp_path, monkeypatch):
+    # No REPO_CONTENT_ROOT, no machine-local on PATH -> DoE root unresolvable.
     monkeypatch.setenv("PATH", "")
     parent = tmp_path / "parent"
     parent.mkdir()
@@ -255,7 +256,7 @@ def test_next_app_missing_doe_root_fails(tmp_path, monkeypatch):
 def test_next_app_missing_template_dir_fails(tmp_path, monkeypatch):
     bare_root = tmp_path / "bare-doe"
     (bare_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(bare_root))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(bare_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -270,7 +271,7 @@ def test_next_app_missing_render_tree_script_fails(tmp_path, monkeypatch):
     next_app.mkdir(parents=True)
     (next_app / "a.txt").write_text("hi\n")
     (root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(root))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -349,6 +350,14 @@ def test_register_repo_success(tmp_path, monkeypatch):
     # PREPEND (not replace) PATH -- the fake script's own `#!/usr/bin/env
     # python3` shebang needs a real python3 discoverable on PATH too.
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    # The verify leg reads the registry in-process; back it with the fake's store.
+    monkeypatch.setattr(
+        new_project_scaffold,
+        "_registry_get",
+        lambda key: dict(
+            line.rstrip("\n").split("\t", 1) for line in store.read_text().splitlines(True)
+        ).get(key),
+    )
 
     target = tmp_path / "target-dir" / "My-Cool-App"
     target.mkdir(parents=True)
@@ -399,3 +408,19 @@ def test_register_repo_verify_mismatch_fails(tmp_path, monkeypatch):
     rc = _REAL_REGISTER_REPO("app", str(target))
 
     assert rc == 1
+
+
+def test_consumer_default_parent_is_cwd_parent_and_skips_registration(tmp_path, monkeypatch, capsys):
+    workdir = tmp_path / "work" / "here"
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    monkeypatch.delenv("COORDINATOR_PROJECTS_ROOT", raising=False)
+    monkeypatch.setattr(new_project_scaffold, "_is_consumer", lambda: True)
+    calls = []
+    monkeypatch.setattr(new_project_scaffold, "_register_repo", lambda *a, **k: calls.append(a) or 0)
+
+    rc = main(["--name", "cons", "--template", "empty", "--no-smoke"])
+
+    assert rc == 0
+    assert (tmp_path / "work" / "cons").is_dir()
+    assert calls == []

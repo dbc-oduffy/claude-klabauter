@@ -3,7 +3,7 @@
 into boot.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-hook-generation-self-probe.py`
+from coordinator-content-repo `coordinator/hooks/scripts/guard-hook-generation-self-probe.py`
 — a DR-047 PLUMBING stub over
 `coordinator_core.ops.session.guard_hook_generation_self_probe.run_self_probe`,
 which already lives in THIS repo. DoE's own version resolved a sibling claude-klabauter

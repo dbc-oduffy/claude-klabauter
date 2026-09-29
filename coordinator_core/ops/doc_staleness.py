@@ -23,17 +23,27 @@ _COMMIT_FIELD_SEP = "\x1f"
 _WHITESPACE_RE = re.compile(r"\s+")
 _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|\(https?://[^)\s]+\)|https?://\S+")
 
+_GIT_TIMEOUT_SECS = 30
+
 
 def _run_git(repo_root: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **no_console_creationflags(),
-    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_GIT_TIMEOUT_SECS,
+            **no_console_creationflags(),
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"doc_staleness: git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECS}s",
+            file=sys.stderr,
+        )
+        return ""
     if result.returncode != 0:
         if result.stderr:
             print(

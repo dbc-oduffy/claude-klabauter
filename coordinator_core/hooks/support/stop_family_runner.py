@@ -4,7 +4,7 @@ runner for the four Stop-family PostToolUse write-path guards, implementing
 that module's numbered clauses for the authoritative statement of each
 behaviour below.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_stop_family_runner.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_stop_family_runner.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3.
 
 Deliberately NOT built on top of `guard_runner.py`'s internals (no shared

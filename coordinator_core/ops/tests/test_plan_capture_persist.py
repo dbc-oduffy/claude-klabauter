@@ -522,8 +522,8 @@ def test_persist_captured_plan_end_to_end_real_coordinator_doc_new():
         assert read_fm_field_unquoted(split.fm_text, "sizing_object") == scratch_sizing_rel
         for heading in ("## Problem", "## Anti-scope", "## Out of scope", "## Tasks"):
             assert heading in text
-        # Falsifier for the retired AC row family (DoE-claude memo
-        # 2026-08-27-doe-claude-em-ac-table-collapse.md, ask 1): a freshly
+        # Falsifier for the retired AC row family (coordinator-content-repo memo
+        # 2026-08-27-coordinator-content-repo-em-ac-table-collapse.md, ask 1): a freshly
         # scaffolded plan must carry no `## Acceptance Criteria` heading --
         # the heading is what kept authors filling a table nothing gates.
         assert "## Acceptance Criteria" not in text

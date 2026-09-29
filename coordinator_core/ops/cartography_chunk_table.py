@@ -2,8 +2,8 @@
 coordinator_core.ops.cartography_chunk_table — JSON-RPC "cartography.chunk_table"
 operation.
 
-Purpose: the DR-228 § D6 scratch-tier writer DoE-claude's memo asks for
-(cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-
+Purpose: the DR-228 § D6 scratch-tier writer coordinator-content-repo's memo asks for
+(cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-chunk-table-producer-
 seam.md): computes ``coordinator_core.cartography.chunk_table.compute_chunk_table``
 over a caller-supplied ``target_root`` + caller-supplied ``systems`` boundary map
 and, on ``emit=true``, writes ONE ``schema_version``-pinned JSON artifact to
@@ -108,7 +108,7 @@ Negative-spec: performs no LLM call, no system-boundary inference, no commit,
 no delete — see coordinator_core.cartography.chunk_table's own negative-spec
 for the pure-computation boundary this handler wraps.
 
-Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-chunk-table-producer-seam.md
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 
 Consumption status: CONSUMED — one of only two of nine cartography op names
@@ -197,7 +197,7 @@ def build_chunk_table_artifact(
     twice (`buckets[].files` and `buckets[].chunks`) — a third per-file
     listing widens the body for a value this op's one consumer does not read
     back; (2) the consumer's readback is an LLM call, not a filesystem read
-    (cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-
+    (cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-chunk-table-
     consumer-wired.md), so there is no reader positioned to exploit a
     ready-made loc index the way a script would. This scopes the anti-scope
     to the artifact's *per-file record* only — not to loc computation itself,

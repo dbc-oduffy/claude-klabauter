@@ -1,8 +1,8 @@
 """Characterization tests for coordinator_core.ops.ensure_doe_clone.
 
-Port source: coordinator/commands/install.md (DoE-claude) Step 3.5a, the two
+Port source: coordinator/commands/install.md (coordinator-content-repo) Step 3.5a, the two
 literal bash fences at lines 731 and 747.
-Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
+Spec backlink: coordinator-content-repo:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
 
 Converted 2026-08-16 (C7b): `_registry_get` now reads the machine-local
 registry in-process (`machine_resolver.registry_get`), so the scenario that
@@ -70,8 +70,8 @@ def _fake_git_clone(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
-    monkeypatch.delenv("REPO_DOE_CLAUDE_URL", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_CONTENT_ROOT_URL", raising=False)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
     monkeypatch.setenv("PATH", "")
     empty_registry = tmp_path / "ml-registry"
@@ -83,7 +83,7 @@ def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
     (clone / "coordinator").mkdir(parents=True)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
 
     rc = main([])
 
@@ -94,33 +94,33 @@ def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
 def test_check_only_skips_when_unresolved(capsys):
     rc = main(["--check-only"])
     assert rc == 0
-    assert "doe_clone: skipped (repos.doe_claude not set)" in capsys.readouterr().out
+    assert "doe_clone: skipped (repos.content_root not set)" in capsys.readouterr().out
 
 
 def test_non_interactive_fails_loud_when_unresolved(capsys):
     rc = main(["--non-interactive"])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "doe_clone: failed (repos.doe_claude not set" in out
+    assert "doe_clone: failed (repos.content_root not set" in out
 
 
 def test_non_interactive_env_var_form(monkeypatch, capsys):
     monkeypatch.setenv("COORDINATOR_NON_INTERACTIVE", "1")
     rc = main([])
     assert rc == 1
-    assert "doe_clone: failed (repos.doe_claude not set" in capsys.readouterr().out
+    assert "doe_clone: failed (repos.content_root not set" in capsys.readouterr().out
 
 
 def test_interactive_unresolved_reports_skip_and_nonzero(capsys):
     rc = main([])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "doe_clone: skipped (repos.doe_claude not set — run the interactive" in out
+    assert "doe_clone: skipped (repos.content_root not set — run the interactive" in out
 
 
 def test_check_only_would_clone_when_resolved_but_absent(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone-not-yet"
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
 
     rc = main(["--check-only"])
 
@@ -131,20 +131,20 @@ def test_check_only_would_clone_when_resolved_but_absent(tmp_path, monkeypatch, 
 
 def test_live_clone_fails_loud_without_resolvable_url(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone-not-yet"
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
 
     rc = main([])
 
     assert rc == 1
-    assert "doe_clone: failed (repos.doe_claude_url not resolvable" in capsys.readouterr().out
+    assert "doe_clone: failed (repos.content_root_url not resolvable" in capsys.readouterr().out
 
 
 def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _fake_git_clone):
-    """Both REPO_DOE_CLAUDE and REPO_DOE_CLAUDE_URL are env-overridden here,
+    """Both REPO_CONTENT_ROOT and REPO_CONTENT_ROOT_URL are env-overridden here,
     so registry resolution is never reached -- no registry seed needed."""
     clone = tmp_path / "doe-clone-not-yet"
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
-    monkeypatch.setenv("REPO_DOE_CLAUDE_URL", "https://example.invalid/doe-claude.git")
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT_URL", "https://example.invalid/coordinator-content-repo.git")
 
     rc = main([])
 
@@ -157,7 +157,7 @@ def test_registry_tier_resolves_clone_path(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
     (clone / "coordinator").mkdir(parents=True)
-    _seed_registry(tmp_path, **{"repos.doe_claude": str(clone)})
+    _seed_registry(tmp_path, **{"repos.content_root": str(clone)})
 
     rc = main([])
 
@@ -169,7 +169,7 @@ def test_trailing_slash_stripped(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
     (clone / "coordinator").mkdir(parents=True)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone) + "/")
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone) + "/")
 
     rc = main([])
 
@@ -180,7 +180,7 @@ def test_trailing_slash_stripped(tmp_path, monkeypatch, capsys):
 def test_git_dir_without_coordinator_reports_distinct_failure(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(clone))
 
     rc = main([])
 

@@ -1,6 +1,6 @@
 """coordinator_core.ops.review_stamp — mint/check tests.
 
-DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1, AC10.
+Coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1, AC10.
 """
 
 from __future__ import annotations

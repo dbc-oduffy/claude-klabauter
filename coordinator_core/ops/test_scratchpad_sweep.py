@@ -47,7 +47,7 @@ _OLD_AGE_SECS = 10 * 86400
 _RECENT_AGE_SECS = 60
 
 _DEFAULT_SLUG_MAP = {
-    "X--claude-klabauter": "X:/claude-klabauter",
+    "X--claude-klabauter": "C:/claude-klabauter",
     "Y--other-project": "Y:/other-project",
 }
 
@@ -267,7 +267,7 @@ def test_two_project_slugs_resolve_independent_liveness(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={"X--claude-klabauter": "X:/claude-klabauter"},
+        slug_to_root_map={"X--claude-klabauter": "C:/claude-klabauter"},
         reclaim=True,
     )
 
@@ -286,8 +286,8 @@ def test_two_project_slugs_resolve_independent_liveness(tmp_path):
 
 
 def test_encode_project_slug_matches_harness_convention():
-    assert _encode_project_slug("X:\\claude-klabauter") == "X--claude-klabauter"
-    assert _encode_project_slug("X:/claude-klabauter") == "X--claude-klabauter"
+    assert _encode_project_slug("C:\\claude-klabauter") == "X--claude-klabauter"
+    assert _encode_project_slug("C:/claude-klabauter") == "X--claude-klabauter"
 
 
 def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
@@ -295,7 +295,7 @@ def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
     dropped from the map entirely (fail safe), never guessed toward either."""
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._known_repo_roots",
-        lambda: ["X:/project.claude-klabauter", "X:/claude-klabauter"],
+        lambda: ["C:/project.claude-klabauter", "C:/claude-klabauter"],
     )
     mapping = _build_slug_to_root_map()
     assert "X--claude-klabauter" not in mapping
@@ -304,11 +304,11 @@ def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
 def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._known_repo_roots",
-        lambda: ["X:/claude-klabauter", "X:/DoE-claude"],
+        lambda: ["C:/claude-klabauter", "C:/coordinator-content-repo"],
     )
     mapping = _build_slug_to_root_map()
-    assert mapping["X--claude-klabauter"] == "X:/claude-klabauter"
-    assert mapping["X--DoE-claude"] == "X:/DoE-claude"
+    assert mapping["X--claude-klabauter"] == "C:/claude-klabauter"
+    assert mapping["X--coordinator-content-repo"] == "C:/coordinator-content-repo"
 
 
 # JSON-RPC handler surface
@@ -379,7 +379,7 @@ def test_size_cut_stops_at_right_threshold_whole_cohorts_only(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=250,
@@ -412,7 +412,7 @@ def test_size_cut_floor_reached_reports_shortfall_deletes_nothing_below_floor(tm
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=100,
@@ -451,7 +451,7 @@ def test_size_cut_spares_live_directory_and_does_not_count_its_bytes(tmp_path, m
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=1,
@@ -480,7 +480,7 @@ def test_size_cut_dry_run_full_accounting_no_deletion(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=False,
         size_cut_target_bytes=1,
@@ -586,7 +586,7 @@ def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=0,
@@ -611,7 +611,7 @@ def test_small_file_directory_same_age_is_not_eligible(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=0,
@@ -641,7 +641,7 @@ def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=0,
@@ -836,7 +836,7 @@ def test_archive_shaped_file_is_detected_and_totaled(tmp_path):
     )
 
     result = _sweep(
-        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+        tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]
     )
 
     entry = _entry_for(result, sid)
@@ -867,7 +867,7 @@ def test_archive_shape_pattern_set(tmp_path, fname, is_archive):
     _make_dated_session_with_files(claude_root, sid, 3.1, {fname: 50})
 
     result = _sweep(
-        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+        tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]
     )
 
     entry = _entry_for(result, sid)
@@ -896,7 +896,7 @@ def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
         size_cut_target_bytes=0,
@@ -927,7 +927,7 @@ def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, caps
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
     )
@@ -948,7 +948,7 @@ def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
 
     result = _sweep(
         tmp_path,
-        slug_to_root_map={slug: "X:/claude-klabauter"},
+        slug_to_root_map={slug: "C:/claude-klabauter"},
         project_slugs=[slug],
         reclaim=True,
     )
@@ -981,7 +981,7 @@ def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
     _make_dated_session_with_files(claude_root, sid_b, 3.1, {"big.tar.zst": 900})
 
     result = _sweep(
-        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+        tmp_path, slug_to_root_map={slug: "C:/claude-klabauter"}, project_slugs=[slug]
     )
 
     seen = result["archives_seen"]

@@ -112,7 +112,7 @@ class TestWholeOpSpawnBudget:
         _write_repos_registry(reg_dir, {"realrepo": real_repo})
         monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-        assert m._tier_a() == [f"X:\\{marker}"]
+        assert m._tier_a() == [f"C:\\{marker}"]
 
         call_count = _install_counting_run(monkeypatch)
         rc = m.main([])

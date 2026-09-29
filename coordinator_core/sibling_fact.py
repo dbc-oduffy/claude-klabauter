@@ -53,8 +53,8 @@ NEGATIVE SPEC — OBSERVATIONS ONLY, NEVER A VERDICT (D1, eng-director F2):
 
 REPO ROOT RESOLUTION (D6, eng-director F6): every `repo:` value binds via
 `coordinator_core.machine_resolver.registry_get("repos.<id>")` EXCEPT
-`doe_claude`, which routes through
-`coordinator_core.doe_root_pointer.read_doe_root_pointer()` — its
+`content_root`, which routes through
+`coordinator_core.content_root_pointer.read_content_root_pointer()` — its
 registry-then-settings-home-mirror-then-legacy ladder is the sanctioned,
 reset-safe (DR-071) resolution contract for that one repo id; bare
 `registry_get` alone is a fresh-machine regression for it specifically. An
@@ -102,7 +102,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple, TypedDict
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.git_ancestry import is_ancestor
 from coordinator_core.machine_resolver import registry_get
 #: `coordinator_core.ops.read_frontmatter_field` is imported lazily at its use
@@ -135,16 +135,16 @@ class LegObservation(TypedDict):
 def _resolve_repo_root(repo_id: str) -> Tuple[Optional[Path], str]:
     """Resolve `repo_id` to an on-disk clone root, or `(None, reason)`.
 
-    `doe_claude` routes through `read_doe_root_pointer()` (D6/F6); every other
+    `content_root` routes through `read_content_root_pointer()` (D6/F6); every other
     id binds via bare `registry_get("repos.<id>")`. Also rejects a registered
     root that is not actually a directory on THIS disk (a stale registry
     entry / a clone that was never made here) — distinguishing "unregistered"
     from "registered but absent" is the "absent clone" edge case C2's own
     test suite is required to cover.
     """
-    if repo_id == "doe_claude":
-        raw = read_doe_root_pointer()
-        source = "doe_root_pointer.read_doe_root_pointer()"
+    if repo_id == "content_root":
+        raw = read_content_root_pointer()
+        source = "content_root_pointer.read_content_root_pointer()"
     else:
         raw = registry_get(f"repos.{repo_id}")
         source = f"registry_get('repos.{repo_id}')"

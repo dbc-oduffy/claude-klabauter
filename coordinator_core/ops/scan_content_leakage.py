@@ -57,7 +57,7 @@ _OP_KEY_SCOPE / _registry_map.py) lands in the separate EM-serial
 registration pass (CC-3).
 
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B7
-Port source: DoE-claude coordinator/skills/percolate/SKILL.md § Step 2c (bash fence)
+Port source: coordinator-content-repo coordinator/skills/percolate/SKILL.md § Step 2c (bash fence)
 
 Negative-spec (hard-won):
   - Does NOT scan for operator-identity tokens (PERSONAL_REVIEW_PATTERNS) —

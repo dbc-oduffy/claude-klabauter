@@ -29,12 +29,12 @@ from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: terminal-status coverage tests read the
-# DoE-claude repo's real HEAD `plan.schema.json` via `git show` to pin the
+# coordinator-content-repo repo's real HEAD `plan.schema.json` via `git show` to pin the
 # schema enum against the actual on-disk oracle, and the no-commit-row guard
 # builds real per-test commit history — no mock stands in for either.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.session import harness_registry as hr
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.workstream_complete import apply as wsc_apply
 from coordinator_core.workstream_complete import completion_verdict as _cv
@@ -285,7 +285,7 @@ _BRIGHTLINE_DIRECTIVE_IDS = frozenset(
 
 
 def test_every_disposition_computes_some_brightline_gate_directive(monkeypatch, tmp_path):
-    """The invariant the 2026-08-03 doe-claude-em memo found violated: a
+    """The invariant the 2026-08-03 coordinator-content-repo-em memo found violated: a
     chain-terminal close skipped the session-scoped brightline gate (right
     scope call) and substituted nothing, leaving the close that caps an
     entire lineage's diff as the ONLY one with no brightline gate at all.
@@ -960,7 +960,7 @@ _CHAIN_SLICE_ENTRY = {
 # (`scope.archive()`) is a once-per-SESSION-END operation. Emitting the
 # archive directive here archived a still-live session mid-session,
 # destroying once-per-session sentinels and the dispatch-evidence file.
-# Archival is now wired to session END (a SessionEnd hook, DoE-claude repo),
+# Archival is now wired to session END (a SessionEnd hook, coordinator-content-repo repo),
 # not this assembly. `d-emit-cadence` previously depended on the removed
 # directive; that directive is itself gone now (2026-08-22 emission CUT).
 # ---------------------------------------------------------------------------
@@ -1128,8 +1128,8 @@ def test_leg_b_a_continuation_cycle_is_indeterminate_not_an_infinite_walk(tmp_pa
 
 
 def test_leg_b_an_unreadable_deployment_state_is_indeterminate_never_a_live_child(tmp_path):
-    """THE 2026-08-31 REGRESSION, generalised (doe-claude-em, cross-repo/inbox/
-    2026-08-31-doe-claude-em-has-live-children-fail-closed-reads-as-a-finding.md):
+    """THE 2026-08-31 REGRESSION, generalised (coordinator-content-repo-em, cross-repo/inbox/
+    2026-08-31-coordinator-content-repo-em-has-live-children-fail-closed-reads-as-a-finding.md):
     a leg that cannot tell must say so, never manufacture a finding. An
     off-enum `deployment_state` on the successor, and a successor that
     cannot be resolved at all, are both `indeterminate` — the non-blocking
@@ -1491,9 +1491,9 @@ def test_consumed_handoff_completeness_leg_a_indeterminate_when_heading_present_
 
 
 # ---------------------------------------------------------------------------
-# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-doe-claude-em-
+# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-coordinator-content-repo-em-
 # wsc-leg-a-session-handoff-kind-blind.md: that kind never carries its own
-# `## Acceptance criteria` (0/34 in DoE-claude's corpus, 0/22 in claude-klabauter's),
+# `## Acceptance criteria` (0/34 in coordinator-content-repo's corpus, 0/22 in claude-klabauter's),
 # so leg A joins its `deliverable_id` frontmatter to the governing plan's own
 # `deliverable_id` instead — the retired `plan:` frontmatter pointer's
 # replacement, per PM ruling R2 (docs/plans/2026-08-04-terminal-state-
@@ -1541,10 +1541,10 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     `status` enum member NOT in `_LEG_A_TERMINAL_PLAN_STATUS`. Enum-pinned
     so a future schema change that reclassified e.g. `landed` cannot pass
     this suite silently -- only `draft` was previously exercised here."""
-    doe_root = resolve_doe_root()
-    if not doe_root:
+    content_root = resolve_content_root()
+    if not content_root:
         return None
-    doe_repo = Path(doe_root)
+    doe_repo = Path(content_root)
     if not doe_repo.exists():
         return None
     # A git-show error against a
@@ -1565,11 +1565,11 @@ def _doe_head_plan_schema(doe_repo: Path):
     """The DoE `plan.schema.json` parsed out of HEAD, or `None` when THIS root
     does not publish it.
 
-    Three states, not two. `resolve_doe_root` documents that it "does NOT
-    validate the resolved root looks like a real DoE-claude checkout --
+    Three states, not two. `resolve_content_root` documents that it "does NOT
+    validate the resolved root looks like a real coordinator-content-repo checkout --
     callers apply their own site-specific existence gate", and this is that
     gate. A root can be PRESENT and still not be an authoring tree: a cloud
-    container registers the flat published OSS mirror as `repos.doe_claude`,
+    container registers the flat published OSS mirror as `repos.content_root`,
     and that mirror deliberately carries no DoE-internal authoring artifact
     (it publishes a flat `schemas/` dir, but not this file) per the one-way
     percolation boundary. Treating present-but-not-authoring as a broken
@@ -1617,7 +1617,7 @@ def pytest_generate_tests(metafunc):
     metafunc.parametrize(
         "status",
         statuses
-        or [pytest.param("draft", marks=pytest.mark.skip(reason="DoE-claude repo not registered/found on this machine"))],
+        or [pytest.param("draft", marks=pytest.mark.skip(reason="coordinator-content-repo repo not registered/found on this machine"))],
     )
 
 
@@ -1672,7 +1672,7 @@ def test_session_handoff_leg_a_not_applicable_when_no_deliverable_id(monkeypatch
 def test_session_handoff_leg_a_indeterminate_when_deliverable_id_unresolved(monkeypatch, tmp_path):
     # No plan anywhere carries this deliverable_id -- the gate must reach a
     # verdict (AC12) without any docs/plans/ population at all, not raise.
-    # 2026-08-08 correction (cross-repo/archive/2026-08-08-doe-claude-em-
+    # 2026-08-08 correction (cross-repo/archive/2026-08-08-coordinator-content-repo-em-
     # leg-a-correction-our-premise-was-wrong-keep-the-verdict-fix.md): a
     # zero-candidate join is `indeterminate`, not `not-applicable` -- it is
     # non-blocking either way (leg A only fires on "open"), but it must not
@@ -1866,7 +1866,7 @@ def test_non_session_handoff_kind_regression_still_indeterminate(monkeypatch, tm
     assert leg_a["detail"] == "no ## Acceptance criteria heading"
 
 
-@pytest.mark.real_home  # live-tree oracle: `git show`s the real DoE-claude HEAD, which the
+@pytest.mark.real_home  # live-tree oracle: `git show`s the real coordinator-content-repo HEAD, which the
 # quarantine's synthetic (non-git) stub root cannot serve.
 def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_enum():
     """AC6 -- presence-only parity, deliberately NOT set-equality and
@@ -1880,10 +1880,10 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
     The terminal subset asserted here (`implemented`/`deferred`/`abandoned`/
     `superseded`) is hand-authored from the schema's own prose, not derived
     mechanically from `enum`."""
-    doe_root = resolve_doe_root()
-    if not doe_root:
-        pytest.skip("DoE-claude repo not registered on this machine")
-    doe_repo = Path(doe_root)
+    content_root = resolve_content_root()
+    if not content_root:
+        pytest.skip("coordinator-content-repo repo not registered on this machine")
+    doe_repo = Path(content_root)
     if not doe_repo.exists():
         pytest.skip(f"DoE repo not found at {doe_repo}")
 
@@ -3809,8 +3809,8 @@ def test_decisions_template_lands_under_preflight_never_a_9th_envelope_key(monke
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 doe-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
-# doe-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
+# 2026-07-30 coordinator-content-repo-em cross-repo memo (`cross-repo/archive/2026-07-30-
+# coordinator-content-repo-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
 # 1 -- directives_memo_lifecycle.compute_memo_resolution_attribution's three
 # signals (picked_up_by / realized_by / archive_rename) and their union, plus
 # judgments.build_memo_resolution_attribution_judgment_point's move from
@@ -4248,7 +4248,7 @@ def test_open_spine_row_gate_fires_and_names_every_open_row_with_five_exits(monk
     named in `warn_text`, the five exits stated verbatim (the two
     PM-gated ones marked, plus the runnable `plan-tasks-resolve`
     command) per the five-exits ruling
-    (cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-
+    (cross-repo/inbox/2026-08-05-coordinator-content-repo-em-plan-tasks-five-exits-
     ruling.md)."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     _write_plan_with_spine(

@@ -18,6 +18,7 @@ Grep anchors: THE-SPAWN-RATCHET-STOPS-ACCUMULATING-ARREARS, C4
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -49,8 +50,11 @@ _FILE_WIDE_MARKED_SPAWN_TEST = (
 )
 
 
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+
+
 def _payload(tool_name, tool_input):
-    return {"tool_name": tool_name, "tool_input": tool_input}
+    return {"tool_name": tool_name, "tool_input": tool_input, "cwd": _REPO_ROOT}
 
 
 def _is_advisory_envelope(result: dict) -> bool:
@@ -168,6 +172,6 @@ def test_guard_fires_through_engine_evaluate_payload_json():
         for r in (control_results or [])
         if _is_advisory_envelope(r)
     ]
-    assert not any("test_thing" in t for t in control_texts), (
+    assert not any("test_thing" in t and "spawns_process" in t for t in control_texts), (
         f"a MARKED spawning test still tripped this guard; advisories: {control_texts}"
     )

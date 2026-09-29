@@ -46,7 +46,7 @@ Exit codes (parity-critical — the trampoline and callers branch on these):
   2 — unrecognised CLI argument
 
 Port of: check-version-consistency.sh (DoE 894d4bc6, 2026-07-22)
-Spec backlink: docs/wiki/versioning-convention.md (DoE-claude)
+Spec backlink: docs/wiki/versioning-convention.md (coordinator-content-repo)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Caller-identity backlink: docs/plans/2026-09-12-ceremony-gates-read-their-caller-before-they-fail-it.md (C1)
 

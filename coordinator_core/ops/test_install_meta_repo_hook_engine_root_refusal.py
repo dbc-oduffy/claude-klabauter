@@ -1,6 +1,6 @@
 """The meta-repo hook installer refuses to run from a live working tree.
 
-Pins the fix for the failure doe-claude-6b reported on 2026-08-26: three of
+Pins the fix for the failure coordinator-content-repo-6b reported on 2026-08-26: three of
 four pre-commit gates resolved and one did not, because the hook's gate paths
 were frozen against a sibling claude-klabauter checkout that had since changed branch.
 The gate could not run, and the only remedy the hook offered was

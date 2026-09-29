@@ -458,7 +458,6 @@ class TestDispatchReachability:
         module's own dispatch.py docstring: "the master gate... rejected...
         before... the guard loop ever run"."""
         monkeypatch.setattr(guard, "MATCHERS", ("Bash",))
-        monkeypatch.setattr(dispatch, "_matchers_multiprobe_banner", ("Bash",))
         monkeypatch.setattr(dispatch, "_ANY_DECLARED_MATCHERS_CACHE", None)
 
         cmd = "Write-Host '=== facts ==='; git status; git log -1; pwd"
@@ -483,7 +482,7 @@ class TestDispatchReachability:
         entries = {e.name: e.matchers for e in chain}
         assert entries["multiprobe-banner"] == ("Bash",), (
             "the revert did not reach the built chain entry -- if this "
-            "entry still declares PowerShell, `_matchers_multiprobe_banner` "
+            "entry still declares PowerShell, `guard.MATCHERS` "
             "is no longer what the registration reads, and the sibling "
             "test above is not proving what it claims"
         )

@@ -6,7 +6,7 @@ subagent identity deny, not the Tier-F/U grant check. `check()` returns
 early for any command the prefilter misses, so all three legs were bypassed
 by one omission. Identical class to the 2026-08-03 `tox`/`nox` gap
 (`_classify_tox_nox`'s docstring records it), and reported as
-`cross-repo/archive/2026-08-11-doe-claude-em-tier-u-node-runner-
+`cross-repo/archive/2026-08-11-coordinator-content-repo-em-tier-u-node-runner-
 unclassified.md`.
 
 THE RULING THIS FILE PINS (DR-395). The reporting memo asked one question --
@@ -97,7 +97,7 @@ def test_plain_node_is_not_a_test_runner() -> None:
 def test_the_reported_invocation_stays_permitted_and_that_is_the_ruling() -> None:
     """The memo's own case, pinned as a DECISION rather than left to drift.
 
-    `2026-08-11-doe-claude-em-tier-u-node-runner-unclassified.md` reported
+    `2026-08-11-coordinator-content-repo-em-tier-u-node-runner-unclassified.md` reported
     `node --test <path>/run.js` as allowed and asked whether that was the
     classifier's gap or their prose overreaching. Ruled: their prose. The
     operand names a file, so it is scoped by the uniform predicate.

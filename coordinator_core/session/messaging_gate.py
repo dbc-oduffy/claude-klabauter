@@ -7,7 +7,7 @@ a BOX-level deliverability question — "does any live record carry a
 `messaging_socket_path`". It returns `False` both when nothing on the box ever
 asked for the gate and when something asked and the gate stayed shut, and those
 two readings are byte-identical to a reader. That collapse has a measured cost:
-`coordinator/bin/claude-doe.py` has defaulted `CLAUDE_CODE_HARBOR_KITE` on for
+`coordinator/bin/claude-author.py` has defaulted `CLAUDE_CODE_HARBOR_KITE` on for
 every session it launches since `c3db5d8b1` (2026-08-15T00:30Z), 45 sessions
 started after it and 0 bound an inbox, and three repos independently measured
 the resulting `messaging_available: false` (claude-klabauter 44/44 2026-08-14,

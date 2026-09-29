@@ -1,6 +1,6 @@
 """STAGED FOR RELOCATION — final destination:
-    X:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py
-(a confined general-purpose subagent cannot write outside the DoE-claude repo
+    C:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py
+(a confined general-purpose subagent cannot write outside the coordinator-content-repo repo
 per subagent-sandbox-policy.yaml `confined:` — this file is staged here for
 the EM to `git mv`/copy into the claude-klabauter working tree and commit there.)
 
@@ -76,7 +76,7 @@ silently invented here). `_resolve_state_root()` falls back to the same
 default the bash oracle itself falls back to when its seam is unavailable:
 `${GIT_ROOT}/state`.
 
-Spec backlink: X:/DoE-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.6
+Spec backlink: C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.6
 """
 
 from __future__ import annotations

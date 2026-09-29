@@ -62,7 +62,7 @@ Two consequences for whoever reads a red run:
     fire's ``log_path``, never the exit status, to learn what the phases
     actually did.
   - The commit phase's ``coordinator:git-commit-agent`` and the CROSS-REPO
-    ``SubagentStart``/``agent_type`` gate (doe-claude-em's ``hooks.json``
+    ``SubagentStart``/``agent_type`` gate (coordinator-content-repo-em's ``hooks.json``
     sending the placeholder, making
     ``block_reviewer_bash_outside_allowlist`` confine the committer) sit
     DOWNSTREAM of this and have not been reached yet -- the executor phase

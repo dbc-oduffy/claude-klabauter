@@ -113,7 +113,7 @@ def cited_review_trail_relpaths(worktree_root: Path) -> set:
     return cited
 
 # "## Integrator Dispositions" as an anchored heading line — the RETIRED
-# marker (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md,
+# marker (coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md,
 # row M4): the review-integrator agent no longer exists, so no NEW sidecar
 # ever carries this heading. Kept ONLY to keep classifying pre-retirement
 # historical sidecars (Anti-scope: "Do not edit historical records") as

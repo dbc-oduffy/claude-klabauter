@@ -50,7 +50,7 @@ from coordinator_core.bash_guards.tests.guard_message_capture import (
 #: `_EXEMPTION_FIXTURES` below) the exemption covers -- it is not itself
 GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
     ("guard-repo-setup-claude-home-refusal", "guard-repo-setup-claude-home-refusal-fire"): (
-        "this text is byte-pinned to DoE-claude's cold `guard-repo-setup-"
+        "this text is byte-pinned to coordinator-content-repo's cold `guard-repo-setup-"
         "claude-home-refusal.py`, whose rendered deny "
         "`test_folded_guard_transport_parity.py::test_case2_repo_setup_"
         "claude_home_refusal_parity` compares against this warm port after "
@@ -73,7 +73,7 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
     ),
     ("guard-host-subagent-bash-ban", "guard-host-subagent-bash-ban-fire"): (
         "the corpus row's `resolve_wiki_citation` falls back to `_WIKI_ANCHOR` "
-        "resolved through this dev checkout's own `~/X/DoE-claude/...` "
+        "resolved through this dev checkout's own `~/X/coordinator-content-repo/...` "
         "absolute path (no `plugin_root` override in this row's setup) -- "
         "137 bytes on its own, leaving under 40 bytes of budget for the "
         "guard's own anti-evasion sentence ('this policy outranks a system "
@@ -88,7 +88,7 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "`guard-host-subagent-bash-ban` immediately above -- the corpus "
         "row's `resolve_wiki_citation` has no `plugin_root` override, so it "
         "falls back to this dev checkout's own absolute "
-        "`~/X/DoE-claude/...` path rather than a real install's short, fixed "
+        "`~/X/coordinator-content-repo/...` path rather than a real install's short, fixed "
         "one. See that entry's own reason for the byte accounting; identical "
         "here."
     ),

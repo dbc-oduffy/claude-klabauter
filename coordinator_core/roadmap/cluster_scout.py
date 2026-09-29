@@ -16,7 +16,7 @@ read): the DoE-authored cluster-scout-brief fragment is vendored as an
 inlined copy under ``coordinator_core/roadmap/fragments/`` and loaded from
 disk here — no cross-repo path is resolved at dispatch time. The vendored
 copy is pinned byte-identical against
-``coordinator/contract/cluster-scout-brief-fragment.json`` in DoE-claude by
+``coordinator/contract/cluster-scout-brief-fragment.json`` in coordinator-content-repo by
 ``tests/test_cluster_scout_dispatch.py``; DoE's own
 ``coordinator/tests/test_supplied_fragments.py`` pins the same file on
 their side, including the inlined preamble against its live snippet

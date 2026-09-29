@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.dev_sync.
 
-Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (DoE-claude, ~115 lines).
+Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (coordinator-content-repo, ~115 lines).
 """
 from __future__ import annotations
 

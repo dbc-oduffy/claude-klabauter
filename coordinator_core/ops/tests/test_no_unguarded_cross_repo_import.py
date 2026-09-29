@@ -1,7 +1,7 @@
 """No production engine module imports the `coordinator` namespace package
 unguarded at module scope.
 
-Why this is a gate and not a convention: `coordinator/` (the DoE-claude plugin
+Why this is a gate and not a convention: `coordinator/` (the coordinator-content-repo plugin
 tree's `bin/lib`, vendored alongside this engine) carries no `__init__.py`, so
 `import coordinator.bin.lib.win_argv` resolves ONLY while the claude-klabauter root
 happens to be on `sys.path`. Callers such as `coordinator/bin/lib/cc_invoke.py`

@@ -3,7 +3,7 @@ coordinator_core.ops.workday_complete_step2_5_dirty_tree — Step 2.5 dirty-tree
 auto-disposition.
 
 Spec backlink: commands/workday-complete.md § Step 2.5
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 PM ruling:     cross-repo/inbox/2026-06-16-workday-complete-dirty-tree-autonomy.md
 
 Purpose: classifies every dirty path in the cwd's git repo (via `git status

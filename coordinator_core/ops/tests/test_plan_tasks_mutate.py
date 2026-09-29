@@ -1129,7 +1129,7 @@ def test_add_task_governed_admits_row_without_pm_approved(tmp_path):
     `resolve` does, so a governed plan's rows are validated against the
     governed schema (pm_approved not required) rather than the legacy one.
 
-    Regression for cross-repo/archive/2026-08-13-doe-claude-em-plan-tasks-
+    Regression for cross-repo/archive/2026-08-13-coordinator-content-repo-em-plan-tasks-
     mutate-governed-flag-asymmetry.md: prior to the fix, add-task always
     validated with governed=False, so a backlogged/wont_do row with no
     pm_approved field failed the legacy schema's required-field check on a
@@ -1168,7 +1168,7 @@ def test_stamp_governed_uses_governed_schema(tmp_path):
     carries `disposition: backlogged` (and no pm_approved) must not be
     revalidated against the legacy pm_approved-required schema.
 
-    Regression for cross-repo/archive/2026-08-13-doe-claude-em-plan-tasks-
+    Regression for cross-repo/archive/2026-08-13-coordinator-content-repo-em-plan-tasks-
     mutate-governed-flag-asymmetry.md."""
     repo = _make_git_repo(tmp_path)
     plan_text = _governed_plan().replace(

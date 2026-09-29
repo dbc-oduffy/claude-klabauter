@@ -138,16 +138,16 @@ class TestRunPreflightRepoResolution:
     def test_run_preflight_reports_exact_counts_and_unresolvable_bucket_separately(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
-        doe_root = tmp_path / "doe-claude"
+        content_root = tmp_path / "coordinator-content-repo"
         claude_klabauter_root = tmp_path / "claude-klabauter"
-        _handoff(doe_root, "state/handoffs/a.md", "spinoff")
-        _handoff(doe_root, "state/handoffs/b.md", "session-handoff")
+        _handoff(content_root, "state/handoffs/a.md", "spinoff")
+        _handoff(content_root, "state/handoffs/b.md", "session-handoff")
         _handoff(claude_klabauter_root, "archive/handoffs/2026-07/c.md", "spinoff")
 
         missing_path = tmp_path / "not-cloned-here" / "project-rag"
 
         _make_registry(tmp_path, monkeypatch, {
-            "doe_claude": doe_root,
+            "content_root": content_root,
             "claude_klabauter": claude_klabauter_root,
             "project_rag": missing_path,
         })
@@ -157,10 +157,10 @@ class TestRunPreflightRepoResolution:
         assert report["exit_code"] == 1
 
         repos = report["repos"]
-        assert repos["DoE-claude"]["resolved"] is True
-        assert repos["DoE-claude"]["counts_live"] == {"spinoff": 1, "session-handoff": 1}
-        assert repos["DoE-claude"]["counts_archived"] == {}
-        assert repos["DoE-claude"]["total"] == 2
+        assert repos["coordinator-content-repo"]["resolved"] is True
+        assert repos["coordinator-content-repo"]["counts_live"] == {"spinoff": 1, "session-handoff": 1}
+        assert repos["coordinator-content-repo"]["counts_archived"] == {}
+        assert repos["coordinator-content-repo"]["total"] == 2
 
         assert repos["claude-klabauter"]["resolved"] is True
         assert repos["claude-klabauter"]["counts_live"] == {}
@@ -187,7 +187,7 @@ class TestRunPreflightRepoResolution:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["DoE-claude"], "state/handoffs/a.md", "spinoff")
+        _handoff(roots["coordinator-content-repo"], "state/handoffs/a.md", "spinoff")
 
         report = preflight.run_preflight()
 
@@ -315,25 +315,25 @@ class TestOffEnumDetection:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["DoE-claude"], "state/handoffs/.archive/a.md", "spinoff-roadmap")
+        _handoff(roots["coordinator-content-repo"], "state/handoffs/.archive/a.md", "spinoff-roadmap")
         _handoff(roots["example-game-workbench-repo"], "state/handoffs/archive/b.md", "spinoff-roadmap")
 
         report = preflight.run_preflight()
 
         assert report["exit_code"] == 0
         assert report["off_enum_live"] == []
-        assert report["repos"]["DoE-claude"]["counts_archived"] == {"spinoff-roadmap": 1}
+        assert report["repos"]["coordinator-content-repo"]["counts_archived"] == {"spinoff-roadmap": 1}
         assert report["repos"]["example-game-workbench-repo"]["counts_archived"] == {"spinoff-roadmap": 1}
-        assert report["repos"]["DoE-claude"]["counts_live"] == {}
+        assert report["repos"]["coordinator-content-repo"]["counts_live"] == {}
         assert report["repos"]["example-game-workbench-repo"]["counts_live"] == {}
 
     def test_absent_kind_never_trips_off_enum_in_either_population(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["DoE-claude"], "state/handoffs/a.md", None)
-        _handoff(roots["DoE-claude"], "state/handoffs/b.md", "session-handoff")
-        _handoff(roots["DoE-claude"], "archive/handoffs/c.md", None)
+        _handoff(roots["coordinator-content-repo"], "state/handoffs/a.md", None)
+        _handoff(roots["coordinator-content-repo"], "state/handoffs/b.md", "session-handoff")
+        _handoff(roots["coordinator-content-repo"], "archive/handoffs/c.md", None)
 
         report = preflight.run_preflight()
 
@@ -346,7 +346,7 @@ class TestOffEnumDetection:
         for i, kind in enumerate([
             "session-handoff", "spinoff", "roadmap-baton", "goal-seed", "roadmap-seed", "recovery",
         ]):
-            _handoff(roots["DoE-claude"], f"state/handoffs/{i}.md", kind)
+            _handoff(roots["coordinator-content-repo"], f"state/handoffs/{i}.md", kind)
 
         report = preflight.run_preflight()
 

@@ -188,7 +188,7 @@ Negative-spec:
       all and cannot reach that seam's code by construction; `"execute-plan" not in
       _ROUTABLE_ROUTES` is pinned by its own test so this stays true even as the
       module grows. `goal-setting` and `roadmap` are excluded by the same rule for a
-      different reason: both are PM-gated rooms, not EM-enterable ones — per DoE-claude
+      different reason: both are PM-gated rooms, not EM-enterable ones — per coordinator-content-repo
       `coordinator/skills/goal-setting/SKILL.md` and `coordinator/skills/roadmap-planning/
       SKILL.md`, each carrying a frontmatter `description: "PM-GATED. ..."` — so
       falsifiable by grepping those two files, not by memory. `shape` is the one
@@ -200,7 +200,7 @@ Negative-spec:
       `goal-setting` — it is now a second, independent guard, though it was designed
       as the sole line of defense had DoE declined that detent. Caveat: the RULE's
       truth for `goal-setting` and `roadmap` rests on frontmatter living in ANOTHER
-      REPO (DoE-claude), so no test in this repo can pin it — if DoE ever un-gates
+      REPO (coordinator-content-repo), so no test in this repo can pin it — if DoE ever un-gates
       either skill, this exclusion becomes silently wrong until someone notices.
     - The **plan->execute-plan** seam (second seam, live as of this module's second seam
       addition — see "Seam naming" below) NEVER fires on the pre-execute PM authorization
@@ -258,7 +258,7 @@ useful first check but is NOT the house-authoritative subagent test — a dispat
 subagent's Stop payload does not always carry `agent_id`, and `CLAUDE_CODE_SESSION_ID`
 is explicitly documented as unreliable for this purpose (it inherits the dispatching
 EM's own id inside a subagent process). The house-authoritative test, per
-`coordinator/hooks/scripts/runtime-tripwire-em-check.py` (DoE-claude repo; docstring
+`coordinator/hooks/scripts/runtime-tripwire-em-check.py` (coordinator-content-repo repo; docstring
 ~lines 26-45, implementation ~1585-1600): a firing `session_id` found under
 `<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt` is a
 SUBAGENT session, full stop — never fire. `_is_subagent_session` below is that same
@@ -339,7 +339,7 @@ The overlap case ("Fixed the parser and committed. Next I'll take this into
 
 This is a STRONGER discharge of
 `state/lessons/2026-07-28-a-detector-s-suppressor-must-not-key-on-c91c411f46ed.yaml`
-(DoE-claude repo, status `open`, born from this hook's structural sibling
+(coordinator-content-repo repo, status `open`, born from this hook's structural sibling
 `nudge_harness_directive_dispatch.py`'s own F2 finding) than a correctly-ordered
 suppressor would be: that lesson's failure mode is a suppressor that can veto a
 genuine tell, and a design with no suppressor at all has no vetoing mechanism to get
@@ -355,7 +355,7 @@ bounded tail-read — imported and reused directly rather than re-derived, per t
 sibling's own documented preference for this exact fallback shape.
 
 Spec backlink: two-repo change, DoE-side transport shim companion in
-`coordinator/hooks/scripts/` (DoE-claude repo). Live incident 2026-07-31, session 66339b3f.
+`coordinator/hooks/scripts/` (coordinator-content-repo repo). Live incident 2026-07-31, session 66339b3f.
 """
 
 from __future__ import annotations
@@ -867,7 +867,7 @@ def _skill_invoked(transcript_path: str, target_skills: frozenset[str]) -> bool:
 def _is_subagent_session(session_id: str, repo_root: str) -> bool:
     """Return True iff `session_id` is a CONFIRMED subagent session, house-authoritative.
 
-    Per runtime-tripwire-em-check.py (DoE-claude repo, docstring ~lines 26-45,
+    Per runtime-tripwire-em-check.py (coordinator-content-repo repo, docstring ~lines 26-45,
     implementation ~1585-1600): a firing session_id found under
     `<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt`
     is a dispatched subagent's own session, not the EM's. This is a SECOND, narrower
@@ -1057,7 +1057,7 @@ def _text_trips_tell(text: str, referent_re: "re.Pattern[str]" = _ROUTE_REFERENT
     message trips it. See the module docstring's "Text half" section for why this
     no-suppressor design is a STRONGER discharge of the cited lesson
     (`state/lessons/2026-07-28-a-detector-s-suppressor-must-not-key-on-c91c411f46ed.yaml`,
-    DoE-claude repo) than a correctly-ordered suppressor would be.
+    coordinator-content-repo repo) than a correctly-ordered suppressor would be.
 
     The tell alone is not enough (F4): a route referent (the resolved route's
     own skill name or route noun) must appear in the same sentence as the tell

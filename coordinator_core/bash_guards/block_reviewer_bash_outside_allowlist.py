@@ -17,7 +17,7 @@ per-type ruleset (it needs to run its own test suite) — see that section for
 why the two types' rulesets diverge and how AC3 (code-reviewer unchanged) is
 preserved despite the shared module.
 
-Authoritative source (item 8, cross-repo/archive/2026-09-19-doe-claude-em-
+Authoritative source (item 8, cross-repo/archive/2026-09-19-coordinator-content-repo-em-
 agent-contract-defects-residual-c8-guard-docstring-pointer.md): THIS module
 — ``_is_confined_type``/``_DEFAULT_RULESET_TYPE_OVERRIDES`` and the
 allowlist tiers below — is the SSOT for the reviewer-Bash allowlist and
@@ -74,8 +74,8 @@ Divergence 4 (2026-07-25, THIS change): ``grep`` was added to
 confined findings-agent has no native content-search tool (no Grep/Glob
 in its harness tool surface — see the DoE-side correction memo below), so
 without ``grep`` it could enumerate and read files but not search their
-contents. Requested by DoE-claude via cross-repo memo
-``cross-repo/inbox/2026-07-25-doe-claude-em-reviewer-bash-search-fallback-correction.md``,
+contents. Requested by coordinator-content-repo via cross-repo memo
+``cross-repo/inbox/2026-07-25-coordinator-content-repo-em-reviewer-bash-search-fallback-correction.md``,
 which retracts a larger earlier ask (that memo's predecessor claimed the
 reviewer had "zero search capability" and asked for both ``find`` and
 ``grep``; the correction, sent after empirically probing this guard,
@@ -264,7 +264,7 @@ addition the next day, so ``coordinator:executor`` was never confined once
 that plan landed -- the override dict entries it left behind were dead code
 from that point on (unreachable by ``_default_ruleset``, which is consulted
 only for a confined type), and their own tests passed vacuously. Reported by
-doe-claude-em (cross-repo/inbox/2026-09-06-doe-claude-em-executor-is-not-
+Coordinator-content-repo-em (cross-repo/inbox/2026-09-06-coordinator-content-repo-em-executor-is-not-
 confined-so-its-ruleset-override-is-dead.md) after the surviving prose here
 misled claude-klabauter's own EM into asserting the opposite to two sibling repos.
 
@@ -814,7 +814,7 @@ The KNOWN RESIDUAL block's own accepted rationale for ``coordinator:executor``
 type "already has an unconfined Write tool," so this leg does not newly
 grant that capability -- applies identically to ``coordinator:code-reviewer``,
 confirmed from its own agent definition
-(``coordinator/agents/code-reviewer.md``, DoE-claude repo):
+(``coordinator/agents/code-reviewer.md``, coordinator-content-repo repo):
 ``tools: ["Bash", "Read", "Edit", "ToolSearch"]`` -- an unconfined ``Edit``,
 not a sandboxed one (the agent's own doc says so explicitly: "``Edit`` is
 **not** structurally confined -- nothing blocks a source edit but the
@@ -1720,7 +1720,7 @@ def peel_env_assignment_prefix(tokens: list) -> list:
     and a leading bare ``env`` carrying its own assignments/``-i`` -- removed,
     so the effective token is resolved from the command actually being run.
 
-    Why (memo, doe-claude-em, 2026-09-06): a ``coordinator:code-reviewer`` may
+    Why (memo, coordinator-content-repo-em, 2026-09-06): a ``coordinator:code-reviewer`` may
     run ``python3 -m pytest <file>`` (Amendment 2's ruling), but could not set
     an environment variable on that same sanctioned run, because tokens[0] was
     then the assignment (or ``env``) and matched no allowlisted binary. Any
@@ -2051,7 +2051,7 @@ def _evaluate_machine_local_tier_a(cmd: str, ruleset: Dict[str, Any]) -> tuple:
     return False, None
 
 
-#: M3 (2026-09-26, DoE-claude docs/plans/2026-09-26-retire-review-integrator.md):
+#: M3 (2026-09-26, coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md):
 #: the ``review-findings-ledger`` CLI trampoline's ``verify`` subcommand is
 #: added to the reviewer Bash allowlist so a confined reviewer can self-check
 #: its own findings ledger before returning (§ Contract). ``reject``/

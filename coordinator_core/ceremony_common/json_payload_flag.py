@@ -108,7 +108,7 @@ def _inline_transport_hint(raw: str, flag: str) -> str:
     way through, so the parser sees `{lesson-worth-capturing:{disposition:
     skip}}`. The error is correct-looking and misdirects — an EM who trusts
     it rewrites a payload that was never malformed instead of changing
-    vehicle (cross-repo/inbox/2026-08-20-doe-claude-em-cmd-forwarder-eats-
+    vehicle (cross-repo/inbox/2026-08-20-coordinator-content-repo-em-cmd-forwarder-eats-
     json-and-two-smaller-seams.md, item 1).
 
     Fingerprint, deliberately narrow: the received value opens a JSON

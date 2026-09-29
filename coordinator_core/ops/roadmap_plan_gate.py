@@ -52,7 +52,7 @@ Negative-spec:
     keyed "common_dir" is always handed one; deriving a root from cwd instead
     would make the answer depend on where the caller happened to stand.
 
-Spec backlink: DoE-claude coordinator/skills/plan-blitz/SKILL.md § The two gates
+Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md § The two gates
 """
 
 from __future__ import annotations

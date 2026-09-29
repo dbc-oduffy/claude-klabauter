@@ -2,7 +2,7 @@
 
 The defect these pin: `claude plugin install` copies a directory-source plugin
 into the plugin cache and pins a `gitCommitSha`, so plain `claude` serves a
-frozen snapshot while `claude-doe` (which injects `--plugin-dir`) serves the
+frozen snapshot while `claude-author` (which injects `--plugin-dir`) serves the
 clone. Two sessions, two different coordinator surfaces, no warning.
 
 Negative-spec: none of these assert the displaced cache copy is deleted. It is

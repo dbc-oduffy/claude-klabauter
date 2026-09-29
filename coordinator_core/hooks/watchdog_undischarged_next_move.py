@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.watchdog_undischarged_next_move — PostToolUse(Skill|Agent) +
-Stop warm-door counterpart of DoE-claude's
+Stop warm-door counterpart of coordinator-content-repo's
 `coordinator/hooks/scripts/watchdog-undischarged-next-move.py`, folded together
 with its three sibling transport modules (`_next_move_ledger.py`, `_posture.py`,
 `_touch_record.py` — 550 + 700 + 197 + 123 = 1,570 combined DoE source lines).
@@ -145,7 +145,7 @@ applies ONLY when `op_name == hook_http.DEFAULT_OP_NAME` (the bare `/hook`
 or `/hook/warm_guard.evaluate` alias); a named path like
 `/hook/hooks.watchdog_undischarged_next_move` is routed and served
 regardless of `hook_event_name`, Stop included -- `route_for_event` never
-runs on this op's own path. The real open dependency is whether DoE-claude's
+runs on this op's own path. The real open dependency is whether coordinator-content-repo's
 `hooks.json` posts the Stop event to this op's own path at all, or is still
 pointed at the retired source script; that cross-repo wiring question is not
 resolved by this chunk, and is inherited as a named gap for whichever chunk
@@ -168,10 +168,10 @@ matching the source script's own fail-open-everywhere posture.
 
 Spec backlink: docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md
 (chunk C4); docs/reference/warm-hook-migration.md (candidate-selection input,
-PostToolUse Skill|Agent row); DoE-claude
+PostToolUse Skill|Agent row); coordinator-content-repo
 `coordinator/hooks/scripts/watchdog-undischarged-next-move.py` (source,
 spec backlink docs/plans/2026-08-10-posture-scaled-autonomous-disposition.md
-chunk C3); DoE-claude `coordinator/docs/wiki/obligations-inbound-intake.md`
+chunk C3); coordinator-content-repo `coordinator/docs/wiki/obligations-inbound-intake.md`
 (the cross-plane ledger contract this op now consumes on the writing side,
 alongside `coordinator_core.group_em.obligations`'s existing producer).
 """

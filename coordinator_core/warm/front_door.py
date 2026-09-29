@@ -60,7 +60,7 @@ the only box either repo runs on. `FIXED_PORT` is not this module's to win by
 default -- its value was taken FROM DoE's `http_hook_forwarder` (see
 `FIXED_PORT`'s own comment), which has held the seat continuously and serves
 the same job: accept a hook fire, reach a warm listener. Measured by
-doe-claude-em 2026-08-30 on a door that could never win: the forwarder holds
+Coordinator-content-repo-em 2026-08-30 on a door that could never win: the forwarder holds
 `47623`, answers `501` to `GET`, and so probed as a FOREIGN holder -- which
 would have made a registered `ensure_front_door` caller spawn one doomed door
 per session across ~30 concurrent sessions.
@@ -714,9 +714,9 @@ FLOOR_PROBE_RELATIVE_PATH = Path("coordinator_core") / "warm" / "front_door.py"
 FLOOR_PROBE_MARKER = "elect_front_door"
 
 #: The exported, whitelisted, non-`CLAUDE_`-prefixed env var DoE's
-#: `claude-doe.py` launcher exports as the clone-identity key the http hook
+#: `claude-author.py` launcher exports as the clone-identity key the http hook
 #: transport routes on (`DR-http-hook-forwarder-fixed-port.md` C1). Kept as
-#: a bare literal here, mirroring `claude-doe.py`'s own bare
+#: a bare literal here, mirroring `claude-author.py`'s own bare
 #: `os.environ.setdefault("COORDINATOR_CLONE_ROOT", ...)` -- there is no
 #: shared constant module either side already imports, and inventing one
 #: here for a single string would be a second source of truth, not a fix.
@@ -937,7 +937,7 @@ def ensure_front_door(
 # transport can currently answer it. That is the gap this counter closes.
 #
 # The history matters, because the first attempt to answer it got the answer
-# wrong in the exact way this counter exists to prevent. DoE-claude `45e3673f`
+# wrong in the exact way this counter exists to prevent. Coordinator-content-repo `45e3673f`
 # reported the registration SILENTLY INERT: a fresh session ran a command a
 # guard denies, the write landed, so the harness had evidently never dialled.
 # **That claim was RETRACTED by its own author within the hour**, and the
@@ -1253,7 +1253,7 @@ def _make_handler(ctx: "_FrontDoorContext"):
             try:
                 if self.requestline:
                     # STRICT, and deliberately not a fallback to the path.
-                    # `doe-claude-a9` hit the general form of this on their own
+                    # `coordinator-content-repo-a9` hit the general form of this on their own
                     # forwarder: their `_extract_hook_event_name` defaults an
                     # unparsable body to "PreToolUse", which is right for the
                     # deny it shapes and fatal for counting -- a garbage

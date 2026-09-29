@@ -4,7 +4,7 @@ consumer-corpus pre-flight.
 
 Purpose: report, PER REGISTERED FLEET REPO, how many ``state/handoffs/**`` +
 ``archive/handoffs/**`` records carry each ``kind`` frontmatter value — scanning
-CONSUMER trees (DoE-claude, claude-klabauter, example-retrieval-repo, example-cockpit-repo,
+CONSUMER trees (coordinator-content-repo, claude-klabauter, example-retrieval-repo, example-cockpit-repo,
 Example-retrieval-repo-ue-addon, example-game-workbench-repo, example-market-data-repo), never just
 this repo's own corpus — AND fail loud the moment any counted LIVE value falls
 outside the live ``kind`` enum, or the fleet-repo set itself has silently
@@ -18,7 +18,7 @@ nothing caught it before ceremony failures did. A producer-scoped oracle is the
 exact bug this module exists to stop repeating; landing it here IS the notice
 protocol the queue entry asked for.
 
-2026-07-31 hardening (cross-repo/inbox/2026-07-31-doe-claude-em-consumer-
+2026-07-31 hardening (cross-repo/inbox/2026-07-31-coordinator-content-repo-em-consumer-
 corpus-preflight-blind-to-half-the-fleet.md): the first cut of this module
 COULD NOT have caught the thing it was built for. A 2026-07-29 enum narrow
 (``kind: spinoff-roadmap`` retired) stranded 59 live records — 34 of them in
@@ -156,9 +156,9 @@ Negative-spec:
     above) — an unrecognised key is surfaced for classification, never silently
     swept in as a fleet repo or silently ignored as noise.
 
-Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § C5
+Spec backlink: coordinator-content-repo:pln-baton-kind-vocabulary-one-axis-d1ce8f § C5
 Origin defect: state/improvement-queue/2026-07-23-vocabulary-retirement-needs-consumer-corpus-preflight.yaml
-Hardening backlink: cross-repo/inbox/2026-07-31-doe-claude-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
+Hardening backlink: cross-repo/inbox/2026-07-31-coordinator-content-repo-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
 """
 from __future__ import annotations
 
@@ -185,7 +185,7 @@ class PreflightOracleError(Exception):
 
 
 FLEET_REPO_KEYS: Dict[str, str] = {
-    "DoE-claude": "doe_claude",
+    "coordinator-content-repo": "content_root",
     "claude-klabauter": "claude_klabauter",
     "project-rag": "project_rag",
     "cockpit": "example_cockpit_repo",
@@ -210,7 +210,7 @@ NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     # handoff 8.10.0 -> 10.0.0 major re-vendor. Each verified by RESOLVED PATH,
     # not by name — the two aliases below resolve to a tree FLEET_REPO_KEYS
     "repos.claude_klabauter": "published engine mirror (percolate publish target), not an authoring EM working tree — its handoff corpus, if any, is a transformed copy of claude-klabauter's",
-    "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.doe_claude, already scanned as DoE-claude — classifying it fleet would double-count that corpus",
+    "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.content_root, already scanned as coordinator-content-repo — classifying it fleet would double-count that corpus",
     "repos.example-game-repo": "ALIAS: resolves to the same tree as repos.example_game_workbench_repo, already scanned as example-game-workbench-repo — classifying it fleet would double-count that corpus",
     "repos.fleet_root": "the PARENT DIRECTORY holding the fleet's repos, not a repo itself — a scan rooted here would walk every tree at once",
     "repos.example_memo_probe_repo": "memo-delivery smoke-test fixture under the settings home's machine-local dir, not a repo",

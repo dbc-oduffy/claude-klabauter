@@ -36,6 +36,11 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+@pytest.fixture(autouse=True)
+def _cwd_outside_any_repo(tmp_path_factory, monkeypatch):
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+
+
 def _init_git_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", str(path)], check=True, timeout=30, **no_console_passthrough_kwargs())
@@ -141,13 +146,13 @@ class TestGateAndDedup:
 
 class TestToPosixKey:
     def test_native_drive_form(self):
-        assert _to_posix_key("X:\\dev\\repo") == "/x/dev/repo"
+        assert _to_posix_key("C:\\dev\\repo") == "/x/dev/repo"
 
     def test_posix_form_drive(self):
-        assert _to_posix_key("X:/dev/repo") == "/x/dev/repo"
+        assert _to_posix_key("C:/dev/repo") == "/x/dev/repo"
 
     def test_lowercases_drive_only(self):
-        assert _to_posix_key("X:\\Dev\\Repo") == "/x/Dev/Repo"
+        assert _to_posix_key("C:\\Dev\\Repo") == "/x/Dev/Repo"
 
     def test_posix_passthrough(self):
         assert _to_posix_key("/x/dev/repo") == "/x/dev/repo"
@@ -164,17 +169,17 @@ class TestToPosixKey:
 
 class TestTierAPosix:
     def test_native_form_no_fs_root(self):
-        assert _tier_a_posix("X:\\Dev\\Repo", "") == "/x/dev/repo"
+        assert _tier_a_posix("C:\\Dev\\Repo", "") == "/x/dev/repo"
 
     def test_with_fs_root_seam(self):
-        assert _tier_a_posix("X:\\Dev\\Repo", "/tmp/fsroot") == "/tmp/fsroot/dev/repo"
+        assert _tier_a_posix("C:\\Dev\\Repo", "/tmp/fsroot") == "/tmp/fsroot/dev/repo"
 
 
 class TestFsProbePath:
 
     def test_msys_drive_form_converted_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
-        assert _fs_probe_path("/x/doe-claude") == "x:/doe-claude"
+        assert _fs_probe_path("/x/coordinator-content-repo") == "x:/coordinator-content-repo"
 
     def test_bare_msys_drive_root_converted_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
@@ -182,26 +187,26 @@ class TestFsProbePath:
 
     def test_already_native_path_passed_through_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
-        assert _fs_probe_path("X:\\DoE-claude") == "X:\\DoE-claude"
-        assert _fs_probe_path("X:/DoE-claude") == "X:/DoE-claude"
+        assert _fs_probe_path("C:\\coordinator-content-repo") == "C:\\coordinator-content-repo"
+        assert _fs_probe_path("C:/coordinator-content-repo") == "C:/coordinator-content-repo"
 
     def test_identity_on_non_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "posix")
-        assert _fs_probe_path("/x/doe-claude") == "/x/doe-claude"
-        assert _fs_probe_path("/home/example-operator/DoE-claude") == "/home/example-operator/DoE-claude"
+        assert _fs_probe_path("/x/coordinator-content-repo") == "/x/coordinator-content-repo"
+        assert _fs_probe_path("/home/example-operator/coordinator-content-repo") == "/home/example-operator/coordinator-content-repo"
 
 
 class TestTierAGreedyDecode:
     def test_resolves_hyphenated_dir_name_against_real_fixture_tree(self, tmp_path: Path):
-        (tmp_path / "DoE-claude").mkdir()
-        out = _tier_a_greedy_decode("DoE-claude", "X", str(tmp_path))
-        assert out == "X:\\DoE-claude"
+        (tmp_path / "coordinator-content-repo").mkdir()
+        out = _tier_a_greedy_decode("coordinator-content-repo", "X", str(tmp_path))
+        assert out == "C:\\coordinator-content-repo"
 
     def test_resolves_hyphenated_segment(self, tmp_path: Path):
         root = tmp_path
         (root / "dev" / "example-stats-repo").mkdir(parents=True)
         out = _tier_a_greedy_decode("dev-example-stats-repo", "X", str(root))
-        assert out == "X:\\dev\\example-stats-repo"
+        assert out == "C:\\dev\\example-stats-repo"
 
     def test_no_match_returns_none(self, tmp_path: Path):
         out = _tier_a_greedy_decode("nonexistent-path-segment", "X", str(tmp_path))
@@ -218,10 +223,10 @@ class TestDecodeProjectsDirName:
         drive, rest, decoded = _decode_projects_dir_name("X--dev-example-stats-repo")
         assert drive == "X"
         assert rest == "dev-example-stats-repo"
-        assert decoded == "X:\\dev\\fifa\\stats"
+        assert decoded == "C:\\dev\\fifa\\stats"
 
     def test_posix_form_out_of_scope_gap(self):
-        drive, rest, decoded = _decode_projects_dir_name("-Users-example-operator-X-DoE-claude")
+        drive, rest, decoded = _decode_projects_dir_name("-Users-example-operator-X-coordinator-content-repo")
         assert drive == ""
         assert decoded == "\\Users\\example-operator\\X\\DoE\\claude"
 
@@ -231,11 +236,11 @@ class TestTierAEndToEnd:
     def test_hyphenated_repo_name_resolved_via_greedy_fallback(self, tmp_path: Path, monkeypatch):
         fake_home = tmp_path / "home"
         projects_dir = fake_home / ".claude" / "projects"
-        (projects_dir / "X--DoE-claude").mkdir(parents=True)
+        (projects_dir / "X--coordinator-content-repo").mkdir(parents=True)
 
         # COORDINATOR_TIER_A_FS_ROOT test seam: point existence probes at a
         fs_root = tmp_path / "fsroot"
-        (fs_root / "doe-claude").mkdir(parents=True)
+        (fs_root / "coordinator-content-repo").mkdir(parents=True)
 
         monkeypatch.setenv("HOME", str(fake_home))
         # Path.home() on Windows reads USERPROFILE, not HOME — set both so
@@ -244,7 +249,7 @@ class TestTierAEndToEnd:
 
         out = _tier_a()
 
-        assert out == ["X:\\DoE-claude"]
+        assert out == ["C:\\coordinator-content-repo"]
 
 
 class TestTierAExcludeRegex:
@@ -256,19 +261,19 @@ class TestTierAExcludeRegex:
         assert _TIER_A_EXCLUDE_RE.search("X:")
 
     def test_bare_drive_root_with_slash_excluded(self):
-        assert _TIER_A_EXCLUDE_RE.search("X:\\")
+        assert _TIER_A_EXCLUDE_RE.search("C:\\")
 
     def test_dot_claude_suffix_excluded(self):
         assert _TIER_A_EXCLUDE_RE.search("/some/path/.claude")
 
     def test_normal_repo_path_not_excluded(self):
-        assert not _TIER_A_EXCLUDE_RE.search("X:\\dev\\repo")
+        assert not _TIER_A_EXCLUDE_RE.search("C:\\dev\\repo")
 
 
 class TestSortUnique:
     def test_matches_locale_collation_not_ordinal(self):
-        out = _sort_unique(["DoE-claude", "example-store-repo", "example-sim-repo-md"])
-        assert set(out) == {"DoE-claude", "example-store-repo", "example-sim-repo-md"}
+        out = _sort_unique(["coordinator-content-repo", "example-store-repo", "example-sim-repo-md"])
+        assert set(out) == {"coordinator-content-repo", "example-store-repo", "example-sim-repo-md"}
         assert len(out) == 3
 
     def test_dedups(self):
@@ -387,3 +392,16 @@ class TestMainNeverBlocks:
         assert rc == 0
         err = capsys.readouterr().err
         assert "Tier A failed" in err
+
+
+def test_invoking_cwd_repo_is_discovered(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import discover_working_repos as dwr
+
+    repo = tmp_path / "clone"
+    (repo / "sub").mkdir(parents=True)
+    _init_git_repo(repo)
+    monkeypatch.chdir(repo / "sub")
+    monkeypatch.setenv("COORDINATOR_TIER_A_PROJECTS_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(dwr, "_tier_b", lambda: [])
+    monkeypatch.setattr(dwr, "_tier_a5", lambda: [])
+    assert dwr._emit_form(str(repo.resolve())) in dwr.discover_repo_paths()

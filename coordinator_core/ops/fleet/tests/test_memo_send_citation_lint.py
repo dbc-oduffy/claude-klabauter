@@ -36,7 +36,7 @@ from coordinator_core.ops.fleet.tests.test_memo_send_duplicate_reply_warning imp
     _seed_prior_reply_row,
 )
 
-_QUALIFIERS = frozenset({"doe-claude", "project-rag", "claude-klabauter", "receiver-repo"})
+_QUALIFIERS = frozenset({"coordinator-content-repo", "project-rag", "claude-klabauter", "receiver-repo"})
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ class TestRepoQualifierNames:
 
 class TestUnqualifiedPathCitations:
     def test_repo_colon_path_form_not_flagged(self):
-        body = "See DoE-claude coordinator/docs/wiki/x.md for detail."
+        body = "See coordinator-content-repo coordinator/docs/wiki/x.md for detail."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == []
 

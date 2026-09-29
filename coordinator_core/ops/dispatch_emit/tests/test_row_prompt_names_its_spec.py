@@ -106,28 +106,28 @@ from coordinator_core.ops.dispatch_emit.emit import _spec_path_for_prompt
 
 def test_relative_to_repo_root_when_supplied():
     got = _spec_path_for_prompt(
-        Path('X:/claude-klabauter/docs/plans/p.md'), Path('X:/claude-klabauter')
+        Path('C:/claude-klabauter/docs/plans/p.md'), Path('C:/claude-klabauter')
     )
     assert not got.is_absolute()
     assert got.as_posix() == 'docs/plans/p.md'
 
 
 def test_no_repo_root_still_yields_a_relative_path():
-    got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), None)
+    got = _spec_path_for_prompt(Path('C:/claude-klabauter/docs/plans/p.md'), None)
     assert not got.is_absolute(), f'leaked an absolute path: {got}'
 
 
 def test_plan_off_the_repo_root_still_yields_a_relative_path():
     got = _spec_path_for_prompt(
-        Path('Z:/elsewhere/docs/plans/p.md'), Path('X:/claude-klabauter')
+        Path('Z:/elsewhere/docs/plans/p.md'), Path('C:/claude-klabauter')
     )
     assert not got.is_absolute(), f'leaked an absolute path: {got}'
     assert got.as_posix() == 'docs/plans/p.md'
 
 
 def test_never_returns_a_drive_letter():
-    for root in (None, Path('X:/claude-klabauter'), Path('Z:/other')):
-        got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), root)
+    for root in (None, Path('C:/claude-klabauter'), Path('Z:/other')):
+        got = _spec_path_for_prompt(Path('C:/claude-klabauter/docs/plans/p.md'), root)
         assert ':' not in got.as_posix(), f'drive letter survived for root={root}: {got}'
 
 

@@ -8,7 +8,7 @@ Coverage (AC-5 of the originating dispatch):
   (d) mixed (both shapes present, single host) -> only the foreign shape flags.
   (e) malformed / absent settings.json -> silent empty-string banner, never raises.
 
-Also covers the `suggested` correction path (via `.doe-root`) and the
+Also covers the `suggested` correction path (via `.coordinator-content-root`) and the
 shape-regex false-positive guards (URLs, UNC paths must NOT match).
 """
 
@@ -35,7 +35,7 @@ def _posix_settings():
                 {
                     "hooks": [
                         {
-                            "command": "python3 /Users/alice/X/DoE-claude/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 /Users/alice/X/coordinator-content-repo/coordinator/hooks/scripts/foo.py",
                         }
                     ]
                 }
@@ -54,7 +54,7 @@ def _windows_corrupted_settings():
                 {
                     "hooks": [
                         {
-                            "command": "python3 X:/DoE-claude/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 C:/coordinator-content-repo/coordinator/hooks/scripts/foo.py",
                         }
                     ]
                 }
@@ -101,7 +101,7 @@ def test_posix_paths_on_windows_host_flagged():
 
 def test_clean_windows_on_windows_host_no_findings():
     windows_native = {
-        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/alice/DoE-claude/coordinator/hooks/scripts/foo.py"}]}]},
+        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/alice/coordinator-content-repo/coordinator/hooks/scripts/foo.py"}]}]},
     }
     findings = detect_foreign_platform_paths(windows_native, host_is_windows=True)
     assert findings == []
@@ -112,8 +112,8 @@ def test_clean_windows_on_windows_host_no_findings():
 
 def test_mixed_shapes_posix_host_only_windows_shape_flagged():
     mixed = {
-        "a": "python3 /Users/alice/X/DoE-claude/coordinator/hooks/scripts/ok.py",
-        "b": "python3 X:/DoE-claude/coordinator/hooks/scripts/bad.py",
+        "a": "python3 /Users/alice/X/coordinator-content-repo/coordinator/hooks/scripts/ok.py",
+        "b": "python3 C:/coordinator-content-repo/coordinator/hooks/scripts/bad.py",
     }
     findings = detect_foreign_platform_paths(mixed, host_is_windows=False)
     assert len(findings) == 1
@@ -150,10 +150,10 @@ def test_url_and_unc_paths_do_not_false_positive():
 # --- correction / suggestion path ---------------------------------------------
 
 
-def test_suggestion_derived_from_doe_root(tmp_path):
+def test_suggestion_derived_from_content_root(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / ".doe-root").write_text("/Users/alice/X/DoE-claude", encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text("/Users/alice/X/coordinator-content-repo", encoding="utf-8")
     settings = config_dir / "settings.json"
     import json
 
@@ -164,10 +164,10 @@ def test_suggestion_derived_from_doe_root(tmp_path):
 
     banner = evaluate_foreign_platform_paths(settings, config_dir=config_dir, host_is_windows=False)
     assert "FOREIGN-PLATFORM PATH(S) DETECTED" in banner
-    assert "/Users/alice/X/DoE-claude/coordinator/hooks/scripts/foo.py" in banner
+    assert "/Users/alice/X/coordinator-content-repo/coordinator/hooks/scripts/foo.py" in banner
 
 
-def test_no_doe_root_suggestion_is_none(tmp_path):
+def test_no_content_root_suggestion_is_none(tmp_path):
     findings = detect_foreign_platform_paths(
         _windows_corrupted_settings(), host_is_windows=False, local_coordinator_root=None
     )
@@ -185,7 +185,7 @@ def test_format_banner_names_offending_keys():
     findings = detect_foreign_platform_paths(_windows_corrupted_settings(), host_is_windows=False)
     banner = format_banner(findings, "/Users/alice/.claude/settings.json")
     assert "settings.json" in banner
-    assert "X:/DoE-claude" in banner
+    assert "C:/coordinator-content-repo" in banner
     assert "DETECT-ONLY" in banner
 
 
@@ -296,7 +296,7 @@ def test_env_var_syntax_in_non_command_field_not_flagged():
                 {
                     "description": "On Windows use $env:COORDINATOR_CONTENT_ROOT; "
                     "on POSIX use $COORDINATOR_CONTENT_ROOT instead.",
-                    "hooks": [{"command": "python3 /Users/x/DoE-claude/foo.py"}],
+                    "hooks": [{"command": "python3 /Users/x/coordinator-content-repo/foo.py"}],
                 }
             ]
         }
@@ -324,8 +324,8 @@ def test_windows_path_in_non_command_field_not_flagged_as_env_var_shape():
     `command` pointer) must not trip the NEW env-var-shape check (the
     pre-existing path-shape check is untouched behavior, out of scope here)."""
     data = {
-        "notes": "See X:/DoE-claude/coordinator/hooks/scripts/foo.py for context.",
-        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 /Users/x/DoE-claude/foo.py"}]}]},
+        "notes": "See C:/coordinator-content-repo/coordinator/hooks/scripts/foo.py for context.",
+        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 /Users/x/coordinator-content-repo/foo.py"}]}]},
     }
     findings = detect_foreign_platform_paths(data, host_is_windows=False)
     env_shapes = {"windows-env-var-syntax-on-posix-host", "posix-env-var-syntax-on-windows-host"}
@@ -345,7 +345,7 @@ def test_windows_path_in_non_command_field_not_flagged_as_env_var_shape():
 def test_prose_leak_fires_on_asserted_repo_path():
     """The exact shape from the 2026-07-30 incident: a sibling-repo-map list
     entry asserting a specific hyphenated repo name after a drive letter."""
-    text = "- `X:\\some-repo` — description of the repo"
+    text = "- `C:\\some-repo` — description of the repo"
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     assert findings[0].line == 1
@@ -353,7 +353,7 @@ def test_prose_leak_fires_on_asserted_repo_path():
 
 
 def test_prose_leak_banner_names_file_line_and_remedy():
-    text = "line one\n- `X:\\example-game-workbench-repo` — UE5 workbench\nline three"
+    text = "line one\n- `C:\\example-game-workbench-repo` — UE5 workbench\nline three"
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     assert findings[0].line == 2
@@ -370,7 +370,7 @@ def test_real_bare_root_illustration_line_stays_quiet():
     line_one = (
         "**This list names repos, never paths — resolve every path at read "
         "time.** The checkout root differs per machine and per platform "
-        "(`X:\\` on Windows-native, `/x/` under WSL/Git-Bash, `~/X/` on "
+        "(`C:\\` on Windows-native, `/x/` under WSL/Git-Bash, `~/X/` on "
         "macOS), so any literal path written here is wrong on most machines "
         "that read it."
     )
@@ -394,12 +394,12 @@ def test_real_location_claim_line_now_fires():
 
 
 def test_bare_drive_root_mention_not_flagged():
-    text = "The checkout root is `X:\\` on Windows-native machines."
+    text = "The checkout root is `C:\\` on Windows-native machines."
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
 
 
 def test_bare_forward_slash_drive_root_mention_not_flagged():
-    text = "The checkout root is `X:/` on Windows-native machines."  # abs-path-ok: bare-root test fixture, not a real path
+    text = "The checkout root is `C:/` on Windows-native machines."  # abs-path-ok: bare-root test fixture, not a real path
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
 
 
@@ -413,7 +413,7 @@ def test_generic_single_word_segment_now_fires():
 
 
 def test_hyphenated_segment_still_fires_even_short():
-    text = "checked out at `X:\\my-repo` on that box"
+    text = "checked out at `C:\\my-repo` on that box"
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
 
@@ -427,7 +427,7 @@ def test_hyphenated_segment_still_fires_even_short():
 
 
 def test_single_word_repo_name_experiments_fires():
-    text = "- `X:\\experiments` — controlled experiments."  # abs-path-ok: real leaked-corpus fixture under test
+    text = "- `C:\\experiments` — controlled experiments."  # abs-path-ok: real leaked-corpus fixture under test
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     banner = format_prose_banner(findings, "CLAUDE.local.md")
@@ -437,7 +437,7 @@ def test_single_word_repo_name_experiments_fires():
 
 
 def test_single_word_repo_name_example_os_repo_fires():
-    text = "- `X:\\example-os-repo` — Example Interactive repo."  # abs-path-ok: real leaked-corpus fixture under test
+    text = "- `C:\\example-os-repo` — Example Interactive repo."  # abs-path-ok: real leaked-corpus fixture under test
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     banner = format_prose_banner(findings, "CLAUDE.local.md")
@@ -447,7 +447,7 @@ def test_single_word_repo_name_example_os_repo_fires():
 
 
 def test_hyphenated_repo_name_example_game_workbench_repo_fires():
-    text = "- `X:\\example-game-workbench-repo` — UE5 workbench."  # abs-path-ok: real leaked-corpus fixture under test
+    text = "- `C:\\example-game-workbench-repo` — UE5 workbench."  # abs-path-ok: real leaked-corpus fixture under test
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     banner = format_prose_banner(findings, "CLAUDE.local.md")
@@ -457,7 +457,7 @@ def test_hyphenated_repo_name_example_game_workbench_repo_fires():
 
 
 def test_forward_slash_repo_name_coordinator_claude_fires():
-    text = "- `X:/coordinator-claude` — OSS publish target."  # abs-path-ok: real leaked-corpus fixture under test
+    text = "- `C:/coordinator-claude` — OSS publish target."  # abs-path-ok: real leaked-corpus fixture under test
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
     banner = format_prose_banner(findings, "CLAUDE.local.md")
@@ -483,7 +483,7 @@ def test_prose_url_not_flagged():
 
 def test_prose_inline_allow_marker_suppresses_detection():
     text = (
-        "- `X:\\some-real-leak` — this would normally fire "
+        "- `C:\\some-real-leak` — this would normally fire "
         "<!-- foreign-path-ok: deliberate doctrine illustration -->"
     )
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
@@ -508,15 +508,15 @@ def test_prose_allow_marker_works_in_any_comment_syntax(marker):
     sample, a Windows .cmd header. That failure is invisible: the line reads as
     marked to a human and as unmarked to the guard.
     """
-    text = f"- `X:\\some-real-leak` — deliberate mention {marker}"
+    text = f"- `C:\\some-real-leak` — deliberate mention {marker}"
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
 
 
 def test_prose_allow_marker_only_suppresses_its_own_line():
     text = (
-        "- `X:\\some-real-leak` — this would normally fire "
+        "- `C:\\some-real-leak` — this would normally fire "
         "<!-- foreign-path-ok: doctrine -->\n"
-        "- `X:\\another-real-leak` — no marker on this line"
+        "- `C:\\another-real-leak` — no marker on this line"
     )
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=False)
     assert len(findings) == 1
@@ -548,7 +548,7 @@ def test_format_prose_banner_empty_findings_is_empty_string():
 # indistinguishable from a one-character Windows drive path unless the
 # escape-letter shape is excluded. See `_path_shape_regexes.WIN_DRIVE_RE`'s
 # own docstring for the chosen fix and its residual, and that module's own
-# docstring for the real fleet example this reproduces (DoE-claude's
+# docstring for the real fleet example this reproduces (coordinator-content-repo's
 # `state/cockpit-emission.json`).
 
 
@@ -573,8 +573,8 @@ def test_real_shapes_still_fire_after_escape_letter_fix():
     genuine segment that merely STARTS with an escape letter (temp, dev,
     Users)."""
     cases = [
-        "- `X:\\some-repo` — description of the repo",  # abs-path-ok: shape-regression fixture, duplicate of an earlier fixture in this file
-        "- `X:/some-repo` — description of the repo",  # abs-path-ok: shape-regression fixture, duplicate of an earlier fixture in this file
+        "- `C:\\some-repo` — description of the repo",  # abs-path-ok: shape-regression fixture, duplicate of an earlier fixture in this file
+        "- `C:/some-repo` — description of the repo",  # abs-path-ok: shape-regression fixture, duplicate of an earlier fixture in this file
         "checked out at `E:\\dev\\Thing` on that box",  # abs-path-ok: shape-regression fixture, not a real path
         "checked out at `C:\\Users\\someone\\rest` on that box",  # abs-path-ok: shape-regression fixture, not a real path
         "The scratch root is `C:\\temp` on that machine.",  # abs-path-ok: fixture, segment starts with escape letter 't' but is a real word, duplicate of an earlier fixture in this file
@@ -587,7 +587,7 @@ def test_real_shapes_still_fire_after_escape_letter_fix():
 def test_bare_drive_root_and_url_stay_quiet_after_escape_letter_fix():
     assert (
         detect_foreign_platform_paths_in_prose(
-            "The checkout root is `X:\\` on Windows-native machines.",  # abs-path-ok: bare-root fixture, duplicate of an earlier fixture in this file
+            "The checkout root is `C:\\` on Windows-native machines.",  # abs-path-ok: bare-root fixture, duplicate of an earlier fixture in this file
             host_is_windows=False,
         )
         == []

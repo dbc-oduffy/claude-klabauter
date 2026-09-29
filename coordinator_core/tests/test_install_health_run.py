@@ -1,8 +1,8 @@
 """Characterization tests for coordinator_core.ops.install_health_run.
 
-Ported test cases mirror the T1/T5 cases from DoE-claude's former
+Ported test cases mirror the T1/T5 cases from coordinator-content-repo's former
 coordinator/bin/tests/test-install-health-run.sh, plus the trust-gate
-contract from DoE-claude's former coordinator/lib/coordinator-
+contract from coordinator-content-repo's former coordinator/lib/coordinator-
 trusted-root-guard.sh's fail-loud mode, which this module reimplements.
 
 T2/T3/T4 (bash-drop-in-passthrough, continue-past-failure, silent-skip) and

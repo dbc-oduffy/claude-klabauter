@@ -114,7 +114,7 @@ def test_absolute_key_refused_before_writing(tmp_path):
 def test_drive_letter_key_refused_before_writing(tmp_path):
     repo = _repo(tmp_path)
     before = (repo / ".git" / "index").read_bytes()
-    drive_key = "X:/claude-klabauter/seed.txt"
+    drive_key = "C:/claude-klabauter/seed.txt"
 
     with pytest.raises(index_write.IndexWriteError):
         index_write.splice_index(repo, {drive_key: index_write.ABSENT})

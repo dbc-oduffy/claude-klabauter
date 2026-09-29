@@ -21,7 +21,7 @@ NEVER derive it. A generator emitting ``min_supported_contract_version ==
 contract_version`` would trip claude-klabauter's own ``doe_drift`` version-band gate on every
 still-current consumer pin -- the precise failure DoE's CD-2 re-vendor-window
 discipline exists to prevent. Constraint carried verbatim from the owner
-(doe-claude-em, 2026-08-23). If the committed fixture is absent there is no value to
+(coordinator-content-repo-em, 2026-08-23). If the committed fixture is absent there is no value to
 preserve, and this generator REFUSES rather than guessing one.
 
 The target contract version is whatever the SCHEMA BUNDLE says, never
@@ -249,15 +249,15 @@ def resolve_doe_clone(explicit: Optional[str] = None) -> Path:
     """Resolve the DoE clone the fixture lives in.
 
     Mirrors ``doe_drift``'s resolution rather than inventing a second one: an
-    explicit path wins, then ``REPO_DOE_CLAUDE``, then a sibling directory beside
+    explicit path wins, then ``REPO_CONTENT_ROOT``, then a sibling directory beside
     this repo.
     """
     if explicit:
         return Path(explicit).resolve()
-    env = os.environ.get("REPO_DOE_CLAUDE")
+    env = os.environ.get("REPO_CONTENT_ROOT")
     if env:
         return Path(env).resolve()
-    sibling = Path(__file__).resolve().parents[3].parent / "DoE-claude"
+    sibling = Path(__file__).resolve().parents[3].parent / "coordinator-content-repo"
     return sibling.resolve()
 
 

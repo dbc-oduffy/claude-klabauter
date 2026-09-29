@@ -42,8 +42,8 @@ def test_budget_leaves_headroom_under_the_windows_cap() -> None:
 
 def test_every_chunk_fits_the_budget_at_the_observed_failing_scale() -> None:
     paths = [
-        Path(r"X:\claude-klabauter\cross-repo\inbox")
-        / f"2026-08-{(i % 28) + 1:02d}-doe-claude-em-a-memo-with-a-representative-slug-{i}.md"
+        Path(r"C:\claude-klabauter\cross-repo\inbox")
+        / f"2026-08-{(i % 28) + 1:02d}-coordinator-content-repo-em-a-memo-with-a-representative-slug-{i}.md"
         for i in range(335)
     ]
     unchunked = _argv_chars([str(p) for p in paths])

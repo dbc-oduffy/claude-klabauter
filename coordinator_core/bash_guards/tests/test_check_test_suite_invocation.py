@@ -662,7 +662,7 @@ def test_runner_recognized_true_for_tox_and_nox():
     ],
 )
 def test_variable_held_path_operand_remediation_names_the_friction(command):
-    """Item 5.1 (cross-repo/archive/2026-09-11-doe-claude-em-suite-guard-
+    """Item 5.1 (cross-repo/archive/2026-09-11-coordinator-content-repo-em-suite-guard-
     and-emit-preamble-frictions.md): the classification is unchanged --
     a variable-held path list still classifies Tier U, correctly, since
     this guard cannot see inside a variable -- but the remediation used to
@@ -983,7 +983,7 @@ def test_classify_command_core_does_not_raise_on_malformed_configured():
 
 def test_classify_command_core_chained_fast_test_cmd_classifies_both_segments_as_tier_f():
     """Regression (2026-07-25 cockpit Tier-F-unreachable report), UPDATED
-    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-em-validate-
+    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-
     tier-u-shape-ruling.md): with ``fast_test_cmd`` chained (``pnpm run
     typecheck && pnpm run test``) and invoked verbatim, BOTH segments are
     matched by the configured-cmd containment leg (not just the trailing
@@ -1286,7 +1286,7 @@ class TestGrantLeg:
 
     def test_em_tier_f_chained_no_grant_denied_as_tier_u(self, grant_repo, free_mutex, monkeypatch):
         """Regression (2026-07-25 cockpit Tier-F-unreachable report),
-        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-
+        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-content-repo-
         em-validate-tier-u-shape-ruling.md): a CHAINED configured
         fast_test_cmd (``pnpm run typecheck && pnpm run test``), invoked
         verbatim, still has BOTH segments recognized by the configured-cmd
@@ -1445,7 +1445,7 @@ class TestGrantLeg:
         real resolver file (not just a monkeypatched stub) -- i.e. the
         fast_test_cmd match is genuinely recognized, not silently dropped.
 
-        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-
+        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-content-repo-
         em-validate-tier-u-shape-ruling.md): the fixture's fast_test_cmd
         (``python3 -m pytest -m 'not cadence'``, a marker filter -- not a
         file/dir/node-id scope) is an unscoped-runner SHAPE, so it now

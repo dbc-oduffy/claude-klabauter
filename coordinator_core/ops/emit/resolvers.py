@@ -581,7 +581,7 @@ def _registry_coordinator_root() -> Optional[Path]:
     (``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps —
     matches ``machine_resolver.registry_get``; the ``.local``-only read
     predated that pattern), key-major rung order preserved (``live_path``
-    before ``repos.doe_claude``). Direct file reads only — bootstrap-safety
+    before ``repos.content_root``). Direct file reads only — bootstrap-safety
     invariant, no CLI/subprocess (see ``resolve_coordinator_root``'s
     docstring)."""
     reg_dir = machine_local_dir()
@@ -611,7 +611,7 @@ def _registry_coordinator_root() -> Optional[Path]:
 
     for key_path, suffix in (
         (["plugin", "mirrors", "coordinator-claude", "live_path"], ""),
-        (["repos", "doe_claude"], "/coordinator"),
+        (["repos", "content_root"], "/coordinator"),
     ):
         flat_key = ".".join(key_path)
         for data, text in files:
@@ -658,11 +658,11 @@ def resolve_coordinator_root() -> Path:
     Purpose: locate the coordinator clone whose ``bin/query-records.py`` exists so section
     porters that read from it find the real records reader.  The W4.2 cutover relocated the
     coordinator SOURCE out of ``~/.claude/plugins/coordinator-claude/coordinator/`` into the
-    DoE clone at ``<doe-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
+    DoE clone at ``<content-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
     2026-07-22 de-node cutover then retired ``bin/query-records.js`` fleet-wide (claude-klabauter's own
     production dependency on it dropped to zero -- see
     ``cross-repo/archive/2026-07-22-claude-klabauter-em-query-records-positive-clearance-de-node-cutover-landed.md``
-    -- and DoE-claude/coordinator/bin now carries neither the ``.js`` oracle nor a ``.py``
+    -- and coordinator-content-repo/coordinator/bin now carries neither the ``.js`` oracle nor a ``.py``
     port), so ``bin/query-records.py`` (claude-klabauter's own native, de-node-durable reader) is now
     the sentinel, not the deleted ``.js`` file.  Section porters that read from
     ``ctx.coordinator_root / "bin" / "query-records.py"`` would silently fall back to ``[]``
@@ -675,7 +675,7 @@ def resolve_coordinator_root() -> Path:
       1. ENV ``COORDINATOR_ROOT`` — set in CI or by the coordinator plugin loader.
       2. Co-located ``<claude-klabauter-repo-root>/coordinator`` (2026-07-22 executable-surface
          migration, commits b644d5a9/8a28a6ca): the coordinator bin/lib/scripts tree now
-         lives INSIDE this repo, not the DoE-claude clone — DoE-claude/coordinator/bin is
+         lives INSIDE this repo, not the coordinator-content-repo clone — coordinator-content-repo/coordinator/bin is
          empty post-migration (PM ruling: coordinator scripts must not execute out of
          ``~/.claude``). Checked first because it is now the canonical, common case and
          needs no registry/subprocess round-trip. Mirrors ``data_root.py``'s
@@ -685,7 +685,7 @@ def resolve_coordinator_root() -> Path:
          still points at a valid DoE mirror). Per-key file precedence:
          ``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps
          (``machine_resolver.registry_get`` semantics; see ``_registry_coordinator_root``).
-      4. Machine-local registry key ``repos.doe_claude`` + ``/coordinator`` suffix
+      4. Machine-local registry key ``repos.content_root`` + ``/coordinator`` suffix
          (same two-file per-key precedence).
       5. ``resolve-coordinator-clone --for-content`` subprocess (survivor CLI at
          ``~/.claude/bin/resolve-coordinator-clone``) — replaces the pre-repoint legacy

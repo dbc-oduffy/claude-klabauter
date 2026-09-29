@@ -26,6 +26,10 @@ path, not a text classifier over Bash strings), and the actual creation of a
 genuine approval is an act only the human PM performs out-of-band -- those
 hold regardless of whatever this classifier misses.
 
+OPT-IN. The doctrine-edit approval gate is off on every profile; this guard
+allows unless `machine-local set coordinator.feature.doctrine_edit_gate on`
+has been run.
+
 WHY THIS EXISTS. A sibling DoE-side hook denies edits to always-loaded
 doctrine surfaces (global CLAUDE.md and friends) unless a repo-root sentinel
 file named `.coordinator-doctrine-edit-approved` exists and is under 30
@@ -45,15 +49,12 @@ pattern (self-forging PM approval) is wrong regardless of who types it. An
 EM-only gate would defeat the guard's own purpose, since the EM is exactly
 who this sentinel exists to constrain.
 
-NO OVERRIDE -- DELIBERATE, by design, no exceptions. Precedent:
-`block_subagent_destructive_action.py`'s own "OVERRIDE-WITHHOLDING,
-deliberate" section (module docstring lines 41-45) -- a subagent (or an EM)
-can set its own process env, so any `COORDINATOR_OVERRIDE_*` escape hatch
-here would be reachable by exactly the caller class this guard exists to
-constrain, and would make this a bypass of a bypass-prevention guard. There
-is no legitimate reason for an agent to ever create this specific file --
-the PM's own act of creating it IS the approval, so a programmatic path to
-create it is never sanctioned, not even conditionally. Do not add one.
+LEVEL, NOT ENV -- the only way to relax this guard is the operator's
+`coordinator.guard_level[.block-approval-sentinel-creation]` registry key
+(strict on author boxes, warn on consumer boxes by default). There is no
+`COORDINATOR_OVERRIDE_*` env escape: a subagent can set its own process env,
+so an env hatch would be reachable by exactly the caller class this guard
+constrains. The registry key is an operator setting, like any other.
 
 REGISTRATION ORDERING -- MUST run BEFORE `offer-git-c` in
 `coordinator_core.bash_guards.dispatch`. That check rewrites `cd <dir> &&
@@ -159,7 +160,7 @@ forged DIRECTORY at the sentinel's path -- which this guard's `mkdir` rule
 of this gap -- is closed on the read side too, independent of whatever a
 future lexical bypass might slip past the create side.
 
-Spec: doctrine-approval sentinel un-creatable-by-agent guard (DoE-claude
+Spec: doctrine-approval sentinel un-creatable-by-agent guard (coordinator-content-repo
 dispatch, 2026-07-28; round-two variable-taint closure, 2026-07-30) --
 companion to the sibling DoE-side hook that reads this sentinel to gate
 always-loaded-doctrine edits.
@@ -174,7 +175,6 @@ import re
 import shlex
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
-    INDIRECTION_REMEDY,
     REASON_DIRECT,
     REASON_INDIRECTION,
     SentinelCreationDetector,
@@ -197,9 +197,27 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
     _tokenize_full_command,
 )
-from coordinator_core.bash_guards._command_tokenizer import _SEPARATOR_TOKEN_RE
+from coordinator_core.bash_guards._command_tokenizer import (
+    _SEPARATOR_TOKEN_RE,
+    exceeds_tokenizable_ceiling,
+)
+from coordinator_core.machine_profile import LEVEL_VERB, apply_guard_level, feature_enabled
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+
+GUARD_NAME = "block-approval-sentinel-creation"
+
+_RISK_DIRECT = (
+    "this command creates/modifies the PM-approval sentinel for doctrine "
+    "edits, the PM's sign-off on always-loaded doctrine; an agent doing so "
+    "approves its own edit."
+)
+_RISK_INDIRECTION = (
+    "this command's payload runs through an interpreter, stdin or command "
+    "assembly the guard could not read, so it might create the "
+    "doctrine-approval sentinel (the PM's sign-off on always-loaded doctrine "
+    "edits) unseen."
+)
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -318,6 +336,76 @@ def _has_module_flag(interpreter_args: List[str]) -> bool:
             continue
         return False
     return False
+
+
+_PARAM_EXPANSION_RE = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+_UNRESOLVED_CWD = object()
+
+_STDIN_REDIRECT_RE = re.compile(r"^0?<(?![<(&])(.*)$")
+
+
+def _expand_from_env(token: str, assigned: "set[str]") -> Optional[str]:
+    """Expand `$VAR`, `${VAR}`, `${VAR:-default}` and a leading `~` in `token`
+    against the guard process's environment and the inline default. Returns
+    None when any reference stays unresolved or names a variable assigned
+    earlier in the same command (its shell value is not this process's env)."""
+    unresolved = False
+
+    def _sub(m: "re.Match[str]") -> str:
+        nonlocal unresolved
+        name = m.group(1) or m.group(3)
+        default = m.group(2)
+        if name in assigned:
+            unresolved = True
+            return m.group(0)
+        value = os.environ.get(name)
+        if value:
+            return value
+        if default is not None:
+            return default
+        unresolved = True
+        return m.group(0)
+
+    expanded = _PARAM_EXPANSION_RE.sub(_sub, token)
+    if unresolved or "$" in expanded or "`" in expanded:
+        return None
+    if expanded.startswith("~"):
+        expanded = os.path.expanduser(expanded)
+    return expanded
+
+
+def _split_stdin_redirect(tokens: List[str]) -> "Tuple[List[str], Optional[str]]":
+    """Remove output redirects and plain `< file` / `<file` redirects (not
+    heredoc, here-string, process substitution or fd duplication) from
+    `tokens`; return the remaining tokens and the last stdin-redirect
+    target, if any. Output-redirect targets are judged by `_segment_denies`."""
+    kept: List[str] = []
+    target: Optional[str] = None
+    i = 0
+    n = len(tokens)
+    while i < n:
+        out_m = _REDIR_PREFIX_RE.match(tokens[i])
+        if out_m:
+            attached = tokens[i][out_m.end() :]
+            i += 1 if attached or "&" in out_m.group(0) else 2
+            continue
+        m = _STDIN_REDIRECT_RE.match(tokens[i])
+        if not m:
+            kept.append(tokens[i])
+            i += 1
+            continue
+        if m.group(1):
+            target = m.group(1)
+            i += 1
+        elif i + 1 < n:
+            target = tokens[i + 1]
+            i += 2
+        else:
+            i += 1
+    return kept, target
 
 
 def _segment_writes_target_path(seg_tokens: List[str], path_token: str) -> bool:
@@ -471,7 +559,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     spelling they match.
 
     ITEM 33 NARROWING (2026-09-26, bounded forge-closure fix -- reported
-    false positive: `machine-local`, DoE-claude
+    false positive: `machine-local`, coordinator-content-repo
     `coordinator/templates/bin/machine-local`, a forwarder that names
     `python3`/`exec`/`bash` in its own text and was denied outright by the
     inherited "interpreter-invoked script, content unexamined" branch this
@@ -561,6 +649,27 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         #: `_extract_heredoc_bodies` and `_next_heredoc_body`.
         self._heredoc_bodies: "list[str]" = []
         self._heredoc_idx = 0
+        #: Names assigned inside the command being evaluated: their shell
+        #: value is unknown here, so env expansion skips them.
+        self._assigned_vars: "set[str]" = set()
+
+    def _resolve_argv0(self, seg_tokens: "list[str]") -> "list[str]":
+        """Replace an argv0 parameter expansion (`${COORDINATOR_PYTHON:-python3}`,
+        `$PY`) with its env/default value so it classifies as the interpreter
+        it names. Unresolvable expansions are left as written."""
+        idx = self._env_skip_index(seg_tokens)
+        if idx >= len(seg_tokens) or "$" not in seg_tokens[idx]:
+            return seg_tokens
+        resolved = _expand_from_env(seg_tokens[idx], self._assigned_vars)
+        if not resolved or exceeds_tokenizable_ceiling(resolved):
+            return seg_tokens
+        try:
+            parts = shlex.split(resolved)
+        except ValueError:
+            return seg_tokens
+        if not parts:
+            return seg_tokens
+        return seg_tokens[:idx] + parts + seg_tokens[idx + 1 :]
 
     def _collect_tainted_vars(self, tokens: "list[str]") -> "set[str]":
         """Scan every token of the (whole, not-yet-segmented) command for a
@@ -679,8 +788,12 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 )
             return False, "", ""
 
+        self._assigned_vars = {
+            m.group(1) for m in (_ASSIGN_RE.match(t) for t in tokens) if m
+        }
         prior_segments: "list[tuple[list[str], bool, bool]]" = []
         for seg_tokens, pipe_before, backgrounded in _segments_with_background(tokens):
+            seg_tokens = self._resolve_argv0(seg_tokens)
             if self._segment_denies(seg_tokens):
                 return (
                     True,
@@ -754,6 +867,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             working = stripped
         if not working:
             return None
+        working, stdin_target = _split_stdin_redirect(working)
+        if not working:
+            return None
 
         head_base = _normalize_executable_basename(working[0])
         norm_head = _normalize_interpreter_basename(head_base)
@@ -799,7 +915,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 working[1:]
             ):
                 return self._script_file_verdict(
-                    norm_head, working, depth, prior_segments
+                    norm_head, working, depth, prior_segments, stdin_target
                 )
             # `python3` is a `_C_FLAG_INTERPRETERS` member with no bare-file
             # branch at all above this override (see module docstring
@@ -814,7 +930,16 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 and not _has_module_flag(working[1:])
             ):
                 return self._script_file_verdict(
-                    norm_head, working, depth, prior_segments
+                    norm_head, working, depth, prior_segments, stdin_target
+                )
+            if (
+                stdin_target
+                and norm_head in _READABLE_SCRIPT_INTERPRETERS
+                and not _has_script_operand(working[1:])
+                and not _has_module_flag(working[1:])
+            ):
+                return self._script_file_verdict(
+                    norm_head, working, depth, prior_segments, stdin_target
                 )
             return None
 
@@ -833,8 +958,11 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         working: "list[str]",
         depth: int,
         prior_segments: "list[tuple[list[str], bool, bool]]",
+        stdin_target: Optional[str] = None,
     ) -> Tuple[str, str]:
-        """Item 33: the one narrowed branch. `working` is `<interp>
+        """Item 33: the one narrowed branch. `stdin_target` is a plain
+        `< file` redirect on the segment: it names the script when the
+        interpreter has no operand or reads `-`. `working` is `<interp>
         <args...>` with `<interp>` already confirmed to name a script
         operand. Falls back to the inherited unconditional deny (byte-
         identical message to the shared engine's own) whenever any safety
@@ -849,6 +977,8 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         if depth != 0 or norm_head not in _READABLE_SCRIPT_INTERPRETERS:
             return fallback
         path_token = _first_operand_token(working[1:])
+        if stdin_target and (not path_token or path_token == "-"):
+            path_token = stdin_target
         if not path_token:
             return fallback
         if any(backgrounded for _prior_tokens, _pipe_before, backgrounded in prior_segments):
@@ -868,7 +998,13 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 for prior_tokens, _pipe_before, _backgrounded in prior_segments
             ):
                 return fallback
-            mentions = self._readable_script_mentions_target(path_token)
+            read_path = _expand_from_env(path_token, self._assigned_vars)
+            effective_cwd = self._cwd_after(prior_segments)
+            mentions = (
+                None
+                if read_path is None or effective_cwd is _UNRESOLVED_CWD
+                else self._readable_script_mentions_target(read_path, effective_cwd)
+            )
         if mentions is None:
             return fallback
         if mentions:
@@ -898,7 +1034,29 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             return True
         return any(vm.group(1) in self._tainted_vars for vm in _VAR_REF_RE.finditer(text))
 
-    def _readable_script_mentions_target(self, path_token: str) -> Optional[bool]:
+    def _cwd_after(
+        self, prior_segments: "list[tuple[list[str], bool, bool]]"
+    ) -> Any:
+        """The payload cwd moved by each earlier `cd <literal dir>` segment;
+        an unresolvable `cd` target yields `_UNRESOLVED_CWD` (the script read
+        then fails closed)."""
+        cwd = self._cwd
+        for tokens, _pipe, _bg in prior_segments:
+            idx = self._env_skip_index(tokens)
+            if idx >= len(tokens) or tokens[idx] != "cd":
+                continue
+            args = [t for t in tokens[idx + 1 :] if not t.startswith("-")]
+            if len(args) != 1:
+                return _UNRESOLVED_CWD
+            target = _expand_from_env(args[0], self._assigned_vars)
+            if target is None:
+                return _UNRESOLVED_CWD
+            cwd = target if os.path.isabs(target) else os.path.join(cwd or ".", target)
+        return cwd
+
+    def _readable_script_mentions_target(
+        self, path_token: str, cwd: Optional[str] = None
+    ) -> Optional[bool]:
         """Read `path_token` (resolved against `self._cwd`) and apply this
         detector's own mention-plus-taint scan to its text. Returns `None`
         (caller keeps the inherited unconditional deny) when the path is
@@ -907,7 +1065,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         class docstring), or too large."""
         candidate = path_token
         if not os.path.isabs(candidate):
-            candidate = os.path.join(self._cwd or ".", candidate)
+            candidate = os.path.join(cwd or self._cwd or ".", candidate)
         try:
             if os.path.islink(candidate) or not os.path.isfile(candidate):
                 return None
@@ -963,19 +1121,15 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         # copy-paste), but a RECURSIVE indirection verdict can still bottom
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
-            "BLOCKED (approval-sentinel guard): this command was denied "
-            "because its payload is delivered through an interpreter, "
-            "stdin, or command-assembly indirection this guard cannot "
-            "examine -- NOT because the payload was found to touch the "
-            "approval sentinel.\n\n"
-            "Detected shape: %s\n\n"
-            "If this command genuinely does not touch the approval "
-            "sentinel: %s\n\n"
-            "Reading or removing an existing sentinel remains available as a "
-            "DIRECT command -- `cat`, `ls`, `stat`, `rm` -- but not through a "
-            "wrapper like this one: inside an interpreter payload this guard "
-            "cannot tell a read from a write, so it denies either way. "
-            "Removal only re-locks the boundary." % (safe_shape, INDIRECTION_REMEDY)
+            "BLOCKED (approval-sentinel guard): payload unreadable (%s); it "
+            "might create the PM-approval sentinel unseen.\n\n"
+            "Run instead: `python3 path/to/script.py` (bare interpreter, "
+            "literal path; also `python3 < path/to/script.py`, `bash`, `sh`) "
+            "-- the file is read and allowed unless it names the sentinel. "
+            "`$VAR` and `${VAR:-x}` expand from the environment only, not "
+            "from assignments in the same command. `./path/to/script` needs "
+            "an executable file with a shebang.\n\n"
+            "Lower this guard: `%s`." % (safe_shape, LEVEL_VERB)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     safe_argv0 = ", ".join(
@@ -987,10 +1141,11 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     )
     return (
         "BLOCKED: creates/modifies the PM-approval sentinel for doctrine "
-        "edits; agents cannot self-approve. Ask the PM to create it.\n\n"
+        "edits. Ask the PM to create it.\n\n"
         "Use instead:\n"
         "  %s\n"
-        "  %s" % (safe_argv0, safe_git)
+        "  %s\n\n"
+        "Lower it: `%s`." % (safe_argv0, safe_git, LEVEL_VERB)
     )
 
 
@@ -1000,8 +1155,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     Returns `None` (allow) or the nested hard-deny envelope. Never
     identity-gated -- fires for every caller including the main-loop EM
-    (see module docstring "NOT IDENTITY-GATED").
+    (see module docstring "NOT IDENTITY-GATED"). Allows first, before any
+    parsing, unless `coordinator.feature.doctrine_edit_gate` is on.
     """
+    if not feature_enabled("doctrine_edit_gate"):
+        return None
+    return check_ungated(payload)
+
+
+def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """`check` without the feature gate: the liveness probe in
+    `_alternative_liveness` calls this so its trigger stays live while the
+    gate is off."""
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None
@@ -1020,10 +1185,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not deny:
         return None
 
-    return {
+    envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
         }
     }
+    risk = _RISK_INDIRECTION if reason_class == REASON_INDIRECTION else _RISK_DIRECT
+    return apply_guard_level(GUARD_NAME, envelope, risk=risk[0].upper() + risk[1:])

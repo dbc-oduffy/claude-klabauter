@@ -1,6 +1,6 @@
 """Shared gate for creating a session's directory under the session hub.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_session_hub.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_session_hub.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3, verbatim: this
 module is self-contained (stdlib-only, no cross-repo/cross-plane reference),
 so no adaptation was needed.

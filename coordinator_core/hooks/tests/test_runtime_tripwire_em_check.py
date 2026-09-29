@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.tests.test_runtime_tripwire_em_check — Tier-T test for
-the PostToolUse(Agent) warm-door op (leg 2 of 2 of DoE-claude's
+the PostToolUse(Agent) warm-door op (leg 2 of 2 of coordinator-content-repo's
 `runtime-tripwire-em-check.py`; the sibling UserPromptSubmit leg is out of
 scope — Terminal, see the module's own docstring).
 

@@ -10,13 +10,14 @@ These drive the real CLI as a subprocess rather than calling the op directly. In
 part of what is under test: the trampoline resolves its own claude-klabauter root and the whole point is
 that it runs with no Claude Code process involved.
 
-Fixtures point `REPO_DOE_CLAUDE` at a throwaway tree. Never at the live one — a health check
+Fixtures point `REPO_CONTENT_ROOT` at a throwaway tree. Never at the live one — a health check
 tested against live shared config is the thing it is meant to catch.
 """
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -35,8 +36,8 @@ _DOCTOR = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "doctor.py"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _write_hooks(doe_root: Path, command: str) -> None:
-    hooks_dir = doe_root / "coordinator" / "hooks"
+def _write_hooks(content_root: Path, command: str) -> None:
+    hooks_dir = content_root / "coordinator" / "hooks"
     (hooks_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -53,13 +54,13 @@ _LOADER = (
 )
 
 
-def _write_hooks_exec_form(doe_root: Path, script_token: str) -> None:
+def _write_hooks_exec_form(content_root: Path, script_token: str) -> None:
     """The exec-form registration `fail_open_launcher.wrap_command_exec` emits and
     every live hooks.json entry uses: bare interpreter in `command`, real argv in
     `args`, no shell in the path. The doctor's original extractor only understood
     the legacy single-string form, so against this shape every entry parsed as
     "shape not understood" and the missing-on-disk stat never ran."""
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     (hooks_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -79,7 +80,20 @@ def _write_hooks_exec_form(doe_root: Path, script_token: str) -> None:
     )
 
 
-def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
+def _isolated_settings_home(content_root: Path) -> Path:
+    """Throwaway settings-home carrying a current resolve-claude-klabauter shim, so the machine's
+    real installed shim and registered clones cannot decide the healthy verdict."""
+    home = content_root.parent / "settings-home"
+    (home / "bin").mkdir(parents=True, exist_ok=True)
+    shutil.copy(
+        _CLAUDE_KLABAUTER_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py",
+        home / "bin" / "_resolve_claude_klabauter.py",
+    )
+    return home
+
+
+def _run_doctor(content_root: Path, *args: str) -> subprocess.CompletedProcess:
+    settings_home = _isolated_settings_home(content_root)
     return subprocess.run(
         [sys.executable, str(_DOCTOR), *args],
         capture_output=True, text=True, creationflags=_NO_WINDOW,
@@ -96,27 +110,31 @@ def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
         # missed by that sweep because a fixture WRITES the var and never reads it.
         env=dict(
             os.environ,
-            REPO_DOE_CLAUDE=str(doe_root),
+            REPO_CONTENT_ROOT=str(content_root),
             REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
+            # Empty machine-local registry: the git-hook currency layer otherwise
+            # reads this machine's real registered clones.
+            COORDINATOR_SETTINGS_HOME=str(settings_home),
+            MACHINE_LOCAL_REGISTRY_DIR=str(settings_home / "machine-local"),
         ),
     )
 
 
 @pytest.fixture
-def doe_root(tmp_path: Path) -> Path:
-    root = tmp_path / "DoE-claude"
+def content_root(tmp_path: Path) -> Path:
+    root = tmp_path / "coordinator-content-repo"
     (root / "coordinator" / "hooks" / "scripts").mkdir(parents=True)
     return root
 
 
-def test_registration_pointing_at_a_missing_script_is_reported_broken(doe_root: Path):
+def test_registration_pointing_at_a_missing_script_is_reported_broken(content_root: Path):
     """The exact 2026-07-29 incident: a registration outliving the script it names. Every
     on-disk consistency check passed while this was true, which is why the doctor has to be
     the thing that catches it."""
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deleted-by-a-peer.py")
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deleted-by-a-peer.py")
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert result.returncode == 1, result.stdout
     assert "BROKEN" in result.stdout
@@ -124,55 +142,55 @@ def test_registration_pointing_at_a_missing_script_is_reported_broken(doe_root: 
     assert "Hook registration" in result.stdout
 
 
-def test_a_healthy_registration_is_quiet(doe_root: Path):
+def test_a_healthy_registration_is_quiet(content_root: Path):
     """Quiet on clean. A check that fires on benign states is muted within a week, and this
     guard family already has members that went inert exactly that way."""
-    script = doe_root / "coordinator" / "hooks" / "scripts" / "real.py"
+    script = content_root / "coordinator" / "hooks" / "scripts" / "real.py"
     script.write_text("import sys\nsys.exit(0)\n")
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert "BROKEN" not in result.stdout, result.stdout
     assert "registered script missing" not in result.stdout
 
 
-def test_a_bare_registration_is_flagged_as_not_fail_open(doe_root: Path):
+def test_a_bare_registration_is_flagged_as_not_fail_open(content_root: Path):
     """A present script that is nonetheless registered bare is a latent instance of the same
     incident — it works until the day the path stops resolving."""
-    script = doe_root / "coordinator" / "hooks" / "scripts" / "real.py"
+    script = content_root / "coordinator" / "hooks" / "scripts" / "real.py"
     script.write_text("import sys\nsys.exit(0)\n")
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert "bare" in result.stdout.lower(), result.stdout
 
 
-def test_exit_code_distinguishes_broken_from_healthy(doe_root: Path):
+def test_exit_code_distinguishes_broken_from_healthy(content_root: Path):
     """A caller gating on this must be able to tell the two apart without parsing prose."""
-    script = doe_root / "coordinator" / "hooks" / "scripts" / "real.py"
+    script = content_root / "coordinator" / "hooks" / "scripts" / "real.py"
     script.write_text("import sys\nsys.exit(0)\n")
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
-    healthy = _run_doctor(doe_root).returncode
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    healthy = _run_doctor(content_root).returncode
 
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/gone.py")
-    broken = _run_doctor(doe_root).returncode
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/gone.py")
+    broken = _run_doctor(content_root).returncode
 
     assert broken == 1
     assert healthy != broken
 
 
-def test_exec_form_registration_pointing_at_a_missing_script_is_reported_broken(doe_root: Path):
-    """The vacuous-pass regression (doe-claude-em memo, 2026-08-17). Under the
+def test_exec_form_registration_pointing_at_a_missing_script_is_reported_broken(content_root: Path):
+    """The vacuous-pass regression (coordinator-content-repo-em memo, 2026-08-17). Under the
     single-string-only extractor this case reported `[OK]` while emitting a
     `broken` finding for every entry — the true pass and the vacuous pass were
     the same green."""
     _write_hooks_exec_form(
-        doe_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deleted-by-a-peer.py"
+        content_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deleted-by-a-peer.py"
     )
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert result.returncode == 1, result.stdout
     assert "BROKEN" in result.stdout, result.stdout
@@ -180,28 +198,28 @@ def test_exec_form_registration_pointing_at_a_missing_script_is_reported_broken(
     assert "shape not understood" not in result.stdout
 
 
-def test_a_healthy_exec_form_registration_is_quiet_and_reads_as_wrapped(doe_root: Path):
+def test_a_healthy_exec_form_registration_is_quiet_and_reads_as_wrapped(content_root: Path):
     """Polarity check. The seam marker lives in `args`, not `command`, so testing
     `command` alone reported every exec-form hook as bare — and, inverted, would
     have reported a genuinely unwrapped hook as wrapped, suppressing the warning
     that exists because that state bricks every tool call."""
-    scripts = doe_root / "coordinator" / "hooks" / "scripts"
+    scripts = content_root / "coordinator" / "hooks" / "scripts"
     for name in ("real.py", "_hook_venv_inject.py", "_hook_boot.py"):
         (scripts / name).write_text("import sys\nsys.exit(0)\n")
-    _write_hooks_exec_form(doe_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _write_hooks_exec_form(content_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert "BROKEN" not in result.stdout, result.stdout
     assert "registered script missing" not in result.stdout
     assert "bare" not in result.stdout.lower(), "exec form IS fail-open-wrapped"
 
 
-def test_a_finding_the_layer_calls_broken_can_never_report_ok(doe_root: Path):
+def test_a_finding_the_layer_calls_broken_can_never_report_ok(content_root: Path):
     """Defect B standalone, independent of any one encoding: status is derived
     from the findings, not from the missing-script counter. An unparseable
     registration is the general case — any future shape migration lands here."""
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     (hooks_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -211,13 +229,13 @@ def test_a_finding_the_layer_calls_broken_can_never_report_ok(doe_root: Path):
         )
     )
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert result.returncode == 1, result.stdout
     assert "BROKEN" in result.stdout, result.stdout
 
 
-def test_a_hook_with_no_parseable_command_is_reported_broken_not_ok(doe_root: Path):
+def test_a_hook_with_no_parseable_command_is_reported_broken_not_ok(content_root: Path):
     """The same "OK on zero parsed registrations" pathology the status-derivation
     fix (above) closes, one call frame earlier: `_hook_argv` used to return
     `None` silently for a missing/non-string/empty `command`, so
@@ -226,7 +244,7 @@ def test_a_hook_with_no_parseable_command_is_reported_broken_not_ok(doe_root: Pa
     is unparseable read as clean. `_iter_hook_commands` now yields the entry
     with `argv=None` so it counts toward `total` and becomes a `broken`
     finding instead of vanishing."""
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     (hooks_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -236,78 +254,78 @@ def test_a_hook_with_no_parseable_command_is_reported_broken_not_ok(doe_root: Pa
         )
     )
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert result.returncode == 1, result.stdout
     assert "BROKEN" in result.stdout, result.stdout
     assert "shape not understood" in result.stdout, result.stdout
 
 
-def _install_real_launcher(doe_root: Path) -> None:
+def _install_real_launcher(content_root: Path) -> None:
     """Copy the LIVE `fail_open_launcher.py` into the throwaway tree.
 
     The seam this exercises is a cross-repo API boundary — a hand-written stub
     would keep passing through exactly the rename that broke it (`wrap_command`
     -> `wrap_command_exec`), which is the defect, not the test. Skips rather
-    than fabricating when DoE-claude is not reachable."""
-    # `coordinator_doe_root()` is deliberately quarantined to a throwaway stub
+    than fabricating when coordinator-content-repo is not reachable."""
+    # `coordinator_content_root()` is deliberately quarantined to a throwaway stub
     # under pytest, so the real checkout comes from conftest's collection-time
     # capture instead — the same escape hatch the manifest read uses.
-    from coordinator_core.conftest import _REAL_DOE_ROOT
+    from coordinator_core.conftest import _REAL_CONTENT_ROOT
 
     src = (
-        Path(_REAL_DOE_ROOT) / "coordinator" / "hooks" / "fail_open_launcher.py"
-        if _REAL_DOE_ROOT
+        Path(_REAL_CONTENT_ROOT) / "coordinator" / "hooks" / "fail_open_launcher.py"
+        if _REAL_CONTENT_ROOT
         else None
     )
     if not src or not src.is_file():
-        pytest.skip("DoE-claude fail_open_launcher not reachable — nothing real to bind against")
-    (doe_root / "coordinator" / "hooks").mkdir(parents=True, exist_ok=True)
-    (doe_root / "coordinator" / "hooks" / "fail_open_launcher.py").write_text(
+        pytest.skip("coordinator-content-repo fail_open_launcher not reachable — nothing real to bind against")
+    (content_root / "coordinator" / "hooks").mkdir(parents=True, exist_ok=True)
+    (content_root / "coordinator" / "hooks" / "fail_open_launcher.py").write_text(
         src.read_text(encoding="utf-8"), encoding="utf-8"
     )
 
 
-def test_fix_does_not_crash_or_rewrite_already_exec_wrapped_registrations(doe_root: Path):
+def test_fix_does_not_crash_or_rewrite_already_exec_wrapped_registrations(content_root: Path):
     """Defect C: `--fix` called `fail_open_launcher.wrap_command`, removed in
     favour of `wrap_command_exec`. Since the bareness probe read only the
     `command` string (`python3`), every live hook looked unwrapped, so `--fix`
     reached the missing attribute — an uncaught AttributeError on a repair path
     whose entire premise is being usable on a broken machine."""
-    scripts = doe_root / "coordinator" / "hooks" / "scripts"
+    scripts = content_root / "coordinator" / "hooks" / "scripts"
     for name in ("real.py", "_hook_venv_inject.py", "_hook_boot.py"):
         (scripts / name).write_text("import sys\nsys.exit(0)\n")
-    hooks_json = doe_root / "coordinator" / "hooks" / "hooks.json"
-    _write_hooks_exec_form(doe_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
-    _install_real_launcher(doe_root)
+    hooks_json = content_root / "coordinator" / "hooks" / "hooks.json"
+    _write_hooks_exec_form(content_root, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _install_real_launcher(content_root)
     before = hooks_json.read_text()
 
-    result = _run_doctor(doe_root, "--fix")
+    result = _run_doctor(content_root, "--fix")
 
     assert "Traceback" not in result.stderr, result.stderr
     assert "unimportable" not in result.stdout, "the launcher must actually have been bound"
     assert hooks_json.read_text() == before, "already-wrapped registrations must be left alone"
 
 
-def test_fix_wraps_a_bare_registration_into_the_exec_form(doe_root: Path):
+def test_fix_wraps_a_bare_registration_into_the_exec_form(content_root: Path):
     """The repair path's positive case, bound against the real launcher: a bare
     hook comes back as an exec-form registration, and the doctor then reads its
     own repair as healthy — the round trip, not just the write."""
-    scripts = doe_root / "coordinator" / "hooks" / "scripts"
+    scripts = content_root / "coordinator" / "hooks" / "scripts"
     for name in ("real.py", "_hook_venv_inject.py", "_hook_boot.py"):
         (scripts / name).write_text("import sys\nsys.exit(0)\n")
-    hooks_json = doe_root / "coordinator" / "hooks" / "hooks.json"
-    _write_hooks(doe_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
-    _install_real_launcher(doe_root)
+    hooks_json = content_root / "coordinator" / "hooks" / "hooks.json"
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _install_real_launcher(content_root)
 
-    result = _run_doctor(doe_root, "--fix")
+    result = _run_doctor(content_root, "--fix")
 
     assert "Traceback" not in result.stderr, result.stderr
     hook = json.loads(hooks_json.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]
     assert hook["command"] == "python3"
     assert "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py" in hook["args"]
 
-    after = _run_doctor(doe_root)
+    after = _run_doctor(content_root)
     assert "BROKEN" not in after.stdout, after.stdout
     assert "bare" not in after.stdout.lower(), "the doctor must read back its own repair as wrapped"
 
@@ -381,7 +399,7 @@ def test_an_absolute_interpreter_path_is_understood(interpreter):
     assert doctor._extract_script_path([interpreter, script]) == script
 
 
-def test_an_http_hook_is_not_a_broken_command(doe_root: Path):
+def test_an_http_hook_is_not_a_broken_command(content_root: Path):
     """A `type: "http"` registration has no script path BY CONSTRUCTION, so the
     command layer has nothing to say about it and must stay quiet.
 
@@ -393,7 +411,7 @@ def test_an_http_hook_is_not_a_broken_command(doe_root: Path):
     """
     from coordinator_core.ops import doctor
 
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -418,7 +436,7 @@ def test_an_http_hook_is_not_a_broken_command(doe_root: Path):
     )
 
     status, findings, present = doctor._check_one_hooks_doc(
-        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+        hooks_dir / "hooks.json", str(content_root), "hooks.json"
     )
 
     assert present is True
@@ -427,7 +445,7 @@ def test_an_http_hook_is_not_a_broken_command(doe_root: Path):
     assert any("non-command" in f.message for f in findings), [f.message for f in findings]
 
 
-def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
+def test_an_http_hook_does_not_swallow_a_broken_sibling_command(content_root: Path):
     """The `continue` that skips a non-command entry lives mid-loop, right
     next to the `total`/`bare` counters — the exact shape that silently
     swallows a sibling finding if a future edit reorders those counters. A
@@ -438,7 +456,7 @@ def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
     """
     from coordinator_core.ops import doctor
 
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -467,7 +485,7 @@ def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
     )
 
     status, findings, present = doctor._check_one_hooks_doc(
-        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+        hooks_dir / "hooks.json", str(content_root), "hooks.json"
     )
 
     assert present is True
@@ -477,7 +495,7 @@ def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
     assert any("missing on disk" in f.message for f in broken), [f.message for f in findings]
 
 
-def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(doe_root: Path):
+def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(content_root: Path):
     """The `total == 0` branch, hit with a broken finding already sitting in
     `findings` and no counted command registrations at all. A doc whose ONLY
     entry is a `command`-shaped hook with a misspelled `type` (e.g.
@@ -490,7 +508,7 @@ def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(doe_root: Path):
     """
     from coordinator_core.ops import doctor
 
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -514,7 +532,7 @@ def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(doe_root: Path):
     )
 
     status, findings, present = doctor._check_one_hooks_doc(
-        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+        hooks_dir / "hooks.json", str(content_root), "hooks.json"
     )
 
     assert present is True
@@ -534,15 +552,15 @@ def test_a_non_python_interpreter_is_still_not_understood():
     assert doctor._extract_script_path(["<drive>:\\tools\\pythonish.exe", "hook.py"]) is None
 
 
-def test_reports_rather_than_raises_on_an_unreadable_hooks_document(doe_root: Path):
+def test_reports_rather_than_raises_on_an_unreadable_hooks_document(content_root: Path):
     """A layer it cannot evaluate must say so. Absence of a check must never be
     indistinguishable from the check passing — that is the pathology the whole plan is
     about."""
-    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir = content_root / "coordinator" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text("{ not valid json")
 
-    result = _run_doctor(doe_root)
+    result = _run_doctor(content_root)
 
     assert result.returncode == 1, result.stdout
     assert "Traceback" not in result.stderr, "must report, not crash: " + result.stderr

@@ -1,7 +1,7 @@
 """coordinator_core.group_em.baseline -- the previous tick's peer set, persisted
 so spawn/exit/state-transition diffing survives context compaction.
 
-SUPERSESSION NOTICE. The `group-em` skill body (the doe-claude-em repo,
+SUPERSESSION NOTICE. The `group-em` skill body (the coordinator-content-repo-em repo,
 READ ONLY from this plane) still says "Nothing is written to disk on invoke" and "No
 registration ceremony, no persistence". The PM's 2026-08-30 ruling retired
 that no-persistence rule for the READ path only -- this module is the

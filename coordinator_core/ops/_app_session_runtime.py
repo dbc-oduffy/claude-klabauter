@@ -7,7 +7,7 @@ the argv the caller should spawn. Called by `coordinator_core.ops.app_session`'s
 `launch` op (C3) — this module does resolution only, never spawns.
 
 Spec backlink: docs/plans/2026-08-15-app-session-launch-census-teardown-ops.md,
-    chunk C2 (source_memo: 2026-08-15-doe-claude-em-launch-ops-amendment-runtime-axis-and-mapping-reader.md)
+    chunk C2 (source_memo: 2026-08-15-coordinator-content-repo-em-launch-ops-amendment-runtime-axis-and-mapping-reader.md)
 
 Shape: a resolver REGISTRY keyed by runtime kind, with `electron` as the first
 entry — not the mechanism. The registry exists because the op family was born

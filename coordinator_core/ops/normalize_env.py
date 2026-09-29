@@ -354,6 +354,9 @@ def _ne_print_probe_summary(probe_output: str, out) -> None:
         print(f"  [{rec.get('status', '')}] {rec.get('name', '')}: {rec.get('detail', '')}", file=out)
 
 
+_POSIX_PATHSEP = ":"
+
+
 def _ne_split_path_entries(path_value: str) -> list:
     # `path_value` is always a POSIX zsh-login PATH snapshot (macOS
     # ~/.bash_profile reconstruction, see `_ne_extra_zsh_path_entries`'s own
@@ -362,7 +365,7 @@ def _ne_split_path_entries(path_value: str) -> list:
     # colon-joined string as one un-split entry there (latent bug: a host-OS
     # separator applied to a target-OS-fixed string). Split on the literal
     # POSIX separator, not the running interpreter's own pathsep.
-    return [p for p in path_value.split(":") if p]
+    return [p for p in path_value.split(_POSIX_PATHSEP) if p]
 
 
 def _ne_extra_zsh_path_entries(recon_source: str) -> list:

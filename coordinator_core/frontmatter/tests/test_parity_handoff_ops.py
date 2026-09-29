@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.tests.test_parity_handoff_ops
 
 Parity harness — CLI byte-parity between claude-klabauter's native handoff op handlers and
-FROZEN GOLDEN snapshots of the legacy JS CLIs (DoE-claude coordinator/bin/) they
+FROZEN GOLDEN snapshots of the legacy JS CLIs (coordinator-content-repo coordinator/bin/) they
 were ported from, via coordinator_core.testing.golden (de-node Gate A, C3).
 
 Covered operations (each captured ONCE, CAPTURE_GOLDENS=1, against the live
@@ -14,14 +14,14 @@ Node.js oracle CLI, then committed under `_goldens/parity_handoff_ops/`):
   stamp     — stamp-shipped-in.js
 
 Ordinary runs shell out ONLY to the Python op handlers and diff their resulting
-on-disk content against the committed golden — no node / DoE-claude checkout
+on-disk content against the committed golden — no node / coordinator-content-repo checkout
 needed at test time.
 
 TestHandoffPhaseCrossFieldParity is a distinct LIVE-ORACLE-turned-golden shape
 (not a mutation-parity harness like the above): its golden freezes the
 lint-frontmatter.js --file --json cross-field-rule-logic verdict (H-CROSS-EXEC-1/2
 from DoE's CROSS_FIELD_RULES['handoff']) so claude-klabauter's validate_frontmatter() can be
-diffed against it without a live node/DoE-claude dependency at test time. This is
+diffed against it without a live node/coordinator-content-repo dependency at test time. This is
 a drift guard on rule LOGIC, which check_schema_drift() (byte-comparing
 schema.json shape) does not cover.
 
@@ -52,7 +52,7 @@ Parity contract:
 Negative-spec: none of the fixture bodies or lint-frontmatter.js --json output
 below embed a tmp_path-derived absolute prefix — frontmatter content has no path
 fields, and lint-frontmatter.js's JSON `file` key is `repoRel` (relative to repo
-root, see DoE-claude coordinator/bin/lint-frontmatter.js:72), not an absolute
+root, see coordinator-content-repo coordinator/bin/lint-frontmatter.js:72), not an absolute
 path — so no tmp_path normalization step is needed before freezing here (unlike
 `coordinator_core/tests/test_dag_js_parity.py`'s `--format paths`/`json` CLI
 output, which does embed absolute paths and requires `_normalize_paths_output`/
@@ -62,16 +62,16 @@ inspecting a captured golden for path leakage before committing it.
 Regenerating goldens (deliberate, reviewed action only — see Decisions in
 docs/plans/2026-07-21-parity-suites-freeze-to-goldens.md):
     CAPTURE_GOLDENS=1 python3 -m pytest coordinator_core/frontmatter/tests/test_parity_handoff_ops.py -q
-(requires `node` on PATH and the DoE-claude sibling checkout to be resolvable.)
+(requires `node` on PATH and the coordinator-content-repo sibling checkout to be resolvable.)
 
 Run (from the repo root):
   python3 -m pytest coordinator_core/frontmatter/tests/test_parity_handoff_ops.py -q
 
 Spec backlinks:
-  DoE-claude: coordinator/bin/handoff-transition.js
-  DoE-claude: coordinator/bin/stamp-shipped-in.js
-  DoE-claude: coordinator/bin/normalize-handoff-frontmatter.js
-  DoE-claude: coordinator/bin/lint-frontmatter.js
+  coordinator-content-repo: coordinator/bin/handoff-transition.js
+  coordinator-content-repo: coordinator/bin/stamp-shipped-in.js
+  coordinator-content-repo: coordinator/bin/normalize-handoff-frontmatter.js
+  coordinator-content-repo: coordinator/bin/lint-frontmatter.js
   Port sources: coordinator_core/ops/handoff_transition.py
                 coordinator_core/ops/handoff_stamp.py
                 coordinator_core/ops/handoff_normalize.py
@@ -91,7 +91,7 @@ from typing import Optional, Tuple
 
 import pytest
 
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
 # Real-git spawn is load-bearing: fixtures build a real git repo
@@ -104,14 +104,14 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _GOLDEN_NAMESPACE = "parity_handoff_ops"
 
 # ---------------------------------------------------------------------------
-# JS CLI paths (DoE-claude sibling repo) — resolved lazily and ONLY consulted
+# JS CLI paths (coordinator-content-repo sibling repo) — resolved lazily and ONLY consulted
 # under CAPTURE_GOLDENS=1 (see `_require_oracle` below). Never gates an
 # ordinary (non-capture) run — that skip-on-missing shape is exactly the
 # silent-green hazard this de-node conversion closes (see module docstring
 # and coordinator_core/testing/golden.py's own negative-spec).
 # ---------------------------------------------------------------------------
 
-_DOE_COORDINATOR = Path(resolve_doe_root() or "/doe-root-unresolved") / "coordinator"
+_DOE_COORDINATOR = Path(resolve_content_root() or "/content-root-unresolved") / "coordinator"
 _DOE_BIN = _DOE_COORDINATOR / "bin"
 _TRANSITION_JS = _DOE_BIN / "handoff-transition.js"
 _STAMP_JS = _DOE_BIN / "stamp-shipped-in.js"
@@ -134,7 +134,7 @@ def _require_oracle() -> str:
     ]
     if node is None or missing:
         raise RuntimeError(
-            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the DoE-claude "
+            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the coordinator-content-repo "
             "sibling checkout's coordinator/bin/*.js CLIs to be resolvable — neither "
             f"is needed for an ordinary (non-capture) run. node={node!r} missing={missing!r}"
         )
@@ -508,7 +508,7 @@ def _cross_field_golden(case: str, capture_fn) -> dict:
     `capture_fn` is never invoked — the committed golden verdict is diffed
     against claude-klabauter's validate_frontmatter() output instead. No tmp_path
     normalization needed: lint-frontmatter.js's `file` key is `repoRel`
-    (relative to repo root — see DoE-claude coordinator/bin/lint-frontmatter.js:72),
+    (relative to repo root — see coordinator-content-repo coordinator/bin/lint-frontmatter.js:72),
     not an absolute path (see module docstring negative-spec).
     """
     if is_capturing():
@@ -972,7 +972,7 @@ class TestStampParity:
             return js_file.read_text(encoding="utf-8")
 
         expected = _mutation_golden_content(case, _capture)
-        # kind is now REQUIRED on the Python side (DR-096, DoE-claude
+        # kind is now REQUIRED on the Python side (DR-096, coordinator-content-repo
         # 2026-07-26/27 follow-up) — the JS oracle predates shipped_in_kind
         # entirely and never writes it, so the golden's SHA-quoting-only
         # content gets one line inserted (immediately after shipped_in:,

@@ -236,7 +236,7 @@ def test_classify_command_identical_scoped_string_under_both_keys_now_classifies
 ):
     """RECONCILED 2026-07-30: this test formerly pinned an OBSERVED
     divergence from the ruling memo's own worked example
-    (cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
+    (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-tier-u-shape-
     ruling.md "The correction" section) -- the memo illustrates a repo
     declaring an identical, genuinely-scoped (real descendant of
     testpaths, NOT the testpaths root) command string under BOTH

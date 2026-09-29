@@ -15,13 +15,13 @@ Run it:
 `--repo-root` names the repo to report ON; it does not make that repo importable. `python -m`
 resolves `coordinator_core` off cwd/PYTHONPATH, so this command must be run with cwd (or
 PYTHONPATH) at the engine root -- the tree where `coordinator_core` actually lives -- never at
-the repo passed as `--repo-root`. Run from a Group-EM's own repo (e.g. a DoE-claude checkout)
+the repo passed as `--repo-root`. Run from a Group-EM's own repo (e.g. a coordinator-content-repo checkout)
 this fails `ModuleNotFoundError: No module named 'coordinator_core'`; the identical command run
 from the engine root succeeds. The error text gives no hint that cwd is the variable -- a
 Group-EM cannot tell "the engine is gone" from "wrong cwd" from the failure alone.
 
 THE CONSUMER OWNS THE OUTPUT SHAPE, and it is written down on their side, in
-the DoE-claude sibling repo: `coordinator/docs/wiki/fleet-watch-idle-report-contract.md`,
+the coordinator-content-repo sibling repo: `coordinator/docs/wiki/fleet-watch-idle-report-contract.md`,
 read by `coordinator/agents/fleet-watch.md`. The verdict vocabulary, the
 per-peer field names, the `push` trigger, the `UNADDRESSABLE` disposition and
 the summary line are all theirs. Changing any of them here silently changes
@@ -733,7 +733,7 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         "nudge-shape": shape,
         "address": ("%s [%s]" % (name, session_id[:8])) if name else UNADDRESSABLE,
         "last-said": None if exited else last_said,
-        # `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE` (DoE-claude
+        # `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE` (coordinator-content-repo
         "named-next-move": (
             None if exited
             else named_move[:LAST_SAID_CHARS] if named_move
@@ -834,7 +834,7 @@ def summary_line(report: dict) -> str:
     whole report. The thresholds ride on it so a report pasted into the Group-EM's
     context explains its own judgements without a second lookup.
 
-    SUPERSEDED (DoE-claude bc5b1ba18,
+    SUPERSEDED (coordinator-content-repo bc5b1ba18,
     `fleet-watch-idle-report-contract.md` "Every field on this line is
     fixed-form"): this line used to argue `exited=` was our own additive
     field and that rendering it through `render_struck_count`'s parenthetical

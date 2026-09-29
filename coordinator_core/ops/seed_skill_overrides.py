@@ -12,7 +12,7 @@ replaces the bash orchestration shell (trust-guard + arg-building +
 graceful-degrade-on-absent-helper).
 
 Port source: coordinator/bin/install-health/seed-skill-overrides.sh
-    (DoE-claude), replaced with a sh/python polyglot trampoline over this
+    (coordinator-content-repo), replaced with a sh/python polyglot trampoline over this
     module on cutover.
 Spec backlink: docs/plans/2026-06-27-ccos-1-dual-context-validator.md
     (seed-skill-overrides chunk); install-health drop-in plan (2026-06-27).

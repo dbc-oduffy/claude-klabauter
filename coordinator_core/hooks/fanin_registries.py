@@ -2,7 +2,7 @@
 once.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/_fanin_registries.py`, with the
+from coordinator-content-repo `coordinator/hooks/scripts/_fanin_registries.py`, with the
 one shape change the move itself forces, plus one shape change the move
 exposes as no-longer-applicable (see "WHAT CHANGED" below).
 

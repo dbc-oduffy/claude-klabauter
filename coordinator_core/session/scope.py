@@ -26,7 +26,7 @@ optional ``cwd``).
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-t4a-coordinator-session-hub.md § scope.py
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 
 Negative-spec:
     - ``compute_scope`` MUST use TWO git commands (``git diff --name-only
@@ -570,7 +570,7 @@ def _relpath_failure_is_benign(exc: Exception, fpath: str, root: str) -> bool:
     (e.g. ``X:``). It is not evidence of anything unexpected and must not
     arm :func:`_emit_normalize_diagnostic`'s latch — mirrors
     :func:`_ls_files_failure_is_benign`'s discrimination for the ``ls-files``
-    arm (2026-08-07 finding: independently reported by DoE-claude and
+    arm (2026-08-07 finding: independently reported by coordinator-content-repo and
     carried as an undiagnosed item on a live handoff in this tree, both
     traced to the same false premise — that relpath failure is non-routine
     on every platform, which holds on POSIX but not on Windows).
@@ -5023,7 +5023,7 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
     ``coordinator_core.ops.session.reap._reap_stale_agents``'s cadence
     sub-reap (registered again since 2026-08-25 — the memo
     ``2026-08-14-claude-klabauter-em-session-reaper-lost-its-caller.md`` was
-    actioned, and the caller is DoE-claude's ``sweep-boot.py`` leg) and
+    actioned, and the caller is coordinator-content-repo's ``sweep-boot.py`` leg) and
     to ``coordinator_core.ops.reap_orphaned_agent_dirs``'s four-rail orphan
     sweep. Do not read this function's presence as full coverage.
     """

@@ -30,9 +30,9 @@ exactly the failure class it exists to close — an unwatched vendored file.
 Coverage-by-construction is the requirement, so this module globs.
 
 Public seam (2026-07-26, cross-repo ratification — see
-cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md):
+cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md):
 `scan_vendored_schema_drift()` is a STABLE, externally-consumable entrypoint. Sibling
-repos (DoE-claude) MAY import and gate on it directly — this is the answer to their
+repos (coordinator-content-repo) MAY import and gate on it directly — this is the answer to their
 Ask 1 option 3 ("read scan_vendored_schema_drift through a named seam"): this module
 IS that seam, not an internal we'd rather they avoid. Its returned-dict keys are
 additive-only across versions — existing keys never change shape or get removed,
@@ -75,7 +75,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.engine_root import (
     coordinator_engine_root,
     engine_source_root,
@@ -361,6 +361,10 @@ def resolve_cockpit_repo_path() -> Optional[Path]:
     Returns None when neither rung resolves to an existing directory — the
     honest "cockpit clone not present on this machine" answer. Never raises.
     """
+    from coordinator_core.machine_profile import machine_profile
+
+    if machine_profile() != "author":
+        return None
     candidates: list[str] = []
 
     env_root = os.environ.get("REPO_EXAMPLE_COCKPIT_REPO", "").strip()
@@ -559,47 +563,47 @@ def check_source_drift_advisory(vendor_path: Path, cockpit_repo_path: Path) -> d
 
 
 def resolve_doe_repo_path() -> Optional[Path]:
-    """Best-effort resolution of the DoE-claude sibling clone root — no subprocess.
+    """Best-effort resolution of the coordinator-content-repo sibling clone root — no subprocess.
 
     Ladder (first rung that yields a directory containing `coordinator/schemas/` wins):
-      1. REPO_DOE_CLAUDE env var — the operator/caller override honoured fleet-wide.
-      2. `coordinator_core.doe_root_pointer.read_doe_root_pointer()` — registry-first
-         (DR-071 `repos.doe_claude`), durable-pointer-file, then legacy-pointer-file
+      1. REPO_CONTENT_ROOT env var — the operator/caller override honoured fleet-wide.
+      2. `coordinator_core.content_root_pointer.read_content_root_pointer()` — registry-first
+         (DR-071 `repos.content_root`), durable-pointer-file, then legacy-pointer-file
          fallback (see that module's docstring for the full 3-sub-rung ladder). This
          already IS the reset-safe, registry-anchored resolution — it does not assume
          any fixed checkout layout.
 
     Returns None when no rung resolves — the honest "DoE clone not present on this
     machine" answer (fresh machine, CI without the sibling checked out, or a machine
-    whose registry has no `repos.doe_claude` entry yet). Deliberately subprocess-free:
+    whose registry has no `repos.content_root` entry yet). Deliberately subprocess-free:
     this runs inside a doctor probe on the cheap first-pass triage path, so the
-    `machine-local get` spawn rung used by `coordinator_core.ops.coordinator_doe_root`
+    `machine-local get` spawn rung used by `coordinator_core.ops.coordinator_content_root`
     is NOT part of this ladder.
 
     Negative-spec:
       - Never raises, and never returns a path lacking `coordinator/schemas/` — a
         wrong-but-present path would produce a wall of false indeterminates.
       - Does NOT walk `Path(__file__).resolve().parents[N]` to guess a flat-sibling
-        `<claude-klabauter repo root>/../DoE-claude` layout. A prior rung 3 did exactly that
+        `<claude-klabauter repo root>/../coordinator-content-repo` layout. A prior rung 3 did exactly that
         and was retired 2026-07-22: it hardcoded both claude-klabauter's checkout depth from
         this file AND a flat-sibling directory layout, so it silently reported "DoE
-        clone not present" on any machine where DoE-claude isn't checked out next
+        clone not present" on any machine where coordinator-content-repo isn't checked out next
         to claude-klabauter — the antipattern `coordinator_core/tests/test_no_hardcoded_paths.py`
-        now gates against fleet-wide. `read_doe_root_pointer()`'s registry rung
-        already subsumes the case that depth-walk existed for (a DoE-claude clone
-        present but not yet pointer-configured) — once `repos.doe_claude` or either
+        now gates against fleet-wide. `read_content_root_pointer()`'s registry rung
+        already subsumes the case that depth-walk existed for (a coordinator-content-repo clone
+        present but not yet pointer-configured) — once `repos.content_root` or either
         pointer file is populated, which every install-chain walk does, rung 2
         resolves it correctly regardless of checkout layout. No replacement rung is
         added; there is nothing left for it to cover.
     """
     candidates: list[Path] = []
 
-    env_root = os.environ.get("REPO_DOE_CLAUDE", "").strip()
+    env_root = os.environ.get("REPO_CONTENT_ROOT", "").strip()
     if env_root:
         candidates.append(Path(env_root))
 
     try:
-        pointer_root = read_doe_root_pointer().strip()
+        pointer_root = read_content_root_pointer().strip()
     except Exception:
         pointer_root = ""
     if pointer_root:
@@ -660,7 +664,7 @@ def scan_vendored_schema_drift(
             schema_validate._read_schema_version) — passed through verbatim from
             check_schema_drift_advisory, never re-parsed here (see this module's
             "SHAPE TO AVOID" note). Additive keys (2026-07-26, cross-repo
-            schema-version surfacing — see cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
+            schema-version surfacing — see cross-repo/inbox/2026-07-26-coordinator-content-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md).
             local_bump_class/doe_bump_class are the two sides' top-level
             `x-bump-class` values (str | None each, via
             schema_validate._read_bump_class) — closed vocabulary
@@ -674,7 +678,7 @@ def scan_vendored_schema_drift(
             module's "SHAPE TO AVOID" note); None is the ordinary case while
             upstream adoption is partial, never an error. Additive keys
             (2026-07-27, bump-class surfacing — see
-            cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md).
+            cross-repo/inbox/2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md).
         indeterminate (list[dict]): {schema, detail} per schema whose comparison
             could NOT be performed.
         summary (str): one-line operator-facing sentence.
@@ -808,7 +812,7 @@ def _scan(
             "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
             "summary": (
                 "No sibling schema-source clone resolved on this machine (checked "
-                "REPO_DOE_CLAUDE, the .doe-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
+                "REPO_CONTENT_ROOT, the .coordinator-content-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
                 "registry repos.example_cockpit_repo key) — vendored drift is not determinable "
                 "here."
             ),
@@ -840,7 +844,7 @@ def _scan(
             indeterminate.append({
                 "schema": schema_path.name,
                 "detail": (
-                    "No sibling DoE-claude clone resolved on this machine — drift "
+                    "No sibling coordinator-content-repo clone resolved on this machine — drift "
                     "could not be determined."
                 ),
             })

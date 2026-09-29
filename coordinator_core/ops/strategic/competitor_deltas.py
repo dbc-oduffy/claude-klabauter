@@ -32,7 +32,7 @@ Accepted snapshot shapes (defensive — either is handled):
                                                      # degrades to an empty set instead
 
 Pinned return shape (frozen schema, generatable subset — see
-DoE-claude/coordinator/schemas/strategic-self-description.schema.json):
+Coordinator-content-repo/coordinator/schemas/strategic-self-description.schema.json):
     list[{
         "name":       str,
         "note":       str | None,

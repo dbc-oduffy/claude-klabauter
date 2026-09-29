@@ -6,7 +6,7 @@ repo's scan roots, exclusions, and forward-slash scope to the shared engine
 ledger (`_home_resolution_lint_baseline.py`, unchanged, 98 known sites).
 The four AST rules themselves no longer live in this file -- see the
 engine module's docstring for why (extraction design:
-`DoE-claude/docs/research/2026-07-28-fleet-lint-distribution-design.md`).
+`coordinator-content-repo/docs/research/2026-07-28-fleet-lint-distribution-design.md`).
 Every other fleet repo gets its own shim of this same shape, importing the
 identical engine live rather than a vendored copy, so a fifth rule is one
 edit to the engine and reaches every repo on its next `pytest` run with no
@@ -15,7 +15,7 @@ re-publish step.
 Four independent, structural (AST-based) scans, each its own test so a
 failure names precisely which shape tripped rather than "the lint failed".
 Spec backlink: `docs/research/2026-07-28-windows-simulation-test-harness-design.md`
-(DoE-claude) Component Design § 2 -- this file implements that blueprint's
+(coordinator-content-repo) Component Design § 2 -- this file implements that blueprint's
 static-shape tier. The blueprint's fifth shape (a docstring/comment that
 *describes* home resolution in bash spelling -- `${CLAUDE_HOME:-$HOME}`) is
 already covered by the standing `test_docstring_shell_paste_hazard.py` gate
@@ -90,8 +90,8 @@ _FORWARD_SLASH_SCOPE = (
     "coordinator_core/trusted_root_guard.py",
     "coordinator/lib/settings_home.py",
     "coordinator_core/_settings_home.py",
-    "coordinator_core/doe_root_pointer.py",
-    "coordinator_core/read_doe_root_pointer.py",
+    "coordinator_core/content_root_pointer.py",
+    "coordinator_core/read_content_root_pointer.py",
 )
 
 

@@ -102,17 +102,13 @@ from typing import Callable, Dict, FrozenSet, Mapping, Optional, Union
 
 from coordinator_core.session import autonomous_sentinel
 from coordinator_core.session.fleet_mode import read_fleet_mode
+from coordinator_core.session.job_mode_env import (
+    COORDINATOR_JOB_MODE,
+    INTERACTION_MODES,
+    JOB_MODE_VALUES,
+)
 
 COMPACTION_WARNING_VARIANTS: FrozenSet[str] = frozenset({"standard", "informational"})
-
-#: forwards through the door's ``FORWARDING_SET``. C1 declared it as a bare
-#: string literal inside that module's ``FORWARDING_SET`` tuple rather than
-#: ``FORWARDING_SET`` entry rather than repeating the literal -- two spellings
-#: that "must stay byte-identical" fail SILENTLY when they drift, because a
-COORDINATOR_JOB_MODE = "COORDINATOR_JOB_MODE"
-
-#: same shape as ``COMPACTION_WARNING_VARIANTS``.
-JOB_MODE_VALUES: FrozenSet[str] = frozenset({"blitz", "cron", "interactive"})
 
 #: ``_MOST_CAUTIOUS_POSTURE`` (renamed 2026-09-06 from ``_FAIL_OPEN_POSTURE``
 #: ``coordinator_core.conservatism`` for the fuller RAISE/FALL_BACK split).
@@ -125,7 +121,6 @@ _MOST_CAUTIOUS_JOB_MODE: str = "interactive"
 #: a set. ``INTERACTION_MODE_VALUES`` is the unordered form the registry's
 #: own ``value_type`` slot wants (matching how the other two enum keys pass
 #: a frozenset there).
-INTERACTION_MODES = ("hands-on", "pm", "ceo")
 INTERACTION_MODE_VALUES: FrozenSet[str] = frozenset(INTERACTION_MODES)
 
 ValueType = Union[type, FrozenSet[str]]

@@ -1,6 +1,6 @@
 """named_dispatch_strip -- shared library, NOT a registered hook.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_named_dispatch_strip.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_named_dispatch_strip.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4. ADAPTATION
 (the class-1 site named in this package's own `__init__.py` docstring): DoE's
 copy reached its sibling `_message_envelope.py` via a `sys.path.insert` plus

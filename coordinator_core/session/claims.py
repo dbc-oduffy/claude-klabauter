@@ -24,7 +24,7 @@ TWO DISTINCT DISCIPLINES the claim layer routes through (both in liveness.py):
       holder? — via ``liveness.claim_held_by_me`` with a PRE-RESOLVED my_sid
       (the two-call TOCTOU re-read keys both reads off ONE identity).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 Spec backlinks (original claim contracts):
     archive/specs/2026-06/2026-06-17-foreign-cwd-pickup-hardening.md § C1;
     archive/specs/2026-06/2026-06-17-concurrent-pickup-guard-sid-regression.md § C1;
@@ -1430,7 +1430,7 @@ def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
     a genuinely successful mutation (e.g. ``archive_stamp.cs_claim_handoff``
     returning ok on its OWN post-write ``_validate_fm`` pass), never before.
 
-    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-doe-claude-em-pickup-
+    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-coordinator-content-repo-em-pickup-
     already-satisfied-masks-a-refused-write.md): ``claim_stage`` reads
     ``apply`` the moment ``promote_claim_stage`` runs, which ``pickup_
     assemble.apply.apply`` does UNCONDITIONALLY, BEFORE the directives that
@@ -1925,7 +1925,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
 #: path-touch claims are advisory, not hard-denying); its advisory successor
 #: ``_warn_recent_edits`` was itself deleted (``e96b7601``, 2026-08-19).
 #: Nothing on the commit path consumes this plane today -- widened onto here
-#: per cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
+#: per cross-repo/inbox/2026-08-11-coordinator-content-repo-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md: a dead session's claim on an arbitrary
 #: repo-relative path (e.g. a doctrine/code file the three classed forms
 #: were never meant to cover) had a query surface (``who-claims-path``) and
@@ -2208,7 +2208,7 @@ def _clear_path_claim_if_dead(
     """``class_ == "artifact"`` entrypoint for ``clear_claim_if_dead`` -- the
     CLEAR-ONLY, liveness-gated counterpart to ``_release_path_claim_
     artifact`` for the PATH-TOUCH claim plane. This is the release path
-    cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
+    cross-repo/inbox/2026-08-11-coordinator-content-repo-em-dead-claim-on-a-non-plan-
     artifact-has-no-clear-path.md asks for: a claim ``who-claims-path``
     reports and ``ceremony.scoped_git_commit`` fails closed on, whose
     claimant is confirmed dead, had no sanctioned release path before this.
@@ -2331,8 +2331,8 @@ def _clear_path_claim_if_dead(
         # "go negotiate with them", which on a shared surface the caller
         # cannot do -- they usually have no channel to that peer, and there
         # is nothing to negotiate, because releasing the dead row would not
-        # make the path committable anyway. Reported by doe-claude-em
-        # (cross-repo/inbox/2026-08-31-doe-claude-em-clear-claim-if-dead-is-
+        # make the path committable anyway. Reported by coordinator-content-repo-em
+        # (cross-repo/inbox/2026-08-31-coordinator-content-repo-em-clear-claim-if-dead-is-
         # path-scoped-not-row-scoped.md), who named this as the third
         # instance that day, across three surfaces, of a remedy assuming a
         # caller state that is false.
@@ -2592,7 +2592,7 @@ def release_or_relinquish_artifact(
         marker_path = claim_dir / "relinquished.json"
         tmp_path = claim_dir / f".relinquished.json.tmp.{os.getpid()}"
         payload = {"session_id": recorded_sid, "at": core.now_iso()}
-        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         os.replace(tmp_path, marker_path)
     except OSError:
         return released
@@ -2614,7 +2614,7 @@ def _clear_shape_plan_pointer(
     the shape pointer BEFORE the durable ``plan-claims/`` store and returns on
     a hit — so ``/handoff`` after a shipped plan resolved the shipped plan and
     surfaced a ``DivergentDeliverableIdError`` against the handoff chain's own
-    ``deliverable_id`` (doe-claude-em memo, 2026-08-10; the two ids differing
+    ``deliverable_id`` (coordinator-content-repo-em memo, 2026-08-10; the two ids differing
     is the EXPECTED steady state for a chain spanning several plans, so the
     stale pointer made a routine seam fail loud).
 

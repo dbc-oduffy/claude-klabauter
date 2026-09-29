@@ -16,7 +16,7 @@ brief in-process and dispatches through
 `coordinator_core.contract.apply_base`'s shared directive-execution engine,
 one directive at a time, halting on the first non-zero exit.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C3
 
 `directives[]` order, each naming its predecessor in `depends_on`:

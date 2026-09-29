@@ -107,6 +107,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.write_guards._slash_normalize import collapse_slashes as _collapse_slashes
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -145,13 +146,6 @@ def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
                 if efp:
                     out.append(efp)
     return out
-
-
-def _collapse_slashes(value: str) -> str:
-    normalized = value.replace("\\", "/")
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
 
 
 def _resulting_body(tool_name: str, tool_input: Dict[str, Any], pre_image: Optional[str]) -> Optional[str]:

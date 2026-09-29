@@ -66,32 +66,32 @@ outcome: no advisory rather than a wrong one).
 
 In-process schema/manifest/DAG resolution
 -------------------------------------------
-The reference hook lives in DoE-claude and must resolve INTO claude-klabauter
+The reference hook lives in coordinator-content-repo and must resolve INTO claude-klabauter
 for schema validation, DAG lineage-walk, and the two claude-klabauter-generated memo
 schemas — hence its ``_claude_klabauter_root``/``sys.path`` seam (D1a). This module
 lives IN claude-klabauter already, so those three imports
 (``coordinator_core.frontmatter.schema_validate``, ``coordinator_core.dag``,
 ``coordinator_core.contract``) are direct, in-tree imports — no seam, no
 ``sys.path`` manipulation needed. The DIRECTION this module still needs to
-resolve is the reverse one: the DoE-claude sibling checkout, for
+resolve is the reverse one: the coordinator-content-repo sibling checkout, for
 ``coordinator/schemas/`` (the schema corpus, contract-owned by DoE, not
 Claude-klabauter) and ``coordinator/schemas/coordinator-registry.manifest.json`` (the
 registry manifest). That resolution goes through
-``coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`` — the
-same ratified "resolve the DoE-claude sibling root" ladder the reference
+``coordinator_core.ops.coordinator_content_root.coordinator_content_root()`` — the
+same ratified "resolve the coordinator-content-repo sibling root" ladder the reference
 hook's own DoE-side callers use elsewhere, now called natively in-process
-rather than via the ``machine-local get repos.doe_claude`` subprocess the
+rather than via the ``machine-local get repos.content_root`` subprocess the
 reference hook shells out to. Same target, same effective resolution (that
 subprocess call is rung 2 of this very ladder), no behavior change.
 
-Import-safety: per INTERFACE.md rule 7, no resolution work (DoE-root
+Import-safety: per INTERFACE.md rule 7, no resolution work (content-root
 lookup, manifest load, schema load, git-root subprocess) happens at import
 time — regex/module-level constants only. All of it happens inside
 ``check()``, matching the reference hook's own per-invocation (spawn-per-
 call) freshness.
 
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C11
-Source: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+Spec backlink: coordinator-content-repo:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C11
+Source: coordinator-content-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ from coordinator_core.frontmatter.schema_validate import (
     plan_tasks_spine_errors as _plan_tasks_spine_errors_driver,
     validate_frontmatter_obj,
 )
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import (
     resolve_repo_root as _shared_resolve_repo_root,
@@ -149,13 +149,13 @@ _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 _PRIORITY_LEDGER_RE = re.compile(r"(^|/)state/priority-ledger/[^/]+$")
 
 _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
-_DOE_CLAUDE_REGISTRY_KEY = "repos.doe_claude"
+_CONTENT_ROOT_REGISTRY_KEY = "repos.content_root"
 
 # The vendored, version-pinned schema corpus this module now validates
 # against — see module docstring § In-process schema/manifest/DAG
 # resolution and docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
 # corpus.md. Resolved relative to this file's own on-disk location (this
-# module runs INSIDE claude-klabauter already), never from DoE-claude's live working
+# module runs INSIDE claude-klabauter already), never from coordinator-content-repo's live working
 # tree. The registry MANIFEST (`_load_doe_registry`) stays on DoE's tree —
 # it is routing/scaffold logic, not a schema, and is out of scope for this
 # repoint (plan AC4 + Out of scope).
@@ -486,7 +486,7 @@ def build_scaffold_offer_payload_advisory(
 
 
 def _load_doe_registry() -> dict:
-    """Resolve the DoE-claude sibling root and load
+    """Resolve the coordinator-content-repo sibling root and load
     coordinator-registry.manifest.json, best-effort. NEVER returns ``None``
     any more — that was exactly the fail-open-on-missing-sibling hole AC2
     closes (see docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
@@ -501,12 +501,12 @@ def _load_doe_registry() -> dict:
     schema-validation ones.
     """
     try:
-        doe_root = coordinator_doe_root()
+        content_root = coordinator_content_root()
     except Exception:  # noqa: BLE001 — degrade-open, never block
-        doe_root = None
+        content_root = None
 
     manifest: Optional[dict] = None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is not None:
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         try:
@@ -552,7 +552,7 @@ def _load_doe_registry() -> dict:
             central_canonical_id = None
 
     return {
-        "doe_root": doe_root,
+        "content_root": content_root,
         "manifest": manifest or {},
         "repo_basename_to_em_shortname": repo_basename_to_em_shortname,
         "scaffold_offer_map": scaffold_offer_map,
@@ -562,11 +562,11 @@ def _load_doe_registry() -> dict:
     }
 
 
-def _doe_claude_realpath(doe_root: Optional[str]) -> Optional[str]:
-    if not doe_root:
+def _content_root_realpath(content_root: Optional[str]) -> Optional[str]:
+    if not content_root:
         return None
     try:
-        return str(Path(doe_root).resolve())
+        return str(Path(content_root).resolve())
     except (OSError, ValueError):
         return None
 
@@ -670,7 +670,7 @@ def _memo_guards_decision(
     abs_file_path: str,
     repo_rel: str,
     registry: dict,
-    doe_claude_realpath: Optional[str],
+    content_root_realpath: Optional[str],
 ) -> Optional[tuple]:
     if tool_name not in ("Write", "Edit", "MultiEdit"):
         return None
@@ -684,7 +684,7 @@ def _memo_guards_decision(
 
     repo_root_stripped = repo_root.rstrip("/\\")
     repo_root_realpath: Optional[str] = None
-    if doe_claude_realpath is not None:
+    if content_root_realpath is not None:
         try:
             repo_root_realpath = str(Path(repo_root_stripped).resolve())
         except OSError:
@@ -698,8 +698,8 @@ def _memo_guards_decision(
         # identity check, never for I/O — safe to fold both sides.
         this_repo_is_central = (
             repo_root_realpath is not None
-            and doe_claude_realpath is not None
-            and casefold_path(repo_root_realpath) == casefold_path(doe_claude_realpath)
+            and content_root_realpath is not None
+            and casefold_path(repo_root_realpath) == casefold_path(content_root_realpath)
         )
         if this_repo_is_central:
             this_em_id = registry["central_canonical_id"]
@@ -769,8 +769,8 @@ def _memo_guards_decision(
                 # Comparison-only fold: see `this_repo_is_central` above.
                 landing_repo_is_central = (
                     repo_root_realpath is not None
-                    and doe_claude_realpath is not None
-                    and casefold_path(repo_root_realpath) == casefold_path(doe_claude_realpath)
+                    and content_root_realpath is not None
+                    and casefold_path(repo_root_realpath) == casefold_path(content_root_realpath)
                 )
                 if landing_repo_is_central:
                     landing_em_id = registry["central_canonical_id"]
@@ -782,7 +782,7 @@ def _memo_guards_decision(
                 to_repo_field_raw = extract_yaml_to_repo_field(memo_check_content)
                 if to_repo_field_raw is not None:
                     this_repo_registry_key = (
-                        _DOE_CLAUDE_REGISTRY_KEY
+                        _CONTENT_ROOT_REGISTRY_KEY
                         if landing_repo_is_central
                         else registry_key_for_basename(landing_basename, registry["manifest"])
                     )
@@ -802,12 +802,12 @@ def _memo_guards_decision(
                         pass
                     # Fail open when the DoE root is unresolvable. Deliberately does NOT also test
                     # `to_is_central`: `central_em_ids` only populates once that root HAS resolved,
-                    # so `to_is_central and doe_claude_realpath is None` was unsatisfiable by
+                    # so `to_is_central and content_root_realpath is None` was unsatisfiable by
                     # construction and the regex fallback below fired unconditionally on any
                     # `-em`-suffixed `to:`. Root unresolvable means we cannot tell whether `to:` is
                     # central, so emit nothing rather than guess. Mirrors the same fix in the deny
                     # sibling; the two modules are mutually exclusive and must agree here.
-                    elif doe_claude_realpath is None:
+                    elif content_root_realpath is None:
                         pass
                     else:
                         to_em_id = to_field_raw.strip()
@@ -906,7 +906,7 @@ def _plan_tasks_spine_errors(
         covered by nothing. Enforcement was inverted: one row with a bad enum
         was reported, a spine no consumer could read at all was not.
 
-    Reference: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+    Reference: coordinator-content-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
     (`_plan_tasks_spine_errors`) — kept as an honest parity copy there, but
     inert (that hook is no longer registered in hooks.json); this module is
     the live enforcement.
@@ -1574,10 +1574,10 @@ def check(payload: dict) -> Optional[dict]:
         return None
 
     registry = _load_doe_registry()
-    doe_claude_realpath = _doe_claude_realpath(registry["doe_root"])
+    content_root_realpath = _content_root_realpath(registry["content_root"])
 
     decision = _memo_guards_decision(
-        tool_name, tool_input, repo_root, abs_file_path, repo_rel, registry, doe_claude_realpath
+        tool_name, tool_input, repo_root, abs_file_path, repo_rel, registry, content_root_realpath
     )
     if decision is not None:
         kind, envelope = decision

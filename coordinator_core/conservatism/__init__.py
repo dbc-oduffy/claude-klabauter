@@ -33,7 +33,7 @@ thing a test has to assert and the thing a call site has to implement.
 This module was specified to supersede a vocabulary collision and does not,
 because the collision was resolved upstream while it was being written:
 `_posture.py`'s anchor was named `_FAIL_OPEN_POSTURE` while denoting the most
-CAUTIOUS value, and DoE-claude renamed it to `_MOST_CAUTIOUS_POSTURE` at
+CAUTIOUS value, and coordinator-content-repo renamed it to `_MOST_CAUTIOUS_POSTURE` at
 `4026b4250`. No term of theirs is superseded by a term of ours. The rename is
 recorded here rather than dropped because the old name was not describing
 nothing -- posture resolution genuinely does fail open; the name was describing

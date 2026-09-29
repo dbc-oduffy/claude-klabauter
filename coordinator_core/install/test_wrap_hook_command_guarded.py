@@ -182,10 +182,10 @@ def _oracle_fixture_paths():
     colocated = claude_klabauter_root / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
     if (colocated / "hooks.json").is_file():
         return colocated / "hooks.json"
-    from coordinator_core.testing.doe_root import resolve_doe_root
+    from coordinator_core.testing.content_root import resolve_content_root
 
-    doe_root = Path(resolve_doe_root() or "/doe-root-unresolved")
-    doe_fixtures = doe_root / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
+    content_root = Path(resolve_content_root() or "/content-root-unresolved")
+    doe_fixtures = content_root / "coordinator" / "bin" / "fixtures" / "gen-settings-hooks"
     if (doe_fixtures / "hooks.json").is_file():
         return doe_fixtures / "hooks.json"
     raise RuntimeError("test_wrap_hook_command_guarded: oracle hooks.json fixture not found")

@@ -251,7 +251,7 @@ class TestAC6DR258MatcherBehavioural:
         assert _touch_record_entries(common_dir, params["session_id"]) == [], (
             "a Bash-tool-shaped payload recorded a claim — the DR-258 matcher "
             "widened to include Bash, which is the doctrine reversal DR-258 "
-            "forecloses without a decision record + memo to DoE-claude"
+            "forecloses without a decision record + memo to coordinator-content-repo"
         )
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
@@ -287,7 +287,7 @@ class TestAC6DR258MatcherSourceGrepSecondLayer:
         assert 'if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):' in text, (
             "track_touched_files._handler's DR-258 matcher tuple changed — "
             "widening/narrowing this matcher needs a decision record and a "
-            "memo to DoE-claude BEFORE any code (see _handler's own "
+            "memo to coordinator-content-repo BEFORE any code (see _handler's own "
             "NAMED LIMIT docstring section)"
         )
 
@@ -321,6 +321,10 @@ _SCOPE_HELPER_NAMES = frozenset(
 #: 2026-08-05. Note what is NOT here: `coordinator_core/ops/session/
 #: safe_commit_offer.py` names the helper in prose only and neither imports nor
 #: calls it.
+#: RE-BASELINED 2026-09-27 (BV-20260927-01, PM ruling): the one call site
+#: passes `allow_orphans=True`, adopting an unclaimed path only when it is an
+#: element of the invocation's own explicit non-sweeping pathspec; the
+#: peer-claimed case still denies. No new site gained reach.
 #: RE-BASELINED 2026-08-31, and the reason is the whole record: the enclosing
 #: def changed from `_git_commit_agent_may_commit` to
 #: `_git_commit_agent_pathspec_permitted` at f864d4c716, whose own docstring
@@ -337,7 +341,7 @@ _EXPECTED_SCOPE_HELPER_CALL_SITES = frozenset(
         (
             "coordinator_core/bash_guards/block_subagent_commit.py",
             "_git_commit_agent_pathspec_permitted",
-            "False",
+            "True",
         ),
     }
 )
@@ -498,7 +502,7 @@ class TestAC5AllowOrphansDoesNotWiden:
             (
                 "coordinator_core/bash_guards/block_subagent_commit.py",
                 "_git_commit_agent_pathspec_permitted",
-                "False",
+                "True",
             ),
         }, "sanity check on the pinned set itself failed — see comment above"
 
@@ -599,7 +603,7 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 #: `claim_index.lookup(...)` invocation outside `claim_index.py` itself and
 #: outside any tests/ path is therefore `claims._clear_path_claim_if_dead`
 #: (the dead-holder release path for the PATH-TOUCH claim plane, landed per
-#: cross-repo/archive/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
+#: cross-repo/archive/2026-08-11-coordinator-content-repo-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md) -- the decision record this pin's own
 #: docstring asks for before widening. A new entry re-added to the commit
 #: path needs K-008's Returns-when discharged, not just this set edited.

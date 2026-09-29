@@ -3,7 +3,7 @@ bash_guards.dispatch_checks) -- T4a-g2, the checks left OUT OF SCOPE by the
 T4a-g1 first pass now that ``coordinator_core.session.scope.compute_scope``
 gives Check 5 a native scope-set to compare against.
 
-Oracle: DoE-claude's retired ``coordinator/hooks/scripts/validate-commit.sh``
+Oracle: coordinator-content-repo's retired ``coordinator/hooks/scripts/validate-commit.sh``
 (deleted 2026-07-20, DoE ``e91827a7``):
   - Check 5 -- scoped-staging warn: a staged file NOT in this
     session's scope set (``compute_scope``) is WARNED on by default, and

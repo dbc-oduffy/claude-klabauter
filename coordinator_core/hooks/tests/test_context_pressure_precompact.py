@@ -5,7 +5,7 @@ coordinator_core.hooks.tests.test_context_pressure_precompact — tests for the
 persisted `Workflow` run-id capture across a `/compact` that killed the
 background run's own session state.
 
-Spec backlink: state/cross-repo/inbox/2026-09-25-doe-claude-em-mise-workflow-run-id-across-compaction.md
+Spec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-mise-workflow-run-id-across-compaction.md
 """
 
 from __future__ import annotations

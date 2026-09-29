@@ -11,7 +11,7 @@ governed name appears nowhere, `is_denied_bash_write`'s opening gate returns
 False, no leg of the guard is reached, and the write lands. Measured as a
 LIVE bypass through the armed hook on 2026-08-31 -- allowed, with the
 governed-named file on disk afterwards. One of three prefilter-evasion shapes
-from `2026-08-29-doe-claude-em-prefilter-evasion-is-not-only-a-python-
+from `2026-08-29-coordinator-content-repo-em-prefilter-evasion-is-not-only-a-python-
 concat.md`; the other two are closed at `f6222de006` and were already closed.
 
 WHY THIS IS NOT A TABLE OF SHAPES. The backlog row that filed this

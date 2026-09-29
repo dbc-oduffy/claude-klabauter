@@ -108,7 +108,7 @@ class TestRenderDischargesBlock:
 class TestEmitDischarge:
     _BASE_KWARGS = dict(
         from_id="repos.claude_klabauter",
-        to="repos.doe_claude",
+        to="repos.content_root",
         topic="gate-closure-demo",
         title="Gate closure demo",
         body="The blocker landed.",

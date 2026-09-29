@@ -22,7 +22,7 @@ Schema" — two audit clocks above a per-system table; all system grades start
 at "?".
 
 Port of: setup-seed-health-ledger.sh (DoE 6fb5fb37, 2026-07-22)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 State-root seam: the bash original routes a meta-repo REPO_ROOT through the
 Claude-klabauter state seam (C4/stop-the-rot) via `command -v coordinator_is_meta_repo`

@@ -1,7 +1,7 @@
 """coordinator_core.hooks.block_workflow_foreign_emission — PreToolUse
 (Workflow) op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/block-workflow-foreign-
+Ported from coordinator-content-repo `coordinator/hooks/scripts/block-workflow-foreign-
 emission.py` per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9.
 Refuses to fire a `Workflow` script this session did not emit.
 
@@ -54,7 +54,7 @@ REMEDIATION STRING NAMES THE S1-SHIPPED LAUNCHER (per this row's own body):
 (S1-C7) invoked through its settings-home launcher, not run directly with
 `python3 <plugin-root>/bin/emit-dispatch-workflow.py` — the source script's
 own `_emitter_invocation`/`_emitter_root_candidates` (a `CLAUDE_PLUGIN_ROOT`/
-`.doe-root`-probing `python3 <path>` prefix) is REPLACED with
+`.coordinator-content-root`-probing `python3 <path>` prefix) is REPLACED with
 `_emitter_launcher_invocation`, which names
 `<settings-home>/bin/emit-dispatch-workflow` — the launcher
 `scripts/setup.py` writes for every warm-allowlisted entrypoint (this

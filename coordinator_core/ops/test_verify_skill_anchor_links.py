@@ -421,17 +421,17 @@ def test_plugin_root_claude_plugin_root_env_wins_verbatim(monkeypatch):
     assert _plugin_root() == "/some/explicit/plugin/root"
 
 
-def test_plugin_root_unset_resolves_via_doe_root(monkeypatch):
+def test_plugin_root_unset_resolves_via_content_root(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", "/scratch/DoE-claude")
-    assert _plugin_root() == os.path.join("/scratch/DoE-claude", "coordinator")
+    monkeypatch.setenv("REPO_CONTENT_ROOT", "/scratch/coordinator-content-repo")
+    assert _plugin_root() == os.path.join("/scratch/coordinator-content-repo", "coordinator")
 
 
 def test_plugin_root_unset_and_unresolvable_exits_2(monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("REPO_DOE_CLAUDE", "")
+    monkeypatch.setenv("REPO_CONTENT_ROOT", "")
     monkeypatch.setattr(
-        "coordinator_core.ops.verify_skill_anchor_links.coordinator_doe_root",
+        "coordinator_core.ops.verify_skill_anchor_links.coordinator_content_root",
         lambda: None,
     )
     with pytest.raises(SystemExit) as exc_info:

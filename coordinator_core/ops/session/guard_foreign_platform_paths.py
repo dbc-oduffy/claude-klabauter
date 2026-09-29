@@ -8,7 +8,7 @@ scan (prose legitimately DISCUSSES the very path shapes this guard exists to
 catch, the JSON tree never does).
 
 Purpose: catch the 2026-07-28 incident shape — a POSIX host's `settings.json`
-silently rewritten with Windows drive-letter hook-command paths (`X:/DoE-claude/...`,
+silently rewritten with Windows drive-letter hook-command paths (`C:/coordinator-content-repo/...`,
 `C:\\Users\\...`), or the reverse on a Windows host — BEFORE it bricks every
 hook, guard, and nudge in the session with zero signal. That incident produced
 no error anywhere: the only symptom was tool calls failing against a hook
@@ -25,7 +25,7 @@ required because upstream `--plugin-dir` hook-delivery is dead, bug #38699).
 periodic "safety-commit" snapshots of the live working tree). Machine-absolute
 paths and a synced repo do not mix: whichever machine committed/pushed last
 overwrites the other's hook chain on the next pull or safety-commit. Direct
-evidence: DoE-claude repo, `~/.claude` commit `ed0b972` ("safety",
+evidence: coordinator-content-repo repo, `~/.claude` commit `ed0b972` ("safety",
 2026-07-28T19:55:14+01:00) snapshotted a `settings.json` whose entire `hooks`
 block and `extraKnownMarketplaces` had Windows paths, on what is otherwise a
 macOS machine.
@@ -38,7 +38,7 @@ pull. A human/PM call is required to pick a canonical per-machine value; this
 module's job is to make the corruption LOUD, never to silently pick a side.
 
 Callers (two independent delivery legs, deliberately not one):
-  1. `coordinator/hooks/scripts/guard-foreign-platform-paths.py` (DoE-claude)
+  1. `coordinator/hooks/scripts/guard-foreign-platform-paths.py` (coordinator-content-repo)
      — SessionStart hook, thin stub, imports `detect_foreign_platform_paths`
      + `format_session_banner` in-process. Fires on every boot WHEN the hook
      layer is alive. See that script's own docstring for the residual gap
@@ -57,7 +57,7 @@ Callers (two independent delivery legs, deliberately not one):
      named here as a residual gap, not silently assumed away.
 
 Detection is SHAPE-based, never a hardcoded drive letter or username:
-  - Windows-drive-letter form on a POSIX host: `X:/...`, `C:\\...`,
+  - Windows-drive-letter form on a POSIX host: `C:/...`, `C:\\...`,
     `/cygdrive/x/...` — matched by regex, not by an enumerated drive list.
   - POSIX-rooted form on a Windows host: a leading `/segment/...` — matched by
     regex, deliberately excluding `//host/share`-shaped UNC and `scheme://`
@@ -88,7 +88,7 @@ loop by rewriting it — the tool it would use to verify the repair (another
 hook fire) is the tool the break may have just disabled. Detection and
 repair cannot share that closed loop; a human/PM call breaks it instead.
 
-Spec backlink: DoE-claude `state/subagent-share/32637f2b-204d-4937-89a7-c3518928e38d/
+Spec backlink: coordinator-content-repo `state/subagent-share/32637f2b-204d-4937-89a7-c3518928e38d/
 coordinatorexecutor-7bb4cb37.md` (this guard's originating dispatch, 2026-07-28)
 and `state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-351b3ca2.md` (env-var-reference-shape follow-up, 2026-07-29).
@@ -155,7 +155,8 @@ _POWERSHELL_AUTOMATIC_VARS = frozenset(
     )
 )
 
-_DOEROOT_NAME = ".doe-root"
+_DOEROOT_NAME = ".coordinator-content-root"
+_LEGACY_DOEROOT_NAME = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
 # LEGITIMATELY discusses paths, including the exact shape this guard exists
 # guard's own originating incident writeup). A bare `_WIN_DRIVE_RE`/
@@ -324,8 +325,10 @@ class Finding:
     suggested: Optional[str]
 
 
-def _read_doe_root(config_dir: Path) -> Optional[str]:
+def _read_content_root(config_dir: Path) -> Optional[str]:
     doeroot_file = config_dir / _DOEROOT_NAME
+    if not doeroot_file.is_file():
+        doeroot_file = config_dir / _LEGACY_DOEROOT_NAME
     if not doeroot_file.is_file():
         return None
     try:
@@ -543,7 +546,7 @@ def evaluate_foreign_platform_paths(
         return ""
 
     resolved_config_dir = config_dir if config_dir is not None else settings_path.parent
-    local_root = _read_doe_root(resolved_config_dir)
+    local_root = _read_content_root(resolved_config_dir)
 
     findings = detect_foreign_platform_paths(
         data, host_is_windows=host_is_windows, local_coordinator_root=local_root

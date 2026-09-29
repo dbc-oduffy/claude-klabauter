@@ -45,7 +45,7 @@ def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
     output contract (`coordinator/bin/coordinator-initiative.py::_cmd_attach_batch`).
 
     Python, not bash: the real `coordinator-initiative` was ported to python3
-    (DoE-claude commit 6fb5fb37) and this module invokes it via `sys.executable`
+    (coordinator-content-repo commit 6fb5fb37) and this module invokes it via `sys.executable`
     directly, so the fixture must be python source for that invocation to succeed."""
     script = bin_dir / "coordinator-initiative.py"
     known_ids_repr = repr(sorted(known_ids))

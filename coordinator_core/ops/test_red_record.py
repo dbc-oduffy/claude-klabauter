@@ -2,14 +2,14 @@
 ``state/test-red/<machine>.yaml``.
 
 Spec backlink: cross-repo commitment
-    DoE-claude state/cross-repo-commitments/2026-07-25-claude-klabauter-to-answer-the-test-red-record-con-bff3653a45f8.yaml
+    coordinator-content-repo state/cross-repo-commitments/2026-07-25-claude-klabauter-to-answer-the-test-red-record-con-bff3653a45f8.yaml
 Frozen contract:
-    claude-klabauter cross-repo/archive/2026-07-25-doe-claude-em-test-red-record-contract-consult.md
+    claude-klabauter cross-repo/archive/2026-07-25-coordinator-content-repo-em-test-red-record-contract-consult.md
     § "## EM Response" (the reply that froze the schema — Q1 parse-stdout with
     output-derived ``runner``, Q2 read-modify-write + atomic write + monotonic
     guard (yes to all three, plus two amendments), Q3 claude-klabauter-owned ``test-red
     ack`` engine op).
-Consumers (read-only, DoE-claude, verified byte-identical on the schema they
+Consumers (read-only, coordinator-content-repo, verified byte-identical on the schema they
 parse):
     coordinator/commands/workday-start.md § Step 1.66 "Test-Red Delta Surface"
     coordinator/skills/workstream-start/SKILL.md § Engage, item 6
@@ -55,7 +55,7 @@ RECORD SHAPE (frozen, do not invent fields)
     (the ``coordinator.machine_slug`` registry key, same resolution both
     consumer docs cite: "resolved the same way /workday-start Step 1.66
     does"). The record lives under the INVOKING repo's ``state/test-red/`` —
-    Q2 amendment 2 — never under DoE-claude's tree.
+    Q2 amendment 2 — never under coordinator-content-repo's tree.
 
 NEGATIVE SPEC
     - Does NOT run pytest, node --test, or any test tier itself. Callers pass
@@ -71,7 +71,7 @@ NEGATIVE SPEC
       than clobbering (ISO8601 ``...Z`` timestamps sort lexicographically, so
       plain string comparison is exact).
     - Does NOT decide when an acknowledgement is void (owner unresolvable,
-      past ``expires_at``) — that evaluation is consumer-side (DoE-claude),
+      past ``expires_at``) — that evaluation is consumer-side (coordinator-content-repo),
       per Q3's plane split.
 """
 from __future__ import annotations

@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.text.normalize_snippet import normalize_snippet
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
@@ -53,8 +53,8 @@ def test_g_clean_content_unchanged():
 
 
 def _find_doe_normalize_lib() -> str | None:
-    # layers the CLAUDE_KLABAUTER_TEST_DOE_ROOT override on top) rather than a
-    root = resolve_doe_root()
+    # layers the CLAUDE_KLABAUTER_TEST_CONTENT_ROOT override on top) rather than a
+    root = resolve_content_root()
     if not root:
         return None
     candidate = os.path.join(root, "coordinator", "lib", "normalize-snippet.sh")

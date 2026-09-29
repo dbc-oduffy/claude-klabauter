@@ -92,7 +92,7 @@ Negative-spec:
     lines — the anti-clobber guarantee every other lifecycle mutator in this repo
     relies on.
 
-Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
                .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md § 1, § 2
 """
 

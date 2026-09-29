@@ -3,7 +3,7 @@ composes the SYNC (never registered async) legs this row's own `writes:`
 footprint carries.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/sessionstart-dispatch.py` — a
+from coordinator-content-repo `coordinator/hooks/scripts/sessionstart-dispatch.py` — a
 subprocess-based fan-in over five hyphenated sibling scripts, folded into one
 `python3` process to save four interpreter starts per boot. That whole
 mechanism (dynamic `importlib.util.spec_from_file_location` per-guard import,

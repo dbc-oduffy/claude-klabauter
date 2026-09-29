@@ -2,7 +2,7 @@
 only event that sees the child's prompt, to SubagentStart, the only event
 that caters it.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_plan_path_bridge.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_plan_path_bridge.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4, verbatim: this
 module is self-contained (stdlib-only -- `json`/`re`/`sys`/`time`/`pathlib`,
 no cross-repo/cross-plane reference), so no adaptation was needed.
@@ -38,6 +38,8 @@ import sys
 import time
 from pathlib import Path, PureWindowsPath
 from typing import Optional
+
+from coordinator_core.session.claimed_write import replace_text
 
 #: Queue leaf under `state/subagent-share/<session_id>/`, sibling of the
 #: telemetry `*.jsonl` rows already written there.
@@ -159,9 +161,7 @@ def record_plan_path(
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = _read_rows(path)
         existing.append(row)
-        with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            for entry in existing[-_MAX_ROWS:]:
-                handle.write(json.dumps(entry) + "\n")
+        replace_text(path, "".join(json.dumps(entry) + "\n" for entry in existing[-_MAX_ROWS:]))
     except Exception:
         return False
     return True

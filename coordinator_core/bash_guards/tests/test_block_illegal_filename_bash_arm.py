@@ -53,7 +53,7 @@ def test_double_quoted_illegal_redirect_target_no_space_fires():
 
 
 def test_double_quoted_illegal_redirect_target_with_space_fires():
-    assert _fires('echo x > "X:/repo/bx17 bad:name?.txt"')
+    assert _fires('echo x > "C:/repo/bx17 bad:name?.txt"')
 
 
 def test_single_quoted_illegal_redirect_target_fires():

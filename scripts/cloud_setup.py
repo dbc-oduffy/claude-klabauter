@@ -2554,7 +2554,9 @@ def install_hooks_fleet(report: Report) -> None:
         # satisfied by a stale, zero-byte, or hand-authored non-executable
         # hook surviving an earlier aborted run; require it be executable too,
         # since git silently skips a non-executable hook at commit time.
-        landed = hook_path.is_file() and os.access(hook_path, os.X_OK)
+        landed = hook_path.is_file()
+        if os.name != "nt":
+            landed = landed and os.access(hook_path, os.X_OK)
         checked[str(hook_path)] = landed
         if not landed:
             missing.append(f"{clone_name}: {hook_path}")
@@ -3817,7 +3819,7 @@ def follow_engine_link_in_pth(report: Report) -> None:
         for pth in sorted(Path(directory).glob("__editable__.coordinator_core-*.pth")):
             try:
                 if pth.read_text(encoding="utf-8").strip() == frozen:
-                    pth.write_text(str(ENGINE_CURRENT_LINK) + "\n", encoding="utf-8")
+                    pth.write_text(str(ENGINE_CURRENT_LINK) + "\n", encoding="utf-8", newline="\n")
                     verdict["rewritten"].append(str(pth))
                 else:
                     verdict["left"].append(str(pth))

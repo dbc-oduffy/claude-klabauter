@@ -11,7 +11,7 @@ process-time blind spot, so neither number alone can be trusted here:
     dozens of sessions.
   * Conversely, a `PreToolUse` hook BLOCKS the session, so the operator actually waits wall
     time. A bar claimed met in process time can read green while the operator waits half a
-    second -- doe-claude-74 spot-checked one call at 674ms wall for 46ms user+sys.
+    second -- coordinator-content-repo-74 spot-checked one call at 674ms wall for 46ms user+sys.
 
 So: report both, side by side, and state the invocation shape every figure was taken in.
 Process time isolates work from wait; wall is what the operator pays. Neither is "the truth".
@@ -19,7 +19,7 @@ Process time isolates work from wait; wall is what the operator pays. Neither is
 ARMS ARE INTERLEAVED ROUND-ROBIN, NEVER RUN SEQUENTIALLY. On a contended box, load drifts
 over the life of a run, and sequential arms silently attribute that drift to whichever arm
 happened to run during it. Round-robin spreads the drift across all arms equally. This is
-the method doe-claude-74 used and it is the only reason their arm-to-arm comparison means
+the method coordinator-content-repo-74 used and it is the only reason their arm-to-arm comparison means
 anything.
 
 NEGATIVE SPEC.

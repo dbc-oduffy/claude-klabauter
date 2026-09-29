@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import coordinator_complete_entry as m
-from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns real git because the module under test
@@ -1312,7 +1312,7 @@ class TestNativeSingleSessionLoe:
 # ---------------------------------------------------------------------------
 # Byte-parity against the DoE oracle trampoline (best-effort — skipped when
 # the oracle script isn't reachable from this checkout, e.g. a claude-klabauter-only CI
-# runner with no DoE-claude sibling clone).
+# runner with no coordinator-content-repo sibling clone).
 #
 # 2026-07-22: repointed from coordinator-complete-entry.sh (retired by DoE's
 # de-bash wave, commit 6fb5fb37) to coordinator-complete-entry.py — the .sh
@@ -1324,14 +1324,14 @@ class TestNativeSingleSessionLoe:
 
 
 def _find_oracle() -> Path | None:
-    doe_root = resolve_doe_root()
-    if not doe_root:
+    content_root = resolve_content_root()
+    if not content_root:
         return None
-    candidate = Path(doe_root) / "coordinator" / "bin" / "coordinator-complete-entry.py"
+    candidate = Path(content_root) / "coordinator" / "bin" / "coordinator-complete-entry.py"
     return candidate if candidate.is_file() else None
 
 
-@pytest.mark.skipif(_find_oracle() is None, reason="DoE-claude oracle script not found as a sibling checkout")
+@pytest.mark.skipif(_find_oracle() is None, reason="coordinator-content-repo oracle script not found as a sibling checkout")
 @pytest.mark.real_home
 class TestOracleParity:
     def test_basic_frontmatter_shape_matches_oracle(self, tmp_path, monkeypatch):

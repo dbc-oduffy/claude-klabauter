@@ -78,7 +78,7 @@ didn't name:
      rather than being read tolerantly like the fields above.
      ``awaiting_gate`` is not a property plan-tasks.schema.json declares,
      the schema sets no ``additionalProperties: false`` to catch it, and
-     the only gate this module (or DoE-claude's wave-builder) ever reads
+     the only gate this module (or coordinator-content-repo's wave-builder) ever reads
      is ``external_gate``. Read tolerantly, a row carrying it validates
      clean and dispatches exactly as though unblocked, silently discarding
      whatever cross-repo blocker the author meant to name — the dangerous
@@ -89,7 +89,7 @@ didn't name:
 A further behaviour, not one of the fail-loud ones above but load-bearing:
 ``read_spine`` excludes non-dispatchable rows (closed ``disposition``
 values, ``deferred: true``, and an uncleared ``external_gate`` entry that
-blocks execution) from its returned list entirely, per DoE-claude's
+blocks execution) from its returned list entirely, per coordinator-content-repo's
 ``skills/execute-plan/SKILL.md`` § Chunk-SET derivation. A row already
 shipped (``disposition: coded``), explicitly deferred, or still waiting on
 a cross-repo blocker must never reach the dispatch-emit pipeline and re-run
@@ -227,7 +227,7 @@ def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     (see the schema's own x-bump-note: 1.9.0 landed only the additive
     ``cleared: false`` override as a first step; presence-as-cleared was
     deferred pending this widening, matched on the same schedule against
-    DoE-claude's ``_uncleared_execution_gate``).
+    coordinator-content-repo's ``_uncleared_execution_gate``).
 
     Before ``cleared`` was read at all, an author who wrote a status note
     into ``closure_evidence`` and wanted to say "not actually discharged"
@@ -435,7 +435,7 @@ class EmitterRow(NamedTuple):
     ``reads_at_head`` is a SEPARATE, non-ordering read set: a path a row
     reads for its verdict at the plan's base revision, never at another
     row's write. It never contributes a wave edge. Defaults to ``()`` so
-    DoE-claude's ``emit-dispatch-workflow.py``, which calls ``read_spine``
+    coordinator-content-repo's ``emit-dispatch-workflow.py``, which calls ``read_spine``
     and does not know this field, is unaffected by its addition.
     """
 
@@ -772,7 +772,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             if isinstance(chunk, str) and chunk:
                 dependents.setdefault(chunk, []).append(row.id)
 
-    # Restated from DoE-claude emit-dispatch-workflow.py's
+    # Restated from coordinator-content-repo emit-dispatch-workflow.py's
     # `_transitive_gate_closure` (commit aee52a6a5): a row excluded here not
     # because it carries a gate/operator mode itself, but because it
     # `depends_on`, directly or through a chain, a row this loop already

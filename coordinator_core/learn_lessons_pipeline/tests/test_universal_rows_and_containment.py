@@ -210,11 +210,11 @@ def _lesson_promote_script() -> str:
 
 
 def test_23c_lesson_promote_prints_a_repo_relative_outbox_path(tmp_path):
-    doe_root = tmp_path / "doe-claude"
-    (doe_root / "state" / "lessons-outbox").mkdir(parents=True)
+    content_root = tmp_path / "coordinator-content-repo"
+    (content_root / "state" / "lessons-outbox").mkdir(parents=True)
 
-    env = {**os.environ, "DOE_ROOT": str(doe_root)}
-    env.pop("REPO_DOE_CLAUDE", None)
+    env = {**os.environ, "CONTENT_ROOT": str(content_root)}
+    env.pop("REPO_CONTENT_ROOT", None)
 
     result = subprocess.run(
         [
@@ -242,4 +242,4 @@ def test_23c_lesson_promote_prints_a_repo_relative_outbox_path(tmp_path):
     printed_path = written_line.split(":", 1)[1].strip()
     assert not os.path.isabs(printed_path), printed_path
     assert printed_path.startswith("state/lessons-outbox/"), printed_path
-    assert str(doe_root) not in printed_path
+    assert str(content_root) not in printed_path

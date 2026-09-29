@@ -1031,6 +1031,78 @@ def test_run_gate_two_package_monorepo_runs_each_group_from_its_own_root(tmp_pat
     assert target_b.read_bytes() == original_b
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_run_gate_one_group_crash_reports_only_that_group_not_every_group(tmp_path, monkeypatch):
+    """Two independent runner-root groups (e.g. a nested vitest subpackage
+    with no installed deps, alongside a healthy pytest group) -- one group's
+    `run_selected` returning `None` (crashed/unparseable/unavailable) must
+    NOT poison the merge for the OTHER group, and the resulting
+    `indeterminate` detail must name only the group that actually failed,
+    never every group in the batch (the field bug: a single vitest group
+    with no `node_modules` made every sibling pytest group's detail entry
+    look crashed too)."""
+    repo = tmp_path / "monorepo"
+    repo.mkdir()
+
+    pkg_a = repo / "pkg-a"
+    pkg_a.mkdir()
+    (pkg_a / "conftest.py").write_text("", encoding="utf-8")
+    (pkg_a / "target_a.py").write_text("VALUE_A = 1\n", encoding="utf-8")
+    (pkg_a / "tests").mkdir()
+    (pkg_a / "tests" / "test_a.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_target_a():\n"
+        "    assert (Path(__file__).resolve().parent.parent / 'target_a.py').exists()\n",
+        encoding="utf-8",
+    )
+
+    pkg_b = repo / "pkg-b"
+    pkg_b.mkdir()
+    (pkg_b / "conftest.py").write_text("", encoding="utf-8")
+    (pkg_b / "target_b.py").write_text("VALUE_B = 1\n", encoding="utf-8")
+    (pkg_b / "tests").mkdir()
+    (pkg_b / "tests" / "test_b.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_target_b():\n"
+        "    assert (Path(__file__).resolve().parent.parent / 'target_b.py').exists()\n",
+        encoding="utf-8",
+    )
+
+    (repo / "conftest.py").write_text("", encoding="utf-8")
+    _git_init(repo)
+
+    target_a = pkg_a / "target_a.py"
+    target_b = pkg_b / "target_b.py"
+    target_a.write_bytes(b"VALUE_A = 2\n")
+    target_b.write_bytes(b"VALUE_B = 2\n")
+
+    from coordinator_core.source_edit_gate import gate as gate_module
+
+    pkg_a_root = str(pkg_a.resolve())
+
+    def fake_run_selected(root, test_files, runner, *, parallel=True):
+        if root == pkg_a_root:
+            return None  # simulates a crashed/unavailable runner for pkg-a only
+        return {f"{f}::ok": "passed" for f in test_files}
+
+    monkeypatch.setattr(gate_module, "run_selected", fake_run_selected)
+
+    calls = []
+    result = run_gate(
+        str(repo),
+        ["pkg-a/target_a.py", "pkg-b/target_b.py"],
+        restore_originals=lambda: calls.append("restore"),
+        reapply_stripped=lambda: calls.append("reapply"),
+    )
+
+    assert result.verdict == "indeterminate"
+    assert result.reason == "candidate-run-crashed-or-empty"
+    assert len(result.detail) == 1
+    assert "pkg-a" in result.detail[0]
+    assert "pkg-b" not in result.detail[0]
+
+
 # --------------------------------------------------------------------------
 # Root-cause regression tests, 2026-09-27 field measurement:
 #   (1) AST-based classify_edit -- a positional token-stream diff

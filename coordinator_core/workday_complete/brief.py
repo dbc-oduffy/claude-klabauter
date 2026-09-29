@@ -15,8 +15,8 @@ canonical-resolution-engine library (`coordinator_core.resolution.facade`,
 `coordinator_core.contract.decision_object.{envelope,judgment}`) rather than
 reimplementing them — see the negative-spec below.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C2
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: coordinator-content-repo:pln-b1-ceremony-complete-computed--9ffa54, chunk C2
 
 Consumes-manifest (C1 census, plan § Tasks C1 body) — orchestrates, reimplements
 none of the following existing atomic CLIs (every `directives[].cli` value below
@@ -597,7 +597,7 @@ def _build_judgment_points(
 
     2026-08-08 evidence-wording correction (falsifier search: neither this
     module, the Step 4b/4c dispatched-worker bodies (`docs/commands/
-    workday-complete.md` Step 4, DoE-claude), nor any other producer in this
+    workday-complete.md` Step 4, coordinator-content-repo), nor any other producer in this
     repo computes a "zero new commits AND no agent-driven changes" boolean —
     a grep across `coordinator_core/` returns only this module's own string
     literal and a review-trail diff, and the skill prose at that doc's Step 4

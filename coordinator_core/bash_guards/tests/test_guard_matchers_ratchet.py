@@ -1,5 +1,5 @@
 """Two-directional ratchet over `GuardEntry.matchers` -- the field
-`test_ac8_regeneration_is_byte_identical` (DoE-claude side) structurally
+`test_ac8_regeneration_is_byte_identical` (coordinator-content-repo side) structurally
 cannot watch, because a narrowing from `COMMAND_TOOL_NAMES` back to
 `("Bash",)` restores agreement between their generated `hooks.json` and
 Claude-klabauter's roster rather than breaking it. Losing PowerShell coverage and
@@ -143,6 +143,7 @@ EXPECTED: Dict[str, _Expected] = {
     "block-stash-destruction": _Expected(("Bash", "PowerShell")),
     "block-subagent-destructive-action": _Expected(("Bash", "PowerShell")),
     "block-subagent-plan-body-bash-write": _Expected(("Bash", "PowerShell")),
+    "block-subagent-findings-reject": _Expected(("Bash", "PowerShell")),
     "block-subagent-stash-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-sentinel-creation": _Expected(("Bash", "PowerShell")),
@@ -392,7 +393,7 @@ def test_discovery_found_the_expected_scope():
     against `_scoped_module_stems()` rather than re-derived by arithmetic,
     per this pin's own charter."""
     stems = _scoped_module_stems()
-    assert len(stems) == 27, sorted(stems)
+    assert len(stems) == 28, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -413,7 +414,7 @@ def test_every_registered_guard_is_classified():
     arrived live in `guard_roster()` on origin/main only -- absent from
     this branch's pre-merge tip -- and had no classification here."""
     actual = _actual_matchers()
-    assert len(actual) == 53, sorted(actual)
+    assert len(actual) == 54, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -454,7 +455,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 53
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 54
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

@@ -197,7 +197,7 @@ def test_cc_invoke_precedence_is_pinned_to_the_accessor():
 
     Asserted against source text rather than by calling it, because the module
     is loaded by path off the install tree and importing it here would resolve
-    a DIFFERENT copy than the one this repo ships. Requested by doe-claude-em
+    a DIFFERENT copy than the one this repo ships. Requested by coordinator-content-repo-em
     (2026-08-20) as the shape to pin after C14 removed the fallback.
     """
     src = (

@@ -149,16 +149,16 @@ class TestNegative:
         # that override over CLAUDE_HOME/HOME/USERPROFILE entirely, so on a box
         for key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT", "COORDINATOR_SETTINGS_HOME"):
             env.pop(key, None)
-        env["HOME"] = str(tmp_path / "no-doe-root-home")
+        env["HOME"] = str(tmp_path / "no-content-root-home")
         # USERPROFILE on Windows and ignores HOME entirely -- without this,
         # the real dev box's own USERPROFILE survives `os.environ.clear()`+
-        env["USERPROFILE"] = str(tmp_path / "no-doe-root-home")
-        (tmp_path / "no-doe-root-home" / ".claude").mkdir(parents=True)
+        env["USERPROFILE"] = str(tmp_path / "no-content-root-home")
+        (tmp_path / "no-content-root-home" / ".claude").mkdir(parents=True)
 
         rc, out, err = _run_main([], env)
 
         assert rc == 1
-        assert "ERROR: ~/.claude/.doe-root missing/invalid" in err
+        assert "ERROR: ~/.claude/.coordinator-content-root missing/invalid" in err
 
     def test_unreadable_file_names_it_and_fails_closed(self, tmp_path: Path, monkeypatch):
         plugin_root = _build_plugin_root(tmp_path)

@@ -1,9 +1,9 @@
 """
 coordinator_core.workstream_complete.tests.test_review_scale_mandatory_invariants
 
-The gate state doe-claude-em reported as having no legal reader-side move:
+The gate state coordinator-content-repo-em reported as having no legal reader-side move:
 `partition_mandatory: true` alongside `resolved: false`, shipping no
-`commit_slices` (`cross-repo/archive/2026-08-29-doe-claude-em-review-scale-
+`commit_slices` (`cross-repo/archive/2026-08-29-coordinator-content-repo-em-review-scale-
 ships-no-brightline-inputs.md`, asks (a) and (c)).
 
 WHAT IT COST, since that is the argument for pinning rather than trusting the

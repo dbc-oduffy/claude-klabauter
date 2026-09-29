@@ -260,7 +260,7 @@ def assert_paths_in_session_scope(
     `allow_orphans` is True AND the caller clears the positive-evidence check
     below, classifies ``OWNERSHIP_UNCLAIMED``.
 
-    DOCSTRING CORRECTED 2026-08-29 (flagged by doe-claude-em while answering
+    DOCSTRING CORRECTED 2026-08-29 (flagged by coordinator-content-repo-em while answering
     the SC-DR-001 read-time-backstop memo). This paragraph described the
     membership test as ``compute_offer(...)["safe_paths"]`` / ``["orphans"]``
     with a citation to DoE's ``scoped-safety-commits.md:131``. That was the
@@ -284,7 +284,7 @@ def assert_paths_in_session_scope(
     in both directions — an aborted walk yields neither `mine` nor
     `unclaimed`, and a peer claim denies whether or not the holder is live.
 
-    KNOWN DIVERGENCE, named rather than left drifting (doe-claude-em,
+    KNOWN DIVERGENCE, named rather than left drifting (coordinator-content-repo-em,
     2026-08-29). Doctrine defines an orphan as **dirty AND claimed by
     nobody**. ``OWNERSHIP_UNCLAIMED`` is a pure claim-ledger verdict with no
     dirtiness component, so this gate currently admits **claimed by nobody**
@@ -357,7 +357,7 @@ def assert_paths_in_session_scope(
     The deny reason NAMES the classification (rather than a bare "path
     outside session scope") so a caller can tell an orphan denial from a
     peer-claimed one, AND enumerates the full pathspec rather than stopping
-    at the first denied path (cross-repo ruling SC-DR-019, DoE-claude: "A
+    at the first denied path (cross-repo ruling SC-DR-019, coordinator-content-repo: "A
     scoped-commit refusal is per-path, not per-commit. Commit the
     uncontested remainder immediately, then wait holding only the contested
     path" — mechanical only if the refusal names every contested path AND
@@ -757,7 +757,7 @@ def _classify_denied_path(
 
     THE LIVE SET IS PER-REPO, SO THE ORACLE MUST BE cwd-SCOPED (break-class
     fix, 2026-08-07 pass 2; cross-repo memo
-    `2026-08-07-doe-claude-em-scoped-commit-calls-a-live-peer-dead-and-reapable`).
+    `2026-08-07-coordinator-content-repo-em-scoped-commit-calls-a-live-peer-dead-and-reapable`).
     Session registries live at `<repo>/.git/coordinator-sessions/`, so
     "is <sid> live?" is only answerable relative to a repo. This function
     previously called the ZERO-ARG `coordinator_core.liveness.

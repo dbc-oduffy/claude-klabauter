@@ -33,7 +33,7 @@ Spec backlink: docs/plans/2026-06-09-executor-sidecar-flight-recorder.md § C3a
   § C8 — the flight-recorder sidecar carve-out is RETIRED; there is no
   sidecar-path carve-out in this port either.)
 Spec backlink (2026-07-24 widening to docs/problems/**):
-  cross-repo/inbox/2026-07-24-doe-claude-em-executor-spec-surface-widening.md
+  cross-repo/inbox/2026-07-24-coordinator-content-repo-em-executor-spec-surface-widening.md
   (actioning C9(c) of DoE's agent-citizenship provisioning plan).
 Ported from the retired DoE bash guard ``block-subagent-plan-body-write.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).

@@ -1,7 +1,7 @@
 """Behavioral tests for
 coordinator_core.write_guards.block_home_dir_memo_delivery.
 
-Cross-checked against the DoE-claude reference hook by the differential
+Cross-checked against the coordinator-content-repo reference hook by the differential
 harness (coordinator/tests/test_write_guard_fan_in_differential.py, C5) --
 this file covers the port's own local behavior: the stderr-noise regression
 found in review (a non-matching containment root must be an ordinary
@@ -145,12 +145,12 @@ class TestDenyAndAllow:
 
 
 class TestDenyMessageContent:
-    """Item 30 (cross-repo/archive/2026-09-24-doe-claude-em-block-home-dir-
+    """Item 30 (cross-repo/archive/2026-09-24-coordinator-content-repo-em-block-home-dir-
     memo-delivery-lost-config-only.md): ``_deny_reason`` had drifted from
     the module's own docstring, dropping the CONFIG-ONLY framing, the
     ``claude-home`` alias, and the destination inbox path. Pins three of the
     memo's four literal needles verbatim. The fourth, a single-shot
-    ``cross-repo-memo --to doe-claude-em --topic <slug> --title "<t>"``
+    ``cross-repo-memo --to coordinator-content-repo-em --topic <slug> --title "<t>"``
     invocation, is a RETIRED CLI flag form (DR-210 -- see
     ``coordinator/bin/cross-repo-memo.py``'s ``send`` subparser comment,
     "No legacy one-shot flag form") and is deliberately NOT reproduced: an
@@ -172,7 +172,7 @@ class TestDenyMessageContent:
     def test_deny_message_names_the_real_receiver_and_live_cli_form(self, _fake_home):
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
-        assert "doe-claude-em" in reason
+        assert "coordinator-content-repo-em" in reason
         assert "cross-repo-memo draft" in reason
         assert "cross-repo-memo send" in reason
 
@@ -181,7 +181,7 @@ class TestDenyMessageContent:
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        for needle in ("CONFIG-ONLY", "cross-repo/inbox/", "claude-home", "doe-claude-em"):
+        for needle in ("CONFIG-ONLY", "cross-repo/inbox/", "claude-home", "coordinator-content-repo-em"):
             assert needle in reason, "missing needle: %r in %r" % (needle, reason)
 
 
@@ -189,29 +189,29 @@ class TestDenyMessageInboxResolution:
     """The inbox path is RESOLVED, never a hardcoded host literal (item 30,
     plan body)."""
 
-    def test_inbox_path_falls_back_to_placeholder_when_doe_root_unresolvable(
+    def test_inbox_path_falls_back_to_placeholder_when_content_root_unresolvable(
         self, monkeypatch, _fake_home
     ):
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
+            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
             lambda: (None, None),
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
-        assert "<doe_claude>/cross-repo/inbox/" in reason
+        assert "<content_root>/cross-repo/inbox/" in reason
 
     def test_inbox_path_resolves_to_the_actual_receiver_root(
         self, monkeypatch, tmp_path, _fake_home
     ):
-        doe_root = tmp_path / "DoE-claude"
-        (doe_root / "state" / "cross-repo").mkdir(parents=True)
+        content_root = tmp_path / "coordinator-content-repo"
+        (content_root / "state" / "cross-repo").mkdir(parents=True)
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
-            lambda: (str(doe_root), "env"),
+            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
+            lambda: (str(content_root), "env"),
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
-        expected = str(doe_root / "state" / "cross-repo" / "inbox").replace("\\", "/") + "/"
+        expected = str(content_root / "state" / "cross-repo" / "inbox").replace("\\", "/") + "/"
         assert expected in reason
 
     def test_inbox_resolution_failure_does_not_raise(self, monkeypatch, _fake_home):
@@ -222,9 +222,9 @@ class TestDenyMessageInboxResolution:
             raise RuntimeError("registry unreadable")
 
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process",
+            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
             _boom,
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
-        assert "<doe_claude>/cross-repo/inbox/" in reason
+        assert "<content_root>/cross-repo/inbox/" in reason

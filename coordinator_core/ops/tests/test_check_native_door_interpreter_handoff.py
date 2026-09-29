@@ -113,7 +113,7 @@ def test_magic_byte_refusal_clears_the_scope():
         "from coordinator_core.install import door_install\n"
         "from coordinator_core._settings_home import settings_home\n"
         "def leg():\n"
-        "    launcher = settings_home() / 'bin' / 'claude-doe'\n"
+        "    launcher = settings_home() / 'bin' / 'claude-author'\n"
         "    if launcher.read_bytes().startswith(door_install.NATIVE_IMAGE_MAGIC):\n"
         "        return 1\n"
         "    return subprocess.run([sys.executable, str(launcher)])\n"
@@ -232,15 +232,15 @@ def test_this_repo_is_always_a_root_and_a_missing_doe_is_a_skip(monkeypatch):
     """A box with no DoE clone is a normal box. The second root is reported as
     a skip with its reason, never as a failure, and the first root still
     scans."""
-    import coordinator_core.ops.coordinator_doe_root as doe
+    import coordinator_core.ops.coordinator_content_root as doe
 
-    monkeypatch.setattr(doe, "coordinator_doe_root", lambda: None)
-    monkeypatch.setattr(doe, "_RESOLVED_DOE_ROOT", None, raising=False)
-    monkeypatch.setattr(doe, "_DOE_ROOT_RESOLVED", False, raising=False)
+    monkeypatch.setattr(doe, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(doe, "_RESOLVED_CONTENT_ROOT", None, raising=False)
+    monkeypatch.setattr(doe, "_CONTENT_ROOT_RESOLVED", False, raising=False)
 
     roots, skips = guard.resolve_roots()
     assert [label for label, _ in roots] == ["claude-klabauter"]
-    assert any("DoE-claude" in skip for skip in skips)
+    assert any("coordinator-content-repo" in skip for skip in skips)
 
 
 def test_explicit_extra_root_is_scanned_and_a_bad_one_is_a_skip(tmp_path):
@@ -263,19 +263,19 @@ def test_cli_exits_zero_on_a_clean_root(tmp_path, capsys, monkeypatch):
     # gets a clean report, never a traceback. DoE resolution is stubbed out
     # (`--no-doe` was removed as a dead flag with no caller outside its own
     # test -- overengineering-reviewer, 2026-09-02) so the assertion doesn't
-    # depend on whether this box has a DoE-claude clone.
-    import coordinator_core.ops.coordinator_doe_root as doe
+    # depend on whether this box has a coordinator-content-repo clone.
+    import coordinator_core.ops.coordinator_content_root as doe
 
-    monkeypatch.setattr(doe, "coordinator_doe_root", lambda: None)
-    monkeypatch.setattr(doe, "_RESOLVED_DOE_ROOT", None, raising=False)
-    monkeypatch.setattr(doe, "_DOE_ROOT_RESOLVED", False, raising=False)
+    monkeypatch.setattr(doe, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(doe, "_RESOLVED_CONTENT_ROOT", None, raising=False)
+    monkeypatch.setattr(doe, "_CONTENT_ROOT_RESOLVED", False, raising=False)
 
     empty = tmp_path / "empty"
     empty.mkdir()
     rc = guard.main(["--root", str(empty)])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "SKIP DoE-claude:" in out
+    assert "SKIP coordinator-content-repo:" in out
 
 
 def test_module_is_runnable_as_a_module():

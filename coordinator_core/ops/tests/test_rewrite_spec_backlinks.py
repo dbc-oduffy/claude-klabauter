@@ -251,16 +251,16 @@ def test_batch_entry_point_aggregates_reported_set(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Cross-repo (C7) fallback — a citation this repo cannot resolve, resolved
-# against a lazily-built DoE-claude peer index.
+# against a lazily-built coordinator-content-repo peer index.
 # ---------------------------------------------------------------------------
 
 
 def _patch_peer_root(monkeypatch, peer_root: Path) -> None:
-    """Point `_doe_root_path()` at a fixture peer corpus instead of the real
-    DoE-claude checkout, so these tests never touch the real peer repo."""
+    """Point `_content_root_path()` at a fixture peer corpus instead of the real
+    coordinator-content-repo checkout, so these tests never touch the real peer repo."""
     import coordinator_core.ops.spec_backlink_resolve as resolve_mod
 
-    monkeypatch.setattr(resolve_mod, "_doe_root_path", lambda: peer_root)
+    monkeypatch.setattr(resolve_mod, "_content_root_path", lambda: peer_root)
 
 
 def test_peer_only_hit_emits_repo_qualified_pln_form(tmp_path: Path, monkeypatch) -> None:
@@ -282,7 +282,7 @@ def test_peer_only_hit_emits_repo_qualified_pln_form(tmp_path: Path, monkeypatch
     report = rewrite_file(peer_only_file, worktree_root=local_root)
     after = peer_only_file.read_text(encoding="utf-8")
 
-    assert "DoE-claude:pln-fixture-plan-pln-only-dddddd" in after
+    assert "coordinator-content-repo:pln-fixture-plan-pln-only-dddddd" in after
     assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-pln-only.md"]
     assert report["unresolvable"] == []
 
@@ -306,7 +306,7 @@ def test_peer_hit_prefers_pln_over_dlv(tmp_path: Path, monkeypatch) -> None:
 
     # Both plan_id and deliverable_id are real on the peer record; pln- wins,
     # matching the same local-corpus preference order (§ pln->dlv ordering).
-    assert "DoE-claude:pln-fixture-plan-full-aaaaaa" in after
+    assert "coordinator-content-repo:pln-fixture-plan-full-aaaaaa" in after
     assert "dlv-fixture-plan-full-bbbbbb" not in after
     assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-full.md"]
 
@@ -317,7 +317,7 @@ def test_local_hit_wins_over_peer_when_target_resolves_in_both(
     """A citation resolving in BOTH this repo and the peer repo stays LOCAL,
     unqualified — this repo's own index is tried first and, on a real-id hit,
     the peer index is never even built. Documented precedence rule: this
-    repo is authoritative for its own citations; DoE-claude is consulted only
+    repo is authoritative for its own citations; coordinator-content-repo is consulted only
     as a fallback for what this repo's index cannot resolve (see
     `_default_resolver`'s own docstring, C7 extension paragraph)."""
     import coordinator_core.ops.spec_backlink_resolve as resolve_mod
@@ -335,7 +335,7 @@ def test_local_hit_wins_over_peer_when_target_resolves_in_both(
         return real_build_index(worktree_root)
 
     monkeypatch.setattr(resolve_mod, "build_index", _counting_build_index)
-    monkeypatch.setattr(resolve_mod, "_doe_root_path", lambda: peer_root)
+    monkeypatch.setattr(resolve_mod, "_content_root_path", lambda: peer_root)
 
     citing_file = corpus["citing_file"]
     report = rewrite_file(citing_file, worktree_root=corpus["root"])
@@ -345,7 +345,7 @@ def test_local_hit_wins_over_peer_when_target_resolves_in_both(
     # unqualified form; peer index is never built at all (still 1 call: the
     # local index only).
     assert "pln-fixture-plan-full-aaaaaa" in after
-    assert "DoE-claude:" not in after
+    assert "coordinator-content-repo:" not in after
     assert build_calls["n"] == 1
     assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-full.md"]
 

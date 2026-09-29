@@ -29,16 +29,16 @@ Handler shapes, one per directive `pre_execution_directives()` ever emits:
     d3 `session-claim-cli claim-plan <slug> --for-execution` — same
        launcher-spawn shape as d2.
     d4 the workflow emit — the one piece of genuinely new mechanism.
-       `emit-dispatch-workflow.py` is plugin-local in DoE-claude with ZERO
+       `emit-dispatch-workflow.py` is plugin-local in coordinator-content-repo with ZERO
        claude-klabauter launchers, so it cannot be a bare `cli:` string; this handler
-       resolves the DoE-claude sibling root itself via
-       `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`
+       resolves the coordinator-content-repo sibling root itself via
+       `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`
        and spawns that script directly. `--out` is EXPLICIT and
        session-scoped (never the emitter's plan-relative default — see
        state/memo-outbox/sent/emitter-repo-root-guard-landed-and-a-
        script-path-collision.md § 3), built from the session id this
        module's own `apply()` resolves via `apply_base.session_identity`.
-       Raises (rather than skipping) when `coordinator_doe_root()` returns
+       Raises (rather than skipping) when `coordinator_content_root()` returns
        `None`.
 
 Negative-spec:
@@ -46,7 +46,7 @@ Negative-spec:
       `coordinator_core.ops.dispatch_emit.emit.emit_script` or the
       `dispatch.emit` op anywhere in this module — the emit leg goes
       through DoE's own `emit-dispatch-workflow.py` script, never the
-      native op (this is what keeps DoE-claude's auto-fired
+      native op (this is what keeps coordinator-content-repo's auto-fired
       `block-workflow-foreign-emission.py` able to do its job; see the
       plan's Anti-scope and C3's boundary test).
     - Do NOT add `mint-deliverable-id`/`advance-tracker-status` (or any
@@ -73,7 +73,7 @@ from typing import Any, Callable, Optional
 from coordinator_core.contract import apply_base
 from coordinator_core.execute_plan_assemble.pre_execution import pre_execution_directives
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.ops.coordinator_doe_root import _REMEDIATION, coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import _REMEDIATION, coordinator_content_root
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
@@ -177,11 +177,11 @@ def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[s
         raise UnrecognizedDirective("emit-dispatch-workflow: expected --plan <plan-path>")
     plan_path = args[1]
 
-    doe_root = coordinator_doe_root()
-    if doe_root is None:
+    content_root = coordinator_content_root()
+    if content_root is None:
         raise RuntimeError(_REMEDIATION)
 
-    script = Path(doe_root) / "coordinator" / "bin" / "emit-dispatch-workflow.py"
+    script = Path(content_root) / "coordinator" / "bin" / "emit-dispatch-workflow.py"
     out_path = _emit_out_path(repo_root, plan_path)
     argv = [
         sys.executable,

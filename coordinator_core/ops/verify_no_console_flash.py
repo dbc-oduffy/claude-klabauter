@@ -8,7 +8,7 @@ window that briefly flashes. The only reliable suppression is
 CREATE_NO_WINDOW / windowsHide:true at the CreateProcess call — not
 `-WindowStyle Hidden`, which is create-then-hide. See:
 docs/wiki/claude-code-platform-gotchas.md § Windows console window flash
-(DoE-claude).
+(coordinator-content-repo).
 
 This guard statically scans a coordinator-claude tree (`*.sh`, `*.json`,
 `coordinator-auto-push`) for spawn shapes that lack an explicit suppression

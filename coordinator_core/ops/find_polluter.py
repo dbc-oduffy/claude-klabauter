@@ -32,7 +32,7 @@ Resolution / behavior (unchanged from the bash oracle, `coordinator/bin/find-pol
      (path, `ls -la`-style detail line) and returns 1. No hit across the full set
      returns 0 ("all tests clean").
 
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec (retired bash-only mechanics — NOT reintroduced here):
     - Does NOT use bash `set -euo pipefail` — Python's own exception propagation

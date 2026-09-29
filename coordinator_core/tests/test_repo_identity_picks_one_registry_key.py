@@ -11,11 +11,11 @@ import pytest
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
 
 try:
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    _DOE_ROOT = coordinator_doe_root()
+    _CONTENT_ROOT = coordinator_content_root()
 except Exception:  # noqa: BLE001 — no DoE checkout is a skip, never a suite error
-    _DOE_ROOT = None
+    _CONTENT_ROOT = None
 
 _CANONICAL_KEY = "repos.claude_klabauter"
 _ALIAS_KEY = "repos.example_orchestration_hub_repo"
@@ -71,10 +71,10 @@ def test_self_identity_resolves_to_the_canonical_em_id(collided_registry):
 def test_cli_sender_identity_resolves_to_the_canonical_em_id(
     collided_registry, monkeypatch
 ):
-    if not _DOE_ROOT:
-        pytest.skip("no DoE-claude checkout — coordinator_registry cannot import")
+    if not _CONTENT_ROOT:
+        pytest.skip("no coordinator-content-repo checkout — coordinator_registry cannot import")
     # The fixture redirects CLAUDE_HOME, which is one rung of the ladder this
-    monkeypatch.setenv("REPO_DOE_CLAUDE", _DOE_ROOT)
+    monkeypatch.setenv("REPO_CONTENT_ROOT", _CONTENT_ROOT)
     lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)

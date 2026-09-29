@@ -537,7 +537,7 @@ def session_governing_plan(
     `plan_assemble/predicates/substrate_seven_dim.py`) — none of them translate
     the value either. Introducing normalization HERE would break every one of
     them by changing an emitted VALUE, not a field name, which is the cross-
-    plane hazard this chunk owns alone (no answer from DoE-claude bears on it,
+    plane hazard this chunk owns alone (no answer from coordinator-content-repo bears on it,
     per § Problem's F1 correction).
 
     POSTURE CONVERSION (AC3, the whole point of this chunk): the OLD bare

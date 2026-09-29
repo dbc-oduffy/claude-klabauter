@@ -4,10 +4,10 @@ contract tests for the ``_write_agent_forwarder`` naked-Python forwarder
 template (coordinator_core/install/substrate.py) and its co-located
 ``_resolve_claude_klabauter.py`` ladder module (coordinator/lib/resolve-claude-klabauter/).
 
-``b644d5a9`` (DoE, 2026-07-22) relocated DoE-claude's entire executable
+``b644d5a9`` (DoE, 2026-07-22) relocated coordinator-content-repo's entire executable
 surface into claude-klabauter's own ``coordinator/bin/`` — the prior forwarder
 template still exec'd the now-empty DoE-side tree and the old
-``.doe-root``/``CLAUDE_PLUGIN_ROOT`` trust-prefix guard this file used to
+``.coordinator-content-root``/``CLAUDE_PLUGIN_ROOT`` trust-prefix guard this file used to
 test no longer exists (see ``_write_agent_forwarder``'s docstring for why
 that trust posture was deliberately NOT carried forward). This file's
 filename is kept for git-history continuity across the port; its content is
@@ -29,7 +29,7 @@ actual resolution/exec behavior fails these tests even if the template text
 still "looks right".
 
 Spec backlink:
-    DoE-claude coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
+    coordinator-content-repo coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
     cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
 """
 
@@ -406,7 +406,7 @@ def test_forwarder_missing_target_exits_127_without_traceback(tmp_path: Path):
         ("coordinator-doc-new", "coordinator-doc-new.cmd"),
         ("cross-repo-memo", "cross-repo-memo.cmd"),
         ("foo.sh", "foo.cmd"),
-        ("claude-doe", "claude-doe.cmd"),
+        ("claude-author", "claude-author.cmd"),
     ],
 )
 def test_agent_cmd_dest_name_never_double_suffixes(name: str, expected: str):
@@ -456,14 +456,14 @@ def test_derive_agent_helper_names_extensionless_polyglot_kept_verbatim(tmp_path
     assert "verify-coverage" in names
 
 
-def test_derive_agent_helper_names_claude_doe_reserved_on_windows_only(tmp_path: Path):
-    """`claude-doe` is platform-split, and the split is the point (93089e568).
+def test_derive_agent_helper_names_claude_author_reserved_on_windows_only(tmp_path: Path):
+    """`claude-author` is platform-split, and the split is the point (93089e568).
 
     On Windows it is reserved out of the generic forwarder set: the generic
     forwarder reaches `claude.exe` three processes deep, which corrupts the
     console input mode, so DoE's purpose-built shallow launcher must be the
     only copy. On POSIX no such launcher is rendered and the shim `execv`s in
-    place, so this forwarder IS the claude-doe CLI and must keep being
+    place, so this forwarder IS the claude-author CLI and must keep being
     installed.
 
     Asserted per-platform rather than unconditionally: this test previously
@@ -472,14 +472,14 @@ def test_derive_agent_helper_names_claude_doe_reserved_on_windows_only(tmp_path:
     where the reservation exists at all.
     """
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "claude-doe")
+    _touch(agent_bin / "claude-author")
 
     names = _derive_agent_helper_names(agent_bin)
 
     if os.name == "nt":
-        assert "claude-doe" not in names
+        assert "claude-author" not in names
     else:
-        assert "claude-doe" in names
+        assert "claude-author" in names
 
 
 def test_derive_agent_helper_names_excludes_private_dirs_and_test_files(tmp_path: Path):
@@ -601,7 +601,7 @@ def test_derive_agent_helper_target_map_py_suffixed_cli_targets_real_file(tmp_pa
 
 
 def test_derive_agent_helper_target_map_extensionless_cli_targets_itself(tmp_path: Path):
-    # `claude-doe` is deliberately NOT the fixture here: it is reserved out of
+    # `claude-author` is deliberately NOT the fixture here: it is reserved out of
     # this map on Windows (93089e568), so using it would make this test about
     # the host platform rather than about extensionless self-targeting.
     agent_bin = tmp_path / "coordinator" / "bin"
@@ -735,7 +735,7 @@ def test_derive_agent_helper_target_map_publish_namespaced_alias_additive():
     forwarder set. `coordinator-publish.py` (`coordinator/bin/`) installs a
     namespaced `coordinator-*` alias ADDITIVELY -- the bare `publish` name
     must keep resolving too, since `coordinator/skills/percolate/SKILL.md`
-    (DoE-claude) still invokes it by that bareword. This is a real-tree
+    (coordinator-content-repo) still invokes it by that bareword. This is a real-tree
     regression test: both installed names must be present and each must
     resolve to its own distinct on-disk file, never collide."""
     agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
@@ -768,7 +768,7 @@ def test_derive_agent_helper_target_map_keys_match_derive_names(tmp_path: Path):
     agent_bin = tmp_path / "coordinator" / "bin"
     _touch(agent_bin / "sample-tool.py")
     _touch(agent_bin / "sample-tool.cmd", executable=False)
-    _touch(agent_bin / "claude-doe")
+    _touch(agent_bin / "claude-author")
     _touch(agent_bin / "mint-deliverable-id.py")
     _touch(agent_bin / "mint-deliverable-id.cmd", executable=False)
 
@@ -791,7 +791,7 @@ def test_write_agent_forwarder_explicit_target_round_trip_all_kinds(tmp_path: Pa
     _touch(agent_bin / "sample-tool.py")
     _touch(agent_bin / "sample-tool.cmd", executable=False)
     _touch(agent_bin / "review-brightline-gate.py")
-    _touch(agent_bin / "claude-doe")
+    _touch(agent_bin / "claude-author")
     _touch(agent_bin / "mint-deliverable-id.py")
     _touch(agent_bin / "mint-deliverable-id.cmd", executable=False)
 
@@ -876,11 +876,11 @@ def test_resolve_agent_cmd_dest_collisions_non_js_wins(colliding_pair: "tuple[st
 
 
 def test_resolve_agent_cmd_dest_collisions_no_collision_passthrough():
-    target_map = {"sample-tool": "sample-tool.py", "claude-doe": "claude-doe"}
+    target_map = {"sample-tool": "sample-tool.py", "claude-author": "claude-author"}
 
     resolved = _resolve_agent_cmd_dest_collisions(target_map)
 
-    assert resolved == {"sample-tool": "sample-tool.cmd", "claude-doe": "claude-doe.cmd"}
+    assert resolved == {"sample-tool": "sample-tool.cmd", "claude-author": "claude-author.cmd"}
 
 
 def test_resolve_agent_cmd_dest_collisions_unresolvable_raises_fatal():
@@ -945,7 +945,7 @@ def _make_install_bin_resolvers_fixture(tmp_path: Path) -> "tuple[Path, Path, Pa
     # special case).
     _touch(agent_bin / "sample-tool.py")
     _touch(agent_bin / "review-brightline-gate.py")
-    _touch(agent_bin / "claude-doe")
+    _touch(agent_bin / "claude-author")
     _touch(agent_bin / "mint-deliverable-id.py")
     _touch(agent_bin / "mint-deliverable-id.cmd", executable=False)
     # A real .cmd-dest-name collision pair (mirrors the live-tree

@@ -31,7 +31,7 @@ CLI entrypoint: ``main(argv)`` is the direct-import target for the DoE trampolin
 JSON-RPC handler (no event loop needed for a CLI invocation with no repo_root
 router to consult).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3c
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3c
 Port of: derive-session-hierarchy.sh (DoE f0aa2d56, 2026-07-16)
 
 Negative-spec:

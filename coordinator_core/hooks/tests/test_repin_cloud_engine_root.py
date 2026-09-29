@@ -19,7 +19,7 @@ def _write_stamp(root: Path, sha: str = "sha:abc123", mtime: "float | None" = No
 
 
 def test_op_registered():
-    assert "hooks.repin_cloud_engine_root" in _REGISTRY
+    assert "hooks.session_start_repin_cloud_engine_root" in _REGISTRY
 
 
 def test_handler_returns_no_advisory():

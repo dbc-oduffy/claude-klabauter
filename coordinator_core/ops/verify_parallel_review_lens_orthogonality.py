@@ -31,7 +31,7 @@ Chunk-manifest format (TSV, one file per line): "chunk-<k>\\t<relpath>".
 Exit codes (parity-critical — both callers branch on these):
   0 — all checks passed.
   1 — one or more checks failed (diagnostic printed to stdout), OR the skill
-      file / chunk manifest was not found, OR the DoE-claude repo root could
+      file / chunk manifest was not found, OR the coordinator-content-repo repo root could
       not be resolved (cross-repo lookup failure — see below), OR a CLI usage
       error (unknown arg, missing --chunk-manifest value, empty chunk
       manifest; these print to STDERR, matching the bash oracle's `>&2`
@@ -39,10 +39,10 @@ Exit codes (parity-critical — both callers branch on these):
 
 Cross-repo note: this op lives in claude-klabauter but the manifest it checks
 (coordinator/skills/parallel-code-review/SKILL.md) and the agent files it
-verifies live in the DoE-claude repo — the bash oracle never needed this
+verifies live in the coordinator-content-repo repo — the bash oracle never needed this
 resolution step because it ran FROM inside that repo (SCRIPT_DIR-relative).
-This port resolves the DoE-claude root via
-`coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`. A
+This port resolves the coordinator-content-repo root via
+`coordinator_core.ops.coordinator_content_root.coordinator_content_root()`. A
 resolution failure is folded into the same "cannot verify without the
 manifest" exit-1 stdout branch the oracle uses for a missing SKILL_FILE —
 semantically the same "verification could not run" outcome for callers, so
@@ -61,7 +61,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root as _resolve_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root as _resolve_content_root
 
 _PROG = "verify-parallel-review-lens-orthogonality.sh"  # literal program-name prefix, matches bash oracle's $0
 _MIN_REVIEWER_COUNT = 4
@@ -243,9 +243,9 @@ def chunk_check(manifest_path: Path) -> Tuple[List[str], bool]:
 
 
 def run(
-    argv: List[str], doe_root: Optional[str] = None
+    argv: List[str], content_root: Optional[str] = None
 ) -> Tuple[List[str], List[str], int]:
-    """Core driver: parse args, resolve the DoE-claude repo root, run static
+    """Core driver: parse args, resolve the coordinator-content-repo repo root, run static
     check then (if requested) chunk check.
 
     Returns (stdout_lines, stderr_lines, rc). CLI usage errors (unknown arg,
@@ -253,8 +253,8 @@ def run(
     `>&2` convention on those two branches; every other diagnostic goes to
     stdout, matching the oracle's plain `echo`.
 
-    doe_root: injection seam for tests — when provided, skips the
-    coordinator_doe_root() resolution call.
+    content_root: injection seam for tests — when provided, skips the
+    coordinator_content_root() resolution call.
     """
     chunk_manifest: Optional[str] = None
     i = 0
@@ -275,11 +275,11 @@ def run(
                 1,
             )
 
-    repo_root_str = doe_root if doe_root is not None else _resolve_doe_root()
+    repo_root_str = content_root if content_root is not None else _resolve_content_root()
     if not repo_root_str:
         return (
             [
-                "ERROR: could not resolve the DoE-claude repo root (needed to locate "
+                "ERROR: could not resolve the coordinator-content-repo repo root (needed to locate "
                 "coordinator/skills/parallel-code-review/SKILL.md).",
                 "Cannot verify lens-orthogonality without the manifest.",
             ],

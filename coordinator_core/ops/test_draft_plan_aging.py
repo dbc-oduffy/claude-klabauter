@@ -958,7 +958,7 @@ def test_list_orphaned_terminal_status_excluded_from_population(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Non-plan population exclusion (cross-repo memo
-# 2026-08-03-doe-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
+# 2026-08-03-coordinator-content-repo-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
 # § 1): frontmatter presence, structurally, is the discriminator — NOT a
 # filename denylist and NOT a probe for a particular key like status:.
 # ---------------------------------------------------------------------------

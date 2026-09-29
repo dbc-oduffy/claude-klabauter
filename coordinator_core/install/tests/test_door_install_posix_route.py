@@ -197,7 +197,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
-    def _cut_over_always_raises(name, bin_dst, check_only, *, engine_root, static_family_names=frozenset()):
+    def _cut_over_always_raises(name, bin_dst, check_only, *, engine_root, static_family_names=frozenset(), source=None):
         raise SystemExit(f"door build: compile failed for {name}")
 
     monkeypatch.setattr(substrate, "_cut_over_to_native_door", _cut_over_always_raises)

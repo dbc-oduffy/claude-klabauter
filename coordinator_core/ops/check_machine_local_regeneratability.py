@@ -78,9 +78,9 @@ Negative-spec (do NOT "fix" while porting):
       removed a tautological ``repos.*`` prefix branch; do not resurrect that shape). AC8
       of the plan above (DR-132 conformance) added a second, equally bounded arm: a dotted
       key matches a family entry that is a strict dotted-prefix of it — e.g.
-      ``engine.working_repos.doe_claude`` is satisfied by a bare ``"engine.working_repos"``
+      ``engine.working_repos.content_root`` is satisfied by a bare ``"engine.working_repos"``
       entry. DoE has declared that exact family entry on their plane (delivery memo
-      cross-repo/inbox/2026-08-07-doe-claude-em-dr132-conformance-fixture-delivered.md:
+      cross-repo/inbox/2026-08-07-coordinator-content-repo-em-dr132-conformance-fixture-delivered.md:
       "The prefix-family match arm on the consumer side remains yours."). Do NOT widen this
       into an open glob for other keys, and do NOT add ``engine.working_repos.*`` (or any
       spelling of it) to ``COORDINATOR_OWNED_KEYS`` here — that namespace is DoE-authored
@@ -95,7 +95,7 @@ Negative-spec (do NOT "fix" while porting):
       (direct calls to ``_key_matches_regen_entry``). It exists anyway because DoE
       declared the bare family entry ``"engine.working_repos" = "idempotent-regeneratable"``
       on their plane and stated the consumer-side match arm is ours to supply
-      (cross-repo/inbox/2026-08-07-doe-claude-em-dr132-conformance-fixture-delivered.md)
+      (cross-repo/inbox/2026-08-07-coordinator-content-repo-em-dr132-conformance-fixture-delivered.md)
       — deliberate forward-looking infrastructure for whichever module (presumably
       DoE's own regeneratability checker) owns a ``canon_key`` list containing
       ``engine.working_repos.*``, not dead code. Do NOT assume Check 1 exercises this
@@ -169,7 +169,7 @@ def _key_matches_regen_entry(canon_key: str, regen_key: str) -> bool:
     ever the bare *canonical* key satisfied by a dotted regen sub-entry
     (``plugin.mirrors.coordinator-claude``), while ``engine.working_repos`` is only
     ever the bare *regen* entry satisfying a dotted specific key
-    (``engine.working_repos.doe_claude``) — but that's a property of today's data,
+    (``engine.working_repos.content_root``) — but that's a property of today's data,
     not something this function enforces; the stray opposite-direction branches are
     simply always False given the current key list. A plain ``str.startswith`` would
     also match a key that merely shares a leading substring without a dotted-segment

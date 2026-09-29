@@ -126,6 +126,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -795,6 +796,10 @@ def _read_relinquishment_marker(
     )
 
 
+#: Hard ceiling on the single `git cat-file -e` spawn (brightline: 500ms).
+_HANDOFF_LANDED_TIMEOUT_S = 0.5
+
+
 def _handoff_landed(handoff_path: str, worktree: Path) -> bool:
     """One ``git cat-file -e HEAD:<repo-relative-path>`` spawn — the ONLY
     spawn ``claim_holder_relinquished`` ever makes, and only for a candidate
@@ -816,8 +821,16 @@ def _handoff_landed(handoff_path: str, worktree: Path) -> bool:
             cwd=str(worktree),
             capture_output=True,
             text=True,
+            timeout=_HANDOFF_LANDED_TIMEOUT_S,
             **leaf_spawn_creationflags(),
         )
+    except subprocess.TimeoutExpired:
+        print(
+            f"liveness: git cat-file for {rel} exceeded {_HANDOFF_LANDED_TIMEOUT_S}s; "
+            "treating the handoff as not landed (no relinquishment evidence)",
+            file=sys.stderr,
+        )
+        return False
     except OSError:
         return False
     return result.returncode == 0
@@ -1739,7 +1752,7 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     does not exist) -> False, not True: absent evidence is never dispositive
     of abandonment, mirroring this module's fail-open-toward-"do not act"
     bias on thin evidence (module docstring; AC2's own citation of
-    DoE-claude's 2026-08-19 absence-is-not-death lesson).
+    coordinator-content-repo's 2026-08-19 absence-is-not-death lesson).
 
     Deliberately does NOT consult the transcript
     (``~/.claude/projects/*/<sid>.jsonl``) -- C1's census named it

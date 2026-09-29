@@ -33,7 +33,7 @@ also renders `result.gates_cleared[]` entries where `dry_run` is truthy AND
 `coordinator/bin/check-auto-reconcile.py`'s `_render` uses for its own
 would-flip line.
 
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2c
+Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C2c
 Spec backlink: cross-repo/inbox/2026-08-13-example-cockpit-repo-em-clear-verdict-invisible-under-dry-run-so-gates-never-announce.md
 
 Negative-spec:

@@ -248,8 +248,8 @@ class TestReasonClassSpecificMessages:
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "creates/modifies the PM-approval sentinel" not in reason
-        assert "cannot examine" in reason
-        assert "NOT because the payload was found" in reason
+        assert "unreadable" in reason
+        assert "might create the PM-approval sentinel" in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_surfaces_the_shape(self):
@@ -258,15 +258,19 @@ class TestReasonClassSpecificMessages:
         assert "interpreter-invoked script" in reason
         assert "indirection wrapper" in reason
 
-    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self):
+    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self, tmp_path):
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
-        assert "EM/PM" in reason
+        assert "machine-local set coordinator.guard_level warn" in reason
         recommended = next(
-            c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("python3 path/")
         )
-        assert guard.check(_payload(recommended)) is None
+        assert "`./path/to/script` needs an executable file with a shebang" in reason
+        script = tmp_path / "clean.py"
+        script.write_text("print('ok')\n")
+        runnable = recommended.replace("path/to/script.py", str(script))
+        assert guard.check(_payload(runnable)) is None
 
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None
@@ -921,3 +925,130 @@ class TestItem33ReadableScriptOverride:
         cmd = "bash writer.sh & python3 - <<'EOF'\nprint('clean')\nEOF"
         out = guard.check(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
+
+
+class TestArgv0ResolutionAndStdinRedirect:
+
+    @staticmethod
+    def _files(tmp_path):
+        clean = tmp_path / "clean.py"
+        clean.write_text("print('ok')\n")
+        bad = tmp_path / "bad.py"
+        bad.write_text("open('%s', 'w')\n" % SENTINEL)
+        return clean, bad
+
+    def test_default_expansion_argv0_reads_the_script(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
+        clean, bad = self._files(tmp_path)
+        cmd = '"${COORDINATOR_PYTHON:-python3}" %s'
+        assert guard.check(_payload(cmd % clean)) is None
+        assert guard.check(_payload(cmd % bad)) is not None
+
+    def test_env_set_expansion_argv0_uses_the_env_value(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_PYTHON", "python3")
+        clean, bad = self._files(tmp_path)
+        cmd = '"${COORDINATOR_PYTHON:-python3}" %s'
+        assert guard.check(_payload(cmd % clean)) is None
+        assert guard.check(_payload(cmd % bad)) is not None
+
+
+    def test_stdin_redirect_on_bare_interpreter_is_a_file_read(self, tmp_path):
+        clean, bad = self._files(tmp_path)
+        assert guard.check(_payload("python3 < %s" % clean)) is None
+        assert guard.check(_payload("python3 - < %s" % clean)) is None
+        assert guard.check(_payload("python3 < %s > /dev/null" % clean)) is None
+        assert guard.check(_payload("python3 < %s" % bad)) is not None
+        assert guard.check(_payload("bash < %s" % bad)) is not None
+
+    def test_stdin_redirect_from_missing_file_is_denied(self, tmp_path):
+        assert guard.check(_payload("python3 < %s/nope.py" % tmp_path)) is not None
+
+    def test_env_expanded_script_path_is_read(self, tmp_path, monkeypatch):
+        clean, _bad = self._files(tmp_path)
+        monkeypatch.setenv("W1A_ROOT", str(tmp_path))
+        assert guard.check(_payload('python3 "$W1A_ROOT/clean.py"')) is None
+        assert guard.check(_payload('python3 "$W1A_UNSET_ROOT/clean.py"')) is not None
+
+    def test_path_variable_assigned_in_the_same_command_is_not_trusted(self, tmp_path, monkeypatch):
+        clean, _bad = self._files(tmp_path)
+        monkeypatch.setenv("W1A_ROOT", str(tmp_path))
+        assert guard.check(_payload('W1A_ROOT=/elsewhere; python3 "$W1A_ROOT/clean.py"')) is not None
+
+    def test_redirect_forms_that_are_not_file_reads_are_not_misparsed(self):
+        assert guard.check(_payload("python3 -m pytest 2>&1")) is None
+
+
+class TestGuardLevel:
+
+    def _consumer(self, monkeypatch):
+        from coordinator_core import machine_profile
+
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+        machine_profile.reset_cache()
+
+    def test_consumer_default_warns_instead_of_denying(self, monkeypatch):
+        self._consumer(monkeypatch)
+        out = guard.check(_payload("touch %s" % SENTINEL))
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "PM-approval sentinel" in hso["additionalContext"]
+        assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
+        assert SENTINEL not in hso["additionalContext"]
+
+    def test_warn_text_is_constant_per_reason_class_for_once_per_session_dedupe(self, monkeypatch):
+        self._consumer(monkeypatch)
+        a = guard.check(_payload("touch %s" % SENTINEL))
+        b = guard.check(_payload("cp x %s" % SENTINEL))
+        assert a == b
+
+    def test_indirection_warn_names_the_unreadable_payload(self, monkeypatch):
+        self._consumer(monkeypatch)
+        out = guard.check(_payload("bash bin/install-git-hooks.sh"))
+        assert "could not read" in out["hookSpecificOutput"]["additionalContext"]
+
+    def test_per_guard_off_is_silent(self, monkeypatch):
+        self._consumer(monkeypatch)
+        monkeypatch.setenv(
+            "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_BLOCK-APPROVAL-SENTINEL-CREATION", "off"
+        )
+        assert guard.check(_payload("touch %s" % SENTINEL)) is None
+
+    def test_strict_override_on_a_consumer_box_still_denies(self, monkeypatch):
+        self._consumer(monkeypatch)
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
+        out = guard.check(_payload("touch %s" % SENTINEL))
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestNamedScriptFileIsReadNotRefused:
+
+    def test_relative_script_resolves_against_payload_cwd(self, tmp_path):
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "gen.py").write_text("print('regen')\n")
+        cmd = "python3 lib/gen.py --regenerate"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+        assert guard.check(_payload(cmd, cwd=str(tmp_path / "elsewhere"))) is not None
+
+    def test_relative_bash_script_is_read(self, tmp_path):
+        (tmp_path / "pcommit.sh").write_text("echo ok\n")
+        assert guard.check(_payload("bash pcommit.sh", cwd=str(tmp_path))) is None
+
+    def test_script_that_names_the_sentinel_is_denied(self, tmp_path):
+        (tmp_path / "bad.sh").write_text("touch %s\n" % SENTINEL)
+        assert guard.check(_payload("bash bad.sh", cwd=str(tmp_path))) is not None
+
+    def test_preceding_cd_moves_the_script_lookup(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "gen.py").write_text("print('ok')\n")
+        (sub / "bad.py").write_text("open('%s', 'w')\n" % SENTINEL)
+        ok = "cd %s && python3 gen.py" % sub
+        assert guard.check(_payload(ok, cwd=str(tmp_path))) is None
+        rel = "cd sub && python3 gen.py"
+        assert guard.check(_payload(rel, cwd=str(tmp_path))) is None
+        assert guard.check(_payload("cd sub && python3 bad.py", cwd=str(tmp_path))) is not None
+
+    def test_unresolvable_cd_target_fails_closed(self, tmp_path):
+        (tmp_path / "gen.py").write_text("print('ok')\n")
+        cmd = "cd $W1A_UNSET_DIR && python3 gen.py"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is not None

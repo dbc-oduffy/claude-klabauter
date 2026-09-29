@@ -21,7 +21,7 @@ machine-wide (leg 0.5):
      session. Runs only when the command is NOT suite-shaped, so it is
      strictly additive: it never restates a deny the identity leg below owns
      with a better diagnosis. Ruled by DoE 2026-07-28
-     (``cross-repo/inbox/2026-07-28-doe-claude-em-dr088-tier-t-relevance-
+     (``cross-repo/inbox/2026-07-28-coordinator-content-repo-em-dr088-tier-t-relevance-
      ruling.md``); DoE refused a breadth/test-count term in the same ruling
      (R8) -- a rule the classifier cannot evaluate without collecting is not
      a rule.
@@ -114,7 +114,7 @@ machine-wide (leg 0.5):
      Tier U under any of them.
 
      Ownership split, and why this file cannot close a grant-writer gap on
-     its own if one reopens: the WRITER lives in DoE-claude's tree --
+     its own if one reopens: the WRITER lives in coordinator-content-repo's tree --
      ``coordinator/commands/<ceremony>.md`` OR
      ``coordinator/skills/<ceremony>/SKILL.md``, and both shapes are in live
      use, which is precisely what an earlier verification missed by grepping
@@ -255,7 +255,7 @@ Negative spec for the public API -- what it deliberately does NOT do:
   - It does NOT read, import, or branch on a repo's
     ``fast_tier_unscoped_reason`` declaration (DR-088 R7, standing
     prohibition, ratified 2026-07-25 --
-    cross-repo/inbox/2026-07-25-doe-claude-em-dr088-marker-scope-ruling.md).
+    cross-repo/inbox/2026-07-25-coordinator-content-repo-em-dr088-marker-scope-ruling.md).
     This classifier answers "what shape is this command";
     whether a repo has declared its fast tier legitimately unscoped is an
     AUTHORITY question -- "is this caller authorized to run that shape
@@ -338,7 +338,7 @@ guard entirely: no classification, no subagent identity deny (leg 1), no
 Tier-U grant check (leg 2). See ``_classify_tox_nox`` for the full rationale
 and why no scoped branch is offered for ``-e``/``-s``/``--`` posargs.
 Reconstructed from a relayed finding (relay:
-cross-repo/inbox/2026-08-03-doe-claude-em-klabauter-rows-move-to-you-pm-
+cross-repo/inbox/2026-08-03-coordinator-content-repo-em-klabauter-rows-move-to-you-pm-
 ruled.md's sibling chain; original ``2026-08-01-example-retrieval-repo-em-test-suite-
 approval-gate-bypass.md`` not present in this tree) -- the relay named which
 rung each finding hit (Layer 3 identity leg; the Tier-F/U grant-check leg)
@@ -350,7 +350,7 @@ literal ``os.path.isdir`` check, so an unexpanded glob positional (``pytest
 coordinator_core/*/tests``) was never a directory ON DISK and slipped past
 leg 0 even though the shell expands it to the exact breadth R9 exists to
 refuse. Reported by example-retrieval-repo, relayed via
-cross-repo/inbox/2026-08-03-doe-claude-em-two-rulings-plan-orphan-population-
+cross-repo/inbox/2026-08-03-coordinator-content-repo-em-two-rulings-plan-orphan-population-
 and-dr088-antiscope.md (Finding 2; the relay's "spelling-keyed" framing is
 imprecise -- the gap is isdir-keyed, not spelling-keyed). Fixed by expanding
 any positional containing glob metacharacters with ``glob.iglob(...,
@@ -385,8 +385,8 @@ question.md
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-test-suite-invocation-guards.md
 Spec backlink (public API): cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 1
 Spec backlink (grant leg): cross-repo/inbox/2026-07-23-claude-central-em-dr088-ceremonies-write-grants-wire-the-deny.md
-Spec backlink (R5-R7 amendment): cross-repo/inbox/2026-07-25-doe-claude-em-dr088-marker-scope-ruling.md
-Spec backlink (R9 precision public API): cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (DoE-claude repo)
+Spec backlink (R5-R7 amendment): cross-repo/inbox/2026-07-25-coordinator-content-repo-em-dr088-marker-scope-ruling.md
+Spec backlink (R9 precision public API): cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (coordinator-content-repo repo)
 Governing decision: DoE docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md
 Anti-evasion language adapted from DoE coordinator/agents/coverage-auditor.md:227.
 """
@@ -1234,7 +1234,7 @@ def _scoped_alternatives_block(detected: str) -> str:
         return _JS_SCOPED_ALTERNATIVES
     return _PY_SCOPED_ALTERNATIVES
 
-#: Item 5.1 (cross-repo/archive/2026-09-11-doe-claude-em-suite-guard-and-
+#: Item 5.1 (cross-repo/archive/2026-09-11-coordinator-content-repo-em-suite-guard-and-
 #: emit-preamble-frictions.md): a BARE bash `$VAR`/`${VAR}` or PowerShell
 #: `$env:VAR` token, anchored to the WHOLE token -- a variable reference
 #: embedded inside a larger literal (`tests/$SUITE/`) is a different,
@@ -1370,7 +1370,7 @@ def _classify_tox_nox(base: str, args: Sequence[str]) -> str:
     2026-08-03 while reconstructing the relayed finding
     ``2026-08-01-example-retrieval-repo-em-test-suite-approval-gate-bypass.md`` (not
     present in this tree; relayed via
-    ``cross-repo/inbox/2026-08-03-doe-claude-em-klabauter-rows-move-to-you-
+    ``cross-repo/inbox/2026-08-03-coordinator-content-repo-em-klabauter-rows-move-to-you-
     pm-ruled.md``'s sibling memo chain). Neither runner was in
     ``_RUNNER_PREFILTER_RE`` at all, so a bare ``tox`` or ``nox`` invocation
     -- each of which, by design, walks EVERY configured environment/session
@@ -1459,7 +1459,7 @@ def _classify_node_test(args: Sequence[str], testpaths: Sequence[str],
     this guard -- not the classification leg, not the Layer-3 subagent
     identity deny, not the Tier-F/U grant check. ``check()`` never reaches
     any of them for a command the prefilter does not match. Reported as
-    ``cross-repo/archive/2026-08-11-doe-claude-em-tier-u-node-runner-
+    ``cross-repo/archive/2026-08-11-coordinator-content-repo-em-tier-u-node-runner-
     unclassified.md``, confirmed live by dominant-shard3 group 4.
 
     THE RULE IS THE ONE EVERY OTHER RUNNER ALREADY GETS, not a new one:
@@ -1823,7 +1823,7 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
     by-path leg finds no file and returns ``[]``. With ``[]`` the
     configured-command containment leg is inert, and a whole-suite command
     that merely NAMES a path (``python -m pytest coordinator/tests``, which
-    is DoE-claude's declared fast AND full tier) classifies on shape alone as
+    is coordinator-content-repo's declared fast AND full tier) classifies on shape alone as
     Tier T -- ungated for subagents and requiring no Tier-U grant from the
     EM. That is the guard silently not guarding, in the exact repo whose
     suite command looks scoped. Do not regress this back to by-path-only.
@@ -2461,7 +2461,7 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
     to phrase the alternative in the deny text.
 
     Glob-expansion closing (2026-08-03, example-retrieval-repo Finding 2, relayed via
-    ``cross-repo/inbox/2026-08-03-doe-claude-em-two-rulings-plan-orphan-
+    ``cross-repo/inbox/2026-08-03-coordinator-content-repo-em-two-rulings-plan-orphan-
     population-and-dr088-antiscope.md``): this leg was ``os.path.isdir``-keyed
     on the LITERAL positional, so an unexpanded glob (``pytest
     coordinator_core/*/tests``, ``pytest tests/*/``) was never a directory on
@@ -3090,7 +3090,7 @@ def _runner_recognized(tokens: Sequence[str]) -> bool:
 
 def _tier_for_cfg_match(cfg_tier: str, generic: Optional[str],
                         argv: Sequence[str]) -> Tuple[str, str]:
-    """R1 (cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
+    """R1 (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-tier-u-shape-
     ruling.md): tier is a property of the invocation's SHAPE, not of the
     config key (``fast_test_cmd`` or ``full_test_cmd``) it was read from.
     The single decision point for both legs of ``_classify_command_core``'s
@@ -3442,7 +3442,7 @@ def _bare_line_is_command_shaped(prefix: str) -> bool:
 
     The cue search is CLAUSE-scoped, not whole-prefix -- a second,
     independent false-positive class (2026-07-25, cross-repo/inbox/
-    2026-07-25-doe-claude-em-dispatch-suite-classifier-two-live-defects.md
+    2026-07-25-coordinator-content-repo-em-dispatch-suite-classifier-two-live-defects.md
     Defect A): "Neither consumer may run the test tier or block the
     ceremony. A start ceremony that invokes pytest is a several-minute
     stall ..." has a ``run`` in its FIRST sentence (itself part of a

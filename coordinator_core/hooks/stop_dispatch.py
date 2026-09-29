@@ -1,7 +1,7 @@
 """
 coordinator_core.hooks.stop_dispatch — Stop-event fan-in, nine legs (not six).
 
-Purpose: warm-engine composition for DoE-claude's `stop-dispatch.py`, the
+Purpose: warm-engine composition for coordinator-content-repo's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
 start (measured 53.1ms of process time, see the plan's own § Problem) to run
 its fan-in of folded scripts every Stop, fleet-wide. This module is the
@@ -9,7 +9,7 @@ engine-side op that registration can eventually point at (per this plan's
 own exit criterion — the `type`/`url` edit itself is DoE's, not ours).
 
 THE COUNT IS NINE, NOT SIX. `stop-dispatch.py`'s own `REGISTRY` (read at
-DoE-claude HEAD `3331187b9cd5b806942e6dba290e5985c7dbfc4c`, unchanged at
+Coordinator-content-repo HEAD `3331187b9cd5b806942e6dba290e5985c7dbfc4c`, unchanged at
 current HEAD `7b9b78f4b211023e34a9d53f2feaacd45ed98154` — same 478 lines)
 carries eight `StopGuard` entries, not the six the classification table's
 prose names — the "six" there is inherited docstring prose this plan's own

@@ -20,7 +20,7 @@ session_id, or unexpected exception yields empty stdout and exit 0 --
 this module must never brick a spawn.
 
 Additive second seam (canonical spec
-state/subagent-share/conductor/seam-adjudication.md § 2.3, DoE-claude):
+state/subagent-share/conductor/seam-adjudication.md § 2.3, coordinator-content-repo):
 when the stdin payload carries a ``contract_blocks`` JSON list of
 ``coordinator/snippets/<name>.md`` block names (resolved DoE-side from
 ``subagent-sandbox-policy.yaml`` -- this module never re-reads that
@@ -87,7 +87,7 @@ from coordinator_core.subagent_sandbox.engine import (
 #: ``coordinator:premise-checker`` provisioned as
 #: ``coordinatorpremise-checker-<hash>.md``, a name that reads as a defect to
 #: every reader because the word boundary is gone. It cost a wrong defect report
-#: against a sibling repo's workflow (doe-claude-9a, 2026-09-11) before anyone
+#: against a sibling repo's workflow (coordinator-content-repo-9a, 2026-09-11) before anyone
 #: looked here. Sanitization has to stay lossy -- these characters cannot appear
 #: in a segment -- but it does not have to be illegible.
 #:
@@ -819,7 +819,7 @@ def _build_staff_eng_review_doc_text(
     """``--type staff-eng-review``: verdict + rationale + per-finding slots.
 
     ``## Findings`` is the canonical heading for review output across every
-    consumer (DoE-claude ruling, 2026-08-10 memo): a type whose name promises
+    consumer (coordinator-content-repo ruling, 2026-08-10 memo): a type whose name promises
     review output must emit a sidecar
     ``ops.review_findings_ledger.verify`` can read a ``## Findings Ledger``
     block out of. A verdict is not a finding, so ``## Verdict``/``## Rationale``
@@ -863,7 +863,7 @@ def _append_lens_frontmatter_keys(frontmatter_text: str, lens_keys: str) -> str:
     return frontmatter_text[: -len(marker)] + lens_keys + marker
 
 
-#: DoE-claude coordinator/agents/plan-coverage-checker.md \u00a7 Sidecar Format
+#: coordinator-content-repo coordinator/agents/plan-coverage-checker.md \u00a7 Sidecar Format
 #: skeleton (## Plan Coverage Verification through the tenth ### heading),
 #: copied byte-exact -- see _build_plan_coverage_check_doc_text's docstring.
 _PLAN_COVERAGE_CHECK_SKELETON = '## Plan Coverage Verification\n\n**Plan:** <path>\n**Verdict:** COMPLETE | INCOMPLETE | BLOCKED-SURFACE-TO-PM | SCOPE-MISMATCH | DEGRADED\n**Sub-label:** INCOMPLETE — Mechanical: N, Judgment: M  *(INCOMPLETE only; omit otherwise)*\n**Oracle items:** N (source: <heading|table|ratified problem-set:`<path>`|inline ratified problem-set|sizing object:`<path>`>)\n**Slate items:** M\n**Missed:** X | **Ambiguous:** A | **OOS-weak:** Y | **Hedges:** Z | **Unratified-deferrals:** U | **Malformed-rows:** R | **Missing-writes:** V | **Open-on-landed:** O | **Substrate-drift:** W | **Deferral-args:** G | **Spine-emittability:** E | **Vehicle-in-anti-scope:** H | **Unregistered-hooks:** K\n**Advisory:** <finding line if applicable, else omit>\n\n### Missed audit items (no slate entry, no architectural OOS)\n\n*Action: one of the three resolutions in § Identity (add-to-slate | architectural-OOS | oracle-was-wrong).*\n\n### Ambiguous audit items (signal-partial — informational only)\n\n*Action: "verify covered or promote to explicit slate citation" — plus the reason (stopword-only overlap OR uncited consolidation). Never gates INCOMPLETE.*\n\n### Weak OOS / hedges (appetite-based deferrals)\n\n*Action: "promote to slate OR rewrite OOS reason as architectural" — quote ±5 lines of context.*\n\n### Task-spine: unratified deferrals and malformed rows\n\n*Action: LEGACY → "PM ratifies (pm_approved: true) OR EM moves the row back into scope." GOVERNED → **"ask the PM to approve the `<grouping>` grouping (or supply the missing pm_utterance/disposition_detail) — never set a field yourself, approval is a PM act."** Malformed row → "author fixes the required field(s)." Zero/>1 spine blocks → FAIL-LOUD note, verdict DEGRADED.*\n\n**Deferral-argument lenses** (`case_against` vacuity; >4 candidate cuts): see `docs/wiki/plan-coverage-checker.md` § Lens 2b checks 3–4 — a cut counts as candidate while `open`, not only once closed. Emit above as **Deferral-args**.\n\n### Task-spine: rows missing declared writes\n\n*Action: "author adds `writes:` — the row\'s `surface:` plus its body name the write targets."*\n\n### Task-spine: open rows on landed plans (resolution-completeness)\n\n*Action: "EM resolves via `plan_tasks.mutate resolve` (PM approval if disposition is non-`coded`) OR investigates why it was missed."*\n\n### Spine emittability (would `dispatch.emit` refuse this spine — AC9)\n\n*Action: "add a `writes:` path with a co-located test, OR architecturally justify why this row ships with no test coverage" — quote the offending row `id`s (the engine-defect case is Advisory-only, see Phase 3.7).*\n\n### Substrate drift (in-repo paths/symbols cited that don\'t match disk)\n\n*Action: "amend plan to current substrate OR explain drift" — plus current disk state (file absent / symbol not found within ±50 lines).*\n\n### Anti-scope vehicle-naming (Phase 4.5, Lens 4)\n\n*Action: the tripwire token and correction from Phase 4.5.*\n\n### Hook registration liveness (Phase 4.6, Lens 5)\n\n*Action: "amend plan to a currently-registered hook, or confirm with the EM whether the citation is stale" — plus the on-disk existence note and roster citation.*'
@@ -887,7 +887,7 @@ def _build_plan_coverage_check_doc_text(
     path (``_PLAN_DERIVABLE_LENS``): ``_PLAN_COVERAGE_CHECK_SKELETON`` above
     -- the ``## Plan Coverage Verification`` section, its ten ``### ``
     findings headings, and the thirteen-bucket counts line -- is copied
-    BYTE-EXACT from DoE-claude's ``coordinator/agents/plan-coverage-
+    BYTE-EXACT from coordinator-content-repo's ``coordinator/agents/plan-coverage-
     checker.md`` \u00a7 Sidecar Format -- never retyped or paraphrased,
     since a near-miss classifies the sidecar DEGRADED. A DoE-side edit to
     that section is a drift this module does NOT auto-follow (no runtime
@@ -1013,7 +1013,7 @@ def resolve_plugin_root() -> Optional[str]:
     two is the defect this resolver exists to fix. ``_assemble_contract_blocks``
     used to join ``coordinator/snippets`` under the session's ``git_root``,
     which only composes when the session happens to be running inside the
-    DoE-claude checkout itself and yields an empty snippets dir everywhere
+    coordinator-content-repo checkout itself and yields an empty snippets dir everywhere
     else.
 
     Resolution order:
@@ -1028,10 +1028,10 @@ def resolve_plugin_root() -> Optional[str]:
          (content directly at that root) -- mirroring
          ``coordinator_root._resolve_plugin_root_for_machine_local``'s same
          two-shape probe for a different artifact.
-      3. ``<machine_local_dir()>/.doe-root`` + ``coordinator`` -- the fleet's
+      3. ``<machine_local_dir()>/.coordinator-content-root`` + ``coordinator`` -- the fleet's
          own pointer file, an in-process read with no spawn. Required because
          on a dev-clone box the live plugin root is a checkout OUTSIDE
-         ``.claude`` entirely (``X:\\DoE-claude\\coordinator``), which rungs 1
+         ``.claude`` entirely (``C:\\coordinator-content-repo\\coordinator``), which rungs 1
          and 2 cannot see: rung 2's directory EXISTS there but holds only
          ``coordinator/bin``.
 
@@ -1041,7 +1041,7 @@ def resolve_plugin_root() -> Optional[str]:
     returned the first candidate that ``is_dir()``, which on this fleet's
     dev-clone install returned ``~/.claude/plugins/coordinator-claude/
     coordinator`` -- a real directory containing only ``bin`` -- and thereby
-    composed EMPTY contract blocks in every repo including DoE-claude itself,
+    composed EMPTY contract blocks in every repo including coordinator-content-repo itself,
     which had worked before. A stand-in probe is exactly the failure
     ``cater_subagent_start._resolve_role_append_snippet_path``'s own docstring
     already warned against for the sibling artifact.
@@ -1065,12 +1065,12 @@ def resolve_plugin_root() -> Optional[str]:
             return str(candidate)
 
     try:
-        pointer = machine_local_dir() / ".doe-root"
-        doe_root = pointer.read_text(encoding="utf-8").strip()
+        pointer = machine_local_dir() / ".coordinator-content-root"
+        content_root = pointer.read_text(encoding="utf-8").strip()
     except OSError:
-        doe_root = ""
-    if doe_root:
-        candidate = content_root_for(doe_root)
+        content_root = ""
+    if content_root:
+        candidate = content_root_for(content_root)
         if candidate is not None and _has_content(candidate):
             return str(candidate)
 
@@ -1176,7 +1176,7 @@ def _assemble_contract_block_parts(
     join separator is exactly ``"\\n\\n"``. ``plugin_root`` is the
     plugin's own CONTENT root (``resolve_plugin_root()``), NOT the spawning
     session's git root -- the two only coincide when the session happens to
-    be running inside the DoE-claude checkout itself (see
+    be running inside the coordinator-content-repo checkout itself (see
     ``resolve_plugin_root``'s docstring).
     """
     snippets_dir = Path(plugin_root) / "snippets"
@@ -1348,7 +1348,7 @@ def assemble_contract_block_parts_for_payload(
 
     # `payload["plugin_root"]` is the FIRST rung (C1, hook_http.payload_from_event's
     # computed body field, carried per-call from the forwarder). `resolve_plugin_root()`'s
-    # own ambient probe (env var -> plugin dir -> `.doe-root` pointer) is the FALLBACK,
+    # own ambient probe (env var -> plugin dir -> `.coordinator-content-root` pointer) is the FALLBACK,
     # reached only when the payload is silent -- e.g. a direct in-process caller
     # (`cater_subagent_start.py`, `fan-out-dispatch.py`) that never went through the HTTP
     # hook seam at all. Never the other way around: see this module's docstring for the
@@ -1538,7 +1538,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     repo is NOT unambiguously resolvable from here -- guessing via this process's own ambient
     directory is exactly how a multi-repo plan-blitz item misfiles its receipt into whichever
     repo this process happens to be sitting in, which is a DURABLE wrong record once
-    written (`hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, DoE-claude, reads it back
+    written (`hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, coordinator-content-repo, reads it back
     and reports a false owed-route or a false in-flight verdict off it). Refuse, don't guess.
     """
     if not cwd:
@@ -1584,7 +1584,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     #   - a RESUMED agent: the harness reports `general-purpose` for it, so
     #     the header claimed a type the agent is not, on the one field a
     #     consumer filters by. Observed live 2026-08-29 on a resumed
-    #     `coordinator:review-integrator` (reported by doe-claude-6c).
+    #     `coordinator:review-integrator` (reported by coordinator-content-repo-6c).
     # Reading the SAME label the filename and the eligibility test already
     # read closes that by construction -- the header can no longer disagree
     # with the name of the file it sits in.
@@ -1691,7 +1691,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # SubagentStart under a new session id, misses the FileExistsError branch,
     # and gets scaffolded a second, EMPTY sidecar while its populated one is
     # orphaned under the old id. Observed live 2026-08-29 on a resumed
-    # `coordinator:review-integrator` (reported by doe-claude-6c): the run
+    # `coordinator:review-integrator` (reported by coordinator-content-repo-6c): the run
     # report read as lost work, and only survived because the agent noticed
     # and hand-copied the file across.
     #

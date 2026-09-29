@@ -1,6 +1,6 @@
 """foreground_dispatch_strip -- shared library, NOT a registered hook.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_foreground_dispatch_strip.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_foreground_dispatch_strip.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4. THREE
 ADAPTATIONS (the class-1 sites named in this package's own `__init__.py`
 docstring), all direct-import or direct-primitive substitutions for a

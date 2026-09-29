@@ -6,7 +6,7 @@ launcher coverage on stock Windows unless a same-name `.cmd` sibling exists
 (see coordinator/bin/gen-launcher-shim.py and docs/wiki/windows-cmd-shims.md).
 It is easy to add a new entrypoint and forget the Windows twin -- this guard
 fails loud instead of letting that gap ship silently. It caught two real
-violations on 2026-07-25: `claude-doe` and `workstream-complete-assemble` were
+violations on 2026-07-25: `claude-author` and `workstream-complete-assemble` were
 both missing `.cmd` launchers (bare-entrypoint case). The `.py`-suffixed case
 was added 2026-07-25 closing a DR-076 gap: ~254 `.py` entrypoints had `.cmd`
 twins purely by convention, with nothing enforcing the pairing -- deleting one
@@ -659,14 +659,14 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     # own docstrings ("harness-injected plugin bin ... resolves on tool shells
     # where ~/.claude/bin is NOT on PATH"). Both are true, about different
     # trees: THIS repo's coordinator/bin (the source copy) is never
-    # PATH-injected -- only DoE-claude's own coordinator/bin is (a distinct
+    # PATH-injected -- only coordinator-content-repo's own coordinator/bin is (a distinct
     # directory the harness injects for its own plugin). The forwarders'
-    # docstrings described the general pattern correct for DoE-claude's copy
+    # docstrings described the general pattern correct for coordinator-content-repo's copy
     # but never held for claude-klabauter's. Settled on disk, not by convenience: see
     # docs/plans/2026-08-14-windows-first-class-gate-and-exemptions.md:116
     # ("coordinator/bin is the SOURCE side, not the executed side") and
     # docs/research/2026-08-14-posix-exec-final-36-bin-name-dispositions.md's
-    # `machine-local` per-name evidence section (the sibling DoE-claude/
+    # `machine-local` per-name evidence section (the sibling coordinator-content-repo/
     # example-game-repo forwarders are EXEMPT, not deleted, for exactly this reason).
     # -- Not generator output at all: the widened roots (2026-08-03) ---------
     # The 2026-08-03 sweep over `bin/`, `coordinator/lib/`,

@@ -41,7 +41,7 @@ which reports) and ``coordinator_core.ops.plan_stamp_prepped`` (the
 four-field attest under a lock). This module registers nothing and writes
 nothing.
 
-Read-side twin, and the authority for every predicate here: DoE-claude
+Read-side twin, and the authority for every predicate here: coordinator-content-repo
 ``coordinator/bin/mise-prep-gate.py``. That script and this module must agree —
 they answer the same question over two different corpora, and a verdict that
 depends on which one ran is not a bar. Where a predicate is restated here it is
@@ -49,13 +49,13 @@ restated to the letter; where it necessarily differs (see ``fleet_siblings``) th
 difference is named.
 
 Four legs (``_created_roots``, the STALE-PREFIX candidate, the archive-write
-SPINE check, and refusal collapsing) are ported from that script at DoE-claude
+SPINE check, and refusal collapsing) are ported from that script at coordinator-content-repo
 sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``; see
 ``coordinator_core/roadmap/tests/test_prep_gate_four_legs.py`` for one fixture
 per leg.
 
-Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
-               DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
+               coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
                .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md
 
 Budget: pure reads, ZERO spawns, no git. One bounded read per plan plus the
@@ -161,7 +161,7 @@ FLEET_REPOS = (
     "example-game-workbench-repo",
     "example-cockpit-repo",
     "example-market-data-repo",
-    "DoE-claude",
+    "coordinator-content-repo",
 )
 
 #: Keys every ``census[]`` entry declares. Presence-and-non-blank, never a value
@@ -213,7 +213,7 @@ def fleet_siblings(repo_root: Path) -> tuple:
     not.
 
     Case-folded, for the reason ``_path_leaves_repo`` folds case: a clone at
-    ``doe-claude/`` and one at ``DoE-claude/`` are the same repo, and a
+    ``coordinator-content-repo/`` and one at ``coordinator-content-repo/`` are the same repo, and a
     subtraction that missed on case would report every self-naming row in one of
     them as a cross-repo dependency.
     """
@@ -238,7 +238,7 @@ def repo_nested_names(repo_root: Path, root_names: frozenset) -> Dict[str, tuple
     """Second-level directory names in ``repo_root``, mapped to the root entries
     holding them — the STALE-PREFIX candidate for the ROOT-EXISTENCE leg.
 
-    Ported from DoE-claude ``coordinator/bin/mise-prep-gate.py``
+    Ported from coordinator-content-repo ``coordinator/bin/mise-prep-gate.py``
     (``_repo_nested_names``) at sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``.
 
     A value like ``cross-repo/inbox/x`` names a first segment this repo does
@@ -378,7 +378,7 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     # A row held out of the emit already -- because an earlier row's `epistemic-premise`
     # depends_on edge decides its writes, directly OR transitively through a chain of
     # non-epistemic-premise edges -- declares nothing a fire-time driver must resolve, since
-    # `dispatch_emit.emit`/`build_waves` never requires its writes either. Ported from DoE-claude
+    # `dispatch_emit.emit`/`build_waves` never requires its writes either. Ported from coordinator-content-repo
     # `coordinator/bin/mise-prep-gate.py`'s `_spine` (code-reviewer Finding 1,
     # 2026-09-08-hoexec-close/mise-prep-gate.md): a direct-edge-only check misses route 2 of
     # `_compute_held_out`'s walk, so the full transitive predecessor graph is passed here too.
@@ -420,7 +420,7 @@ def _archive_writes_refused_in_wave(rows: List[Any]) -> Optional[Dict[str, Any]]
     engine's ``block_subagent_archive_write`` refuses every subagent write
     there outside its carve-outs, so the row's executor cannot land it.
 
-    Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py``'s
+    Restated from coordinator-content-repo ``coordinator/bin/mise-prep-gate.py``'s
     ``writes-archive-refused-in-wave`` leg (2026-09-11, reported by
     example-store-repo-fb, whose mise run halted on a chunk writing
     ``archive/specs/...``). The guard's own allow-predicates are CALLED, not
@@ -553,7 +553,7 @@ def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Option
 
     ``emit._row_agent_type`` raises one of ``emit.ROW_ROUTING_ERRORS`` on a
     static spine fact. Calling it here means a plan the gate certifies is one
-    the emitter will route (DoE-claude#75).
+    the emitter will route (coordinator-content-repo#75).
     """
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -642,7 +642,7 @@ def _path_leaves_repo(
 
     The name match is CASE-FOLDED, and the separator rule is unchanged by that.
     The corpus does not agree with itself on the case of a fleet shortname — the
-    doctrine repo is spelled both ``DoE-claude`` and ``doe-claude`` by its own
+    doctrine repo is spelled both ``coordinator-content-repo`` and ``coordinator-content-repo`` by its own
     peers, in plan prose and in cross-repo archives — so a case-sensitive ``==``
     made a row declaring a genuine cross-repo surface in the corpus's OWN
     spelling invisible to this leg. Folding case widens which spellings are SEEN;
@@ -727,7 +727,7 @@ def _path_leaves_repo(
         # own declaration rather than a directory listing.
         return None
     if first and first not in root_names:
-        # STALE-PREFIX candidate (ported from DoE-claude ``mise-prep-gate.py``
+        # STALE-PREFIX candidate (ported from coordinator-content-repo ``mise-prep-gate.py``
         # ``_repo_nested_names`` at sha ``fbc7bf2bb9f58ef84a11254ef71f0c9391b220f6``):
         # a first segment absent from the root but present one level down is a
         # path written against a remembered layout, and its repair is to move
@@ -759,7 +759,7 @@ def _is_settings_home_path(normalized: str) -> bool:
     """A path rooted at the machine-local settings home, which belongs to no repo.
 
     The ROOT-EXISTENCE leg catches a nameless path into another team's tree; the
-    settings home is not one. Same bar as DoE-claude ``mise-prep-gate.py``
+    settings home is not one. Same bar as coordinator-content-repo ``mise-prep-gate.py``
     (``ff446da1b``), so a plan the authoring gate passes is one this stamp passes.
     The discriminant is read off the value's own spelling, never an author flag.
 
@@ -812,6 +812,11 @@ def _path_is_unresolved_placeholder(value: str) -> bool:
     return "<" in value or ">" in value
 
 
+#: Path-declaring read fields on a spine row; `reads_at_head` never orders but is
+#: still a declaration of a path this row touches.
+READ_FIELDS = ("reads", "reads_at_head", "consumes")
+
+
 def _row_declared_paths(row: Dict[str, Any]) -> List[tuple]:
     """``(field, value)`` for every path-shaped declaration on a row.
 
@@ -825,7 +830,7 @@ def _row_declared_paths(row: Dict[str, Any]) -> List[tuple]:
     commit 92ca01682).
     """
     out: List[tuple] = []
-    for key in ("writes", "reads", "reads_at_head", "consumes"):
+    for key in ("writes", *READ_FIELDS):
         value = row.get(key)
         if isinstance(value, list):
             out.extend((key, item) for item in value if isinstance(item, str))
@@ -875,7 +880,7 @@ def _ungated_reads(row: Dict[str, Any], row_id: str) -> "tuple[dict, list]":
     """Validated ``external_reads_ungated`` entries for ``row``, as
     ``({(path, owner_repo_folded): entry}, findings)``.
 
-    APM ruling (mirrors DoE-claude ``coordinator/bin/mise-prep-gate.py``): an
+    APM ruling (mirrors coordinator-content-repo ``coordinator/bin/mise-prep-gate.py``): an
     entry clears a SIBLING-NAME/ROOT-EXISTENCE hit on ``reads:`` only, never
     ``writes:``/``surface:`` — three shapes are refused here rather than
     silently ignored, each its own message because each names a different
@@ -889,18 +894,14 @@ def _ungated_reads(row: Dict[str, Any], row_id: str) -> "tuple[dict, list]":
     """
     entries = row.get("external_reads_ungated")
     entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-    # DoE parity, commit 92ca01682: reads_at_head/consumes clear exactly as
-    # reads does -- the schema refuses a row mixing reads with either, so a
-    # row never carries more than one of the three.
-    reads_set: set = set()
-    for _reads_key in ("reads", "reads_at_head", "consumes"):
-        _reads_value = row.get(_reads_key)
-        if not isinstance(_reads_value, list):
-            _reads_value = []
-        reads_set.update(str(v).strip() for v in _reads_value if isinstance(v, str))
-    writes = row.get("writes")
-    if not isinstance(writes, list):
-        writes = []
+    reads_set = {
+        str(v).strip()
+        for key in READ_FIELDS
+        if isinstance(row.get(key), list)
+        for v in row[key]
+        if isinstance(v, str)
+    }
+    writes = row.get("writes") if isinstance(row.get("writes"), list) else []
     writes_set = {str(v).strip() for v in writes if isinstance(v, str)}
     writes_under = row.get("writes_under")
     if not isinstance(writes_under, list):
@@ -1029,7 +1030,7 @@ def _external_deps(
         # placeholder in one of them discards the rows that had nothing to do with it —
         # the same reasoning this function already applies to a withheld cross-repo row.
         #
-        # Measured case (DoE-claude
+        # Measured case (coordinator-content-repo
         # docs/plans/2026-07-30-boot-payload-residue-curation-and-dispatch-guards.md):
         # C8b declares `writes: ~/.claude/projects/<project>/memory/` and is
         # `deferred: true` / `pm_approved: false`, withheld behind a FRONTMATTER-level
@@ -1040,7 +1041,7 @@ def _external_deps(
         # by a mechanism this leg does not read. Scoped to the placeholder leg only.
         #
         # Skipped, NOT withheld: `withheld` becomes `mise_prepped_findings`, which the
-        # attest contract (DoE-claude coordinator/docs/wiki/mise-prepped-attest.md)
+        # attest contract (coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md)
         # defines as rows held by an uncleared external_gate — work waiting on
         # somebody else. A coded or wont_do row is finished, and a deferred one is
         # out of scope; listing them made a 59-of-70-coded plan on example-game-repo read as a
@@ -1066,7 +1067,7 @@ def _external_deps(
             # DoE's SIBLING-NAME correlation; a value with no sibling match (the
             # ROOT-EXISTENCE leg) is not cleared by this field, matching DoE's own
             # acknowledged blind spot there.
-            if reason and field in ("reads", "reads_at_head", "consumes"):
+            if reason and field in READ_FIELDS:
                 sibling = _matched_sibling(value, siblings)
                 if sibling is not None:
                     key = (value.strip(), sibling.casefold())

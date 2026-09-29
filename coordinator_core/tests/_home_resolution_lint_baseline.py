@@ -96,8 +96,7 @@ FORWARD_SLASH_BASELINE: list[tuple[str, int, str]] = [
     ("coordinator_core/install/scaffold_structure.py", 99, 'return self.path.endswith("/")'),
     ("coordinator_core/trusted_root_guard.py", 210, 'if content.endswith("/"):'),
     ("coordinator_core/trusted_root_guard.py", 270, 'if content.endswith("/"):'),
-    ("coordinator_core/trusted_root_guard.py", 445, 'if os.name == "nt" and doe_root.endswith("/"):'),
-    ("coordinator_core/trusted_root_guard.py", 453, 'if os.name == "nt" and claude_klabauter_root.endswith("/"):'),
+    ("coordinator_core/trusted_root_guard.py", 443, 'if os.name == "nt" and anchor.endswith("/"):'),
     ("coordinator_core/install/check_install_singularity.py", 184, 'p = raw[:-1] if raw.endswith("/") else raw'),
     ("coordinator_core/install/check_install_singularity.py", 187, 'basename = p.rsplit("/", 1)[-1]'),
     (
@@ -114,6 +113,13 @@ FORWARD_SLASH_BASELINE: list[tuple[str, int, str]] = [
 
 # 2026-07-29 update: 13 of the original 18 BARE_OR_BASELINE sites fixed --
 BARE_OR_BASELINE: list[tuple[str, int, str]] = [
+    # Shape A -- explicit CLAUDE_HOME override; the unset case falls through to
+    # content_root(), which owns the platform home resolution.
+    (
+        "coordinator/bin/count-distill-backlog.py",
+        57,
+        'claude_home_env = os.environ.get("CLAUDE_HOME")',
+    ),
     # Shape A -- an OPTIONAL EXTRA root, not a resolution chain: a lone
     # `os.environ.get("CLAUDE_HOME", "")` / `os.environ.get("HOME", "")`
     # whose result, if non-empty, is APPENDED to a list already populated

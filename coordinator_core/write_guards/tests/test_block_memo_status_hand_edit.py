@@ -463,7 +463,7 @@ class TestPassThrough:
         The root is resolved rather than written as the POSIX literal
         ``/repo``: on Windows a leading slash is drive-RELATIVE, so
         ``Path.resolve`` anchors the candidate onto the current drive
-        (``X:\\repo\\...``) while a literal root stays ``/repo`` and the
+        (``C:\\repo\\...``) while a literal root stays ``/repo`` and the
         containment prefix can never match -- which made this test fail for
         a reason that has nothing to do with the casing it exists to check.
         Resolving both through the same anchoring keeps the subject intact

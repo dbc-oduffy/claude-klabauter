@@ -29,7 +29,7 @@ Tests assert:
     target's prior mode bits) — CLAUDE.md is non-executable, so this is a
     faithful-oracle-repro, not a regression (see module negative-spec).
 
-Spec backlink: DoE-claude:pln-posture-overlay-lands-in-the-e-adc58c
+Spec backlink: coordinator-content-repo:pln-posture-overlay-lands-in-the-e-adc58c
 """
 
 from __future__ import annotations

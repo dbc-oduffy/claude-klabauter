@@ -11,10 +11,10 @@ routing table living as prose in the skill body (the "deterministic if/else
 in a markdown fence at the logic level" defect `invisible-doctrine.md`
 realization #6 forbids).
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-DR-090 (DoE-claude docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
-Spec backlink: DoE-claude DoE-claude:pln-sizing-skill-sizing-object-art-3eb413, chunk C7 (Design D4/D5)
-Input shape: DoE-claude coordinator/schemas/sizing-object.schema.json (C1)
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+DR-090 (coordinator-content-repo docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-sizing-skill-sizing-object-art-3eb413, chunk C7 (Design D4/D5)
+Input shape: coordinator-content-repo coordinator/schemas/sizing-object.schema.json (C1)
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/sizing-assemble` trampoline (mirrors
 `coordinator/bin/pickup-assemble`'s direct-import template-variant #1).
@@ -147,10 +147,10 @@ before ANY detent computation runs, so `premise_unproven` /
 `premise_not_applicable` never fire on that path regardless of
 `premise_provenance` — that is correct by size (D3), not an oversight to
 "fix" by adding the detent to the short-circuit (cross-repo memo
-2026-08-05-doe-claude-em-premise-provenance-detent-sizing-assemble.md).
+2026-08-05-coordinator-content-repo-em-premise-provenance-detent-sizing-assemble.md).
 
 Premise provenance (advisory detent, warn-never-block — DR-068 precedent;
-cross-repo memo 2026-08-05-doe-claude-em-premise-provenance-detent-sizing-
+cross-repo memo 2026-08-05-coordinator-content-repo-em-premise-provenance-detent-sizing-
 assemble.md): `premise_provenance` is one of `executed` | `read` |
 `not-applicable` | `unrecorded` | None, validated unconditionally by
 `_validate_premise_provenance` (same unconditional-validation property as
@@ -176,7 +176,7 @@ producing a spike-result artifact (a structural-in-mechanism,
 never-in-ceremony design per the memo's PM ruling 2).
 
 Boundary-in-notch (advisory detent, warn-never-block — same shape as premise
-provenance above; cross-repo memo 2026-08-10-doe-claude-em-sizing-guard-
+provenance above; cross-repo memo 2026-08-10-coordinator-content-repo-em-sizing-guard-
 flags.md): `boundary_in_notch` is one of `yes` | `no` | None, validated
 unconditionally by `_validate_boundary_in_notch`. A `yes` answers "a
 cross-repo boundary, memo, relay, or assent gate contributed to this notch"
@@ -671,7 +671,7 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
     land beneath these rows rather than reopening the list, and the harness task
     list is not readable from the engine, so nothing here can see whether a
     recorder is already open. That discriminator stays doctrine-side
-    (doe-claude-em memo, 2026-09-05).
+    (coordinator-content-repo-em memo, 2026-09-05).
     """
     terminal = (
         "quick-wrap"

@@ -2317,7 +2317,7 @@ class TestUpdateMetaFields:
 #
 # A session launched from Git Bash hands `sessions_dir()` an MSYS drive-mount
 # cwd (`/x/claude-klabauter`). Before the `_normalize_cwd` fix that resolved to
-# `X:\x\claude-klabauter`, the `.git` walk found nothing, and the hub came back  # abs-path-ok: illustrative example shape
+# `C:\x\claude-klabauter`, the `.git` walk found nothing, and the hub came back  # abs-path-ok: illustrative example shape
 # as `""` — which every registry lookup layered on it reads as "this repo has
 # no sessions". A PM grant recorded under the real hub was therefore
 # INVISIBLE, not denied, and the failure was directional: always toward "no

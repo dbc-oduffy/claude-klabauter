@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards.bump_outside_repo_write -- the
 Bash-surface OUTSIDE-REPO write-confinement speed bump (C5).
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C5 "Outside-repo detection, inline-interpreter classification,
 sandbox reroute".
 
@@ -651,7 +651,7 @@ def test_variable_used_as_path_prefix_is_not_treated_as_unexpanded_shape(env, mo
     ],
 )
 def test_variable_assigned_earlier_in_the_command_is_not_unexpanded(cmd):
-    """doe-claude-4d, 2026-09-23: `D=...; mkdir -p $D` was denied as
+    """coordinator-content-repo-4d, 2026-09-23: `D=...; mkdir -p $D` was denied as
     "'$D' did not expand -- the variable was never set"."""
     assert "D" in guard._names_assigned_in(cmd)
     assert not guard._is_unexpanded_variable_target("$D", guard._names_assigned_in(cmd))
@@ -1756,3 +1756,20 @@ def test_foreign_repo_branch_does_not_carry_the_shapes_not_effects_clause():
     for rendered in (foreign_em, foreign_subagent, foreign_unknown):
         assert "classifies command shapes, not their effects" not in rendered
         assert "script that writes here is not checked" not in rendered
+
+
+def test_consumer_level_warns_instead_of_denying_outside_repo_write(env, monkeypatch):
+    from coordinator_core import machine_profile
+
+    _set_anchor(monkeypatch, env, "sess-warn-outside")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    machine_profile.reset_cache()
+    src = env["anchor"] / "src.txt"
+    src.write_text("x\n", encoding="utf-8")
+    cmd = f"cp {_posix(src)} {_posix(env['outside'] / 'newfile.txt')}"
+
+    first = guard.check_bump_outside_repo_write(cmd, "sess-warn-outside", str(env["anchor"]), {})
+    hso = first["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "full context" in hso["additionalContext"]
+    assert guard.check_bump_outside_repo_write(cmd, "sess-warn-outside", str(env["anchor"]), {}) is None

@@ -612,7 +612,7 @@ def test_repo_root_derives_default_manifest_path(tmp_path, capsys):
 def test_repo_root_probes_claude_klabauter_layout_when_doe_layout_absent(tmp_path, capsys):
     """claude-klabauter's own layout (`docs/install/...`, no `coordinator/` prefix) must
     resolve by default too — regression for the relpath that was hardcoded to
-    the DoE-claude layout only, which made a no-args run in THIS repo always
+    the coordinator-content-repo layout only, which made a no-args run in THIS repo always
     land on "no manifest declared" and exit 0 (green-by-skip on the guard for
     claude-klabauter's own manifest)."""
     repo_root = tmp_path / "repo"
@@ -663,7 +663,7 @@ def test_repo_root_skip_message_names_both_probed_paths(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Point 2 — declared setup-script paths must resolve on disk
 #
-# Regression origin: DoE-claude's manifest reported `packageability-compliant`
+# Regression origin: coordinator-content-repo's manifest reported `packageability-compliant`
 # while its declared Point-2 entry point had left the repo entirely. Point 2
 # verified that the field and its flags were DECLARED, never that the path
 # resolved, so a migration of 1135 files moved the target and nothing noticed.
@@ -728,7 +728,7 @@ def test_point2_stats_the_programmatic_entry_point_too(tmp_path, capsys):
     check at all — yet the declared-path stat originally covered only
     `standalone_setup_script`. So the field the contract trusts MOST was the one
     field nothing verified, and a manifest could pass Point 2 while its
-    authoritative entry point had left the repo. Found live against DoE-claude's
+    authoritative entry point had left the repo. Found live against coordinator-content-repo's
     manifest on 2026-08-17: its `programmatic_entry_point.posix` names a file
     present in neither their working tree nor the published mirror.
     """
@@ -814,7 +814,7 @@ def test_point2_object_valued_programmatic_entry_point_leg_fails_not_skips(tmp_p
     `_stat_declared_paths` is one shared helper parametrized by field — the
     `standalone_setup_script` regression above proved the str-guard fires: this
     is the same case for `programmatic_entry_point`, the field Point 2 trusts
-    MOST and the one a live manifest (DoE-claude, 2026-08-17) actually had
+    MOST and the one a live manifest (coordinator-content-repo, 2026-08-17) actually had
     unresolved.
     """
     manifest = _compliant_manifest()

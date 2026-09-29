@@ -1,7 +1,7 @@
 """coordinator_core.hooks.nudge_multiwave_workflow — PreToolUse(Agent|Workflow)
 advisory op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/nudge-multiwave-workflow.py`
+Ported from coordinator-content-repo `coordinator/hooks/scripts/nudge-multiwave-workflow.py`
 per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9.
 
 Offer-shape (never blocks): always returns `allow_advisory()` on the nudge
@@ -53,7 +53,7 @@ common dir, or session sentinel/log falls through to `no_advisory()`. A
 filesystem hiccup must never brick an Agent/Workflow dispatch.
 
 Spec backlink: coordinator/docs/wiki/coordinator-tripwires.md
-§ NUDGE-MULTIWAVE-WORKFLOW (DoE-claude);
+§ NUDGE-MULTIWAVE-WORKFLOW (coordinator-content-repo);
 docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 """
 

@@ -2,8 +2,8 @@
 coordinator_core.ops.cmd_autorun_guard — closes the cmd.exe coverage gap in
 coordinator's `claude` interception.
 
-Problem: coordinator guards reach a session only via `claude-doe`
-(coordinator/bin/claude-doe.py[.cmd]), which execs `claude --plugin-dir
+Problem: coordinator guards reach a session only via `claude-author`
+(coordinator/bin/claude-author.py[.cmd]), which execs `claude --plugin-dir
 <DoE>/coordinator`. Interception of a bare `claude` invocation happens via
 shell FUNCTION shims (pwsh profile, Windows PowerShell 5.1 profile, bash rc —
 see `coordinator_core.install.shell_rc_guard`). None of those load in
@@ -18,7 +18,7 @@ Mechanism: cmd.exe's `AutoRun` registry value
 cmd.exe runs on EVERY interactive startup, unconditionally — not a PATH
 lookup, so unlike the declined python3.exe launcher-shim PE (see DR-284),
 this mechanism's efficacy is NOT a function of the host's PATH order. This
-module writes a `doskey claude=claude-doe $*` macro into that AutoRun value
+module writes a `doskey claude=claude-author $*` macro into that AutoRun value
 (HKCU only — never HKLM, which would require elevation and is a materially
 more invasive, machine-wide change out of this module's scope), guarded so
 it never clobbers an operator's own AutoRun content.
@@ -38,7 +38,7 @@ seam, not a shared import (that op's registry surface is unrelated —
 hardware enumeration, not AutoRun).
 
 § Idempotency / clobber-avoidance
-`_desired_macro` (`"doskey claude=claude-doe $*"`) is treated as an
+`_desired_macro` (`"doskey claude=claude-author $*"`) is treated as an
 identifiable, self-marking substring of the AutoRun value — not wrapped in a
 sentinel comment pair, because cmd.exe's `rem` consumes the REST of the
 line (including any `&`-chained commands after it), so a sentinel-comment
@@ -102,7 +102,7 @@ from coordinator_core.ipc import register_op
 
 _AUTORUN_KEY = r"Software\Microsoft\Command Processor"
 _AUTORUN_VALUE_NAME = "AutoRun"
-_DESIRED_MACRO = "doskey claude=claude-doe $*"
+_DESIRED_MACRO = "doskey claude=claude-author $*"
 _JOIN = " & "
 _LOG_PREFIX = "[cmd-autorun-guard]"
 

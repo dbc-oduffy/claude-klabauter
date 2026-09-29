@@ -1,7 +1,7 @@
 """Compose the roster-v5 ``execute_review`` wave (Design D6, task C11).
 
 Spec: ``docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md``
-task C11, against DoE-claude
+task C11, against coordinator-content-repo
 ``docs/plans/2026-09-27-review-inside-execute-plan.md`` § Contract (ask
 #1). Consumes ``roster.parse_execute_review``'s :class:`ExecuteReview` and
 emits three ``(phase_title, block)`` entries through

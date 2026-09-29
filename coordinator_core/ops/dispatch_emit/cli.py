@@ -13,7 +13,7 @@ Every real computation lives one layer down:
     it in-process, never through a second JSON-RPC round trip, so a CLI
     emission and an op-driven emission of the same plan produce byte-
     identical output by construction (they run the identical call).
-  - a re-stamp (`--restamp`) is `op.py :: restamp`, mirroring DoE-claude's
+  - a re-stamp (`--restamp`) is `op.py :: restamp`, mirroring coordinator-content-repo's
     prior `emit-dispatch-workflow.py :: restamp` wrapper (same refusal
     shape, same serialisation — see that function's own docstring).
   - firing (`--fire`) is `coordinator_core.ops.workflow_fire.fire ::
@@ -398,7 +398,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return EXIT_USAGE
 
     if not is_queue_route:
-        # Restated from DoE-claude emit-dispatch-workflow.py (review(slice A),
+        # Restated from coordinator-content-repo emit-dispatch-workflow.py (review(slice A),
         # 08fb23d21): these flags are queue-route-only and are otherwise
         # silently ignored by the --plan/--inventory/--restamp route -- a
         # caller who drops --queue/--profile while editing a queue invocation

@@ -282,7 +282,7 @@ def _evaluate_powershell_legacy(text: str) -> Optional[str]:
     (Convention (a); AC3) -- routes `text` through C2's `_dialect.strip_
     powershell_prose_noise` FIRST, stripping here-string bodies and quoted
     spans, so a hazard-documenting or otherwise quoted mention of `stash`
-    does not misclassify as an issued command (the doe-claude false-positive
+    does not misclassify as an issued command (the coordinator-content-repo false-positive
     shape this plan exists to not multiply onto a second dialect). The scan
     below reuses the SAME `_STASH_WORD_RE` pre-filter and "next bare word"
     heuristic `_evaluate_legacy` uses, but is a deliberately SEPARATE

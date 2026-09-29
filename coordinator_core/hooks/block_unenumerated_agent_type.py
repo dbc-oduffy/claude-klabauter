@@ -49,7 +49,7 @@ AC10 -- THE ROSTER-LOAD-FAILURE REASON IS SELF-DESCRIBING. Every `_RosterError`
 names the exact path attempted and distinguishes MISSING ENTIRELY (the path
 does not exist -- a path/install defect) from PRESENT BUT UNPARSEABLE/
 UNREADABLE (an OSError or YAMLError reading a path that exists -- a
-peer-repo edit in flight, e.g. mid-rebase on the DoE-claude checkout), so an
+peer-repo edit in flight, e.g. mid-rebase on the coordinator-content-repo checkout), so an
 operator debugs the two differently without reading source. Deliberately NO
 last-good cache as the mitigation -- a stale cache would silently re-open
 the loophole for a type deleted from the roster, which is a new pattern
@@ -147,7 +147,7 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 import yaml
 
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ipc import register_op
 
 CLASS = "hard-deny"
@@ -177,7 +177,7 @@ _OVERRIDE_MARKER_RE = re.compile(
 #: (the fork inherits your full conversation context and always runs on
 #: your model -- a `model` override is ignored); any other type -- or
 #: omitting it -- starts a fresh agent." Confirmed by live measurement, not
-#: only by reading the schema: doe-claude-em measured a real fork dispatch
+#: only by reading the schema: coordinator-content-repo-em measured a real fork dispatch
 #: reaching `PreToolUse(Agent)` with `subagent_type` as the literal string
 #: `"fork"`. It never materializes as a file under any of the three
 #: filesystem legs ((a) policy map keys, (b) coordinator/agents/*.md, (c)
@@ -273,7 +273,7 @@ def _extract_frontmatter(text: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _content_candidates(doe_root: str, leaf: str) -> "list[Path]":
+def _content_candidates(content_root: str, leaf: str) -> "list[Path]":
     """`leaf` under each on-disk shape the plugin content root takes, in
     probe order: a dev clone nests it under `coordinator/`, a
     marketplace/OSS-mirror clone holds it directly at the root.
@@ -290,11 +290,11 @@ def _content_candidates(doe_root: str, leaf: str) -> "list[Path]":
     correctly identified an install defect and then refused every
     `coordinator:*` dispatch because of it.
     """
-    base = Path(doe_root)
+    base = Path(content_root)
     return [base / "coordinator" / leaf, base / leaf]
 
 
-def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
+def _load_policy_roster(content_root: str) -> FrozenSet[str]:
     """Roster source (a) -- the union of all `subagent_type` keys/members
     across `subagent-sandbox-policy.yaml`'s four catering maps.
 
@@ -306,7 +306,7 @@ def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
     independently shaped and a malformed one should not blank the other
     three.
     """
-    candidates = _content_candidates(doe_root, "subagent-sandbox-policy.yaml")
+    candidates = _content_candidates(content_root, "subagent-sandbox-policy.yaml")
     policy_path = next((c for c in candidates if c.is_file()), None)
     if policy_path is None:
         raise _RosterError(
@@ -344,7 +344,7 @@ def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
     return frozenset(keys)
 
 
-def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
+def _scan_agents_frontmatter(content_root: str) -> Dict[str, Tuple[dict, Path]]:
     """Shared scan behind BOTH roster source (b) (`_load_agents_roster`) and
     `resolve_model_pins()` (`coordinator_core.hooks.enforce_agent_model_pin`)
     -- one walk of `coordinator/agents/*.md`, not two frontmatter readers.
@@ -355,7 +355,7 @@ def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
     unreadable or frontmatter-less file is skipped, not fatal -- one
     corrupt agent file must not blank the roster for the other 32.
     """
-    candidates = _content_candidates(doe_root, "agents")
+    candidates = _content_candidates(content_root, "agents")
     agents_dir = next((c for c in candidates if c.is_dir()), None)
     if agents_dir is None:
         raise _RosterError(
@@ -386,7 +386,7 @@ def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
     return entries
 
 
-def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
+def _load_agents_roster(content_root: str) -> FrozenSet[str]:
     """Roster source (b) -- `coordinator:<name>` for every `coordinator/
     agents/*.md` frontmatter `name:` field, keyed as the policy file itself
     keys them (confirmed at HEAD: `name: executor` in the frontmatter,
@@ -395,7 +395,7 @@ def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
     Thin wrapper over `_scan_agents_frontmatter` -- see that function for
     the fail-closed contract this inherits unchanged.
     """
-    return frozenset(_scan_agents_frontmatter(doe_root).keys())
+    return frozenset(_scan_agents_frontmatter(content_root).keys())
 
 
 def _repo_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
@@ -685,7 +685,7 @@ def _home_dir() -> Optional[str]:
 
 
 def resolve_roster(
-    *, doe_root: Any = _UNSET, home: Any = _UNSET
+    *, content_root: Any = _UNSET, home: Any = _UNSET
 ) -> Tuple[Optional[FrozenSet[str]], Optional[str]]:
     """Resolve the union-of-three roster (AC3).
 
@@ -696,32 +696,33 @@ def resolve_roster(
     marker (see module docstring "AC2 -- OVERRIDE MARKER"): the marker
     still exists and is still honored, it just is not disclosed here.
 
-    `doe_root`/`home` are injectable (default: real resolution via
-    `read_doe_root_pointer()` / `_home_dir()`) purely for test isolation --
+    `content_root`/`home` are injectable (default: real resolution via
+    `read_content_root_pointer()` / `_home_dir()`) purely for test isolation --
     production callers never pass them.
     """
-    if doe_root is _UNSET:
-        doe_root = read_doe_root_pointer()
+    if content_root is _UNSET:
+        content_root = read_content_root_pointer()
     if home is _UNSET:
         home = _home_dir()
 
-    if not doe_root:
+    if not content_root:
         return None, (
             "roster source MISSING ENTIRELY (path/install defect): the "
-            "doe-root pointer is unresolved -- checked registry "
-            "repos.doe_claude, <settings-home>/machine-local/.doe-root, "
-            "${CLAUDE_HOME:-$HOME}/.claude/.doe-root. Sources (a) "
+            "the content root is unresolved -- checked registry "
+            "repos.content_root, <settings-home>/machine-local/.coordinator-content-root, "
+            "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root, and the installed "
+            "plugin under ~/.claude/plugins/coordinator-claude. Sources (a) "
             "coordinator/subagent-sandbox-policy.yaml and (b) "
             "coordinator/agents/*.md cannot be read without it."
         )
 
     try:
-        policy_roster = _load_policy_roster(doe_root)
+        policy_roster = _load_policy_roster(content_root)
     except _RosterError as exc:
         return None, exc.reason
 
     try:
-        agents_roster = _load_agents_roster(doe_root)
+        agents_roster = _load_agents_roster(content_root)
     except _RosterError as exc:
         return None, exc.reason
 
@@ -776,7 +777,7 @@ def _declared_pin_value(raw: Any, order: Dict[str, int]) -> Optional[str]:
 
 
 def resolve_model_pins(
-    *, doe_root: Any = _UNSET, home: Any = _UNSET
+    *, content_root: Any = _UNSET, home: Any = _UNSET
 ) -> Tuple[Optional[Dict[str, Dict[str, str]]], Optional[str]]:
     """Resolve `model`/`effort` pins declared in agent frontmatter across
     BOTH roster source (b) (`coordinator/agents/*.md`, keyed `coordinator:
@@ -834,26 +835,27 @@ def resolve_model_pins(
     to leg (b) and no plugin namespace is named `coordinator`) leg (b)
     wins, resolved last.
 
-    `doe_root`/`home` are injectable (default: real resolution via
-    `read_doe_root_pointer()` / `_home_dir()`) purely for test isolation --
+    `content_root`/`home` are injectable (default: real resolution via
+    `read_content_root_pointer()` / `_home_dir()`) purely for test isolation --
     production callers never pass them.
     """
-    if doe_root is _UNSET:
-        doe_root = read_doe_root_pointer()
+    if content_root is _UNSET:
+        content_root = read_content_root_pointer()
     if home is _UNSET:
         home = _home_dir()
 
-    if not doe_root:
+    if not content_root:
         return None, (
             "roster source MISSING ENTIRELY (path/install defect): the "
-            "doe-root pointer is unresolved -- checked registry "
-            "repos.doe_claude, <settings-home>/machine-local/.doe-root, "
-            "${CLAUDE_HOME:-$HOME}/.claude/.doe-root. Source (b) "
+            "the content root is unresolved -- checked registry "
+            "repos.content_root, <settings-home>/machine-local/.coordinator-content-root, "
+            "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root, and the installed "
+            "plugin under ~/.claude/plugins/coordinator-claude. Source (b) "
             "coordinator/agents/*.md cannot be read without it."
         )
 
     try:
-        scanned = _scan_agents_frontmatter(doe_root)
+        scanned = _scan_agents_frontmatter(content_root)
     except _RosterError as exc:
         return None, exc.reason
 

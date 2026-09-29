@@ -1,8 +1,8 @@
 """Pins that `~/.coordinator-claude-settings` is actually PROVISIONED when the
 install runs in the plugin-layered (OSS) shape.
 
-This is claude-klabauter's half of a declare/prove split agreed with DoE-claude on
-2026-08-17 (`cross-repo/inbox/2026-08-17-doe-claude-em-install-entrypoint-what-
+This is claude-klabauter's half of a declare/prove split agreed with coordinator-content-repo on
+2026-08-17 (`cross-repo/inbox/2026-08-17-coordinator-content-repo-em-install-entrypoint-what-
 we-need-from-you.md` § 4b): DoE declares, in `AGENT.md` /
 `agent-install-contract.md`, what an OSS consumer's settings-home must contain
 after install; claude-klabauter owns a test proving the plugin-layered path provisions it.

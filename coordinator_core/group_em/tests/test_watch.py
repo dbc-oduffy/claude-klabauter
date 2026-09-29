@@ -30,12 +30,12 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
     """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
 
     Regression for a live miss measured against the PUBLISHED engine 2026-08-31 by
-    doe-claude-80: the line read `claude-klabauter peers` for every --repo-root,
+    coordinator-content-repo-80: the line read `claude-klabauter peers` for every --repo-root,
     because the source carried the literal `claude-klabauter` and the publish transform
     rewrites that token on the way into the mirror. So the label was wrong in BOTH
     trees at once and wrong differently in each.
 
-    The counts were correct throughout -- 3 for DoE-claude, 14 for claude-klabauter --
+    The counts were correct throughout -- 3 for coordinator-content-repo, 14 for claude-klabauter --
     which is what makes it worth a pin rather than a cosmetic edit. A Group EM arming
     for one repo reads a plausible count beside a FOREIGN repo name, and the honest
     reading is that the watch is pointed at the wrong tree: the failure lands as an
@@ -435,7 +435,7 @@ def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys)
 
 # ---------------------------------------------------------------------------
 # two ids: the watching process is not always the Group-EM
-# (cross-repo/inbox/2026-08-31-doe-claude-em-fleet-watch-needs-engine-side-
+# (cross-repo/inbox/2026-08-31-coordinator-content-repo-em-fleet-watch-needs-engine-side-
 # transition-events.md, question 1 -- DoE stands up a teammate to hold this
 # watch so the Group-EM's context stays free for adjudicating)
 # ---------------------------------------------------------------------------
@@ -1690,7 +1690,7 @@ def test_cli_status_exits_one_when_the_watch_stopped_ticking(tmp_path, capsys):
 
 # --- C12: arming refuses when a fresh foreign holder already holds the watch
 #
-# `cross-repo/inbox/2026-08-31-doe-claude-em-watch-arm-refusal-yes-please.md`
+# `cross-repo/inbox/2026-08-31-coordinator-content-repo-em-watch-arm-refusal-yes-please.md`
 # accepts our own proposal: a half handover -- crown and watcher both armed,
 # each believing the other holds it -- is worse than neither. DISTINCT from
 # C1 (`watch_heartbeat.stamp`'s own fresh-and-foreign decline): C1 stops a

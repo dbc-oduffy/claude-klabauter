@@ -2,12 +2,12 @@
 coordinator_core.ops.install_shell_init_guard_seam — DoE-owned rc-eval seam
 for claude-klabauter's stdout-emitter shell-init resource-cap guard (DR-047 split).
 
-Port source: coordinator/commands/install.md (DoE-claude repo) Step 3.5b.1,
+Port source: coordinator/commands/install.md (coordinator-content-repo repo) Step 3.5b.1,
 the two literal bash fences at lines 932 and 950 of the source doc.
 
 Purpose (unchanged from the doc): resolve `claude-klabauter`'s root
 (`REPO_CLAUDE_KLABAUTER` env override, then `machine-local get
-repos.claude_klabauter`), and — only if `<claude_klabauter_root>/bin/shell-init-guard.py`
+Repos.claude_klabauter`), and — only if `<claude_klabauter_root>/bin/shell-init-guard.py`
 exists and is readable — write an idempotent, sentinel-guarded block into
 the operator's interactive rc (selected from the SHELL env var: zsh picks
 .zshrc, bash picks .bashrc, same selection idiom as install.md's other
@@ -18,7 +18,7 @@ source.
 
 The resolved claude-klabauter path is BAKED into the written block at install time,
 not re-resolved via `machine-local` at eval time (a cold terminal lacks it
-on PATH) — same principle as the `claude-doe`/`claude()` shim blocks.
+on PATH) — same principle as the `claude-author`/`claude()` shim blocks.
 
 Contract: emits the exact `shell_init_guard: <status>` stdout row the DoE
 Phase 7 status table expects on every exit path, folding install.md's own

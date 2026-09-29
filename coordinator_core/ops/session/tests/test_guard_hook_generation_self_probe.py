@@ -72,7 +72,7 @@ def test_healthy_content_root_is_silent_and_records_sentinel(tmp_path: Path, mon
 
 def test_empty_content_root_rearms_kill_switch_and_reports(tmp_path: Path, monkeypatch):
     """Re-scoped 2026-07-31 (not inverted — see dispatch report): this
-    scenario carries NO `.doe-root` pointer at all, so the inline-install
+    scenario carries NO `.coordinator-content-root` pointer at all, so the inline-install
     carve-out added below does not apply and the fail-safe default (arm)
     still fires — this test's assertion was already correct for this exact
     shape (no positive discriminator evidence whatsoever). Kept, clarified
@@ -99,9 +99,9 @@ def test_inline_install_with_empty_content_root_stays_silent(tmp_path: Path, mon
     switch (see module docstring's 2026-07-31 inline-install carve-out)."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    doe_root = tmp_path / "doe-claude-clone"
-    (doe_root / "coordinator").mkdir(parents=True)
-    (config_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    content_root = tmp_path / "coordinator-content-repo-clone"
+    (content_root / "coordinator").mkdir(parents=True)
+    (config_dir / ".coordinator-content-root").write_text(f"{content_root}\n", encoding="utf-8")
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
 
     text = run_self_probe(config_dir)
@@ -146,9 +146,9 @@ def test_sentinel_records_why_an_empty_content_root_is_or_is_not_expected(
     # 2. Inline `--plugin-dir`: empty content root is the healthy shape.
     inline_dir = tmp_path / "inline" / ".claude"
     inline_dir.mkdir(parents=True)
-    doe_root = tmp_path / "inline" / "doe-claude-clone"
-    (doe_root / "coordinator").mkdir(parents=True)
-    (inline_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    content_root = tmp_path / "inline" / "coordinator-content-repo-clone"
+    (content_root / "coordinator").mkdir(parents=True)
+    (inline_dir / ".coordinator-content-root").write_text(f"{content_root}\n", encoding="utf-8")
     run_self_probe(inline_dir)
     body = (inline_dir / _SENTINEL_NAME).read_text(encoding="utf-8")
     assert "resolved_ok=false" in body, "the raw resolution must still be recorded honestly"
@@ -166,23 +166,23 @@ def test_sentinel_records_why_an_empty_content_root_is_or_is_not_expected(
     #    the true positive, and the verdict must not launder it as expected.
     stale_dir = tmp_path / "stale" / ".claude"
     stale_dir.mkdir(parents=True)
-    (stale_dir / ".doe-root").write_text(
+    (stale_dir / ".coordinator-content-root").write_text(
         f"{tmp_path / 'stale' / 'now-gone'}\n", encoding="utf-8"
     )
     run_self_probe(stale_dir)
     assert _verdict_for(stale_dir) == "unresolved-and-unexplained"
 
 
-def test_stale_doe_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypatch):
+def test_stale_content_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypatch):
     """Regression: proves the inline-install carve-out does NOT blind the
-    true positive. A `.doe-root` pointer file surviving while the coordinator
+    true positive. A `.coordinator-content-root` pointer file surviving while the coordinator
     directory it points at has actually been destroyed must still arm —
     `is_inline_install` re-verifies the directory exists on disk right now,
     it does not trust the pointer file's mere presence."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    destroyed_root = tmp_path / "doe-claude-clone-now-gone"
-    (config_dir / ".doe-root").write_text(f"{destroyed_root}\n", encoding="utf-8")
+    destroyed_root = tmp_path / "coordinator-content-repo-clone-now-gone"
+    (config_dir / ".coordinator-content-root").write_text(f"{destroyed_root}\n", encoding="utf-8")
     # destroyed_root/coordinator is deliberately never created.
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
 
@@ -193,28 +193,28 @@ def test_stale_doe_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypat
     assert marker.is_file()
 
 
-def test_migrated_doe_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
+def test_migrated_content_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
     """Migrated-box shape (Ask 1, plan 2026-08-07-detector-effective-guard-
-    sets.md, C0): the `.doe-root` pointer now lives at
-    `<settings-home>/machine-local/.doe-root`, not `{config_dir}/.doe-root`
+    sets.md, C0): the `.coordinator-content-root` pointer now lives at
+    `<settings-home>/machine-local/.coordinator-content-root`, not `{config_dir}/.coordinator-content-root`
     (retired — see that plan's C0 body for the cross-machine-clobber
     history). `config_dir` here is a direct sibling of the settings home
     (`home/.claude` next to `home/.coordinator-claude-settings`), the exact
     shape `_settings_home_scoped_to` trusts and `settings_home()`'s own
-    default construction produces. No LEGACY `.doe-root` exists at all —
+    default construction produces. No LEGACY `.coordinator-content-root` exists at all —
     this fixture is unreachable pre-fix, which is the point: today's code
-    only ever reads `config_dir / .doe-root`."""
+    only ever reads `config_dir / .coordinator-content-root`."""
     home = tmp_path / "home"
     home.mkdir()
     config_dir = home / ".claude"
     config_dir.mkdir()
     settings_home_dir = home / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    doe_root = tmp_path / "doe-claude-clone"
-    (doe_root / "coordinator").mkdir(parents=True)
+    content_root = tmp_path / "coordinator-content-repo-clone"
+    (content_root / "coordinator").mkdir(parents=True)
     ml_dir = settings_home_dir / "machine-local"
     ml_dir.mkdir(parents=True)
-    (ml_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    (ml_dir / ".coordinator-content-root").write_text(f"{content_root}\n", encoding="utf-8")
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
 
     text = run_self_probe(config_dir)
@@ -224,7 +224,7 @@ def test_migrated_doe_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
     assert not marker.is_file()
 
 
-def test_migrated_doe_root_empty_pointer_falls_through_to_live_legacy(
+def test_migrated_content_root_empty_pointer_falls_through_to_live_legacy(
     tmp_path: Path, monkeypatch
 ):
     """A blank migrated pointer is what a sibling session's SessionStart sees
@@ -236,14 +236,14 @@ def test_migrated_doe_root_empty_pointer_falls_through_to_live_legacy(
     config_dir.mkdir()
     settings_home_dir = home / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    doe_root = tmp_path / "doe-claude-clone"
-    (doe_root / "coordinator").mkdir(parents=True)
+    content_root = tmp_path / "coordinator-content-repo-clone"
+    (content_root / "coordinator").mkdir(parents=True)
     # Legacy rung: present and would resolve True on its own.
-    (config_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    (config_dir / ".coordinator-content-root").write_text(f"{content_root}\n", encoding="utf-8")
     # Migrated rung: present but blank.
     ml_dir = settings_home_dir / "machine-local"
     ml_dir.mkdir(parents=True)
-    (ml_dir / ".doe-root").write_text("", encoding="utf-8")
+    (ml_dir / ".coordinator-content-root").write_text("", encoding="utf-8")
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
 
     text = run_self_probe(config_dir)
@@ -253,7 +253,7 @@ def test_migrated_doe_root_empty_pointer_falls_through_to_live_legacy(
     assert not marker.exists()
 
 
-def test_migrated_doe_root_unscoped_config_dir_not_consulted(tmp_path: Path, monkeypatch):
+def test_migrated_content_root_unscoped_config_dir_not_consulted(tmp_path: Path, monkeypatch):
     """Scope-escape guard (Review: staff-eng, finding 4): `machine_local_dir()`
     resolves off ambient env/host state, not `config_dir`. An unrelated
     `config_dir` (not a sibling of the resolved settings home) must NOT pick
@@ -264,10 +264,10 @@ def test_migrated_doe_root_unscoped_config_dir_not_consulted(tmp_path: Path, mon
     ambient_home = tmp_path / "unrelated-real-home"
     settings_home_dir = ambient_home / ".coordinator-claude-settings"
     ml_dir = settings_home_dir / "machine-local"
-    doe_root = tmp_path / "doe-claude-clone"
-    (doe_root / "coordinator").mkdir(parents=True)
+    content_root = tmp_path / "coordinator-content-repo-clone"
+    (content_root / "coordinator").mkdir(parents=True)
     ml_dir.mkdir(parents=True)
-    (ml_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    (ml_dir / ".coordinator-content-root").write_text(f"{content_root}\n", encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
 
     config_dir = tmp_path / "config"  # NOT a sibling of settings_home_dir
@@ -342,7 +342,7 @@ def test_never_raises_on_unwritable_config_dir(tmp_path: Path, monkeypatch):
 
 
 def test_marketplace_install_with_live_install_path_stays_silent(tmp_path: Path, monkeypatch):
-    """Marketplace/OSS shape (no `.doe-root` at all): a live `installPath`
+    """Marketplace/OSS shape (no `.coordinator-content-root` at all): a live `installPath`
     that stats as a real dir with `hooks/hooks.json` present must be read as
     healthy — no re-arm, no marker written."""
     config_dir = tmp_path / ".claude"

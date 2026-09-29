@@ -7,8 +7,8 @@ contract, and surfaces every JUDGMENT branch as an overridable `judgment_points`
 offer rather than deciding it. The EM's job collapses to resolving the judgment
 residue this module surfaces — see the contract for the full rationale.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Branches computed against: DoE-claude coordinator/skills/pickup/SKILL.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Branches computed against: coordinator-content-repo coordinator/skills/pickup/SKILL.md
 Spec backlink: docs/plans/2026-07-23-computed-skills-pickup-beachhead.md, chunk A2
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/pickup-assemble` trampoline (mirrors
@@ -313,7 +313,7 @@ _RUN_GIT_SPAWN_VERBS = ("status", "diff", "add", "commit")
 # past it).
 #
 # CORRECTED (stamp-integrity investigation, `tasks/mise-findings/stamp-
-# integrity.md`, DoE-claude, 2026-07-30): an earlier revision of this note
+# integrity.md`, coordinator-content-repo, 2026-07-30): an earlier revision of this note
 # characterized the pickaxe gap as narrow — rename-only. That was false.
 # `_in_process_pickaxe` was directly reproduced disagreeing with real git
 # on a **never-renamed** path too (a TREESAME-to-first-parent merge commit,
@@ -1141,7 +1141,7 @@ def _in_process_pickaxe(common_dir: Path, start_sha: str, needle: str, path: str
     its docstring) — not a guarantee under clock skew.
 
     Both gaps were reproduced disagreeing with real git (stamp-integrity
-    investigation, `tasks/mise-findings/stamp-integrity.md`, DoE-claude,
+    investigation, `tasks/mise-findings/stamp-integrity.md`, coordinator-content-repo,
     2026-07-30, Root cause B) — including the merge case above with NO
     rename involved, which an earlier revision of this module's negative-
     spec comment incorrectly called "narrow... rename-only." Because that
@@ -1357,7 +1357,7 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     on `Path(__file__).resolve().parents[n]` instead of `cwd` still returns *a*
     repo root, just the wrong one — the engine's own rather than the caller's —
     and is the one live defect the audit found
-    (`bash_guards/dispatch_checks.py::_bt_python3_invocation_cache_path`).
+    (`bash_guards/_rewrite_support.py::_bt_python3_invocation_cache_path`).
     """
     cwd = start or Path.cwd()
     result = _run_git(["rev-parse", "--show-toplevel"], cwd)
@@ -1467,7 +1467,7 @@ _SUFFIX_BOUNDARY_CHARS = ("-", "_")
 
 def _basename_has_slug_suffix(candidate_name: str, slug: str) -> bool:
     """True when `candidate_name` (a file's bare basename, e.g.
-    `2026-07-28-doe-claude-em-foo-bar.md`) ends with `slug` once a trailing
+    `2026-07-28-coordinator-content-repo-em-foo-bar.md`) ends with `slug` once a trailing
     `.md` is stripped from BOTH sides (2026-07-28 suffix-match tier), AND the
     match starts at a genuine filename-COMPONENT boundary — either index 0
     of the stripped stem, or immediately preceded by a
@@ -2483,7 +2483,7 @@ def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str,
     if not claims_dir.is_dir():
         # "ok" never appears from this module — this is a READ-ONLY producer
         # (AC3, no `git fetch`); it's reserved for a future fetch-capable
-        # producer per the contract's illustrative example (DoE-claude
+        # producer per the contract's illustrative example (coordinator-content-repo
         # commit c12825a5).
         return {"fetch_state": "not_performed", "holder": None}
     # `holder_sid` is resolved BEFORE the liveness read now — the cross-repo
@@ -3342,7 +3342,7 @@ def compute_liveness_signal(
     deliberately not unified — see this function's call sites for the
     detail.
 
-    Self-session exclusion (2026-07-29, defect 1 of the doe-claude-em
+    Self-session exclusion (2026-07-29, defect 1 of the coordinator-content-repo-em
     self-claim-reads-as-live-peer memo): the docstring above has always
     promised "stamp present & this session ... -> a handover, not
     contention, proceed", but `_lineage_related_sessions` never contains the
@@ -3723,8 +3723,8 @@ def compute_baton_unification_verdict(
     inheritable baton" and unifies a set of ONE with itself. That minted an
     empty `pickup_ready: true` successor two seconds after the claim, which
     then held the genuine successor's `deliverable_id` and advertised
-    itself to the pickup index as available work (DoE-claude 2026-08-20,
-    `cross-repo/inbox/2026-08-20-doe-claude-em-pickup-mints-a-phantom-
+    itself to the pickup index as available work (coordinator-content-repo 2026-08-20,
+    `cross-repo/inbox/2026-08-20-coordinator-content-repo-em-pickup-mints-a-phantom-
     successor.md`; session `b1578cac`, claim `14:14:56Z`, mint `98b95686e`
     at `14:15:00Z`).
 
@@ -3898,7 +3898,7 @@ def _baton_unification_routing_enabled() -> bool:
     It shipped OFF so no window opened where this engine's behaviour
     contradicted DoE's still-live pickup doctrine
     (`skills/pickup/SKILL.md`'s N-independent-dispositions contract). Their
-    reply (`cross-repo/inbox/2026-08-19-doe-claude-em-baton-schema-8-2-0-
+    reply (`cross-repo/inbox/2026-08-19-coordinator-content-repo-em-baton-schema-8-2-0-
     landed-role-axis-named-doctrine-held.md`) set the release condition
     exactly: schema 8.2.0 landed at `3fb4a1053` carrying `baton_role`, the
     two doctrine files are held as ONE commit on their side, and "signal us
@@ -4250,9 +4250,9 @@ def route_baton_adoption(
     inferred one is gone rather than tuned.
 
     REVERSES `c09345b56` (2026-08-19, "flip D-I on"), whose message records
-    the flip as coordinated with DoE-claude holding `skills/pickup/
+    the flip as coordinated with coordinator-content-repo holding `skills/pickup/
     SKILL.md` and `commands/mise-en-place.md` to land against it. THAT
-    DOCTRINE WAS NEVER THERE TO STRAND: checked at `DoE-claude`
+    DOCTRINE WAS NEVER THERE TO STRAND: checked at `coordinator-content-repo`
     `work/machine-a/2026-08-22to31` @ `0380f0604`, neither file mentions
     unification or fan-in, and `git log -S` shows neither has EVER
     contained "unification" in its history (the one historic "fan-in"
@@ -4622,12 +4622,12 @@ from coordinator_core.repo_identity_gate import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Reply-closure check (2026-07-25 defect)
 #
-# `cross-repo/archive/2026-07-25-doe-claude-em-test-red-record-contract-
+# `cross-repo/archive/2026-07-25-coordinator-content-repo-em-test-red-record-contract-
 # consult.md`: an inbound `kind: consult` memo reached `status: actioned`
 # with an `actioned_note` reading "Replied in full under the '## EM
 # Response' heading in the memo body" — but the reply was written into
 # CLAUDE-KLABAUTER'S OWN archived copy of the sender's memo, a file the sender
-# (`doe-claude-em`) has no way to read. The sender's memo explicitly asked
+# (`coordinator-content-repo-em`) has no way to read. The sender's memo explicitly asked
 # for a reply naming Q1/Q2/Q3's answers and their plan was blocked on it.
 # Both terminal-memo emit sites in `brief()` reported `coast=clear`,
 # `judgment_points=0`, "Nothing further to do" — the loop was wide open and
@@ -4641,7 +4641,7 @@ from coordinator_core.repo_identity_gate import (  # noqa: E402
 #
 # 2026-07-25 re-entry: the first fix landed `from`+`created` co-occurrence
 # as its "evidenced" bar. Run against the live memo above it returned
-# `evidenced` with 28 candidates — every memo we sent `doe-claude-em` that
+# `evidenced` with 28 candidates — every memo we sent `coordinator-content-repo-em` that
 # day, because sender-id + date is not a discriminator on a busy fleet day.
 # `evidenced` SUPPRESSES the judgment point, so on any day we sent that
 # sender anything at all, an unanswered consult rendered as closed — the
@@ -4706,8 +4706,8 @@ def _inbound_link_stems(memo_path: str, from_id: str) -> tuple[str, str, str]:
     merely same-day.
 
     Returns `(basename, basename_no_ext, tail_stem)` — e.g. for
-    `2026-07-25-doe-claude-em-test-red-record-contract-consult.md` sent by
-    `doe-claude-em`: `("...consult.md", "...consult", "test-red-record-
+    `2026-07-25-coordinator-content-repo-em-test-red-record-contract-consult.md` sent by
+    `coordinator-content-repo-em`: `("...consult.md", "...consult", "test-red-record-
     contract-consult")`. `tail_stem` strips the leading `YYYY-MM-DD-` date
     AND the `<from_id>-` sender segment — real replies often cite an
     ELIDED filename (the genuine reply that closed the originating defect
@@ -4728,7 +4728,7 @@ def _inbound_link_stems(memo_path: str, from_id: str) -> tuple[str, str, str]:
 #: no length floor on its needles. `tail_stem` strips the leading
 #: `YYYY-MM-DD-` date AND the sender-id prefix off the basename, so a short
 #: `--topic` slug degrades to a near-empty stem — found empirically when an
-#: agent writing THIS feature's own tests used `2026-07-25-doe-claude-em-
+#: agent writing THIS feature's own tests used `2026-07-25-coordinator-content-repo-em-
 #: m.md` as a fixture basename: `tail_stem` came out `"m"`, and `"m" in
 #: candidate_text.lower()` is true of almost any prose, so deliberately
 #: unrelated candidate memos matched as LINKED. Ten characters is the floor:
@@ -5102,7 +5102,7 @@ def build_handoff_directives(
 #: unlike accepted/partial) — every other mapped entry maps to `accepted`
 #: (fully actioned in this pass).
 #:
-#: Renamed 2026-08-03 (PM-ratified, doe-claude-em cross-repo memo:
+#: Renamed 2026-08-03 (PM-ratified, coordinator-content-repo-em cross-repo memo:
 #: "escalate to sizing is better than escalate to plan"): the disposition
 #: value formerly named `accept-escalate-to-plan` is now
 #: `accept-escalate-to-sizing`, straight rename with no alias — nothing
@@ -5636,7 +5636,7 @@ def compute_gate_blocker_evidence(
     `blocked_by` list to a record, instead of handing the EM the bare id
     list and making it hand-walk the handoff corpus to answer "has this
     gate actually cleared?" (the memo this chunk answers, cross-repo/
-    inbox/2026-08-30-doe-claude-em-gate-check-names-blockers-but-resolves-
+    inbox/2026-08-30-coordinator-content-repo-em-gate-check-names-blockers-but-resolves-
     none.md).
 
     One bounded index build (`reconcile.handoff_corpus._build_blocker_
@@ -6011,7 +6011,7 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
     never mechanizes.
 
     Third disposition (2026-09-11 inbox blitz item 23, forwarded from
-    `state/cross-repo/archive/2026-09-03-doe-claude-em-pickup-archives-a-
+    `state/cross-repo/archive/2026-09-03-coordinator-content-repo-em-pickup-archives-a-
     terminal-baton-instead-of-claiming-it.md`): `confirm-shipped-archive-now`
     lets the EM archive the record on the spot instead of leaving it for the
     later corpus-wide sweep, when — and only when — it is terminal, has no
@@ -6619,7 +6619,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-#: Defect 2 fix (2026-07-29, doe-claude-em self-claim-reads-as-live-peer
+#: Defect 2 fix (2026-07-29, coordinator-content-repo-em self-claim-reads-as-live-peer
 #: memo): `ops/memo_transition.py` hard-requires `--realized-by` whenever
 #: `--decision` is `accepted`/`partial` (`memo_transition.py:642-643`), but
 #: nothing an operator reads before `apply` said so — not the disposition
@@ -6694,7 +6694,7 @@ def _archived_open_memo_kind_dispatch(
     artifact_path: str, terminal_fields: dict[str, Any], decisions: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Archived-memo-still-open kind-dispatch assembly (2026-07-27
-    doe-claude-em memo defect fix, `brief()`'s `classification == "archived"`
+    coordinator-content-repo-em memo defect fix, `brief()`'s `classification == "archived"`
     branch) — an archived MEMO whose terminal `status` frontmatter field is
     NOT already a terminal disposition (in `_MEMO_TERMINAL_STATUS`) was
     swept into the archive without ever having a disposition stamped on it. Before this
@@ -6950,7 +6950,7 @@ def _find_stamp_commit(repo_root: Path, path: str, stamped_sha: str) -> Optional
 
     Spawns real `git` directly, bypassing `_run_git`'s in-process read-model
     dispatch (stamp-integrity investigation, `tasks/mise-findings/stamp-
-    integrity.md`, DoE-claude, Root cause B). The read-model's own
+    integrity.md`, coordinator-content-repo, Root cause B). The read-model's own
     `_in_process_pickaxe`/`_walk_commits` reimplementation of this search
     provably disagrees with real git — not only on the documented `--follow`
     rename gap, but also on a merge commit that is TREESAME to one parent on

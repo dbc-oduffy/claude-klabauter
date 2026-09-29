@@ -590,10 +590,10 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 
 
 # as an OPTIONAL param — absent (None), both fall back to the original
-# MEASURED numbers (DoE-claude corpus, one full envelope.emit() run, fresh
+# MEASURED numbers (coordinator-content-repo corpus, one full envelope.emit() run, fresh
 #     SEPARATE, unrelated `git merge-base --is-ancestor` hot spot, tracked
 #     PYTHONHASHSEED pinned) measured fallback spawns 313 -> 308 (-5) on
-#     DoE-claude and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
+#     coordinator-content-repo and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
 #     priority_resolve.py's NEGATIVE-SPEC block). Verified independently: the
 #   - FRESH PROCESS ONLY: _EVER_TRACKED_CACHE (below) is process-lifetime, so
 #     _EVER_TRACKED_CACHE and bump the generation) between "before" and

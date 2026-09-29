@@ -1,7 +1,7 @@
 """
 coordinator_core.group_em.nomination -- in-engine read and claim of the Group EM nomination
 record, mirroring (never importing, never shelling out to)
-`DoE-claude:coordinator/bin/group-em-nomination.py`.
+`coordinator-content-repo:coordinator/bin/group-em-nomination.py`.
 
 Spec backlink: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C3
 
@@ -250,7 +250,7 @@ def claim(
     `peer_name` and `nominated_by` are write-side-only fields (Review: overengineering-reviewer,
     Finding 9, nit): neither is read by any branch of the five-case decision above -- claiming,
     refusing, and replacing all turn on `session_id` and `is_live`'s verdict alone. They exist
-    here purely for on-disk format parity with `DoE-claude:coordinator/bin/group-em-
+    here purely for on-disk format parity with `coordinator-content-repo:coordinator/bin/group-em-
     nomination.py`, the OTHER writer of this same record shape (module docstring, line 1) --
     dropping them would desync the two writers' record shape even though this reader never
     consumes them. Do not "clean them up" as unused.

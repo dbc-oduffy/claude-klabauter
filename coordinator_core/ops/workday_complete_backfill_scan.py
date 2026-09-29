@@ -2,8 +2,8 @@
 coordinator_core.ops.workday_complete_backfill_scan — skipped-workday backfill detector.
 
 Port of: workday-complete-backfill-scan.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-workday-complete-go-local-day--532ea9 § C3
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-workday-complete-go-local-day--532ea9 § C3
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C1
 
 Purpose: `/workday-complete` Step 3.5 and `/workday-start` Step 1.85 both call the

@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.normalize_claimed_frontmatter
 
-Purpose: native Python port of DoE-claude
+Purpose: native Python port of coordinator-content-repo
 coordinator/bin/normalize-consumed-frontmatter.js -- flips frontmatter to
 match `<!-- consumed: YYYY-MM-DD [notes] -->` body markers. Belt-and-suspenders
 companion to the claude-klabauter port of query-records.js: query-records normalizes
@@ -71,8 +71,8 @@ node parses the whole file as JavaScript regardless of a leading shebang
 line, so a polyglot sh/python shebang would be inert there; the trampoline
 instead bridges via a synchronous `python -c` child-process spawn.
 
-Port source: coordinator/bin/normalize-consumed-frontmatter.js (DoE-claude)
-Parity oracle: DoE-claude coordinator/bin/normalize-consumed-frontmatter.js
+Port source: coordinator/bin/normalize-consumed-frontmatter.js (coordinator-content-repo)
+Parity oracle: coordinator-content-repo coordinator/bin/normalize-consumed-frontmatter.js
     (node, golden-oracle diff run during the port).
 
 Negative-spec:

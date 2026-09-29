@@ -1,10 +1,10 @@
 """Shared, single-owner export of the D2 ratio-tier boundaries.
 
 Purpose: `tier_boundaries_for(surface)` is the ONE seam through which
-DoE-claude's Layer 1 (the ratio guard, C8/C9a/C9b) reads Layer-2 ceiling
+Coordinator-content-repo's Layer 1 (the ratio guard, C8/C9a/C9b) reads Layer-2 ceiling
 data. It reads C3a's baseline `aspirational_ceiling` per surface (measured
-against DoE-claude's own corpus and committed there, at
-`<doe_root>/coordinator/tests/baselines/doctrine-surface-weight.json`) and
+against coordinator-content-repo's own corpus and committed there, at
+`<content_root>/coordinator/tests/baselines/doctrine-surface-weight.json`) and
 returns D2's three bands (under ceiling -> 2:1, 1-3x -> 5:1, over 3x -> 10:1)
 as boundary values, each paired with its `credit_scope` (PM ruling,
 2026-08-13): `"surface"` at the 2:1 tier, `"file"` at the 5:1 and 10:1
@@ -35,8 +35,8 @@ own three-rung ambient probe -- the same pair this module's coordinator/bin/
 siblings from the same chunk (`generate-doctrine-surfaces.py`,
 `generate-doctrine-surface-split.py`) use. The DoE original derived
 `REPO_ROOT` from `Path(__file__).resolve().parents[2]` -- the
-DoE-claude@b644d5a9 lesson this wave exists to fix: that resolved correctly
-only so long as the file stayed inside DoE-claude's own `coordinator/lib/`.
+Coordinator-content-repo@b644d5a9 lesson this wave exists to fix: that resolved correctly
+only so long as the file stayed inside coordinator-content-repo's own `coordinator/lib/`.
 This module has no claude-klabauter-side consumer today (every importer is a
 DoE-resident hook, per this chunk's arrival record); it lands here because
 DoE's `coordinator/lib` is not published -- the mirror's `lib` is sourced
@@ -45,7 +45,7 @@ consumer before this move (plan intro).
 
 Spec: docs/plans/2026-08-13-doctrinal-surface-weight-ratchet.md, chunk C3b
 (§ D2, D6, AC A20).
-Arrived from DoE-claude coordinator/lib/doctrine_surface_tiers.py
+Arrived from coordinator-content-repo coordinator/lib/doctrine_surface_tiers.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C6).
 """
 
@@ -58,16 +58,16 @@ from coordinator_core.warm.caller_context import resolve_caller_context
 
 
 def _baseline_path() -> Path:
-    """`<doe_root>/coordinator/tests/baselines/doctrine-surface-weight.json`
-    -- a DoE-claude test-tree asset this module reads but does not own or
+    """`<content_root>/coordinator/tests/baselines/doctrine-surface-weight.json`
+    -- a coordinator-content-repo test-tree asset this module reads but does not own or
     write. See module docstring § Path resolution."""
     plugin_root = resolve_caller_context().plugin_root
     if plugin_root is None:
         raise RuntimeError(
-            "doctrine_surface_tiers: cannot resolve the DoE-claude plugin root -- "
+            "doctrine_surface_tiers: cannot resolve the coordinator-content-repo plugin root -- "
             "resolve_caller_context().plugin_root returned no result. Set "
             "CLAUDE_PLUGIN_ROOT, or register the coordinator-claude plugin "
-            "install / .doe-root pointer (see resolve_plugin_root())."
+            "install / .coordinator-content-root pointer (see resolve_plugin_root())."
         )
     return Path(plugin_root) / "tests" / "baselines" / "doctrine-surface-weight.json"
 

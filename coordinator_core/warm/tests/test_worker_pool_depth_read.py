@@ -31,6 +31,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
+    def is_source_stale(self) -> bool:
+        return False
+
 
 def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot():
     """A freshly started pool of `WORKER_POOL_SIZE` workers reports 30 live
@@ -62,7 +65,7 @@ def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch):
         time.sleep(0.01)
     assert ctx.worker_pool_depth() == 3
 
-    ctx._enqueue_connection("die")
+    ctx._enqueue_connection("die", admitted=False)
 
     deadline = time.monotonic() + 5
     while ctx.worker_pool_depth() == 3 and time.monotonic() < deadline:

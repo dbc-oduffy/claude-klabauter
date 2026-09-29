@@ -714,13 +714,13 @@ class TestLivenessBasisYieldsToName:
             owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name="doe-claude-b8",
+            writer_name="coordinator-content-repo-b8",
         )
         sentence = dispatch_checks._format_owner_sentence(
             fact, self._verdicts(REAL_SID, "harness-registry")
         )
         assert "via harness-registry" in sentence
-        assert " -- w:doe-claude-b8" in sentence
+        assert " -- w:coordinator-content-repo-b8" in sentence
 
     def test_unnamed_marker_still_renders_under_a_basis(self, monkeypatch):
         monkeypatch.setattr(

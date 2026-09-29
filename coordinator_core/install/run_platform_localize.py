@@ -19,9 +19,9 @@ schema-validation half natively:
      copy's own call sites.
   2. On a live (non ``--check-only``) run that completed with rc 0, performs
      the SAME conditional schema-validation the retired bash step performed:
-     shell out to ``.github/scripts/validate-json-schemas.py`` (a DoE-claude
-     repo script, resolved via :func:`coordinator_core.ops.coordinator_doe_root.
-     coordinator_doe_root`) IFF that script AND a resulting
+     shell out to ``.github/scripts/validate-json-schemas.py`` (a coordinator-content-repo
+     repo script, resolved via :func:`coordinator_core.ops.coordinator_content_root.
+     coordinator_content_root`) IFF that script AND a resulting
      ``known_marketplaces.json`` both exist. Under the maximalist
      live-resolution shape, plugins are resolved live via ``--plugin-dir``
      and never byte-copied under ``~/.claude/plugins/``, so
@@ -39,7 +39,7 @@ Status rows (install.md Step 9 Phase 7 contract, verbatim):
   ``platform_localize: error (see stderr)``
   ``platform_localize: ran (known_marketplaces.json not applicable — no local plugin dirs)``
 
-Spec backlink: coordinator/commands/install.md § Step 9 [DoE-claude repo]
+Spec backlink: coordinator/commands/install.md § Step 9 [coordinator-content-repo repo]
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.hooks import platform_localize
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 
 def _check_only_requested(args: argparse.Namespace) -> bool:
@@ -75,9 +75,9 @@ def _default_plugins_dir() -> Path:
 
 
 def _default_validate_schemas_path() -> Optional[Path]:
-    doe_root = coordinator_doe_root()
-    if doe_root:
-        candidate = Path(doe_root) / ".github" / "scripts" / "validate-json-schemas.py"
+    content_root = coordinator_content_root()
+    if content_root:
+        candidate = Path(content_root) / ".github" / "scripts" / "validate-json-schemas.py"
         if candidate.is_file():
             return candidate
     cwd_candidate = Path(".github/scripts/validate-json-schemas.py")

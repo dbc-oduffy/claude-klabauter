@@ -225,7 +225,7 @@ def test_misc_and_other_are_structurally_dropped_not_denylisted() -> None:
 
 def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     """Enforces the module docstring's Downstream-consumer contract, ratified
-    2026-08-06 with doe-claude-em: their /distill C3 leg logs each dropped
+    2026-08-06 with coordinator-content-repo-em: their /distill C3 leg logs each dropped
     nugget as EPHEMERAL-with-reason, and their clustering resolves a merged tag
     to its destination — so drop-set enumerability, drop `reason` presence, and
     `merge_target` presence are a stability commitment to a named sibling

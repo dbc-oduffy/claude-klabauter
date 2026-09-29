@@ -73,7 +73,7 @@ class TestEmitSchemas:
 
     def test_bump_class_and_note_stamped(self, tmp_path: Path) -> None:
         """DoE bump-class annotation (memo
-        2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md):
+        2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md):
         x-bump-class/x-bump-note sit immediately alongside x-schema-version
         on both entities so a future emitter edit cannot silently drop
         them and re-open the vendored-schema drift commit 5140d176 closed."""
@@ -211,7 +211,7 @@ class TestByKindNeverArmedAtRealDeliveryShape:
 
 
 class TestToRepoFieldPresentAndOptional:
-    """DoE-claude parity (2026-07-27): `to_repo` was a DoE-local vendored
+    """coordinator-content-repo parity (2026-07-27): `to_repo` was a DoE-local vendored
     extension on both schemas that claude-klabauter's generation permanently
     re-drifted every regen. The field now comes home to the emitter, byte-
     identical to DoE's carried copy, on both entities — and stays optional

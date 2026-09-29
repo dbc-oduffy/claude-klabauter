@@ -16,7 +16,7 @@ here too, matching `index.ts`'s `export * from "./entities/deliverable-spine.js"
 — it carries no `ENTITY_SCHEMAS` entry (shared enums only, not an emittable
 entity), same as the TS source.
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 Negative-spec: no `ENTITY_SCHEMAS` / `CONTRACT_VERSION` here — those are
 package-level (see above), not entities-level, to match where `emit_schema.py`
 looks them up.

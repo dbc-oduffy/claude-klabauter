@@ -1,7 +1,7 @@
 """coordinator_core.hooks.block_worktree_tool — PreToolUse
 (EnterWorktree|ExitWorktree) op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/block-worktree-tool.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/block-worktree-tool.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C9. Structurally bans
 the harness worktree-lifecycle tools from every session in this fleet:
 worktrees degrade on Windows and do not scale to the concurrent-agent shape

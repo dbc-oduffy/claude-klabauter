@@ -41,7 +41,7 @@ Exit codes (parity-critical — both callers branch on these):
       resolution.
 
 Port of: draft-plan-aging.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-continuity-artifact-staleness--bec61c § Design Fix #2, § Chunks C1
+Spec backlink: coordinator-content-repo:pln-continuity-artifact-staleness--bec61c § Design Fix #2, § Chunks C1
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 Negative-spec:
@@ -587,7 +587,7 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
 # building block. Additive: does NOT touch _has_active_baton/check_one/scan/
 # main above (AC10 — before/after parity depends on that separation).
 #
-# Ownership predicate (spec of record: DoE-claude
+# Ownership predicate (spec of record: coordinator-content-repo
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP):
 #   handoff.deliverable_id == plan.deliverable_id, raw-string equality.
 #   A plan carrying no `deliverable_id` at all resolves to NO owner — retired
@@ -1019,7 +1019,7 @@ def _list_dangling_baton_plan_references(
 
 # ---------------------------------------------------------------------------
 # Sibling op: plan.list_orphaned (JSON-RPC, C2) — the tiered orphan census
-# built on C1's resolve_plan_owner. Spec of record: DoE-claude
+# built on C1's resolve_plan_owner. Spec of record: coordinator-content-repo
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP,
 # implementation plan docs/plans/2026-07-31-plan-orphan-ownership-resolver.md
 # § C2. Advisory only — never blocks (same posture as list_stale_executing).
@@ -1038,8 +1038,8 @@ def _list_dangling_baton_plan_references(
 # either/or (AC3, AC16).
 #
 # Non-plan exclusion (cross-repo memo
-# cross-repo/inbox/2026-08-03-doe-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
-# § 1, DoE-claude coordinator/docs/wiki/coordinator-tripwires.md §
+# cross-repo/inbox/2026-08-03-coordinator-content-repo-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
+# § 1, coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md §
 # PLAN-ORPHAN-OWNERSHIP): a file under docs/plans/ that survives the sidecar
 # exclusions above but carries NO YAML frontmatter block at all (structural
 # presence, via `coordinator_core.frontmatter.primitives.split_frontmatter`

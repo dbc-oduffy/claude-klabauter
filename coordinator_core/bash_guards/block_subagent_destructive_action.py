@@ -20,7 +20,7 @@ unaffected.
 TWO-LAYER CLASSIFIER:
   Layer 1 -- dangerous-surface detection. v2 scope (this change, item 23 of
     docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md, closing
-    deferred D2 from cross-repo/archive/2026-09-23-doe-claude-em-destructive-
+    deferred D2 from cross-repo/archive/2026-09-23-coordinator-content-repo-em-destructive-
     action-v2-gap-still-open.md): git + rm + chmod/chown -R (v1, unchanged)
     PLUS three named v2 surfaces -- docker, kill/pkill, and a fixed set of
     DB-client binaries (psql/mysql/mariadb/sqlite3). Each of the three is a
@@ -83,7 +83,7 @@ Anti-scope (do NOT extend without a spec update):
 FAIL-OPEN OBSERVABILITY (2026-07-29 addition, PM-authorized, observability
 only -- see "FAIL-OPEN OBSERVABILITY" comment block above `_log_fail_open`
 for the full rationale): root-caused live by
-DoE-claude state/audits/2026-07-29-destructive-git-guard-inconsistency.md --
+Coordinator-content-repo state/audits/2026-07-29-destructive-git-guard-inconsistency.md --
 a `git rm --cached` denied in one repo and silently allowed the identical
 shape in another, and `check()` returning `None` on ANY of the three
 fail-open branches above wrote nothing anywhere, so the incident could not
@@ -99,7 +99,7 @@ fail-open on a NON-flagged command logs nothing.
 
 Ported from the retired DoE bash guard ``block-subagent-destructive-action.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).
-Spec backlink: DoE-claude:pln-subagent-destructive-action-em-88a860
+Spec backlink: coordinator-content-repo:pln-subagent-destructive-action-em-88a860
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md section (b).3
 
 INDIRECTION-WRAPPER HARDENING (2026-07-21 addition, NOT part of the original
@@ -377,7 +377,7 @@ survey-analyst-friction-digest.md, ranked #2 and #3):
 DESTRUCTIVE-ACTION GUARD v2 -- DOCKER/KILL/DB-CLIENT MATCHER CLASSES
 (2026-09-26, this change, item 23 of docs/plans/2026-09-26-inbox-blitz-
 Claude-klabauter-fixes-doe-thread.md, closing deferred D2 from
-cross-repo/archive/2026-09-23-doe-claude-em-destructive-action-v2-gap-still-
+cross-repo/archive/2026-09-23-coordinator-content-repo-em-destructive-action-v2-gap-still-
 open.md, originally the Staff Engineer Finding 5 of
 2026-07-13-subagent-destructive-action-em-lock): the module docstring's own
 "OUT of v1" note and anti-scope line named docker/kill/DB-client surfaces as

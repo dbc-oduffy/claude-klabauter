@@ -2,7 +2,7 @@
 op: N registered advisory legs, concatenated, one call.
 
 Arrival note (W4-C8, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/preuse-skill-dispatch.py`, a
+from coordinator-content-repo `coordinator/hooks/scripts/preuse-skill-dispatch.py`, a
 threaded subprocess fan-in over four `compute_context(stdin_text) -> str |
 None` legs (each imported via `importlib.util.spec_from_file_location`,
 three called directly, the fourth — the trampoline — via a stdin-swap/

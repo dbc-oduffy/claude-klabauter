@@ -55,7 +55,7 @@ def test_clean_match_no_drift(tmp_path: Path, two_bin_dirs):
         _write_forwarder(b, "foo")
         _write_forwarder(b, "bar")
 
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root")
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root")
 
     assert result.ok is True
     assert result.skipped is False
@@ -74,7 +74,7 @@ def test_derived_but_not_installed_is_named_drift(tmp_path: Path, two_bin_dirs):
     for b in (settings_bin, compat_bin):
         _write_forwarder(b, "foo")
 
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root")
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root")
 
     assert result.ok is False
     assert result.skipped is False
@@ -97,7 +97,7 @@ def test_compat_mirror_never_reports_missing_forwarders(tmp_path: Path, two_bin_
     _write_forwarder(settings_bin, "review-assemble")
     compat_bin.mkdir(parents=True, exist_ok=True)
 
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root")
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root")
 
     assert result.ok is True
     assert not any(line.startswith("[warn]") for line in result.lines)
@@ -116,18 +116,18 @@ def test_installed_but_not_derived_is_named_orphan(tmp_path: Path, two_bin_dirs)
         _write_forwarder(b, "foo")
         _write_forwarder(b, "retired-cli")
 
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root")
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root")
 
     assert result.ok is False
     warn_lines = [line for line in result.lines if line.startswith("[warn]")]
     assert any("orphaned" in line and "retired-cli" in line for line in warn_lines)
 
 
-def _write_doe_citation(doe_root: Path, skill_relpath: str, cli_name: str) -> None:
-    """A DoE-claude-shaped prompt surface citing a settings-home entrypoint,
+def _write_doe_citation(content_root: Path, skill_relpath: str, cli_name: str) -> None:
+    """A coordinator-content-repo-shaped prompt surface citing a settings-home entrypoint,
     matching the corpus's live shape (`resolve-coordinator-bin.md`'s
     Shape B fallback form) — see forwarder_drift.py's `_ENTRYPOINT_RE`."""
-    path = doe_root / "coordinator" / skill_relpath
+    path = content_root / "coordinator" / skill_relpath
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\nname: fixture\n---\n\n"
@@ -140,22 +140,22 @@ def _write_doe_citation(doe_root: Path, skill_relpath: str, cli_name: str) -> No
 
 def test_missing_and_cited_is_the_loud_arm(tmp_path: Path, two_bin_dirs):
     """CITED-VS-UNCITED SPLIT: a missing forwarder for a CLI a live
-    DoE-claude prompt surface actually invokes gets the louder, 127-naming
+    coordinator-content-repo prompt surface actually invokes gets the louder, 127-naming
     line — not today's plain "expected transient install lag" wording."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")
     for b in (settings_bin, compat_bin):
         _write_forwarder(b, "foo")
     _write_doe_citation(
-        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+        content_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
     )
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root
     )
 
     assert result.ok is False
@@ -174,7 +174,7 @@ def test_missing_and_cited_is_the_loud_arm(tmp_path: Path, two_bin_dirs):
 def test_missing_and_uncited_stays_the_plain_arm(tmp_path: Path, two_bin_dirs):
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "some-uncited-cli")
@@ -182,11 +182,11 @@ def test_missing_and_uncited_stays_the_plain_arm(tmp_path: Path, two_bin_dirs):
         _write_forwarder(b, "foo")
     # A citation for a DIFFERENT name only — proves the split discriminates
     _write_doe_citation(
-        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+        content_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
     )
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root
     )
 
     assert result.ok is False
@@ -208,7 +208,7 @@ def test_one_location_missing_is_reported_separately(tmp_path: Path, two_bin_dir
     _write_forwarder(settings_bin, "baz")
     _write_forwarder(compat_bin, "foo")
 
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root")
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root")
 
     assert result.ok is True
     assert any("[ok]" in line and "settings-home/bin" in line for line in result.lines)
@@ -259,7 +259,7 @@ def test_main_exits_zero_on_uncited_only_drift(tmp_path: Path, two_bin_dirs, mon
     monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
     monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
     monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
-    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: None)
+    monkeypatch.setattr(fd, "_resolve_content_root", lambda: None)
 
     rc = fd.main([])
 
@@ -271,19 +271,19 @@ def test_main_exits_zero_on_uncited_only_drift(tmp_path: Path, two_bin_dirs, mon
 def test_main_exits_nonzero_on_cited_missing_set(tmp_path: Path, two_bin_dirs, monkeypatch):
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")
     for b in (settings_bin, compat_bin):
         _write_forwarder(b, "foo")
     _write_doe_citation(
-        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+        content_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
     )
 
     monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
     monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
     monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
-    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+    monkeypatch.setattr(fd, "_resolve_content_root", lambda: content_root)
 
     rc = fd.main([])
 
@@ -299,7 +299,7 @@ def test_cited_missing_field_is_empty_for_uncited_only_drift(tmp_path: Path, two
         _write_forwarder(b, "foo")
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root"
     )
 
     assert result.ok is False
@@ -316,7 +316,7 @@ def test_cited_missing_field_is_empty_for_orphan_only_drift(tmp_path: Path, two_
         _write_forwarder(b, "retired-cli")
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root"
     )
 
     assert result.ok is False
@@ -351,7 +351,7 @@ def test_cited_missing_field_is_empty_for_clean_result(tmp_path: Path, two_bin_d
         _write_forwarder(b, "bar")
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root"
     )
 
     assert result.ok is True
@@ -361,18 +361,18 @@ def test_cited_missing_field_is_empty_for_clean_result(tmp_path: Path, two_bin_d
 def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two_bin_dirs):
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")
     for b in (settings_bin, compat_bin):
         _write_forwarder(b, "foo")
     _write_doe_citation(
-        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+        content_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
     )
 
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root
     )
 
     assert result.ok is False
@@ -383,12 +383,12 @@ def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two
     )
 
 
-def _write_shape_w_citation(doe_root: Path, skill_relpath: str, cited_spelling: str, sep: str = "\\") -> None:
+def _write_shape_w_citation(content_root: Path, skill_relpath: str, cited_spelling: str, sep: str = "\\") -> None:
     """A Shape W (Windows PowerShell) settings-home entrypoint citation —
     `$env:COORDINATOR_SETTINGS_HOME\\bin\\<cited_spelling>` — matching
     `resolve-coordinator-bin.md`'s rung 0 form. ``sep`` lets a caller exercise
     the `/`-separated variant too."""
-    path = doe_root / "coordinator" / skill_relpath
+    path = content_root / "coordinator" / skill_relpath
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\nname: fixture\n---\n\n"
@@ -401,15 +401,15 @@ def _write_shape_w_citation(doe_root: Path, skill_relpath: str, cited_spelling: 
 
 def test_extension_mismatch_recorded_when_cmd_cited_but_exe_installed(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert result.ok is False
     assert set(result.extension_mismatch.keys()) == {"app-session.cmd"}
@@ -418,17 +418,17 @@ def test_extension_mismatch_recorded_when_cmd_cited_but_exe_installed(tmp_path: 
 
 def test_main_exits_nonzero_on_extension_mismatch(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
     monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
     monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
-    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+    monkeypatch.setattr(fd, "_resolve_content_root", lambda: content_root)
 
     rc = fd.main([])
 
@@ -437,60 +437,60 @@ def test_main_exits_nonzero_on_extension_mismatch(tmp_path: Path, two_bin_dirs, 
 
 def test_extension_clean_when_cited_spelling_matches_installed(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.exe")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.exe")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert result.extension_mismatch == {}
 
 
 def test_extension_clean_for_legitimate_cmd_survivor(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "claude-home.cmd").write_text("stub")
-    _write_shape_w_citation(doe_root, "snippets/resolve-coordinator-bin.md", "claude-home.cmd")
+    _write_shape_w_citation(content_root, "snippets/resolve-coordinator-bin.md", "claude-home.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert result.extension_mismatch == {}
 
 
 def test_extension_axis_silent_when_no_sibling_installed_at_all(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "unrelated.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/percolate/SKILL.md", "percolate-push.cmd")
+    _write_shape_w_citation(content_root, "skills/percolate/SKILL.md", "percolate-push.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert result.extension_mismatch == {}
 
 
 def test_extension_axis_skips_on_non_windows_host(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: False)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert result.extension_mismatch == {}
     assert any(
@@ -500,24 +500,24 @@ def test_extension_axis_skips_on_non_windows_host(tmp_path: Path, two_bin_dirs, 
 
 def test_extension_axis_skip_does_not_block_exit_zero_on_would_be_mismatch(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.cmd")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: False)
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
     monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
     monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
-    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+    monkeypatch.setattr(fd, "_resolve_content_root", lambda: content_root)
 
     rc = fd.main([])
 
     assert rc == 0
 
 
-def test_extension_axis_doe_root_unresolvable_is_empty_no_crash(tmp_path: Path, two_bin_dirs, monkeypatch):
+def test_extension_axis_content_root_unresolvable_is_empty_no_crash(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
@@ -526,13 +526,13 @@ def test_extension_axis_doe_root_unresolvable_is_empty_no_crash(tmp_path: Path, 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
     result = fd.check_forwarder_drift(
-        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=tmp_path / "no-content-root"
     )
 
     assert result.extension_mismatch == {}
 
 
-def test_check_extension_axis_direct_none_doe_root_is_empty_no_crash(tmp_path: Path, monkeypatch):
+def test_check_extension_axis_direct_none_content_root_is_empty_no_crash(tmp_path: Path, monkeypatch):
     settings_bin = tmp_path / "settings-bin"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
@@ -546,15 +546,15 @@ def test_check_extension_axis_direct_none_doe_root_is_empty_no_crash(tmp_path: P
 
 def test_shape_w_citation_matched_with_forward_slash_separator(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "app-session.exe").write_text("stub")
-    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd", sep="/")
+    _write_shape_w_citation(content_root, "skills/app-session/SKILL.md", "app-session.cmd", sep="/")
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert set(result.extension_mismatch.keys()) == {"app-session.cmd"}
 
@@ -646,10 +646,10 @@ def test_installed_forwarder_names_oserror_is_best_effort_skip(tmp_path: Path, m
 
 def test_shape_w_citation_trailing_period_is_stripped(tmp_path: Path, two_bin_dirs, monkeypatch):
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "doe-claude"
+    content_root = tmp_path / "coordinator-content-repo"
     settings_bin.mkdir(parents=True, exist_ok=True)
     (settings_bin / "workweek-complete-brief.exe").write_text("stub")
-    path = doe_root / "coordinator" / "skills" / "workweek" / "SKILL.md"
+    path = content_root / "coordinator" / "skills" / "workweek" / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\nname: fixture\n---\n\n"
@@ -659,7 +659,7 @@ def test_shape_w_citation_trailing_period_is_stripped(tmp_path: Path, two_bin_di
 
     agent_bin = tmp_path / "empty-agent-bin"
     agent_bin.mkdir(parents=True, exist_ok=True)
-    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, content_root=content_root)
 
     assert set(result.extension_mismatch.keys()) == {"workweek-complete-brief.cmd"}
 

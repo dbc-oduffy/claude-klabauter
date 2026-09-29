@@ -5,7 +5,7 @@ changelog-shaped token into the repo-root `coordinator.local.md` config
 class.
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/guard-doctrine-changelog-prose.py`.
+from coordinator-content-repo `coordinator/hooks/scripts/guard-doctrine-changelog-prose.py`.
 That script ran as an in-process guard body enrolled into a second,
 doctrine-plane-resident guard registry (`_guard_runner.REAL_GUARD_REGISTRY`),
 fired only via `preuse-write-dispatch.py`'s own dispatch, with its own

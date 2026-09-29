@@ -2,7 +2,7 @@
 coordinator_core.execute_plan_assemble.close_out_and_stamp — mutating
 assembler for `/execute-plan` Phase 4's close-out sequence.
 
-Purpose: `/execute-plan`'s Phase 4 (DoE-claude
+Purpose: `/execute-plan`'s Phase 4 (coordinator-content-repo
 `coordinator/skills/execute-plan/SKILL.md` § "Phase 4: Commit, Report, and
 Offer the Next Step", item 1) narrates a hand-sequenced git close-out as
 inline prose -- decide whether every wave-map chunk landed, stamp the plan's
@@ -15,7 +15,7 @@ single CLI (`close-out-and-stamp <plan-path>`) instead of hand-sequencing
 
 Full-shipped vs. halted determination: reads the plan's `## Tasks`
 machine-parseable spine (the single fenced ```yaml plan-tasks``` block
-directly under `## Tasks` -- DoE-claude `docs/wiki/writing-plans.md` §
+directly under `## Tasks` -- coordinator-content-repo `docs/wiki/writing-plans.md` §
 Machine-Parseable Task Spine), takes every commit-required row (disposition
 `open`/`coded`, `deferred` absent or `false`), and asks whether it has
 verified sha-ancestry evidence of landing -- see § Evidence sources below.
@@ -111,7 +111,7 @@ defect (three plans stamped a commit sha where a plan-body blob hash
 belonged) -- the fix here is to not manufacture a second hash-shaped field
 at all, not to re-derive the existing one with a different recipe.
 
-Spec backlink: DoE-claude coordinator/skills/execute-plan/SKILL.md § Phase 4,
+Spec backlink: coordinator-content-repo coordinator/skills/execute-plan/SKILL.md § Phase 4,
 docs/plans/2026-07-27-plan-line-item-resolution-model.md § C7 (AC7/AC8/AC9),
 docs/plans/2026-08-03-klabauter-rows-relocate-into-claude-klabauter.md § C5/C6
 (disposition_ref evidence), docs/plans/2026-08-20-the-close-ceremony-stops-
@@ -249,7 +249,7 @@ _LANDED_STATUS = "landed"
 #: Skip reason recorded on `origin_stub_result["skipped"]` when this run
 #: wrote something (a `close_out_last_partial:` evaluation marker, most
 #: commonly) but did NOT fully ship the plan (`status_target !=
-#: "implemented"`) -- Bug fix, 2026-09-06 (DoE-claude bug-backlog
+#: "implemented"`) -- Bug fix, 2026-09-06 (coordinator-content-repo bug-backlog
 #: 2026-09-06-close-out-promotes-an-origin-stub-to-shipped-on-a-partial-plan
 #: .yaml): `wrote_anything` (this function's own commit-gating predicate)
 #: is a STRICTLY WIDER condition than "fully shipped" -- it is also true on
@@ -1107,7 +1107,7 @@ def _disposition_ref_evidence(
 # that simply declined to declare a criterion (not correct). The date is
 # what separates those two populations, and it is pinned as a literal
 # because "before this plan's landing commit" resolves differently in every
-# repo that asks -- DoE-claude cross-repo memo, 2026-08-27, § "Pin the
+# repo that asks -- coordinator-content-repo cross-repo memo, 2026-08-27, § "Pin the
 # grandfather date". The M+ bound comes from plan.schema.json's own
 # read-side size rule for the falsifier: an S/XS plan omitting a criterion
 # was never in scope and still is not. A `prime_exit_criterion` present
@@ -1150,6 +1150,34 @@ def _read_status_override(plan_text: str) -> Optional[dict[str, str]]:
     return {"by": by.strip(), "reason": reason.strip(), "at": at.strip(), "body_sha": body_sha}
 
 
+def _sibling_sizing_resolves(derived_from: str, root: Path) -> bool:
+    """A multi-repo slate's plans derive from one sizing living in a sibling
+    repo: on a miss in the plan's own repo, probe every `repos.*` registry
+    entry other than `root`. Zero spawns -- `registry_get` reads the TOML
+    directly."""
+    try:
+        from coordinator_core.machine_resolver import registry_dir, load_flat_registry_file
+    except ImportError:
+        return False
+    keys: set[str] = set()
+    for fname in ("registry.local.toml", "registry.toml"):
+        try:
+            flat = load_flat_registry_file(registry_dir() / fname)
+        except Exception:
+            continue
+        keys.update(k for k in flat if k.startswith("repos.") and not k.endswith("_url"))
+    from coordinator_core.machine_resolver import registry_get
+
+    own = str(root.resolve())
+    for key in sorted(keys):
+        value = registry_get(key)
+        if not value or not Path(value).is_dir() or str(Path(value).resolve()) == own:
+            continue
+        if resolve_sizing_citation(value, derived_from) is not None:
+            return True
+    return False
+
+
 def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
     """Resolves `prime_exit_criterion.derived_from` against the plan's own
     repo (AC20) -- a link a reader can open and compare, never a
@@ -1180,7 +1208,9 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
     mirrors this module's degrade-quietly posture everywhere else it
     reads a corpus of caller-authored YAML."""
     if "#" not in derived_from:
-        if resolve_sizing_citation(root, derived_from) is None:
+        if resolve_sizing_citation(root, derived_from) is None and not _sibling_sizing_resolves(
+            derived_from, root
+        ):
             return f"sizing object not found: {derived_from}"
         return None
 
@@ -1424,7 +1454,7 @@ def _evaluate_goal_falsifier_gate(
     # plan that never authored an observation was indistinguishable from an S
     # plan that was never asked for one. Measured 2026-08-27 against four
     # fixtures differing only in t-shirt (S/M/L/XL, all non-refusing) --
-    # cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
+    # cross-repo/archive/2026-08-27-coordinator-content-repo-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
     #
     # Bounded exactly as arm 0 is, and for the same reasons: grandfather date
     # first, then M+, each failing toward NOT refusing. A named
@@ -2391,7 +2421,7 @@ def _ac_advisory_text(finding: dict[str, Any]) -> str:
     bytes); `plan_status_transition._ac_open_rows_warning` builds its
     stderr line from it directly.
 
-    `state/cross-repo/archive/2026-08-27-doe-claude-em-ac-table-
+    `state/cross-repo/archive/2026-08-27-coordinator-content-repo-em-ac-table-
     disposition.md` (accepted) is the binding reason this stays
     advisory-only, in these words, forever: "It reports and never
     blocks... The emission names the table's advisory standing." No
@@ -2760,7 +2790,7 @@ def close_out_and_stamp(
         if contradiction_gate is not None:
             status_target = None
 
-    # Review-stamp refusal (MK1, DoE-claude docs/plans/2026-09-27-review-
+    # Review-stamp refusal (MK1, coordinator-content-repo docs/plans/2026-09-27-review-
     # inside-execute-plan.md): review_stamp.subject_refusal, shared with
     # plan_status_transition._stamp_implemented -- both stamping paths refuse `implemented`
     # on a SUBJECT plan with no valid review_stamp. Evaluated only on the

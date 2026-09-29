@@ -495,7 +495,7 @@ def _grep_scan(search_root: Path, sentinels: list[str]) -> list[str]:
 
 # ---------------------------------------------------------------------------
 # ORPHAN-SENTINEL DETECTION (2026-07-25 DoE incident, memo
-# cross-repo/archive/2026-07-25-doe-claude-em-orient-assemble-phantom-verbs.md § P1)
+# cross-repo/archive/2026-07-25-coordinator-content-repo-em-orient-assemble-phantom-verbs.md § P1)
 #
 # `parallel-review-synthesizer.md` carried `reviewer-calibration` sentinels while
 # appearing in neither `consumers` nor `contract_blocks`. It was not merely stale:

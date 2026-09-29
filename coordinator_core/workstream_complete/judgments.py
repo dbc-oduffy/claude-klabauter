@@ -4,7 +4,7 @@ judgment_point builders for the `workstream-complete-assemble` computed
 engine.
 
 Purpose: the D-3/census conversion of `coordinator/skills/workstream-
-complete/SKILL.md` (DoE-claude) extracts every genuinely mechanical branch
+complete/SKILL.md` (coordinator-content-repo) extracts every genuinely mechanical branch
 into `directives_*.py` submodules and leaves a narrow residue that the
 source text itself names as non-computable — an open-ended qualitative
 call, an authorial-prose act, or a classification the SKILL delegates to a
@@ -36,7 +36,7 @@ session hygiene, and commit/tail — see `JUDGMENT_POINT_BUILDERS` at the
 bottom for the full roster in one place.
 
 Tier discipline (`coordinator/docs/wiki/computed-skills.md` § The
-three-tier model, DoE-claude): every builder below carries a
+three-tier model, coordinator-content-repo): every builder below carries a
 `recommendation` (tier 2, `build_judgment_point`) UNLESS its evidence is
 content this engine did not itself compute — another session's memo
 prose, another session's git activity, or a classification explicitly
@@ -87,7 +87,7 @@ Negative-spec:
     this module's concern at any layer (D-1's separate baton).
 
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
-chunk C2f. Census: DoE-claude
+chunk C2f. Census: coordinator-content-repo
 state/plan-sidecars/2026-07-26-workstream-complete-computed-frontage.census-steps.md
 (rows classified JUDGMENT for Steps 1, 1.2, 2, 2.4, 2.4b, 2.6, 2.6.7,
 2.6.8, 2.6b, 2.65, 2.67, 2.7, 2.8, 2.9, 2.95, 2.96, 3.0, 3, 4).
@@ -988,7 +988,7 @@ def build_no_commit_row_disposition_judgment_point(
             "recorded `disposition_ref` (new or existing plan -- no PM word, "
             "relaxed at DoE bd0475fd5/schema 1.4.0), backlogged and wont-do "
             "each require a PM word (retained by PM ruling -- cross-repo/inbox/"
-            "2026-08-05-doe-claude-em-plan-tasks-five-exits-ruling.md), and "
+            "2026-08-05-coordinator-content-repo-em-plan-tasks-five-exits-ruling.md), and "
             "carried-forward requires an explicit handoff_carry_gate carry_id, "
             "so none of the five resolves without an actual decision"
         ),

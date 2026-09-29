@@ -12,7 +12,7 @@ declined within the last _COOLDOWN_DAYS days — an unconditional offer that
 resurfaces unchanged twice a week reads as a nag by week 3-4, not an offer.
 
 Port of: check-competitor-positioning-nudge.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: coordinator/DoE-claude:pln-per-repo-competitor-peer-self--f0b04e
+Spec backlink: coordinator/coordinator-content-repo:pln-per-repo-competitor-peer-self--f0b04e
 
 Negative-spec (fidelity to the bash oracle — do NOT "fix" these mid-port):
     - A malformed self-description.yaml (unparseable YAML) is NOT caught — it

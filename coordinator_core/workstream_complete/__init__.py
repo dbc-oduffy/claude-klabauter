@@ -18,8 +18,8 @@ tree (D-4/F6 of the same plan); every submodule is a pure, `__init__`-
 independent builder, and this module is the ONLY one that reads the
 CONSUMES_MANIFEST, assembles the 8-key envelope, and exposes the CLI.
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
-Branches computed against: DoE-claude coordinator/skills/workstream-complete/SKILL.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
+Branches computed against: coordinator-content-repo coordinator/skills/workstream-complete/SKILL.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C3 (wiring the manifest/submodules/apply-verb landed here). Original
 compute-only convert: docs/plans/2026-07-21-canonical-resolution-engine.md,
@@ -70,7 +70,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
         sweep-terminal-handoffs.py, sweep-terminal-sizings.py ->
         `directives_session_hygiene.py` (C2i). The handoff sweep is the
         close's mandatory terminal-baton drain (PM ruling 2026-09-03,
-        carried by cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-
+        carried by cross-repo/inbox/2026-09-03-coordinator-content-repo-em-close-verbs-
         must-emit-a-terminal-handoff-drain-directive.md) — unconditional,
         emitted last. The sizings sweep is its sibling (C3,
         docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md):
@@ -1215,7 +1215,7 @@ def _directive(
 #: rules the per-commit review trail retired outright. argparse rejected
 #: every emitted directive with exit 2, `apply` exited 4 PARTIAL_MUTATION,
 #: and the tail was never attempted — measured twice independently
-#: (session `cb4ea2e4`, this repo; DoE-claude session `39644554`). No
+#: (session `cb4ea2e4`, this repo; coordinator-content-repo session `39644554`). No
 #: review trail is owed — that is DR-372's ruling, not a gap — so this
 #: builder is DROPPED, not replaced: `brief()` no longer calls it and no
 #: directive named `d-write-trail*` is ever emitted.
@@ -1323,7 +1323,7 @@ def _plugin_cli_resolution_payload() -> dict[str, Any]:
     "provenance plus a loud fallback" shape `_lesson_capture_route_payload`
     already carries for the other producer this module cannot always
     reach. `root`/`source` come from `resolve_plugin_cli_script_root()`'s
-    own verdict and `coordinator_doe_root_in_process()`'s own memoized
+    own verdict and `coordinator_content_root_in_process()`'s own memoized
     tuple -- never a second ladder run, and never a per-name `.exists()`
     stat inside this function: the resolver already checked the directory
     once (AC6), and re-checking here would spend this module's own
@@ -1344,10 +1344,10 @@ def _plugin_cli_resolution_payload() -> dict[str, Any]:
     no blocking force by being read here.
     """
     from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
-    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root_in_process
+    from coordinator_core.ops.coordinator_content_root import coordinator_content_root_in_process
 
     script_root = resolve_plugin_cli_script_root()
-    _doe_root, rung = coordinator_doe_root_in_process()
+    _content_root, rung = coordinator_content_root_in_process()
     reachable = script_root is not None
     payload: dict[str, Any] = {
         "root": str(script_root) if reachable else None,
@@ -1357,14 +1357,14 @@ def _plugin_cli_resolution_payload() -> dict[str, Any]:
     if not reachable:
         payload["reason"] = (
             "resolve_plugin_cli_script_root() resolved no DoE-anchored "
-            "coordinator/bin directory -- coordinator_doe_root_in_process() "
-            "exhausted rungs 1, 2, 2.5 and 2.75 (env, repos.doe_claude, "
+            "coordinator/bin directory -- coordinator_content_root_in_process() "
+            "exhausted rungs 1, 2, 2.5 and 2.75 (env, repos.content_root, "
             "plugin.mirrors.live_path, codename-free) with no admissible "
             "root, or the joined coordinator/bin at the resolved root is not "
             "a directory (a stale or moved clone)."
         )
         payload["fallback"] = {
-            name: f"Run by hand at the DoE-claude clone: {cmd}"
+            name: f"Run by hand at the coordinator-content-repo clone: {cmd}"
             for name, cmd in _PLUGIN_LOCAL_CLI_HAND_RUN.items()
         }
     return payload
@@ -1686,7 +1686,7 @@ def build_directives(
     # disposition), but substituting nothing left the close that caps an
     # entire lineage's diff as the ONE close with no brightline gate at all,
     # strictly less gated than an ordinary mid-chain session (2026-08-03
-    # doe-claude-em memo, `cross-repo/inbox/2026-08-03-doe-claude-em-wsc-
+    # coordinator-content-repo-em memo, `cross-repo/inbox/2026-08-03-coordinator-content-repo-em-wsc-
     # chain-terminal-brightline-gate-never-fires.md`). The chain gate's
     # machinery was already live — `wsc-coverage-gate-runner brightline-gate
     # --from-handoff` and its two-oracle plan/chain compute — only the call
@@ -1809,7 +1809,7 @@ def build_directives(
     # operation. Emitting it here archived a still-live session mid-session,
     # destroying once-per-session sentinels and the dispatch-evidence file.
     # Archival now belongs to session END, not workstream close — wired via
-    # a SessionEnd hook (DoE-claude repo) rather than this assembly. The
+    # a SessionEnd hook (coordinator-content-repo repo) rather than this assembly. The
     # `archive-session-scope.py archive-session` CLI subcommand remains in
     # place for that caller; the directive builder that used to construct it
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
@@ -1844,7 +1844,7 @@ def build_review_scale_judgment_point(
     chain_terminal: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Surfaces `decide_review_scale`'s verdict — otherwise dead code with
-    no call site (source memo 2026-08-03-doe-claude-em-wsc-chain-terminal-
+    no call site (source memo 2026-08-03-coordinator-content-repo-em-wsc-chain-terminal-
     brightline-gate-never-fires.md). Sits BESIDE `review-partition-strategy`
     / `reviewer-count-on-oracle-disagreement` (the Staff Engineer finding 13): it does
     not feed their inputs and is not gated on `review_relevant` — read only
@@ -1855,7 +1855,7 @@ def build_review_scale_judgment_point(
     tail (`d-run-wsc-tail`, removed in the ceremony.wsc_tail kill,
     2026-08-23) carried no dependency edge on this judgment
     point while it existed. See DR-068 ("Commit-Time Coverage Gate — ... Advisory-Not-
-    Blocking") and DoE-claude coordinator/docs/wiki/workstream-complete-
+    Blocking") and coordinator-content-repo coordinator/docs/wiki/workstream-complete-
     review.md, section "The gate is an oracle, not a lock" — do not
     re-derive this as a bug or wire a dependency edge here without a fresh
     PM decision. (The lesson file a sibling comment cites,
@@ -1898,7 +1898,7 @@ def build_review_scale_judgment_point(
     STILL advisory, not a new block: `d-run-wsc-tail` (removed in the
     ceremony.wsc_tail kill, 2026-08-23) never carried a dependency
     edge on `jp-review-scale` either way, per DR-068 (2026-07-27,
-    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and DoE-claude
+    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and coordinator-content-repo
     coordinator/docs/wiki/workstream-complete-review.md, section "The gate
     is an oracle, not a lock" — do not re-derive this as a bug or wire a
     dependency edge here without a fresh PM decision. Removing the
@@ -1963,7 +1963,7 @@ def build_review_scale_judgment_point(
     if decision.resolved:
         rationale = f"review scale row {decision.row} ({decision.scale}): {decision.reason}"
         if decision.partition_mandatory:
-            # 2026-08-13-doe-claude-em-dispatch-authorization-clause-on-mandatory-
+            # 2026-08-13-coordinator-content-repo-em-dispatch-authorization-clause-on-mandatory-
             # dispatch-judgment-points.md: the recommendation string is the one
             # surface a recall failure of the harness's unattributed
             # dispatch-restriction line cannot route around, since it is read
@@ -2217,7 +2217,7 @@ def _append_directive_dependency(directives: list[dict[str, Any]], directive_id:
 # Three arms, not two: a value in neither set resolves `indeterminate`,
 # never a fail-closed `live-child`. Collapsing "cannot tell" into "a child
 # is live" is the exact shape of both regressions this seam has already
-# shipped (cross-repo/inbox 2026-08-31-doe-claude-em-has-live-children-
+# shipped (cross-repo/inbox 2026-08-31-coordinator-content-repo-em-has-live-children-
 # fail-closed-reads-as-a-finding.md, and 2026-09-01-example-game-repo-em-wsc-leg-b-
 # renames-referenced-to-live-child.md).
 #
@@ -2599,7 +2599,7 @@ def _compute_review_receipt_gate(
     the session's completion writer ran and this sidecar carries no
     session-matching `review_completion` block of its own.
 
-    RRI-M4 repoint (DoE-claude docs/plans/2026-09-26-retire-review-integrator.md):
+    RRI-M4 repoint (coordinator-content-repo docs/plans/2026-09-26-retire-review-integrator.md):
     the review-integrator agent is retired, so no sidecar ever stamps a fresh
     `integrator_receipt:` block again. "Findings were applied" is now read
     directly off the MATCHED review sidecar's own `findings_ledger:`
@@ -2631,7 +2631,7 @@ def _compute_review_receipt_gate(
             ),
         )
 
-    # MK2 (DoE-claude docs/plans/2026-09-27-review-inside-execute-plan.md):
+    # MK2 (coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md):
     # a plan-bearing close whose governing plan carries a valid `review_stamp`
     # is discharged by the stamp alone — per-reviewer dispatch receipts are no
     # longer required. Supersession is deliberately NEVER re-run here
@@ -2877,7 +2877,7 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
     Returns the full list of matches — zero, one, or more — so the caller
     can distinguish "nothing to look at" (zero candidates) from "ambiguous
     join" (2+ candidates) rather than collapsing both into one "unresolved"
-    signal (cross-repo/archive/2026-08-08-doe-claude-em-leg-a-correction-
+    signal (cross-repo/archive/2026-08-08-coordinator-content-repo-em-leg-a-correction-
     our-premise-was-wrong-keep-the-verdict-fix.md: both cases previously
     emitted the identical "does not resolve to exactly one" string). Never
     raises: an unreadable/non-UTF-8 plan file is skipped, not fatal to the
@@ -2906,8 +2906,8 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
 
 def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> dict[str, Any]:
     """Leg A for `kind: session-handoff` batons only — that kind is not
-    built to carry its own `## Acceptance criteria` (0/34 in DoE-claude's
-    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-doe-claude-em-
+    built to carry its own `## Acceptance criteria` (0/34 in coordinator-content-repo's
+    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-coordinator-content-repo-em-
     wsc-leg-a-session-handoff-kind-blind.md): its acceptance criteria live
     in the PLAN it was executing. Joins on the handoff's own
     `deliverable_id` frontmatter to that plan's `deliverable_id`
@@ -3374,7 +3374,7 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
     # KILLED (-32006) and is called from nowhere in this module -- and then, after
     # that repair, "candidate's own `continued_into` back-edge names a successor",
     # which was accurate about the field and silent on the question: whether the
-    # successor is still live. Both misreads blocked real closes (doe-claude-em
+    # successor is still live. Both misreads blocked real closes (coordinator-content-repo-em
     # 2026-08-31, example-game-repo-em 2026-09-01). The detail now comes from the link that
     # decided the verdict, composed where that link was read, so a relabel here
     # cannot outrun the evidence again.

@@ -18,7 +18,7 @@ logic — the 8 review-side `judgment_points` named in D-3
 `review-dispatch-vehicle-choice`, `quota-retry-vs-escalate`) belong to
 `judgments.py` (C2f).
 
-Source: DoE-claude coordinator/skills/workstream-complete/SKILL.md,
+Source: coordinator-content-repo coordinator/skills/workstream-complete/SKILL.md,
 Step 2.9 (lines ~409-566) and Step 2.9b (lines ~568-587).
 
 This module is one of seven siblings (directives_lessons_plan.py,
@@ -938,7 +938,7 @@ def build_write_review_trail_directive(
 
     `reviewer` and `verdict` MUST agree on whether this record is waived
     (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C14,
-    folded from the doe-claude-em memo): `reviewer='waived'` requires
+    folded from the coordinator-content-repo-em memo): `reviewer='waived'` requires
     `verdict='waived'`; any other verdict (including `pending`) requires a
     real, non-waived reviewer. Enforced here, fail-loud via `ValueError`
     mirroring the `sha_range` guard above — NOT coerced, because silently

@@ -18,7 +18,7 @@ commit) — so on an unpinned box, work/* pushes fail silently forever and the
 ONLY signal is .git/push-failures.log, which nobody reads.
 
 Full background, reproduced two-armed control, and the mechanism writeup:
-coordinator/docs/wiki/bash-on-windows-gotchas.md §15 (DoE-claude).
+coordinator/docs/wiki/bash-on-windows-gotchas.md §15 (coordinator-content-repo).
 
 Contract for legs declared in install_health_run's `_NATIVE_LEGS` (see that
 module's own docstring): self-gate on OS, exit 0 silently when the gate

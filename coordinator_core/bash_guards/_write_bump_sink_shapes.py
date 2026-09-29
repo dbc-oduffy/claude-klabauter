@@ -5,7 +5,7 @@ plain-bash write-sink shape table shared by the cross-repo bump guard
 by reference, so the two chunks classify the identical shape set rather than
 each hand-rolling its own list that can silently drift from the other's.
 
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
+Spec backlink: coordinator-content-repo:pln-write-confinement-guards-cross-996567 [coordinator-content-repo
 repo], chunk C4 ("the enumerated plain-bash write-sink set is owned by chunk
 C5 and shared here by reference so the two cannot drift -- put the set in one
 shared helper you own now, structured so C5 imports it rather than restating
@@ -29,7 +29,7 @@ PM-RATIFIED REVERSAL, 2026-08-14 (`docs/plans/2026-08-14-interpreter-body-
 write-sinks.md`) -- record this, do not re-derive the old rule. This module
 previously stated that interpreter indirection beyond the single inline
 `-c` case was out of scope BY DESIGN ("do not enumerate evasions",
-DoE-claude:pln-write-confinement-guards-cross-996567 § Design posture). That
+Coordinator-content-repo:pln-write-confinement-guards-cross-996567 § Design posture). That
 exclusion was written against *adversarial* evasion. The reversal covers
 only the ACCIDENTAL shape underneath it -- a write target that exists
 solely inside a heredoc body or a `python`/`python3 -c` payload string, the
@@ -390,7 +390,7 @@ def translate_msys_path(path: str) -> Optional[str]:
     form this function deliberately does not attempt to resolve.
 
     Pattern: normalize at the single get seam, not at each of the N
-    consumers -- see DoE-claude `coordinator/docs/wiki/bash-on-windows-
+    consumers -- see coordinator-content-repo `coordinator/docs/wiki/bash-on-windows-
     gotchas.md` §10/§14. This function IS that single seam for the two
     `bump_*_write.py` guards (C2, C4): `resolve_relative` below calls it on
     both `base` and `target` before either ever reaches `os.path`.
@@ -668,7 +668,7 @@ def _bound_literal_paths(text: str) -> dict:
     to a literal path.
 
     Why this is not a widening of the closed set (2026-08-30, cross-repo ask
-    `cross-repo/inbox/2026-08-30-doe-claude-em-interpreter-write-sink-misses-
+    `cross-repo/inbox/2026-08-30-coordinator-content-repo-em-interpreter-write-sink-misses-
     the-bound-receiver.md`): `p = Path(lit)` followed by `p.write_text(...)`
     is the READ-MODIFY-WRITE idiom. You must bind the path to edit a file in
     place, so every in-place edit carried a variable receiver and the whole

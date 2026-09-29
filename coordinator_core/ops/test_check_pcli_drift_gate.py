@@ -205,9 +205,9 @@ def _write_capture(
     )
 
 
-def _write_resolution(doe_root: Path, schemas_dir: Path, source_hashes: dict[str, str] | None = None) -> None:
+def _write_resolution(content_root: Path, schemas_dir: Path, source_hashes: dict[str, str] | None = None) -> None:
     if source_hashes is None:
-        tracked = doe_root / "coordinator" / "tracked.md"
+        tracked = content_root / "coordinator" / "tracked.md"
         tracked.parent.mkdir(parents=True, exist_ok=True)
         tracked.write_text("tracked content", encoding="utf-8")
         source_hashes = {
@@ -219,25 +219,25 @@ def _write_resolution(doe_root: Path, schemas_dir: Path, source_hashes: dict[str
     )
 
 
-def _doe_root(tmp_path: Path) -> tuple[Path, Path]:
-    doe_root = tmp_path / "DoE-claude"
-    schemas_dir = doe_root / "coordinator" / "schemas"
+def _content_root(tmp_path: Path) -> tuple[Path, Path]:
+    content_root = tmp_path / "coordinator-content-repo"
+    schemas_dir = content_root / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
-    return doe_root, schemas_dir
+    return content_root, schemas_dir
 
 
 def test_run_gate_clean_on_matching_fixture(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 10))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 10))
     assert lines == []
 
 
 def test_run_gate_nonzero_on_drifted_capture(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(
         schemas_dir,
@@ -245,50 +245,50 @@ def test_run_gate_nonzero_on_drifted_capture(tmp_path):
         filename_date="2026-08-05",
         extra_opts={"brandNewOption": "prose"},
     )
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 10))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 10))
     assert any("LEG 1" in line for line in lines)
     assert any("brandNewOption" in line for line in lines)
 
 
 def test_run_gate_nonzero_on_filename_captured_at_mismatch(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-06")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 10))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 10))
     assert any("LEG 2" in line for line in lines)
     assert any("disagrees with captured_at" in line for line in lines)
 
 
 def test_run_gate_nonzero_on_source_hash_mismatch(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
-    _write_resolution(doe_root, schemas_dir, source_hashes={"coordinator/missing.md": "0" * 64})
+    _write_resolution(content_root, schemas_dir, source_hashes={"coordinator/missing.md": "0" * 64})
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 10))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 10))
     assert any("LEG 3" in line for line in lines)
 
 
 def test_run_gate_clock_ignores_backdated_mtime(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
     capture_path = schemas_dir / "workflow-tool-api-capture.2026-08-05.json"
     old_time = date(2000, 1, 1).toordinal() * 86400
     os.utime(capture_path, (old_time, old_time))
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 10))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 10))
     assert lines == []
 
 
 def test_run_gate_raises_gate_error_on_missing_source_hashes(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
     resolution = {"hash_algorithm": "sha256"}
@@ -297,21 +297,21 @@ def test_run_gate_raises_gate_error_on_missing_source_hashes(tmp_path):
     )
 
     with pytest.raises(gate.GateError):
-        gate.run_gate(doe_root, today=date(2026, 8, 10))
+        gate.run_gate(content_root, today=date(2026, 8, 10))
 
 
 def test_run_gate_raises_gate_error_on_empty_source_hashes(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
-    _write_resolution(doe_root, schemas_dir, source_hashes={})
+    _write_resolution(content_root, schemas_dir, source_hashes={})
 
     with pytest.raises(gate.GateError):
-        gate.run_gate(doe_root, today=date(2026, 8, 10))
+        gate.run_gate(content_root, today=date(2026, 8, 10))
 
 
 def test_run_gate_raises_gate_error_on_non_mapping_source_hashes(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
     resolution = {"hash_algorithm": "sha256", "source_hashes": ["not", "a", "mapping"]}
@@ -320,7 +320,7 @@ def test_run_gate_raises_gate_error_on_non_mapping_source_hashes(tmp_path):
     )
 
     with pytest.raises(gate.GateError):
-        gate.run_gate(doe_root, today=date(2026, 8, 10))
+        gate.run_gate(content_root, today=date(2026, 8, 10))
 
 
 def test_hash_drift_raises_gate_error_on_path_traversal(tmp_path):
@@ -340,12 +340,12 @@ def test_load_json_raises_gate_error_on_non_utf8(tmp_path):
 
 
 def test_run_gate_missing_dispatch_feed_schema_raises_gate_error(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_capture(schemas_dir)
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
     with pytest.raises(gate.GateError):
-        gate.run_gate(doe_root, today=date(2026, 8, 10))
+        gate.run_gate(content_root, today=date(2026, 8, 10))
 
 
 def test_select_window_days_narrow_until_a_second_capture_exists():
@@ -394,41 +394,41 @@ def test_capture_max_age_days_still_only_shortens_the_wide_tier():
 
 
 def test_run_gate_one_capture_applies_narrow_window(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 20))
     assert any("threshold_days=14" in line for line in lines)
     assert any("1 capture on disk" in line for line in lines)
 
 
 def test_run_gate_second_capture_widens_window_and_clears_the_stale_fail(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
     _write_capture(schemas_dir, captured_at="2026-08-14", filename_date="2026-08-14")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 9, 2))
+    lines = gate.run_gate(content_root, today=date(2026, 9, 2))
     assert lines == [], lines
 
 
 def test_run_gate_wide_tier_still_fails_past_90_days(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
     _write_capture(schemas_dir, captured_at="2026-08-14", filename_date="2026-08-14")
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 11, 20))
+    lines = gate.run_gate(content_root, today=date(2026, 11, 20))
     assert any("threshold_days=90" in line for line in lines)
     assert any("2 captures on disk" in line for line in lines)
 
 
 def test_run_gate_reads_the_newest_capture_when_several_exist(tmp_path):
-    doe_root, schemas_dir = _doe_root(tmp_path)
+    content_root, schemas_dir = _content_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
     _write_capture(
@@ -437,35 +437,35 @@ def test_run_gate_reads_the_newest_capture_when_several_exist(tmp_path):
         filename_date="2026-08-14",
         extra_opts={"brandNewLiveOption": "prose"},
     )
-    _write_resolution(doe_root, schemas_dir)
+    _write_resolution(content_root, schemas_dir)
 
-    lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
+    lines = gate.run_gate(content_root, today=date(2026, 8, 20))
     assert any("LEG 1" in line for line in lines)
     assert any("brandNewLiveOption" in line for line in lines)
 
 
 def _flat_mirror_root(tmp_path: Path) -> tuple[Path, Path]:
-    doe_root = tmp_path / "coordinator-claude"
-    (doe_root / ".claude-plugin").mkdir(parents=True)
-    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
-    schemas_dir = doe_root / "schemas"
+    content_root = tmp_path / "coordinator-claude"
+    (content_root / ".claude-plugin").mkdir(parents=True)
+    (content_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    schemas_dir = content_root / "schemas"
     schemas_dir.mkdir(parents=True)
-    return doe_root, schemas_dir
+    return content_root, schemas_dir
 
 
 def test_run_gate_clean_on_flat_mirror_layout(tmp_path):
-    doe_root, schemas_dir = _flat_mirror_root(tmp_path)
+    content_root, schemas_dir = _flat_mirror_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
-    tracked = doe_root / "tracked.md"
+    tracked = content_root / "tracked.md"
     tracked.write_text("tracked content", encoding="utf-8")
     _write_resolution(
-        doe_root,
+        content_root,
         schemas_dir,
         source_hashes={"tracked.md": hashlib.sha256(b"tracked content").hexdigest()},
     )
 
-    assert gate.run_gate(doe_root, today=date(2026, 8, 10)) == []
+    assert gate.run_gate(content_root, today=date(2026, 8, 10)) == []
 
 
 def test_run_gate_raises_on_a_bare_directory(tmp_path):

@@ -263,7 +263,7 @@ _UNROUTABLE_DETAILS: dict = {
     KEY_ABSENT: lambda res: "no clone identity on this request",
     CREDENTIAL_ABSENT: lambda res: (
         "no door credential on this request -- this session was not started "
-        "through the claude-doe launcher, or the key was vetoed to empty"
+        "through the claude-author launcher, or the key was vetoed to empty"
     ),
     CREDENTIAL_INVALID: lambda res: "door credential presented does not match this box's",
     ROOT_UNRESOLVABLE: lambda res: "clone identity %s names no engine root this box can resolve" % res.identity,

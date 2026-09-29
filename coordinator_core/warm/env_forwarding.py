@@ -55,7 +55,7 @@ PRECEDENCE` triple) plus `MACHINE_LOCAL_REGISTRY_DIR`.
 
 WIDENED SET (C7): seven more `borrow` names -- `CLAUDE_HOME`,
 `CLAUDE_PLUGIN_ROOT`, `CLAUDE_CONFIG_DIR`, `MACHINE_LOCAL_IMPL`,
-`COORDINATOR_ROOT`, `DOE_ROOT`, `CLAUDE_PROJECT_DIR` -- the remaining
+`COORDINATOR_ROOT`, `CONTENT_ROOT`, `CLAUDE_PROJECT_DIR` -- the remaining
 census names that are path-valued caller-owned facts read the same way
 `MACHINE_LOCAL_REGISTRY_DIR` already is. The OS-level census names
 (`HOME`, `USERPROFILE`, `PATH`, `LOCALAPPDATA`, `TMPDIR`, `SYSTEMROOT`)
@@ -71,7 +71,7 @@ from __future__ import annotations
 from typing import NamedTuple, Tuple
 
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
-from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
+from coordinator_core.session.job_mode_env import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "CALLER_PREFIXES", "is_caller_prefixed", "generate_header"]
 
@@ -103,7 +103,7 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("CLAUDE_CONFIG_DIR", BORROW),
     _entry("MACHINE_LOCAL_IMPL", BORROW),
     _entry("COORDINATOR_ROOT", BORROW),
-    _entry("DOE_ROOT", BORROW),
+    _entry("CONTENT_ROOT", BORROW),
     _entry("CLAUDE_PROJECT_DIR", CALLER),
     _entry("CLAUDE_CODE_REMOTE", CALLER),
     # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`

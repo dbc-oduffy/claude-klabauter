@@ -22,12 +22,12 @@ bypassed and the code under test resolves the REAL ``C:\\Users\\<you>``.
 
 That is not a theoretical leak. On 2026-07-20 three sibling repos independently
 reported that running this suite on Windows wrote a pytest tmpdir into the real
-``~/.claude/.doe-root``, repointing every coordinator skill on the machine at a
+``~/.claude/.coordinator-content-root``, repointing every coordinator skill on the machine at a
 directory that vanishes on the next tmp reap. See:
 
-- ``cross-repo/inbox/2026-07-20-claude-central-em-doe-root-pointer-test-clobbers-real-home.md``
-- ``cross-repo/inbox/2026-07-20-claude-central-em-doe-root-pointer-test-corrupts-live-machine-config.md``
-- ``cross-repo/inbox/2026-07-20-example-cockpit-repo-em-doe-root-clobbered-by-windows-test-home-leak.md``
+- ``cross-repo/inbox/2026-07-20-claude-central-em-content-root-pointer-test-clobbers-real-home.md``
+- ``cross-repo/inbox/2026-07-20-claude-central-em-content-root-pointer-test-corrupts-live-machine-config.md``
+- ``cross-repo/inbox/2026-07-20-example-cockpit-repo-em-content-root-clobbered-by-windows-test-home-leak.md``
 
 The fix is structural rather than per-site: point EVERY home-resolution
 variable at a throwaway per-test directory before the test runs. A test that
@@ -151,18 +151,18 @@ def _capture_real_settings_home() -> str:
 _REAL_SETTINGS_HOME = _capture_real_settings_home()
 
 
-def _capture_real_doe_root() -> str:
-    """Resolve the sibling DoE-claude checkout ONCE, at collection time, under
+def _capture_real_content_root() -> str:
+    """Resolve the sibling coordinator-content-repo checkout ONCE, at collection time, under
     the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
-    into a throwaway stub (see ``_STUB_DOE_ROOT`` below). The real path itself
-    is never seeded into a quarantined test's ``.doe-root`` pointer.
+    into a throwaway stub (see ``_STUB_CONTENT_ROOT`` below). The real path itself
+    is never seeded into a quarantined test's ``.coordinator-content-root`` pointer.
 
     Same capture-before-quarantine shape as ``_REAL_USER_SITE`` above, for the
     same class of reason. ``coordinator/bin/lib/coordinator_registry.py``
     resolves its manifest (``coordinator/schemas/coordinator-registry.manifest
-    .json``, which DR-047 keeps in DoE-claude while this repo owns the engine)
+    .json``, which DR-047 keeps in coordinator-content-repo while this repo owns the engine)
     at IMPORT time, through a ladder whose every live rung is home-anchored:
-    the ``.doe-root`` pointer files, the marketplace-cache probe, the flat
+    the ``.coordinator-content-root`` pointer files, the marketplace-cache probe, the flat
     plugin-layout probe, and the machine-local registry CLI all hang off
     ``$HOME``/settings-home. Quarantining HOME therefore does not isolate that
     module — it makes it unresolvable, and it fails loud with an
@@ -171,19 +171,19 @@ def _capture_real_doe_root() -> str:
     ``baton_assemble.apply._load_doc_new_module`` does, or as a spawned
     subprocess inheriting this environment) dies before reaching its assertion.
 
-    Returns "" when nothing resolves — on a machine with no DoE-claude checkout
+    Returns "" when nothing resolves — on a machine with no coordinator-content-repo checkout
     the seeding below is skipped and behavior is unchanged.
     """
     try:
-        from coordinator_core.testing.doe_root import resolve_doe_root
+        from coordinator_core.testing.content_root import resolve_content_root
 
-        root = resolve_doe_root()
+        root = resolve_content_root()
     except Exception:  # pragma: no cover - defensive; a broken resolver must not break collection
         return ""
     return root if root and os.path.isdir(root) else ""
 
 
-_REAL_DOE_ROOT = _capture_real_doe_root()
+_REAL_CONTENT_ROOT = _capture_real_content_root()
 
 _REAL_DOE_MANIFEST_RELPATH = os.path.join(
     "coordinator", "schemas", "coordinator-registry.manifest.json"
@@ -200,55 +200,55 @@ _STUB_DOE_SEED_RELPATHS = (
 
 
 def _real_doe_seed_source(relpath: str) -> str:
-    """Locate one seed file inside ``_REAL_DOE_ROOT``, tolerant of BOTH DoE
+    """Locate one seed file inside ``_REAL_CONTENT_ROOT``, tolerant of BOTH DoE
     layouts, and return its absolute path ("" when absent).
 
-    The private DoE-claude checkout keeps these under ``coordinator/…``; the
+    The private coordinator-content-repo checkout keeps these under ``coordinator/…``; the
     published `coordinator-claude` mirror ships them FLAT at its repo root,
-    and that mirror is what a cloud container registers as `repos.doe_claude`
-    — so `resolve_doe_root()` legitimately hands back a flat root there.
+    and that mirror is what a cloud container registers as `repos.content_root`
+    — so `resolve_content_root()` legitimately hands back a flat root there.
     `coordinator/bin/lib/coordinator_registry.py::_mp_candidate_manifest_path`
     already probes both arms for exactly this reason; hardcoding only the
     ``coordinator/`` arm here made the stub builder blind to the flat mirror,
-    returned "" from `_build_stub_doe_root`, and left the quarantined HOME
-    with no ``.doe-root`` pointer at all — so every test that loads a
+    returned "" from `_build_stub_content_root`, and left the quarantined HOME
+    with no ``.coordinator-content-root`` pointer at all — so every test that loads a
     `coordinator/bin/` CLI died at import on the registry's install-integrity
     `FileNotFoundError`, which is the failure this whole seeding path exists
     to prevent.
 
     The STUB is always written in the canonical ``coordinator/…`` layout
-    whatever the source layout was: `doe_root()`-anchored readers join that
+    whatever the source layout was: `content_root()`-anchored readers join that
     shape, and the registry prober accepts it on both arms.
     """
-    if not _REAL_DOE_ROOT:
+    if not _REAL_CONTENT_ROOT:
         return ""
     candidates = [relpath]
     head, _, tail = relpath.partition(os.sep)
     if head == "coordinator" and tail:
         candidates.append(tail)
     for candidate in candidates:
-        path = os.path.join(_REAL_DOE_ROOT, candidate)
+        path = os.path.join(_REAL_CONTENT_ROOT, candidate)
         if os.path.isfile(path):
             return path
     return ""
 
 
-def _build_stub_doe_root(base_dir: str) -> str:
-    """Build a throwaway DoE-claude STUB under ``base_dir`` and return its path.
+def _build_stub_content_root(base_dir: str) -> str:
+    """Build a throwaway coordinator-content-repo STUB under ``base_dir`` and return its path.
 
     Copies only the explicitly named files quarantined tests actually need
     to READ — listed in ``_STUB_DOE_SEED_RELPATHS`` above — out of the real
-    checkout captured by ``_capture_real_doe_root``. Nothing else from the
+    checkout captured by ``_capture_real_content_root``. Nothing else from the
     real repo is copied or referenced. A file earns a place in that tuple
     only when a quarantined test genuinely reads it from the DoE side, added
     deliberately one at a time — this must never become a whole-tree copy.
 
-    This is the fix for a P1: seeding the REAL DoE-claude path into a
-    quarantined test's ``.doe-root`` pointer made the manifest READ succeed,
-    but ``coordinator_registry.py::doe_root()`` is also the documented anchor
+    This is the fix for a P1: seeding the REAL coordinator-content-repo path into a
+    quarantined test's ``.coordinator-content-root`` pointer made the manifest READ succeed,
+    but ``coordinator_registry.py::content_root()`` is also the documented anchor
     other call sites join WRITE targets onto (``state/lessons-outbox``,
     ``state/improvement-queue``) — so any quarantined test that reached a
-    ``doe_root()``-anchored write path without its own override could write
+    ``content_root()``-anchored write path without its own override could write
     into the LIVE sibling repo, the exact corruption class this fixture
     exists to prevent. Pointing at a stub instead keeps the needed reads
     working while making every write land inside the throwaway quarantine
@@ -259,22 +259,22 @@ def _build_stub_doe_root(base_dir: str) -> str:
     file widens the exposure the stub was built to shrink.
 
     Returns "" if the real DoE root or the REGISTRY MANIFEST cannot be
-    located, mirroring ``_capture_real_doe_root``'s graceful degradation —
+    located, mirroring ``_capture_real_content_root``'s graceful degradation —
     callers must treat an empty return the same as "nothing to seed". The
     manifest is deliberately load-bearing rather than one seed among equals:
-    a stub carrying schemas but no registry resolves ``doe_root()`` into a
+    a stub carrying schemas but no registry resolves ``content_root()`` into a
     tree that fails its read later and further away, which is worse than
     degrading here. Any OTHER missing seed file is skipped, not fatal — it
     surfaces as its own reader's ENOENT, naming the file it wanted.
     """
-    if not _REAL_DOE_ROOT:
+    if not _REAL_CONTENT_ROOT:
         return ""
     if not _real_doe_seed_source(_REAL_DOE_MANIFEST_RELPATH):
         return ""
 
     import shutil
 
-    stub_root = os.path.join(base_dir, "doe-claude-stub")
+    stub_root = os.path.join(base_dir, "coordinator-content-repo-stub")
     for relpath in _STUB_DOE_SEED_RELPATHS:
         real_path = _real_doe_seed_source(relpath)
         if not real_path:
@@ -402,19 +402,19 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv(_warm_breadcrumb.RUNTIME_BASE_ENV, str(_warm_base))
 
     # Make the throwaway home a FAITHFUL home rather than an empty one for the
-    # Seeded as a FILE inside the quarantine, not as a `REPO_DOE_CLAUDE` env
-    # The pointer value itself is a THROWAWAY STUB (`_build_stub_doe_root`),
-    # never `_REAL_DOE_ROOT`. Seeding the real path here made the manifest
-    # `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` (legacy fallback). Seeding only
+    # Seeded as a FILE inside the quarantine, not as a `REPO_CONTENT_ROOT` env
+    # The pointer value itself is a THROWAWAY STUB (`_build_stub_content_root`),
+    # never `_REAL_CONTENT_ROOT`. Seeding the real path here made the manifest
+    # `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` (legacy fallback). Seeding only
     # the first would leave any test that redirects COORDINATOR_SETTINGS_HOME
-    stub_doe_root = _build_stub_doe_root(str(quarantine))
-    if stub_doe_root:
+    stub_content_root = _build_stub_content_root(str(quarantine))
+    if stub_content_root:
         for pointer in (
-            quarantine / ".coordinator-claude-settings" / "machine-local" / ".doe-root",
-            quarantine / ".claude" / ".doe-root",
+            quarantine / ".coordinator-claude-settings" / "machine-local" / ".coordinator-content-root",
+            quarantine / ".claude" / ".coordinator-content-root",
         ):
             pointer.parent.mkdir(parents=True, exist_ok=True)
-            pointer.write_text(stub_doe_root + "\n", encoding="utf-8")
+            pointer.write_text(stub_content_root + "\n", encoding="utf-8")
 
     override_doc_src = Path(__file__).resolve().parent.parent / "docs" / "reference" / "guard-override-keys.md"
     if override_doc_src.is_file():
@@ -430,9 +430,9 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
         shutil.copyfile(override_doc_src, override_doc_dst)
 
     try:
-        from coordinator_core.ops.coordinator_doe_root import _reset_doe_root_cache
+        from coordinator_core.ops.coordinator_content_root import _reset_content_root_cache
 
-        _reset_doe_root_cache()
+        _reset_content_root_cache()
     except ImportError:  # pragma: no cover - defensive, mirrors the capture helper
         pass
 
@@ -446,6 +446,25 @@ def _reset_foreign_repo_probe_memo():
     reset_foreign_repo_probe_memo()
     yield
     reset_foreign_repo_probe_memo()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_advisory_dedupe_gitdir(monkeypatch, tmp_path_factory):
+    """Point the per-session advisory dedupe store at a per-test directory.
+
+    Tests dispatch with a fixed fake ``cwd`` and session id; when that ``cwd``
+    resolves to a real ``.git`` on the box the dedupe markers persist across
+    runs and silence a later run's first advisory.
+    """
+    import sys
+
+    # Patch only when a test already paid for the heavy `dispatch` import;
+    # forcing it here would tax every suite that never touches guards.
+    dispatch = sys.modules.get("coordinator_core.bash_guards.dispatch")
+    if dispatch is None:
+        return
+    store = tmp_path_factory.mktemp("advisory_dedupe_gitdir")
+    monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: store)
 
 
 @pytest.fixture(autouse=True)
@@ -649,7 +668,7 @@ _OWN_LIVE_STATE_DIRS = (
 )
 
 def _resolve_live_doe_lessons_outbox():
-    root = (os.environ.get("DOE_ROOT") or os.environ.get("REPO_DOE_CLAUDE") or "").strip()
+    root = (os.environ.get("CONTENT_ROOT") or os.environ.get("REPO_CONTENT_ROOT") or "").strip()
     if not root:
         # Load coordinator_registry BY LOCATION, and do not leave
         try:
@@ -666,7 +685,7 @@ def _resolve_live_doe_lessons_outbox():
                 )
                 _mod = _ilu.module_from_spec(_spec)
                 _spec.loader.exec_module(_mod)
-                root = _mod.doe_root()
+                root = _mod.content_root()
             finally:
                 if _added:
                     try:
@@ -703,8 +722,8 @@ def _no_live_state_corpus_writes(request):
                 f"_no_live_state_corpus_writes: {d} gained {sorted(gained)!r} during "
                 f"{request.node.nodeid} -- a write-root rung was not neutralized. "
                 f"Set the seam's isolation root (QUEUE_APPEND_OUTPUT_ROOT / "
-                f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip DOE_ROOT / "
-                f"REPO_DOE_CLAUDE / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
+                f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip CONTENT_ROOT / "
+                f"REPO_CONTENT_ROOT / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
                 f"warm-served CLI never receives any of them.",
                 pytrace=False,
             )

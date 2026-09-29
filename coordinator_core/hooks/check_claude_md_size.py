@@ -4,7 +4,7 @@ budget gate -- the C7 admission-gate ledger check (deny) and the byte-size
 soft-warn (advisory-only).
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/check-claude-md-size.py`. That
+from coordinator-content-repo `coordinator/hooks/scripts/check-claude-md-size.py`. That
 source's own docstring names a 2026-07-29 EM-ratified decision
 (`docs/plans/2026-07-29-hook-fan-in-write-path.md` § C8, also documented on
 `coordinator_core.write_guards.check_claude_md_size`'s own module docstring)

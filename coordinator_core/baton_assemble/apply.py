@@ -20,7 +20,7 @@ to the existing atomic CLI/op it names, `_run_git` (the in-process git
 read-model), and the `apply()` orchestration (brief-recompute, session
 identity, scoped commit).
 
-Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -354,7 +354,7 @@ def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str,
     emit this directive for `kind=handoff` -- d1's scaffold stamps
     `handoff_phase:continuation` itself), but the handler stays registered in
     `_CLI_DISPATCH`, one emission decision away from live. Reported by
-    doe-claude-em, 2026-07-29 cross-repo memo."""
+    coordinator-content-repo-em, 2026-07-29 cross-repo memo."""
     artifact_path = args[0] if args else ""
     result = _invoke_op_in_process(
         "handoff.stamp_phase", {"handoff_path": artifact_path}, repo_root
@@ -1039,7 +1039,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
         }
     # `reconciled` is deliberately NOT branched on any more. It used to gate an
     # unconditional degrade here, before the op was ever composed -- the
-    # DoE-claude defect. The decision belongs to
+    # coordinator-content-repo defect. The decision belongs to
     # `handoff_archive_transition`'s `mode == "supersede"` block, which is the
     # load-bearing choke point; this site is defense in depth.
     # `_reconcile_claim_from_ledger` above still runs for its own sake.
@@ -2697,7 +2697,7 @@ def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
     no-op here).
 
     THE DEFECT THIS CLOSES. A mint is a silent write into the work-state of a
-    session that is then accountable for it. DoE-claude's `/pickup` minted a
+    session that is then accountable for it. Coordinator-content-repo's `/pickup` minted a
     successor two seconds after a claim and the session never knew: the first
     signal was a `deliverable_id` collision three and a half hours later, and
     only because the ids happened to clash (`cross-repo/inbox/2026-08-20-doe-

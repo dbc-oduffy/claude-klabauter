@@ -2,7 +2,7 @@
 Tests for the provenance receipt ``dispatch.emit`` writes beside every
 emitted script (``coordinator_core.ops.dispatch_emit.op``).
 
-The receipt's shape is a cross-repo contract with DoE-claude's wrapper CLI
+The receipt's shape is a cross-repo contract with coordinator-content-repo's wrapper CLI
 ``coordinator/bin/emit-dispatch-workflow.py`` (the other producer) and a
 DoE-side hook (the consumer, which verifies ``sha256`` against the script
 bytes). These tests pin the keys, the digest, the best-effort failure mode,

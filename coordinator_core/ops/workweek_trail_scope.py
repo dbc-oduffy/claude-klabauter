@@ -21,8 +21,8 @@ Wire-vocabulary note (2026-08-04): the shard keys were renamed from their
 prior persona-named forms to the current role-based `staff_eng`/
 `staff_eng_seam_files` per the PM ruling that a persona slug must never be a
 wire key/value/enum member (state/sizings/2026-08-04-persona-wire-vocabulary-
-rename.yaml; docs/decisions/DR-262 Amendment cl.3). Coordinated with DoE-claude
-via cross-repo memo (cross-repo/inbox/2026-08-04-doe-claude-em-correction-the-
+rename.yaml; docs/decisions/DR-262 Amendment cl.3). Coordinated with coordinator-content-repo
+via cross-repo memo (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-correction-the-
 shard-key-coupling-is-three-keys-five-files.md) — DoE's five reader sites move
 in the same window, no back-compat/dual-spelling transition.
 
@@ -97,7 +97,7 @@ Port of: workweek-trail-scope.sh (DoE 6fb5fb37, 2026-07-22).
 Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Central-reg: this op is a PLAIN MODULE (no @register_op) — direct-import
-trampoline variant (template-variant #1; see DoE-claude
+trampoline variant (template-variant #1; see coordinator-content-repo
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1, exemplified by
 coordinator_core.hooks.auto_push / coordinator_core.ops.handoff_gate_aging).
 NOT wired into ops/__init__.py / _registry_map.py / ipc.py /

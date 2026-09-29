@@ -38,7 +38,7 @@ plumbing is replaced.
 
 Resolution mechanism, per check (NOT interchangeable -- see each function's
 own docstring):
-  - Checks 9/10 are DoE-claude-repo-specific structural invariants
+  - Checks 9/10 are coordinator-content-repo-repo-specific structural invariants
     (canonical-structure.yaml / coordinator/bin/ live only in the coordinator
     plugin's own source repo). Their bash originals resolve their OWN plugin
     root from ``$(dirname "${BASH_SOURCE[0]}")`` -- i.e. wherever the
@@ -46,8 +46,8 @@ own docstring):
     staged files, independent of which repo's ``git commit`` triggered the
     dispatcher. This port reproduces that same "always the installed
     coordinator-plugin repo, never the commit's own cwd" semantics, but via
-    ``coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`` (the
-    canonical, already-adopted-elsewhere DoE-root resolver with a real
+    ``coordinator_core.ops.coordinator_content_root.coordinator_content_root()`` (the
+    canonical, already-adopted-elsewhere content-root resolver with a real
     machine-local-registry ladder) rather than re-deriving the bash
     originals' fragile ``BASH_SOURCE``-relative walk / ``_find_bin_script``'s
     hardcoded-depth-index walk -- both of which this port's own author
@@ -56,9 +56,9 @@ own docstring):
     files, not changing the guards' policy.
   - Check 11 (machine-path-leak) is different: it is scoped to whichever repo
     the ``git commit`` actually targets (``settings.json`` can live in any
-    repo, not just DoE-claude). It reuses ``check_validate_commit``'s own
+    repo, not just coordinator-content-repo). It reuses ``check_validate_commit``'s own
     already-resolved ``staged``/``cwd`` (the target repo's staged-file list
-    and the commit's own working directory) -- no DoE-root resolution needed.
+    and the commit's own working directory) -- no content-root resolution needed.
   - Check 12 (``check_registration_quad_completeness``, added
     docs/plans/2026-07-25-registration-quad-completeness-gate.md) is a third,
     DIFFERENT resolution shape again: its oracle is the STAGED-DIFF content of
@@ -121,7 +121,7 @@ deny.
 
 Spec backlink: pln-registration-quad-completeness-bf0d39
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md
-Spec backlink: DoE-claude coordinator/docs/wiki/scoped-safety-commits.md § SC-DR-015
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/scoped-safety-commits.md § SC-DR-015
 """
 
 from __future__ import annotations
@@ -198,22 +198,22 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float
 
 def _resolve_doe_coordinator_root() -> Optional[str]:
     """Resolve the installed coordinator plugin's content directory, via the
-    canonical DoE-root resolver and ``content_root_for`` (so a flat published
+    canonical content-root resolver and ``content_root_for`` (so a flat published
     mirror resolves as well as the private authoring tree, which is what a
     container registering the mirror gets). Returns ``None`` on any resolution
     failure (never raises) -- Checks 9/10 fail open on this, matching the
     bash originals' own "not a git repo at PLUGIN_ROOT" -> exit 2 -> no
     warning-appended fail-open shape (see this module's docstring)."""
     try:
-        from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
         from coordinator_core.data_root import content_root_for
     except Exception:
         return None
     try:
-        doe_root = coordinator_doe_root()
+        content_root = coordinator_content_root()
     except Exception:
         return None
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     return str(content_root) if content_root is not None else None
 
 
@@ -767,7 +767,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
 # then ran `git commit -m ... -- <paths>` and discarded all of it; two hunks
 # belonging to a concurrent session landed under the wrong subject.
 #
-# Ruling + full empirical writeup: SC-DR-015, canonical text at DoE-claude's
+# Ruling + full empirical writeup: SC-DR-015, canonical text at coordinator-content-repo's
 # `coordinator/docs/wiki/scoped-safety-commits.md` § SC-DR-015. That ruling's
 # own "Discharge" section names this exact guard as the artifact that makes
 # the ruling unnecessary to remember: "a PreToolUse check that sees

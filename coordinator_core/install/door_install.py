@@ -1378,7 +1378,7 @@ _GENERATOR_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 #: Mach-O (both endiannesses plus the fat/universal header), ELF, and PE.
 #: The one honest way to ask "is this file a compiled image" without
 #: launching it, and the question two callers need -- the install-health
-#: launch-chain leg (which refuses one under `claude-doe`) and the
+#: launch-chain leg (which refuses one under `claude-author`) and the
 #: settings-home report (which recognises one under a cut-over name as
 #: correct rather than corrupt). Defined here because this module is what
 #: PUTS them there.
@@ -1410,7 +1410,7 @@ def is_native_image(path: Path) -> bool:
 #: overlays the SERVER, not the caller: the engine every peer on this box is
 #: queued behind disappears mid-request, and the caller gets nothing back.
 #:
-#: `claude-doe` is the whole population today: `coordinator/bin/claude-doe.py`
+#: `claude-author` is the whole population today: `coordinator/bin/claude-author.py`
 #: exists solely to `exec claude --plugin-dir <clone>/coordinator`, and
 #: `docs/reference/interactive-launch-chain.md`'s direct-child invariant is a
 #: second, independent reason -- an interactive TUI handed back over a socket
@@ -1425,7 +1425,7 @@ def is_native_image(path: Path) -> bool:
 #: `main()` is a call-graph problem, and the honest fix is for an entrypoint
 #: to DECLARE itself non-servable. Until that marker exists this roster is
 #: the mechanism, and it is deliberately tiny.
-_EXEC_SHAPED_NAMES = frozenset({"claude-doe"})
+_EXEC_SHAPED_NAMES = frozenset({"claude-author"})
 
 #: INSTALL-CLASS CLIs declare themselves: a module-level `INSTALL_CLASS = True`
 #: line in `coordinator/bin/<name>.py`. PM ruling 2026-09-23: "install shouldn't

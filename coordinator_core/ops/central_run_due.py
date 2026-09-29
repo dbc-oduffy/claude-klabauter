@@ -23,7 +23,7 @@ Companion-script resolution: the bash oracle located its DoE-resident sibling sc
 extract-lessons.py) via its OWN on-disk location (BASH_SOURCE[0]-relative), since it
 lived inside coordinator/bin/ itself. Ported into the claude-klabauter engine tree, that anchor is
 gone — this module re-derives the DoE coordinator content root via `_resolve_doe_content_root()`
-(env override → `~/.claude/.doe-root` pointer → machine-local registry → the SAME
+(env override → `~/.claude/.coordinator-content-root` pointer → machine-local registry → the SAME
 unconditional flat-layout fallback the oracle used) for the one remaining subprocess
 boundary (`extract-lessons.py`, already-Python, invoked via `sys.executable` — a
 subprocess-boundary reuse, not a bash bridge, out of C11's bash-retirement scope).
@@ -55,7 +55,7 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
     - `_count_universals` folds any extraction failure or missing record_count into 0,
       per the oracle's `|| continue` / missing-record_count → 0 fallback.
 
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
 from coordinator_core.ops.learn_lessons_cutoff import _claude_home, derive_cutoff
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -90,8 +90,8 @@ def _resolve_doe_content_root(claude_home: str) -> str:
     sourcing of resolve-coordinator-clone.sh, plus its own unconditional final
     fallback when COORDINATOR_CONTENT_ROOT comes back empty):
       1. COORDINATOR_ROOT / CLAUDE_PLUGIN_ROOT env override.
-      2. `~/.claude/.doe-root` pointer file → the content root inside it (either
-         layout: `<doe-root>/coordinator`, or a flat published mirror root).
+      2. `~/.claude/.coordinator-content-root` pointer file → the content root inside it (either
+         layout: `<content-root>/coordinator`, or a flat published mirror root).
       3. machine-local registry `plugin.mirrors.coordinator-claude.live_path`.
       4. `<claude_home>/plugins/coordinator-claude/coordinator` (unconditional
          fallback — used as-is even if it does not exist, matching the oracle).
@@ -100,9 +100,9 @@ def _resolve_doe_content_root(claude_home: str) -> str:
     if override:
         return override
 
-    doe_root = read_doe_root_pointer_file(os.path.expanduser("~"))
-    if doe_root:
-        content_root = content_root_for(doe_root)
+    content_root = read_content_root_pointer_file(os.path.expanduser("~"))
+    if content_root:
+        content_root = content_root_for(content_root)
         if content_root is not None:
             return str(content_root)
 

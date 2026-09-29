@@ -13,7 +13,7 @@ resumption, or a DR-242 Amendment A1 adoption), which is what makes it an
 engine fact. See `_APPLY_MINTED_SUCCESSOR`'s own docstring.
 
 Covers:
-  - The DoE-claude reproduction AS REPORTED: apply's d6 (composing the real
+  - The coordinator-content-repo reproduction AS REPORTED: apply's d6 (composing the real
     `handoff.archive_transition` op, unstubbed) lands the succession edge on
     a never-claimed predecessor whose successor is the FRESHLY MINTED, never-
     claimed one d1 just wrote. A2 section 7.3 clause 2 is discharged by
@@ -84,14 +84,14 @@ def _seed_successor(repo: Path, claimed: bool) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# DoE-claude reproduction: real op, unstubbed
+# coordinator-content-repo reproduction: real op, unstubbed
 # ---------------------------------------------------------------------------
 
 
 def test_lands_the_edge_over_a_never_claimed_predecessor_and_a_freshly_minted_successor(
     tmp_path,
 ):
-    """The DoE-claude reproduction AS REPORTED: the successor is the one d1
+    """The coordinator-content-repo reproduction AS REPORTED: the successor is the one d1
     minted seconds ago, so it is `status: open` and has never been claimed.
 
     This is the regression test for the defect the first cut of this plan

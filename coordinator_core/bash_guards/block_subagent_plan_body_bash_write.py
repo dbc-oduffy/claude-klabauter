@@ -66,7 +66,7 @@ returns `permissionDecision: "allow"` with the same reason text surfaced via
 "hard-deny"` above is dead metadata on the bash-guard side (nothing reads
 it) and is left as historical record, not the load-bearing signal.
 
-Spec backlink: DoE-claude:pln-dispatch-sidecar-contract-exec-5e045c
+Spec backlink: coordinator-content-repo:pln-dispatch-sidecar-contract-exec-5e045c
   section D-BASH, AC4, chunk C-BASH.
 Spec backlink (ADVISORY_REWRITE conversion):
   docs/plans/2026-08-06-apply-guard-class-census.md, chunk C14.

@@ -28,7 +28,7 @@ filesystem path the running installer already resolved) instead of walking
 `$PATH` in shell, so it no longer calls `python_probe_lines` at all. Today's
 callers: `coordinator.bin.lib.git_hook_install` (two sites),
 `coordinator_core.ops.install_meta_repo_precommit_hook`, and
-`coordinator_core.ops.install_doe_claude_precommit_hook` (DoE-claude's own
+`coordinator_core.ops.install_content_root_precommit_hook` (coordinator-content-repo's own
 hook -- another repo's surface, out of C17's scope; see that plan's C17 row
 for why only the claude-klabauter installer converts). Grep `python_probe_lines`
 before quoting a count; this line drifts as consumers are added or removed
@@ -146,7 +146,7 @@ def baked_python_lines(var: str = "_py") -> str:
 
     Negative spec: this does NOT replace `python_probe_lines`, and that
     function's `$PATH` walk is not dead code.
-    `install_doe_claude_precommit_hook` and `install_meta_repo_precommit_hook`
+    `install_content_root_precommit_hook` and `install_meta_repo_precommit_hook`
     emit hooks into OTHER repos, where the installing interpreter is not
     necessarily the one the emitted hook should run under. Repointing those
     is a cross-repo change needing their owners' sign-off, never a mechanical

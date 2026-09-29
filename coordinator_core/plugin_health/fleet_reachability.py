@@ -1,13 +1,13 @@
 """
 coordinator_core.plugin_health.fleet_reachability — FAIL-LOUD delete-safety
-gate for claude-klabauter `coordinator/bin/` oracles the DoE-claude fleet still
+gate for claude-klabauter `coordinator/bin/` oracles the coordinator-content-repo fleet still
 consumes.
 
 Purpose: catch the `c79e66cd` regression class at delete-time — claude-klabauter
-deleted `lint-frontmatter.js` while DoE-claude skills still cited
+deleted `lint-frontmatter.js` while coordinator-content-repo skills still cited
 `bin/lint-frontmatter` — instead of relying on an operator to remember to
 grep the fleet before every delete. This is the north-star "discharge, don't
-enumerate" answer (DoE-claude coordinator/docs/wiki/invisible-doctrine.md):
+enumerate" answer (coordinator-content-repo coordinator/docs/wiki/invisible-doctrine.md):
 a durable artifact that fails a test at delete-time, not a directive an
 operator is trusted to run by hand.
 
@@ -48,7 +48,7 @@ Axes compared:
     "Documented residual blind spots" for what a name with no oracle in any
     of these three directories means (a genuine unmet demand, not a
     reason to widen the scan further).
-  - Demand: DoE-claude fleet consumers, derived from a regex sweep of
+  - Demand: coordinator-content-repo fleet consumers, derived from a regex sweep of
     `coordinator/{skills,commands,hooks,pipelines}` `.md` files for the
     `bin/<name>` invocation form, NARROWED to genuine live-invocation
     demand by two independent structural filters (2026-07-27 widening —
@@ -80,10 +80,10 @@ WARN-only contract exists because ITS drift is expected to self-heal on the
 next install pass; a fleet-consumed oracle with no surviving claude-klabauter entry
 does not self-heal — it is a live breakage the next consumer install hits.
 
-Skip-masking guard: a clean `skipped=True, ok=True` result when DoE-claude is
+Skip-masking guard: a clean `skipped=True, ok=True` result when coordinator-content-repo is
 unresolvable (the OSS-consumer / no-DoE-checkout persona — genuinely nothing
 to compare) is NOT itself a failure. But a skip on a machine where
-`repos.doe_claude` IS registered would silently reproduce the exact blind
+`repos.content_root` IS registered would silently reproduce the exact blind
 spot this gate exists to close — `assert_registered_implies_no_skip()` below
 is the CI-facing assertion that catches that shape; see
 `test_fleet_reachability.py` for its wiring.
@@ -184,7 +184,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from coordinator_core.data_root import content_root_for
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.machine_resolver import registry_get
 
 _PROG = "fleet-reachability"
@@ -338,7 +338,7 @@ _EXCLUDED_PATH_SEGMENTS = frozenset({"tests", "test", "archive", "archived"})
 
 
 def _is_excluded_from_invocation_surface(rel_path: Path) -> bool:
-    """True when `rel_path` (relative to DoE-claude's repo root) is a
+    """True when `rel_path` (relative to coordinator-content-repo's repo root) is a
     non-invocation-surface file class per `_EXCLUDED_PATH_SEGMENTS`'s own
     docstring -- a test/fixture directory, an archived directory, a
     CHANGELOG, or a `docs/plans/` working doc -- rather than live prose a
@@ -423,7 +423,7 @@ class FleetReachabilityResult:
     """ok=True -> no fleet-consumed oracle is missing (or a clean skip);
     ok=False -> at least one DoE-cited `bin/<name>` has no surviving claude-klabauter
     oracle. `skipped=True` means no comparison was possible (claude-klabauter root
-    and/or DoE-claude root unresolvable) — distinct from a clean zero-missing
+    and/or coordinator-content-repo root unresolvable) — distinct from a clean zero-missing
     result. `missing` carries the un-normalized DoE-cited tokens (for
     readability) whose normalized stem has no claude-klabauter match; empty when
     `ok=True`.
@@ -466,8 +466,8 @@ def _claude_klabauter_oracle_names(oracle_dirs: List[Path]) -> Set[str]:
     return {_normalize(name) for name in live_oracle_names(oracle_dirs)}
 
 
-def _doe_demand_tokens(doe_root: Path) -> Set[str]:
-    """Regex-sweep DoE-claude's coordinator/{skills,commands,hooks,pipelines}
+def _doe_demand_tokens(content_root: Path) -> Set[str]:
+    """Regex-sweep coordinator-content-repo's coordinator/{skills,commands,hooks,pipelines}
     for `bin/<name>` citations, normalized to a common stem. Non-existent
     swept subdirs are skipped (a leaner DoE checkout is not an error).
 
@@ -481,7 +481,7 @@ def _doe_demand_tokens(doe_root: Path) -> Set[str]:
         that are not genuinely namespace-qualified (bare `bin/<name>` with
         no `coordinator/`/`templates/`/settings-home-forwarder-seam prefix)."""
     tokens: Set[str] = set()
-    coordinator_dir = content_root_for(doe_root)
+    coordinator_dir = content_root_for(content_root)
     if coordinator_dir is None:
         return tokens
     for subdir in _SWEEP_SUBDIRS:
@@ -491,7 +491,7 @@ def _doe_demand_tokens(doe_root: Path) -> Set[str]:
         for path in root.rglob(f"*{_SWEEPABLE_SUFFIX}"):
             if not path.is_file():
                 continue
-            if _is_excluded_from_invocation_surface(path.relative_to(doe_root)):
+            if _is_excluded_from_invocation_surface(path.relative_to(content_root)):
                 continue
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")
@@ -538,7 +538,7 @@ def _ledger_explains_missing(normalized_name: str, ledger_path: Optional[Path]) 
             # quarantine hiding the registry — see this file's sibling test
             # module for the same shape). No ledger to consult is a skip for
             # THIS lookup, not a gate failure; the caller's own agent_bin/
-            # doe_root resolution already handles the analogous top-level
+            # content_root resolution already handles the analogous top-level
             # unresolvable case the same way.
             return None
         if entry is not None:
@@ -546,8 +546,8 @@ def _ledger_explains_missing(normalized_name: str, ledger_path: Optional[Path]) 
     return None
 
 
-def _resolve_doe_root() -> Optional[Path]:
-    pointer = read_doe_root_pointer()
+def _resolve_content_root() -> Optional[Path]:
+    pointer = read_content_root_pointer()
     if not pointer:
         return None
     candidate = Path(pointer)
@@ -558,14 +558,14 @@ def check_fleet_reachability(
     *,
     agent_bin: Optional[Path] = None,
     extra_oracle_dirs: Optional[List[Path]] = None,
-    doe_root: Optional[Path] = None,
+    content_root: Optional[Path] = None,
     ledger_path: Optional[Path] = None,
 ) -> FleetReachabilityResult:
     """Core gate — used by both `main()` (CLI) and the delete-time pytest
     (`test_fleet_reachability.py`). `agent_bin` / `extra_oracle_dirs` /
-    `doe_root` / `ledger_path` are explicit overrides for tests; a caller
+    `content_root` / `ledger_path` are explicit overrides for tests; a caller
     that omits any of them gets the real resolution ladder (claude-klabauter's own
-    `coordinator_claude_klabauter_root()`, DoE's `read_doe_root_pointer()`, and
+    `coordinator_claude_klabauter_root()`, DoE's `read_content_root_pointer()`, and
     `relocation_ledger`'s own `default_ledger_path()` — all registry-first,
     see each resolver's own docstring).
 
@@ -607,19 +607,19 @@ def check_fleet_reachability(
             lines=[f"[skip] {_PROG}: claude-klabauter root (or its coordinator/bin/) unresolvable — nothing to compare"],
         )
 
-    resolved_doe_root = doe_root if doe_root is not None else _resolve_doe_root()
-    if resolved_doe_root is None:
+    resolved_content_root = content_root if content_root is not None else _resolve_content_root()
+    if resolved_content_root is None:
         # foreign-identity: NOT-REACHABLE — plugin_health fleet delete-safety
         # gate, operator/gate-invoked, not ambient to a example-retrieval-repo EM (audit
         # row 22, fleet_reachability.py:612,642)
         return FleetReachabilityResult(
             ok=True,
             skipped=True,
-            lines=[f"[skip] {_PROG}: DoE-claude root unresolvable — nothing to compare"],
+            lines=[f"[skip] {_PROG}: coordinator-content-repo root unresolvable — nothing to compare"],
         )
 
     claude_klabauter_oracles = _claude_klabauter_oracle_names([resolved_agent_bin] + resolved_extra_dirs)
-    doe_demand = _doe_demand_tokens(resolved_doe_root)
+    doe_demand = _doe_demand_tokens(resolved_content_root)
     candidate_missing = sorted(doe_demand - claude_klabauter_oracles)
 
     missing_normalized: List[str] = []
@@ -645,7 +645,7 @@ def check_fleet_reachability(
                 demand_count=0,
                 lines=[
                     f"[warn] {_PROG}: 0 fleet-cited oracle(s) found in the swept surface — nothing "
-                    "was compared; a genuinely clean sweep of a real DoE-claude tree always finds "
+                    "was compared; a genuinely clean sweep of a real coordinator-content-repo tree always finds "
                     "some citations, so this is reported distinctly rather than as an identical-"
                     "looking [ok]"
                 ]
@@ -672,19 +672,19 @@ def check_fleet_reachability(
 
 def assert_registered_implies_no_skip() -> None:
     """CI-facing skip-masking guard (see module docstring). Raises
-    AssertionError if `repos.doe_claude` IS registered on this machine but
+    AssertionError if `repos.content_root` IS registered on this machine but
     `check_fleet_reachability()` still skipped — a silent skip on a machine
-    that CAN resolve DoE-claude would reproduce this gate's own blind spot.
+    that CAN resolve coordinator-content-repo would reproduce this gate's own blind spot.
     No-ops (does not raise, does not skip a caller's own pytest) when
-    `repos.doe_claude` is not registered — that persona legitimately has
+    `repos.content_root` is not registered — that persona legitimately has
     nothing to compare, and asserting non-skip there would be the OSS/
     no-DoE-checkout false positive this guard must not introduce."""
-    if not registry_get("repos.doe_claude"):
+    if not registry_get("repos.content_root"):
         return
     result = check_fleet_reachability()
     if result.skipped:
         raise AssertionError(
-            f"{_PROG}: skipped despite repos.doe_claude being registered — "
+            f"{_PROG}: skipped despite repos.content_root being registered — "
             "this reproduces the exact skip-masking blind spot the gate exists to close"
         )
 

@@ -1611,7 +1611,7 @@ def push_with_retry(
     non-`work/*` branch. NEVER ambient (no env var, no module-level flag --
     see the plan's Anti-scope); the caller must pass it explicitly on the
     one call that needs it. The ONE sanctioned consumer, as of this chunk,
-    is DoE-claude's `merging-to-main` SKILL, Step 10 item 5 (the
+    is coordinator-content-repo's `merging-to-main` SKILL, Step 10 item 5 (the
     post-merge, on-`main`, release-notes bookkeeping commit) -- see
     `run_commit_pipeline`'s own docstring for the full citation. No op in
     this repo passes it. Every exercised override -- the gate actually

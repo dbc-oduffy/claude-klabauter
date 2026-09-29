@@ -1,10 +1,10 @@
 """
-coordinator_core.hooks.project_orientation — warm-door port of DoE-claude's
+coordinator_core.hooks.project_orientation — warm-door port of coordinator-content-repo's
 `coordinator/hooks/scripts/project-orientation.py`, **`--lightweight` LEG
 ONLY**.
 
 SCOPE FENCE (per this chunk's own row body — measure-first rule), coverage
-established against the source script's own `main()` at DoE-claude HEAD:
+established against the source script's own `main()` at coordinator-content-repo HEAD:
 the source's ONLY production invocation is `sessionstart-dispatch.py`'s
 `REGISTRY` entry, `argv=["--lightweight"]` — "no other caller exists,
 repo-wide grep" (source module docstring). `main()`'s non-lightweight

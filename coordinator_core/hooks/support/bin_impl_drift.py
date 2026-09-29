@@ -1,7 +1,7 @@
 """Daily drift check: refresh `<settings-home>/bin/` files whose source is the
 doctrine plane's `templates/bin/`, when the installed copy has fallen behind.
 
-Ported from DoE-claude `coordinator/hooks/scripts/_bin_impl_drift.py` per
+Ported from coordinator-content-repo `coordinator/hooks/scripts/_bin_impl_drift.py` per
 docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C4. ADAPTATION (the
 class-1 site named in this package's own `__init__.py` docstring): DoE's
 `_templates_bin()` anchored on `Path(__file__).resolve().parents[2] /

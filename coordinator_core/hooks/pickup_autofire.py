@@ -1,7 +1,7 @@
 """coordinator_core.hooks.pickup_autofire — UserPromptExpansion auto-fire
 hook for baton grabs.
 
-Port of: DoE-claude `coordinator/hooks/scripts/pickup-autofire.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/pickup-autofire.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict: command/native-door — no coordinator/bin shim, no http
 registration. 1353 lines in the DoE source — this row's own body names a

@@ -169,7 +169,16 @@ class TestPython3InvocationImportErrorFallback:
         original = _run_shell("echo \"=== X === Y ===\"; " + cmd)
         rewritten = _run_python_c(rewrite)
         if platform.system() != "Windows":
-            assert _mask_clock(original) == _mask_clock(rewritten)
+            orig_lines = _mask_clock(original).splitlines()
+            new_lines = _mask_clock(rewritten).splitlines()
+            assert len(new_lines) == len(orig_lines) and len(new_lines) >= 2
+            assert orig_lines[:-1] == new_lines[:-1]
+            # GNU `uname -a` appends processor/hardware-platform/OS fields
+            # the rewrite omits; the shared prefix must match exactly.
+            _u = platform.uname()
+            expected = " ".join([_u.system, _u.node, _u.release, _u.version, _u.machine])
+            assert new_lines[-1] == expected
+            assert orig_lines[-1].startswith(new_lines[-1])
             return
         assert _date_facts(original) == _date_facts(rewritten)
         assert _date_facts(rewritten)["year"] is not None

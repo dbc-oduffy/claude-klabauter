@@ -4,7 +4,7 @@ introduces the retired POSIX-only coordinator-CLI invocation shape into a
 doctrine surface.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-posix-invocation-doctrine-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-posix-invocation-doctrine-
 write.py`. That script ran as an in-process guard body enrolled into a
 second, doctrine-plane-resident guard registry
 (`_guard_runner.REAL_GUARD_REGISTRY`), fired only via

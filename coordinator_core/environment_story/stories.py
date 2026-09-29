@@ -1,4 +1,4 @@
-"""Ported from DoE-claude coordinator/hooks/scripts/_environment_stories.py
+"""Ported from coordinator-content-repo coordinator/hooks/scripts/_environment_stories.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C2).
 
 PORTING NOTE -- what did NOT move: the dev-time regeneration path (the

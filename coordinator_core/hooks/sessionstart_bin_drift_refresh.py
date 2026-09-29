@@ -3,7 +3,7 @@
 `templates/bin/` source.
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude
+from coordinator-content-repo
 `coordinator/hooks/scripts/sessionstart-bin-drift-refresh.py`. The mechanics
 (refresh-only, the baked-`__PYTHON_BIN__` exemption, the once-a-day cadence)
 already live in `coordinator_core.hooks.support.bin_impl_drift.check_and_refresh`

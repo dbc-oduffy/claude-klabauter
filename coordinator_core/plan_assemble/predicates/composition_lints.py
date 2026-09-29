@@ -6,9 +6,9 @@ presence, sub-agent-spawn detection, shared-state candidate matching, and
 chunk-index-sidecar presence.
 
 Purpose: seven `gates.composition.*` contract rows
-(`DoE-claude archive/specs/2026-08/2026-08-08-stop-the-rot-pickup-and-
+(`coordinator-content-repo archive/specs/2026-08/2026-08-08-stop-the-rot-pickup-and-
 workstream-complete.md:611-714`, as amended by
-`cross-repo/inbox/2026-08-13-doe-claude-em-plan-assemble-wave1-accepted-and-
+`cross-repo/inbox/2026-08-13-coordinator-content-repo-em-plan-assemble-wave1-accepted-and-
 wave2-rulings.md`) — `:136`, `:137`, `:143`, `:150`, `:152`, `:153`,
 `:172` — each a leaf reader taking a `PredicateContext` and returning
 either the sub-tree to merge at its own `gates.composition.<name>` key, or

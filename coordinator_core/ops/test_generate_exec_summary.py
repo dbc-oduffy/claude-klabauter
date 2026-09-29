@@ -477,7 +477,7 @@ def test_extract_last_section_by_prefix_takes_the_newest_match():
 
 def test_derive_progress_reads_week_of_grammar_when_no_highlights_heading(tmp_path):
     """Regression for the retired-heading defect (cross-repo/archive/
-    2026-08-28-doe-claude-em-exec-summary-highlights-reader-greps-a-retired-heading.md):
+    2026-08-28-coordinator-content-repo-em-exec-summary-highlights-reader-greps-a-retired-heading.md):
     the pending-release writer moved to `## Week of <date>` sections with no
     `## Highlights` heading anywhere in the file. Before the fix,
     _extract_section("## Highlights") always returned "", so this prose was
@@ -614,7 +614,7 @@ def test_rung2_reads_release_notes_not_only_week_changelogs(tmp_path):
     keeps its freshest Highlights there and nowhere else. A reader that globs
     only `archive/week-changelogs/` reports the healthiest repos as the most
     frozen ones. Ruling: both directories are doctrinal, read their union
-    (doe-claude-em, 2026-09-04).
+    (coordinator-content-repo-em, 2026-09-04).
     """
     repo_dir = tmp_path / "repo"
     state_root = repo_dir / "state"

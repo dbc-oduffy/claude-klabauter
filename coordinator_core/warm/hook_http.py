@@ -25,7 +25,7 @@ THREE OBLIGATIONS, each with a test that fails loudly if it stops holding.
    override goes silently dead. `test_override_forwarded_not_ambient.py` is the pin.
 
 3. **A listener that is down must not read as a guard that passed.** Claude Code's HTTP hook
-   FAILS OPEN when nothing answers (measured by doe-claude-74 against a dead port). That is
+   FAILS OPEN when nothing answers (measured by coordinator-content-repo-74 against a dead port). That is
    fine for an advisory and a safety regression for a blocking guard. This module cannot fix
    the harness's behaviour and does not try; what it owes is a truthful, machine-readable
    account of whether a guard actually ran, so the absence is detectable rather than silent.
@@ -110,7 +110,7 @@ def _envelope(event_name: Optional[str]) -> Dict[str, Any]:
 
     `SessionEnd` is TERMINAL: no model turn follows it for context to be spliced into, at
     any nesting level. NEGATIVE SPEC -- no placement of `additionalContext` delivers on this
-    event, nested or top-level; do not reintroduce one. See DoE-claude
+    event, nested or top-level; do not reintroduce one. See coordinator-content-repo
     `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`
     for the measurement.
 
@@ -171,7 +171,7 @@ def _is_forwardable_name(name: str) -> bool:
 
 OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
 OVERRIDE_CANARY_HEADER = "X-Coordinator-Env-Canary"
-#: DoE-claude 041cdc2e8 retired the launcher-only `COORDINATOR_PROBE_CANARY` var for
+#: coordinator-content-repo 041cdc2e8 retired the launcher-only `COORDINATOR_PROBE_CANARY` var for
 #: `${HOME}${USERPROFILE}` -- one of the two is present in every session on every OS with
 #: correct against a registration still sending the old `${COORDINATOR_PROBE_CANARY}` header
 OVERRIDE_CANARY_ENV = "HOME/USERPROFILE"
@@ -195,12 +195,12 @@ def env_from_headers(
     THAT KEY SET IS A CALLER SHAPE, NOT A TRANSPORT CEILING -- DO NOT CITE IT AS EVIDENCE
     A FIELD CANNOT REACH THE WIRE. The 2.1.246 measurement above was two MAIN-THREAD calls;
     it could not have distinguished "this transport drops the field" from "this caller has
-    no field to send". Measured again by doe-claude-e7, 2026-08-29, harness 2.1.251, against
+    no field to send". Measured again by coordinator-content-repo-e7, 2026-08-29, harness 2.1.251, against
     a real `type: "http"` registration pointed at a recording sink in an isolated scratch
     settings session (the live registration was never touched): a dispatched SUBAGENT's
     body carries those same ten keys PLUS top-level `agent_id` and `agent_type`, both
     present and non-empty. `agent_id`/`agent_type` are documented as subagent-only fields
-    (the vendored harness docs tie them to "When running as subagent" -- DoE-claude
+    (the vendored harness docs tie them to "When running as subagent" -- coordinator-content-repo
     `state/reference/anthropic-docs/claude-code/hooks.md:201-203`, not vendored into THIS
     tree, which is why the claim is cited to the sibling rather than asserted locally);
     their absence on a main-thread call is a property of the CALLER, not the transport. A
@@ -234,7 +234,7 @@ def env_from_headers(
       this channel at all. Absent means an old-style registration, which is not a fault: the
       result is `({}, None)`, today's behaviour exactly.
 
-      `X-Coordinator-Env-Canary` -- `${HOME}${USERPROFILE}` (DoE-claude 041cdc2e8; a
+      `X-Coordinator-Env-Canary` -- `${HOME}${USERPROFILE}` (coordinator-content-repo 041cdc2e8; a
       registration may still send the retired `${COORDINATOR_PROBE_CANARY}` form during the
       rollout window -- see `OVERRIDE_CANARY_ENV`). One of the two names is non-empty on
       every OS with no launcher or installer export required. Interpolated, so a
@@ -348,7 +348,7 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     `warm/supervisor.py`'s HTTP handler -- the RESIDENT SERVER receiving the harness's POST
     -- not the harness/caller process. `resolve_caller_context(payload)` therefore falls
     through to its ambient probe (`CLAUDE_PLUGIN_ROOT` env, then machine-global config-dir
-    and `.doe-root` rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
+    and `.coordinator-content-root` rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
     on the event does not change the answer (measured). Benign today only because no wire
     carries a caller's real `plugin_root` for this function to prefer instead --
     `FORWARDED_ENV_PREFIXES` deliberately excludes `CLAUDE_PLUGIN_ROOT` (rehome plan

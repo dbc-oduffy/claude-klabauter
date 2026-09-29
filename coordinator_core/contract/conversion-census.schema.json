@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claude-klabauter/coordinator_core/contract/conversion-census.schema.json",
   "title": "Conversion-census row",
-  "description": "Shape of one row in DoE-claude's conversion census — the per-step classification of converting a skill into a computed skill. DoE-claude owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. The document envelope that carries rows — file format, filename, location, transport — is DoE-claude's, per contract § 5. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
+  "description": "Shape of one row in coordinator-content-repo's conversion census — the per-step classification of converting a skill into a computed skill. Coordinator-content-repo owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. The document envelope that carries rows — file format, filename, location, transport — is coordinator-content-repo's, per contract § 5. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["step_id", "classification"],
@@ -25,12 +25,12 @@
     "judgment_kind": {
       "type": "string",
       "enum": ["advisory", "untrusted_gate"],
-      "description": "Which judgment-point constructor the scaffolder emits. advisory: contract/decision_object/judgment.build_judgment_point, whose recommendation parameter is required with no default. untrusted_gate: build_untrusted_gate_judgment_point, which forbids one. Named rather than numbered deliberately — the discriminator is 'may the engine offer a recommendation at all?', a security-class boolean, not an ordinal; a 2|3 encoding invites >= comparisons with no defined meaning and collides with DoE-claude's own three-tier sort where tier 1 is MECHANICAL. Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.judgment_kind."
+      "description": "Which judgment-point constructor the scaffolder emits. advisory: contract/decision_object/judgment.build_judgment_point, whose recommendation parameter is required with no default. untrusted_gate: build_untrusted_gate_judgment_point, which forbids one. Named rather than numbered deliberately — the discriminator is 'may the engine offer a recommendation at all?', a security-class boolean, not an ordinal; a 2|3 encoding invites >= comparisons with no defined meaning and collides with coordinator-content-repo's own three-tier sort where tier 1 is MECHANICAL. Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.judgment_kind."
     },
     "round_trip": {
       "type": "string",
       "enum": ["terminal", "round_trip"],
-      "description": "Whether this judgment point gates downstream mechanical recomputation, deciding whether the emitted CLI is single-shot or genuinely two-phase. Orthogonal to revalidate_at_dispatch — see that field. Spelled as DoE-claude's own wiki spells it (coordinator/docs/wiki/computed-skills.md § round-trip classification). Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.round_trip."
+      "description": "Whether this judgment point gates downstream mechanical recomputation, deciding whether the emitted CLI is single-shot or genuinely two-phase. Orthogonal to revalidate_at_dispatch — see that field. Spelled as coordinator-content-repo's own wiki spells it (coordinator/docs/wiki/computed-skills.md § round-trip classification). Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.round_trip."
     },
     "revalidate_at_dispatch": {
       "type": "boolean",

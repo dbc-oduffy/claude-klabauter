@@ -179,7 +179,7 @@ def test_missing_end_sentinel_reported(env):
 
 def test_extract_block_parity_with_sentinel_blocks_js_oracle(tmp_path):
     """Parity check against the DoE oracle's exact contract (`coordinator/bin/
-    lib/sentinel-blocks-cli.js` `extract`, DoE-claude repo, lines 32-56): the
+    lib/sentinel-blocks-cli.js` `extract`, coordinator-content-repo repo, lines 32-56): the
     block is the text strictly between the marker LINES (marker lines
     themselves excluded), byte-identical to slicing the fixture by hand from
     the newline immediately after BEGIN up to the start of the END marker

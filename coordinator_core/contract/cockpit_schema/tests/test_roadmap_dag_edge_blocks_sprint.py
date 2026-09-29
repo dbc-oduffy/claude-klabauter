@@ -3,7 +3,7 @@ test_roadmap_dag_edge_blocks_sprint — union non-narrowing guard for the D47
 descriptor-altitude `type` widen (C5b).
 
 `RoadmapDagEdge.type` (entities/roadmap_dag_edge.py) and its emitted wire
-twin (DoE-claude `coordinator/cockpit-contract/schema/roadmap-dag-edge.schema.json`
+twin (coordinator-content-repo `coordinator/cockpit-contract/schema/roadmap-dag-edge.schema.json`
 `properties.type.enum`) must both accept the new sprint-altitude value
 ("blocks-sprint") AND still carry the pre-existing stub-altitude value
 ("blocks"). D47 ratified this as a value widen on the SAME property — no

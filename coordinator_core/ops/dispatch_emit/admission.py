@@ -3,7 +3,7 @@ coordinator_core.ops.dispatch_emit.admission — load-aware workflow admission.
 
 Reads live host CPU load and available RAM before a workflow is emitted onto
 this box, and holds when the box is over a config-sourced threshold — the
-in-process sampler PM ruling (DoE-claude
+in-process sampler PM ruling (coordinator-content-repo
 docs/research/2026-09-27-beat-vanilla-restructure/target-design.md § 7):
 static concurrency caps are the wrong instrument; the emitter waits on the
 box's LIVE state instead.

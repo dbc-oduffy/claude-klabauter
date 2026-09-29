@@ -1073,7 +1073,7 @@ def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():
     with nothing consuming it yet must still count as in-flight."""
     ctx = server._ServerContext(name="pipe-enqueue", sid="sid-enqueue", version_state=_FakeVersionState())
     assert ctx.in_flight() == 0
-    ctx._enqueue_connection("io-obj")
+    ctx._enqueue_connection("io-obj", admitted=False)
     assert ctx.in_flight() == 1
     assert ctx._queue.get_nowait() == "io-obj"
 
@@ -1103,7 +1103,7 @@ def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
     ctx._start_worker_pool(pool_size=2)
 
     for i in range(5):
-        ctx._enqueue_connection(f"io-{i}")
+        ctx._enqueue_connection(f"io-{i}", admitted=False)
 
     deadline = time.monotonic() + 5
     while len(running) < 2 and time.monotonic() < deadline:
@@ -1142,8 +1142,8 @@ def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monk
     ctx = server._ServerContext(name="pipe-survive", sid="sid-survive", version_state=_FakeVersionState())
     ctx._start_worker_pool(pool_size=1)
 
-    ctx._enqueue_connection("boom")
-    ctx._enqueue_connection("after")
+    ctx._enqueue_connection("boom", admitted=False)
+    ctx._enqueue_connection("after", admitted=False)
 
     deadline = time.monotonic() + 5
     while calls != ["boom", "after"] and time.monotonic() < deadline:
@@ -1175,9 +1175,9 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
     try:
         ctx._start_worker_pool(pool_size=1)
 
-        ctx._enqueue_connection("first")
+        ctx._enqueue_connection("first", admitted=False)
         assert started_first.wait(timeout=5)
-        ctx._enqueue_connection("second")
+        ctx._enqueue_connection("second", admitted=False)
 
         assert ctx.in_flight() == 2
 
@@ -1495,3 +1495,52 @@ def test_serve_forever_variants_call_record_accept_ready_before_blocking():
             < body.index("_record_accept_ready()")
             < body.index("_stopped.wait()")
         )
+
+
+def _admitting_ctx(monkeypatch):
+    closed: list[int] = []
+    monkeypatch.setattr(server, "_connect_pipe", lambda handle: None)
+    monkeypatch.setattr(server, "_close_handle", closed.append)
+    ctx = server._ServerContext(name="pipe-x", sid="sid-x", version_state=_FakeVersionState())
+    return ctx, closed
+
+
+def test_acceptor_wrap_failure_releases_the_admitted_slot(monkeypatch):
+    ctx, closed = _admitting_ctx(monkeypatch)
+
+    def _no_pipe(name, sid):
+        raise OSError("no more instances")
+
+    def _boom(handle):
+        raise OSError("wrap failed")
+
+    monkeypatch.setattr(server, "_create_pipe_instance", _no_pipe)
+    monkeypatch.setattr(server, "_wrap_handle", _boom)
+    with pytest.raises(OSError):
+        ctx._accept_and_replenish(1)
+    assert ctx.in_flight() == 0
+
+
+def test_replenish_thread_start_failure_releases_the_admitted_slot(monkeypatch):
+    ctx, closed = _admitting_ctx(monkeypatch)
+    monkeypatch.setattr(server, "_create_pipe_instance", lambda name, sid: 9)
+
+    class _NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(server.threading, "Thread", _NoThread)
+    ctx._accept_and_replenish(1)
+    assert ctx.in_flight() == 0
+    assert 1 in closed and 9 in closed
+
+
+def test_refused_after_close_listener_leaves_in_flight_at_zero(monkeypatch):
+    ctx, closed = _admitting_ctx(monkeypatch)
+    ctx.close_listener()
+    ctx._accept_and_replenish(1)
+    assert ctx.in_flight() == 0
+    assert closed == [1]

@@ -3,7 +3,7 @@
 test-tree edit shells `git` to construct fixture state.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/guard-test-tree-git-fixture-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-test-tree-git-fixture-
 spawn.py`. That script ran as an in-process guard body enrolled into a
 second, doctrine-plane-resident guard registry fired only via
 `preuse-write-dispatch.py`'s own dispatch. None of that applies here: this

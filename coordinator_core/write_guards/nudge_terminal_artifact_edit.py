@@ -192,6 +192,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.frontmatter.primitives import (
     frontmatter_body_text,
     read_fm_field_unquoted,
@@ -453,11 +454,7 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
     return tool_input.get("file_path") or tool_input.get("notebook_path") or ""
 
 
-def _normalize(path: str) -> str:
-    normalized = path.replace("\\", "/")
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
+_normalize = collapse_slashes
 
 
 def _resolve_disk_path(file_path_norm: str, cwd: Optional[str]) -> Path:

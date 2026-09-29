@@ -298,7 +298,7 @@ def test_loud_tier_message_names_the_matched_citation(repo_root: Path) -> None:
     assert out is not None
     reason = out["hookSpecificOutput"]["additionalContext"]
     assert "drive-letter" in reason
-    assert r"X:\example-game-workbench-repo" in reason
+    assert r"C:\example-game-workbench-repo" in reason
 
 
 def test_quiet_tier_message_names_the_matched_citation(tmp_target: str) -> None:
@@ -307,7 +307,7 @@ def test_quiet_tier_message_names_the_matched_citation(tmp_target: str) -> None:
     assert out is not None
     reason = out["hookSpecificOutput"]["additionalContext"]
     assert "drive-letter" in reason
-    assert r"X:\example-game-workbench-repo" in reason
+    assert r"C:\example-game-workbench-repo" in reason
 
 
 def test_advisory_names_the_written_file_in_the_runnable_fixer_command(repo_root: Path) -> None:
@@ -344,4 +344,4 @@ def test_non_guarded_tool_is_allowed() -> None:
 
 
 def test_missing_target_is_allowed() -> None:
-    assert check({"tool_name": "Write", "tool_input": {"content": "X:\\foo"}}) is None
+    assert check({"tool_name": "Write", "tool_input": {"content": "C:\\foo"}}) is None

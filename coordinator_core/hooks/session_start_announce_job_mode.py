@@ -2,7 +2,7 @@
 (startup-only) op: announces the resolved `job_mode` (blitz/cron/interactive).
 
 Arrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
-from DoE-claude `coordinator/hooks/scripts/session-start-announce-job-mode.py`
+from coordinator-content-repo `coordinator/hooks/scripts/session-start-announce-job-mode.py`
 — DR-047 transport-seam PLUMBING: DoE's own version resolved a sibling claude-klabauter
 checkout, placed it on `sys.path`, and imported
 `coordinator_core.session.mode_resolution.resolve_mode` across that boundary.

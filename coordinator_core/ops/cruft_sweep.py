@@ -104,7 +104,7 @@ callable to capture records without a subprocess/stdout round-trip.
 
 Self-registration: importing this module calls register_op("cruft_sweep.run",
 _run_handler) as a side-effect — see central-reg fragment
-DoE-claude/scratch/subagent-sandbox/bash-to-python-engine-migration/central-reg/T3a-g1a.txt
+Coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-engine-migration/central-reg/T3a-g1a.txt
 for the OP_MODULE_MAP / OP_CLASSIFICATION additions this self-registration
 still needs (central-registry deferral — this module does NOT edit those
 shared files itself).

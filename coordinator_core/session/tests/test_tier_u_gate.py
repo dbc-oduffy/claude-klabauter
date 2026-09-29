@@ -3,7 +3,7 @@ coordinator_core.session.tests.test_tier_u_gate -- tests for
 coordinator_core.session.tier_u_gate.enforce_tier_u_gate (R3+R4 shared
 resolve-and-execute shape gate).
 
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-tier-u-
 shape-ruling.md (R3, R4).
 
 Fixtures mirror test_grant.py's ``_make_repo``/``_live_session`` idiom --
@@ -552,14 +552,13 @@ class TestGateCallSitesPinned:
 
     @staticmethod
     def _load_module(name, path):
-        """Load a `coordinator/bin` CLI by file path.
+        """Load a `coordinator/bin` CLI by file path, binding its bare
+        `import lib` to this checkout's `coordinator/bin/lib` first (the
+        repo-root `conftest.py` does not load when `coordinator_core/`
+        resolves as rootdir)."""
+        from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 
-        The bare `import lib` (then `from cc_invoke import ...`) each CLI
-        opens with is bound by the root `conftest.py`'s durable
-        `ensure_bin_lib_bound` call (this repo's own `coordinator/bin`), not
-        by any local sys.path workaround here -- see C2's docstring for why
-        a plain spec/module_from_spec/exec_module is now sufficient.
-        """
+        ensure_bin_lib_bound(str(Path(TestGateCallSitesPinned._REPO_ROOT) / "coordinator" / "bin"))
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(name, path)

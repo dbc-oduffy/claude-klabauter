@@ -70,7 +70,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      ordering to preserve, so it sits at the very tail: nothing above it
      shares its detection surface.
  5d. block_worktree_creation                (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (DoE-claude, fleet-wide structural
+     bash predecessor; added 2026-07-28 (coordinator-content-repo, fleet-wide structural
      git-worktree ban, main-loop leg). Not identity-gated, same posture as
      5c: `block_subagent_destructive_action` (5) already denies `git
      worktree add` but ONLY for a resolved subagent, leaving the main-loop
@@ -80,7 +80,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      `git worktree <subcommand>`, never on the destructive-action cohort's
      broader git/rm/chmod surfaces).
  5e. block_approval_sentinel_creation       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (DoE-claude, doctrine-approval
+     bash predecessor; added 2026-07-28 (coordinator-content-repo, doctrine-approval
      sentinel un-creatable-by-agent guard). Not identity-gated, same
      posture as 5c/5d -- the EM is exactly who this sentinel exists to
      constrain, so an EM exemption would defeat its own purpose. Registered
@@ -88,7 +88,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      short-circuit reason (see its own registration comment above and its
      module docstring "REGISTRATION ORDERING").
  5f. block_worktree_sentinel_creation       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (DoE-claude, closing a confirmed
+     bash predecessor; added 2026-07-28 (coordinator-content-repo, closing a confirmed
      security hole: the git-worktree ban's own override sentinel,
      `.coordinator-override-worktree-guard`, was creatable via Bash `touch`/
      redirection/etc, reintroducing the exact agent-self-grant that guard's
@@ -99,7 +99,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      `_sentinel_creation_guard.SentinelCreationDetector`, parameterized on a
      different target basename.
  5g. block_stash_destruction                (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-30 (DoE-claude) as the main-loop leg of
+     bash predecessor; added 2026-07-30 (coordinator-content-repo) as the main-loop leg of
      the `git stash drop`/`clear` ban. Entry 5 already classifies both verbs
      as a deny, but its identity gate fails OPEN when no subagent resolves,
      so an EM-typed `git stash drop` was allowed -- and the EM is the caller
@@ -144,7 +144,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      hard-deny run -- same `offer-git-c` short-circuit ordering requirement
      as every entry in this CONFINEMENT_DENY run.
  5j. block_subagent_findings_reject         (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-09-26 (DoE-claude docs/plans/2026-09-26-
+     bash predecessor; added 2026-09-26 (coordinator-content-repo docs/plans/2026-09-26-
      retire-review-integrator.md, row M3) to make EM-only the `reject`/
      `targets` subcommands of the reviewer-applies-own-findings ledger op
      (`coordinator_core.ops.review_findings_ledger`, M2). Same identity-gate
@@ -809,7 +809,7 @@ def resolve_plugin_root_loud(
             "bash_guards.dispatch: plugin_root could not be resolved for this "
             "call (the per-call payload carried none, and the ambient "
             "fallback rungs -- CLAUDE_PLUGIN_ROOT, the coordinator-claude "
-            "plugin directory, the .doe-root pointer -- all missed); any "
+            "plugin directory, the .coordinator-content-root pointer -- all missed); any "
             "guard whose detection depends on a plugin-root-rooted manifest "
             "degrades to its own no-manifest fail-open for this call.",
             file=sys.stderr,
@@ -996,7 +996,7 @@ def resolve_wiki_citation(text: str, plugin_root: Optional[str]) -> str:
     both name the ``coordinator/`` directory a page path is joined onto (see
     ``resolve_governed_authoring_surfaces`` above, which joins the same
     ``plugin_root`` onto ``governed-authoring-surfaces.json`` and finds it at
-    ``<DoE-claude>/coordinator/governed-authoring-surfaces.json`` -- the
+    ``<coordinator-content-repo>/coordinator/governed-authoring-surfaces.json`` -- the
     identical root DoE's ``_coordinator_dir()`` resolves to).
 
     Called ONLY from each caller's own deny path: the overwhelming majority
@@ -1888,6 +1888,9 @@ def _build_guard_chain(
         check as _check_dev_repo_sentinel_removal,
         check_advisory as _check_dev_repo_sentinel_removal_advisory,
     )
+    from coordinator_core.bash_guards.block_venv_creation import (
+        check as _check_venv_creation,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2159,6 +2162,10 @@ def _build_guard_chain(
         # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4,
         # tuple (not a `MATCHERS` import) stays for the reason given in the
         GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        # block-venv-creation -- PM directive 2026-09-29: per-repo/shared
+        # venvs banned fleet-wide. WARN-only per mid-chunk PM amendment
+        # (always allows; never a CONFINEMENT_DENY), so it lives here.
+        GuardEntry("block-venv-creation", lambda: _check_venv_creation(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # `stash-apply-verification-advisory` -- the ADVISORY_REWRITE sibling
         # of the two CONFINEMENT_DENY stash guards above, and deliberately
         # OVERLAPPING files match, and says nothing about content unique to

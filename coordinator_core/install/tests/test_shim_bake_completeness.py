@@ -43,7 +43,7 @@ described above, is moot post-DR-365 — that path no longer exists.)
 
 **Superseded 2026-08-16 by registry-read-stops-costing-a-process (C2,
 C3):** the "static-copy path never bakes" half of the property above was
-disproved, not merely a stale detail — DoE-claude
+disproved, not merely a stale detail — coordinator-content-repo
 `coordinator/docs/wiki/machine-local-registry.md` §4.3 says baking
 `__PYTHON_BIN__` for the static bin families is worth doing, and this
 2026-08-10 plan's own C6 called the unbaked shims "benign", never a
@@ -249,7 +249,7 @@ def test_install_bin_resolvers_succeeds_when_only_the_py_launcher_is_found(
 # existing.
 #
 # The STATIC half of the same property (`_install_one`'s own baking, asserted
-# above against the `machine-local`/`claude-doe` families) is untouched and
+# above against the `machine-local`/`claude-author` families) is untouched and
 # still live: those shims are not agent-helper forwarders.
 
 

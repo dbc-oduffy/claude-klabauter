@@ -54,7 +54,7 @@ all live in C0 and are shared with C6's vendored leg.
 ## C6 — the vendored leg (AC8/AC9)
 
 `compute_vendored_staleness` answers the same question for a peer
-(DoE-claude)-owned generator emitting a peer-owned artifact that claude-klabauter only
+(coordinator-content-repo)-owned generator emitting a peer-owned artifact that claude-klabauter only
 CONSUMES — vendored copies read via a resolved peer clone, never written to.
 Its leg-specific work is stamp EXTRACTION ONLY (`_extract_vendored_stamp`
 reads the nested `x-effective-delivery`-shaped block); the comparison itself
@@ -63,7 +63,7 @@ uses (AC9), called against the peer repo root with `since_point` set to the
 COMMIT-ISH `generated_from_sha` rather than a timestamp.
 
 Three traps this leg exists to close, all verified live at
-DoE-claude@a0d10df52 (`coordinator/hooks/hooks.json`'s
+Coordinator-content-repo@a0d10df52 (`coordinator/hooks/hooks.json`'s
 `x-effective-delivery` block):
 
   - **Parent offset.** `generated_from_sha` is the emitter's HEAD *at emit
@@ -89,10 +89,10 @@ DoE-claude@a0d10df52 (`coordinator/hooks/hooks.json`'s
 
 `resolve_peer_repo_path` imitates the order
 `coordinator_core.frontmatter.schema_drift_watch.resolve_doe_repo_path`
-already uses (REPO_DOE_CLAUDE env var, then the fleet registry's
-`repos.doe_claude` entry, then the durable pointer file, then the legacy
+already uses (REPO_CONTENT_ROOT env var, then the fleet registry's
+`repos.content_root` entry, then the durable pointer file, then the legacy
 pointer file — all three of the latter folded into
-`coordinator_core.doe_root_pointer.read_doe_root_pointer`'s own ladder) —
+`coordinator_core.content_root_pointer.read_content_root_pointer`'s own ladder) —
 without importing `schema_drift_watch` itself, which is owned by a live
 sibling plan. An absent or unreadable clone (no candidate directory
 containing a `coordinator/` subdir) resolves to `None`, which every caller
@@ -131,7 +131,7 @@ from typing import Any, Optional
 
 import yaml
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ops.generator_provenance import GeneratorRecord, Pair, discover_generators
 from coordinator_core.ops.staleness_git import (
     SinceRange,
@@ -298,30 +298,30 @@ VENDORED_PAIRS: tuple[VendoredPair, ...] = (
 
 
 def resolve_peer_repo_path() -> Optional[Path]:
-    """Best-effort resolution of the DoE-claude sibling clone root.
+    """Best-effort resolution of the coordinator-content-repo sibling clone root.
 
     Imitates `coordinator_core.frontmatter.schema_drift_watch
-    .resolve_doe_repo_path`'s ladder (REPO_DOE_CLAUDE env var, then
-    `read_doe_root_pointer()`'s registry/durable-file/legacy-file rungs)
+    .resolve_doe_repo_path`'s ladder (REPO_CONTENT_ROOT env var, then
+    `read_content_root_pointer()`'s registry/durable-file/legacy-file rungs)
     without importing that module. Returns None when no candidate directory
     contains `PEER_REPO_SENTINEL` (the artifact this leg actually consumes,
     `coordinator/hooks/hooks.json`) — a bare `coordinator/` subdir is not
-    enough to call a candidate a real DoE-claude clone, and gating on the
+    enough to call a candidate a real coordinator-content-repo clone, and gating on the
     consumed artifact fails early and honestly when a clone is present but
     lacks it. Review: code-reviewer da34f46b — bare-dir sentinel accepted a
     stale/half-cloned checkout as a valid peer root. Never raises.
     """
     candidates: list[Path] = []
 
-    env_root = os.environ.get("REPO_DOE_CLAUDE", "").strip()
+    env_root = os.environ.get("REPO_CONTENT_ROOT", "").strip()
     if env_root:
         candidates.append(Path(env_root))
 
     try:
-        pointer_root = read_doe_root_pointer().strip()
+        pointer_root = read_content_root_pointer().strip()
     except Exception as exc:
         print(
-            f"resolve_peer_repo_path: read_doe_root_pointer() raised unexpectedly "
+            f"resolve_peer_repo_path: read_content_root_pointer() raised unexpectedly "
             f"(never-raises contract violated): {exc}",
             file=sys.stderr,
         )
@@ -389,7 +389,7 @@ def compute_vendored_pair_staleness(peer_repo_root: Path, pair: VendoredPair) ->
         return {"artifact": pair.artifact, "verdict": Verdict.UNSTAMPED, "detail": detail}
 
     sha = stamp["sha"]
-    cite = f"DoE-claude@{sha}"
+    cite = f"coordinator-content-repo@{sha}"
 
     if stamp["dirty"]:
         return {
@@ -420,7 +420,7 @@ def compute_vendored_pair_staleness(peer_repo_root: Path, pair: VendoredPair) ->
 
 
 def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
-    """Verdict per declared `VENDORED_PAIRS` entry, keyed `DoE-claude:<artifact>`.
+    """Verdict per declared `VENDORED_PAIRS` entry, keyed `coordinator-content-repo:<artifact>`.
 
     Takes no *repo_root* — the vendored leg always resolves its OWN root via
     `resolve_peer_repo_path()`, never the local repo root. An earlier
@@ -436,16 +436,16 @@ def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
     peer_root = resolve_peer_repo_path()
     if peer_root is None:
         return {
-            "<DoE-claude clone unresolved>": {
+            "<coordinator-content-repo clone unresolved>": {
                 "artifact": None,
                 "verdict": Verdict.INDETERMINATE,
-                "detail": "could not resolve the DoE-claude sibling clone",
+                "detail": "could not resolve the coordinator-content-repo sibling clone",
             }
         }
 
     results: dict[str, dict[str, Any]] = {}
     for pair in VENDORED_PAIRS:
-        results[f"DoE-claude:{pair.artifact}"] = compute_vendored_pair_staleness(peer_root, pair)
+        results[f"coordinator-content-repo:{pair.artifact}"] = compute_vendored_pair_staleness(peer_root, pair)
     return results
 
 
@@ -453,7 +453,7 @@ def compute_all_staleness(repo_root: Optional[Path] = None) -> dict[str, dict[st
     """Local leg (C3) plus vendored leg (C6), merged into one verdict dict.
 
     Local-leg keys are bare artifact paths; vendored-leg keys are prefixed
-    `DoE-claude:` (see `compute_vendored_staleness`) so the two never
+    `coordinator-content-repo:` (see `compute_vendored_staleness`) so the two never
     collide. Never raises — each leg folds its own failures into
     INDETERMINATE entries rather than raising past this join.
     """

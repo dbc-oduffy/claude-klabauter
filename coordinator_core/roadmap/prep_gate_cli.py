@@ -8,7 +8,7 @@ in ``prep_gate.py``, never here — see ``coordinator/bin/mise-prep-gate.py``'s 
 docstring and the S1-C8 plan row this module was written against
 (``docs/plans/2026-09-18-doe-holds-no-scripts.md``).
 
-Restated from requirement over ``DoE-claude coordinator/bin/mise-prep-gate.py``
+Restated from requirement over ``coordinator-content-repo coordinator/bin/mise-prep-gate.py``
 (1708 lines), read only to learn which CLI legs a thin door-served wrapper owes:
 multi-target walk (default ``docs/plans``), ``--json``, ``--tally``, ``--repo-root``,
 and an exit code per verdict. No code from that file is carried here — every
@@ -34,11 +34,11 @@ Negative-spec:
     call per target and aggregates the reports, same as the default report mode.
   - Does NOT gate a sidecar named explicitly on the command line. ``_is_plan_sidecar``
     only prunes a DIRECTORY expansion; a caller who types a compound-stem path is
-    still gated for it, the same asymmetry DoE-claude's own script keeps and for the
+    still gated for it, the same asymmetry coordinator-content-repo's own script keeps and for the
     same reason — silently returning nothing for a path the caller typed would be
     the worse surprise.
 
-Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py :: _is_plan_sidecar``
+Restated from coordinator-content-repo ``coordinator/bin/mise-prep-gate.py :: _is_plan_sidecar``
 (2026-09-18, docs/plans/2026-09-18-doe-holds-no-scripts.md legs 1-3): a review or
 coverage sidecar (``2026-06-24-baz.prior-art-check.md``,
 ``2026-06-27-foo.md.plan-coverage-check.md``) is named for the plan it annotates
@@ -89,7 +89,7 @@ class GateCLIError(RuntimeError):
 def _is_plan_sidecar(path: Path) -> bool:
     """Whether ``path`` is a review/coverage sidecar rather than a plan.
 
-    Restated to the letter from DoE-claude ``coordinator/bin/mise-prep-gate.py
+    Restated to the letter from coordinator-content-repo ``coordinator/bin/mise-prep-gate.py
     :: _is_plan_sidecar``. A plan's filename is a SINGLE stem —
     ``2026-06-27-foo.md`` — because that is what ``coordinator-doc-new --type
     plan`` emits. A sidecar is named for the plan it annotates plus its own
@@ -126,7 +126,7 @@ def _engine_error_report(plan_path: Path, exc: Exception) -> Dict[str, Any]:
     """A ``gate_plan``-shaped report for a target whose engine call raised
     something ``gate_plan`` itself did not turn into a DEFECT.
 
-    Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py ::
+    Restated from coordinator-content-repo ``coordinator/bin/mise-prep-gate.py ::
     _engine_error_report``: defense in depth for ``main()``'s per-target
     loop below. ``gate_plan``/``_spine`` already isolate the named
     ``read_spine()``/``build_waves()`` boundary into a DEFECT, but the batch

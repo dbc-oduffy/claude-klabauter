@@ -199,7 +199,7 @@ Negative-spec -- what this module deliberately does NOT do:
     command already fails to match ANY shape by the classifier's own
     contract, so this guard has nothing to act on.
 
-Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-6
+Spec backlink: coordinator-content-repo:pln-windows-viability-stop-the-spa-b969d9 § BX-6
 Consumes: coordinator_core/bash_guards/_shape_classifier.py (BX-2)
 Consumes: coordinator_core/bash_guards/dispatch_checks.py's
   ``check_grep_via_bash_rewrite`` and its private helpers (BX-16 shape 2)
@@ -286,14 +286,23 @@ def _substitutable_rewrite(tokens: list) -> Tuple[Optional[str], str]:
     return _grep_python_rewrite(parsed), ""
 
 
-#: Short flags that are GENUINELY GNU-only among grep's recognized set --
-#:     family): a SEMANTIC COLLISION, not just absence -- BSD `-Z` means
-#: See ``_GNU_ONLY_LONG_OPTS`` immediately below for the long-option half
+#: Short flags GNU-only among grep's recognized set (macOS 26.5 `man grep`,
+#: 2026-08-01); one rationale per entry, asserted by
+#: ``TestGnuOnlyDenylistRationaleDocumented``:
+#:   - `P` (`--perl-regexp`): BSD grep has no PCRE engine.
+#:   - `z`: NUL-separated records; absent on BSD grep.
+#:   - `Z`: semantic collision -- BSD `-Z` forces zgrep-style decompression.
+#:   - `T` (`--initial-tab`): absent on BSD grep.
+#: The long-option half is ``_GNU_ONLY_LONG_OPTS``; see ``_has_gnu_only_construct``.
 _GNU_ONLY_SHORT_FLAGS = frozenset({"P", "z", "Z", "T"})
 
-#: DENYLIST, not an allowlist, of long options that are genuinely GNU-only
-#: on BSD/macOS grep -- replaces the prior ``_PORTABLE_LONG_OPTS``
-#: STANDARDS section -- the genuinely-divergent set is small, so enumerating
+#: Denylist of long options GNU-only versus BSD/macOS grep. Derived 2026-08-01,
+#: macOS 26.5 `man grep`; re-verify against the target platform's `man grep`.
+#:   - `--perl-regexp`: long spelling of `-P`.
+#:   - `--include-from`, `--exclude-from`: BSD ships only `--include`/`--exclude`.
+#:   - `--initial-tab`: long spelling of `-T`.
+#:   - `--group-separator`, `--no-group-separator`: context-separator
+#:     customization is a GNU extension.
 _GNU_ONLY_LONG_OPTS = frozenset(
     {
         "--perl-regexp",
@@ -378,7 +387,7 @@ def _partial_pipe_rewrite(tokens: list) -> Optional[str]:
     rewrite `check()`'s final branch offers. It is nonetheless a REAL
     alternative for the single largest bucket of otherwise-untouched
     grep-via-Bash traffic (state/audits/2026-07-29-guard-module-ladder-
-    worklist.md Row G2, DoE-claude repo) -- unlike that bucket's prior
+    worklist.md Row G2, coordinator-content-repo repo) -- unlike that bucket's prior
     prose-only advisory, this names something the caller can actually run.
 
     Returns ``None`` for anything outside this narrow shape: not exactly

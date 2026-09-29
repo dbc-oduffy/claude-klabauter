@@ -19,5 +19,6 @@ def test_writing_one_slot_leaves_its_hardlinked_siblings_alone(tmp_path):
     assert door.read_bytes() == b"\xcf\xfa\xed\xfe native door"
     assert b'exec_cli("slot-a.py")' in slot.read_bytes()
     assert os.stat(slot).st_nlink == 1
-    assert os.access(slot, os.X_OK)
+    if os.name != "nt":
+        assert os.access(slot, os.X_OK)
     assert not list(tmp_path.glob(".*.tmp"))

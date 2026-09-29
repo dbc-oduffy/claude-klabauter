@@ -23,7 +23,7 @@ consumed by ``check_find_exec_rewrite``/``check_grep_via_bash_rewrite``/
 ``check_multiprobe_banner_rewrite``), and the shared tokenizer/shape
 classifier.
 
-Spec backlink: DoE-claude:pln-bash-guard-merged-execution-shape-a71e05 M1
+Spec backlink: coordinator-content-repo:pln-bash-guard-merged-execution-shape-a71e05 M1
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@ weight ratchet -- the ONLY enforcing leg (leg 1a,
 `coordinator_core.hooks.guard_doctrine_surface_ratio`, is advisory-only).
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/guard-doctrine-surface-ratio-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-doctrine-surface-ratio-
 precommit.py`. `command/native-door` (per the W4-C1 verdict) does not apply
 to this row's entry: a git pre-commit hook is invoked directly by `git`,
 never dialled through `hook-run`, so it carries no `register_op` and no

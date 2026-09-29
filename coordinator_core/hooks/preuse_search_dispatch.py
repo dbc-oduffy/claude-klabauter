@@ -26,7 +26,7 @@ Kill-switch: env COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED=1.
 Op contract: `params` is the flat PreToolUse payload dict (`tool_name`,
 `tool_input`, `session_id`, `cwd`, `agent_id`, …).
 
-Spec backlink: state/cross-repo/inbox/2026-09-25-doe-claude-em-example-retrieval-repo-adoption-hooks.md
+Spec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-example-retrieval-repo-adoption-hooks.md
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ _GENERAL_SENTINEL = "example-retrieval-repo-search-nudged"
 _AGENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 _GENERAL_ADVICE = (
-    "example-retrieval-repo indexes this repo. Who calls X, where X is defined, what "
+    "this repo has a code index. Who calls X, where X is defined, what "
     "depends on it: project_symbol_callers, project_symbol, "
     "project_semantic_search (check project_staleness_check first). Grep "
     "stays right for literal text."
@@ -156,9 +156,9 @@ def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
 
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     if os.environ.get(_KILL_SWITCH) == "1":
         return no_advisory()
-    params = payload_of(params)
     if params.get("tool_name") not in _SEARCH_TOOLS:
         return no_advisory()
     tool_input = params.get("tool_input")

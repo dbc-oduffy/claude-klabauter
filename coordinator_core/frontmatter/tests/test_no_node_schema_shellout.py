@@ -5,14 +5,14 @@ query-records.js node spawn — see that module's docstring): no DoE-JS-oracle
 Node shell-out survives in coordinator_core/ PRODUCTION (non-test) code.
 
 Context: the DR-210 native-tooling-ownership strangler is porting the DoE JS
-oracles (DoE-claude coordinator/bin/**/*.js) to Python one at a time. Each
+oracles (coordinator-content-repo coordinator/bin/**/*.js) to Python one at a time. Each
 port retires a `subprocess.run(["node", "<oracle>.js", ...])` style shell-out
 in favor of an in-process call. This test is the regression gate that keeps a
 future edit from silently reintroducing a node shell-out to ANY of those
 oracles -- not just the schema pair the gate originally covered.
 
 DoE JS oracle inventory this gate matches (verified against
-DoE-claude/coordinator/bin on 2026-07-22):
+Coordinator-content-repo/coordinator/bin on 2026-07-22):
   - still alive: schema.js, schema-cli.js, query-records.js,
     walk-handoff-dag.js, emit-artifact-shape-contract.js
   - already deleted (a reintroduced call to one of these is worse than a call
@@ -71,7 +71,7 @@ _NODE_TOKENS = {"node"}
 # a deleted script is an even worse regression than one to a live script,
 # since the target doesn't even exist). See module docstring for provenance.
 _DOE_JS_ORACLE_SUBSTRINGS = (
-    # still alive (DoE-claude/coordinator/bin, verified 2026-07-22)
+    # still alive (coordinator-content-repo/coordinator/bin, verified 2026-07-22)
     "schema-cli.js",
     "schema.js",
     "query-records.js",

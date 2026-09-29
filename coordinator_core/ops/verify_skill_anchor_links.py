@@ -114,7 +114,7 @@ import sys
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.data_root import content_root_for
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 
 _HARDCODED_CONSUMERS = (
@@ -164,25 +164,25 @@ def _plugin_root() -> str:
     """Resolve the plugin root (coordinator/) that owns the SKILL.md consumers.
 
     Env var CLAUDE_PLUGIN_ROOT wins if set, returned verbatim. Otherwise
-    resolves via `coordinator_doe_root()` (see that module's own docstring
+    resolves via `coordinator_content_root()` (see that module's own docstring
     for its env-var/machine-local resolution chain) and returns
-    <doe_root>/coordinator.
+    <content_root>/coordinator.
 
     This does NOT derive from this module's own __file__ location. This
-    module migrated from DoE-claude to claude-klabauter (DOE-PORT R2-R6,
+    module migrated from coordinator-content-repo to claude-klabauter (DOE-PORT R2-R6,
     commit b644d5a9 there / 8a28a6ca here) while coordinator/skills/ stayed
-    in DoE-claude — self-location now resolves to
+    in coordinator-content-repo — self-location now resolves to
     <claude-klabauter>/coordinator_core/ops/, a directory with no skills/ at all,
     which previously produced a false "CLAUDE.md not found" error instead of
-    a loud, correctly-diagnosed resolution failure. `coordinator_doe_root()`
-    is the correct authority for "where is the DoE-claude repo," independent
+    a loud, correctly-diagnosed resolution failure. `coordinator_content_root()`
+    is the correct authority for "where is the coordinator-content-repo repo," independent
     of where THIS module happens to run from. A future reader must not
     "restore" __file__-based resolution to regain the old bash-oracle-adjacent
     shape — that is precisely what caused this break (see
     docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md,
     "skill-anchor-links" chunk).
 
-    Fails loud with exit 2 (COULD NOT CHECK) if coordinator_doe_root() cannot
+    Fails loud with exit 2 (COULD NOT CHECK) if coordinator_content_root() cannot
     resolve: this is a gate invoked from `/update-docs`, not a never-block
     hook, and an unresolvable DoE root means the gate examined nothing — which
     must never be reported with the same code as a clean run.
@@ -190,12 +190,12 @@ def _plugin_root() -> str:
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env:
         return env
-    root = coordinator_doe_root()
+    root = coordinator_content_root()
     if root is None:
         print(
             "verify_skill_anchor_links: cannot resolve the coordinator root — "
-            "coordinator_doe_root() returned no result. Set repos.doe_claude in the "
-            "machine-local registry, or set the DOE_ROOT/REPO_DOE_CLAUDE env var, or "
+            "coordinator_content_root() returned no result. Set repos.content_root in the "
+            "machine-local registry, or set the CONTENT_ROOT/REPO_CONTENT_ROOT env var, or "
             "set CLAUDE_PLUGIN_ROOT directly. Nothing was checked.",
             file=sys.stderr,
         )

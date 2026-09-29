@@ -9,7 +9,7 @@ docs/plans/2026-08-13-handoff-ac-shape-template-rule-and-write-time-offer.md:
 `- [ ]`/`- [x]` checkboxes under a handoff's `## Acceptance criteria`
 heading and reports `verdict: indeterminate` when it finds the heading with
 zero of them — but the checkbox convention is stated only in
-`DoE-claude coordinator/skills/plan/SKILL.md`, never in the spinoff or
+`coordinator-content-repo coordinator/skills/plan/SKILL.md`, never in the spinoff or
 handoff skills, and `coordinator/templates/handoffs/` holds no body
 template at all. An author following the skills they were actually given
 can write prose bullets instead, satisfying every instruction they read
@@ -125,6 +125,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.write_guards._slash_normalize import collapse_slashes as _collapse_slashes
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -135,13 +136,6 @@ _TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")
 _HANDOFF_RE = re.compile(r"(^|/)state/handoffs/[^/]+\.md$", re.IGNORECASE)
 
 _MAX_WHOLE_FILE_BYTES = 256 * 1024
-
-
-def _collapse_slashes(value: str) -> str:
-    normalized = value.replace("\\", "/")
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:

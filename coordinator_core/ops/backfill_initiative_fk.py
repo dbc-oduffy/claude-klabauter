@@ -9,7 +9,7 @@ coordinator_core.hooks.auto_push / coordinator_core.ops.handoff_gate_aging.
 Purpose: idempotent batch-attach tool. Reads (artifact-path, initiative-id) TSV pairs
 from a file or stdin and attaches the `initiative:` FK to each artifact's YAML
 frontmatter via the sibling `coordinator-initiative attach` CLI (a python3 script as of
-DoE-claude commit 6fb5fb37; invoked via `sys.executable`, not shelled out through bash).
+Coordinator-content-repo commit 6fb5fb37; invoked via `sys.executable`, not shelled out through bash).
 One-shot backfill tool; safe to re-run on a partially-processed mapping.
 
 Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-doe-land-d-slice.md § F4 (AC8)
@@ -24,11 +24,11 @@ Public API:
         trampoline's own bin/ directory — used to resolve the sibling
         `coordinator-initiative` executable via a plain same-directory join, exactly
         as the bash oracle's `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
-        did. This is a SAME-DIRECTORY SIBLING lookup, not a cross-repo DOE_ROOT
+        did. This is a SAME-DIRECTORY SIBLING lookup, not a cross-repo CONTENT_ROOT
         resolution — this module is always invoked in-process by a trampoline that
         already knows its own location, so reusing that location is both simpler and
-        more byte-faithful to the oracle than re-deriving DOE_ROOT via
-        `coordinator_core.ops.coordinator_doe_root` (which is the right tool for a
+        more byte-faithful to the oracle than re-deriving CONTENT_ROOT via
+        `coordinator_core.ops.coordinator_content_root` (which is the right tool for a
         genuinely cross-repo caller, not this one). If neither is supplied, this
         module's own directory is used as a fallback (not a faithful mirror of the
         oracle's behavior when invoked from a repo layout other than co-located
@@ -96,7 +96,7 @@ Departure from the oracle (additive robustness, not a behavior change to any tes
 path):
     - Invokes `coordinator-initiative` via `[sys.executable, coordinator_initiative_path,
       ...]` rather than shebang-exec of a bare path. `coordinator-initiative` was ported
-      from bash to python3 (DoE-claude commit 6fb5fb37); invoking the running
+      from bash to python3 (coordinator-content-repo commit 6fb5fb37); invoking the running
       interpreter directly needs NO shebang interpretation at all — strictly stronger
       than the earlier bash-resolution approach's Windows-portability workaround (no
       shebang interpretation on Windows was the old bash-resolution rationale; this

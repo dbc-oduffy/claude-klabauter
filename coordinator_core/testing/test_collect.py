@@ -31,7 +31,7 @@ from coordinator_core.testing.collect import (
     FAMILY_RUNNER_KIND,
     discover,
 )
-from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.testing.content_root import content_root_and_present
 
 _TESTING_PKG_DIR = Path(__file__).resolve().parent
 _REAL_TEST_MODULES = {
@@ -86,14 +86,14 @@ def test_no_stray_test_py_files_committed_under_testing_package() -> None:
     assert stray == [], f"stray test_*.py fixture(s) committed under {_TESTING_PKG_DIR}: {stray}"
 
 
-_DOE_ROOT, _DOE_PRESENT = doe_root_and_present()
+_CONTENT_ROOT, _DOE_PRESENT = content_root_and_present()
 
 
 @pytest.mark.skipif(not _DOE_PRESENT, reason="DoE repo root not resolvable on this machine")
 def test_doe_integration_discovers_and_classifies_real_tree() -> None:
-    suites = discover(_DOE_ROOT)
+    suites = discover(_CONTENT_ROOT)
 
-    assert suites, f"discover() found no suites at all under {_DOE_ROOT}"
+    assert suites, f"discover() found no suites at all under {_CONTENT_ROOT}"
     for suite in suites:
         assert suite.family in ALL_FAMILIES
         assert suite.runner_kind == FAMILY_RUNNER_KIND[suite.family]

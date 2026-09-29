@@ -1,9 +1,9 @@
 """coordinator_core.block_discharge — append-only, per-session ledger of
 Stop-guard fires and their discharges.
 
-Port of DoE-claude's `coordinator/hooks/scripts/_block_discharge.py`
+Port of coordinator-content-repo's `coordinator/hooks/scripts/_block_discharge.py`
 (`docs/plans/2026-09-06-block-discharge-durable-artifact.md`, chunk C1),
-loaded by DoE-claude's `coordinator/bin/block-discharge.py` CLI by path and
+loaded by coordinator-content-repo's `coordinator/bin/block-discharge.py` CLI by path and
 imported by three of its hook guards. Ported near-verbatim per
 `docs/plans/2026-09-18-doe-holds-no-scripts.md` chunk W2-C3.
 

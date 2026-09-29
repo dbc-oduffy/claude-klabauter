@@ -6,7 +6,7 @@ The defect class (2026-07-27, six instances found in one day; see
 ``git show f622297b`` and ``git show a4ef240b``): ``conftest.py``'s suite-root
 ``_quarantine_real_home`` autouse fixture hides the machine-local registry
 from every test (correct — it is the fix for the 2026-07-20 Windows
-real-``~/.claude/.doe-root``-clobber incident). A test that resolves a real
+real-``~/.claude/.coordinator-content-root``-clobber incident). A test that resolves a real
 repo root through one of the resolvers in ``_LIVE_ROOT_RESOLVER_NAMES`` below
 therefore cannot reach its subject under quarantine unless it opts out via
 ``@pytest.mark.real_home``. How such a test bails when the resolver fails
@@ -42,7 +42,7 @@ Resolver names (established from the tree, not asserted from memory) — every
 function in ``coordinator_core`` whose contract is "resolve a REAL sibling-
 repo or machine root, raising/returning falsy on failure":
 ``coordinator_core.machine_resolver.registry_get``,
-``coordinator_core.doe_root_pointer.read_doe_root_pointer``,
+``coordinator_core.content_root_pointer.read_content_root_pointer``,
 ``coordinator_core.install._shared.resolve_coordinator_root`` /
 ``coordinator_core.ops.emit.resolvers.resolve_coordinator_root`` (same name,
 two call sites, both live-root oracles),
@@ -115,7 +115,7 @@ import pytest
 # ---------------------------------------------------------------------------
 _LIVE_ROOT_RESOLVER_NAMES: frozenset[str] = frozenset({
     "registry_get",
-    "read_doe_root_pointer",
+    "read_content_root_pointer",
     "resolve_coordinator_root",
     "default_ledger_path",
     "coordinator_engine_root",
@@ -465,7 +465,7 @@ def test_gate_detects_aliased_import_silent_bail(tmp_path):
         "from coordinator_core.machine_resolver import registry_get as real_registry_get\n"
         "\n"
         "def test_aliased_silent_bail():\n"
-        "    if not real_registry_get('repos.doe_claude'):\n"
+        "    if not real_registry_get('repos.content_root'):\n"
         "        return\n"
         "    assert True\n",
         encoding="utf-8",

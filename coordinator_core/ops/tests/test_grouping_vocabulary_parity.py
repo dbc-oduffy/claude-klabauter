@@ -19,7 +19,7 @@ one of them moved:
     argparse exited 2 before the handler, which already accepted the grouping,
     ever ran.
 
-Reported from example-cockpit-repo via DoE-claude, 2026-09-04. The recurring failure
+Reported from example-cockpit-repo via coordinator-content-repo, 2026-09-04. The recurring failure
 is the DESYNC, not the missing member, which is why these assertions are
 derived from the constants rather than restating a member list of their own.
 

@@ -72,6 +72,7 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_LENS
+from coordinator_core.write_guards._slash_normalize import collapse_slashes
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -169,9 +170,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         file_path = _extract_file_path(payload)
         if not file_path:
             return None
-        file_path_norm = file_path.replace("\\", "/")
-        while "//" in file_path_norm:
-            file_path_norm = file_path_norm.replace("//", "/")
+        file_path_norm = collapse_slashes(file_path)
 
         match = _SIDECAR_DIR_RE.search(file_path_norm)
         if not match:

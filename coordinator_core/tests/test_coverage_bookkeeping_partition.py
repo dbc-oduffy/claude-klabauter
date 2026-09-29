@@ -35,7 +35,7 @@ BOTH a bookkeeping path and any other (non-bookkeeping) path classifies as
 CODE, fail-closed — see coverage._classify_bookkeeping_shas.
 
 Spec backlink: cross-repo/inbox dispatch, "review-coverage gate: partition
-uncovered-by-bookkeeping" (DoE-claude, 2026-07-26).
+uncovered-by-bookkeeping" (coordinator-content-repo, 2026-07-26).
 
 K-001 note (state/kill-ledger.md): `run_coverage_gate` and its
 COVERED/WARN/INDETERMINATE verdict were removed under kill-ledger entry

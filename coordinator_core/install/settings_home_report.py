@@ -25,7 +25,7 @@ count reports that state green -- it was green on machine-b on 2026-08-22
 while four names were absent and the other 390 resolved through a different
 root's shim.
 
-Input, not invention -- state precedence explicitly. DoE-claude
+Input, not invention -- state precedence explicitly. Coordinator-content-repo
 (coordinator-claude) already declares the settings-home post-condition:
 
 - ``coordinator-claude coordinator/docs/wiki/machine-local-registry.md``
@@ -301,10 +301,10 @@ def _byte_copied_body_matches_source(
     verifies the shape of a GENERATED trampoline -- the marker line plus the
     `exec_cli("<target>")` call. A byte copy carries neither and can never carry
     them: the delivery mechanism is `shutil.copyfile` of the source file, so the
-    installed body IS the source. `claude-doe` is that shape on POSIX -- the
-    forwarder loop writes a trampoline at `<settings-home>/bin/claude-doe`, then
-    `install-claude-doe-wrapper.py` copies the wrapper source onto
-    `~/.local/bin/claude-doe`, which `maximalist`'s Step 3.5b has made a symlink
+    installed body IS the source. `claude-author` is that shape on POSIX -- the
+    forwarder loop writes a trampoline at `<settings-home>/bin/claude-author`, then
+    `install-claude-author-wrapper.py` copies the wrapper source onto
+    `~/.local/bin/claude-author`, which `maximalist`'s Step 3.5b has made a symlink
     ONTO that same settings-home file, so the source bytes are the final body on
     every completed install. The marker check therefore reported one permanent
     `body not this root's` on every run -- a FAIL whose remediation ("re-run

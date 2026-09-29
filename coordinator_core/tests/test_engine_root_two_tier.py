@@ -30,7 +30,10 @@ def _load_shim_for_test():
 
 
 @pytest.fixture(autouse=True)
-def _reset_wrapper_memos():
+def _reset_wrapper_memos(monkeypatch):
+    # A live-tree override in the invoking shell outranks every rung under test.
+    monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     claude_klabauter_root._reset_shim_cache()
     claude_klabauter_root._reset_gate_memo()
     yield
@@ -819,6 +822,9 @@ def _rung2_fixture(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.setattr(claude_klabauter_root.shutil, "which", lambda name: "machine-local")
+    # This checkout is itself an engine root; the self-located last rung would
+    # otherwise answer before the absent-key remediation these tests pin.
+    monkeypatch.setattr(claude_klabauter_root, "_self_located_root", lambda: None)
 
     return SimpleNamespace(settings_home=settings_home)
 

@@ -49,8 +49,8 @@ Fail-open throughout: an unreadable directory, a malformed record, an
 unavailable registry, an import failure, or any exception at all resolves to
 `""` and the section is omitted.
 
-Deprecated-axis replacement (2026-09-02, DoE-claude-em /
-cross-repo/inbox/2026-09-02-doe-claude-em-abandoned-claim-signal-renders-only-
+Deprecated-axis replacement (2026-09-02, coordinator-content-repo-em /
+cross-repo/inbox/2026-09-02-coordinator-content-repo-em-abandoned-claim-signal-renders-only-
 landed-work.md, mechanism named by example-retrieval-repo-em's addendum the same day):
 this module used to gate on `status == "claimed"` alone, which DR-084
 stripped of terminal meaning -- `status` narrowed to `open|claimed` only,

@@ -15,7 +15,7 @@ LIFTED, not re-derived: the structural module-body-inertness predicate below
 (`_is_main_def` through `find_module_body_violations`, and its 14-shape
 fixture-test coverage in `coordinator_core/warm/tests/test_serve_classifier.py`)
 is a direct port of `find_entrypoint_inertness_violations` from
-`X:/DoE-claude/coordinator/tests/test_bin_entrypoint_inertness.py`  # abs-path-ok: cites the DoE checkout lifted from; the plugin-installed coordinator tree carries no tests/, so no repo-relative form resolves
+`C:/coordinator-content-repo/coordinator/tests/test_bin_entrypoint_inertness.py`  # abs-path-ok: cites the DoE checkout lifted from; the plugin-installed coordinator tree carries no tests/, so no repo-relative form resolves
 (711 lines, checkout as of 2026-08-27) — the origin plan directs lifting this rather than
 re-deriving a second inertness checker (Anti-scope: "Do not build a second
 inertness predicate"). Claude-klabauter is DoE's HARD prereq, so this module owns the
@@ -639,7 +639,7 @@ def _main_arity_ok(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 #: files read `sys.argv` themselves, which inside the shared warm server is
 #: the SERVER's argv, not the caller's. Both are silent argv corruption at
 #: the ceremony entrypoints — see
-#: cross-repo/inbox/2026-08-29-doe-claude-em-exe-forwarder-argv-mangling.md.
+#: cross-repo/inbox/2026-08-29-coordinator-content-repo-em-exe-forwarder-argv-mangling.md.
 ARGV_SHAPE_FULL = "full"
 """`main(sys.argv)` — the callee re-slices; it needs argv[0] present."""
 

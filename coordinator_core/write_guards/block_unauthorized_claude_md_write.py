@@ -73,8 +73,8 @@ silently). This module names the FULL hierarchy instead, never presupposes
 its last rung.
 
 Self-referential scope, resolved deliberately (plan-coverage-checker
-finding, DoE-claude 2026-07-27-claude-md-altitude-triage.md § C4): this
-guard DOES cover DoE-claude's OWN repo-root ``coordinator/CLAUDE.md`` and
+finding, coordinator-content-repo 2026-07-27-claude-md-altitude-triage.md § C4): this
+guard DOES cover coordinator-content-repo's OWN repo-root ``coordinator/CLAUDE.md`` and
 ``CLAUDE.md`` — excluding the authoring repo would reproduce the exact
 stated-vs-real scope gap this guard's own negative-spec calls out in
 ``check_blanket_git_add`` (see AC9 test module). Editing this repo's own
@@ -120,7 +120,7 @@ Negative-spec — do NOT read this guard as reopening DR-058 generally:
     guard-local pattern list here would immediately re-create the kind of
     drift ``is_claude_md_class`` exists to end.
 
-Spec backlink: DoE-claude DoE-claude:pln-claude-md-altitude-triage-earn-31f32e
+Spec backlink: coordinator-content-repo coordinator-content-repo:pln-claude-md-altitude-triage-earn-31f32e
   § C4
 Precedent (module shape): coordinator_core/write_guards/
   block_subagent_plan_body_write.py
@@ -132,7 +132,7 @@ Precedent (real-scope-equals-stated-scope defect this guard's own AC9 test
   only); see ``coordinator_core/bash_guards/tests/
   test_check_blanket_git_add.py`` for the reusable pin shape this guard's
   own AC9 test follows.
-Authorizing decisions: DoE-claude docs/decisions/DR-104 (this override),
+Authorizing decisions: coordinator-content-repo docs/decisions/DR-104 (this override),
   DR-058 (the general grammar this narrowly overrides), DR-047 (contract-
   vs-engine split — why this module is engine-resident), DR-050 (the
   reversal discipline DR-104 follows).

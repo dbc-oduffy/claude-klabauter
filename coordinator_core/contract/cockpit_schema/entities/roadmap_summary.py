@@ -12,7 +12,7 @@ verbatim from roadmap frontmatter.
 `repo` and `coordinator_root_path` are connector-injected (D4).
 Nullable fields follow D9 (present-as-null, not optional).
 
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

@@ -28,10 +28,10 @@ here, so a raising probe yields a permissive capability carrying the exception
 hot path.
 
 RATIFICATION. The capability vocabulary is a DOCTRINE-PLANE contract implemented
-here: DoE-claude `docs/decisions/DR-environment-scoped-guard-stand-down.md`. A
+here: coordinator-content-repo `docs/decisions/DR-environment-scoped-guard-stand-down.md`. A
 capability added without a real probe re-opens the defect review caught the first
 time. Rationale and the measured incidents:
-DoE-claude `docs/research/2026-09-05-environment-dependent-doctrine.md`; the
+Coordinator-content-repo `docs/research/2026-09-05-environment-dependent-doctrine.md`; the
 stand-down's own traps:
 `coordinator/docs/wiki/coordinator-tripwires/tripwire-registry/a-guard-that-stands-down-must-still-be-in-the-chain.md`.
 """
@@ -146,7 +146,7 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
         for name, p in (
             ("settings.json", home / "settings.json"),
             ("machine-local/", home / "machine-local"),
-            (".doe-root", home / ".doe-root"),
+            (".coordinator-content-root", home / ".coordinator-content-root"),
         )
         if p.exists()
     ]
@@ -155,7 +155,7 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
     return _cap(
         "engine_installed",
         False,
-        f"{home} carries none of settings.json, machine-local/, .doe-root",
+        f"{home} carries none of settings.json, machine-local/, .coordinator-content-root",
         env,
     )
 

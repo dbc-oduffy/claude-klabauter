@@ -51,19 +51,6 @@ _ANCHOR = (
     "em-poll-while-a-workflow-runs-is-flagged.md"
 )
 
-# Best-effort assistant tool_use name capture, oldest-to-newest as they appear in the raw
-# transcript text. Defensive like `_capture_script_path_and_args`'s regex scan in
-# postuse_advisory_dispatch.py — a miss here degrades to "no prior tool seen", never a
-# false flag, because the caller only flags on an EXPLICIT prior poll-tool match.
-_TOOL_USE_NAME_RE = re.compile(r'"type"\s*:\s*"tool_use"[^{}]*?"name"\s*:\s*"(?P<name>[A-Za-z0-9_]+)"')
-
-# A defensive, best-effort compact-boundary marker. Claude Code transcripts carry a system
-# entry naming the compaction; several shapes have been observed across harness versions, so
-# this matches loosely rather than pinning one JSON shape (same posture as the tool_use scan
-# above — a miss here is a false-negative on the exemption, not a false flag).
-_COMPACT_BOUNDARY_RE = re.compile(r'"isCompactSummary"\s*:\s*true|"subtype"\s*:\s*"compact_boundary"')
-
-_RUN_ID_RE = re.compile(r'"run_id"\s*:\s*"(?P<run_id>[A-Za-z0-9_-]+)"')
 
 
 def _tmpdir() -> str:
@@ -115,32 +102,63 @@ def _read_tail(path: str, n: int = _TAIL_BYTES) -> Optional[str]:
         return None
 
 
-def _previous_tool_use_name(tail: str) -> Optional[str]:
-    """The last `tool_use` name in the tail BEFORE this call. `finditer` walks the whole tail
-    in file order, so the last match is the most recent tool_use record — which, on a
-    PreToolUse hook, is necessarily a PRIOR call (the current one has not been recorded yet)."""
-    names = [m.group("name") for m in _TOOL_USE_NAME_RE.finditer(tail)]
+_BOUNDARY = None
+
+
+def _events(tail: str) -> list:
+    """Ordered transcript events in `tail`: an assistant `tool_use` block yields its name, a
+    compaction boundary yields `_BOUNDARY`. Real transcripts are JSONL envelopes
+    (`{"type":"assistant","message":{"content":[{"type":"tool_use",...}]}}`); a boundary is
+    `{"type":"system","subtype":"compact_boundary"}` or the summary entry carrying
+    `isCompactSummary`. Malformed lines (incl. the tail's cut first line) are skipped."""
+    events: list = []
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("isCompactSummary") is True or (
+            entry.get("type") == "system" and entry.get("subtype") == "compact_boundary"
+        ):
+            events.append(_BOUNDARY)
+            continue
+        if entry.get("type") != "assistant":
+            continue
+        msg = entry.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                name = block.get("name")
+                if isinstance(name, str) and name:
+                    events.append(name)
+    return events
+
+
+def _previous_tool_use_name(events: list) -> Optional[str]:
+    """The last `tool_use` name before this call (PreToolUse: the current call is not yet
+    recorded, so the most recent record is a prior call)."""
+    names = [e for e in events if e is not _BOUNDARY]
     return names[-1] if names else None
 
 
-def _compaction_boundary_is_most_recent_event(tail: str) -> bool:
-    """True iff at most one `tool_use` record has landed since the LAST compaction-boundary
-    marker in `tail` — the "first status read right after a compaction boundary" grace
-    (module docstring), not an indefinite one. The one recorded entry allowed to sit after
-    the boundary is the PRIOR poll call itself (`_previous_tool_use_name`'s own read); this
-    call is checked against that same entry for consecutiveness, so exemption looks at
-    whether the boundary is more recent than the tool_use call BEFORE that one.
-
-    `.search()` alone (the prior bug) exempted every later poll for as long as ANY
-    compaction marker stayed anywhere in the 64 KiB tail, however many intervening tool
-    calls — poll or not — followed it."""
-    boundary_positions = [m.start() for m in _COMPACT_BOUNDARY_RE.finditer(tail)]
-    if not boundary_positions:
+def _compaction_boundary_is_most_recent_event(events: list) -> bool:
+    """True iff at most one `tool_use` has landed since the LAST compaction boundary — the
+    "first status read right after a compaction boundary" grace, not an indefinite one. That
+    one allowed entry is the PRIOR poll call itself."""
+    last = -1
+    for i, e in enumerate(events):
+        if e is _BOUNDARY:
+            last = i
+    if last < 0:
         return False
-    last_boundary = boundary_positions[-1]
-    tool_positions = [m.start() for m in _TOOL_USE_NAME_RE.finditer(tail)]
-    cutoff = tool_positions[-2] if len(tool_positions) >= 2 else -1
-    return last_boundary > cutoff
+    return sum(1 for e in events[last + 1:] if e is not _BOUNDARY) <= 1
 
 
 def _run_ids_in_flight(tmpdir: str, session_id: str) -> list:
@@ -216,9 +234,10 @@ def _handler(params: dict, repo_root=None) -> dict:
     # Consecutive iff the most recent prior tool_use is itself a poll and no compaction
     # boundary sits in the tail — the transcript is the whole state; nothing is carried.
     try:
+        events = _events(tail)
         consecutive = (
-            not _compaction_boundary_is_most_recent_event(tail)
-            and _previous_tool_use_name(tail) in POLL_TOOLS
+            not _compaction_boundary_is_most_recent_event(events)
+            and _previous_tool_use_name(events) in POLL_TOOLS
         )
     except Exception:
         consecutive = False

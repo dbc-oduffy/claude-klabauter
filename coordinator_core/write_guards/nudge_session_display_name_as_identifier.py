@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.nudge_session_display_name_as_identifier —
 advisory guard.
 
-Catches a SESSION DISPLAY NAME (``claude-klabauter-49``, ``doe-claude-3a``,
+Catches a SESSION DISPLAY NAME (``claude-klabauter-49``, ``coordinator-content-repo-3a``,
 ``klabauter-7f`` — a repo-slug shortname plus a short, disambiguating
 suffix) used INSIDE a written record's body in an ATTRIBUTION or ADDRESS
 construction: the object of a crediting verb (``fixed by``, ``reported
@@ -17,7 +17,7 @@ NARROWED 2026-08-30 (coordinator corpus sweep, `state/subagent-share/
 aac212bc.../coordinatorexecutor.af9616168754bf1b1.md`): the first cut of
 this guard fired on ANY name-shaped token anywhere in the body — 441/3535
 in-scope records, 12.5%, most of them a session name mentioned in
-narrative ("doe-claude-3e hit real divergence...", "measured ... by
+narrative ("coordinator-content-repo-3e hit real divergence...", "measured ... by
 Claude-klabauter-c0 and claude-klabauter-em jointly") rather than doing
 identifier work. A guard that nags on narrative gets disabled, per the
 brief's own warning, and then catches nothing — so the predicate now
@@ -81,7 +81,7 @@ own negative-spec warns against for its own pattern list.
 
 SUFFIX SHAPE. A display name's disambiguating suffix is short (1-4
 alnum characters) and, empirically, always carries at least one digit
-(`claude-klabauter-49`, `doe-claude-3a`, `klabauter-7f`) — a plain
+(`claude-klabauter-49`, `coordinator-content-repo-3a`, `klabauter-7f`) — a plain
 letters-only trailing segment (`claude-klabauter-em`, a role suffix, not a
 disambiguator) reads as a different kind of token and is deliberately left
 alone; strengthening a real name-collision incident's own recorded shape
@@ -121,7 +121,7 @@ Negative-spec:
   - Does NOT fire on a display-name token merely CO-OCCURRING in the body —
     only an attribution/address construction (verb, "message ... to", or
     frontmatter field — see ATTRIBUTION/ADDRESS CONSTRUCTION above) fires.
-    A session named in narrative ("doe-claude-3e hit real divergence...")
+    A session named in narrative ("coordinator-content-repo-3e hit real divergence...")
     is silent; pinned by `TestNarrativeMentionIsSilent`.
   - Does NOT deny/block anything — CLASS is "advisory"; the envelope
     carries only `additionalContext`, never `permissionDecision`. There is
@@ -190,7 +190,7 @@ _OUT_OF_SCOPE_MARKERS = (
 #: DISPLAY-NAME SLUGS" for why narrowing this is a silent regression, not
 _KNOWN_SLUGS = (
     "claude-klabauter",
-    "doe-claude",
+    "coordinator-content-repo",
     "klabauter",
     "project-rag",
     "coordinator",

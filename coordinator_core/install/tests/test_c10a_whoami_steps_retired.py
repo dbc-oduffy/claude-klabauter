@@ -8,7 +8,7 @@ C10a-1 (relocate `coordinator-whoami/` from a legacy install-base dir or the plu
 `whoami/` source into the settings home, then replace the legacy dir with a compat
 pointer), C10a-2 (register the `coordinator.whoami_src` machine-local key), and
 C10a-3 (venv rebuild, break-glass only). `coordinator_whoami` ships no package source
-on any current box (state/cross-repo/archive/2026-09-12-doe-claude-em-installer-
+on any current box (state/cross-repo/archive/2026-09-12-coordinator-content-repo-em-installer-
 still-registers-retired-whoami-src.md), so C10a-1/2 only ever populated or advertised
 a stale/empty seam. This module asserts they no longer run: no relocation copy, no
 legacy-dir replacement, no `coordinator.whoami_src` registry write — while C10a-3

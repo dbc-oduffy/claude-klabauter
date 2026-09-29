@@ -1,7 +1,7 @@
 """
 coordinator_core.merge_assemble.tests.test_producer_root_is_engine_not_target_repo
 — regression guard for the defect three consumer repos reported on
-2026-09-02 (cross-repo/inbox/2026-09-02-doe-claude-em-*,
+2026-09-02 (cross-repo/inbox/2026-09-02-coordinator-content-repo-em-*,
 -example-retrieval-repo-em-*, -example-retrieval-repo-ue-addon-em-*).
 
 `_dispatch_in_process` resolved its producer as
@@ -42,7 +42,7 @@ _ENGINE_ROOT = Path(ma_apply.__file__).resolve().parents[2]
 def test_script_root_is_the_engine_clone_and_takes_no_repo_root():
     assert resolve_cli_script_root() == _ENGINE_ROOT / "coordinator" / "bin"
     with pytest.raises(TypeError):
-        resolve_cli_script_root(Path("X:/some-consumer-repo"))  # type: ignore[call-arg]
+        resolve_cli_script_root(Path("C:/some-consumer-repo"))  # type: ignore[call-arg]
 
 
 def test_both_dispatch_paths_share_one_engine_anchored_bin_dir():

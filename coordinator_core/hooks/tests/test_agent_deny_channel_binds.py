@@ -76,8 +76,8 @@ def _run_main_via_stdin(monkeypatch: pytest.MonkeyPatch, payload: dict) -> "tupl
 
 
 def _patch_roster(monkeypatch: pytest.MonkeyPatch, roster, reason: Optional[str] = None) -> None:
-    def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home
+    def _fake_resolve_roster(*, content_root=None, home=None):
+        del content_root, home
         return (roster, reason)
 
     monkeypatch.setattr(mod, "resolve_roster", _fake_resolve_roster)

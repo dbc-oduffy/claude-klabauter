@@ -8,14 +8,20 @@ import sys
 
 from coordinator_core.win_portability import no_console_creationflags
 
+_GIT_TIMEOUT_SECS = 30
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECS,
+            **no_console_creationflags(),
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args=["git", *args], returncode=1, stdout="", stderr="timed out")
 
 
 def _is_git_repo() -> bool:

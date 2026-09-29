@@ -33,10 +33,11 @@ def _is_deny(result):
     return decision == "deny"
 
 
-def test_compound_add_then_commit_dash_f_dash_piped_denies():
+def test_compound_add_then_commit_dash_f_dash_piped_is_scoped_to_its_add():
     cmd = 'git add a.py && echo msg | git commit -F -'
     result = check_git_commit_safe_commit_advise(cmd)
-    assert _is_deny(result), result
+    assert not _is_deny(result), result
+    assert result["hookSpecificOutput"]["updatedInput"]["command"] == cmd + " -- a.py"
 
 
 def test_compound_add_then_commit_dash_f_dash_heredoc_fed_denies():

@@ -25,7 +25,7 @@ counts) is what these sections must honour, not a machine-checkable regex on
 the section's prose content.
 
 Port of: verify-orientation-cache-sync.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
                docs/plans/2026-05-18-orientation-cache-authoring-discipline.md
 
 Division of labor with the DoE trampoline (template-variant #1, direct

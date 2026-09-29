@@ -4,7 +4,7 @@ gate (`coordinator_core.hooks.check_claude_md_size`, registered on
 Write|Edit|MultiEdit only).
 
 Arrival note (W4-C5, `docs/plans/2026-09-18-doe-holds-no-scripts.md`): ported
-from DoE-claude `coordinator/hooks/scripts/guard-doctrine-surface-bash-
+from coordinator-content-repo `coordinator/hooks/scripts/guard-doctrine-surface-bash-
 write.py` (1748 lines). Shape, per the W4-C1 verdict: command/native-door,
 `hooks.<name>` op, payload-dict-in/response-out -- stdin JSON read and
 `sys.exit()` are replaced with `register_op`'s contract and this package's
@@ -23,7 +23,7 @@ payload (`python3 -c "open(p,'w').write(...)"`, `sed -i`, `perl -i`), or a
 heredoc writes a governed surface with the admission gate never firing at
 all. This hook is the mirror-image guard on the Bash surface.
 
-DETECTION STRATEGY, summarized (see DoE-claude's own source for the full
+DETECTION STRATEGY, summarized (see coordinator-content-repo's own source for the full
 worked-example prose this port trims for size -- every numbered point below
 is a distinct, load-bearing carve-out, unchanged in this port):
 
@@ -89,6 +89,7 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.claude_md_ledger import GOVERNED_AUTHORING_SURFACES
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import feature_enabled
 
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
@@ -903,6 +904,8 @@ def _compose_deny_message(*, commit_shaped: bool = False, quoted_content_shaped:
 
 
 def evaluate(payload: dict):
+    if not feature_enabled("doctrine_edit_gate"):
+        return None
     if not isinstance(payload, dict):
         return None
     if payload.get("tool_name") not in _COMMAND_TOOL_NAMES:

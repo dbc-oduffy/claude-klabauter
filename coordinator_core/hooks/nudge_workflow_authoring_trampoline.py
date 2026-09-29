@@ -1,7 +1,7 @@
 """coordinator_core.hooks.nudge_workflow_authoring_trampoline — PreToolUse
 (Skill, Workflow) advisory op, two fire points, one op.
 
-Ported from DoE-claude `coordinator/hooks/scripts/nudge-workflow-authoring-
+Ported from coordinator-content-repo `coordinator/hooks/scripts/nudge-workflow-authoring-
 trampoline.py` per docs/plans/2026-09-18-doe-holds-no-scripts.md chunk
 W4-C9. Closes the gap where the native `workflow-authoring` skill teaches an
 EM to hand-author a `Workflow({script: "..."})` call with no pointer back at
@@ -39,7 +39,7 @@ common dir, or session sentinel falls through to `no_advisory()`. A
 filesystem hiccup must never brick a Skill or Workflow invocation.
 
 Spec backlink: docs/wiki/coordinator-tripwires/
-a-hand-authored-workflow-costs-4x-the-plan-execution.md (DoE-claude);
+a-hand-authored-workflow-costs-4x-the-plan-execution.md (coordinator-content-repo);
 docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 """
 

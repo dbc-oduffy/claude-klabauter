@@ -64,7 +64,7 @@ class TestAnswersByMarkersNotByCount:
         assert "2 schema file(s)" in reason
 
     def test_authoring_checkout_private_layout_is_the_whole_set(self, tmp_path):
-        repo = tmp_path / "DoE-claude"
+        repo = tmp_path / "coordinator-content-repo"
         _populate(repo / "coordinator" / "schemas", 5)
         (repo / DEV_REPO_SENTINEL).write_text("", encoding="utf-8")
         _mark_published(repo / "coordinator")

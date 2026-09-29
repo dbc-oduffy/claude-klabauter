@@ -3,7 +3,7 @@ coordinator_core.ops.review_mint.wave_bookkeeping — the zero-integration-
 stage MECHANICAL bookkeeping step.
 
 Purpose: 2026-09-28 PM order, step b' of a four-step no-break sequence with
-DoE-claude (retire the execute-review INTEGRATION pass):
+Coordinator-content-repo (retire the execute-review INTEGRATION pass):
 
     (b') the engine tolerates ZERO integration stages -> (a) DoE drops the
     stage from the roster fragment -> (c) DoE deletes code-reviewer's
@@ -11,7 +11,7 @@ DoE-claude (retire the execute-review INTEGRATION pass):
 
 On the zero-integration-stage path (``roster.parse_execute_review``'s
 ``ExecuteReview.integration is None``), each review-wave reviewer applies
-its own findings in place (DoE-claude
+its own findings in place (coordinator-content-repo
 ``docs/plans/2026-09-26-retire-review-integrator.md``) -- there is no
 integrator agent left to write the ``review-integration-result`` sidecar
 ``review_stamp.mint`` reads. This module is the NO-AGENT mechanical

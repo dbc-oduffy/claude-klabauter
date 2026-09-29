@@ -48,7 +48,7 @@ Fail-safe by construction: if that entry is ever missing, rung 1 still answers
 and the result degrades to a labelled confidence rather than a confident lie.
 
 COST (measured 2026-09-05, K=20,000, this repo's spike verdict record
-``DoE-claude docs/research/spike-verdicts/2026-09-05-environment-locality-and-
+``coordinator-content-repo docs/research/spike-verdicts/2026-09-05-environment-locality-and-
 os-family-probe.md``):
 
     os_family()                     0 syscalls   0.00015 ms

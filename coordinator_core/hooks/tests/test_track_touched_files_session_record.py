@@ -13,8 +13,8 @@ canonical's scan scope", and the destructive-rm peer-claim check degrades to a
 30-minute ``touched.txt`` mtime backstop. Appending a ``T`` event IS claim
 acquisition, so the writer of that event owes the registry entry.
 
-Reported by doe-claude-em with one confirmed live instance
-(``cross-repo/inbox/2026-08-25-doe-claude-em-touched-files-path-never-creates-meta-json.md``):
+Reported by coordinator-content-repo-em with one confirmed live instance
+(``cross-repo/inbox/2026-08-25-coordinator-content-repo-em-touched-files-path-never-creates-meta-json.md``):
 session ``b0706df6`` held claims for over an hour, editing files through the
 tool path only, invisible to every peer's liveness check.
 

@@ -18,7 +18,7 @@ Negative-spec:
     - Does NOT assert `mark_reviewed`'s own ledger-file format. That is
       `commit_ledger.store`'s contract and its own tests' subject; these
       tests stub the call and assert what this op PASSES to it.
-    - Does NOT exercise the SubagentStop shim. The shim lives in DoE-claude
+    - Does NOT exercise the SubagentStop shim. The shim lives in coordinator-content-repo
       (C5, `writes: []` here) and is unreachable from this suite by
       construction — these tests enter at the registered op handler.
 """
@@ -507,7 +507,7 @@ def test_an_unreadable_transcript_marks_nothing_and_does_not_raise(tmp_path: Pat
     "/etc/passwd",
     "../../escape.md",
     "state/../../escape.md",
-    "X:/claude-klabauter/state/subagent-share/s/x.md",
+    "C:/claude-klabauter/state/subagent-share/s/x.md",
 ])
 def test_a_marker_that_escapes_the_worktree_resolves_to_nothing(
     tmp_path: Path, value: str,
@@ -517,7 +517,7 @@ def test_a_marker_that_escapes_the_worktree_resolves_to_nothing(
     join onto the worktree unchecked. Absolute, traversing, and drive-qualified
     values all decline.
 
-    The drive-qualified case is here because `PurePosixPath("X:/a").is_absolute()`
+    The drive-qualified case is here because `PurePosixPath("C:/a").is_absolute()`
     is False on every platform: without its own check it would join onto the
     worktree and read outside it on Windows, which is first-class here."""
     assert mod._SIDECAR_MARKER_RE.search(f"sidecar_path: {value}") is not None, (

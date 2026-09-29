@@ -3,7 +3,7 @@ coordinator_core/roadmap/tests/test_prep_gate_cli.py — the door-served CLI hal
 of the mise-prep bar.
 
 Subject: `coordinator_core.roadmap.prep_gate_cli`, restated to the letter from
-DoE-claude `coordinator/bin/mise-prep-gate.py` where a shape has an engine
+Coordinator-content-repo `coordinator/bin/mise-prep-gate.py` where a shape has an engine
 equivalent to be restated against: directory expansion that skips a
 review/coverage sidecar (compound stem, `_is_plan_sidecar`), `--tally`,
 `--json`, the `EXIT_*` route codes including `EXIT_ENGINE_ERROR`, and batch
@@ -54,7 +54,7 @@ def test_directory_expansion_excludes_sidecars(tmp_path):
 def test_a_sidecar_named_explicitly_is_still_gated(tmp_path):
     """Only a DIRECTORY expansion prunes sidecars — a caller who types a
     compound-stem path on the command line still gets it gated, the same
-    asymmetry DoE-claude's own script keeps."""
+    asymmetry coordinator-content-repo's own script keeps."""
     plans = tmp_path / "docs" / "plans"
     sidecar = _touch(plans / "2026-06-27-foo.md.prior-art-check.md")
 

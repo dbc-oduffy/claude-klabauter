@@ -91,7 +91,7 @@ Contract:
 
 CITED-VS-UNCITED SPLIT (2026-07-31 sharpening; exit contract split
 2026-08-12) — a missing settings-home/bin forwarder is reported (and now
-gated) in one of two registers depending on whether any DoE-claude prompt
+gated) in one of two registers depending on whether any coordinator-content-repo prompt
 surface actually tells an agent to invoke it:
   - UNCITED: nothing in the corpus names this CLI. Today's framing is
     correct as-is — this is exactly "an install ran before the current
@@ -116,26 +116,26 @@ surface actually tells an agent to invoke it:
     non-empty `cited_missing` fails the CLI's exit code; the UNCITED
     population never does.
 
-  Names are drawn from DoE-claude's `coordinator/{agents,skills,commands,
+  Names are drawn from coordinator-content-repo's `coordinator/{agents,skills,commands,
   snippets,pipelines}/**/*.md` (excluding `tests/`/`fixtures/` segments,
   same five trees and same exemption as
   `coordinator/hooks/scripts/_prompt_surface_citations.py::PROMPT_SURFACE_DIRS`
   in that repo). Re-derived here, not imported: claude-klabauter must not depend on
-  DoE-claude's test tree (a sibling repo that may not even be checked out
+  coordinator-content-repo's test tree (a sibling repo that may not even be checked out
   on this machine — see below), so `_ENTRYPOINT_RE` and the five-tree scan
   are a deliberate, small, standalone copy of the shape
   `coordinator/tests/test_prompt_surfaces_cite_installed_entrypoints.py`
-  (DoE-claude, committed 2026-07-31, b507bf1a2076) already validated against
+  (coordinator-content-repo, committed 2026-07-31, b507bf1a2076) already validated against
   the corpus — including that module's own documented non-greedy-`.*?`
   subtlety: `[^}]*` cannot cross the inner `}` of the
   `${CLAUDE_HOME:-$HOME}` fallback spelling and silently matches nothing on
   that shape, so `_ENTRYPOINT_RE` uses `.*?` for the same reason that
   module does.
 
-  DoE-claude may legitimately be absent on this machine (OSS consumer, CI,
-  a machine with no `repos.doe_claude` registered) — resolved via the same
-  registry seam `coordinator_core.ops.coordinator_doe_root.
-  coordinator_doe_root()` uses elsewhere (never a hardcoded path), and any
+  coordinator-content-repo may legitimately be absent on this machine (OSS consumer, CI,
+  a machine with no `repos.content_root` registered) — resolved via the same
+  registry seam `coordinator_core.ops.coordinator_content_root.
+  coordinator_content_root()` uses elsewhere (never a hardcoded path), and any
   resolution failure degrades this module to TODAY's undifferentiated
   advisory wording, never a hard failure — same never-raises contract as
   the rest of this module.
@@ -224,7 +224,7 @@ from coordinator_core._settings_home import home_dir, settings_home
 from coordinator_core.data_root import content_root_for
 from coordinator_core.ipc import register_op
 from coordinator_core.engine_root import coordinator_engine_root
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
 _PROG = "forwarder-drift"
 
@@ -283,7 +283,7 @@ _ADVISORY_LINE = (
 # read its counts as live drift against an actively-maintained location.
 _COMPAT_BIN_LABEL = "~/.claude/bin (legacy-mirror residue — compat producer retired 2026-07-24)"
 
-# Deliberate standalone copy of DoE-claude's
+# Deliberate standalone copy of coordinator-content-repo's
 # `coordinator/tests/test_prompt_surfaces_cite_installed_entrypoints.py::_ENTRYPOINT_RE`
 # (committed 2026-07-31, b507bf1a2076) — see module docstring's CITED-VS-UNCITED
 # SPLIT section for why this is copied, not imported. Non-greedy `.*?` so this
@@ -292,7 +292,7 @@ _COMPAT_BIN_LABEL = "~/.claude/bin (legacy-mirror residue — compat producer re
 # module this was copied from).
 _ENTRYPOINT_RE = re.compile(r"\$\{COORDINATOR_SETTINGS_HOME:-.*?\}/bin/([A-Za-z0-9_.-]+)")
 
-# Shape W (rung 0 of DoE-claude's `coordinator/snippets/resolve-coordinator-bin.md`
+# Shape W (rung 0 of coordinator-content-repo's `coordinator/snippets/resolve-coordinator-bin.md`
 # precedence ladder) — PowerShell has no `${VAR:-default}` fallback syntax, so a
 # Windows-authored citation spells the settings-home bin/ lookup as
 # `$env:COORDINATOR_SETTINGS_HOME\bin\<name>` instead, a shape `_ENTRYPOINT_RE`
@@ -310,7 +310,7 @@ _ENTRYPOINT_W_RE = re.compile(r"\$env:COORDINATOR_SETTINGS_HOME[\\/]bin[\\/]([A-
 # not have an arbitrary trailing dot-segment treated as an extension.
 _PLAUSIBLE_EXTENSIONS = (".exe", ".cmd", ".ps1", ".py", ".sh")
 
-# Same five trees, same tests/fixtures exemption, as DoE-claude's
+# Same five trees, same tests/fixtures exemption, as coordinator-content-repo's
 # `coordinator/hooks/scripts/_prompt_surface_citations.py::PROMPT_SURFACE_DIRS`
 # — re-derived rather than imported for the same reason as `_ENTRYPOINT_RE`.
 _DOE_PROMPT_SURFACE_SUBDIRS = ("agents", "skills", "commands", "snippets", "pipelines")
@@ -330,7 +330,7 @@ class ForwarderDriftResult:
     `cited_missing` (new 2026-08-12, AC1) is the machine-readable form of the
     CITED-VS-UNCITED SPLIT (see module docstring): `{settings-home-bin CLI
     name: [citing-site, ...]}` for every missing settings-home/bin forwarder
-    that is ALSO named by a live DoE-claude prompt-surface invocation. Empty
+    that is ALSO named by a live coordinator-content-repo prompt-surface invocation. Empty
     dict in every other case — uncited-only drift, orphan-only drift, skip,
     or clean. This is the field `check-forwarder-drift.py` gates on
     (non-empty -> non-zero exit); everything else about this result stays
@@ -353,7 +353,7 @@ class ForwarderDriftResult:
     # the extension rather than the presence axis. Empty in every other case:
     # a clean/skip result, a non-Windows host (this axis' oracle is THIS
     # machine's settings-home/bin — see `_check_extension_axis`), an
-    # unresolvable DoE-claude root, or a cited base name with no installed
+    # unresolvable coordinator-content-repo root, or a cited base name with no installed
     # sibling at all (that gap is the NAME axis' `cited_missing` population,
     # not this one's).
     extension_mismatch: Dict[str, List[str]] = field(default_factory=dict)
@@ -376,30 +376,30 @@ def _resolve_compat_bin() -> Path:
     return home_dir() / ".claude" / "bin"
 
 
-def _resolve_doe_root() -> Optional[Path]:
-    """DoE-claude's repo root, via the same registry seam
-    `coordinator_core.ops.coordinator_doe_root` uses elsewhere — never a
-    hardcoded path. `coordinator_doe_root()` itself never raises (folds every
+def _resolve_content_root() -> Optional[Path]:
+    """coordinator-content-repo's repo root, via the same registry seam
+    `coordinator_core.ops.coordinator_content_root` uses elsewhere — never a
+    hardcoded path. `coordinator_content_root()` itself never raises (folds every
     rung's failure to None, see that module's docstring); this wrapper adds
     only the is-a-directory gate. Returns None on any unresolvable/absent
-    state (OSS consumer, CI, no `repos.doe_claude` registered) — the caller
+    state (OSS consumer, CI, no `repos.content_root` registered) — the caller
     degrades to the undifferentiated advisory wording in that case, never a
     hard failure (see module docstring's CITED-VS-UNCITED SPLIT)."""
-    root = coordinator_doe_root()
+    root = coordinator_content_root()
     if not root:
         return None
     candidate = Path(root)
     return candidate if candidate.is_dir() else None
 
 
-def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
-    """{settings-home-bin CLI name: [ "<rel-path-from-doe-root>:<line>", ... ]}
+def _cited_entrypoint_sites(content_root: Path) -> Dict[str, List[str]]:
+    """{settings-home-bin CLI name: [ "<rel-path-from-content-root>:<line>", ... ]}
     for every settings-home `bin/<name>` citation — the
     `${COORDINATOR_SETTINGS_HOME:-...}` expansion form — across
-    DoE-claude's five prompt-surface trees (see module docstring). Best-effort
+    coordinator-content-repo's five prompt-surface trees (see module docstring). Best-effort
     per file — an unreadable file is skipped, never a hard failure."""
     sites: Dict[str, List[str]] = {}
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
@@ -408,7 +408,7 @@ def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
             continue
         for path in sorted(root_dir.rglob("*.md")):
             try:
-                rel = path.relative_to(doe_root)
+                rel = path.relative_to(content_root)
             except ValueError:
                 continue
             if _DOE_EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
@@ -423,11 +423,11 @@ def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
     return sites
 
 
-def _cited_shape_w_sites(doe_root: Path) -> Dict[str, List[str]]:
+def _cited_shape_w_sites(content_root: Path) -> Dict[str, List[str]]:
     """{cited spelling verbatim, extension included (e.g. "app-session.cmd"):
-    [ "<rel-path-from-doe-root>:<line>", ... ]} for every Shape W citation
+    [ "<rel-path-from-content-root>:<line>", ... ]} for every Shape W citation
     (`$env:COORDINATOR_SETTINGS_HOME\\bin\\<name>` / `/bin/<name>`) across the
-    same five DoE-claude prompt-surface trees `_cited_entrypoint_sites` scans,
+    same five coordinator-content-repo prompt-surface trees `_cited_entrypoint_sites` scans,
     with the same tests/fixtures exemption and the same best-effort per-file
     `OSError` skip.
 
@@ -440,7 +440,7 @@ def _cited_shape_w_sites(doe_root: Path) -> Dict[str, List[str]]:
     `` `...\\bin\\workweek-complete-brief.exe`. `` — the regex has no notion
     of sentence boundaries, so the caller strips the artifact instead."""
     sites: Dict[str, List[str]] = {}
-    content_root = content_root_for(doe_root)
+    content_root = content_root_for(content_root)
     if content_root is None:
         return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
@@ -449,7 +449,7 @@ def _cited_shape_w_sites(doe_root: Path) -> Dict[str, List[str]]:
             continue
         for path in sorted(root_dir.rglob("*.md")):
             try:
-                rel = path.relative_to(doe_root)
+                rel = path.relative_to(content_root)
             except ValueError:
                 continue
             if _DOE_EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
@@ -489,7 +489,7 @@ def _is_windows_host() -> bool:
 
 
 def _check_extension_axis(
-    doe_root: Optional[Path], settings_bin: Path
+    content_root: Optional[Path], settings_bin: Path
 ) -> "tuple[List[str], Dict[str, List[str]]]":
     """EXTENSION axis (see module docstring) — does the extension a Shape W
     citation tells an EM to type match what is actually installed at
@@ -502,7 +502,7 @@ def _check_extension_axis(
     mismatch. Shape W is Windows-only by construction (rung 0 of the
     precedence ladder fires only on a PowerShell host — see
     `resolve-coordinator-bin.md`), so only a Windows install can adjudicate
-    it; a non-Windows host (or a caller unable to resolve DoE-claude, or a
+    it; a non-Windows host (or a caller unable to resolve coordinator-content-repo, or a
     `settings_bin` that isn't an installed directory) degrades to a clean
     skip, never a fail — same never-raises contract as the rest of this
     module.
@@ -525,7 +525,7 @@ def _check_extension_axis(
             [f"[skip] {_PROG} (extension axis): non-Windows host — Shape W is a Windows-only citation shape, nothing to check here"],
             {},
         )
-    if doe_root is None:
+    if content_root is None:
         return (
             [f"[skip] {_PROG} (extension axis): engine sibling repo unresolvable — nothing to compare"],
             {},
@@ -537,7 +537,7 @@ def _check_extension_axis(
         )
 
     installed_names = {entry.name for entry in settings_bin.iterdir() if entry.is_file()}
-    cited_sites = _cited_shape_w_sites(doe_root)
+    cited_sites = _cited_shape_w_sites(content_root)
 
     mismatch: Dict[str, List[str]] = {}
     for spelling in sorted(cited_sites):
@@ -673,7 +673,7 @@ def _diff_one_location(
 
     ``cited_sites`` (see module docstring's CITED-VS-UNCITED SPLIT) is the
     ``{name: [site, ...]}`` map from `_cited_entrypoint_sites`, or None when
-    DoE-claude was unresolvable on this machine — in which case every missing
+    coordinator-content-repo was unresolvable on this machine — in which case every missing
     name renders in the plain, undifferentiated register (today's wording),
     since there is nothing to differentiate against."""
     installed = _installed_forwarder_names(bin_dir)
@@ -725,13 +725,13 @@ def check_forwarder_drift(
     settings_bin: Optional[Path] = None,
     compat_bin: Optional[Path] = None,
     agent_bin: Optional[Path] = None,
-    doe_root: Optional[Path] = None,
+    content_root: Optional[Path] = None,
 ) -> ForwarderDriftResult:
     """Core scan — used by both `main()` (CLI) and the `plugin_health.
     forwarder_drift` op. Every param is an explicit override for tests; a
     caller that omits one gets the real resolution ladder (see module
-    docstring). ``doe_root`` (new 2026-07-31) overrides `_resolve_doe_root`
-    for the CITED-VS-UNCITED SPLIT — omitted, it resolves DoE-claude via the
+    docstring). ``content_root`` (new 2026-07-31) overrides `_resolve_content_root`
+    for the CITED-VS-UNCITED SPLIT — omitted, it resolves coordinator-content-repo via the
     registry seam; unresolvable there degrades to the undifferentiated
     wording (see `_diff_one_location`), never a hard failure."""
     resolved_agent_bin = agent_bin if agent_bin is not None else _resolve_agent_bin()
@@ -752,8 +752,8 @@ def check_forwarder_drift(
     # CITED-VS-UNCITED SPLIT (see module docstring) — best-effort, only for
     # settings-home/bin (the compat mirror's missing direction is already
     # unconditionally suppressed, so it has no "missing" list to split).
-    resolved_doe_root = doe_root if doe_root is not None else _resolve_doe_root()
-    cited_sites = _cited_entrypoint_sites(resolved_doe_root) if resolved_doe_root is not None else None
+    resolved_content_root = content_root if content_root is not None else _resolve_content_root()
+    cited_sites = _cited_entrypoint_sites(resolved_content_root) if resolved_content_root is not None else None
 
     # `check_missing` is False only for the retired compat mirror — see
     # `_diff_one_location`'s docstring for why the derived-but-not-installed
@@ -781,7 +781,7 @@ def check_forwarder_drift(
         if not result.ok:
             any_drift = True
 
-    extension_lines, extension_mismatch = _check_extension_axis(resolved_doe_root, resolved_settings_bin)
+    extension_lines, extension_mismatch = _check_extension_axis(resolved_content_root, resolved_settings_bin)
     lines.extend(extension_lines)
     if extension_mismatch:
         any_drift = True

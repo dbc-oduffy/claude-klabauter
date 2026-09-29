@@ -47,6 +47,27 @@ def _write_tail(path: Path, lines: list) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _tu(name: str) -> str:
+    """A real-shape assistant envelope line carrying one tool_use block."""
+    return json.dumps({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "x"},
+            {"type": "tool_use", "id": "toolu_1", "name": name, "input": {}},
+        ]},
+    })
+
+
+def _tool_result(text: str = "ok") -> str:
+    return json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": text}]}})
+
+
+_BOUNDARY_LINE = json.dumps(
+    {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}
+)
+
+
 def _payload(session_id, transcript_path, tool_name, agent_id=None):
     p = {"session_id": session_id, "transcript_path": str(transcript_path), "tool_name": tool_name}
     if agent_id:
@@ -62,14 +83,14 @@ def _seed_run_record(session_id: str, run_id: str) -> None:
 
 
 def test_first_poll_is_silent(session_id, transcript):
-    _write_tail(transcript, ['{"type":"tool_use","name":"Bash"}'])
+    _write_tail(transcript, [_tu("Bash")])
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result == {}
 
 
 def test_second_consecutive_poll_with_live_run_flags(session_id, transcript):
     _seed_run_record(session_id, "run-abc")
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result != {}
@@ -78,20 +99,20 @@ def test_second_consecutive_poll_with_live_run_flags(session_id, transcript):
 
 def test_tail_with_intervening_bash_resets(session_id, transcript):
     _seed_run_record(session_id, "run-abc")
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
-    _write_tail(transcript, ['{"type":"tool_use","name":"Bash"}'])
+    _write_tail(transcript, [_tu("Bash")])
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result == {}
 
 
 def test_run_completion_in_tail_is_silent(session_id, transcript):
     _seed_run_record(session_id, "run-abc")
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     _write_tail(
         transcript,
-        ['{"type":"tool_use","name":"ReadNotifications"}', 'run-abc completed and landed'],
+        [_tu("ReadNotifications"), _tool_result("run-abc completed and landed")],
     )
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result == {}
@@ -99,7 +120,7 @@ def test_run_completion_in_tail_is_silent(session_id, transcript):
 
 def test_subagent_payload_is_silent(session_id, transcript):
     _seed_run_record(session_id, "run-abc")
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications", agent_id="agent-1"))
     assert result == {}
@@ -107,11 +128,11 @@ def test_subagent_payload_is_silent(session_id, transcript):
 
 def test_compact_boundary_is_silent(session_id, transcript):
     _seed_run_record(session_id, "run-abc")
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     _write_tail(
         transcript,
-        ['{"subtype":"compact_boundary"}', '{"type":"tool_use","name":"ReadNotifications"}'],
+        [_BOUNDARY_LINE, _tu("ReadNotifications")],
     )
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result == {}
@@ -125,8 +146,8 @@ def test_old_compaction_in_the_tail_no_longer_exempts(session_id, transcript):
     _write_tail(
         transcript,
         [
-            '{"subtype":"compact_boundary"}',
-            '{"type":"tool_use","name":"ReadNotifications"}',
+            _BOUNDARY_LINE,
+            _tu("ReadNotifications"),
         ],
     )
     # First poll right after the boundary: exempt (boundary is the most recent event).
@@ -137,9 +158,9 @@ def test_old_compaction_in_the_tail_no_longer_exempts(session_id, transcript):
     _write_tail(
         transcript,
         [
-            '{"subtype":"compact_boundary"}',
-            '{"type":"tool_use","name":"ReadNotifications"}',
-            '{"type":"tool_use","name":"ReadNotifications"}',
+            _BOUNDARY_LINE,
+            _tu("ReadNotifications"),
+            _tu("ReadNotifications"),
         ],
     )
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
@@ -155,7 +176,32 @@ def test_missing_transcript_fails_open_silently(session_id):
 
 
 def test_no_in_flight_run_is_silent(session_id, transcript):
-    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'])
+    _write_tail(transcript, [_tu("ReadNotifications")])
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result == {}
+
+
+def test_flat_shape_is_not_the_production_shape(session_id, transcript):
+    """A bare `{"type":"tool_use",...}` line is not what Claude Code writes; the hook must
+    read only the nested assistant envelope."""
+    _seed_run_record(session_id, "run-abc")
+    _write_tail(transcript, ['{"type":"tool_use","name":"ReadNotifications"}'] * 2)
+    assert mod._handler(_payload(session_id, transcript, "ReadNotifications")) == {}
+    assert mod._events(transcript.read_text()) == []
+
+
+def test_malformed_and_truncated_lines_are_tolerated(session_id, transcript):
+    _seed_run_record(session_id, "run-abc")
+    _write_tail(transcript, ['ion":"x"}]}}', "not json", _tool_result(), _tu("ReadNotifications")])
+    result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
+    assert result != {}
+
+
+def test_real_shape_fixture_flags_after_boundary_grace(session_id):
+    fixture = Path(mod.__file__).parent / "fixtures" / "em_poll_transcript_tail.jsonl"
+    events = mod._events(fixture.read_text(encoding="utf-8"))
+    assert events == ["Bash", "Workflow", mod._BOUNDARY, "ReadNotifications", "ReadNotifications"]
+    _seed_run_record(session_id, "run-redacted-1")
+    result = mod._handler(_payload(session_id, fixture, "ReadNotifications"))
+    assert result != {}

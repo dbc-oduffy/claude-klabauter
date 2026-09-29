@@ -155,7 +155,7 @@ def repin_cloud_engine_root(
         return verdict
 
 
-@register_op("hooks.repin_cloud_engine_root")
+@register_op("hooks.session_start_repin_cloud_engine_root")
 def _handler(params: dict, repo_root=None) -> dict:
     try:
         repin_cloud_engine_root()

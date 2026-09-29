@@ -81,7 +81,7 @@ from coordinator_core.install.setup_template_manifest import (
     SubstrateFatalError,
     _load_setup_template_manifest,
 )
-from coordinator_core.ops.coordinator_doe_root import (
+from coordinator_core.ops.coordinator_content_root import (
     repo_root_from_plugin_root_candidate,
 )
 
@@ -107,10 +107,10 @@ def _resolve_plugin_root() -> Path:
     It also does NOT fall back to Path.cwd() when CLAUDE_PLUGIN_ROOT is
     unset — cwd is whatever directory the caller happened to invoke from,
     a silent-wrong-root twin of the __file__ hazard this module already
-    guards against. Resolving the DoE-claude repo root is the CALLER's
+    guards against. Resolving the coordinator-content-repo repo root is the CALLER's
     job (topology knowledge the caller has and this module does not): the
     coordinator/bin/verify-templates-setup-sync.py trampoline sets
-    CLAUDE_PLUGIN_ROOT via the doe_root() registry helper before invoking
+    CLAUDE_PLUGIN_ROOT via the content_root() registry helper before invoking
     main(); coordinator_core.plugin_health.sentinel's in-process probe P-11
     call sets it directly from its own resolved plugins_root. Both callers
     are responsible for setting the env var — this function's only job is
@@ -121,8 +121,8 @@ def _resolve_plugin_root() -> Path:
         return Path(env_root)
     raise PluginRootUnresolved(
         "CLAUDE_PLUGIN_ROOT is unset — cannot resolve the plugin root that "
-        "owns templates/setup/. The caller must resolve the DoE-claude repo "
-        "root (e.g. via the coordinator_registry.doe_root() ladder) and set "
+        "owns templates/setup/. The caller must resolve the coordinator-content-repo repo "
+        "root (e.g. via the coordinator_registry.content_root() ladder) and set "
         "CLAUDE_PLUGIN_ROOT before calling main()."
     )
 

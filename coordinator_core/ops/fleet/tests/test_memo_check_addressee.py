@@ -63,7 +63,7 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
     return claude_home
 
 
-def _registered_doe_claude(machine_local: Path) -> Path | None:
+def _registered_content_root(machine_local: Path) -> Path | None:
     import tomllib
 
     for fname in ("registry.local.toml", "registry.toml"):
@@ -75,23 +75,23 @@ def _registered_doe_claude(machine_local: Path) -> Path | None:
                 data = tomllib.load(f)
         except Exception:
             continue
-        value = data.get("repos.doe_claude") or (data.get("repos") or {}).get("doe_claude")
+        value = data.get("repos.content_root") or (data.get("repos") or {}).get("content_root")
         if value:
             return Path(str(value))
     return None
 
 
 def _write_doe_manifest(
-    claude_home: Path, tmp_path: Path, manifest: dict, doe_root: Path | None = None
+    claude_home: Path, tmp_path: Path, manifest: dict, content_root: Path | None = None
 ) -> None:
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
-    doe_root = (
-        doe_root or _registered_doe_claude(machine_local) or (tmp_path / "doe-root")
+    content_root = (
+        content_root or _registered_content_root(machine_local) or (tmp_path / "content-root")
     )
-    schemas_dir = doe_root / "coordinator" / "schemas"
+    schemas_dir = content_root / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True, exist_ok=True)
     machine_local.mkdir(parents=True, exist_ok=True)
-    (machine_local / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    (machine_local / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
     (schemas_dir / "coordinator-registry.manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
@@ -251,7 +251,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "central": str(tmp_path / "central-repo"),
-                "doe_claude": str(tmp_path / "doe-claude-repo"),
+                "content_root": str(tmp_path / "coordinator-content-repo-repo"),
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -261,7 +261,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "doe-claude-em"],
+                    "centralReceiverIds": ["central-em", "coordinator-content-repo-em"],
                     "repoAliases": [],
                 }
             },
@@ -277,9 +277,9 @@ class TestResolverExceptionMapping:
 
 class TestRedirectMatchDefect1:
     def test_redirect_alias_matches_central_self(self, tmp_path, monkeypatch):
-        central_repo = tmp_path / "doe-claude-repo"
+        central_repo = tmp_path / "coordinator-content-repo-repo"
         central_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"doe_claude": str(central_repo)})
+        claude_home = _make_claude_home(tmp_path, {"content_root": str(central_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         _write_doe_manifest(
@@ -287,7 +287,7 @@ class TestRedirectMatchDefect1:
             tmp_path,
             {
                 "identity": {
-                    "centralReceiverIds": ["doe-claude-em"],
+                    "centralReceiverIds": ["coordinator-content-repo-em"],
                     "repoAliases": [],
                     "redirectAliases": ["coordinator-claude"],
                 }

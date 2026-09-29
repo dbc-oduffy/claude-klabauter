@@ -1,7 +1,7 @@
 """coordinator_core.hooks.group_em_autofire — UserPromptExpansion auto-fire
 for Group EM entry.
 
-Port of: DoE-claude `coordinator/hooks/scripts/group-em-autofire.py`
+Port of: coordinator-content-repo `coordinator/hooks/scripts/group-em-autofire.py`
 (docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C12). Shape per the
 W4-C1 verdict: command/native-door — no coordinator/bin shim, no http
 registration.

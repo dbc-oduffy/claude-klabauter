@@ -2,16 +2,16 @@
 must carry a `#!` line.
 
 WHY THIS GUARD EXISTS. On 2026-08-17 a from-scratch install verification found
-`claude-doe` unable to launch at all: `execve` returned ENOEXEC, the shell fell
+`claude-author` unable to launch at all: `execve` returned ENOEXEC, the shell fell
 back to parsing Python as `sh`, and no new session could start. The cause was a
-missing shebang in `coordinator/bin/claude-doe.py` — a line that had never
+missing shebang in `coordinator/bin/claude-author.py` — a line that had never
 existed in that file's history (`git log -S` returns empty), so this was
 latent-by-construction rather than a regression, surfacing only when the
 installed copy was refreshed.
 
 The asymmetry that hid it: most peers in `coordinator/bin/` also lack a shebang
 at source, and are fine, because their installed copies are GENERATED
-trampolines whose content is authored with one. `claude-doe.py` is the outlier —
+trampolines whose content is authored with one. `claude-author.py` is the outlier —
 it is installed by BYTE COPY (`shutil.copy2` in `maximalist`'s Step 3.5b, and
 `shutil.copyfile` in `wrapper_onto_path._install_one`). Nothing injects a
 shebang into a byte copy, so for that delivery shape the source file is the only
@@ -73,8 +73,8 @@ def test_the_wrapper_source_maximalist_installs_is_the_one_this_guard_checks():
     source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(
         encoding="utf-8"
     )
-    assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])' in source, (
-        "maximalist's Step 3.5b no longer derives the claude-doe wrapper source the way "
+    assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])' in source, (
+        "maximalist's Step 3.5b no longer derives the claude-author wrapper source the way "
         "this guard assumes — reconcile _BYTE_COPIED_POSIX_EXEC_SOURCES with the new "
         "derivation."
     )
@@ -90,7 +90,7 @@ def test_windows_sibling_delivery_is_untouched_by_the_posix_shebang():
     source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(
         encoding="utf-8"
     )
-    assert "gen-claude-doe-launcher" in source, (
-        "the Windows claude-doe launcher generation leg is gone — Windows would be left "
+    assert "gen-claude-author-launcher" in source, (
+        "the Windows claude-author launcher generation leg is gone — Windows would be left "
         "with an extension-less POSIX target CreateProcess cannot exec (WinError 193)."
     )

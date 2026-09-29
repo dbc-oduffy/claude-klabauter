@@ -170,7 +170,7 @@ _BASELINE: set[tuple[str, str]] = {
     ('coordinator_core/install/manifest_reader.py',
      'repo_root resolution order: explicit argument -> $REPO_ROOT env var.'),
     ('coordinator_core/install/_shared.py',
-     '4. ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file -> ``<repo>/coordinator``.'),
+     '4. ``${CLAUDE_HOME:-$HOME}/.coordinator-content-root`` pointer file -> ``<repo>/coordinator``.'),
     ('coordinator_core/install/first_run.py',
      'bash>=4.3 (`exec "$_fr_new_bash" "$SELF" --post-toolchain ...`) purely so'),
     ('coordinator_core/install/first_run.py',
@@ -298,8 +298,8 @@ _BASELINE: set[tuple[str, str]] = {
      'bin/ git-hook emitter must be registered) keyed on a bash `cat > "$HOOK"`'),
     ('coordinator/tests/test_percolate_resolve_target.py',
      '${meta_root}/plugins/<key> with a warning (never raises, never consults'),
-    ('coordinator/tests/test_verify_doe_root_seam_sync.py',
-     '--fix rewrites the `$HOME/.claude/.doe-root` (trailing 2>/dev/null) shape'),
+    ('coordinator/tests/test_verify_content_root_seam_sync.py',
+     '--fix rewrites the `$HOME/.claude/.coordinator-content-root` (trailing 2>/dev/null) shape'),
 }
 
 

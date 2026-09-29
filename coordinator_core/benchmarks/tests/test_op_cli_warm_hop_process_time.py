@@ -12,7 +12,7 @@ the-op-clis-spawn-an-interpreter-to-reac.yaml`, measured pre-C1):
     bare interpreter floor           :  26.0 ms process / 1.0 procs
     same, with warm DOWN             : 218.8 ms process / 5.0 procs
 
-RE-MEASURED THIS SESSION (2026-08-26, this box, k=6, cwd=X:/claude-klabauter,
+RE-MEASURED THIS SESSION (2026-08-26, this box, k=6, cwd=C:/claude-klabauter,
 `coordinator_core.benchmarks.process_time.batched_process_time_ms`), against
 this SAME clone's OWN `cross-repo-memo list` in its DEFAULT (ambient,
 un-overridden) resolution:
@@ -27,7 +27,7 @@ the number, not a figure to round toward the AC"): **on THIS repo's own
 default resolution, procs_per_call did not move at all.** Root cause, read
 at source and confirmed live (`coordinator_core.warm.engine_root.
 current_engine_clone`, `coordinator_core.warm.skew.compute_client_token`):
-`X:/claude-klabauter` (this dev checkout) itself carries no
+`C:/claude-klabauter` (this dev checkout) itself carries no
 `coordinator_core/_engine_stamp` -- by DR-315 s2 ruling ("an engine root is
 a stamped build; no stamp, no engine"), this clone is not a warm-server
 HOST, and a call FROM it as a CLIENT goes cold unconditionally, printing
@@ -43,7 +43,7 @@ reason: neither reaches a live server no matter how the caller-side helper
 is wired, because THIS clone was never eligible to be one.
 
 MECHANISM VERIFIED SEPARATELY, against a REAL stamped, live-served clone
-(`X:/claude-klabauter`, this box's ambient fleet server,
+(`C:/claude-klabauter`, this box's ambient fleet server,
 `state/audits/...` / `%LOCALAPPDATA%/coordinator/warm/<hash>/warm.json`
 confirms a live pid at measurement time), via `COORDINATOR_ENGINE_ROOT`
 override (rung 1 of `cc_invoke.resolve_engine_root`, outranks self-location

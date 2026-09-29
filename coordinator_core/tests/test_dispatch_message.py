@@ -628,7 +628,7 @@ def test_resolve_op_repo_key_common_dir_missing_raises():
 
 
 def test_resolve_request_repo_falls_back_on_remote_envelope(tmp_path, monkeypatch):
-    """DoE-claude#85 row 8: a cloud session (CLAUDE_CODE_REMOTE=true) sends a hook
+    """coordinator-content-repo#85 row 8: a cloud session (CLAUDE_CODE_REMOTE=true) sends a hook
     envelope with no `_origin_worktree` field at all -- resolve_request_repo must
     fill the key from CLAUDE_PROJECT_DIR rather than returning None and forcing a
     common_dir-scoped op to fail loud for the whole session."""
@@ -647,7 +647,7 @@ def test_resolve_request_repo_local_session_unaffected(monkeypatch):
 
 
 def test_dispatch_message_preuse_bash_dispatch_degrades_instead_of_denying():
-    """DoE-claude#85 row 8 / PM ruling: hooks.preuse_bash_dispatch never denies
+    """coordinator-content-repo#85 row 8 / PM ruling: hooks.preuse_bash_dispatch never denies
     for lack of routing context -- it degrades to repo_root=None rather than
     returning INVALID_PARAMS, even when the envelope carries no
     _origin_worktree and no remote-session fallback applies (e.g.

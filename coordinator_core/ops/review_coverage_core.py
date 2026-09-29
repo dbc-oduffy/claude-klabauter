@@ -99,7 +99,7 @@ Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Central-reg: this op is a PLAIN MODULE (no @register_op) — direct-import
-trampoline variant (template-variant #1; see DoE-claude
+trampoline variant (template-variant #1; see coordinator-content-repo
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1).
 NOT wired into ops/__init__.py / _registry_map.py / ipc.py /
 authz/classification.py — no registration action needed.

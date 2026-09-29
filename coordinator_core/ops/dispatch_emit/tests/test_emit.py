@@ -1773,7 +1773,7 @@ def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path):
 def test_blocked_prose_with_a_gate_does_not_raise(tmp_path):
     gate = (
         "  external_gate:\n"
-        "    - owner_repo: DoE-claude\n"
+        "    - owner_repo: coordinator-content-repo\n"
         "      condition: waiting on the directive\n"
         "      requires: landed-work\n"
         "      cleared: true\n"
@@ -1821,7 +1821,7 @@ def test_gate_discharge_claim_uncleared_raises(tmp_path):
     even though the row body itself carries no contradicting prose."""
     gate = (
         "  external_gate:\n"
-        "    - owner_repo: DoE-claude\n"
+        "    - owner_repo: coordinator-content-repo\n"
         "      condition: GATE SATISFIED 2026-09-02\n"
         "      requires: landed-work\n"
     )
@@ -1842,7 +1842,7 @@ def test_gate_discharge_claim_cleared_does_not_raise(tmp_path):
     agree."""
     gate = (
         "  external_gate:\n"
-        "    - owner_repo: DoE-claude\n"
+        "    - owner_repo: coordinator-content-repo\n"
         "      condition: GATE SATISFIED 2026-09-02\n"
         "      requires: landed-work\n"
         "      cleared: true\n"

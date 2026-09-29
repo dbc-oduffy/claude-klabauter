@@ -1,7 +1,7 @@
 """Tests for ``coordinator_core.roadmap.cluster_scout``.
 
 Purpose: pins the vendored ``cluster-scout-brief-fragment.json`` byte-identical
-against its DoE-claude source (AC17's fragment-verbatim pin, mirroring
+against its coordinator-content-repo source (AC17's fragment-verbatim pin, mirroring
 AC15/AC20), and pins the dispatch-planning behavior the plan C9 body and
 AC17 describe: ``depth_disposition`` and ``excluded_clusters`` are consumed
 verbatim and never computed, a ``deep-research`` cluster yields a directive
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.roadmap.cluster_scout import (
     Cluster,
     ClusterDispatchCapExceededError,
@@ -54,17 +54,17 @@ def test_vendored_fragment_is_byte_identical_to_doe_source() -> None:
     """AC17's fragment-verbatim pin, mirroring AC15/AC20: an unpinned second
     copy of a DoE-authored rule is the same defect class as the schema drift
     this plan avoids elsewhere."""
-    doe_root = read_doe_root_pointer()
-    if not doe_root:
-        pytest.skip("DoE-claude sibling root not resolvable on this machine")
-    doe_source_fragment = Path(doe_root) / _DOE_FRAGMENT_RELPATH
+    content_root = read_content_root_pointer()
+    if not content_root:
+        pytest.skip("coordinator-content-repo sibling root not resolvable on this machine")
+    doe_source_fragment = Path(content_root) / _DOE_FRAGMENT_RELPATH
     if not doe_source_fragment.is_file():
         pytest.skip(f"DoE source fragment not found at {doe_source_fragment}")
     vendored = VENDORED_FRAGMENT.read_bytes()
     source = doe_source_fragment.read_bytes()
     assert vendored == source, (
         "coordinator_core/roadmap/fragments/cluster-scout-brief-fragment.json "
-        "has drifted from DoE-claude's "
+        "has drifted from coordinator-content-repo's "
         "coordinator/contract/cluster-scout-brief-fragment.json -- re-vendor it "
         "verbatim, never hand-edit the local copy."
     )

@@ -1,8 +1,8 @@
 """
 coordinator_core.cartography.chunk_table — tree -> caller-bucketed chunk table.
 
-Purpose: the reduction DoE-claude's ``/coordinator:architecture-survey`` Phase-0.5
-gate actually needs (cross-repo/inbox/2026-08-06-doe-claude-em-cartography-
+Purpose: the reduction coordinator-content-repo's ``/coordinator:architecture-survey`` Phase-0.5
+gate actually needs (cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-
 chunk-table-producer-seam.md): repo tree -> filter to source files -> exclude
 build/vendor/test artifacts -> bucket by CALLER-SUPPLIED system boundaries ->
 slice into fixed-size chunks. On the 3831-tracked-file repo that prompted the
@@ -50,7 +50,7 @@ Negative-spec:
     ``coordinator_core.ops.cartography_chunk_table`` (the DR-228 § D6
     scratch-tier writer).
 
-Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-cartography-chunk-table-producer-seam.md
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 """
 

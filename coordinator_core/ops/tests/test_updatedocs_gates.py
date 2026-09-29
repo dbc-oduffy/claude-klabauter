@@ -23,7 +23,7 @@ Coverage:
       + rollup for a `params["gates"]` subset
   (i) unknown gate id in params["gates"] raises ValueError (no silent skip)
 
-Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-updatedocs-gates-
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-content-repo-em-updatedocs-gates-
   structured-verdicts.md
 """
 
@@ -578,7 +578,7 @@ def test_bucket2_gate_is_registered(gate_id):
 #
 # The gate hardcoded `coordinator_core/DIRECTORY.md`, so it read UNAVAILABLE
 # forever on every consumer of this ceremony except claude-klabauter — including
-# DoE-claude, whose index is `./DIRECTORY.md`. Reported by doe-claude-3f,
+# coordinator-content-repo, whose index is `./DIRECTORY.md`. Reported by coordinator-content-repo-3f,
 # state/bug-backlog/2026-09-02-directory-md-staleness-hardcodes-claude_klabauters-index-path.yaml.
 # ---------------------------------------------------------------------------
 
@@ -590,7 +590,7 @@ def _run_directory_md_gate(root, overrides=None):
 
 
 def test_directory_md_gate_finds_a_root_level_index(tmp_path):
-    """DoE-claude's shape: the index is `./DIRECTORY.md`."""
+    """coordinator-content-repo's shape: the index is `./DIRECTORY.md`."""
     (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
 
     result = _run_directory_md_gate(tmp_path)
@@ -698,7 +698,7 @@ def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
 def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
     """A corpus must never be joined onto the injected common dir.
 
-    Regression for the defect DoE-claude found on 2026-09-02: `updatedocs.gates`
+    Regression for the defect coordinator-content-repo found on 2026-09-02: `updatedocs.gates`
     is keyed "common_dir", so the injected `repo_root` is `<worktree>/.git`.
     Every corpus join landed under `.git`, the walks counted zero, and
     `distill-threshold` reported CLEAN over a populated tree.

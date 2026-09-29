@@ -186,3 +186,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not texts:
         return no_advisory()
     return post_advisory("\n\n".join(texts))
+
+
+# DoE hooks.json (2e63a74d9) names this op by the script-basename convention
+# (postuse-agent-dispatch.py -> hooks.postuse_agent_dispatch), which does NOT
+# match this module's historical handler name (hooks.agent_postuse_dispatch,
+# word order swapped). Register the same handler under BOTH names rather than
+# renaming the canonical one out from under any other caller still using it.
+register_op("hooks.postuse_agent_dispatch", _handler)

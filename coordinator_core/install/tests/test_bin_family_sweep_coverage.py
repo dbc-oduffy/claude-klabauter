@@ -1,23 +1,23 @@
 """C1 (docs/plans/2026-08-16-registry-read-stops-costing-a-process.md): verify
-DoE-claude's landed `coordinator/hooks/scripts/_bin_impl_drift.py`
+Coordinator-content-repo's landed `coordinator/hooks/scripts/_bin_impl_drift.py`
 (commit `b826d94b4`, SessionStart, once-a-day sentinel-gated) actually covers
 this plan's static bin family, and pin the durability gap it leaves.
 
 This module writes NO production code — the drift sweep already both detects
 and remediates (see § Cross-plan coordination in the plan above); this chunk
 is verification only, per Anti-scope ("Do not edit anything under the
-DoE-claude clone tree").  # abs-path-ok: doc quote of the plan's Anti-scope
+Coordinator-content-repo clone tree").  # abs-path-ok: doc quote of the plan's Anti-scope
 # line, not a path literal used anywhere in this module's code — the actual
-# DoE root is resolved at runtime via read_doe_root_pointer().
-Every assertion here reads DoE-claude's tree read-only, resolved via
-`coordinator_core.doe_root_pointer.read_doe_root_pointer()` — never a
+# DoE root is resolved at runtime via read_content_root_pointer().
+Every assertion here reads coordinator-content-repo's tree read-only, resolved via
+`coordinator_core.content_root_pointer.read_content_root_pointer()` — never a
 hardcoded drive path, since this box's DoE checkout location is not portable
 across machines.
 
 WHAT THIS PINS.
 
 1. Coverage: `_bin_impl_drift.py::check_and_refresh` iterates
-   `<doe_root>/coordinator/templates/bin/` — the same directory
+   `<content_root>/coordinator/templates/bin/` — the same directory
    `coordinator/lib/bin-templates-manifest.py`'s `ML_FAMILY_FILES` /
    `ML_EXPLICIT_FILES` / `PLATFORM_LOCALIZE_FILES` groups are sourced from.
    That template directory's on-disk listing must be a superset of every
@@ -47,14 +47,14 @@ WHAT THIS PINS.
 NEGATIVE-SPEC. This module does not run a live install and does not assert
 that `.python-bin` is populated with any particular value — C4 is the live
 proof (see the plan's own chunk split). It also does not assert anything
-about `launcher_templates` (`claude-doe-launcher.*.tmpl`): those are rendered
-by `gen_claude_doe_launcher.py`, never copied via `_install_one`, and are
+about `launcher_templates` (`claude-author-launcher.*.tmpl`): those are rendered
+by `gen_claude_author_launcher.py`, never copied via `_install_one`, and are
 out of `_static_bin_family_names()` by construction — see that manifest's
 own docstring. Nor does it assert coverage of the dynamically-derived
 agent-helper forwarders (`coordinator/bin/`'s current listing) — those are
 not part of the STATIC family this plan's static-bin-family names describe.
 
-If DoE-claude's tree is not reachable on this box (`repos.doe_claude`
+If coordinator-content-repo's tree is not reachable on this box (`repos.content_root`
 unresolved and no pointer file), every test below skips rather than failing
 closed — a missing cross-repo checkout is an environment fact, not a
 regression in claude-klabauter's own code.
@@ -67,7 +67,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.install.substrate import (
     _CH_FAMILY_FILES,
     _RM_FAMILY_FILES,
@@ -77,24 +77,24 @@ from coordinator_core.install.substrate import (
 )
 
 
-def _resolve_doe_root() -> "Path | None":
-    root_str = read_doe_root_pointer()
+def _resolve_content_root() -> "Path | None":
+    root_str = read_content_root_pointer()
     if not root_str:
         return None
     root = Path(root_str)
     return root if root.is_dir() else None
 
 
-def _doe_templates_bin(doe_root: Path) -> "Path | None":
-    templates_bin = doe_root / "coordinator" / "templates" / "bin"
+def _doe_templates_bin(content_root: Path) -> "Path | None":
+    templates_bin = content_root / "coordinator" / "templates" / "bin"
     return templates_bin if templates_bin.is_dir() else None
 
 
-def _load_bin_impl_drift(doe_root: Path):
+def _load_bin_impl_drift(content_root: Path):
     """Load DoE's `_bin_impl_drift.py` by path (read-only) — mirrors this
     repo's own hyphen/underscore-tolerant `spec_from_file_location` pattern
     used throughout substrate.py for cross-repo manifest loads."""
-    module_path = doe_root / "coordinator" / "hooks" / "scripts" / "_bin_impl_drift.py"
+    module_path = content_root / "coordinator" / "hooks" / "scripts" / "_bin_impl_drift.py"
     if not module_path.is_file():
         return None
     spec = importlib.util.spec_from_file_location("_doe_bin_impl_drift", module_path)
@@ -107,28 +107,28 @@ def _load_bin_impl_drift(doe_root: Path):
 
 
 @pytest.fixture(scope="module")
-def doe_root() -> Path:
-    root = _resolve_doe_root()
+def content_root() -> Path:
+    root = _resolve_content_root()
     if root is None:
-        pytest.skip("DoE-claude root not resolvable on this box (repos.doe_claude unset)")
+        pytest.skip("coordinator-content-repo root not resolvable on this box (repos.content_root unset)")
     return root
 
 
 @pytest.fixture(scope="module")
-def doe_templates_bin_names(doe_root: Path) -> "frozenset[str]":
-    templates_bin = _doe_templates_bin(doe_root)
+def doe_templates_bin_names(content_root: Path) -> "frozenset[str]":
+    templates_bin = _doe_templates_bin(content_root)
     if templates_bin is None:
-        pytest.skip(f"DoE-claude templates/bin/ not found under {doe_root}")
+        pytest.skip(f"coordinator-content-repo templates/bin/ not found under {content_root}")
     return frozenset(
         p.name for p in templates_bin.iterdir() if p.is_file()
     )
 
 
 @pytest.fixture(scope="module")
-def bin_impl_drift(doe_root: Path):
-    module = _load_bin_impl_drift(doe_root)
+def bin_impl_drift(content_root: Path):
+    module = _load_bin_impl_drift(content_root)
     if module is None:
-        pytest.skip(f"_bin_impl_drift.py not found under {doe_root}")
+        pytest.skip(f"_bin_impl_drift.py not found under {content_root}")
     return module
 
 
@@ -158,13 +158,13 @@ def test_doe_templates_bin_is_superset_of_doe_sourced_static_family(
 
 
 def test_bin_impl_drift_iterates_the_same_templates_bin_directory(
-    doe_root: Path, bin_impl_drift, doe_templates_bin_names: "frozenset[str]"
+    content_root: Path, bin_impl_drift, doe_templates_bin_names: "frozenset[str]"
 ):
     """Confirm `_templates_bin()` — the sweep's own source-directory resolver
     — actually resolves to the directory this module's other assertions
     compare against, not a different or stale copy."""
     resolved = bin_impl_drift._templates_bin()
-    assert resolved.resolve() == (doe_root / "coordinator" / "templates" / "bin").resolve()
+    assert resolved.resolve() == (content_root / "coordinator" / "templates" / "bin").resolve()
     on_disk = frozenset(p.name for p in resolved.iterdir() if p.is_file())
     assert on_disk == doe_templates_bin_names
 
@@ -203,15 +203,15 @@ def test_python_bin_sidecar_is_never_a_templates_bin_member(
 
 
 def test_machine_local_cmd_template_writes_the_python_bin_sidecar_itself(
-    doe_root: Path,
+    content_root: Path,
 ):
     """Confirm the durable fix's OTHER half: the template that DOES get
     swept (`machine-local.cmd`) is the thing that generates `.python-bin` at
     runtime, so the sidecar keeps getting (re)written on ordinary use even
     though the sweep never manages it directly."""
-    machine_local_cmd = doe_root / "coordinator" / "templates" / "bin" / "machine-local.cmd"
+    machine_local_cmd = content_root / "coordinator" / "templates" / "bin" / "machine-local.cmd"
     if not machine_local_cmd.is_file():
-        pytest.skip(f"machine-local.cmd not found under {doe_root}")
+        pytest.skip(f"machine-local.cmd not found under {content_root}")
     content = machine_local_cmd.read_text(encoding="utf-8", errors="replace")
     assert ".python-bin" in content, (
         "machine-local.cmd no longer references .python-bin — the durability "

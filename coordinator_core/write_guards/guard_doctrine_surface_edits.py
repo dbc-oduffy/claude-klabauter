@@ -2,7 +2,7 @@
 always-loaded doctrine surfaces unless a PM-created approval sentinel is
 present and unexpired.
 
-Ported from DoE-claude
+Ported from coordinator-content-repo
 `coordinator/hooks/scripts/guard-doctrine-surface-edits.py` (faithful port —
 see `write_guards/INTERFACE.md`). CLASS is hard-deny and fail-closed; this
 is the one guard in the DoE source tree that deliberately differs from every
@@ -56,6 +56,14 @@ root for the sentinel lookup is that repo's own root, never the session's.
 Negative spec — do NOT "split" this guard by gating coordinator.local.md's
 prose body while ungating its frontmatter keys. That is the intuitive split
 and it is exactly inverted: the frontmatter is the executed/authority half.
+
+Opt-in gate
+-----------
+The gate is off on every profile, author boxes included. `check()` returns
+None (allow) as its first step unless
+`machine-local set coordinator.feature.doctrine_edit_gate on` has been run
+(`machine_profile.feature_enabled("doctrine_edit_gate")`). Everything below
+describes the enabled gate.
 
 Approval mechanism
 -------------------
@@ -144,7 +152,7 @@ site clears no DR-277 carve-out, so the verdict is recorded and never
 consulted by the allow/deny decision below, on MISMATCH or any other
 verdict. Do not "finish the job" by wiring a refusal off it.
 
-Spec backlink: DoE-claude
+Spec backlink: coordinator-content-repo
   coordinator/hooks/scripts/guard-doctrine-surface-edits.py
 Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
 """
@@ -159,9 +167,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
+from coordinator_core.write_guards._guard_level import apply_level
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
@@ -176,6 +186,7 @@ GENERATES = []
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
+_GATE_FEATURE = "doctrine_edit_gate"
 _SENTINEL_NAME = ".coordinator-doctrine-edit-approved"
 _APPROVAL_WINDOW_SECONDS = 30 * 60
 
@@ -324,17 +335,17 @@ _PER_REPO_SURFACES: "tuple[tuple[str, ...], ...]" = (
     ("coordinator.local.md",),
 )
 
-_doe_root_memo: "list[str | None]" = []
+_content_root_memo: "list[str | None]" = []
 
 
-def _doe_root() -> "str | None":
-    if not _doe_root_memo:
+def _content_root() -> "str | None":
+    if not _content_root_memo:
         try:
-            resolved = read_doe_root_pointer() or None
+            resolved = read_content_root_pointer() or None
         except Exception:
             resolved = None
-        _doe_root_memo.append(_norm(resolved) if resolved else None)
-    return _doe_root_memo[0]
+        _content_root_memo.append(_norm(resolved) if resolved else None)
+    return _content_root_memo[0]
 
 
 def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]":
@@ -345,14 +356,14 @@ def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]
     cross-repo MIS-ANCHOR for two of them, measured 2026-09-17 from a
     session whose cwd was `claude-klabauter`: `global-doctrine/CLAUDE.md` and
     `coordinator/snippets/em-operating-doctrine.md` exist ONLY in
-    DoE-claude, so they resolved to two nonexistent `claude-klabauter/...`
+    coordinator-content-repo, so they resolved to two nonexistent `claude-klabauter/...`
     paths while the real DoE files sat outside the protected set entirely
     and edited clean. The guard was fail-closed on its own resolution
     failures and wide open on this one, because a path that resolves
     successfully to the wrong repo is not a resolution failure.
 
-      - DoE-ONLY surfaces anchor on `_doe_root()`, never on the session's
-        repo. One clone of DoE-claude serves the whole box.
+      - DoE-ONLY surfaces anchor on `_content_root()`, never on the session's
+        repo. One clone of coordinator-content-repo serves the whole box.
       - PER-REPO surfaces (`CLAUDE.md`, `coordinator.local.md`) stay
         anchored on the session's own repo root, which is correct and
         unchanged: every repo has its own copy, each governing that repo's
@@ -369,7 +380,7 @@ def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]
     ADDITIVE BY CONSTRUCTION. Every entry this returns is one `check()` will
     deny without an approval; nothing is removed relative to the previous
     composition, so no allow path widens -- the direction a hard-deny guard
-    is allowed to move without a ruling. An unresolvable `.doe-root` pointer
+    is allowed to move without a ruling. An unresolvable `.coordinator-content-root` pointer
     drops the DoE-anchored entries and lands exactly on the pre-fix
     protected set rather than on an error.
     """
@@ -385,11 +396,11 @@ def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]
     if home_claude_md:
         _add(home_claude_md, None)
 
-    doe_root = _doe_root()
-    if doe_root:
+    content_root = _content_root()
+    if content_root:
         for parts in _DOE_ONLY_SURFACES:
             try:
-                _add(_norm(os.path.join(doe_root, *parts)), doe_root)
+                _add(_norm(os.path.join(content_root, *parts)), content_root)
             except Exception:
                 pass
 
@@ -592,6 +603,43 @@ def _write_repo_identity_advisory_log(
             file=sys.stderr,
         )
 
+_PRIVILEGED_KEY_RE = re.compile(
+    r"^[ \t]*[\w-]*(?:_cmd|_reason|_post_command|_shape)[ \t]*:", re.MULTILINE
+)
+_GUARD_NAME = "guard-doctrine-surface-edits"
+
+
+def _edit_texts(tool_name: str, tool_input: Dict[str, Any], target: str) -> "tuple[str, str]":
+    return (
+        _rot_old_text(tool_name, tool_input, target),
+        _rot_new_text(tool_name, tool_input),
+    )
+
+
+def _is_unprivileged_config_edit(
+    tool_name: str, tool_input: Dict[str, Any], target: str
+) -> bool:
+    """`coordinator.local.md` edit that writes `project_type` and neither
+    reads nor writes a `*_cmd`, `*_reason`, `*_post_command`, or `*_shape`
+    key: no execution or authority surface moves."""
+    old, new = _edit_texts(tool_name, tool_input, target)
+    if "project_type" not in new:
+        return False
+    return not (_PRIVILEGED_KEY_RE.search(old) or _PRIVILEGED_KEY_RE.search(new))
+
+
+def _is_first_time_create(tool_name: str, tool_input: Dict[str, Any], target: str) -> bool:
+    """A Write that creates a missing CLAUDE.md, or a missing
+    `coordinator.local.md` with no privileged keys (onboarding renders)."""
+    if tool_name != "Write" or os.path.lexists(target):
+        return False
+    base = os.path.basename(target)
+    if base == "CLAUDE.md":
+        return True
+    return base == "coordinator.local.md" and _is_unprivileged_config_edit(
+        tool_name, tool_input, target
+    )
+
 
 def _sentinel_write_deny_reason() -> str:
     return (
@@ -602,6 +650,9 @@ def _sentinel_write_deny_reason() -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not feature_enabled(_GATE_FEATURE):
+        return None
+
     if payload.get("tool_name", "") not in _GUARDED_TOOLS:
         return None
 
@@ -652,14 +703,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             payload.get("tool_name", ""), tool_input, target
         )
 
-    return {
+    tool_name = payload.get("tool_name", "")
+    is_local_config = os.path.basename(target) == "coordinator.local.md"
+    if _is_first_time_create(tool_name, tool_input, target):
+        return None
+    if is_local_config and _is_unprivileged_config_edit(tool_name, tool_input, target):
+        return None
+
+    denial = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(
                 target_raw,
-                is_local_config=(os.path.basename(target) == "coordinator.local.md"),
+                is_local_config=is_local_config,
                 payload=payload,
             ),
         }
     }
+    return apply_level(_GUARD_NAME, denial, f"{target_raw} is a protected doctrine surface.")
