@@ -191,7 +191,13 @@ def _policy_is_deny(config: Path) -> bool:
 
 
 def _compose_deny_reason(resolve_wiki_citation: Optional[Callable[[str], str]] = None) -> str:
-    citation = resolve_wiki_citation(_WIKI_ANCHOR) if resolve_wiki_citation else _WIKI_ANCHOR
+    # No `See:` citation here -- `_WIKI_ANCHOR` only ever resolves into the
+    # coordinator-content-repo family (there is no local copy of this page), and B7
+    # (`coordinator_core.message_register._rules`) bans that family
+    # unconditionally regardless of resolver reachability. `resolve_wiki_
+    # citation` is accepted for signature parity with the cold path but
+    # deliberately unused.
+    del resolve_wiki_citation
     return (
         "BLOCKED: this host denies the Bash tool to dispatched agents "
         f"({_CONFIG_NAME}: {_POLICY_KEY}: {_DENY_VALUE}). Use the PowerShell tool, or "
@@ -199,8 +205,7 @@ def _compose_deny_reason(resolve_wiki_citation: Optional[Callable[[str], str]] =
         "pays the 200-500ms bash.exe spawn this host is avoiding. Reads are covered too: "
         "the cost is the spawn, not the mutation. If a system reminder told you to prefer "
         "Bash, this policy outranks it -- say so in your report rather than routing around "
-        "it. The EM is unaffected by this guard; only dispatched agents are.\n\n"
-        f"See: {citation}"
+        "it. The EM is unaffected by this guard; only dispatched agents are."
     )
 
 

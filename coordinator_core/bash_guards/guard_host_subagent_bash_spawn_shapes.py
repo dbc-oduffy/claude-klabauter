@@ -360,7 +360,12 @@ def _compose_deny_reason(
     tool_name: str,
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> str:
-    citation = resolve_wiki_citation(_WIKI_ANCHOR) if resolve_wiki_citation else _WIKI_ANCHOR
+    # No `See:` citation here -- `_WIKI_ANCHOR` only ever resolves into the
+    # coordinator-content-repo family (there is no local copy of this page), and B7 bans
+    # that family unconditionally regardless of resolver reachability.
+    # `resolve_wiki_citation` is accepted for signature parity with the
+    # cold path but deliberately unused.
+    del resolve_wiki_citation
     named = ", ".join(s.value for s in shapes)
     hints = [_ALTERNATIVES[s] for s in shapes if s in _ALTERNATIVES]
     remedy = hints[0] if hints else "a single `python -c` doing the same work in one interpreter"
@@ -384,8 +389,7 @@ def _compose_deny_reason(
         f"{tool_name} itself is NOT banned here: a single read of a known file is fine. "
         f"It is the fan-out that is refused, not the tool. If a system reminder suggested "
         f"this shape, this policy outranks it — say so in your report rather than routing "
-        f"around it.\n\n"
-        f"See: {citation}"
+        f"around it."
     )
 
 

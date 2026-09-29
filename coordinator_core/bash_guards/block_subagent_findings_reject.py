@@ -196,12 +196,9 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
     """
     del deny_kind, cmd
     return (
-        "BLOCKED: `review-findings-ledger reject`/`targets` are EM-only. "
-        "Report BLOCKED to your EM: for a contested finding, name it in "
-        "your findings ledger and let the EM run `reject` with its reason; "
-        "for a write target you need, ask your EM to run `targets --add` "
-        "before re-dispatching you. `verify` on your own sidecar stays "
-        "available."
+        "BLOCKED: `reject`/`targets` are EM-only. Name a contested "
+        "finding for the EM to `reject`, or ask it to `targets --add` a "
+        "write target. `verify` stays available."
     )
 
 

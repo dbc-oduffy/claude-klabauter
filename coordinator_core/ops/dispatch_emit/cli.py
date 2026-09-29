@@ -19,7 +19,14 @@ Every real computation lives one layer down:
   - firing (`--fire`) is `coordinator_core.ops.workflow_fire.fire ::
     fire_workflow` — the ONE spawn this CLI ever makes, and only on the
     `--fire` path; `--plan`, `--inventory`, and `--restamp` alone spawn
-    nothing (S1-C7 AC).
+    nothing (S1-C7 AC). Guarded immediately before that spawn by
+    `dispatch_emit.op.guard_against_fired_drift`, called with
+    `result["sha256"]` (`_dispatch_emit`'s own reply digest, never a
+    re-read or re-hashed copy) — refuses a fire whose on-disk script
+    changed between this call's emit and its own `--fire` branch (a peer
+    overwrote the deterministic emission path in between). Coordinator-content-repo
+    parity: `emit-dispatch-workflow.py :: _guard_against_fired_drift`,
+    called the same way at its own `fire()` wrapper.
 
 This module owns nothing but argv parsing, the exit-code mapping over
 those three functions' own return/raise contracts, and one added step:
@@ -548,8 +555,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return EXIT_DATA_ERROR
 
     if args.fire:
+        from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
         from coordinator_core.ops.workflow_fire.fire import fire_workflow
 
+        guard_against_fired_drift(Path(result["path"]), result["sha256"])
         fire_record = fire_workflow(
             result["path"], cwd=str(repo_root) if repo_root else None
         )

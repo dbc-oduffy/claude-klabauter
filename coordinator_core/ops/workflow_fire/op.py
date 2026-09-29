@@ -18,6 +18,22 @@ Spec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emi
 Wire params -- workflow.fire:
     script_path (str, required)   -- path to the emitted workflow ``.mjs``
                                       script to fire. Must exist on disk.
+    expected (str, optional)      -- the hex sha256 digest of the script the
+                                      caller itself emitted -- ``dispatch.
+                                      emit``'s own reply ``"sha256"`` key,
+                                      threaded straight through, NEVER the
+                                      script text. When supplied, checked
+                                      against the on-disk bytes' digest via
+                                      ``dispatch_emit.op.
+                                      guard_against_fired_drift`` BEFORE the
+                                      spawn -- refuses
+                                      (``dispatch_emit.op.FiredDriftError``)
+                                      a fire whose script changed on disk
+                                      between emit and this call (a peer
+                                      overwrote the deterministic emission
+                                      path). Omitted, the fire is unverified
+                                      -- the same behavior as before this
+                                      param existed.
     model (str, optional)         -- driver model; defaults to
                                       ``fire.DEFAULT_MODEL`` (cheap tier --
                                       the driver calls one tool once).
@@ -133,10 +149,21 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             or above the cap.
         fire.ChildSpawnFailedError -- if the child cannot be confirmed
             live (immediate non-zero exit, spawn OSError).
+        dispatch_emit.op.FiredDriftError -- if ``expected`` is supplied and
+            differs from the on-disk bytes at ``script_path``.
     """
     script_path = params.get("script_path")
     if not script_path:
         raise ValueError("workflow.fire requires param: script_path")
+
+    expected = params.get("expected")
+    if expected is not None:
+        # Imported here, not at module top -- avoids widening this
+        # package's own import surface for every caller that never passes
+        # ``expected`` (the ordinary case today).
+        from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
+
+        guard_against_fired_drift(Path(script_path), expected)
 
     return fire.fire_workflow(
         script_path,

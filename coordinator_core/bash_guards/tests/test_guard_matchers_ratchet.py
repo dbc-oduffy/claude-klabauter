@@ -165,6 +165,10 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
     # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
     "p4-verb-fence": _Expected(("Bash", "PowerShell")),
+    # block-venv-creation: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`),
+    # PM directive 2026-09-29 -- per-repo/shared venv creation is watched
+    # on both dialects, not Bash-only.
+    "block-venv-creation": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-ban": _Expected(
         ("Bash",),
         BASH_ONLY_BY_CONSTRUCTION,
@@ -391,9 +395,12 @@ def test_discovery_found_the_expected_scope():
     precedence.py` and `guard_longlived_branch_naming.py` -- both
     module-level `MATCHERS`-declaring -- were deleted. Re-measured live
     against `_scoped_module_stems()` rather than re-derived by arithmetic,
-    per this pin's own charter."""
+    per this pin's own charter.
+
+    Rose 28 -> 29 with `block_venv_creation` (module-level `MATCHERS`-
+    declaring, PM directive 2026-09-29)."""
     stems = _scoped_module_stems()
-    assert len(stems) == 28, sorted(stems)
+    assert len(stems) == 29, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -412,9 +419,10 @@ def test_every_registered_guard_is_classified():
     2026-09-20 origin/main merge: `stale-write` (C2,
     docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md)
     arrived live in `guard_roster()` on origin/main only -- absent from
-    this branch's pre-merge tip -- and had no classification here."""
+    this branch's pre-merge tip -- and had no classification here. Widened
+    54 -> 55 with `block-venv-creation` (PM directive 2026-09-29)."""
     actual = _actual_matchers()
-    assert len(actual) == 54, sorted(actual)
+    assert len(actual) == 55, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -455,7 +463,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 54
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 55
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

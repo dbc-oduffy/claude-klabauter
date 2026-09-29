@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 
@@ -165,6 +165,128 @@ def _governing_plan_status(repo_root: Path, fm: dict) -> GoverningPlanInfo:
     m = _STATUS_RE.search(text)
     status = m.group(1).strip() if m else None
     return GoverningPlanInfo(chain_slug=chain_slug, plan_path=str(plan_path), plan_status=status, resolved=True)
+
+
+def build_plan_index(repo_root: Path) -> Dict[str, Path]:
+    """ONE filesystem scan for a repo's whole plan-resolution surface --
+    `docs/plans/*.md` (direct children only, matching `_governing_plan_status`'s
+    exact-path check) plus one `rglob("*.md")` per `_ARCHIVED_PLAN_DIRS` root
+    (three dirs) -- built ONCE per repo and reused for every record's
+    `chain:` lookup, instead of a fresh `rglob(f"{chain_slug}.md")` PER
+    RECORD (`_find_archived_plan`'s per-call cost -- the amplification a
+    bulk caller like `completion_record_sweep.sweep_repo` must avoid; a
+    single-record caller like a finalize-gate writer has no such amplification
+    and can keep using `_governing_plan_status` directly).
+
+    Keys are filename stems (== `chain_slug` for a plan named
+    `<chain_slug>.md`, the only shape a plan archiver ever produces).
+    `dict.setdefault` preserves the exact same precedence
+    `_governing_plan_status`/`_find_archived_plan` apply: `docs/plans/` (live)
+    wins over any archived location; among archived dirs, `_ARCHIVED_PLAN_DIRS`
+    order wins; within one archived dir, the lexicographically-first path for
+    a given stem wins (mirrors `sorted(root.rglob(target_name))[0]`).
+    """
+    index: Dict[str, Path] = {}
+
+    live_dir = repo_root / "docs" / "plans"
+    if live_dir.is_dir():
+        for p in sorted(live_dir.glob("*.md")):
+            index.setdefault(p.stem, p)
+
+    for rel_dir in _ARCHIVED_PLAN_DIRS:
+        root = repo_root / rel_dir
+        if not root.is_dir():
+            continue
+        for p in sorted(root.rglob("*.md")):
+            index.setdefault(p.stem, p)
+
+    return index
+
+
+def governing_plan_status_from_index(
+    repo_root: Path,
+    fm: dict,
+    plan_index: Dict[str, Path],
+    status_cache: Dict[str, Optional[str]],
+) -> GoverningPlanInfo:
+    """Same resolution `_governing_plan_status` performs, but against a
+    pre-built `build_plan_index` result instead of a per-call filesystem
+    walk, and with a repo-scoped `status_cache` (`str(plan_path) ->
+    plan_status`) so N records sharing one governing plan read that plan's
+    `status:` line ONCE, not N times. `repo_root` is accepted (unused beyond
+    matching `_governing_plan_status`'s signature shape) for call-site
+    symmetry -- the plan's own path is already absolute in `plan_index`.
+    """
+    chain = fm.get("chain")
+    chain_slug = str(chain) if chain else None
+    if not chain_slug:
+        return GoverningPlanInfo(chain_slug=None, plan_path=None, plan_status=None, resolved=False)
+
+    plan_path = plan_index.get(chain_slug)
+    if plan_path is None:
+        return GoverningPlanInfo(chain_slug=chain_slug, plan_path=None, plan_status=None, resolved=False)
+
+    key = str(plan_path)
+    if key not in status_cache:
+        text = _read_text(plan_path)
+        m = _STATUS_RE.search(text) if text is not None else None
+        status_cache[key] = m.group(1).strip() if m else None
+
+    return GoverningPlanInfo(chain_slug=chain_slug, plan_path=key, plan_status=status_cache[key], resolved=True)
+
+
+def hollow_reasons_and_governing_plan_info(
+    record_path: Path,
+    repo_root: Path,
+    *,
+    plan_index: Optional[Dict[str, Path]] = None,
+    status_cache: Optional[Dict[str, Optional[str]]] = None,
+) -> "Tuple[List[str], GoverningPlanInfo]":
+    """`hollow_reasons(record_path, repo_root)` and
+    `governing_plan_info(record_path, repo_root)` COMBINED into one
+    read-parse-resolve pass -- the pair a bulk caller (`completion_record_sweep
+    .sweep_repo`) previously ran as two independent calls, each re-reading
+    and re-parsing the same file and (when a `chain:` was present)
+    re-resolving the same governing plan a second time.
+
+    `plan_index`/`status_cache`, when supplied (both built once per repo by
+    the caller -- `build_plan_index` / an empty dict respectively), route
+    plan resolution through `governing_plan_status_from_index` instead of
+    `_governing_plan_status`'s per-call filesystem walk. Omitting either
+    falls back to the original per-call `_governing_plan_status` behaviour
+    byte-for-byte -- this function is purely additive, not a replacement for
+    `hollow_reasons`/`governing_plan_info`, which keep their own signatures
+    and callers (a single-record finalize-gate writer has no amplification
+    to avoid and no reason to thread an index through).
+    """
+    text = _read_text(record_path)
+    if text is None:
+        return list(_UNREADABLE_RECORD_REASONS), GoverningPlanInfo(chain_slug=None, plan_path=None, plan_status=None)
+
+    parsed = parse_frontmatter(text)
+    fm = parsed.get("frontmatter") or {}
+    body = parsed.get("body") or ""
+    if not fm:
+        return list(_UNREADABLE_RECORD_REASONS), GoverningPlanInfo(chain_slug=None, plan_path=None, plan_status=None)
+
+    reasons: List[str] = []
+    if _has_placeholder_markers(fm, body):
+        reasons.append(REASON_PLACEHOLDER)
+    if _has_empty_commits(fm):
+        reasons.append(REASON_EMPTY_COMMITS)
+
+    if plan_index is not None:
+        info = governing_plan_status_from_index(repo_root, fm, plan_index, status_cache if status_cache is not None else {})
+    else:
+        info = _governing_plan_status(repo_root, fm)
+
+    if info.chain_slug:
+        if not info.resolved:
+            reasons.append(REASON_PLAN_UNRESOLVABLE)
+        elif info.plan_status not in _LANDED_PLAN_STATUSES:
+            reasons.append(REASON_PLAN_NOT_LANDED)
+
+    return reasons, info
 
 
 def hollow_reasons_for_fields(fm: dict, body: str, repo_root: Path) -> List[str]:

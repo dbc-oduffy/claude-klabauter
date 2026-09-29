@@ -155,9 +155,17 @@ class TestLegacyCallerUnchangedPropertyB:
         assert result == _soft_envelope("first")
 
     def test_flag_explicit_false_matches_flag_absent(self, monkeypatch):
+        # Two independent sessions (R6, 2026-09-26 `_session_advisory_
+        # already_fired` repeat-silencing): calling twice under the SAME
+        # session_id would have the second call observe the first call's
+        # own recorded fire and strip `additionalContext`, which is that
+        # (unrelated) feature working as intended, not a `collect_advisories`
+        # defect -- distinct session ids isolate the property under test.
         _patch_chain(monkeypatch, _TWO_ADVISORY_CHAIN)
-        omitted = dispatch.evaluate_payload_json(_payload())
-        explicit_false = dispatch.evaluate_payload_json(_payload(), collect_advisories=False)
+        omitted = dispatch.evaluate_payload_json(_payload(session_id="sess-collect-1a"))
+        explicit_false = dispatch.evaluate_payload_json(
+            _payload(session_id="sess-collect-1b"), collect_advisories=False
+        )
         assert omitted == explicit_false == _soft_envelope("first")
 
 

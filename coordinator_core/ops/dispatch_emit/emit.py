@@ -285,6 +285,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     terminal_test_scope,
     candidate_test_additions,
     _map_written_path_to_test_target,
+    _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -1827,6 +1828,63 @@ def _row_source_plan(row: WaveRow) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _declared_scope_block(row: WaveRow) -> str:
+    """Render the row's declared ``writes:`` scope as an explicit block,
+    ported from coordinator-content-repo's ``emit-dispatch-workflow.py ::
+    _append_declared_scope`` (plan `2026-09-21-bug-blitz-emitter-engine-
+    leg.md`, this port's leg 2).
+
+    Three states, all rendered explicitly, because collapsing them is what
+    makes a silent under-delivery possible: declared paths (a test path
+    among them is IN SCOPE, not optional), a positive ``writes: []`` claim,
+    or UNDECLARED (unknown scope -- stop and report BLOCKED rather than
+    infer). DoE's own defect: two independent reproductions 2026-08-20
+    (claude-klabauter-em, claude-klabauter-53) of an executor handed a directory
+    guess or prose inference that dropped the declared test path silently.
+
+    Appended into ``_row_return_contract``'s own rendered text rather than a
+    separate on-disk brief file -- this engine never shells out to a
+    `plan-task-brief` CLI (DoE's `_write_briefs`); the row's full prompt,
+    scope included, is composed and inlined into the emitted script here.
+    """
+    if row.writes is UNDECLARED:
+        block = (
+            "This chunk's `writes:` is UNDECLARED -- there is no authoritative "
+            "scope list for it.\n\nDo NOT infer scope from a directory, from "
+            "this prompt's prose, or from sibling chunks. Stop and report "
+            "BLOCKED naming this row's undeclared `writes:`; the spine is the "
+            "place that gets fixed, not the diff."
+        )
+    else:
+        paths = _declared_paths(row)
+        if not paths:
+            block = (
+                "This chunk declares `writes: []` -- a positive claim that it "
+                "creates or modifies NO files.\n\nIf your work requires writing "
+                "a file, that is a contradiction between the spine and the "
+                "task: stop and report BLOCKED rather than writing outside a "
+                "declared-empty scope."
+            )
+        else:
+            listed = "\n".join(f"- `{p}`" for p in paths)
+            block = (
+                "These are the ONLY paths this chunk may create or modify, "
+                "taken from the row's declared `writes:`.\n\nDo not infer "
+                "scope from a directory and do not write outside this list. "
+                "**A test path listed here is IN SCOPE and is expected to be "
+                "written, not skipped** -- delivering the module and none of "
+                f"its tests is under-delivery, not staying in scope.\n\n{listed}\n\n"
+                "**Report examined and changed as two separate counts, over "
+                f"this list of {len(paths)}.** A path you opened and found "
+                "nothing to change in is a no-op you examined -- report it. A "
+                "path you never opened is an omission, even if it turns out it "
+                "needed nothing. One number cannot carry both: *examined 60, "
+                "changed 3* and *examined 3, skipped 57* are the same "
+                "sentence when collapsed, and the second one passes as DONE."
+            )
+    return f"## Files you may write (declared `writes:` scope)\n\n{block}"
+
+
 def _row_return_contract(
     row: WaveRow, plan_path: str, *, shared: Optional[SharedBlocks] = None
 ) -> str:
@@ -1901,6 +1959,7 @@ def _row_return_contract(
         )
     )
     parts.append(_stop_rule_clause())
+    parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
 
 
@@ -3310,6 +3369,51 @@ def _spec_path_for_prompt(plan_path: Path, repo_root: Optional[Path]) -> Path:
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
+#: Env marker coordinator-content-repo's ``emit-dispatch-workflow.py`` reads for the
+#: in-session fidelity leg (``_FIDELITY_MARKER_ENV`` there). Unset, the
+#: branch below is a no-op and behaviour is byte-identical to before it
+#: existed.
+_FIDELITY_MARKER_ENV = "COORDINATOR_SUBSESSION_FIDELITY"
+
+
+class FidelityBarRefusalError(ValueError):
+    """Raised when ``$COORDINATOR_SUBSESSION_FIDELITY`` is set and
+    ``plan_path`` fails the mise-prep authoring bar -- refuses the emit
+    before any wave/prompt composition runs.
+    """
+
+
+def _check_fidelity_bar(plan_path: Path, repo_root: Optional[Path]) -> None:
+    """The in-session fidelity leg (coordinator-content-repo ``emit-dispatch-workflow.py
+    :: _check_fidelity_bar``, CSF-C5, plan
+    ``2026-09-26-coordinator-subsession-fidelity.md`` row C5), ported
+    in-process: under ``$COORDINATOR_SUBSESSION_FIDELITY``, refuse an emit
+    whose plan fails the mise-prep authoring bar before any brief/prompt is
+    composed.
+
+    Calls ``coordinator_core.roadmap.prep_gate`` DIRECTLY -- this engine
+    never loads ``mise-prep-gate.py`` by file path (that indirection is a
+    DoE-side necessity: DoE has no in-process import of the engine's own
+    gate). A passing verdict is exactly ``prep_gate.PREPPED``; NOT-PREPPED,
+    REFUSED and ENGINE-ERROR all refuse. When the marker is unset this is a
+    no-op.
+
+    ``repo_root`` defaults to ``plan_path``'s parent when omitted -- the
+    gate's ``corpus_inputs`` needs SOME root to scan fleet siblings under,
+    and a caller with no worktree root at hand (matching
+    ``prep_gate.evaluate_plan``'s own fallback convention) still gets a
+    verdict rather than a crash.
+    """
+    if not os.environ.get(_FIDELITY_MARKER_ENV):
+        return
+    from coordinator_core.roadmap import prep_gate
+
+    root = Path(repo_root) if repo_root is not None else plan_path.resolve().parent
+    report = prep_gate.gate_plan_with_corpus(plan_path, prep_gate.corpus_inputs(root))
+    if report["verdict"] != prep_gate.PREPPED:
+        raise FidelityBarRefusalError(report["message"])
+
+
 def emit_script(
     plan_path,
     *,
@@ -3381,6 +3485,7 @@ def emit_script(
     ``compose_script`` -> ``_terminal_commit_marker``.
     """
     plan_path = Path(plan_path)
+    _check_fidelity_bar(plan_path, repo_root)
     # Collected so an excluded row cannot vanish. `read_spine` drops
     # non-dispatchable rows by design, and until this out-parameter existed it
     # dropped them WITHOUT A WORD -- an emitted script named only what it was

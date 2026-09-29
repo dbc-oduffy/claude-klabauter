@@ -366,6 +366,72 @@ def _refuse_foreign_emission(output_path: Path, script: str, session_id: str) ->
     )
 
 
+class FiredDriftError(ValueError):
+    """Raised by ``guard_against_fired_drift`` when a peer overwrote the
+    deterministic emission path after this caller's emit returned but
+    before its fire read the bytes back.
+    """
+
+
+def guard_against_fired_drift(script_path: Path, expected_sha256: str) -> None:
+    """Refuse to fire bytes this caller did not emit, ported from
+    coordinator-content-repo's ``emit-dispatch-workflow.py ::
+    _guard_against_fired_drift`` (this port's leg 3).
+
+    ``_refuse_foreign_emission``/``_guard_against_foreign_overwrite`` close
+    the emit leg only: they stop a caller clobbering a peer's already-landed
+    emission. The window THIS guard closes is the other direction -- a peer
+    writing the same deterministic path AFTER this caller's emit returned
+    and BEFORE the script is read back to fire. A fire re-reads from disk,
+    so an unguarded fire would execute the peer's wave map under this
+    caller's handle with nothing in the handle saying so (DoE measured
+    2026-08-30: a fired script had grown an extra wave ahead of the intended
+    one, and the pre-empted row's disposition was NO MEMO OWED --
+    re-dispatching it would have put an external-facing send back in play).
+
+    ``expected_sha256`` -- a hex sha256 digest, never the script's full
+    text. ``_dispatch_emit``'s own reply already carries this exact value
+    (its ``"sha256"`` key, computed via ``_script_sha256`` over the bytes it
+    just wrote) -- a caller threads that value straight through rather than
+    holding the whole script text across the emit/fire boundary just to
+    compare it. Digested the same way this module already digests every
+    on-disk script (``read_bytes()``, never ``read_text()`` -- see
+    ``_script_sha256``'s own docstring on why a text-mode digest disagrees
+    with itself across platforms on a file nobody edited).
+
+    Wired into ``coordinator_core.ops.workflow_fire.op :: _workflow_fire``
+    (the ``workflow.fire`` RPC op) -- an ``expected`` wire param, when
+    supplied, is THIS caller's sha256 (not the script text) and is checked
+    immediately before ``fire.fire_workflow``'s spawn. Also wired into this
+    package's own CLI (``cli.py :: main``'s ``--fire`` branch), the other
+    production path that reaches ``fire_workflow`` -- both callers pass
+    ``result["sha256"]`` straight from ``_dispatch_emit``'s reply, never a
+    re-hashed or re-read copy.
+
+    Negative spec: does NOT make the path unique -- resume addresses the
+    script by its deterministic name, so a session-scoped path would break
+    resume. The check is on the bytes' digest, never the filename. A
+    missing ``script_path`` is a no-op here (``fire_workflow``'s own
+    ``ScriptNotFoundError`` owns that refusal).
+    """
+    if not script_path.is_file():
+        return
+    on_disk = script_path.read_bytes()
+    on_disk_sha256 = hashlib.sha256(on_disk).hexdigest()
+    if on_disk_sha256 == expected_sha256:
+        return
+    mtime = datetime.fromtimestamp(script_path.stat().st_mtime).isoformat(timespec="seconds")
+    raise FiredDriftError(
+        f"{script_path} changed between emit and fire (written {mtime}, "
+        f"{len(on_disk)} bytes on disk, sha256 {on_disk_sha256}; we emitted "
+        f"sha256 {expected_sha256}) -- refusing to fire. A peer overwrote this "
+        "deterministic path after our emit, so firing would run THEIR wave "
+        "map under our handle, silently. Re-emit and re-read the wave map "
+        "before firing: the rows that changed may carry dispositions this "
+        "run was not authorized for."
+    )
+
+
 def emission_receipt_path(guarded_script_path: Path) -> Path:
     """The provenance sidecar's path for an ALREADY-GUARDED script path.
 
@@ -439,6 +505,7 @@ def _write_emission_receipt(
     plan_path: Optional[str],
     params: dict,
     extras: Optional[dict] = None,
+    sha256: Optional[str] = None,
 ) -> Optional[str]:
     """Write the provenance sidecar. Best-effort: never fails the emit.
 
@@ -454,6 +521,14 @@ def _write_emission_receipt(
     as ``null``, and ``extras`` (``queue_emit.QueueEmission.receipt_extras``)
     is merged in under the same serialisation, never a forked one (module
     docstring § The receipt is a property of emitting).
+
+    ``sha256``, when supplied, is used verbatim instead of a second
+    ``_script_sha256`` call -- the caller (``_dispatch_emit``) already
+    computed it once for its own reply (``"sha256"`` key, the digest a
+    ``--fire``/``workflow.fire`` caller checks against before firing) and
+    passes that same value through rather than reading the file twice.
+    ``None`` (every pre-existing caller) computes it here, unchanged from
+    before this parameter existed.
 
     Returns the receipt path as a string, or ``None`` if it could not be
     written.
@@ -473,7 +548,7 @@ def _write_emission_receipt(
     receipt_path = emission_receipt_path(guarded_script_path)
     try:
         receipt = {
-            "sha256": _script_sha256(guarded_script_path),
+            "sha256": sha256 if sha256 is not None else _script_sha256(guarded_script_path),
             "session_id": _receipt_session_id(params),
             "emitted_at": datetime.now().isoformat(timespec="seconds"),
             "plan": Path(plan_path).name if plan_path else None,
@@ -834,13 +909,42 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     guarded_path.write_text(script, encoding="utf-8", newline="")
 
+    # Digested once, reused for both the reply and the receipt -- never a
+    # second `read_bytes()` of the file this call just wrote. Computed
+    # best-effort, same as the receipt write below: a caller reading the
+    # bytes right back off disk failing is exactly as unlikely as the
+    # receipt write failing, and this must not turn into a NEW way for an
+    # otherwise-successful emit to raise (`_write_emission_receipt`'s own
+    # "never fails the emit" contract, which this reuses rather than
+    # narrows). `None` here degrades `reply["sha256"]` to `None` too -- a
+    # `--fire`/`workflow.fire` caller holding a `None` digest cannot use
+    # the fired-drift guard, the same "lost the evidence, not the
+    # emission" tradeoff the receipt already makes.
+    try:
+        script_sha256 = _script_sha256(guarded_path)
+    except OSError as exc:
+        print(
+            f"dispatch.emit: wrote {guarded_path} but could not digest it "
+            f"({exc}). The script stands; its reply carries no sha256, and "
+            "a --fire/workflow.fire caller cannot drift-guard this emission.",
+            file=sys.stderr,
+        )
+        script_sha256 = None
+
     receipt = _write_emission_receipt(
-        guarded_path, receipt_plan_path, params, extras=receipt_extras
+        guarded_path, receipt_plan_path, params, extras=receipt_extras, sha256=script_sha256
     )
 
     reply = {
         "path": str(guarded_path),
         "receipt": receipt,
+        # The bytes-on-disk digest, same value the receipt's own "sha256"
+        # key carries when the receipt wrote successfully. A `--fire`
+        # caller (or `workflow.fire`'s `expected` param) compares THIS
+        # against the script it is about to fire, never the receipt file,
+        # which is best-effort and may be `None`
+        # (`_write_emission_receipt`'s own negative-spec).
+        "sha256": script_sha256,
         "ok": error_count == 0,
         "findings": [
             {

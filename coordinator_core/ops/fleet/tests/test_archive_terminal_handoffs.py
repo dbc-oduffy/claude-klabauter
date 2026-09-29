@@ -1564,6 +1564,51 @@ def test_c3_classify_branch_reparked_claimed_not_terminal():
     assert label == "consumed"
 
 
+def test_c2_classify_branch_status_outside_enum_reports_malformed_not_bulk_not_terminal():
+    """`status: complete` (or any value outside handoff.schema.json's
+    `open`/`claimed` enum) is an authoring defect, not an enum change (DR-084,
+    plan Anti-scope). It must never fail the sweep and must never be lumped
+    into the bulk `_SCAN_REASON_NOT_TERMINAL` family alongside every genuinely
+    open/claimed record — it gets its own family so a census can name it.
+    """
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_MALFORMED_STATUS,
+        _classify_branch,
+        _prefilter_scan_disqualifies,
+    )
+
+    def _family(reason: str) -> str:
+        return reason.split(":", 1)[0]
+
+    malformed = {"status": "complete", "deployment_state": ""}
+    qualifies, reason, _label, _b = _classify_branch(malformed, {})
+    assert qualifies is False
+    assert _family(reason) == _SCAN_REASON_MALFORMED_STATUS, (
+        f"a status outside the schema enum must be reported as malformed, not "
+        f"silently lumped with genuinely open/claimed work; got {reason!r}"
+    )
+
+    # A record whose `deployment_state` IS terminal is archived on that basis
+    # alone — status is not consulted for terminality (Branch A/B), so a
+    # malformed status must never block an otherwise-terminal record.
+    terminal_anyway = {"status": "complete", "deployment_state": "shipped", "shipped_in": "substantively-shipped-no-commit:2026-01-01"}
+    qualifies, _reason, _label, _b = _classify_branch(terminal_anyway, {})
+    assert qualifies is True
+
+
+def test_c2_prefilter_status_outside_enum_reports_malformed(tmp_path: Path):
+    """Same split, on the cheap byte-level pre-check most records take."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_MALFORMED_STATUS,
+        _prefilter_scan_disqualifies,
+    )
+
+    p = tmp_path / "malformed.md"
+    p.write_text("---\nstatus: complete\ndeployment_state: ready_to_fire\n---\nbody\n", encoding="utf-8")
+    reason = _prefilter_scan_disqualifies(p)
+    assert reason is not None and reason.startswith(_SCAN_REASON_MALFORMED_STATUS), reason
+
+
 # ---------------------------------------------------------------------------
 # example-store-repo-fb, mise run 20260911T144351: four call-shape / message defects
 # that each cost an operator a cycle mid-close-out.

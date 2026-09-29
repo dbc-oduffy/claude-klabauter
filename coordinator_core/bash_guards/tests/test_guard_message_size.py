@@ -253,11 +253,22 @@ JITTER_ALLOWANCE_BYTES = max(5, _ceil_to_5(2.1618))
 #: jitter, which `JITTER_ALLOWANCE_BYTES` now absorbs explicitly (measured,
 #: retains_affordances._MAX_BYTES`'s own manually-ratcheted-down precedent)
 RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
-    "confinement-deny": 250 + JITTER_ALLOWANCE_BYTES,
-    "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
-    "platform-conditioned-deny": 625 + JITTER_ALLOWANCE_BYTES,
+    # Trimmed this dispatch: destructive-git-revert's whole-tree checkout/
+    # restore copy shortened to clear the leg-1 per-cell cap -- live
+    # ceil5-mean dropped to 240, lowered to match.
+    "confinement-deny": 240 + JITTER_ALLOWANCE_BYTES,
+    # Legitimate bump (this dispatch): `block-venv-creation` (PM directive
+    # 2026-09-29) is a new corpus population member, not a trimmable
+    # regression -- raw raised from 165 to ceil5(172.46)=175.
+    "advisory-rewrite": 175 + JITTER_ALLOWANCE_BYTES,
+    "platform-conditioned-deny": 585 + JITTER_ALLOWANCE_BYTES,
     "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
-    "directory:hooks": 220 + JITTER_ALLOWANCE_BYTES,
+    # Legitimate bump (this dispatch): five new `hooks/*` corpus rows
+    # (guard_config_change_hookstack_selfdefence, nudge_cross_repo_cwd_
+    # boundary, postusefailure_cross_repo_memo_remediate, session_start_
+    # cloud_focus, session_start_watch_presence) closed AC10 coverage gaps
+    # -- raw raised from 220 to ceil5(244.99)=245.
+    "directory:hooks": 245 + JITTER_ALLOWANCE_BYTES,
 }
 
 

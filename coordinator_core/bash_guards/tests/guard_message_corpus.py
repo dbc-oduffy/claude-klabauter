@@ -549,6 +549,16 @@ _DENY = dispatch.GuardBand.CONFINEMENT_DENY
 def _rehomed_doctrine_surface_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
+    # PR #103 made the doctrine-edit gate opt-in
+    # (`coordinator.feature.doctrine_edit_gate`, off by default) -- this
+    # guard is a no-op unless the gate is on, so the corpus row must turn
+    # it on itself rather than rely on the ambient machine profile (see
+    # `coordinator_core/tests/test_doctrine_edit_gate_opt_in.py`'s own
+    # `_set_gate`).
+    from coordinator_core import machine_profile as _machine_profile
+
+    mp.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
+    _machine_profile.reset_cache()
     plugin_root = Path(
         tempfile.mkdtemp(
             prefix="guard-message-corpus-doctrine-surface-", dir=str(Path.home())
@@ -1212,6 +1222,22 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         setup=_git_repo_advisory_setup("git -C %s checkout -f"),
     ),
     CorpusRow(
+        "block-venv-creation",
+        "block-venv-creation-fire",
+        "python -m venv .venv",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "block-venv-creation",
+        "block-venv-creation-control",
+        "git status",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
         # advisory` immediately above -- same CONFINEMENT_DENY shadowing
         # shapes.md`): registered in ADVISORY_REWRITE, after every
         # CONFINEMENT_DENY hard-deny guard. The paired non-firing
@@ -1833,9 +1859,30 @@ def _wg_sizing_schema_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[st
     subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True, **no_console_passthrough_kwargs())
     target = scratch_dir / "state" / "sizings" / "s.yaml"
     target.parent.mkdir(parents=True)
+    # Every OTHER required field present (an otherwise-valid document) so
+    # only `pm_resolution` trips -- a document missing every required field
+    # (the earlier fixture) makes the guard's own `"; ".join(parts)` message
+    # legitimately huge, which is B5/leg-1 cap fallout from the FIXTURE, not
+    # a defect in the guard's composition.
+    content = (
+        "schema: sizing-object\n"
+        "intent: test intent\n"
+        "estimate:\n"
+        "  tshirt: S\n"
+        "  provisional: true\n"
+        "route: dispatch\n"
+        "detents: []\n"
+        "fork: null\n"
+        "xl_exit: null\n"
+        "status: sized\n"
+        "premise:\n"
+        "  provenance: read\n"
+        "  evidence: test evidence\n"
+        "pm_resolution: not-a-mapping\n"
+    )
     return {
         "tool_name": "Write",
-        "tool_input": {"file_path": str(target), "content": "pm_resolution: not-a-mapping\n"},
+        "tool_input": {"file_path": str(target), "content": content},
         "cwd": str(scratch_dir),
     }
 
@@ -2959,6 +3006,7 @@ from coordinator_core.hooks import derive_setup_copies as _hook_derive_setup_cop
 from coordinator_core.hooks import doctrine_changelog_prose as _hook_doctrine_changelog_prose_data
 from coordinator_core.hooks import enforce_agent_dispatch_mode as _hook_enforce_agent_dispatch_mode
 from coordinator_core.hooks import group_em_autofire as _hook_group_em_autofire
+from coordinator_core.hooks import guard_config_change_hookstack_selfdefence as _hook_guard_config_change_hookstack_selfdefence
 from coordinator_core.hooks import guard_doctrine_changelog_prose as _hook_guard_doctrine_changelog_prose
 from coordinator_core.hooks import guard_doctrine_surface_bash_write as _hook_guard_doctrine_surface_bash_write
 from coordinator_core.hooks import guard_doctrine_surface_ratio as _hook_guard_doctrine_surface_ratio
@@ -2973,12 +3021,14 @@ from coordinator_core.hooks import guard_posix_invocation_doctrine_write as _hoo
 from coordinator_core.hooks import guard_python_syntax_on_write as _hook_guard_python_syntax_on_write
 from coordinator_core.hooks import guard_repo_setup_claude_home_refusal as _hook_guard_repo_setup_claude_home_refusal
 from coordinator_core.hooks import guard_test_tree_git_fixture_spawn as _hook_guard_test_tree_git_fixture_spawn
+from coordinator_core.hooks import nudge_cross_repo_cwd_boundary as _hook_nudge_cross_repo_cwd_boundary
 from coordinator_core.hooks import nudge_initiative_goals_ladder as _hook_nudge_initiative_goals_ladder
 from coordinator_core.hooks import nudge_multiwave_workflow as _hook_nudge_multiwave_workflow
 from coordinator_core.hooks import nudge_plan_test_surface_tier as _hook_nudge_plan_test_surface_tier
 from coordinator_core.hooks import nudge_workflow_authoring_trampoline as _hook_nudge_workflow_authoring_trampoline
 from coordinator_core.hooks import offer_exploration_tier_dispatch as _hook_offer_exploration_tier_dispatch
 from coordinator_core.hooks import postuse_stop_family_dispatch as _hook_postuse_stop_family_dispatch
+from coordinator_core.hooks import postusefailure_cross_repo_memo_remediate as _hook_postusefailure_cross_repo_memo_remediate
 from coordinator_core.hooks import preuse_agent_dispatch as _hook_preuse_agent_dispatch
 from coordinator_core.hooks import preuse_bash_dispatch as _hook_preuse_bash_dispatch
 from coordinator_core.hooks import preuse_skill_dispatch as _hook_preuse_skill_dispatch
@@ -2986,7 +3036,9 @@ from coordinator_core.hooks import preuse_write_dispatch as _hook_preuse_write_d
 from coordinator_core.hooks import project_orientation as _hook_project_orientation
 from coordinator_core.hooks import runtime_tripwire_em_check as _hook_runtime_tripwire_em_check
 from coordinator_core.hooks import session_start_announce_job_mode as _hook_session_start_announce_job_mode
+from coordinator_core.hooks import session_start_cloud_focus as _hook_session_start_cloud_focus
 from coordinator_core.hooks import session_start_guard_plane_check as _hook_session_start_guard_plane_check
+from coordinator_core.hooks import session_start_watch_presence as _hook_session_start_watch_presence
 from coordinator_core.hooks import sessionstart_async_dispatch as _hook_sessionstart_async_dispatch
 from coordinator_core.hooks import sessionstart_bin_drift_refresh as _hook_sessionstart_bin_drift_refresh
 from coordinator_core.hooks import sessionstart_dispatch as _hook_sessionstart_dispatch
@@ -4510,7 +4562,193 @@ def _fire_strip_worktree_isolation_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_run_maybe_async(_hook_strip_worktree_isolation._handler(payload)))
 
 
+def _fire_guard_config_change_hookstack_selfdefence() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ccshsd-", dir=_neutral_scratch_parent()) as scratch:
+        settings_path = Path(scratch) / "settings.local.json"
+        settings_path.write_text(_json.dumps({"disableAllHooks": True}), encoding="utf-8")
+        payload = {"source": "local_settings", "file_path": str(settings_path)}
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_guard_config_change_hookstack_selfdefence._handler(payload))
+        )
+
+
+def _fire_guard_config_change_hookstack_selfdefence_control() -> Optional[Dict[str, Any]]:
+    payload = {"source": "some_other_source", "file_path": "/nonexistent-xyz.json"}
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_guard_config_change_hookstack_selfdefence._handler(payload))
+    )
+
+
+def _fire_nudge_cross_repo_cwd_boundary() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ncrcb-", dir=_neutral_scratch_parent()) as scratch:
+            sibling = Path(scratch) / "claude-klabauter"
+            sibling.mkdir()
+            mp.setenv("COORDINATOR_ENGINE_ROOT", str(sibling))
+            payload = {
+                "old_cwd": str(Path(scratch) / "elsewhere"),
+                "new_cwd": str(sibling / "sub"),
+            }
+            return _to_envelope_or_none(
+                _run_maybe_async(_hook_nudge_cross_repo_cwd_boundary._handler(payload))
+            )
+
+
+def _fire_nudge_cross_repo_cwd_boundary_control() -> Optional[Dict[str, Any]]:
+    payload = {"old_cwd": "/tmp/same-place", "new_cwd": "/tmp/same-place"}
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_nudge_cross_repo_cwd_boundary._handler(payload))
+    )
+
+
+def _fire_postusefailure_cross_repo_memo_remediate() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Bash",
+        "error": "Exit code 127: command not found",
+        "tool_input": {"command": "cross-repo-memo send foo"},
+    }
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_postusefailure_cross_repo_memo_remediate._handler(payload))
+    )
+
+
+def _fire_postusefailure_cross_repo_memo_remediate_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Bash",
+        "error": "Exit code 0",
+        "tool_input": {"command": "cross-repo-memo send foo"},
+    }
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_postusefailure_cross_repo_memo_remediate._handler(payload))
+    )
+
+
+def _fire_session_start_cloud_focus() -> Optional[Dict[str, Any]]:
+    payload = {
+        "env": {
+            "CLAUDE_CODE_REMOTE": "true",
+            "COORDINATOR_CLOUD_FOCUS_REPO": "someone/some-nonexistent-repo-xyz",
+        }
+    }
+    return _to_envelope_or_none(_run_maybe_async(_hook_session_start_cloud_focus._handler(payload)))
+
+
+def _fire_session_start_cloud_focus_control() -> Optional[Dict[str, Any]]:
+    payload = {"env": {}}
+    return _to_envelope_or_none(_run_maybe_async(_hook_session_start_cloud_focus._handler(payload)))
+
+
+def _fire_session_start_watch_presence() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sswp-", dir=_neutral_scratch_parent()) as scratch:
+            settings_home_dir = Path(scratch) / "settings-home"
+            repo_root = Path(scratch) / "repo"
+            repo_root.mkdir()
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+            from coordinator_core.group_em import atomic_record as _atomic_record
+
+            uhura_dir = settings_home_dir / "state" / "uhura"
+            uhura_dir.mkdir(parents=True)
+            record = {
+                "schema_version": 1,
+                "peer_name": "test-uhura-peer",
+            }
+            key = _atomic_record.repo_key(str(repo_root))
+            (uhura_dir / f"{key}.json").write_text(_json.dumps(record), encoding="utf-8")
+            payload = {"cwd": str(repo_root)}
+            return _to_envelope_or_none(
+                _run_maybe_async(_hook_session_start_watch_presence._handler(payload))
+            )
+
+
+def _fire_session_start_watch_presence_control() -> Optional[Dict[str, Any]]:
+    # `read_liveness` always returns a non-empty `verdict` (even "absent" --
+    # see its own docstring, "`absent` stays ONE verdict"), so a bare fresh
+    # repo still speaks the watch line. The true no-op leg is the liveness
+    # READ failing outright (`compute_context`'s own `except Exception: pass`
+    # arm), forced here rather than relied on from repo state.
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sswp-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            settings_home_dir = Path(scratch) / "settings-home"
+            repo_root = Path(scratch) / "repo"
+            repo_root.mkdir()
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+
+            def _raise(*_a, **_kw):
+                raise RuntimeError("no liveness in this scratch fixture")
+
+            mp.setattr(
+                _hook_session_start_watch_presence.group_em_watch_heartbeat,
+                "read_liveness",
+                _raise,
+            )
+            payload = {"cwd": str(repo_root)}
+            return _to_envelope_or_none(
+                _run_maybe_async(_hook_session_start_watch_presence._handler(payload))
+            )
+
+
 HOOK_ROWS: List[HookRow] = [
+    HookRow(
+        "guard_config_change_hookstack_selfdefence",
+        "fire-disable-all-hooks",
+        True,
+        _fire_guard_config_change_hookstack_selfdefence,
+    ),
+    HookRow(
+        "guard_config_change_hookstack_selfdefence",
+        "control",
+        False,
+        _fire_guard_config_change_hookstack_selfdefence_control,
+    ),
+    HookRow(
+        "nudge_cross_repo_cwd_boundary",
+        "fire-crosses-boundary",
+        True,
+        _fire_nudge_cross_repo_cwd_boundary,
+    ),
+    HookRow(
+        "nudge_cross_repo_cwd_boundary",
+        "control",
+        False,
+        _fire_nudge_cross_repo_cwd_boundary_control,
+    ),
+    HookRow(
+        "postusefailure_cross_repo_memo_remediate",
+        "fire-exit-127",
+        True,
+        _fire_postusefailure_cross_repo_memo_remediate,
+    ),
+    HookRow(
+        "postusefailure_cross_repo_memo_remediate",
+        "control",
+        False,
+        _fire_postusefailure_cross_repo_memo_remediate_control,
+    ),
+    HookRow(
+        "session_start_cloud_focus",
+        "fire-no-checkout-match",
+        True,
+        _fire_session_start_cloud_focus,
+    ),
+    HookRow(
+        "session_start_cloud_focus",
+        "control",
+        False,
+        _fire_session_start_cloud_focus_control,
+    ),
+    HookRow(
+        "session_start_watch_presence",
+        "fire-uhura-record",
+        True,
+        _fire_session_start_watch_presence,
+    ),
+    HookRow(
+        "session_start_watch_presence",
+        "control",
+        False,
+        _fire_session_start_watch_presence_control,
+    ),
     HookRow("em_report_altitude", "fire-d2", True, _fire_em_report_altitude_d2),
     HookRow("em_report_altitude", "control", False, _fire_em_report_altitude_control),
     HookRow(

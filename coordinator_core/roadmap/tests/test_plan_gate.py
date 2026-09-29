@@ -682,6 +682,66 @@ def test_a_pre_fix_pair_with_no_replan_of_is_still_deduped_by_forked_from(tmp_pa
     assert candidates == {"hnd-replan-b-2-def456"}, candidates
 
 
+def test_a_baton_whose_plan_is_superseded_by_a_live_successor_is_withdrawn(tmp_path):
+    """Two PLAN files sharing one `deliverable_id` — the superseded shape flagged
+    by coordinator-content-repo-2a (landed-batons batch discharge). Baton A's own plan is
+    `superseded`; baton B's plan is the live successor. A must stop offering
+    itself as a planning candidate, and the pair is named in the report."""
+    superseded_path = _plan(
+        tmp_path, "old-plan", "superseded", deliverable_id="dlv-shared-abc"
+    )
+    live_path = _plan(
+        tmp_path, "new-plan", "draft", deliverable_id="dlv-shared-abc"
+    )
+    _baton(tmp_path, "baton-a", governing_plan=superseded_path)
+    _baton(tmp_path, "baton-b", governing_plan=live_path)
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    candidates = {b["id"] for b in report["batons"] if b["candidate"]}
+    assert candidates == {"baton-b"}, candidates
+    assert report["counts"]["superseded_deliverable"] == 1
+    row = report["superseded_deliverable"][0]
+    assert row["id"] == "baton-a"
+    assert row["deliverable_id"] == "dlv-shared-abc"
+    assert row["superseded_plan"] == superseded_path
+    assert row["successor_plans"] == [live_path]
+
+
+def test_a_superseded_plan_with_no_live_successor_stays_a_candidate(tmp_path):
+    """A superseded plan whose deliverable_id names no OTHER plan is not
+    evidence of a successor — it stays a candidate (nothing to withdraw for)."""
+    superseded_path = _plan(
+        tmp_path, "lonely-superseded", "superseded", deliverable_id="dlv-lonely"
+    )
+    _baton(tmp_path, "baton-c", governing_plan=superseded_path)
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    candidates = {b["id"] for b in report["batons"] if b["candidate"]}
+    assert candidates == {"baton-c"}, candidates
+    assert report["superseded_deliverable"] == []
+
+
+def test_two_live_plans_sharing_a_deliverable_id_are_named_not_silently_picked(tmp_path):
+    """Two LIVE (non-superseded) plans sharing one deliverable_id is an
+    authoring question this module cannot resolve from disk — named in
+    `deliverable_id_collisions`, and NEITHER baton is withdrawn on this
+    rule's account (picking a survivor is out of scope, plan's Anti-scope)."""
+    path_x = _plan(tmp_path, "plan-x", "draft", deliverable_id="dlv-dup")
+    path_y = _plan(tmp_path, "plan-y", "approved", deliverable_id="dlv-dup")
+    _baton(tmp_path, "baton-x", governing_plan=path_x)
+    _baton(tmp_path, "baton-y", governing_plan=path_y)
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["superseded_deliverable"] == []
+    assert report["counts"]["deliverable_id_collisions"] == 1
+    collision = report["deliverable_id_collisions"][0]
+    assert collision["deliverable_id"] == "dlv-dup"
+    assert collision["paths"] == sorted([path_x, path_y])
+
+
 def test_kind_plan_is_admitted_because_the_template_emits_it():
     assert pg.is_plan_record({"kind": "plan"}) is True
     assert pg.is_plan_record({}) is True

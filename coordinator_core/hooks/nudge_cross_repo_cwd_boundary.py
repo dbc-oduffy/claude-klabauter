@@ -24,12 +24,10 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 
 _REMEDIATION = (
-    "[cross-repo boundary] this session just crossed into or out of the claude-klabauter "
-    "sibling repo. No standing cross-repo commit grant survives in either direction "
-    "(coordinator-content-repo CLAUDE.md § Subject-matter routing) -- a cross-repo commit needs "
-    "per-session PM assent obtained at execution dispatch. When held: scoped commits "
-    "only, never `git add -A`/`.`/`commit -a`; no destructive git ops; never leave "
-    "the sibling's tests red."
+    "[cross-repo boundary] crossed into/out of the claude-klabauter sibling repo -- no "
+    "standing commit grant survives the crossing; a cross-repo commit needs "
+    "per-session PM assent. When held: scoped commits only, never `-A`/`.`/"
+    "`-a`."
 )
 
 

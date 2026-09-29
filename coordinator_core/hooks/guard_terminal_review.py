@@ -396,12 +396,10 @@ def _refusal_message(shas: List[str], ceiling_note: Optional[str]) -> str:
     if extra > 0:
         sha_text += f" (+{extra} more)"
     lines = [
-        f"[guard] This session's Stop is refused: {len(shas)} code commit(s) "
-        f"this session authored carry no review ({sha_text}).",
-        "Dispatch a code-reviewer, or make a follow-up commit carrying a "
-        "valid `Inline-Review:` trailer (`em-verified — <what was "
-        "checked, >=20 chars>` up to 50 code LOC, or `applies <sidecar-stem> "
-        "— <which findings, >=20 chars>`) to cover them.",
+        f"[guard] Stop refused: {len(shas)} unreviewed code commit(s) "
+        f"({sha_text}).",
+        "Dispatch a code-reviewer, or commit an `Inline-Review:` trailer "
+        "covering them.",
     ]
     if ceiling_note:
         lines.append(ceiling_note)

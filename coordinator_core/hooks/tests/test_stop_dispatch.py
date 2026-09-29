@@ -212,6 +212,7 @@ def test_guard_kira_verdict_routed_passes_when_answered(tmp_path) -> None:
             "agent_type: coordinator:overengineering-reviewer",
             "spawned_at: 2026-08-31T00:00:00Z",
             "findings_count: 2",
+            "rebuild_recommended: true",
         ],
     )
     _write_sidecar(

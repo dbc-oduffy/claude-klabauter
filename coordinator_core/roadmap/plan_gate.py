@@ -727,6 +727,11 @@ class PlanIndex:
             "title": fm.get("title"),
             "approved": status in PLAN_APPROVED_STATUSES,
             "coded": status in PLAN_CODED_STATUSES,
+            # A plan's OWN `deliverable_id` claim, kept alongside its status so a
+            # caller can ask "does THIS deliverable_id have a live plan besides
+            # this superseded one" without a second frontmatter read — see
+            # `_supersession_by_deliverable_id` below.
+            "deliverable_id": _as_list(fm.get("deliverable_id")),
         }
         for key in _as_list(fm.get("plan_id")):
             self.by_plan_id.setdefault(key, []).append(rel_path)
@@ -1016,6 +1021,113 @@ def _plan_link_ambiguity(
             "disambiguate one of them"
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Deliverable-id supersession
+# ---------------------------------------------------------------------------
+#
+# A superseded plan and its successor legitimately share one `deliverable_id`
+# — the successor IS the same deliverable, replanned. Neither
+# `blocker_disposition` (keys on `deployment_state`/`own_plan`, never on a
+# SIBLING plan of the same deliverable) nor `_best_plan` (reduces hits from
+# ONE baton's OWN links, never scans the whole `by_deliverable_id` bucket) sees
+# this: a baton whose only linked plan is the superseded one reads `needs_plan`
+# and keeps recycling through every planning wave, and `roadmap.plan_gate`'s
+# candidate set (and therefore `emit-wave-fire`'s wave, which trusts the frozen
+# report and re-derives nothing — its own module docstring's "WHAT IT DOES NOT
+# DO") offers it up again beside its own successor. Flagged by coordinator-content-repo-2a
+# during the landed-batons batch discharge.
+#
+# Plan `status` values a successor may hold to count as "the deliverable is
+# still live" — everything except the shelved-and-done terminal, mirroring
+# `PLAN_APPROVED_STATUSES`'s own negative list (deferred/abandoned/superseded
+# "publish no decisions a dependent can build on"), narrowed here to exactly
+# what the reported defect names: a status of `superseded` is the one signal
+# a REPLACEMENT plan exists for this same deliverable_id, and is the only one
+# this rule acts on — `deferred`/`abandoned` are a shelving decision about the
+# SAME plan, not evidence a second plan replaced it, and treating them the
+# same way would withdraw a baton whose only plan was merely paused.
+_PLAN_SUPERSEDED_STATUS = "superseded"
+
+
+def _deliverable_ids_for_plan(plan: Dict[str, Any]) -> List[str]:
+    """The `deliverable_id`(s) a PlanIndex entry itself claims."""
+    return list(plan.get("deliverable_id") or [])
+
+
+def deliverable_id_collisions(plans: "PlanIndex") -> List[Dict[str, Any]]:
+    """Every `deliverable_id` claimed by 2+ LIVE (non-superseded) plans.
+
+    A named finding, never a silent pick: two live plans sharing one
+    deliverable_id is not resolvable from disk alone (which one is the real
+    successor is an authoring question), so this reports the pair rather than
+    reducing them the way `_best_plan` reduces a single baton's own hit set —
+    that reduction presupposes the hits are the SAME baton's plans, which does
+    not hold for a corpus-wide id collision.
+    """
+    collisions: List[Dict[str, Any]] = []
+    for deliverable_id, paths in plans.by_deliverable_id.items():
+        live = sorted(
+            {p for p in paths if (plans.get(p) or {}).get("status") != _PLAN_SUPERSEDED_STATUS}
+        )
+        if len(live) > 1:
+            collisions.append({"deliverable_id": deliverable_id, "paths": live})
+    collisions.sort(key=lambda row: row["deliverable_id"])
+    return collisions
+
+
+def _live_successor_plans(deliverable_id: str, exclude_path: str, plans: "PlanIndex") -> List[str]:
+    """Plans sharing `deliverable_id` that are NOT `exclude_path` and are not
+    themselves superseded — the candidate "successor" set for one baton's own
+    superseded plan."""
+    out = []
+    for candidate_path in plans.by_deliverable_id.get(deliverable_id, []):
+        if candidate_path == exclude_path:
+            continue
+        record = plans.get(candidate_path)
+        if record is not None and record["status"] != _PLAN_SUPERSEDED_STATUS:
+            out.append(candidate_path)
+    return sorted(out)
+
+
+def superseded_by_deliverable_id(
+    record: Dict[str, Any], own_plan: Optional[Dict[str, Any]], plans: "PlanIndex"
+) -> Optional[Dict[str, Any]]:
+    """This baton's own plan is `superseded` AND a live successor shares its
+    `deliverable_id` — or None.
+
+    Checked against BOTH the baton's own `deliverable_id`/`deliverable_ids`
+    frontmatter and the superseded plan's own claimed `deliverable_id`(s):
+    the successor relationship is a property of the DELIVERABLE, and either
+    side may be the one that still names it after a rename or a relink.
+    """
+    if own_plan is None or own_plan["status"] != _PLAN_SUPERSEDED_STATUS:
+        return None
+    candidate_ids = list(_as_list(record["_fm"].get("deliverable_id")))
+    candidate_ids += _as_list(record["_fm"].get("deliverable_ids"))
+    candidate_ids += _deliverable_ids_for_plan(own_plan)
+    seen_ids: List[str] = []
+    for did in candidate_ids:
+        if did not in seen_ids:
+            seen_ids.append(did)
+    for did in seen_ids:
+        successors = _live_successor_plans(did, own_plan["path"], plans)
+        if successors:
+            return {
+                "id": record["id"],
+                "path": record["path"],
+                "deliverable_id": did,
+                "superseded_plan": own_plan["path"],
+                "successor_plans": successors,
+                "reason": (
+                    f"own plan {own_plan['path']} is status: superseded and "
+                    f"deliverable_id {did!r} has a live successor "
+                    f"({', '.join(successors)}) — this baton's plan is superseded, "
+                    "not a candidate to re-plan"
+                ),
+            }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1758,6 +1870,16 @@ def assemble_plan_gate(
             return None
         return {"id": record["id"], "path": record["path"], "title": record["title"]}
 
+    def _w_superseded_deliverable(record):
+        """Drop a baton whose own linked plan is `superseded` and whose
+        `deliverable_id` already has a live successor plan — see
+        `superseded_by_deliverable_id`. Baton-level supersession is
+        `_w_replanned`'s job; this is the PLAN-level shape the same defect
+        class takes: two PLAN files sharing one deliverable_id, each linked
+        to its own baton, so `_w_replanned`'s `replan_of`/`forked_from` edge
+        (baton-to-baton) never fires."""
+        return superseded_by_deliverable_id(record, record["own_plan"], plans)
+
     def _w_out_of_roadmap(record):
         """`roadmap_id` narrows the CANDIDATE set to one roadmap. Reported
         nowhere: asking about one roadmap is not a finding about the others."""
@@ -1860,6 +1982,7 @@ def assemble_plan_gate(
         ("untracked", _w_untracked),
         ("resurrected", _w_resurrected),
         ("replanned", _w_replanned),
+        ("superseded_deliverable", _w_superseded_deliverable),
         (None, _w_out_of_roadmap),
         (None, _w_not_targeted),
         ("held", _w_held),
@@ -1884,8 +2007,14 @@ def assemble_plan_gate(
     untracked_rows = withdrawn["untracked"]
     resurrected_rows = withdrawn["resurrected"]
     replanned_rows = withdrawn["replanned"]
+    superseded_deliverable_rows = withdrawn["superseded_deliverable"]
     held_rows = withdrawn["held"]
     waiting_on_execution_rows = withdrawn["waiting_on_execution"]
+
+    # Corpus-wide, never reduced: two LIVE plans sharing one `deliverable_id`
+    # is an authoring question this module cannot answer from disk, so it is
+    # named rather than silently picked — see `deliverable_id_collisions`.
+    deliverable_id_collision_rows = deliverable_id_collisions(plans)
 
     # A baton whose OWNER declared a gate says so in the report —
     # example-cockpit-repo, 2026-09-11.
@@ -2152,6 +2281,8 @@ def assemble_plan_gate(
         "index_unreadable": index_unreadable,
         "resurrected": resurrected_rows,
         "replanned": replanned_rows,
+        "superseded_deliverable": superseded_deliverable_rows,
+        "deliverable_id_collisions": deliverable_id_collision_rows,
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
         "gated": gated_rows,
@@ -2161,6 +2292,8 @@ def assemble_plan_gate(
             untracked=len(untracked_rows),
             resurrected=len(resurrected_rows),
             replanned=len(replanned_rows),
+            superseded_deliverable=len(superseded_deliverable_rows),
+            deliverable_id_collisions=len(deliverable_id_collision_rows),
             shared_wave_slot=len(shared_wave_slot_rows),
         ),
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},

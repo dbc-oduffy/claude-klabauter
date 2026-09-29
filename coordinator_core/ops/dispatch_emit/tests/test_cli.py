@@ -205,3 +205,53 @@ def test_preamble_recorded_in_receipt(tmp_path, monkeypatch):
     # Emitted once as a shared const, never inlined per row -- see
     # grind_compose.py's own docstring on PREAMBLE.
     assert script_text.count("const PREAMBLE =") == 1
+
+
+def test_fire_refuses_when_a_peer_overwrites_the_script_before_firing(tmp_path, monkeypatch):
+    """coordinator-content-repo parity port, leg 3 (`emit-dispatch-workflow.py ::
+    _guard_against_fired_drift`), CLI production caller: `--fire` must
+    refuse rather than spawn a child when the on-disk script no longer
+    matches what this same call's own emit just wrote -- simulating a peer
+    overwriting the deterministic ``--out`` path in the window between this
+    process's emit and its own ``--fire`` branch.
+
+    `_dispatch_emit` is monkeypatched to overwrite the file it just wrote
+    immediately after returning -- the only way to land a peer write inside
+    that window from a single synchronous CLI call -- and `fire_workflow`
+    is monkeypatched to fail the test if reached (the guard must refuse
+    before any spawn).
+    """
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    out_path = repo_root / "state" / "queue-grind" / "out.workflow.mjs"
+    monkeypatch.chdir(repo_root)
+
+    from coordinator_core.ops.dispatch_emit import op as op_module
+
+    real_dispatch_emit = op_module._dispatch_emit
+
+    def _dispatch_emit_then_peer_overwrites(*args, **kwargs):
+        result = real_dispatch_emit(*args, **kwargs)
+        Path(result["path"]).write_bytes(b"// a peer's different emission\n")
+        return result
+
+    monkeypatch.setattr(cli_module, "_dispatch_emit", _dispatch_emit_then_peer_overwrites)
+
+    def _fire_workflow_must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("fire_workflow was called despite the drifted script")
+
+    import coordinator_core.ops.workflow_fire.fire as fire_module
+
+    monkeypatch.setattr(fire_module, "fire_workflow", _fire_workflow_must_not_be_called)
+
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(out_path),
+        "--fire",
+    ]
+
+    with pytest.raises(op_module.FiredDriftError):
+        cli_module.main(argv)
+
+    assert out_path.read_bytes() == b"// a peer's different emission\n"

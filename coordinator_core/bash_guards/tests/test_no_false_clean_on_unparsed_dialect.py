@@ -162,6 +162,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "p4_verb_fence": (
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
+    "block_venv_creation": lambda mod: "python -m venv .venv",
 }
 
 

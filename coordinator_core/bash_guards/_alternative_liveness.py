@@ -140,6 +140,7 @@ from coordinator_core.bash_guards import block_subagent_commit
 from coordinator_core.bash_guards import block_subagent_destructive_action
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write
 from coordinator_core.bash_guards import block_subagent_stash_creation
+from coordinator_core.bash_guards import block_venv_creation
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
@@ -639,6 +640,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_worktree_creation": lambda: block_worktree_creation.check(
         _payload("git worktree add ../foo", agent_id=None)
+    ),
+    "block_venv_creation": lambda: block_venv_creation.check(
+        _payload("python -m venv .venv", agent_id=None)
     ),
     "block_stash_destruction": lambda: block_stash_destruction.check(
         _payload("git stash drop", agent_id=None)

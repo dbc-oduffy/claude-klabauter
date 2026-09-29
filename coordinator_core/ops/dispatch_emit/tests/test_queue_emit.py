@@ -320,7 +320,19 @@ def test_op_refuses_queue_and_plan_together(tmp_path):
 
 
 def test_op_refuses_foreign_overwrite(tmp_path):
-    result, output_path, repo_root, queue_dir = _dispatch_queue_emit(tmp_path)
+    # Both calls pin an EXPLICIT, distinct session_id rather than relying on
+    # ambient ``resolve_session_id()`` fallback being empty. In any shell
+    # where CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/COORDINATOR_SESSION_ID
+    # is set (e.g. this repo's own tests run from inside a Claude Code
+    # session), that ambient id resolves identically for both calls in the
+    # same process, so an un-pinned second call reads its own receipt back
+    # and legitimately treats it as "re-emitting your own output" --
+    # `_refuse_foreign_emission`'s documented, correct behavior, not a bug.
+    # Pinning two distinct ids simulates an actual foreign session
+    # regardless of the ambient environment.
+    result, output_path, repo_root, queue_dir = _dispatch_queue_emit(
+        tmp_path, session_id="session-a"
+    )
 
     output_path.write_bytes(b"// a different session's emission\n")
 
@@ -329,6 +341,7 @@ def test_op_refuses_foreign_overwrite(tmp_path):
         "profile": "fixture",
         "profile_dir": str(_FIXTURE_PROFILE_DIR),
         "output_path": str(output_path),
+        "session_id": "session-b",
     }
     from coordinator_core.ops.dispatch_emit.op import ForeignEmissionError
 

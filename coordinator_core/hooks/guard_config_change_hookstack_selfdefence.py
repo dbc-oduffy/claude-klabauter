@@ -25,33 +25,25 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.hooks.support import message_envelope as _envelope
 from coordinator_core.ipc import register_op
 
-_WIKI_ANCHOR = "coordinator/docs/wiki/claude-code-extension-surface.md"
-
 _TARGET_SOURCE = "local_settings"
 
 
 def _compose_disable_all_hooks_offer() -> "_envelope.Message":
     prose = (
-        "[ConfigChange self-defence] this session's own hookstack was just "
-        "disabled (`disableAllHooks: true`) by a write outside the tool "
-        "pipeline -- `decision: \"block\"` is not honored on this event "
-        "(proven, not assumed), so this is a flag, not a revert. Verify the "
-        "write was intentional before trusting any guard silence for the "
-        "rest of this session."
+        "[ConfigChange self-defence] hookstack just disabled "
+        "(`disableAllHooks: true`) outside the tool pipeline -- a flag, "
+        "not a revert. Verify the write was intentional."
     )
-    return _envelope.compose(prose, anchor=_WIKI_ANCHOR)
+    return _envelope.compose(prose)
 
 
 def _compose_out_of_band_edit_offer() -> "_envelope.Message":
     prose = (
-        "[ConfigChange self-defence] this session's local settings file "
-        "(`.claude/settings.local.json`) was just edited by a process "
-        "outside the tool pipeline. `decision: \"block\"` is not honored on "
-        "this event (proven, not assumed), so this is a flag, not a revert "
-        "-- review the change before trusting the rest of this session's "
-        "hook behaviour."
+        "[ConfigChange self-defence] `.claude/settings.local.json` "
+        "edited outside the tool pipeline -- a flag, not a revert. "
+        "Review the change."
     )
-    return _envelope.compose(prose, anchor=_WIKI_ANCHOR)
+    return _envelope.compose(prose)
 
 
 def _file_carries_disable_all_hooks(file_path: object) -> bool:

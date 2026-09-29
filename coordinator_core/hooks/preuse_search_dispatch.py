@@ -52,10 +52,8 @@ _GENERAL_SENTINEL = "example-retrieval-repo-search-nudged"
 _AGENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 _GENERAL_ADVICE = (
-    "this repo has a code index. Who calls X, where X is defined, what "
-    "depends on it: project_symbol_callers, project_symbol, "
-    "project_semantic_search (check project_staleness_check first). Grep "
-    "stays right for literal text."
+    "this repo has a code index: project_symbol, project_symbol_callers, "
+    "project_semantic_search. Grep stays right for literal text."
 )
 
 _WB = r"(?:\\b)?"
@@ -102,21 +100,18 @@ SHAPES: Tuple[SearchShape, ...] = (
     SearchShape(
         "definition",
         _match_definition,
-        "`{symbol}` definition: project_symbol(symbol_name=\"{symbol}\") "
-        "returns its location and signature in one call.",
+        "`{symbol}` definition: project_symbol(symbol_name=\"{symbol}\").",
     ),
     SearchShape(
         "call-site",
         _match_call_site,
-        "Callers of `{symbol}`: project_symbol_callers(symbol_name=\"{symbol}\") "
-        "resolves real call edges; a text grep misses indirect calls and "
-        "names wrong callers.",
+        "Callers of `{symbol}`: project_symbol_callers(symbol_name=\"{symbol}\").",
     ),
     SearchShape(
         "bare-identifier",
         _match_bare_identifier,
-        "`{symbol}` is a symbol: project_symbol(symbol_name=\"{symbol}\") "
-        "finds its definition, project_symbol_callers its callers.",
+        "`{symbol}`: project_symbol(symbol_name=\"{symbol}\") for its "
+        "definition, project_symbol_callers for callers.",
     ),
 )
 

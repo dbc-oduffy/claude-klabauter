@@ -253,8 +253,7 @@ def _target_repo_is_outside_any_repo(target_repo: str) -> bool:
 
 
 _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE = (
-    " This guard classifies command shapes, not their effects; a script "
-    "that writes here is not checked."
+    " Shape-only: a script writing here is not checked."
 )
 
 #: write reaching the FOREIGN-class renderer at all. Named once here so

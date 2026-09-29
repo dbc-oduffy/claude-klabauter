@@ -33,8 +33,8 @@ from pathlib import Path
 from typing import List, NamedTuple
 
 from coordinator_core.completion_record_integrity import (
-    governing_plan_info,
-    hollow_reasons,
+    build_plan_index,
+    hollow_reasons_and_governing_plan_info,
 )
 
 
@@ -60,15 +60,24 @@ def sweep_repo(repo_root: Path) -> List[HollowRecordFinding]:
     if not completed_dir.is_dir():
         return []
 
+    # ONE plan-resolution scan for the whole repo (build_plan_index) plus ONE
+    # shared status_cache, instead of a per-record filesystem walk AND a
+    # second independent governing-plan lookup per record -- see
+    # `hollow_reasons_and_governing_plan_info`'s own docstring for why this
+    # was previously double work.
+    plan_index = build_plan_index(repo_root)
+    status_cache: dict = {}
+
     findings: List[HollowRecordFinding] = []
     for record_path in sorted(completed_dir.rglob("*.md")):
         rel = record_path.relative_to(repo_root).as_posix()
         if "/legacy/" in f"/{rel}":
             continue
-        reasons = hollow_reasons(record_path, repo_root)
+        reasons, info = hollow_reasons_and_governing_plan_info(
+            record_path, repo_root, plan_index=plan_index, status_cache=status_cache
+        )
         if not reasons:
             continue
-        info = governing_plan_info(record_path, repo_root)
         findings.append(
             HollowRecordFinding(
                 repo_root=str(repo_root),

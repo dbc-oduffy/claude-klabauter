@@ -36,15 +36,13 @@ def _compose_remediation() -> str:
 
     if forwarder:
         return (
-            "[cross-repo-memo remediation] exit 127 means the shell could not find "
-            "`cross-repo-memo` on PATH. The resolved forwarder for this install is "
-            f"`{forwarder}` -- invoke it directly, or add its directory to PATH."
+            "[cross-repo-memo remediation] exit 127: not on PATH. Invoke the "
+            f"resolved forwarder directly: `{forwarder}`."
         )
     return (
-        "[cross-repo-memo remediation] exit 127 means the shell could not find "
-        "`cross-repo-memo` on PATH. No settings-home forwarder resolved for this "
-        "install -- confirm the coordinator install's `bin/cross-repo-memo` "
-        "forwarder is present under `<settings-home>/bin/`."
+        "[cross-repo-memo remediation] exit 127: not on PATH, and no "
+        "settings-home forwarder resolved -- confirm `bin/cross-repo-memo` "
+        "is present under `<settings-home>/bin/`."
     )
 
 

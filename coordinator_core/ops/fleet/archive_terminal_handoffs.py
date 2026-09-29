@@ -152,6 +152,23 @@ _FAMILY = "handoff"
 _SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE = "shipped-in-unresolvable"
+#: A record carrying a `status` this repo's own handoff.schema.json does not
+#: admit (DR-084 P4 narrow: only `open`/`claimed`) — `status: complete` and
+#: its like. Terminality never keys on `status` (see `_prefilter_qualifies`),
+#: so such a record was previously indistinguishable, in the refusal report,
+#: from an ordinary open/claimed record still doing live work — both landed
+#: under `_SCAN_REASON_NOT_TERMINAL`. This tags it separately: it is an
+#: authoring defect (a value the schema refuses), not a record correctly
+#: awaiting terminality, and the sweep reports it rather than raising —
+#: widening the wire enum is explicitly out of scope (plan's Anti-scope:
+#: "A record carrying `status: complete` is a malformed record → refusal
+#: with reason, not an enum change").
+_SCAN_REASON_MALFORMED_STATUS = "malformed-status"
+#: The handoff schema's own admitted `status` values (handoff.schema.json
+#: `properties.status.enum`). An empty status is not malformed — it is
+#: merely absent, and `_classify_branch`'s Branch A already treats a bare
+#: `claimed`/`consumed` `status` under no `deployment_state` as terminal.
+_HANDOFF_STATUS_ENUM = frozenset({"open", "claimed"})
 
 _RECOMMENDED_CAP_CHOICE = 150
 
@@ -785,6 +802,12 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
 
     if deployment_lower == "in_flight" and status_lower in ("claimed", "consumed"):
         return f"{_SCAN_REASON_NOT_TERMINAL}: deployment_state=in_flight — not terminal (archive-safety)"
+    if status_lower and status_lower not in _HANDOFF_STATUS_ENUM and status_lower != "consumed":
+        return (
+            f"{_SCAN_REASON_MALFORMED_STATUS}: status={status_scalar!r} is not one of "
+            f"{sorted(_HANDOFF_STATUS_ENUM)!r} (handoff.schema.json) and "
+            f"deployment_state={deployment_scalar!r} is not terminal"
+        )
     return (
         f"{_SCAN_REASON_NOT_TERMINAL}: status={status_scalar!r} and "
         f"deployment_state={deployment_scalar!r} (not terminal)"
@@ -844,6 +867,16 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
     # _TERMINAL_DEPLOYMENT_STATES. The old test — "terminal unless
     if normalized_status in ("claimed", "consumed") and not deployment_state:
         return True, "", "consumed", False
+
+    if normalized_status and normalized_status not in _HANDOFF_STATUS_ENUM and normalized_status != "consumed":
+        return (
+            False,
+            f"{_SCAN_REASON_MALFORMED_STATUS}: status={status!r} is not one of "
+            f"{sorted(_HANDOFF_STATUS_ENUM)!r} (handoff.schema.json) and "
+            f"deployment_state={deployment_state!r} is not terminal",
+            "",
+            False,
+        )
 
     return (
         False,

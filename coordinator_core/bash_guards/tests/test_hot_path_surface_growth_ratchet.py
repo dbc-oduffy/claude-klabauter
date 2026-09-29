@@ -71,7 +71,7 @@ _guard_roster_provider: GuardRosterProvider = _live_guard_roster
 # CPython 3.11.15, against dispatch.py post-P070-C3's eager-import shed.
 _EAGER_IMPORT_CEILING = 21
 _DISPATCH_CHECKS_LINE_CEILING = 11284
-_REGISTERED_ENTRY_CEILING = 54  # + block-subagent-findings-reject (RRI-M3)
+_REGISTERED_ENTRY_CEILING = 55  # + block-venv-creation (PM directive 2026-09-29)
 
 
 def _count_module_scope_imports(source: str) -> int:

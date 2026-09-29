@@ -5499,17 +5499,12 @@ def _check_destructive_git_revert_full(
                 # below, unchanged.
                 if dotspec and verb in ("checkout", "restore"):
                     return _deny(
-                        "BLOCKED: 'git %s .' is a whole-tree revert "
-                        "(SC-DR-023) -- denied from the command alone, "
-                        "with no git-status check of what it would "
-                        "discard.\n\n"
-                        "Did you mean to scope this to your own paths?\n"
-                        "  git checkout -- <your-paths>\n"
-                        "  git restore -- <your-paths>\n\n"
-                        "Preserve first (recoverable stash of everything, "
-                        "including untracked):\n"
+                        "BLOCKED: 'git %s .' is whole-tree "
+                        "(SC-DR-023).\n\n"
+                        "Scope or preserve:\n"
+                        "  git %s -- <your-paths>\n"
                         '  git stash push -u -m "before-revert" -- <paths>'
-                        % (verb,)
+                        % (verb, verb)
                         + ("\n\nOr: %s" % _gr_note if _gr_note else "")
                     ), None
                 # Name the shape actually seen: `git checkout -f` reaches this

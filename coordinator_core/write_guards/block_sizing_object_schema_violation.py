@@ -100,8 +100,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except Exception:  # noqa: BLE001 — fail-open, never block on infra
             repo_root = cwd
 
+        # `os.path.realpath` here is comparison-only (mirrors `to_repo_
+        # relative`'s own casefold-for-matching note) -- `abs_file_path`
+        # itself, unresolved, is still what disk I/O below reads. Without
+        # this, a macOS `/var` (symlink to `/private/var`) tempdir makes
+        # `abs_file_path` and the (symlink-resolved) `repo_root` disagree on
+        # prefix, `to_repo_relative` returns `None`, and the guard silently
+        # fails to fire on every write under a symlinked tree -- a real
+        # macOS-tempdir corruption mode, not a fixture artifact.
+        import os.path as _ospath
+
         repo_rel = to_repo_relative(
-            str(abs_file_path).replace("\\", "/"), str(repo_root).replace("\\", "/")
+            _ospath.realpath(str(abs_file_path)).replace("\\", "/"),
+            _ospath.realpath(str(repo_root)).replace("\\", "/"),
         )
         if not repo_rel or not _SIZING_PATH_RE.search(repo_rel):
             return None
