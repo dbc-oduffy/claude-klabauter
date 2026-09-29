@@ -39,7 +39,7 @@ coordinator_core/diff_scoped_tests.py
 coordinator_core/doctor_envelope.py
 coordinator_core/doctrine_status.py
 coordinator_core/doctrine_surface_tiers.py
-coordinator_core/doe_root_pointer.py
+coordinator_core/content_root_pointer.py
 coordinator_core/engine_provenance_counter.py
 coordinator_core/engine_root.py
 coordinator_core/engine_root_census.py
@@ -102,7 +102,7 @@ coordinator_core/test_daily_branch.py
 coordinator_core/test_daily_day.py
 coordinator_core/test_data_root.py
 coordinator_core/test_diff_scoped_tests.py
-coordinator_core/test_doe_root_pointer.py
+coordinator_core/test_content_root_pointer.py
 coordinator_core/test_engine_root.py
 coordinator_core/test_env_locality.py
 coordinator_core/test_git_lock_retry.py
@@ -1020,7 +1020,7 @@ coordinator_core/hooks/runtime_tripwire_em_check.py
 coordinator_core/hooks/runtime_tripwire_stop_watcher.py
 coordinator_core/hooks/session_start_announce_job_mode.py
 coordinator_core/hooks/session_start_guard_plane_check.py
-coordinator_core/hooks/session_start_register_doe_claude_root.py
+coordinator_core/hooks/session_start_register_content_root_root.py
 coordinator_core/hooks/session_start_register_published_engine.py
 coordinator_core/hooks/session_start_repair_prepare_commit_msg_hook.py
 coordinator_core/hooks/session_start_write_plugin_root_breadcrumb.py
@@ -1196,7 +1196,7 @@ coordinator_core/install/tests/__init__.py
 coordinator_core/install/tests/test_bare_name_shadow_detection.py
 coordinator_core/install/tests/test_bin_family_refresh.py
 coordinator_core/install/tests/test_bin_family_sweep_coverage.py
-coordinator_core/install/tests/test_claude_doe_wrapper_windows_publish.py
+coordinator_core/install/tests/test_claude_author_wrapper_windows_publish.py
 coordinator_core/install/tests/test_console_entrypoint_manifest.py
 coordinator_core/install/tests/test_door_bare_name_ordering.py
 coordinator_core/install/tests/test_door_bare_name_resolution.py
@@ -1371,7 +1371,7 @@ coordinator_core/ops/completion_nature.py
 coordinator_core/ops/completion_ops.py
 coordinator_core/ops/configure_git.py
 coordinator_core/ops/coordinator_complete_entry.py
-coordinator_core/ops/coordinator_doe_root.py
+coordinator_core/ops/coordinator_content_root.py
 coordinator_core/ops/coordinator_render_rollup.py
 coordinator_core/ops/coordinator_setup_state.py
 coordinator_core/ops/copy_plugin_template.py
@@ -1441,9 +1441,9 @@ coordinator_core/ops/gate_dimension_review.py
 coordinator_core/ops/gate_dimension_types.py
 coordinator_core/ops/gate_tool_resolve.py
 coordinator_core/ops/gate_validate_invocable.py
-coordinator_core/ops/gen_claude_doe_launcher.py
-coordinator_core/ops/gen_claude_doe_shim.py
-coordinator_core/ops/gen_doe_root_pointer.py
+coordinator_core/ops/gen_claude_author_launcher.py
+coordinator_core/ops/gen_claude_author_shim.py
+coordinator_core/ops/gen_content_root_pointer.py
 coordinator_core/ops/generate_exec_summary.py
 coordinator_core/ops/generate_repomap.py
 coordinator_core/ops/generator_provenance.py
@@ -1482,8 +1482,8 @@ coordinator_core/ops/handoff_transition.py
 coordinator_core/ops/hibernate_machine.py
 coordinator_core/ops/init_anchor_injection_state.py
 coordinator_core/ops/initiatives_serve.py
-coordinator_core/ops/install_claude_doe_wrapper.py
-coordinator_core/ops/install_doe_claude_precommit_hook.py
+coordinator_core/ops/install_claude_author_wrapper.py
+coordinator_core/ops/install_content_root_precommit_hook.py
 coordinator_core/ops/install_health_run.py
 coordinator_core/ops/install_lfs_pre_push_hook.py
 coordinator_core/ops/install_meta_repo_precommit_hook.py
@@ -1662,7 +1662,7 @@ coordinator_core/ops/test_cmd_autorun_guard.py
 coordinator_core/ops/test_completion_ops.py
 coordinator_core/ops/test_configure_git.py
 coordinator_core/ops/test_coordinator_complete_entry.py
-coordinator_core/ops/test_coordinator_doe_root.py
+coordinator_core/ops/test_coordinator_content_root.py
 coordinator_core/ops/test_coordinator_postsync_marker_resync_check.py
 coordinator_core/ops/test_coordinator_precommit_settings_tracking_check.py
 coordinator_core/ops/test_coordinator_render_rollup.py
@@ -1702,15 +1702,15 @@ coordinator_core/ops/test_extract_scope_paths.py
 coordinator_core/ops/test_fan_out_integrator.py
 coordinator_core/ops/test_find_polluter.py
 coordinator_core/ops/test_fold_execution_record.py
-coordinator_core/ops/test_gen_claude_doe_launcher.py
-coordinator_core/ops/test_gen_claude_doe_shim.py
-coordinator_core/ops/test_gen_doe_root_pointer.py
+coordinator_core/ops/test_gen_claude_author_launcher.py
+coordinator_core/ops/test_gen_claude_author_shim.py
+coordinator_core/ops/test_gen_content_root_pointer.py
 coordinator_core/ops/test_generate_exec_summary.py
 coordinator_core/ops/test_git_maintenance.py
 coordinator_core/ops/test_hibernate_machine.py
 coordinator_core/ops/test_init_anchor_injection_state.py
-coordinator_core/ops/test_install_claude_doe_wrapper.py
-coordinator_core/ops/test_install_doe_claude_precommit_hook.py
+coordinator_core/ops/test_install_claude_author_wrapper.py
+coordinator_core/ops/test_install_content_root_precommit_hook.py
 coordinator_core/ops/test_install_meta_repo_hook_engine_root_refusal.py
 coordinator_core/ops/test_install_meta_repo_precommit_hook.py
 coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py
@@ -2406,8 +2406,8 @@ coordinator_core/ops/tests/test_gate_dimension_types.py
 coordinator_core/ops/tests/test_gate_recheck_retires_blocked_by.py
 coordinator_core/ops/tests/test_gate_tool_resolve.py
 coordinator_core/ops/tests/test_gate_validate_invocable.py
-coordinator_core/ops/tests/test_gen_claude_doe_shim_disabled_block.py
-coordinator_core/ops/tests/test_gen_claude_doe_shim_template_family_match.py
+coordinator_core/ops/tests/test_gen_claude_author_shim_disabled_block.py
+coordinator_core/ops/tests/test_gen_claude_author_shim_template_family_match.py
 coordinator_core/ops/tests/test_generator_discovery_oracle.py
 coordinator_core/ops/tests/test_generator_provenance.py
 coordinator_core/ops/tests/test_generator_provenance_ratchet.py
@@ -2501,7 +2501,7 @@ coordinator_core/ops/tests/test_queue_cluster.py
 coordinator_core/ops/tests/test_queue_family.py
 coordinator_core/ops/tests/test_queue_parity.py
 coordinator_core/ops/tests/test_queue_promote_concurrency.py
-coordinator_core/ops/tests/test_queue_promote_doe_root_param.py
+coordinator_core/ops/tests/test_queue_promote_content_root_param.py
 coordinator_core/ops/tests/test_queue_scaffold_baton.py
 coordinator_core/ops/tests/test_read_sizing_object_fields.py
 coordinator_core/ops/tests/test_reap_in_flight_claims.py
@@ -3014,7 +3014,7 @@ coordinator_core/testing/__init__.py
 coordinator_core/testing/_fixtures.py
 coordinator_core/testing/collect.py
 coordinator_core/testing/conftest.py
-coordinator_core/testing/doe_root.py
+coordinator_core/testing/content_root.py
 coordinator_core/testing/fake_engine_root.py
 coordinator_core/testing/fake_machine_local.py
 coordinator_core/testing/fleet_pin.py

@@ -1599,6 +1599,10 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     if os.name == "nt":
         sys.exit(_run_target_in_process(target_path, argv, target_claude_klabauter_root))
 
+    lib_dir = os.path.join(os.path.dirname(target_path), "lib")
+    if os.path.isdir(lib_dir):
+        prior = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = lib_dir + (os.pathsep + prior if prior else "")
     try:
         os.execv(sys.executable, [sys.executable, target_path, *argv])
     except OSError as exc:

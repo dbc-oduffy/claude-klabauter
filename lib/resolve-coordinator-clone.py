@@ -265,7 +265,7 @@ def _registry_live_path() -> str:
 
 
 # ---------------------------------------------------------------------------
-# content-root pointer — mirrors read_content_root_pointer.py::coordinator_read_content_root_pointer.
+# Content-root pointer.
 # Durable-first (DR-072): settings-home pointer, falling back to the legacy
 # ~/.claude/.coordinator-content-root during the transition window.
 # ---------------------------------------------------------------------------
