@@ -2,7 +2,7 @@
 title: "Linux cloud dogfood: install and exercise klabauter in Claude Code Cloud"
 created: 2026-09-05
 author: claude-klabauter-em
-status: draft
+status: implemented
 branch: "claude/klabauter-linux-compat-xctyyo"
 plan_id: "pln-linux-cloud-dogfood-install-an-1bb19c"
 deliverable_id: "dlv-linux-cloud-dogfood-install-and-exercise-68bf76"
