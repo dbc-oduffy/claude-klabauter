@@ -83,25 +83,33 @@ publish = _load_publish_module()
 
 def _init_risky_repo(root: Path, *, autocrlf: str) -> None:
     """A repo whose OWN config mimics an invoking-repo state the docstring
-    warns about, `core.eol=native` (= CRLF on Windows) always, plus a
-    caller-chosen `core.autocrlf` — the two regimes need DIFFERENT
-    baselines to exercise the flag each one is sensitive to (empirically
-    verified: with `core.autocrlf=true` at the repo, an attribute-free path
-    is corrupted by autocrlf regardless of `core.eol`, so `eol=lf` alone
-    cannot fix it and only `autocrlf=false` does; with `core.autocrlf=false`,
-    a `text=auto` path is corrupted by `core.eol=native` alone, so
-    `autocrlf=false` is already the baseline — redundant, hence inert — and
-    only `eol=lf` fixes it). A bare `git archive` against either — no `-c`
-    overrides — really does corrupt LF blobs; only `_extract_git_archive`'s
-    pinned pair of `-c` flags brings it back to the committed bytes in
-    both."""
+    warns about, `core.eol=crlf` always, plus a caller-chosen
+    `core.autocrlf` — the two regimes need DIFFERENT baselines to exercise
+    the flag each one is sensitive to (empirically verified: with
+    `core.autocrlf=true` at the repo, an attribute-free path is corrupted by
+    autocrlf regardless of `core.eol`, so `eol=lf` alone cannot fix it and
+    only `autocrlf=false` does; with `core.autocrlf=false`, a `text=auto`
+    path is corrupted by a CRLF `core.eol` alone, so `autocrlf=false` is
+    already the baseline — redundant, hence inert — and only `eol=lf` fixes
+    it). A bare `git archive` against either — no `-c` overrides — really
+    does corrupt LF blobs; only `_extract_git_archive`'s pinned pair of `-c`
+    flags brings it back to the committed bytes in both.
+
+    Deliberately `crlf`, not `native`: `native` resolves to CRLF only on
+    Windows (`_extract_git_archive`'s own real-world hazard, Windows-only)
+    — on macOS/Linux `native` IS `lf`, so a repo config of `core.eol=native`
+    would silently fail to reproduce ANY corruption on this dispatch's own
+    box (Darwin) regardless of the flags under test, an OS-dependent false
+    green this file's own docstring goal ("never depends on ... state, which
+    can drift") explicitly rules out. `crlf` reproduces the Windows-native
+    hazard identically on every platform this suite runs on."""
     root.mkdir(parents=True, exist_ok=True)
     _git("init", "-b", "main", cwd=root)
     _git("config", "user.email", "publish-git-archive-eol-regimes-test@claude-klabauter.test", cwd=root)
     _git("config", "user.name", "Publish Git Archive Eol Regimes Test", cwd=root)
     _git("config", "commit.gpgsign", "false", cwd=root)
     _git("config", "core.autocrlf", autocrlf, cwd=root)
-    _git("config", "core.eol", "native", cwd=root)
+    _git("config", "core.eol", "crlf", cwd=root)
 
 
 def _commit_lf_file(root: Path, rel_path: str, *, gitattributes: str | None = None) -> str:

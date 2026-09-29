@@ -122,7 +122,7 @@ def _wire_common_fakes(monkeypatch, *, src_dir: Path):
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
     monkeypatch.setattr(
         publish,
-        "_swap_publish_staging_into_dest",
+        "_swap_all_rows_into_dest",
         lambda *a, **k: None,
     )
 
@@ -173,10 +173,18 @@ def test_dryrun_and_real_run_phase_sets_differ_by_exactly_the_swap(tmp_path, mon
     dry_run_phases = {phase for (_row, phase, _wall, _cpu) in dry_run_timings}
     real_run_phases = {phase for (_row, phase, _wall, _cpu) in real_run_timings}
 
+    # DR-445 (docs/decisions/DR-445-publish-assembles-in-a-throwaway-and-
+    # moves-once.md): `process_target` no longer performs the swap in either
+    # run mode — it moved to the round orchestrator (`_run_round_dr445` /
+    # `_swap_all_rows_into_dest`), which runs it once per round, after every
+    # gate, never inside `process_target`. The two phase sets are therefore
+    # IDENTICAL now, and `PROCESS_TARGET_REAL_RUN_ONLY_PHASES` is empty.
     assert dry_run_phases.issubset(real_run_phases)
 
     assert real_run_phases - dry_run_phases == publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES
+    assert publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES == frozenset()
+    assert real_run_phases == dry_run_phases
 
     assert publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES <= real_run_phases
-    assert "_swap_publish_staging_into_dest" in real_run_phases
-    assert "_swap_publish_staging_into_dest" not in dry_run_phases
+    assert "_swap_all_rows_into_dest" not in real_run_phases
+    assert "_swap_all_rows_into_dest" not in dry_run_phases

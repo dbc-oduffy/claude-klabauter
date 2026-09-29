@@ -941,7 +941,8 @@ _ENGINE_SPLIT_ANNOUNCED = False
 
 def _norm_path_for_split_compare(path: str) -> str:
     """normcase over realpath, falling back to normcase(abspath) if realpath
-    raises (e.g. a broken junction or an inaccessible ancestor).
+    raises (e.g. a broken junction or an inaccessible ancestor), plus a
+    manual backslash/case fold on top.
 
     Plain
     abspath+normcase never resolves a symlink/junction/8.3-short-name
@@ -949,11 +950,19 @@ def _norm_path_for_split_compare(path: str) -> str:
     read as a false split. realpath closes that gap; the fallback keeps
     this function from ever raising past `_announce_engine_cli_split`'s own
     outer `except Exception`, which must never take a dispatch down.
+
+    `os.path.normcase` only folds separator/case on the host it runs on
+    (a no-op on POSIX). The two roots compared here can be Windows-style
+    strings even off a Windows host -- e.g. a dispatch root read from a
+    registry entry authored on Windows -- so a manual `\\` -> `/` and
+    lowercase fold runs unconditionally after normcase, never relying on
+    the host platform to supply it.
     """
     try:
-        return os.path.normcase(os.path.realpath(path))
+        resolved = os.path.realpath(path)
     except OSError:
-        return os.path.normcase(os.path.abspath(path))
+        resolved = os.path.abspath(path)
+    return os.path.normcase(resolved).replace("\\", "/").lower()
 
 
 def _announce_engine_cli_split(dispatch_root: str) -> None:

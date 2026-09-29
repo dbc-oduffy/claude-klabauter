@@ -390,7 +390,14 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
     def test_stale_published_pointer_falls_through_the_ladder(self) -> None:
         """A pointer naming a clone that no longer exists must not strand
         dispatch on a path with no engine in it -- with no `.claude-klabauter-live-root`
-        rung left to fall to, it now falls through to Rung 2 (registry)."""
+        rung left to fall to, it now falls through to Rung 2 (registry), and
+        -- with Rung 2 also mocked empty -- to Rung 3 (self-location). Rung 3
+        is gate-blind by construction (it resolves THIS checkout, the box the
+        test itself runs from -- see `engine_bootstrap._resolve_engine_root`'s
+        own "Rung 3 (TERMINAL)" docstring note), so it must ALSO be mocked
+        missing here to observe the genuine full-ladder exhaustion this test
+        exists to pin, rather than incidentally passing because the test
+        happens to run from inside a real claude-klabauter checkout."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -401,6 +408,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
                     os.environ, {"COORDINATOR_SETTINGS_HOME": str(settings_home)}, clear=False
                 ),
                 unittest.mock.patch.object(_mod, "_machine_local_get", return_value=None),
+                unittest.mock.patch.object(_engine_bootstrap_mod, "_walk_up_to_checkout", return_value=None),
             ):
                 with self.assertRaises(RuntimeError):
                     _mod._resolve_claude_klabauter_root()
@@ -409,7 +417,10 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
         """C3: a present-but-unstamped published mirror must not win at Rung
         1.5 -- the rung admits only a STAMPED root (`isfile(<root>/
         coordinator_core/_engine_stamp)` strictly subsumes a bare `isdir`
-        check), so a bare mkdir with no stamp falls through the ladder."""
+        check), so a bare mkdir with no stamp falls through the ladder. Rung 3
+        (self-location) is mocked missing too, for the same reason given in
+        `test_stale_published_pointer_falls_through_the_ladder` above -- it is
+        gate-blind and would otherwise resolve to this very checkout."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -423,6 +434,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
                     os.environ, {"COORDINATOR_SETTINGS_HOME": str(settings_home)}, clear=False
                 ),
                 unittest.mock.patch.object(_mod, "_machine_local_get", return_value=None),
+                unittest.mock.patch.object(_engine_bootstrap_mod, "_walk_up_to_checkout", return_value=None),
             ):
                 with self.assertRaises(
                     RuntimeError,

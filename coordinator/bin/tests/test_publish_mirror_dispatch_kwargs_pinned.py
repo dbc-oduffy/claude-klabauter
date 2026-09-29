@@ -98,7 +98,17 @@ _STRUCTURALLY_SEPARATE_KWARGS = frozenset({"changed_paths"})
 #: kwarg -- it is simply one this repo must never make REQUIRED of a consumer's
 _DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names"})
 
-_PIN_EXCLUSIONS = _STRUCTURALLY_SEPARATE_KWARGS | _DELIBERATELY_OPTIONAL_KWARGS
+#: `sync_mirror` declares `injected_paths`, but `dispatch_mirror_like` deliberately
+#: never forwards it (unlike `foreign_dir_names`, no runtime signature probe gates
+#: it): a sibling repo's own `publish_sync.py` override this tree cannot edit
+#: (`test_publish_sync_override_seam_parity.py`) does not yet declare it, and the
+#: value would be `None` on every call site today regardless -- see
+#: `dispatch_mirror_like`'s own docstring for the full reasoning.
+_NEVER_FORWARDED_KWARGS = frozenset({"injected_paths"})
+
+_PIN_EXCLUSIONS = (
+    _STRUCTURALLY_SEPARATE_KWARGS | _DELIBERATELY_OPTIONAL_KWARGS | _NEVER_FORWARDED_KWARGS
+)
 
 
 def _expected_mirror_kwargs_from_real_signature() -> frozenset[str]:

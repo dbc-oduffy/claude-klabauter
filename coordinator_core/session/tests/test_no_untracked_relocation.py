@@ -277,14 +277,13 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "outside those two swap functions (verified 2026-09-06), so this entry "
         "cannot silently widen to cover a worktree path later without the "
         "guard's own group-membership check firing on a new caller's site.",
-    # The root-dest branch (2026-08-15): a flat-mirror row whose dest_subdir is
-    # empty has dest_dir == the mirror ROOT, and renaming that root fails on
-    # Windows whenever any handle is open anywhere beneath it -- which, for a
-    # mirror that is also a live engine install, is always. That branch swaps
-    # entry-by-entry instead, so its renames operate one level lower. Same
-    # external-destination reasoning: every path here is under the sibling-repo
-    # publish destination, never this worktree.
-    ("bin", "publish.py", "_swap_publish_staging_entry", "os.replace", "os.replace(staging_entry, dest_entry)", 1): "file entry replaced in the external publish destination; staging source is this round's own copy, never claimed",
+    # The root-dest branch's own entry (`_swap_publish_staging_entry`,
+    # os.replace(staging_entry, dest_entry)) is gone: DR-445's 2026-09-29
+    # rewrite retired the whole per-row rename-based swap (`_swap_publish_
+    # staging_into_dest`/`_root`/`_entry`) in favour of a git-native
+    # commit-in-throwaway + fetch + `merge --ff-only` (or, for the
+    # `--no-commit` leg, a direct throwaway-sourced file apply) -- there is
+    # no longer a call at that site to key.
 
     # --- Category 4: sites the plan's C3 table does not cover, found by  ---
     # --- this guard's own scan and classified here against the same      ---
@@ -308,9 +307,10 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     # --- (fixed above, see `_scan_root`'s `rel = path.relative_to(root).  ---
     # --- as_posix()`) stopped masking every subdirectory finding. Same    ---
     # --- source-side discriminator as Category 4 above; none are hazards.---
-    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "_stranded_prior_dir", "Path.rename", "stray.rename(prior)", 1): "test fixture: stray/prior both resolve under pytest tmp_path -- not the process's real worktree",
-    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_h_stranded_prior_glob_metachar_dest_name_ignores_lookalike_sibling", "Path.rename", "lookalike.rename(lookalike_prior)", 1): "test fixture: lookalike/lookalike_prior both resolve under pytest tmp_path -- not the process's real worktree",
-    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_j_non_matching_directory_is_untouched", "Path.rename", "prior_shaped.rename(prior)", 1): "test fixture: prior_shaped/prior both resolve under pytest tmp_path -- not the process's real worktree",
+    # test_publish_swap_preserves_dest_git.py's own three entries here are
+    # gone: that whole file was deleted (2026-09-29, DR-445's swap rewrite)
+    # along with the `_swap_publish_staging_into_dest` whole-tree branch it
+    # regression-tested.
     ("coordinator_core", "ops/reap_orphaned_agent_dirs.py", "_archive_candidate", "Path.rename", "agent_dir.rename(archive_dest)", 1): "agent_dir lives under .git/coordinator-sessions/.agents/, categorically outside claimable space -- same reasoning as session/reap.py's already-allowlisted _reap_stale_agents entry, which this function deliberately mirrors",
     ("coordinator_core", "ops/test_assert_no_dangling_plan_backlinks.py", "test_archive_round_trip_id_citation_survives_and_gate_stays_clean", "os.rename", "os.rename(os.path.join(root, plan_rel), os.path.join(root, dest_rel))", 1): "test fixture: root resolves under pytest tmp_path -- not the process's real worktree",
     ("coordinator_core", "ops/test_install_content_root_precommit_hook.py", "test_hook_survives_the_repo_being_relocated", "Path.rename", "repo.rename(moved)", 1): "test fixture: repo/moved both resolve under pytest tmp_path -- not the process's real worktree",

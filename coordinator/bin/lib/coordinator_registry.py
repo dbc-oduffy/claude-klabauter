@@ -727,3 +727,13 @@ def content_root() -> str:
         "repos.content_root not set in machine-local registry and neither "
         "REPO_CONTENT_ROOT nor CONTENT_ROOT (legacy alias) env var is set"
     )
+
+
+# publish-time alias: percolate's base depersonalize table text-rewrites this
+# module's `content_root` identifier to `content_root` in the published mirror, but
+# leaves the live source untouched. A published CLI's `from coordinator_registry
+# import content_root` therefore resolves against the live tree's `bin/lib` (see
+# coordinator/bin/tests/test_published_cli_cross_tree_imports_resolve.py) only if
+# both spellings are exported here. Self-assigns harmlessly once percolate
+# renames `content_root` -> `content_root` in the mirror.
+Content_root = content_root

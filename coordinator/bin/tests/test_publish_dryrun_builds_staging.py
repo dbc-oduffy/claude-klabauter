@@ -170,7 +170,7 @@ def test_dry_run_builds_staging_with_post_transform_bytes_and_leaves_dest_byte_i
     swap_calls: list = []
     monkeypatch.setattr(
         publish,
-        "_swap_publish_staging_into_dest",
+        "_swap_all_rows_into_dest",
         lambda *a, **k: swap_calls.append((a, k)),
     )
 
@@ -247,7 +247,7 @@ def test_dry_run_staging_tree_reclaimed_on_exception_path(tmp_path, monkeypatch)
     swap_calls: list = []
     monkeypatch.setattr(
         publish,
-        "_swap_publish_staging_into_dest",
+        "_swap_all_rows_into_dest",
         lambda *a, **k: swap_calls.append((a, k)),
     )
 

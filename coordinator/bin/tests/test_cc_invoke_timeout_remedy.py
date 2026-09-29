@@ -471,26 +471,34 @@ _age = _load_bin_module("append_goal_event_timeout_remedy_test", "append-goal-ev
 
 
 class TestAppendGoalEventUsesSharedTimeoutMessage(_ComputedCeilingFixture):
-    """[P3] regression: append-goal-event.py's `_cc_invoke_bare` used to hand-build its own
-    "engine timeout after Ns" message with no ceiling derivation — a third, divergent
-    implementation of the same TimeoutExpired branch. Must now route through cc_invoke.py's
-    shared `_timeout_exceeded_message`/`_op_timeout_ceiling`, matching the fixture's
-    computed ceiling exactly (not a flat fallback).
+    """[P3] regression, superseded by P055-C1 (78ee4de534): `_cc_invoke_bare` used to
+    hand-build its own "engine timeout after Ns" message with no ceiling derivation --
+    a third, divergent implementation of the same TimeoutExpired branch, fixed by
+    routing through cc_invoke.py's shared `_timeout_exceeded_message`/`_op_timeout_ceiling`.
+
+    P055-C1 then converted `_cc_invoke_bare` off its `subprocess.run(timeout=...)` spawn
+    entirely, onto `_dispatch_argv`'s in-process call (see that commit's docstring on the
+    conversion: no external timeout wrapper is reintroduced, matching every other
+    `_dispatch_argv` consumer). There is no longer a `subprocess.run` call on this path for
+    `TimeoutExpired` to fire from, so the shared-ceiling message this test pinned no longer
+    applies here -- `mutating_op_names`-style coverage of `_timeout_exceeded_message` itself
+    stays live via `TestTimeoutExceededMessageShape` above, against `cc_invoke.py` directly.
     """
 
-    def test_timeout_message_uses_shared_computed_ceiling(self) -> None:
+    def test_no_subprocess_timeout_wrapper_remains_on_the_in_process_path(self) -> None:
         with unittest.mock.patch.object(
             _age, "_resolve_claude_klabauter_root", return_value="/fake/mr"
         ), unittest.mock.patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(["python3"], timeout=_COMPUTED_CEILING),
-        ), self.assertRaises(RuntimeError) as ctx:
-            _age._cc_invoke_bare(_OP, {}, "/repo")
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                _age._cc_invoke_bare(_OP, {}, "/repo")
         msg = str(ctx.exception)
-        self.assertNotIn("CLAUDE_KLABAUTER_ROOT", msg)
-        self.assertNotIn("installation", msg)
-        self.assertIn(str(_COMPUTED_CEILING), msg)
-        self.assertIn(str(_ENGINE_BUDGET), msg)
+        # The mocked subprocess.run is never reached (P055-C1 dropped the spawn) --
+        # the raise instead comes from _dispatch_argv's own op-error ladder, not the
+        # TimeoutExpired branch this test class used to pin.
+        self.assertNotIn(str(_COMPUTED_CEILING), msg)
 
 
 class TestMachineLocalGetDistinguishesTimeoutFromAbsent(unittest.TestCase):
@@ -682,14 +690,24 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
         """The same C4 cut, on the message a warm-served refusal actually
         prints. The cc_invoke remedies above were fixed first and this one was
         missed -- it surfaced verbatim in the next indeterminate after they
-        shipped, which is the case for pinning every copy rather than one."""
+        shipped, which is the case for pinning every copy rather than one.
+
+        Superseded by P164-C3 (b94b2bb1c6, 2026-09-23): the "Reconcile against
+        real state ... finding no trace means it is safe to re-run" sentence
+        this test used to require was ITSELF a false absence-of-evidence
+        claim ("finding no trace means it is safe to re-run") and was cut
+        whole, not reworded -- see client.py's own NEGATIVE SPEC comment and
+        coordinator_core/warm/tests/test_indeterminate_message_makes_no_absence_claim.py,
+        which pins the opposite (its absence) for this exact constant.
+        """
         from coordinator_core.warm import client
 
         text = " ".join(client._MUTATION_INDETERMINATE_MESSAGE.split())
         self.assertNotIn("slow op is not a hung one", text)
         self.assertNotIn("does not stop when this client", text)
-        self.assertIn("Reconcile against real state", text)
+        self.assertNotIn("finding no trace means it is safe to re-run", text)
         self.assertIn("may never have started", text)
+        self.assertIn("absence of a trace is not evidence", text)
 
     def test_no_branch_names_an_override_key(self):
         """Unchanged contract from this file's original subject — re-asserted

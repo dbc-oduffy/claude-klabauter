@@ -24,10 +24,49 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# `_init_committed_git_repo` (below) spawns real `git` subprocesses, needed
+# only for `TestArgvParityGateMainWiring`'s DR-445 throwaway-clone
+# fixtures — module-scoped since pytest markers don't compose per-class
+# here without also gating every other (non-spawning) class in this file,
+# and a stray extra `cadence`/`spawns_process` marker on an already-fast
+# unit test is harmless.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _init_committed_git_repo(root: Path) -> None:
+    """DR-445 (docs/decisions/DR-445-publish-assembles-in-a-throwaway-and-
+    moves-once.md): `main()` now clones every touched destination repo root
+    into a throwaway before running any end-of-run gate
+    (`coordinator/lib/percolate/throwaway_tree.py::build_throwaway_tree`),
+    which needs a REAL git repo with a committed HEAD to clone from — a
+    requirement `TestArgvParityGateMainWiring`'s plain-directory fixtures
+    (`_write_clean_tree`/`_write_unaccepted_tree`, authored before DR-445,
+    when gates read `repo_root` directly) never had to satisfy."""
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            creationflags=_NO_WINDOW,
+        )
+
+    _git("init", "-q", "-b", "main")
+    _git("config", "user.email", "publish-argv-parity-gate-test@claude-klabauter.test")
+    _git("config", "user.name", "Publish Argv Parity Gate Test")
+    _git("config", "commit.gpgsign", "false")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "chore: init")
 
 
 def _load_publish_module():
@@ -319,7 +358,46 @@ class _StubClaudeKlabauter:
 
 
 def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
+    # DR-445 (docs/decisions/DR-445-publish-assembles-in-a-throwaway-and-
+    # moves-once.md): returning `None` here (as this fake used to) makes
+    # `_run_round_dr445` fall back to an EMPTY `StagedRowResult` (its own
+    # "a test double that advances totals.processed without returning a
+    # StagedRowResult" carve-out). For a TOPLEVEL row (`target.dest_dir ==
+    # repo_root`, exactly this file's fixture shape) that empty staging dir
+    # gets overlaid onto the throwaway clone's ROOT — wholesale replacing
+    # the entire assembled tree with nothing, silently erasing the fixture
+    # content (`coordinator_core/*_assembler.py`, `coordinator/bin/known-
+    # cli.py`) the argv-parity gate exists to read. A real `process_target`
+    # never returns `None` on a real run's success path — this fake must
+    # actually stage a copy of the row's already-published content (this
+    # fixture never changes anything; it just needs to survive the
+    # overlay) so the throwaway the gate reads matches `target.dest_dir`.
+    import shutil
+    import tempfile as _tempfile
+
+    staging_dir = Path(
+        _tempfile.mkdtemp(prefix=f".{target.dest_dir.name}.publish-staging-", dir=str(target.dest_dir.parent))
+    )
+    for entry in target.dest_dir.iterdir():
+        if entry.name == ".git":
+            continue
+        dest_entry = staging_dir / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, dest_entry)
+        else:
+            shutil.copy2(entry, dest_entry)
+
     totals.processed += 1
+    return publish.StagedRowResult(
+        staging_dir=staging_dir,
+        row_visited=set(),
+        row_changed_files=None,
+        row_removed_files=set(),
+        row_published_files=set(),
+        report_text="",
+        synced=0,
+        deleted=0,
+    )
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
@@ -376,6 +454,7 @@ class TestArgvParityGateMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         _write_unaccepted_tree(repo_root)
+        _init_committed_git_repo(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
@@ -390,6 +469,7 @@ class TestArgvParityGateMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         _write_clean_tree(repo_root)
+        _init_committed_git_repo(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
@@ -402,6 +482,7 @@ class TestArgvParityGateMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         _write_unaccepted_tree(repo_root)
+        _init_committed_git_repo(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("engine-row", repo_root))
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
