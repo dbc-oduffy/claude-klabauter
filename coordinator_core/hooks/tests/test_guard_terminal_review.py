@@ -304,7 +304,7 @@ def test_refusal_register(tmp_path):
     result = m.op(_payload(repo, sid))
     assert result is not None
     message = result["message"]
-    assert "follow-up" in message
+    assert "Inline-Review:" in message
     assert "amend" not in message.lower()
 
 

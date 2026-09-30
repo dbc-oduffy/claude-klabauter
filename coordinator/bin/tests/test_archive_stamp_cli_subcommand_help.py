@@ -99,16 +99,16 @@ class TestDeprecatedAliasDispatch(unittest.TestCase):
     # positional handling with every existing test still green.
     def test_consume_handoff_dispatches_like_claim_handoff(self):
         mock_mod = unittest.mock.Mock()
-        with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
-            rc = _cli.main(["consume-handoff", "state/handoffs/x.md"])
-        self.assertEqual(rc, mock_mod.cs_claim_handoff.return_value)
-        mock_mod.cs_claim_handoff.assert_called_once_with("state/handoffs/x.md")
-
-        mock_mod.reset_mock()
-        with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
-            rc = _cli.main(["claim-handoff", "state/handoffs/x.md"])
-        self.assertEqual(rc, mock_mod.cs_claim_handoff.return_value)
-        mock_mod.cs_claim_handoff.assert_called_once_with("state/handoffs/x.md")
+        mock_mod.cs_claim_handoff.return_value = {"exit_code": 0, "writes": {}}
+        for verb in ("consume-handoff", "claim-handoff"):
+            mock_mod.reset_mock()
+            with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
+                with unittest.mock.patch("sys.stdout"):
+                    rc = _cli.main([verb, "state/handoffs/x.md"])
+            self.assertEqual(rc, 0)
+            mock_mod.cs_claim_handoff.assert_called_once_with(
+                "state/handoffs/x.md", return_result=True
+            )
 
     def test_unconsume_handoff_dispatches_like_unclaim_handoff(self):
         mock_mod = unittest.mock.Mock()

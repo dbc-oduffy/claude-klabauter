@@ -1804,8 +1804,7 @@ def test_ac3_outside_repo_mkdir_deny_names_command_shapes_not_effects(env, monke
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "classifies command shapes, not their effects" in reason
-    assert "script that writes here is not checked" in reason
+    assert "Shape-only: a script writing here is not checked." in reason
 
 
 def test_foreign_repo_branch_does_not_carry_the_shapes_not_effects_clause():
@@ -1824,7 +1823,7 @@ def test_foreign_repo_branch_does_not_carry_the_shapes_not_effects_clause():
     )
 
     for rendered in (foreign_em, foreign_subagent, foreign_unknown):
-        assert "classifies command shapes, not their effects" not in rendered
+        assert "Shape-only: a script writing here is not checked." not in rendered
         assert "script that writes here is not checked" not in rendered
 
 

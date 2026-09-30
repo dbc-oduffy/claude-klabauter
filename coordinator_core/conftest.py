@@ -818,9 +818,13 @@ def _fail_on_environ_leak(request):
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    from coordinator_core.ipc import allow_unstamped_dispatch
+    from coordinator_core.ipc import PYTEST_UNSTAMPED_DISPATCH_ENV, allow_unstamped_dispatch
 
     allow_unstamped_dispatch()
+    # Spawned CLIs honour this only while pytest is running a test (see
+    # `ipc.allow_unstamped_dispatch_under_pytest`); set here so it is part of
+    # every test's environ baseline rather than reported as a leak.
+    os.environ[PYTEST_UNSTAMPED_DISPATCH_ENV] = "1"
 
 
 @pytest.fixture

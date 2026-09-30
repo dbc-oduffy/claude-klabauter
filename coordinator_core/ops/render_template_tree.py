@@ -18,7 +18,7 @@ from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "render-template-tree.sh"
 
@@ -93,7 +93,7 @@ def _co_located_render_single() -> Optional[str]:
     """
     this_repo_root = Path(__file__).resolve().parents[2]
     candidate = this_repo_root / "coordinator" / "bin" / "render-template.py"
-    if candidate.is_file() and is_executable(candidate):
+    if candidate.is_file():
         return str(candidate)
     return None
 
@@ -114,7 +114,7 @@ def _find_render_single() -> Optional[str]:
         )
         return None
     candidate = str(content_root / "bin" / "render-template.py")
-    if os.path.isfile(candidate) and is_executable(candidate):
+    if os.path.isfile(candidate):
         return candidate
     print(
         f"render-template-tree: cannot find executable render-template.py at: {candidate}",

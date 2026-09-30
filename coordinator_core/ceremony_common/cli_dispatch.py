@@ -154,13 +154,12 @@ seen on disk: the joined `<content_root>/coordinator/bin` must be a real
 directory (one `is_dir()` inside the resolver), which also covers the stale
 or moved DoE clone -- a resolved-but-gone root is treated exactly like an
 unresolvable one, never surfaced as a `FileNotFoundError` three calls later.
-The join is deliberately NOT layout-aware: a flat OSS/marketplace root (whose
-`schemas/` and `bin/` sit directly under it, no `coordinator/` subdirectory)
-joins to a `coordinator/bin` that does not exist, so it is never an
-admissible plugin-local dispatch source even when `coordinator_content_root_in_
-process()` itself resolves it (at rung 2.75). Admitting a published mirror's
-scripts would be a product decision about consumer boxes this module does
-not make.
+The join is layout-aware through `_content_root_primitive.content_root_for`:
+a private clone resolves `<content_root>/coordinator/bin`, and a flat mirror (the
+cloud install -- `bin/` directly under the root, marked by
+`.claude-plugin/plugin.json`) resolves `<content_root>/bin`. A cloud session runs
+from exactly that mirror, so refusing it left every plugin-local directive
+unresolvable there.
 
 `sys.path` FINDING, FOLDED INTO THE EXISTING NEGATIVE SPEC BELOW: a
 plugin-local script resolved through this second root is loaded through the
@@ -229,6 +228,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
 
+from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
@@ -338,13 +338,15 @@ def resolve_plugin_cli_script_root() -> Optional[Path]:
     never reaches `resolve_coordinator_clone.resolve_clone_root()`'s
     `subprocess.run`. Returns `None`, never raises, when the ladder cannot
     resolve a root AND, equally, when it resolves a root whose joined
-    `coordinator/bin` is not a directory (a stale/moved clone, or a
-    flat-layout root admissible only up to rung 2.75 itself -- the join is
-    deliberately not layout-aware, see module docstring)."""
+    content root has no `bin` directory (a stale/moved clone). Private
+    (`<root>/coordinator`) and flat-mirror roots both resolve."""
     root, _rung = coordinator_content_root_in_process()
     if root is None:
         return None
-    candidate = Path(root) / "coordinator" / "bin"
+    content = content_root_for(root)
+    if content is None:
+        return None
+    candidate = content / "bin"
     return candidate if candidate.is_dir() else None
 
 

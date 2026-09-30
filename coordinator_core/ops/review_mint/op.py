@@ -108,6 +108,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import derive_review_tier
+from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.ops.review_mint.compose import compose
 from coordinator_core.ops.review_mint.roster import Stage, parse_stages
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -116,7 +117,9 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 # path-guarded output_path -- no fixed target, purely caller-named.
 GENERATES = []
 
-_REVIEW_ROSTER_FRAGMENT_RELPATH = "coordinator/contract/review-roster-fragment.json"
+#: Relative to the content root, which is `<doe>/coordinator` in a private
+#: clone and the checkout root itself in the flat mirror.
+_REVIEW_ROSTER_FRAGMENT_RELPATH = "contract/review-roster-fragment.json"
 
 # Pre-execution wording -- distinct from dispatch.emit's post-execution
 # "Review this plan's completed work." (plan C4 body: neither caller
@@ -150,7 +153,13 @@ def load_fragment(repo_root: Optional[Path] = None) -> dict:
             "root (read_content_root_pointer() returned empty) -- cannot load "
             f"{_REVIEW_ROSTER_FRAGMENT_RELPATH}"
         )
-    fragment_path = Path(content_root) / _REVIEW_ROSTER_FRAGMENT_RELPATH
+    content_root = content_root_for(content_root)
+    if content_root is None:
+        raise FileNotFoundError(
+            f"review.mint_workflow: {content_root} is neither a private clone "
+            "(no coordinator/) nor a flat mirror (no plugin marker)"
+        )
+    fragment_path = content_root / _REVIEW_ROSTER_FRAGMENT_RELPATH
     if not fragment_path.is_file():
         raise FileNotFoundError(
             f"review roster fragment not found at {fragment_path}"

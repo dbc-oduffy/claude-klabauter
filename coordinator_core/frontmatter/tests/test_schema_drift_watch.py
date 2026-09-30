@@ -893,8 +893,16 @@ class TestCockpitRepoPathResolution:
     def test_env_override_wins_when_valid(
         self, fake_cockpit: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr("coordinator_core.machine_profile.machine_profile", lambda: "author")
         monkeypatch.setenv("REPO_EXAMPLE_COCKPIT_REPO", str(fake_cockpit))
         assert resolve_cockpit_repo_path() == fake_cockpit
+
+    def test_non_author_profile_resolves_no_cockpit_clone(
+        self, fake_cockpit: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("coordinator_core.machine_profile.machine_profile", lambda: "consumer")
+        monkeypatch.setenv("REPO_EXAMPLE_COCKPIT_REPO", str(fake_cockpit))
+        assert resolve_cockpit_repo_path() is None
 
     def test_bogus_env_override_does_not_win(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

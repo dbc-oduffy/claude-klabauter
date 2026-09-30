@@ -914,14 +914,15 @@ def test_an_existing_completion_block_stamps_nothing(tmp_path: Path) -> None:
 def test_an_absent_transcript_stamps_nothing(tmp_path: Path) -> None:
     """AC (no-write case): an absent/markerless transcript -- the sidecar is
     never resolved at all."""
-    _write_sidecar_with_receipt(tmp_path, None)
+    sidecar = _write_sidecar_with_receipt(tmp_path, None)
+    before = sidecar.read_bytes()
     git = _GitStub({})
     marks: list = []
 
     _invoke(tmp_path, git, marks, transcript=_write_transcript(tmp_path, None))
 
-    # No exception, no crash; nothing to assert on the sidecar since it was
-    # never even opened -- the absence of a raise IS the assertion.
+    assert sidecar.read_bytes() == before
+    assert marks == []
 
 
 def test_a_mis_anchored_doc_stamps_nothing(tmp_path: Path) -> None:

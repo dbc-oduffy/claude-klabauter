@@ -465,3 +465,16 @@ def test_review_mint_workflow_mints_a_fresh_nonce_each_call_by_default(tmp_path,
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("layout", ["private", "flat"])
+def test_load_fragment_resolves_private_and_flat_mirror(tmp_path, monkeypatch, layout):
+    root = tmp_path / "doe"
+    content = root / "coordinator" if layout == "private" else root
+    (content / "contract").mkdir(parents=True)
+    (content / "contract" / "review-roster-fragment.json").write_text('{"schema": "x"}', encoding="utf-8")
+    if layout == "flat":
+        (root / ".claude-plugin").mkdir()
+        (root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(root))
+    assert review_mint_op.load_fragment() == {"schema": "x"}

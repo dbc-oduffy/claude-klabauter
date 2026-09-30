@@ -1300,8 +1300,8 @@ def test_baseline_absorbs_new_sites_once(tmp_path):
     note (this must stay fast)."""
     baseline_path = tmp_path / "deep-per-item-spawn-worklist.json"
 
-    site_a = AmpSite(path="a.py", lineno=1, enclosing="check", route="a-direct", callee="wrapper")
-    site_b = AmpSite(path="b.py", lineno=2, enclosing="check", route="a-direct", callee="wrapper")
+    site_a = AmpSite(path="a.py", lineno=1, enclosing="check", route="a-direct", callee="wrapper", ordinal=0)
+    site_b = AmpSite(path="b.py", lineno=2, enclosing="check", route="a-direct", callee="wrapper", ordinal=0)
 
     rows_first = [
         {"site": site_a, "depth": 1, "reachable_spawn_sites": 3},
@@ -1327,7 +1327,7 @@ def test_baseline_absorbs_new_sites_once(tmp_path):
 def test_baseline_top_capped_at_three_highest_reachable():
     """`top` carries AT MOST 3 rows, highest `reachable_spawn_sites` first."""
     sites = [
-        AmpSite(path=f"m{i}.py", lineno=i, enclosing="check", route="a-direct", callee="wrapper")
+        AmpSite(path=f"m{i}.py", lineno=i, enclosing="check", route="a-direct", callee="wrapper", ordinal=0)
         for i in range(5)
     ]
     rows = [

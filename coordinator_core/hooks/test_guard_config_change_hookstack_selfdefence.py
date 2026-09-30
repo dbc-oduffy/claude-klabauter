@@ -12,7 +12,7 @@ def test_disable_all_hooks_write_flags_the_sharper_message(tmp_path):
     result = m._handler({"source": "local_settings", "file_path": str(settings_file)})
     ctx = result["hookSpecificOutput"]["additionalContext"]
     assert result["hookSpecificOutput"]["hookEventName"] == "ConfigChange"
-    assert "hookstack was just disabled" in ctx
+    assert "hookstack just disabled" in ctx
 
 
 def test_generic_out_of_band_edit_flags_the_generic_message(tmp_path):
@@ -21,7 +21,7 @@ def test_generic_out_of_band_edit_flags_the_generic_message(tmp_path):
 
     result = m._handler({"source": "local_settings", "file_path": str(settings_file)})
     ctx = result["hookSpecificOutput"]["additionalContext"]
-    assert "edited by a process outside the tool pipeline" in ctx
+    assert "edited outside the tool pipeline" in ctx
 
 
 def test_non_local_settings_source_is_a_no_op():

@@ -62,11 +62,11 @@ _TEMPLATE_PATH = (
 )
 
 _FALSIFIER_COMMENT_LINES = [
-    "#   falsifier:",
-    "#     how:",
-    "#     baseline_output:",
-    "#     baseline_ref:",
-    "#     expected_when_true:",
+    "  # falsifier:",
+    "  #   how:",
+    "  #   baseline_output:",
+    "  #   baseline_ref:",
+    "  #   expected_when_true:",
 ]
 
 _CRITERION_LIVE_LINES = [
@@ -97,7 +97,7 @@ class ScaffoldPlanEmitsCommentedFalsifierBlockTest(unittest.TestCase):
 
     def test_falsifier_heading_is_commented(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
-        self.assertIn("#   falsifier:", content)
+        self.assertIn("  # falsifier:\n", content)
         self.assertNotIn("\n  falsifier:", content)
 
     def test_all_falsifier_subfields_are_commented(self):
@@ -109,7 +109,7 @@ class ScaffoldPlanEmitsCommentedFalsifierBlockTest(unittest.TestCase):
 
     def test_expected_when_true_is_present_new_2_8_0_field(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
-        self.assertIn("#     expected_when_true:", content)
+        self.assertIn("  #   expected_when_true:", content)
 
 
 class ScaffoldPlanFalsifierNeverALiveStubTest(unittest.TestCase):
@@ -179,7 +179,7 @@ class TemplateMirrorParityTest(unittest.TestCase):
         falsifier_block = [
             fl for fl in fm_lines
             if any(tok in fl for tok in falsifier_tokens)
-            or fl.strip().startswith("#     how:")
+            or fl.strip().startswith("#   how:")
         ]
         self.assertTrue(falsifier_block, "no falsifier-subblock literal lines found in template")
         for fl in falsifier_block:
@@ -205,11 +205,11 @@ class TemplateMirrorParityTest(unittest.TestCase):
         scaffold_falsifier = [
             ln for ln in scaffold_lines if ln.strip().startswith("#") and (
                 "prime_exit_criterion" in ln or "statement:" in ln
-                or "derived_from:" in ln or ln.strip() == "#   falsifier:"
-                or ln.strip().startswith("#     how:")
-                or ln.strip().startswith("#     baseline_output:")
-                or ln.strip().startswith("#     baseline_ref:")
-                or ln.strip().startswith("#     expected_when_true:")
+                or "derived_from:" in ln or ln.strip() == "# falsifier:"
+                or ln.strip().startswith("#   how:")
+                or ln.strip().startswith("#   baseline_output:")
+                or ln.strip().startswith("#   baseline_ref:")
+                or ln.strip().startswith("#   expected_when_true:")
             )
         ]
 
@@ -222,11 +222,11 @@ class TemplateMirrorParityTest(unittest.TestCase):
         template_falsifier = [
             fl for fl in fm_lines if fl.strip().startswith("#") and (
                 "prime_exit_criterion" in fl or "statement:" in fl
-                or "derived_from:" in fl or fl.strip() == "#   falsifier:"
-                or fl.strip().startswith("#     how:")
-                or fl.strip().startswith("#     baseline_output:")
-                or fl.strip().startswith("#     baseline_ref:")
-                or fl.strip().startswith("#     expected_when_true:")
+                or "derived_from:" in fl or fl.strip() == "# falsifier:"
+                or fl.strip().startswith("#   how:")
+                or fl.strip().startswith("#   baseline_output:")
+                or fl.strip().startswith("#   baseline_ref:")
+                or fl.strip().startswith("#   expected_when_true:")
             )
         ]
 

@@ -141,7 +141,10 @@ def test_the_hint_names_the_declared_empty_and_routes_to_the_op():
 
 
 def test_the_new_plan_rule_set_does_not_reach_other_schemas():
-    assert sv._CROSS_FIELD_RULES_BY_SCHEMA["plan"] == [sv._cf_mise_prepped_stamp_quartet]
+    assert sv._CROSS_FIELD_RULES_BY_SCHEMA["plan"] == [
+        sv._cf_mise_prepped_stamp_quartet,
+        sv._cf_execution_restamp_quartet,
+    ]
     for name, rules in sv._CROSS_FIELD_RULES_BY_SCHEMA.items():
         if name != "plan":
             assert sv._cf_mise_prepped_stamp_quartet not in rules

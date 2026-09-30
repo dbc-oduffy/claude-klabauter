@@ -768,6 +768,10 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         from coordinator_core.ipc import allow_unstamped_dispatch
 
         allow_unstamped_dispatch()
+    else:
+        from coordinator_core.ipc import allow_unstamped_dispatch_under_pytest
+
+        allow_unstamped_dispatch_under_pytest()
 
     # 0. --dump-op-timeouts short-circuit -- read-only, no op dispatch, no
     #    repo_root resolution, no params parsing. Runs BEFORE the op-required

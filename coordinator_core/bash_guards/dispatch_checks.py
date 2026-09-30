@@ -6486,8 +6486,7 @@ def check_blanket_git_add(
         "For many files (keep only yours), use instead:\n"
         "  git ls-files -om --exclude-standard -- <dir> > \"${TMPDIR:-/tmp}/p\"\n"
         "  git add --pathspec-from-file=\"${TMPDIR:-/tmp}/p\"\n"
-        "  git commit -m <subject> --pathspec-from-file=\"${TMPDIR:-/tmp}/p\"\n"
-        "Gitignore `.coordinator-local/`."
+        "  git commit -m <subject> --pathspec-from-file=\"${TMPDIR:-/tmp}/p\""
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)

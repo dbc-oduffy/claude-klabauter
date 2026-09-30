@@ -85,7 +85,7 @@ _MODE = "handoffs_for_plan"
 
 _PLAN_HANDOFF_TYPES = ("handoff", "handoff-archived")
 
-_CLAIMED_BY_KEY = "claimed_by"
+_CLAIMED_BY_KEY = "claimed_by"  # dr084: write-not-read, output dict key emitted to callers, not a frontmatter lookup
 
 
 def _candidate_from_record(record: dict, *, record_type: str, plan_id: str) -> dict:

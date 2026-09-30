@@ -28,7 +28,7 @@ _DOC_PATH = (
 )
 
 _TABLE_ROW_RE = re.compile(
-    r"^\|\s*(?P<id>[^|]+?)\s*\|\s*[^|]+?\s*\|\s*"
+    r"^\|\s*(?P<id>[^|]+?)\s*\|\s*"
     r"(?P<classification>action-enforcing|syntax-enforcing)\s*\|"
 )
 

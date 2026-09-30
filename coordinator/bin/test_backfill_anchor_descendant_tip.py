@@ -178,11 +178,13 @@ def test_partial_order_three_plus_candidates_dominant_found(tmp_path):
 
 def test_missing_topo_output_is_not_silently_ignored(tmp_path, monkeypatch=None):
     mod = _load_module()
+    import workday_ceremony_lib as wc
+
     _init_repo(tmp_path)
     c1 = _commit(tmp_path, "a.txt", "1\n", "c1")
     c2 = _commit(tmp_path, "a.txt", "2\n", "c2")
 
-    real_git_out = mod.wc.git_out
+    real_git_out = wc.git_out
 
     def _fake_git_out(*args, **kwargs):
         out = real_git_out(*args, **kwargs)
@@ -191,11 +193,11 @@ def test_missing_topo_output_is_not_silently_ignored(tmp_path, monkeypatch=None)
             return "\n".join(lines)
         return out
 
-    mod.wc.git_out = _fake_git_out
+    wc.git_out = _fake_git_out
     try:
         tip = mod.compute_descendant_tip(str(tmp_path), [c1, c2])
     finally:
-        mod.wc.git_out = real_git_out
+        wc.git_out = real_git_out
 
     if tip is not None:
         _fail(

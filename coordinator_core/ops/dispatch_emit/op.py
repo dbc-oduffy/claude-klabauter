@@ -190,15 +190,15 @@ from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spa
 from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
+from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.ops.review_mint.op import load_fragment as _load_review_roster_fragment
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
-#: Sibling-relative path of DoE's roster-v5 stage-schema file (AC22) --
-#: joined onto the SAME sibling root ``review_mint.op.load_fragment``
-#: already resolves the roster fragment from (``read_content_root_pointer()``),
-#: never a second cross-repo pointer.
-_REVIEW_STAGE_SCHEMA_RELPATH = "coordinator/schemas/review-stage.schema.json"
+#: Content-root-relative path of DoE's roster-v5 stage-schema file (AC22) --
+#: resolved from the SAME pointer ``review_mint.op.load_fragment`` uses,
+#: through ``content_root_for`` so the flat mirror resolves too.
+_REVIEW_STAGE_SCHEMA_RELPATH = "schemas/review-stage.schema.json"
 
 
 def _load_review_roster_and_stage_schemas() -> tuple:
@@ -221,7 +221,10 @@ def _load_review_roster_and_stage_schemas() -> tuple:
     if not content_root:
         return fragment, None
 
-    schema_path = Path(content_root) / _REVIEW_STAGE_SCHEMA_RELPATH
+    content_root = content_root_for(content_root)
+    if content_root is None:
+        return fragment, None
+    schema_path = content_root / _REVIEW_STAGE_SCHEMA_RELPATH
     if not schema_path.is_file():
         return fragment, None
 

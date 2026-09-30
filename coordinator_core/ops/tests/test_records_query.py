@@ -1286,6 +1286,10 @@ class TestTypeToGlobDerivedGate:
         "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator-claude/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
         "workstream":              "record-shaped (state/workstreams/*.yaml) — not yet wired, out of scope for this fix",
         "workstream-event":        "record-shaped (state/workstreams/events/*.yaml) — not yet wired, out of scope for this fix",
+        "plan-approvability-judgment": "JSON glob (state/review-trail/plan-approvability/*.json), whole-document-json — unparseable by this module's .md/.yaml branches",
+        "plan-completeness-ledger": "record-shaped (<plan_sidecars_dir>/<plan-stem>.completeness.md) — not yet wired, out of scope for this fix",
+        "queue-grind-profile":     "record-shaped (coordinator/queue-profiles/*.yaml) — profile config, not a queried record set; not yet wired",
+        "known-red-registry":      "two fixed JSON files (state/hook-tier-known-red.json, state/fast-full-known-red.json), no wildcard — not a record set",
     }
 
     def _skip_if_unresolvable(self):
@@ -1734,7 +1738,7 @@ class TestRoadmapStatusNormalization:
             ("blocked", "blocked"),
             ("shipped", "shipped"),
             ("archived", "archived"),
-            ("some-unmapped-value", "active"),
+            ("some-unmapped-value", "planning"),
         ],
     )
     def test_status_mapping(self, raw, expected):

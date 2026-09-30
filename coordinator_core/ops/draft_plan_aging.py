@@ -134,6 +134,7 @@ DRAFT_STATUS = "draft"
 REVIEWED_STATUS = "reviewed"
 APPROVED_STATUS = "approved"
 LANDED_STATUS = "landed"
+BLOCKED_STATUS = "blocked"
 
 # Checker-sidecar suffix denylist (report artifacts, not plans — see module
 # docstring). Kept as a tuple so it's greppable and extensible.
@@ -1133,7 +1134,14 @@ _CARRY_OBSERVABILITY_FIX_LANDED_ON = date(2026, 7, 31)
 # Any future non-terminal status added to the schema enum must be added
 # below by hand.
 _KNOWN_NON_TERMINAL_PLAN_STATUSES = frozenset(
-    {DRAFT_STATUS, EXECUTING_STATUS, REVIEWED_STATUS, APPROVED_STATUS, LANDED_STATUS}
+    {
+        DRAFT_STATUS,
+        EXECUTING_STATUS,
+        REVIEWED_STATUS,
+        APPROVED_STATUS,
+        LANDED_STATUS,
+        BLOCKED_STATUS,
+    }
 )
 
 

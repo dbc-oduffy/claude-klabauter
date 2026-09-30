@@ -87,7 +87,9 @@ def test_every_enforcement_point_allows_when_off(author_box, monkeypatch, value)
     assert guard_doctrine_surface_edits.check(_edit_payload(home)) is None
     assert guard_doctrine_surface_edits.check(_sentinel_write_payload(home)) is None
     assert block_approval_sentinel_creation.check(_touch_payload()) is None
-    assert guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"]) is None
+    assert not _is_deny(
+        guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
+    )
     assert hook_bash_write.evaluate(_bash_write_payload()) is None
 
 

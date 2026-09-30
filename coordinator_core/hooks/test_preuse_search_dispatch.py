@@ -40,15 +40,15 @@ def _payload(repo, tool="Grep", pattern="foo", session_id=None, agent_id=None, p
 def test_general_fires_once_per_agent(indexed_repo):
     sid = str(uuid.uuid4())
     first = _ctx(m._handler(_payload(indexed_repo, pattern="some text", session_id=sid)))
-    assert "example-retrieval-repo indexes this repo" in first
+    assert "this repo has a code index" in first
     assert _ctx(m._handler(_payload(indexed_repo, pattern="other", session_id=sid))) == ""
     sub = _ctx(m._handler(_payload(indexed_repo, pattern="x", session_id=sid, agent_id="a1b2")))
-    assert "example-retrieval-repo indexes this repo" in sub
+    assert "this repo has a code index" in sub
 
 
 def test_glob_gets_general_only(indexed_repo):
     out = _ctx(m._handler(_payload(indexed_repo, tool="Glob", pattern="_resolve_registry_key")))
-    assert "example-retrieval-repo indexes this repo" in out
+    assert "this repo has a code index" in out
     assert "symbol_name" not in out
 
 
@@ -83,7 +83,7 @@ def test_shape_fires_once_per_agent(indexed_repo):
 def test_search_path_resolves_index(indexed_repo, tmp_path_factory):
     elsewhere = tmp_path_factory.mktemp("unindexed")
     out = _ctx(m._handler(_payload(elsewhere, pattern="x", path=str(indexed_repo / "pkg"))))
-    assert "example-retrieval-repo indexes this repo" in out
+    assert "this repo has a code index" in out
 
 
 def test_unindexed_repo_is_silent(tmp_path):

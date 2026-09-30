@@ -293,14 +293,13 @@ def test_reconcile_refusal_blocks_push_rather_than_racing_a_peer(tmp_path, monke
     assert push_calls == []
 
 
-def test_dirty_dest_refuses(tmp_path, monkeypatch, capsys):
+def test_dirty_dest_still_pushes(tmp_path, monkeypatch, capsys):
+    """Uncommitted files never block a publish (PM ruling): a push carries
+    commits, not the worktree."""
     rc, spy, dest = _run_push(tmp_path, monkeypatch, status_stdout=_STATUS_DIRTY)
-    assert rc == _mod._EXIT_USAGE
-    err = capsys.readouterr().err
-    assert "refusing to push" in err
-    assert "2 uncommitted" in err
+    assert rc == _mod._EXIT_OK
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
-    assert push_calls == []
+    assert len(push_calls) == 1
 
 
 def test_nothing_to_push_exits_without_pushing(tmp_path, monkeypatch, capsys):

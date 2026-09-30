@@ -70,6 +70,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core._content_root_primitive import content_root_or_private
 from coordinator_core.contract import apply_base
 from coordinator_core.execute_plan_assemble.pre_execution import pre_execution_directives
 from coordinator_core.git.repo_root import show_toplevel
@@ -181,7 +182,7 @@ def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[s
     if content_root is None:
         raise RuntimeError(_REMEDIATION)
 
-    script = Path(content_root) / "coordinator" / "bin" / "emit-dispatch-workflow.py"
+    script = Path(content_root_or_private(content_root)) / "bin" / "emit-dispatch-workflow.py"
     out_path = _emit_out_path(repo_root, plan_path)
     argv = [
         sys.executable,

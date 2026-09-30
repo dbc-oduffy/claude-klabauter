@@ -604,6 +604,31 @@ def allow_unstamped_dispatch() -> None:
     _unstamped_dispatch_allowed = True
 
 
+#: Set by the test suite's `conftest.py::pytest_configure` so the CLIs a test
+#: spawns (which reach the engine through `cc_invoke` -> `coordinator_core.invoke`)
+#: inherit the suite's own unstamped allowance. Honoured only by
+#: `allow_unstamped_dispatch_under_pytest` and only while pytest itself is
+#: running a test in the same environment.
+PYTEST_UNSTAMPED_DISPATCH_ENV = "COORDINATOR_PYTEST_ALLOW_UNSTAMPED_DISPATCH"
+
+
+def allow_unstamped_dispatch_under_pytest() -> bool:
+    """Extend the suite's unstamped allowance to a spawned child.
+
+    Requires BOTH `PYTEST_CURRENT_TEST` (written by pytest itself, only while a
+    test runs) and `PYTEST_UNSTAMPED_DISPATCH_ENV` (written by the suite's
+    conftest): neither is ever present in a production environment, so a real
+    caller cannot reach the carve-out. Returns whether it applied.
+    """
+    if (
+        os.environ.get("PYTEST_CURRENT_TEST")
+        and os.environ.get(PYTEST_UNSTAMPED_DISPATCH_ENV) == "1"
+    ):
+        allow_unstamped_dispatch()
+        return True
+    return False
+
+
 def is_unstamped_dispatch_allowed() -> bool:
     """Public reader for `_unstamped_dispatch_allowed` -- the single opt-in
     this module exposes, read by `invoke.__main__` to decide whether a

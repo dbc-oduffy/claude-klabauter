@@ -60,7 +60,8 @@ def _pascal_case(skill_name: str) -> str:
 
 
 def _py_str_literal(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'").replace("\r", "\\r").replace("\n", "\\n")
+    escaped = escaped.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     return f"'{escaped}'"
 
 

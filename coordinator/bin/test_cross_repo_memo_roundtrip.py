@@ -406,10 +406,18 @@ def test_send_partial_delivery_exits_1() -> None:
             ],
         }
 
-    mod.cc_invoke.route_mutation = _fake_route_mutation
+    if _bin_dir() not in sys.path:
+        sys.path.insert(0, _bin_dir())
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke as _cc_invoke_real
 
-    args = argparse.Namespace(topic="roundtrip-topic")
-    rc = mod._cmd_send(args)
+    original_route_mutation = _cc_invoke_real.route_mutation
+    _cc_invoke_real.route_mutation = _fake_route_mutation
+    try:
+        args = argparse.Namespace(topic="roundtrip-topic")
+        rc = mod._cmd_send(args)
+    finally:
+        _cc_invoke_real.route_mutation = original_route_mutation
 
     if rc != 1:
         raise AssertionError(f"{name}: sender_committed=False should exit 1, got {rc}")

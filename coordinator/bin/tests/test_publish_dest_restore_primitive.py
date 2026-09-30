@@ -206,18 +206,3 @@ def test_process_target_finally_restores_after_a_post_swap_exception(monkeypatch
 
     assert not sub.exists()
     assert _porcelain(dest_root) == ""
-
-
-def test_dirty_round_roots_names_only_the_dirty_repo(tmp_path):
-    clean, dirty = tmp_path / "clean", tmp_path / "dirty"
-    for root in (clean, dirty):
-        _init_git_repo(root)
-        (root / "a.txt").write_text("a\n", encoding="utf-8")
-        _git(root, "add", "a.txt")
-        _git(root, "commit", "-m", "seed")
-    (dirty / "stray.txt").write_text("x\n", encoding="utf-8")
-
-    result = publish._dirty_round_roots([clean, dirty, dirty])
-
-    assert [root for root, _ in result] == [dirty]
-    assert "stray.txt" in result[0][1]

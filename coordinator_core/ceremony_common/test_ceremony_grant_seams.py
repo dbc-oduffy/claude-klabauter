@@ -131,12 +131,12 @@ def test_merge_grant_dispatch_tolerates_exit_1_but_not_usage_or_transport():
     original = grant_directive.run_grant_directive
     merge_apply_original = getattr(merge_apply, "_run_py_script", None)
     try:
-        grant_directive.run_grant_directive = lambda args: (1, "session id unresolvable")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: (1, "session id unresolvable")
         result = merge_apply._dispatch_tier_u_grant(["grant"], Path("."))
         assert result["returncode"] == 1
         assert "degraded_reason" in result
 
-        grant_directive.run_grant_directive = lambda args: (2, "bad shape")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: (2, "bad shape")
         with pytest.raises(RuntimeError):
             merge_apply._dispatch_tier_u_grant(["grant"], Path("."))
     finally:
@@ -160,7 +160,7 @@ def test_merge_grant_dispatch_spawns_no_subprocess():
     original_directive = grant_directive.run_grant_directive
     try:
         _subprocess.run = lambda *a, **k: calls.append(a) or original_run(*a, **k)
-        grant_directive.run_grant_directive = lambda args: (0, "")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: (0, "")
         merge_apply._dispatch_tier_u_grant(["revoke", "--only-ceremony", "x"], Path("."))
     finally:
         _subprocess.run = original_run
@@ -189,7 +189,7 @@ def test_the_compensator_uses_the_same_guard_as_the_handback():
     seen = []
     original = grant_directive.run_grant_directive
     try:
-        grant_directive.run_grant_directive = lambda args: seen.append(args) or (0, "")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: seen.append(args) or (0, "")
         merge_apply._COMPENSATORS["d_grant_write"]({"id": "d_grant_write"}, Path("."), None)
     finally:
         grant_directive.run_grant_directive = original
@@ -211,7 +211,7 @@ def test_a_failed_handback_is_not_reported_as_a_successful_compensation():
 
     original = grant_directive.run_grant_directive
     try:
-        grant_directive.run_grant_directive = lambda args: (1, "revoke: session id unresolvable")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: (1, "revoke: session id unresolvable")
         with pytest.raises(RuntimeError) as excinfo:
             merge_apply._COMPENSATORS["d_grant_write"](
                 {"id": "d_grant_write"}, Path("."), None
@@ -234,7 +234,7 @@ def test_a_successful_handback_compensation_returns_the_success_sentinel():
 
     original = grant_directive.run_grant_directive
     try:
-        grant_directive.run_grant_directive = lambda args: (0, "")
+        grant_directive.run_grant_directive = lambda args, repo_root=None: (0, "")
         result = merge_apply._COMPENSATORS["d_grant_write"](
             {"id": "d_grant_write"}, Path("."), None
         )

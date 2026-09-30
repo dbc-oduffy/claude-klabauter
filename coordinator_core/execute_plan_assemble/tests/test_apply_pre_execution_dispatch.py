@@ -228,3 +228,25 @@ def test_emit_leg_never_imports_or_calls_dispatch_emit_op():
             assert node.attr != "emit_script"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             assert node.func.attr != "emit_script"
+
+
+def test_emit_leg_script_resolves_on_flat_mirror(monkeypatch, tmp_path: Path):
+    flat = tmp_path / "flat"
+    (flat / ".claude-plugin").mkdir(parents=True)
+    (flat / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (flat / "bin").mkdir()
+    monkeypatch.setattr(apply_mod, "coordinator_content_root", lambda: str(flat))
+    captured: dict[str, Any] = {}
+
+    class _Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        apply_mod.subprocess, "run", lambda argv, **kw: captured.setdefault("argv", argv) and _Done()
+    )
+    with apply_base.session_identity("sess-flat"):
+        apply_mod._dispatch_emit_dispatch_workflow(["--plan", PLAN_PATH], tmp_path)
+
+    assert captured["argv"][1] == str(flat / "bin" / "emit-dispatch-workflow.py")

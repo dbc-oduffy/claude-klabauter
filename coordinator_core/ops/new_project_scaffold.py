@@ -87,7 +87,7 @@ from coordinator_core.data_root import content_root_for
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -170,7 +170,7 @@ def _resolve_content_root() -> Tuple[Optional[str], int]:
 def _co_located_render_tree() -> Optional[str]:
     this_repo_root = Path(__file__).resolve().parents[2]
     candidate = this_repo_root / "coordinator" / "bin" / "render-template-tree.py"
-    if candidate.is_file() and (os.name == "nt" or is_executable(candidate)):
+    if candidate.is_file():
         return str(candidate)
     return None
 
@@ -183,7 +183,7 @@ def _find_render_tree(content_root: str) -> Optional[str]:
     if content_root is None:
         return None
     candidate = str(content_root / "bin" / "render-template-tree.py")
-    if os.path.isfile(candidate) and (os.name == "nt" or is_executable(candidate)):
+    if os.path.isfile(candidate):
         return candidate
     return None
 

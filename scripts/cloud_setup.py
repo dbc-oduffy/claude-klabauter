@@ -622,6 +622,35 @@ def _create_engine_current_symlink() -> None:
     tmp.replace(ENGINE_CURRENT_LINK)
 
 
+#: What a box needs for every execute workflow to compose its review stage.
+REVIEW_PAYLOAD_RELPATHS = ("contract/review-roster-fragment.json", "bin")
+
+
+def verify_review_payload(clone_root: "str | Path | None" = None) -> None:
+    """Raise when the coordinator-claude clone lacks the review payload.
+
+    A RECORDED failure, never a non-zero exit (fact 3): downstream,
+    `emit-dispatch-workflow` already refuses to emit a workflow with no
+    review stage, so the failure this names is loud at the first execute,
+    and a box that cannot start at all would hide it instead. Resolves the
+    content root the way `_content_root_primitive.content_root_for` does --
+    inlined, because this script runs before the engine is importable.
+    """
+    base = Path(clone_root or CLONES["coordinator-claude"]["dest"])
+    if (base / "coordinator").is_dir():
+        content = base / "coordinator"
+    elif (base / ".claude-plugin" / "plugin.json").is_file():
+        content = base
+    else:
+        raise RuntimeError(f"review payload: {base} is neither a private clone nor a flat mirror")
+    missing = [rel for rel in REVIEW_PAYLOAD_RELPATHS if not (content / rel).exists()]
+    if missing:
+        raise RuntimeError(
+            f"review payload missing under {content}: {', '.join(missing)} -- "
+            "every execute workflow on this box will refuse to emit"
+        )
+
+
 def set_engine_env(report: Report) -> None:
     """Set COORDINATOR_ENGINE_ROOT and COORDINATOR_SETTINGS_HOME in this process' own
     environment — the env-var block is not readable from the setup script's shell
@@ -4119,6 +4148,7 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step("session tools inventory", lambda: session_tools_inventory(report), report)
     run_step("clone coordinator-claude", lambda: clone_repo("coordinator-claude"), report)
     run_step("clone klabauter", lambda: clone_repo("klabauter"), report)
+    run_step("verify review payload", verify_review_payload, report)
     run_step("set engine env", lambda: set_engine_env(report), report)
     run_step("install engine CLI shims", lambda: install_engine_cli_shims(report), report)
     run_step(

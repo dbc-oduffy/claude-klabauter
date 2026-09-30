@@ -316,7 +316,7 @@ def test_ac2_iv_reset_clears_both_memo_pairs(tmp_path, monkeypatch):
     assert _content_root_mod._CONTENT_ROOT_RESOLVED is False
 
 
-def test_ac2_v_flat_layout_root_is_not_an_admissible_source(tmp_path, monkeypatch):
+def test_ac2_v_flat_layout_root_resolves_its_bin_without_a_subprocess(tmp_path, monkeypatch):
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
     fake_home = tmp_path / "flat-fake-home"
@@ -343,10 +343,14 @@ def test_ac2_v_flat_layout_root_is_not_an_admissible_source(tmp_path, monkeypatc
         _content_root_mod._resolve_coordinator_clone, "resolve_clone_root", _boom
     )
 
-    assert resolve_plugin_cli_script_root() is None
+    assert resolve_plugin_cli_script_root() == flat_root / "bin"
 
 
-def test_ac2b_unresolved_plugin_cli_root_sentinel_shape():
-    assert isinstance(UNRESOLVED_PLUGIN_CLI_ROOT, Path)
-    assert UNRESOLVED_PLUGIN_CLI_ROOT.name == "bin"
-    assert UNRESOLVED_PLUGIN_CLI_ROOT.exists() is False
+def test_resolve_plugin_cli_script_root_on_flat_mirror(tmp_path, monkeypatch):
+    flat = tmp_path / "flat-mirror"
+    (flat / ".claude-plugin").mkdir(parents=True)
+    (flat / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (flat / "bin").mkdir()
+    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat))
+
+    assert resolve_plugin_cli_script_root() == flat / "bin"

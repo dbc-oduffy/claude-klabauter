@@ -225,3 +225,16 @@ def test_write_rule_surface(tmp_path):
     assert (tmp_path / "rules" / "a.md").read_bytes() == b"x\n"
     assert hpv.write_rule_surface(tmp_path, "a.md", None) is False
     assert not (tmp_path / "rules" / "a.md").exists()
+
+
+def test_content_root_bin_dir_resolves_on_flat_mirror(tmp_path):
+    flat = tmp_path / "flat"
+    (flat / ".claude-plugin").mkdir(parents=True)
+    (flat / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (flat / "bin").mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".coordinator-content-root").write_text(f"{flat}\n", encoding="utf-8")
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=None)
+    assert plane["content_root_bin_dir"] == str(flat / "bin")
+    assert plane["content_root_bin_resolves"] is True

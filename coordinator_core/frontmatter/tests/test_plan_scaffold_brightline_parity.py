@@ -159,7 +159,7 @@ class TemplateMirrorParityTest(unittest.TestCase):
     def _mirror_literal_lines(self) -> list[str]:
         template = json.loads(_TEMPLATE_PATH.read_text(encoding="utf-8"))
         return [
-            f["line"]
+            f["line"].replace("{{", "{").replace("}}", "}")
             for f in template["frontmatter"]["fields"]
             if f.get("kind") == "literal"
         ]

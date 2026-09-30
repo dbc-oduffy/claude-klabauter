@@ -263,7 +263,12 @@ def derive_hook_plane(
     content_root_resolves = any(value for value in rungs.values())
 
     resolved_content_root = next((value for value in rungs.values() if value), None)
-    content_root_bin_dir = str(Path(resolved_content_root) / "coordinator" / "bin") if resolved_content_root else None
+    # Inline `content_root_or_private`: this module is stdlib-only by contract.
+    content_root_bin_dir = None
+    if resolved_content_root:
+        base = Path(resolved_content_root)
+        flat = not (base / "coordinator").is_dir() and (base / ".claude-plugin" / "plugin.json").is_file()
+        content_root_bin_dir = str((base if flat else base / "coordinator") / "bin")
     content_root_bin_resolves = bool(content_root_bin_dir and Path(content_root_bin_dir).is_dir())
 
     return {

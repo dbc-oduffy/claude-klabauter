@@ -271,6 +271,7 @@ def test_next_app_missing_render_tree_script_fails(tmp_path, monkeypatch):
     next_app.mkdir(parents=True)
     (next_app / "a.txt").write_text("hi\n")
     (root / "coordinator" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
     monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
     parent = tmp_path / "parent"
     parent.mkdir()
