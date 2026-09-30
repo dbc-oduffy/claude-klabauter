@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import grind_compose as gc
 from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from coordinator_core.ops.dispatch_emit import pm_adjudication as pa
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
+from coordinator_core.session import record_homes
 
 _PROFILES = Path(__file__).parent / "fixtures" / "queue-profiles"
 
@@ -20,7 +21,7 @@ def _script() -> str:
     entries = (ManifestEntry(row_id="r0", path="state/x/r0.yaml", digest="0" * 64, batch_key="P0"),)
     manifest = Manifest(entries=entries, batch_sizes={"P0": 4}, source=None, digest="deadbeef")
     return gc.compose_grind_script(
-        manifest, profile, knobs, run_dir=Path("state/queue-grind/fixture/run-1"),
+        manifest, profile, knobs, run_dir=Path(record_homes.home_dir("", "queue-grind")) / "fixture" / "run-1",
         appetite="standard", agent_type_host=None,
     )
 

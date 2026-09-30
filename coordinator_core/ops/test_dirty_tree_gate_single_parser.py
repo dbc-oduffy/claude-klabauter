@@ -3,9 +3,8 @@
 `coordinator_core/ops/dirty_tree_gate.py`'s `parse_porcelain_paths` docstring
 declares the invariant: the porcelain-parsing loop exists exactly ONCE, here;
 a second copy anywhere else is a bug, not a shortcut. This module makes that
-claim checkable rather than merely stated, and asserts both named external
-importers (`ops/session/safe_commit_offer.py`,
-`baton_assemble/__init__.py`) still resolve the symbol from this one module.
+claim checkable rather than merely stated, and asserts the named external
+importer (`baton_assemble/__init__.py`) still resolves the symbol from this one module.
 
 Negative spec: this is a pin on the fact (single definition + both importers
 resolve), not a shape-fingerprinting detector over parser bodies generally —
@@ -52,7 +51,6 @@ def test_parse_porcelain_paths_defined_exactly_once_in_non_test_code():
 
 def test_external_importers_resolve_parse_porcelain_paths_from_dirty_tree_gate():
     importer_paths = [
-        REPO_ROOT / "coordinator_core" / "ops" / "session" / "safe_commit_offer.py",
         REPO_ROOT / "coordinator_core" / "baton_assemble" / "__init__.py",
     ]
     expected_import = (

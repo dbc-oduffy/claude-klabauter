@@ -160,7 +160,9 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     replacement = PureWindowsPath(replacement).as_posix()
     new_first_line_pattern = re.compile(r'SCRIPT="[^"]+"\n')
-    new_text, count = new_first_line_pattern.subn(f'SCRIPT="{replacement}"\n', text, count=1)
+    new_text, count = new_first_line_pattern.subn(
+        lambda _m: f'SCRIPT="{replacement}"\n', text, count=1
+    )
     if count != 1:
         return no_advisory()
 

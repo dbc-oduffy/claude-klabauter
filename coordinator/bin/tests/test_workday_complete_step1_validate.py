@@ -147,7 +147,7 @@ class ArgvWhichResolutionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as shim_dir:
             shim_name = "pnpm-fake-shim.CMD" if os.name == "nt" else "pnpm-fake-shim"
             shim_path = os.path.join(shim_dir, shim_name)
-            with open(shim_path, "w") as f:
+            with open(shim_path, "w", encoding="utf-8") as f:
                 f.write(f"#!{sys.executable}\nimport sys; sys.exit(0)\n")
             os.chmod(shim_path, os.stat(shim_path).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
             env["PATH"] = shim_dir + os.pathsep + env.get("PATH", "")

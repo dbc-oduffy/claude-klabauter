@@ -406,14 +406,8 @@ class GitResult:
             ok-with-a-commit-sha-t.md, C4). `None` is never an error --
             "no ref is being reported here" -- and is the default on
             every `GitResult` this module builds.
-        stall_killed — True iff `push_streamed` killed the child because its
-            stderr went silent for `STALL_SILENCE_SECS` or more (a genuine hang
-            signal), False otherwise -- including when `push_streamed` killed the
-            child on its `total_timeout` bound instead (that is not evidence of
-            silence, see that function's docstring). Every other constructor in
-            this module leaves this at its default, False
-            (docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-
-            timeout.md, C2).
+        stall_killed — True iff `push_streamed` killed the child on the silence bound
+            (not its `total_timeout`); False on every other constructor.
     """
 
     returncode: int
@@ -592,22 +586,11 @@ def _has_windows_drive(normalized: str) -> bool:
 
 
 def canonical_repo_relative_path_refusal(path: str) -> Optional[str]:
-    """`None` iff `path` is already a canonical repo-relative tree-entry
-    path; otherwise a register-shaped refusal message naming the offending
-    path and, when a safe canonical form exists, that form -- REFUSAL, never
-    silent normalisation. A tree entry assembled from a non-canonical path
-    (e.g. `coordinator/../coordinator_core/x.py`) passes every check this
-    module ran before this function existed and then fails at `git
-    update-index`/`read-tree` with an "invalid path" error the caller never
-    sees until a push -- commit 528eee8314 shipped one. Single shared
-    validator, called once from `_commit_via_head_spine`, the helper every
-    commit route in this module (and so `ceremony.commit_v2`) lands through.
+    """`None` iff `path` is a canonical repo-relative tree-entry path; else a refusal naming the path
+    and, when safe, its canonical form. REFUSAL, never silent normalisation: git rejects a
+    non-canonical entry only at `update-index`/`read-tree`, after the caller saw rc=0.
 
-    Checked: absolute path, Windows drive letter (`ntpath.splitdrive`, see
-    `_has_windows_drive`), and -- per `/`-split component, after backslash
-    normalisation -- an empty component (a doubled or trailing `/`), a `.`
-    component, a `..` component, or a `.git` component (case-insensitive:
-    `.GIT`, `.Git` are the same refusal on a case-insensitive filesystem).
+    Refuses: absolute, Windows drive, and (per `/` component) empty, `.`, `..`, or `.git` (casefolded).
     """
     normalized = path.replace("\\", "/")
     reasons = []
@@ -647,11 +630,7 @@ def canonical_repo_relative_path_refusal(path: str) -> Optional[str]:
 
 
 def first_non_canonical_path_refusal(paths) -> Optional[str]:
-    """First `canonical_repo_relative_path_refusal` hit across `paths`, or
-    `None` if every path is canonical -- the plural form every multi-path
-    commit entry point (`commit_scoped`, `ceremony.commit_v2`) calls once
-    over its combined path lists rather than looping the singular check
-    itself."""
+    """First `canonical_repo_relative_path_refusal` hit across `paths`, else `None`."""
     for candidate_path in paths:
         refusal = canonical_repo_relative_path_refusal(candidate_path)
         if refusal is not None:
@@ -724,13 +703,8 @@ def status_porcelain(
 ) -> GitResult:
     """`git status --porcelain` — dirty-tree gate classification (C3).
 
-    `untracked_all` (keyword-only, default `False`): listing mode. Adds
-    `-c core.quotepath=false` before `status` and `--untracked-files=all
-    --no-renames` after `--porcelain`. Output stays newline-separated porcelain
-    v1, so `dirty_tree_gate.parse_porcelain_paths` reads it unchanged;
-    `--no-renames` reports a staged rename's source as its own `D` line
-    instead of collapsing it to the destination. `False` keeps argv
-    byte-identical for every existing caller.
+    `untracked_all` (default `False`): listing mode -- `-c core.quotepath=false`, `--untracked-files=all
+    --no-renames`; still porcelain v1, so `parse_porcelain_paths` reads it unchanged.
 
     `--no-optional-locks` (pre-subcommand, per `git`'s placement rule)
     suppresses the opportunistic stat-cache write-back a bare `git status`
@@ -742,27 +716,9 @@ def status_porcelain(
     paths: this is the only query on the commit hot path whose cost scales
     with the TREE rather than with what is being committed.
 
-    `untracked_files` (keyword-only, default `None`, P014-C1): when given,
-    appends `--untracked-files=<value>` (e.g. `"all"`, the
-    `session_facts._dirty_paths` divergence the census records). `None`
-    keeps argv byte-identical to HEAD — git's own porcelain default
-    (`normal`) applies, unchanged.
-
-    `quotepath_false` (keyword-only, default `False`, P014-C1): when `True`,
-    prepends `-c core.quotepath=false` — the divergence
-    `ops/session/safe_commit_offer.py:1367` and `ops/dirty_tree_gate.py:400`
-    both already pin directly. `False` (the default) keeps argv
-    byte-identical to HEAD.
-
-    Both keyword-only options default to a no-op specifically so every
-    existing caller's argv is unchanged — pinned in `test_git_native.py`.
-
-    The walk is NOT the main cost and this parameter is not where the
-    ceremony's latency lives — process creation is (DR-344), and both
-    unscoped and scoped reads are one spawn either way. It is taken
-    because it is free and scales with the tree, not because it closes
-    any meaningful gap; the ceremony's budget is made or missed on how
-    many times `git` is spawned at all.
+    `untracked_files` (default `None`): appends `--untracked-files=<value>`.
+    `quotepath_false` (default `False`): prepends `-c core.quotepath=false`.
+    Both default to a no-op so every existing caller's argv is unchanged.
 
     Output SHAPE is byte-identical either way — same porcelain v1, same
     C-quoting, same ` -> ` rename separator — deliberately, so a caller that
@@ -867,18 +823,8 @@ def dirty_relpaths_from_porcelain(
     only (e.g. `"archive_terminal_handoffs"`, `"archive_sizings"`) — purely
     diagnostic, never load-bearing for behavior.
 
-    PROJECTION OF THE `session_facts` PRODUCER (P014-C1,
-    `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`,
-    resolve pass R5): this function's own body no longer spawns or parses —
-    it calls `coordinator_core.session.session_facts._dirty_paths` (imported
-    function-local; `git_native` never imports `session_facts` at module top,
-    since this module is on the commit path) with the caller's `pathspecs`
-    as the producer's pathspec scope, `keep_rename_source=True` (both rename
-    halves matter here — either side being dirty is enough to exclude both),
-    and `unquote=True`. A degraded producer record maps to the same
-    fail-closed set this function already returned on a raw git failure. This
-    function's own signature, its `pathspecs=()` short-circuit, and
-    `REASON_WORKTREE_DIRTY` are all unchanged.
+    Projection of `session_facts._dirty_paths` (function-local import: this module is on the commit
+    path); both rename halves count as dirty; a degraded record yields the fail-closed set.
     """
     if not pathspecs:
         return set()
@@ -1550,17 +1496,10 @@ def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitR
         pathspec_file.unlink(missing_ok=True)
 
 
-#: Env var `coordinator.bin.lib.git_hook_install.ensure_prepare_commit_msg_
-#: hook` wires as ITS OWN `skip_env` -- deliberately a
-#: DIFFERENT name from `_AUTO_PUSH_SUPPRESS_ENV` (C1's post-commit sentinel):
-#: the two hooks skip on different facts, and folding them into one flag
-#: would be the "skip all hooks" generalization `_shim_body`'s own docstring
-#: forbids. Set ONLY by `_trailer_sentinel_env()`, below, and ONLY at the one
-#: call site inside `commit_scoped`'s agree branch that follows `_apply_
-#: trailers` returning with no error -- see that function's docstring for
-#: why nowhere else may set this (AC12: the lying-sentinel defence is that
-#: this is the sentinel's one and only setter, pinned by
-#: `test_trailer_sentinel_has_exactly_one_setter`).
+#: Env var wired as `ensure_prepare_commit_msg_hook`'s own `skip_env`; a different name from
+#: `_AUTO_PUSH_SUPPRESS_ENV` (the hooks skip on different facts). Set only by `_trailer_sentinel_env()`
+#: at the one `commit_scoped` agree-branch call site after `_apply_trailers` succeeds; the lying-sentinel
+#: defence is that single setter (`test_trailer_sentinel_has_exactly_one_setter`).
 _TRAILERS_ALREADY_APPLIED_ENV = "COORDINATOR_TRAILERS_ALREADY_APPLIED"
 
 
@@ -2212,20 +2151,9 @@ def _head_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
 #: re-typing it, so the two can never drift apart again.
 INDEX_HEAD_CAS_MARKER = "compare-and-swap refused"
 
-#: Distinguishing substring of `_commit_via_head_spine`'s own AC11(b)
-#: index-`stat_identity` re-check failure (C1, claude-klabauter-75) --
-#: deliberately NOT `INDEX_HEAD_CAS_MARKER` above, because that check's
-#: `GitResult.stderr` keeps its pre-existing `"compare-and-swap failed"`
-#: lead (pinned by `test_commit_scoped_edges.py`/
-#: `test_commit_authored_content_edges.py`'s `"compare-and-swap failed"`
-#: assertions, which also cover this helper's UNRELATED ref-CAS "HEAD
-#: moved" failures -- rewording the lead to match `INDEX_HEAD_CAS_MARKER`
-#: would blur those two failure families together at the substring level).
-#: This marker is the middle clause unique to the index-changed case, kept
-#: as a single named constant (not retyped in `commit_pipeline.py`) for the
-#: same reason `INDEX_HEAD_CAS_MARKER` is: independently-typed prose in two
-#: files is how the classifier's marker match diverged from this call
-#: site's wording in the first place.
+#: Distinguishing substring of `_commit_via_head_spine`'s AC11(b) index-`stat_identity` re-check failure.
+#: Not `INDEX_HEAD_CAS_MARKER`: that lead is pinned for the unrelated ref-CAS failures. One named constant,
+#: so classifier and wording cannot diverge.
 INDEX_STAT_CAS_MARKER = "the shared index changed since it was snapshotted for this commit"
 
 
@@ -2358,17 +2286,8 @@ _SOURCE_SUPPLIED = "supplied-blob"
 _SOURCE_STAGED = "staged-blob"
 _SOURCE_WORKTREE = "worktree"
 
-#: Fallback mode for a supplied-blob cacheinfo entry with no prior entry
-#: anywhere (a genuinely brand-new file) -- `_resolve_mode_for_paths()`,
-#: below, is consulted FIRST for every `supplied_paths` member, so this
-#: constant is reached only when a path has neither a real-index nor a
-#: HEAD-tree entry to inherit a mode from. Previously (until this fix)
-#: applied unconditionally to every supplied-blob path regardless of an
-#: existing entry's mode, which would have silently downgraded an
-#: already-`100755` path the first time a real `supplied_blobs` producer
-#: existed (`stage_from_patch()`, C2, has none yet -- this was latent, not
-#: the observed live incident). `100644` (ordinary non-executable file) is
-#: still the right default for a path with no prior entry to inherit from.
+#: Mode for a supplied-blob entry with no prior entry anywhere (a brand-new file);
+#: `_resolve_mode_for_paths()` is consulted first, so an existing `100755` is never downgraded.
 _SUPPLIED_BLOB_MODE = "100644"
 
 
@@ -3193,9 +3112,7 @@ def _hash_worktree_blobs(
     return GitResult(returncode=0, stdout="\n".join(ordered) + "\n", stderr="")
 
 
-# The one place that pins the FULL exclusion-notice literal for the staged
-# (index) arm -- test_commit_scoped_edges.py imports this rather than
-# holding its own copy, so the literal has a single source of truth (AC3).
+# Single source of the staged-arm exclusion notice; tests import it.
 _WORKTREE_EXCLUDED_TEMPLATE = (
     "commit_scoped: worktree edits to %s were NOT included -- "
     "the committed content came from the shared index, which records no "
@@ -3372,22 +3289,8 @@ def _commit_scoped_private_index(
     for path in absent:
         assembled[path] = _ABSENT
 
-    # STAGED-ROLLBACK CHECK (P2e, docs/plans/2026-09-11-close-the-three-
-    # silent-failure-gaps.md) -- opt-in (`detect_rollback=True`), and it has
-    # to sit HERE: `assembled` above is this call's own final per-path
-    # content resolution (`_resolve_content_sources` -> `_assemble_commit_
-    # tree_input`, the SAME "resolved candidates" `commit.commit_paths`'
-    # P2d check reads off its own `assembled`), and nothing below this point
-    # has written a tree or commit object yet (`_commit_via_head_spine`/the
-    # ladder, further down, is the first write). Mirrors `commit.commit_
-    # paths`' own placement and shape exactly -- see `StagedRollbackRefused`
-    # there for the mechanism. Unlike that route, a refusal here returns a
-    # not-ok `GitResult` (this function's own contract; it never raises) --
-    # there is nothing to unstage, since neither `commit_scoped` branch ever
-    # touches the shared index (see this function's own C8b-rewire
-    # paragraph above): the plan row's "unstage exactly what this call
-    # staged" describes commit_scoped's pre-zero-spawn shape and is a no-op
-    # here by construction.
+    # Staged-rollback check: opt-in, before any tree or commit object is written. A refusal returns a
+    # not-ok GitResult; nothing is staged on the shared index, so there is nothing to unstage.
     if detect_rollback and old_head is not None:
         declared_set = {d.replace("\\", "/") for d in declared_reverts}
         candidates: Dict[str, object] = {}
@@ -3615,19 +3518,9 @@ def _commit_scoped_private_index(
             if empty_tree_refusal is not None:
                 return empty_tree_refusal
 
-            # No-op refusal (DEFECT 1 fix, mirrors the fast path's own
-            # `refuse_noop` check in `_commit_via_head_spine`): a byte-
-            # identical re-commit computes the SAME tree HEAD already
-            # points at -- landing it would create a phantom commit with
-            # no real content change, exactly the "nothing to commit"
-            # no-op `git commit` itself refused for free pre-C3. Only
-            # meaningful with a real parent to compare against -- an
-            # unborn branch's first commit has no HEAD tree to diff. Also
-            # gated on the shared index being genuinely present (see the
-            # matching comment on this function's own fast-path call site,
-            # above) -- the absent-index HEAD-fallback safety net
-            # (P1 69ce1cdfd) intentionally produces this same byte-
-            # identical tree and must still land.
+            # No-op refusal, mirroring the fast path's `refuse_noop`: a byte-identical re-commit would
+            # land a phantom commit. Needs a real parent, and a genuinely present shared index (the
+            # absent-index HEAD-fallback intentionally produces this same tree and must still land).
             if old_head is not None and index_snapshot.stat_identity is not None:
                 parent_tree_sha = _git_state_head_tree_sha(root)
                 if parent_tree_sha is not None and tree_sha == parent_tree_sha:
@@ -3910,9 +3803,7 @@ def _commit_scoped_private_index(
     # the opposite of what happened, and reads as reassurance (P1
     # 69ce1cdfd, item 3).
     substitute = "HEAD" if index_snapshot.stat_identity is None else "staged (index)"
-    # Bounded at five, matching `commit_v2`'s `worktree_over_staged` warning
-    # (AC1, AC5, AC9): a slice plus a truthiness test on `excluded_paths[5:]`,
-    # never a `len()` call.
+    # Bounded at five, matching `commit_v2`'s `worktree_over_staged` warning.
     _paths_str = ", ".join(excluded_paths[:5])
     if excluded_paths[5:]:
         _paths_str += ", ..."
@@ -4016,20 +3907,8 @@ def commit_scoped(
     working tree (see the module-section docstring above `commit_scoped`
     for the two incidents this closes).
 
-    `detect_rollback`/`declared_reverts` (P2e, docs/plans/2026-09-11-close-
-    the-three-silent-failure-gaps.md) -- the same opt-in `rollback_check.
-    find_exact_blob_rollbacks` check `commit.commit_paths` runs (P2d,
-    `coordinator_core.git.commit.StagedRollbackRefused`), wired here for
-    this function's own agent route (`coordinator-safe-commit.py`'s
-    `do_scoped`). DEFAULT FALSE -- the default caller pays nothing and never
-    sees a refusal shaped by it. `declared_reverts` names paths this call is
-    deliberately reverting; they are excluded from the candidate set
-    entirely, not merely exempted from refusal. Forwarded straight through
-    to `_commit_scoped_private_index`, which both branches land through --
-    see the STAGED-ROLLBACK CHECK comment there for placement and the
-    "nothing to unstage" correction against the plan row's `reset_paths`
-    language (this function never runs a real `git add`, so there is
-    nothing staged onto the shared index for a refusal to unstage).
+    `detect_rollback`/`declared_reverts`: opt-in `rollback_check.find_exact_blob_rollbacks` refusal
+    (default off). `declared_reverts` are excluded from the candidate set entirely.
 
     `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
     stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, the
@@ -4498,17 +4377,8 @@ def commit_scoped(
         interpret_result = _apply_trailers(msg_file, trailer_args, root)
         if interpret_result is not None:
             return interpret_result
-        # `_apply_trailers` just returned `None` above -- the trailers ARE
-        # on `msg_file` now, a fact this code just established. No spawned
-        # `git commit` runs on this branch any more (see below), so no
-        # `prepare-commit-msg` hook will ever read this sentinel for THIS
-        # call. An assign-then-`del` of `_trailer_sentinel_env()` here
-        # would read as accidental dead code rather than a deliberate
-        # invariant pin; no test in the current tree consumes a
-        # "sentinel-setter fired here" fact (grep confirms zero references
-        # to `_TRAILERS_ALREADY_APPLIED_ENV`/`_trailer_sentinel_env`
-        # outside this module), so the call is dropped outright rather
-        # than kept as a no-op assert.
+        # No spawned `git commit` runs here, so no `prepare-commit-msg` hook reads the sentinel; the
+        # setter call is dropped rather than kept as a no-op (nothing else references it).
 
         # C3 dispatch (state/dispatch-briefs/2026-08-26-the-commit-becomes-
         # a-warm-served-op/C3.md), spike verdict docs/research/spike-
@@ -4934,10 +4804,7 @@ def _commit_via_head_spine(
     orphaning a peer's own commit (ref case) -- exactly the hazard each
     refusal exists to prevent.
     """
-    # DOCTRINE-SURFACE ADMISSION, before every precondition below -- see
-    # `commit_admission`'s module docstring. First so that a refusal is a
-    # failing result and never the `None` that would hand the same content to
-    # the plumbing ladder, which runs no admission of its own.
+    # Admission runs first and must fail as a result, never `None`: the plumbing ladder runs none.
     admission_refusal = governed_surface_refusal(root, assembled)
     if admission_refusal is not None:
         return GitResult(
@@ -4955,17 +4822,7 @@ def _commit_via_head_spine(
             stdout="",
             stderr=f"{caller}: refused -- this commit lands a path Windows cannot check out:\n{legality_refusal}",
         )
-    # Canonical-path gate, before any tree/spine write below -- every commit
-    # route (`commit_scoped`'s two branches, `commit_authored_content`,
-    # `commit_authored_new_file`) assembles its `{path: (mode, sha) |
-    # _ABSENT}` dict and calls this one helper to land it, so checking here
-    # once covers all of them. A `..`/`.`/empty/`.git` component reaching
-    # `git update-index`/`read-tree` below is refused by GIT ITSELF too, but
-    # only at that point -- too late to stop the loose objects this function
-    # already wrote from being orphaned garbage, and (528eee8314) too late to
-    # stop a caller further up the ladder from treating rc=0 as success. See
-    # `canonical_repo_relative_path_refusal`'s own docstring for what is
-    # checked.
+    # Canonical-path gate before any tree write; every commit route lands through this helper.
     canonical_refusal = first_non_canonical_path_refusal(assembled.keys())
     if canonical_refusal is not None:
         return GitResult(
@@ -5070,10 +4927,7 @@ def _commit_via_head_spine(
             stamp,
         )
         if sign_warning is not None:
-            # DR-308: signing stays, enforcement does not -- a broken
-            # signing setup must never block this commit from landing.
-            # Fall through to the SAME zero-spawn unsigned write the
-            # `else` branch below already uses.
+            # A broken signing setup never blocks the commit: fall through to the unsigned write.
             _LOG.warning(sign_warning)
     if new_commit_sha is None:
         header = f"tree {new_tree_sha}\nparent {old_head}\nauthor {who}\ncommitter {who}\n\n".encode(
@@ -5627,16 +5481,8 @@ def commit_authored_new_file(
                 "traversal segment"
             ),
         )
-    # Checked BEFORE the containment resolve() below: a component carrying a
-    # colon (e.g. `state/a:b/row.yaml`) is a legality refusal, not a
-    # containment one, but `Path.resolve()` on Windows reads an embedded
-    # `a:` as a second drive letter and re-anchors the whole path there --
-    # the containment check below would then throw on a `ValueError` and
-    # report "resolves outside the worktree", the wrong diagnostic for a
-    # path that never left it. Ordering this check first means the
-    # Windows-checkout refusal fires with its own, correct message on
-    # every offending path, never only on the ones `.resolve()` happens to
-    # leave alone.
+    # Before the containment resolve(): Windows `resolve()` reads `a:` in a component as a drive
+    # and would misreport a legality refusal as containment.
     early_legality_refusal = illegal_path_refusal({normalized: (0, "0" * 40)})
     if early_legality_refusal is not None:
         return GitResult(
@@ -5866,12 +5712,7 @@ def push(
     return _git(args, cwd=cwd, timeout=timeout)
 
 
-# STALL_SILENCE_SECS = 2 x S_max, S_max = 7.018s (max inter-line silence across every
-# healthy slow-push run, idle + ambient), measured by
-# docs/research/2026-09-10-git-push-progress-stall-measurement.md (arm B selected —
-# clause 1 of the arm predicate fails on this number, see that document's "Arm-predicate
-# evaluation" section). Never an invented number; re-derive from that document if the
-# measurement is redone.
+# 2 x the longest healthy inter-line silence (7.018s); re-derive, never invent.
 STALL_SILENCE_SECS = 14.036
 
 
@@ -5883,39 +5724,11 @@ def push_streamed(
     silence_secs: float = STALL_SILENCE_SECS,
     total_timeout: Optional[float] = None,
 ) -> GitResult:
-    """`git push --progress [<remote_name>]`, watched line-by-line for a silence stall.
+    """`git push --progress [<remote_name>]`, killed on a stderr silence stall.
 
-    Sibling of `push()` above, composed on the streaming shape
-    `ops/emit/enrich.py :: _walk_last_modified_at` already uses (`Popen` + a reader
-    thread), not a new portability helper. One git child, as `push()` spawns today --
-    no extra process.
-
-    `stderr` is read on a `daemon=True` thread that appends each line to an
-    accumulator and stamps the time of the most recently read line. The calling
-    thread polls that stamp and kills the child (`terminate()` then `wait()`, in a
-    `finally`, so teardown runs even if the wait below raises) once either bound
-    fires:
-      - silence exceeds `silence_secs` since the last line (or since spawn, if no
-        line has arrived yet) -- the stall arm;
-      - `total_timeout` (if given) elapses since spawn regardless of whether the
-        child is still emitting lines close together -- AC8: a child that emits a
-        line every `silence_secs - e` forever must still die. `total_timeout` is a
-        parameter, never hardcoded here; C5 names the value each caller passes.
-
-    The reader thread is always `join()`ed with a bounded timeout before this
-    function returns, so no thread outlives the call.
-
-    `GitResult.stall_killed` is True only when the silence bound (not the total
-    bound) is what triggered the kill -- both bounds terminate the child, but only a
-    genuine silence stall is diagnostic of a hang; a total-bound kill on a
-    still-progressing child is reported the same way a plain timeout would be
-    (`returncode=-1`, no `stall_killed`), since it is not evidence of silence.
-    The child's real signal returncode is kept verbatim on a stall kill -- never
-    rewritten to -1, and `returncode`'s two existing -1 meanings (OSError,
-    TimeoutExpired) are untouched.
-
-    Accumulated stderr is carried verbatim, with `PUSH_STALL_MARKER` (formatted with
-    the silence bound used) appended as one more line only on a stall kill.
+    Stall bound: no stderr line for `silence_secs`. Total bound: `total_timeout` since spawn,
+    regardless of progress. `stall_killed` is True only for the silence bound; the child's real
+    returncode is kept on a stall kill, and `PUSH_STALL_MARKER` is appended to stderr.
     """
     args = ["git", "push", "--progress"]
     if remote_name:
@@ -6001,23 +5814,9 @@ def push_refspec(
     *,
     timeout: float = REMOTE_BUDGET_SECS,
 ) -> GitResult:
-    """`git push <remote_name> <local_ref>:<remote_ref>` — push to an
-    upstream whose branch NAME DIFFERS from the local branch's (the standard
-    cloud-harness shape: a local `work/vm/<date>` tracking a differently
-    named `origin/claude/<session>`).
+    """`git push <remote_name> <local_ref>:<remote_ref>` for an upstream whose name differs from the local branch.
 
-    `push()` above hands git no refspec at all, which under
-    `push.default=simple` git refuses outright the moment the tracked
-    upstream's name disagrees with the current branch's own name ("The
-    upstream branch of your current branch does not match the name of your
-    current branch"). Naming both sides explicitly sidesteps that refusal
-    without touching `push.default` or writing `--set-upstream` (which
-    would silently repoint tracking rather than publish to the one already
-    configured).
-
-    Distinct from `push_set_upstream`: this pushes to an EXISTING tracked
-    upstream and writes no config; `push_set_upstream` is the first-publish
-    form that creates the tracking relationship. No `--force` here either.
+    Writes no config and never forces; `push_set_upstream` is the first-publish form.
     """
     return _git(
         ["push", remote_name, f"{local_ref}:{remote_ref}"], cwd=cwd, timeout=timeout
@@ -6115,29 +5914,9 @@ def merge_base_is_ancestor(
 
 
 def patch_id(cwd: Union[str, Path], ref: str) -> GitResult:
-    """`git diff-tree -p <ref> | git patch-id --stable` — the diff a single
-    commit introduces, hashed independent of its parent.
+    """`git diff-tree -p <ref> | git patch-id --stable`: the commit's own diff hash, parent-independent.
 
-    Purpose: `push.py::resolve_post_push_sha`'s rebase-retry detection. A
-    `rebase --onto` reparents a commit onto a new base without touching the
-    diff it carries, but that new base's tree can legitimately differ from
-    the old one — e.g. a concurrent peer commit touching an unrelated file —
-    which means the REWRITTEN commit's own tree (parent tree + this diff)
-    no longer equals the pre-push commit's tree (old parent tree + this
-    diff) even though the rebase was a clean, no-op reparent. A whole-tree
-    equality check therefore false-negatives on exactly the ordinary
-    rebase-retry case whenever the peer's commit is disjoint from ours
-    (state/bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
-    cc84495b2bb1.yaml). `--stable` output is deterministic across git
-    versions (the legacy algorithm is machine/version-dependent); two
-    non-empty-diff commits carrying the identical patch are the ONLY
-    inputs this hashes equal, so a peer's unrelated commit or a genuine
-    content conflict during the rebase both still compare unequal. Two
-    `_git` calls (not a real shell pipe) because this wrapper's choke point
-    (`_git`) runs one subprocess per call; `diff-tree`'s output is passed
-    through as `patch-id`'s stdin via `input_data`, matching what a real
-    pipe would deliver — `git patch-id` skips any non-diff header lines by
-    design, so the intermediate `diff-tree` text needs no trimming.
+    Two `_git` calls, not a shell pipe: `_git` spawns one process per call.
     """
     diff_result = _git(["diff-tree", "-p", "--no-color", ref], cwd=cwd)
     if not diff_result.ok:

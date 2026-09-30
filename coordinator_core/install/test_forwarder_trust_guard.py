@@ -180,31 +180,16 @@ def _run(forwarder: Path, ml_dir: Path, extra_env: dict | None = None) -> subpro
     )
 
 
-def test_registry_rung_wins_over_sentinel(tmp_path: Path):
-    """Rung 1 (registry.local.toml key) must be preferred even when rung 2
-    (the .claude-klabauter-live-root sentinel) also resolves — to a DIFFERENT, non-fixture
-    path that would fail if it were the one actually used."""
-    forwarder = _write_forwarder(tmp_path)
-    ml_dir = tmp_path / "machine-local"
-    ml_dir.mkdir()
-
-    registry_root = tmp_path / "registry-claude-klabauter"
-    _make_claude_klabauter_fixture(registry_root)
+def _register_root(ml_dir: Path, root: Path | str) -> None:
+    """Point `repos.claude_klabauter` at `root` the way `machine-local set` does."""
     (ml_dir / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = \'{registry_root}\'\n', encoding="utf-8"
+        f'"repos.claude_klabauter" = \'{root}\'\n', encoding="utf-8"
     )
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(tmp_path / "sentinel-claude-klabauter-nonexistent"), encoding="utf-8")
-
-    result = _run(forwarder, ml_dir)
-
-    assert result.returncode == 0
-    assert "TARGET_REACHED_cross-repo-memo" in result.stdout
 
 
-def test_sentinel_only_resolves(tmp_path: Path):
-    """With no registry.local.toml at all, the .claude-klabauter-live-root sentinel alone
-    must resolve — the documented fallback for a machine provisioned by the
-    older convention."""
+def test_claude_klabauter_root_sentinel_file_is_not_a_rung(tmp_path: Path):
+    """The `.claude-klabauter-live-root` pointer rung was deleted (fb4f1dba27): a sentinel
+    naming a valid root, with no registry key, must fail loud, not resolve."""
     forwarder = _write_forwarder(tmp_path)
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
@@ -212,6 +197,23 @@ def test_sentinel_only_resolves(tmp_path: Path):
     sentinel_root = tmp_path / "sentinel-claude-klabauter"
     _make_claude_klabauter_fixture(sentinel_root)
     (ml_dir / ".claude-klabauter-live-root").write_text(str(sentinel_root), encoding="utf-8")
+
+    result = _run(forwarder, ml_dir)
+
+    assert result.returncode == 1
+    assert "cannot resolve claude-klabauter" in result.stderr
+    assert "TARGET_REACHED" not in result.stdout
+
+
+def test_registry_only_resolves(tmp_path: Path):
+    """The registry key alone resolves the root."""
+    forwarder = _write_forwarder(tmp_path)
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+
+    registry_root = tmp_path / "registry-claude-klabauter"
+    _make_claude_klabauter_fixture(registry_root)
+    _register_root(ml_dir, registry_root)
 
     result = _run(forwarder, ml_dir)
 
@@ -235,7 +237,7 @@ def test_traversal_segment_rejected(tmp_path: Path):
     forwarder = _write_forwarder(tmp_path)
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(tmp_path / "some" / ".." / "claude-klabauter"), encoding="utf-8")
+    _register_root(ml_dir, str(tmp_path / "some" / ".." / "claude-klabauter"))
 
     result = _run(forwarder, ml_dir)
 
@@ -253,7 +255,7 @@ def test_root_resolved_but_coordinator_bin_missing_message(tmp_path: Path):
 
     incomplete_root = tmp_path / "incomplete-claude-klabauter"
     incomplete_root.mkdir()
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(incomplete_root), encoding="utf-8")
+    _register_root(ml_dir, str(incomplete_root))
 
     result = _run(forwarder, ml_dir)
 
@@ -271,7 +273,7 @@ def test_coordinator_bin_present_but_sentinel_absent_message(tmp_path: Path):
 
     stale_root = tmp_path / "stale-claude-klabauter"
     (stale_root / "coordinator" / "bin").mkdir(parents=True)
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(stale_root), encoding="utf-8")
+    _register_root(ml_dir, str(stale_root))
 
     result = _run(forwarder, ml_dir)
 
@@ -289,7 +291,7 @@ def test_non_executable_sentinel_rejected(tmp_path: Path):
 
     root = tmp_path / "non-exec-sentinel-claude-klabauter"
     _make_claude_klabauter_fixture(root, sentinel_executable=False)
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
+    _register_root(ml_dir, str(root))
 
     result = _run(forwarder, ml_dir)
 
@@ -309,7 +311,7 @@ def test_py_suffixed_cli_forwarder_execs_py_target(tmp_path: Path):
 
     root = tmp_path / "sample-tool-claude-klabauter"
     _make_claude_klabauter_fixture(root, target_name="sample-tool.py")
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
+    _register_root(ml_dir, str(root))
 
     result = _run(forwarder, ml_dir)
 
@@ -374,7 +376,7 @@ def test_forwarder_missing_target_exits_127_without_traceback(tmp_path: Path):
         # executability probe is PATHEXT-based, not stat-mode-based.
         (bin_dir / "archive-stamp-cli.cmd").write_text("@echo SENTINEL\r\n", encoding="utf-8")
     # cross-repo-memo itself deliberately absent from bin_dir.
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
+    _register_root(ml_dir, str(root))
 
     result = _run(forwarder, ml_dir)
 
@@ -821,8 +823,8 @@ def test_write_agent_forwarder_target_is_required_keyword_only(tmp_path: Path):
 
 
 def test_forwarder_trailing_slash_and_crlf_normalized(tmp_path: Path):
-    """Windows-first-class: a sentinel file written with a trailing slash
-    and CRLF line ending must still resolve — mirrors the prior template's
+    """Windows-first-class: a registry value written with a trailing slash
+    and a CRLF line ending must still resolve — mirrors the prior template's
     deliberate `\\r\\n` (not just `\\n`) stripping."""
     forwarder = _write_forwarder(tmp_path)
     ml_dir = tmp_path / "machine-local"
@@ -830,7 +832,9 @@ def test_forwarder_trailing_slash_and_crlf_normalized(tmp_path: Path):
 
     root = tmp_path / "crlf-claude-klabauter"
     _make_claude_klabauter_fixture(root)
-    (ml_dir / ".claude-klabauter-live-root").write_bytes((str(root) + "/\r\n").encode("utf-8"))
+    (ml_dir / "registry.local.toml").write_bytes(
+        (f'"repos.claude_klabauter" = \'{root}/\'\r\n').encode("utf-8")
+    )
 
     result = _run(forwarder, ml_dir)
 

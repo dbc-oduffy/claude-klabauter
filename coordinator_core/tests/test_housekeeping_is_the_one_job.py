@@ -1,10 +1,11 @@
 """One dispatchable housekeeping key, and one module allowed to reach the leg.
 
 Governing plan:
-`docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-time.md`,
+`archive/specs/2026-08/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-time.md`,
 chunk C6 — the half of the prime exit criterion a timing test cannot see. The
-timing half lives in
-`coordinator_core/reconcile/tests/test_housekeeping_corpus_read_budget.py`.
+timing half lives in `coordinator_core/housekeeping/tests/test_brightline.py`.
+The caller-side sibling, which asserts who invokes the job, is
+`coordinator_core/tests/test_housekeeping_is_called_by_the_ceremonies.py`.
 
 WHY THIS IS NOT `test_op_suspension_ratchet.py`, whose ground is adjacent and
 which was the chunk's own home-check candidate. That module polices the

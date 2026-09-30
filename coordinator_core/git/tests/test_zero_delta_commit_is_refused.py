@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
-from coordinator_core.git.commit import CommitRefused, NothingToCommit
+from coordinator_core.git.commit import CommitRefused, NothingToCommit, PhantomDeletionDeclared
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
@@ -76,7 +76,7 @@ def test_a_deletion_of_an_already_absent_path_is_refused(repo):
     landed = _head(repo)
     assert landed != before
 
-    with pytest.raises(NothingToCommit):
+    with pytest.raises(PhantomDeletionDeclared):
         gcommit.commit_paths(repo, [], "drop seed again", deleted_paths=["seed.txt"])
 
     assert _head(repo) == landed

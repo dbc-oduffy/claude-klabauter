@@ -27,13 +27,13 @@ site -- without blocking in the accept loop or creating a real named pipe.
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import election, server, skew, supervisor
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +64,7 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="warm runtime base")
 
 
 def _stamp(tmp_path: Path) -> None:

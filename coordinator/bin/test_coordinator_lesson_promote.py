@@ -698,6 +698,9 @@ def test_native_route_carries_the_validated_content_root() -> None:
         _mock.patch("sys.stdout", _io.StringIO()),
     ):
         env.pop("LESSON_PROMOTE_OUTBOX_ROOT", None)
+        # An ambient CONTENT_ROOT (other test modules pin one at import) forces the legacy write.
+        env.pop("CONTENT_ROOT", None)
+        env.pop("REPO_CONTENT_ROOT", None)
         rc = cli_mod.main([
             "--title", "some title",
             "--body", "some body",
@@ -774,9 +777,9 @@ def test_wiki_append_bogus_target_still_validates() -> None:
         raise AssertionError(f"{name}: " + ("outbox has entries but validation should have rejected before any write"))
 
 
-def test_allow_new_wiki_rejected_for_wiki_append() -> None:
+def test_allow_new_wiki_rejected_for_non_wiki_change_kind() -> None:
     name = (
-        "Test 17 — --change-kind wiki-append --allow-new-wiki → exit 2 at argparse "
+        "Test 17 — --change-kind doctrine-edit --allow-new-wiki → exit 2 at argparse "
         "time (mismatch rejected before the inventory check runs)"
     )
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -786,7 +789,7 @@ def test_allow_new_wiki_rejected_for_wiki_append() -> None:
             [
                 "--title", "some title",
                 "--body", "some body",
-                "--change-kind", "wiki-append",
+                "--change-kind", "doctrine-edit",
                 "--target-wiki", "nonexistent.md",
                 "--allow-new-wiki",
             ],

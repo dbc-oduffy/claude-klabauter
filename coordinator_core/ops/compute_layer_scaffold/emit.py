@@ -60,8 +60,8 @@ def _pascal_case(skill_name: str) -> str:
 
 
 def _py_str_literal(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'").replace("\r", "\\r").replace("\n", "\\n")
-    escaped = escaped.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+    escaped = escaped.replace("\r", "\\r").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     return f"'{escaped}'"
 
 
@@ -190,12 +190,9 @@ def compose_producer_module(skill_name: str, verbs: Sequence[str]) -> str:
     )
 
     usage_block = (
-        "\n\ndef _usage() -> int:\n"
+        f"\n\ndef _usage(prog: str = {_py_str_literal(skill_name)}) -> int:\n"
         '    """Prints the generated CLI\'s usage line to stderr, returns USAGE."""\n'
-        "    print(\n"
-        f"        {_py_str_literal(f'usage: {skill_name} [brief|apply]')},\n"
-        "        file=sys.stderr,\n"
-        "    )\n"
+        "    print(f'usage: {prog} [brief|apply]', file=sys.stderr)\n"
         f"    return int({exit_code_name}.USAGE)\n"
     )
 
@@ -206,7 +203,8 @@ def compose_producer_module(skill_name: str, verbs: Sequence[str]) -> str:
         "        return _usage()\n"
         "    verb = argv[0]\n"
         "    if verb == 'brief':\n"
-        "        print(json.dumps(brief(), indent=2, sort_keys=True))\n"
+        "        envelope = brief()\n"
+        "        print(json.dumps(envelope, indent=2, sort_keys=True))\n"
         f"        return int({exit_code_name}.SUCCESS)\n"
         "    if verb == 'apply':\n"
         "        exit_code, _report = apply([], [], Path.cwd())\n"

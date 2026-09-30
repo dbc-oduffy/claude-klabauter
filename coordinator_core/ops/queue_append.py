@@ -254,7 +254,7 @@ def _verify_override_session_ownership(override: str) -> None:
         # win and is checked against it below, same as any other foreign
         # claim.
         try:
-            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             try:
                 with open(marker_path, "r", encoding="utf-8") as fh:

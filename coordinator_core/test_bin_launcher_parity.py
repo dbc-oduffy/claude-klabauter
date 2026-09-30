@@ -621,18 +621,6 @@ LAUNCHER_PARITY_ROOTS: tuple[str, ...] = tuple(r.rel for r in SCAN_ROOTS)
 # the bar is a defect that regeneration would destroy information about, not
 # "regenerating it is inconvenient".
 LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
-    # -- Line-ending drift, not body drift ----------------------------------
-    # These three are byte-identical to the PRE-fix generator body except
-    # that they are stored LF in the git index despite `.gitattributes`
-    # pinning `*.cmd text eol=crlf` (`git ls-files --eol` reports
-    # `i/lf w/lf attr/text eol=crlf`) -- they predate the repo-wide pin and
-    # were never renormalized. Regenerating them writes CRLF, which is a
-    # correct-but-unrelated renormalization touching the index for reasons
-    # that have nothing to do with the interpreter ladder. Fold them into a
-    # deliberate `git add --renormalize` pass, then delete these entries.
-    "coordinator/bin/autonomous-verb.cmd": (
-        "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
-    ),
     # -- Orphaned launcher (RESOLVED 2026-08-31, row deleted) ---------------
     # `coordinator/bin/tests/run-fast-tests.cmd` lived here, exempt because it
     # invoked a `run-fast-tests.py` that does not exist and "wants deleting or

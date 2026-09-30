@@ -244,12 +244,14 @@ def test_concerns_structured_key_clause_is_structured_file_key_not_file_path():
     assert entry.path == f"<settings-home>/machine-local/{target._ML_REGISTRY_TOML_NAME}"
 
 
-def test_whoami_tree_copy_clause_is_shaped():
+def test_whoami_tree_copy_clause_is_retired_static_entry():
     clause = target.WRITE_SURFACE.clauses[21]
-    assert isinstance(clause, ShapedClause)
-    assert "_iter_whoami_files" in clause.discovered_by
-    assert clause.entry_template.kind == "file-path"
-    assert f"<settings-home>/{target._WHOAMI_DIRNAME}/" in clause.entry_template.path
+    assert isinstance(clause, StaticClause)
+    assert len(clause.entries) == 1
+    entry = clause.entries[0]
+    assert entry.kind == "file-path"
+    assert entry.path == f"<settings-home>/{target._WHOAMI_DIRNAME}/"
+    assert entry.reason.startswith("RETIRED")
 
 
 def test_legacy_whoami_delete_and_compat_pointer_clauses_are_distinct():

@@ -39,10 +39,11 @@ def _write_lib(root: Path, contents: str) -> Path:
     return dst
 
 
-def test_name_axis_ok_content_axis_drifts_on_stale_installed_lib(tmp_path: Path):
+def test_name_axis_ok_content_axis_drifts_on_stale_installed_lib(tmp_path: Path, monkeypatch):
     mod = _load_module()
 
     checkout_root = tmp_path / "engine-checkout"
+    monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(checkout_root))
     source_dir = checkout_root / "coordinator" / "lib" / "resolve-claude-klabauter"
     _write_lib(source_dir, "# current source, 500 lines of two-tier gate\n")
 
@@ -63,10 +64,11 @@ def test_name_axis_ok_content_axis_drifts_on_stale_installed_lib(tmp_path: Path)
     assert fd_module._REMEDY in joined
 
 
-def test_content_axis_clean_when_installed_matches_source(tmp_path: Path):
+def test_content_axis_clean_when_installed_matches_source(tmp_path: Path, monkeypatch):
     mod = _load_module()
 
     checkout_root = tmp_path / "engine-checkout"
+    monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(checkout_root))
     source_dir = checkout_root / "coordinator" / "lib" / "resolve-claude-klabauter"
     _write_lib(source_dir, "# identical content\n")
 
@@ -82,9 +84,10 @@ def test_content_axis_clean_when_installed_matches_source(tmp_path: Path):
     assert "[warn]" not in joined
 
 
-def test_content_axis_skips_when_settings_bin_missing(tmp_path: Path):
+def test_content_axis_skips_when_settings_bin_missing(tmp_path: Path, monkeypatch):
     mod = _load_module()
     checkout_root = tmp_path / "engine-checkout"
+    monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(checkout_root))
     settings_bin = tmp_path / "settings-home" / "bin"
 
     fd_module = _FakeFdModule(settings_bin)
@@ -118,10 +121,11 @@ def test_content_axis_lib_names_falls_back_when_substrate_unimportable(monkeypat
     assert names == ("_resolve_claude_klabauter.py",)
 
 
-def test_content_axis_unresolved_source_reported_and_not_counted_clean(tmp_path: Path):
+def test_content_axis_unresolved_source_reported_and_not_counted_clean(tmp_path: Path, monkeypatch):
     mod = _load_module()
 
     checkout_root = tmp_path / "engine-checkout"
+    monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(checkout_root))
 
     settings_bin = tmp_path / "settings-home" / "bin"
     _write_lib(settings_bin, "# installed copy, no source-of-truth to compare against\n")

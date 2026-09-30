@@ -1987,7 +1987,7 @@ _LAUNCH_CHAIN_PROBE = "claude-klabauter.launch.shim_chain"
 
 
 def _launch_chain_claude_home() -> Path:
-    return Path(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~"))
+    return Path(os.environ.get("CLAUDE_HOME") or Path.home())
 
 
 def _run_probe_launch_chain() -> _ProbeResult:
@@ -2906,7 +2906,7 @@ def _resolve_settings_home() -> Path:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return Path(override)
-    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    home = os.environ.get("CLAUDE_HOME") or Path.home()
     return Path(home) / ".coordinator-claude-settings"
 
 

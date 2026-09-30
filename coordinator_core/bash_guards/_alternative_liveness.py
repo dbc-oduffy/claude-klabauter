@@ -1043,7 +1043,9 @@ def _isolated_session_scope():
             os.environ.pop(_SESSION_SCOPED_ENV_VAR, None)
         else:
             os.environ[_SESSION_SCOPED_ENV_VAR] = prior
-        shutil.rmtree(latch_root, ignore_errors=True)
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(Path(latch_root), label="alternative-liveness latch root")
 
 
 def _call_trigger_isolated(trigger: Callable[[], Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:

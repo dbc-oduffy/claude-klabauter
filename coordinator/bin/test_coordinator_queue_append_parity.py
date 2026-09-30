@@ -515,6 +515,7 @@ def test_lesson_promote_valid() -> None:
     name = "coordinator-lesson-promote (a) valid invocation → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
+        os.makedirs(outbox)  # the CLI refuses an override root that does not exist
         result = _run_lesson_promote(
             [
                 "--title", "Parity test lesson",

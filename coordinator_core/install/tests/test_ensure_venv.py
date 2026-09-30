@@ -1273,7 +1273,7 @@ def test_swap_in_new_venv_survives_reader_via_junction_retarget(tmp_path):
     old_marker.write_text("old-interpreter")
     junction.create_junction(venv_dir, old_gen)
 
-    reader_fd = open(venv_dir / "bin" / "python", "r")
+    reader_fd = open(venv_dir / "bin" / "python", "r", encoding="utf-8")
     try:
         build_dir = ev._build_dir_for(venv_dir)
         (build_dir / "bin").mkdir(parents=True)

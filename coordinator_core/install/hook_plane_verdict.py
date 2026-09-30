@@ -17,6 +17,8 @@ import json
 import shlex
 from pathlib import Path
 
+GENERATES = []  # writes `<claude_home>/rules/<basename>` in the operator's settings home, outside claude-klabauter's tracked tree
+
 #: Where the platform records each installed plugin; `${CLAUDE_PLUGIN_ROOT}`
 #: expands from its `installPath`, and a dead path silently disables all hooks.
 PLUGIN_RECORD_REL = ("plugins", "installed_plugins.json")

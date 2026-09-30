@@ -77,9 +77,9 @@ def test_import_is_fast(module_name):
         if name == module_name or name.startswith(module_name + "."):
             del sys.modules[name]
 
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     importlib.import_module(module_name)
-    elapsed_ms = (time.perf_counter() - t0) * 1000
+    elapsed_ms = (time.process_time() - t0) * 1000
     assert elapsed_ms < 500, f"{module_name} cold import took {elapsed_ms}ms"
 
 

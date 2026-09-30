@@ -16,6 +16,7 @@ import pytest
 
 from coordinator_core.ops.test_workday_complete_backfill_scan import _commit_on, _git, _make_repo
 from coordinator_core.ops.workday_complete_backfill_scan import main
+from coordinator_core.session import record_homes
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -32,13 +33,14 @@ TIP_LEG_EXTRA_SPAWNS = 4
 
 def _covered_repo(tmp_path_factory) -> Path:
     repo = _make_repo(tmp_path_factory)
-    (repo / "state" / "week-changelog").mkdir(parents=True)
+    _changelog_dir = Path(record_homes.home_dir(str(repo), "week-changelog"))
+    _changelog_dir.mkdir(parents=True)
     start = date.fromisoformat(TODAY)
     for i in range(1, DAYS + 1):
         day = (start - timedelta(days=i)).isoformat()
         sha = _commit_on(repo, day, f"work {day}")
         (repo / "archive" / "daily-summaries" / f"{day}.md").write_text(f"summary\ncovered_tip_sha: {sha}\n")
-        (repo / "state" / "week-changelog" / f"{day}.md").write_text("changelog\n")
+        (_changelog_dir / f"{day}.md").write_text("changelog\n")
     return repo
 
 

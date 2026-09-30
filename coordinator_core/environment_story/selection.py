@@ -125,7 +125,7 @@ def _resolve_settings_home() -> str:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return override
-    base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    base = os.environ.get("CLAUDE_HOME") or str(Path.home())
     return os.path.join(base, ".coordinator-claude-settings")
 
 

@@ -353,10 +353,31 @@ def test_main_asks_server_and_unlinks_breadcrumb_on_success(
     monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
     monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: True)
+    monkeypatch.setattr(stop_mod, "_wait_for_pid_gone", lambda pid, epoch, deadline_secs: True)
     unlinked = []
     monkeypatch.setattr(stop_mod.breadcrumb, "unlink_breadcrumb", lambda: unlinked.append(True))
     assert stop_mod.main([]) == stop_mod._EXIT_OK
     assert unlinked == [True]
+
+
+def test_main_keeps_breadcrumb_when_graceful_stop_is_delivered_but_pid_stays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = {
+        "pipe": r"\\.\pipe\fake",
+        "pid": 4242,
+        "stable_pid_start_epoch": 1,
+        "engine_sha": "x",
+        "started_at": "2026-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
+    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: True)
+    monkeypatch.setattr(stop_mod, "_wait_for_pid_gone", lambda pid, epoch, deadline_secs: False)
+    unlinked = []
+    monkeypatch.setattr(stop_mod.breadcrumb, "unlink_breadcrumb", lambda: unlinked.append(True))
+    assert stop_mod.main([]) == stop_mod._EXIT_COULD_NOT_STOP
+    assert unlinked == []
 
 
 def test_main_falls_back_to_terminate_when_ask_fails(monkeypatch: pytest.MonkeyPatch) -> None:

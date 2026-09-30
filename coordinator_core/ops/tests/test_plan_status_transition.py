@@ -8,6 +8,7 @@ Port source: coordinator/bin/plan-status-transition.js (coordinator-content-repo
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -934,6 +935,11 @@ def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_pat
     placeholder = '"<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>"'
     assert placeholder in plan_content
     plan_content = plan_content.replace(placeholder, '"state/sizings/2026-08-10-e2e.yaml"')
+    # A scaffold created today is a review-stamp SUBJECT plan; the gate is not
+    # under test here, so date the plan before the review_stamp cutoff.
+    plan_content = re.sub(
+        r"^created: .*$", "created: 2026-08-10", plan_content, count=1, flags=re.MULTILINE
+    )
     plan_path = _write(tmp_path, plan_relpath, plan_content)
 
     # Mirrors the CLI's own `--type plan --sizing-object ...` reverse-edge

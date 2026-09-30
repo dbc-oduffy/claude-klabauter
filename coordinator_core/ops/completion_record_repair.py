@@ -48,8 +48,7 @@ output, corrupting cases 1-3 for every other record in the same call).
 
 Dry-run by default (`apply=False`): computes and reports exactly what WOULD be
 written, touches no file. `apply=True` performs a read-modify-write per
-repaired record (temp file + `os.replace`, matching `completion_ops.
-append_plan_session`'s no-lock-available fallback shape -- this module has no
+repaired record (atomic replace through the claiming seam -- this module has no
 IPC engine caller supplying a `repo_root`-derived lock namespace).
 
 Negative-spec:
@@ -65,10 +64,8 @@ Negative-spec:
 from __future__ import annotations
 
 import datetime
-import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
 
@@ -80,6 +77,7 @@ from coordinator_core.completion_record_integrity import (
 )
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.completion_record_sweep import sweep_repo
+from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Legal `status:` enum values per `completion-entry.schema.json` (1.4.0) --
@@ -406,19 +404,8 @@ def _write_commits_field(text: str, shas: List[str]) -> str:
 
 
 def _atomic_write(path: Path, new_text: str) -> None:
-    """temp file + `os.replace` -- same idiom as `completion_ops.
-    append_plan_session`'s no-lock fallback."""
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(new_text)
-        os.replace(tmp_path, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    """Atomic replace through the claiming seam."""
+    replace_text(path, new_text)
 
 
 class RecordRepairResult(NamedTuple):

@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_commit_tail
+from coordinator_core.session import record_homes
 
 # Declared, not excused: the property under test is git's own commit result.
 pytestmark = [
@@ -24,7 +25,7 @@ pytestmark = [
     pytest.mark.spawns_process,
 ]
 
-_HANDOFF = "state/handoffs/X.md"
+_HANDOFF = Path(record_homes.record_path("", "handoffs", "X.md")).as_posix()
 _ARCHIVED = "archive/handoffs/2026-09/X.md"
 _DIAGNOSTIC = "stage path vanished before commit: " + _HANDOFF
 
@@ -44,7 +45,7 @@ def repo(tmp_path):
     _git("config", "user.email", "test@example.com", cwd=root)
     _git("config", "user.name", "Test", cwd=root)
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
-    (root / "state/handoffs").mkdir(parents=True)
+    Path(record_homes.home_dir(str(root), "handoffs")).mkdir(parents=True)
     (root / _HANDOFF).write_text("handoff\n", encoding="utf-8")
     _git("add", "seed.txt", _HANDOFF, cwd=root)
     if _git("commit", "-qm", "seed", cwd=root).returncode != 0:

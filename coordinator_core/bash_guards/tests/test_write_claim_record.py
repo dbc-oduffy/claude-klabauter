@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -54,6 +53,7 @@ from coordinator_core.session.touch_record import (
     iter_complete_lines,
     sink_path,
 )
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 try:
     from coordinator_core.bash_guards._advisory_value import AdvisoryValue
@@ -550,7 +550,7 @@ def test_ac7_cost_under_5ms_total_and_no_subprocess(monkeypatch):
         root = _repo(work_dir)
         _run_ac7_timing(root, monkeypatch)
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        rmtree_or_raise(work_dir, label="write-claim-record work dir")
         try:
             scratch_root.rmdir()
         except OSError:

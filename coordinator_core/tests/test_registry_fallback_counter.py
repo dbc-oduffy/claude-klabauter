@@ -15,12 +15,13 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import ipc, registry_fallback_counter as fbc
+from coordinator_core.session.machinery_paths import share_dir
 
 _FILENAME = "registry-fallback-counts.jsonl"
 
 
 def _counts_path(root: Path, sid: str) -> Path:
-    return root / "state" / "subagent-share" / sid / _FILENAME
+    return Path(share_dir(str(root), sid)) / _FILENAME
 
 
 def _write_one(tmp_path: Path, monkeypatch, **kwargs) -> Path:

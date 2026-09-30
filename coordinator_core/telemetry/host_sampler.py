@@ -675,7 +675,7 @@ def _darwin_memory_mb(_sysctl=None) -> tuple:
 def _posix_memory_mb() -> tuple:
     try:
         info = {}
-        with open("/proc/meminfo", "r") as fh:
+        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
             for line in fh:
                 key, _, rest = line.partition(":")
                 value_kb = rest.strip().split()[0]
@@ -698,7 +698,7 @@ def _posix_process_counts() -> tuple:
                 continue
             total += 1
             try:
-                with open(f"/proc/{name}/comm", "r") as fh:
+                with open(f"/proc/{name}/comm", "r", encoding="utf-8") as fh:
                     comm = fh.read().strip().lower()
             except Exception:
                 comm = ""

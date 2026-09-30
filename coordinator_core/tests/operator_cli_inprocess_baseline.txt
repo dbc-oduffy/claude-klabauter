@@ -91,8 +91,6 @@ coordinator/bin/check-harvest-debt.py
 coordinator/bin/check-shipped-on-main.py
 coordinator/bin/check-surface-inline-budget.py
 coordinator/bin/coordinator-fold-execution-record.py
-coordinator/bin/coordinator-prepare-commit-msg
-coordinator/bin/coordinator-prepare-commit-msg.py
 coordinator/bin/coordinator-safe-commit.py
 # `cross-repo-memo.py` (added 2026-08-14, C5b): its ONE in-process op reach
 # that this gate credits is `_commit_archived_outbox_draft`'s
@@ -192,7 +190,6 @@ coordinator/bin/publish.py
 coordinator/bin/render-ceremony-receipt.py
 coordinator/bin/review-brightline-gate.py
 coordinator/bin/spinoff-deliverable-and-commit.py
-coordinator/bin/sweep-boot.py
 coordinator/bin/sync-main.py
 coordinator/bin/update-docs-probes.py
 coordinator/bin/verify-orientation-cache-sync.py
@@ -207,6 +204,39 @@ coordinator/bin/workday-complete-backfill-scan.py
 # reaping.
 coordinator/bin/workday-complete-step3-consolidate.py
 coordinator/bin/workday-start-advisory-counters.py
-coordinator/bin/workweek-complete-advisories.py
 coordinator/bin/workweek-complete-doc-staleness.py
-coordinator/bin/wsc-coverage-gate-runner.py
+
+# 2026-09-30 arrivals from the DoE-holds-no-scripts moves. Kinds 1-3 are the header's
+# kinds; `deferred` is open conversion debt, not a permanent carve-out.
+# compose-review-wave.py: deferred: one state/review-trail waste-report write (_write_waste_report); imports a batch helper with no main(argv) to route
+coordinator/bin/compose-review-wave.py
+# coordinator-harvest-deferrals.py: kind 2: imports read-only predicates; every write goes out through subprocess CLIs that declare at their own write site
+coordinator/bin/coordinator-harvest-deferrals.py
+# coordinator-postsync-marker-resync-check: deferred: one kill-switch marker write under the settings home after a foreign-platform finding; predicate import has no main(argv) to route
+coordinator/bin/coordinator-postsync-marker-resync-check
+# coordinator-precommit-foreign-platform-check: kind 1: pre-commit predicate over staged content; writes nothing
+coordinator/bin/coordinator-precommit-foreign-platform-check
+# emit-wave-fire.py: kind 2: already reaches the engine through dispatch_message
+coordinator/bin/emit-wave-fire.py
+# handoff-archive-transition.py: kind 2: already reaches the engine through cc_invoke.route / route_mutation
+coordinator/bin/handoff-archive-transition.py
+# hollow-completion-record-sweep.py: deferred: --repair calls completion_record_repair.repair_repos, a library function with no main(argv) for run_op_main to route
+coordinator/bin/hollow-completion-record-sweep.py
+# merge-gate-and-pr.py: kind 3: git/gh ref and PR operations through subprocess; no file-content write
+coordinator/bin/merge-gate-and-pr.py
+# merge-recovery-and-tag-cut.py: kind 3: git merge/tag operations through subprocess; no file-content write
+coordinator/bin/merge-recovery-and-tag-cut.py
+# query-roadmap-serve.py: kind 1/2: read-only DAG query, already reaches the engine via cc_invoke.route
+coordinator/bin/query-roadmap-serve.py
+# recycle-check.py: kind 1: read-only slot_order recycle probe; writes nothing
+coordinator/bin/recycle-check.py
+# regenerate-generator-content-cache.py: deferred: writes the shipped generator content cache through generator_scan_cache.save_content_cache, a library call with no main(argv) to route
+coordinator/bin/regenerate-generator-content-cache.py
+# triage-plan-candidates.py: kind 1: read-only plan-candidate triage over git and spine reads
+coordinator/bin/triage-plan-candidates.py
+# waste-signal.py: deferred: dynamic instrument; its only write is an operator-named --out JSON report
+coordinator/bin/waste-signal.py
+# workday-start-day-branch-resolve.py: kind 3: day-branch resolve and publish through git subprocesses; no file-content write
+coordinator/bin/workday-start-day-branch-resolve.py
+# writes-ignored-check.py: kind 1: read-only check over spine_read output; writes nothing
+coordinator/bin/writes-ignored-check.py

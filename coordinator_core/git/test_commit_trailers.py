@@ -489,6 +489,13 @@ def test_artifact_tier_omits_on_genuinely_divergent_multi_artifact_commit(
 _SENTINEL_SID = "99887766-1122-4334-8ee5-aabbccddeeff"
 
 
+# Session-Id/Deliverable-Id stay omitted; Co-Authored-By is owed on every commit.
+_ONLY_ATTRIBUTION_ARGS = [
+    "--trailer",
+    f"Co-Authored-By: {commit_trailers.ATTRIBUTION_TRAILER_VALUE}",
+]
+
+
 def _write_sentinel(repo: Path, sid: str) -> None:
     sentinel_dir = repo / ".git" / "coordinator-sessions"
     sentinel_dir.mkdir(parents=True, exist_ok=True)
@@ -518,7 +525,7 @@ def test_sentinel_stale_session_ignored_no_trailers(tmp_path, monkeypatch):
 
     args = compute_missing_trailer_args(msg, repo)
 
-    assert args == []
+    assert args == _ONLY_ATTRIBUTION_ARGS
 
 
 def test_sentinel_live_session_still_ignored_no_trailers(tmp_path, monkeypatch):
@@ -537,7 +544,7 @@ def test_sentinel_live_session_still_ignored_no_trailers(tmp_path, monkeypatch):
 
     args = compute_missing_trailer_args(msg, repo)
 
-    assert args == []
+    assert args == _ONLY_ATTRIBUTION_ARGS
 
 
 def test_sentinel_no_session_dir_no_trailers(tmp_path, monkeypatch):
@@ -549,7 +556,7 @@ def test_sentinel_no_session_dir_no_trailers(tmp_path, monkeypatch):
 
     args = compute_missing_trailer_args(msg, repo)
 
-    assert args == []
+    assert args == _ONLY_ATTRIBUTION_ARGS
 
 
 def _git_trailer_value(repo: Path, msg_file: Path, key: str) -> str:

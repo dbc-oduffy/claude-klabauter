@@ -808,13 +808,14 @@ def mint_rows(
     dep_kinds = _resolve_dep_kinds(chunk_rows)
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
     writes_by_id: Dict[str, set] = {}
+    writes_under_by_id: Dict[str, List[str]] = {}
 
     for row in chunk_rows:
         row_id = _strip_backtick(row["id"])
         if dep_kinds[row_id] != _DEP_KIND_LIVE:
             continue
-        writes, _writes_under = _split_footprint(row_id, row["footprint"])
-        if not writes:
+        writes, writes_under = _split_footprint(row_id, row["footprint"])
+        if not writes and not writes_under:
             raise FootprintUnreadableError(
                 f"chunk table row {row_id!r} is LIVE ({row['disposition']!r}) "
                 "but its footprint is empty -- an EM-run/no-write row does "
@@ -822,6 +823,7 @@ def mint_rows(
                 "commit-C12 precedent)"
             )
         writes_by_id[row_id] = set(writes)
+        writes_under_by_id[row_id] = writes_under
         live.append((row_id, row, writes))
 
     plan_cache: Dict[Path, Dict[str, dict]] = {}
@@ -966,14 +968,17 @@ def mint_rows(
                     {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
                 )
 
+        writes_under = writes_under_by_id[row_id]
         entry = {
             "id": row_id,
             "title": summary,
-            "change_kind": _infer_change_kind(writes),
-            "surface": writes[0],
+            "change_kind": _infer_change_kind(writes or writes_under),
+            "surface": (writes or writes_under)[0],
             "body": _row_body(row_id, spec_path, summary, verification, complexity),
             "writes": writes,
         }
+        if writes_under:
+            entry["writes_under"] = writes_under
         execution_mode = _plan_row_execution_mode(
             inventory_path, spec_path, row_id, plan_cache
         )

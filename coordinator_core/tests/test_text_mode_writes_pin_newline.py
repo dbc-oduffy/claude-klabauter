@@ -40,6 +40,9 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import subprocess
+
+from coordinator_core.win_portability import no_console_creationflags
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -144,12 +147,24 @@ def _offenders_in(src: str, rel: str) -> list[str]:
     return out
 
 
+def _candidate_python_paths() -> list[str]:
+    """Tracked plus untracked-but-not-ignored `.py` files: gitignored build
+    output, peer scratch clones and session sidecars are not shipped source."""
+    proc = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        **no_console_creationflags(),
+    )
+    assert proc.returncode == 0, f"git ls-files failed: {proc.stderr.strip()}"
+    return sorted({p for p in proc.stdout.split("\0") if p})
+
+
 def _production_sources() -> list[tuple[str, str]]:
     found = []
-    for path in REPO.rglob("*.py"):
+    for rel in _candidate_python_paths():
+        path = REPO / rel
         if _SKIP_DIRS.intersection(path.parts):
             continue
-        rel = path.relative_to(REPO).as_posix()
         if _is_test_file(rel):
             continue
         try:

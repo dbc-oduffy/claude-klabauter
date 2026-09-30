@@ -231,7 +231,7 @@ def test_a_trailing_slash_write_is_refused(tmp_path):
     report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
     assert report["verdict"] == pg.NOT_PREPPED
     spine_class = report["classes"]["SPINE"]
-    assert spine_class["kind"] == "writes-unreadable-at-emit"
+    assert spine_class["kind"] == "writes-directory-shaped"
     assert "C1" in spine_class["detail"]
     assert "directory-shaped" in spine_class["detail"]
 
@@ -803,12 +803,12 @@ def test_a_new_root_level_entry_is_not_read_as_a_cross_repo_write(tmp_path):
         if value.endswith("/"):
             # `brand-new-dir/` clears EXTERNAL_DEPS's created-roots exemption but
             # is trailing-slash directory-shaped — SPINE's own emit-shape check
-            # (this module's writes-unreadable-at-emit) now refuses it before the
+            # (this module's writes-directory-shaped) now refuses it before the
             # stamp, the same shape `dispatch_emit.pathspec` refuses at emit time
             # regardless of that exemption. Not a regression in this leg: the
             # exemption's own PASS above is unaffected.
             assert report["verdict"] == pg.NOT_PREPPED, value
-            assert report["classes"]["SPINE"]["kind"] == "writes-unreadable-at-emit"
+            assert report["classes"]["SPINE"]["kind"] == "writes-directory-shaped"
         else:
             assert report["verdict"] == pg.PREPPED, value
 

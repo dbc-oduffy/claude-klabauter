@@ -88,6 +88,10 @@ def test_unknown_target_raises():
 
 
 def test_run_target_no_subprocess_spawned(monkeypatch):
+    # Outside a served span the shim routes through the invoke door, which
+    # spawns by design; the in-process path this test pins is the served one.
+    monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", "warm_server")
+
     def _forbidden(*a, **kw):
         raise AssertionError("run_target must not spawn a subprocess")
 

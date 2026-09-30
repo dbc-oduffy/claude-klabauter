@@ -102,7 +102,9 @@ _SUB_FLOOR_BYTES = 512
 _RATIO_PRICED_SURFACES = frozenset({"wiki", "commands", "snippets"})
 _ADMISSION_PRICED_SURFACES = frozenset({"wiki", "commands", "snippets", "agents", "skills"})
 
-_ACCUMULATOR_STATE_PATH = machine_local_dir() / "doctrine-surface-ratio-accumulator.json"
+def _accumulator_state_path() -> Path:
+    return machine_local_dir() / "doctrine-surface-ratio-accumulator.json"
+
 
 _ACCUMULATOR_KEY_BY_SCOPE = {
     CREDIT_SCOPE_SURFACE: "sub_floor_accumulator_surface",
@@ -324,21 +326,22 @@ def _sanctioned_split_paths(raw_output: str) -> "set[str]":
 
 def _load_baseline() -> dict:
     try:
-        return json.loads(_ACCUMULATOR_STATE_PATH.read_text(encoding="utf-8"))
+        return json.loads(_accumulator_state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"surfaces": {}}
 
 
 def _save_baseline(baseline: dict) -> None:
-    _ACCUMULATOR_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    state_path = _accumulator_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(baseline, indent=2, sort_keys=False) + "\n"
     fd, tmp_path = tempfile.mkstemp(
-        dir=str(_ACCUMULATOR_STATE_PATH.parent), prefix=".doctrine-surface-ratio-accumulator-"
+        dir=str(state_path.parent), prefix=".doctrine-surface-ratio-accumulator-"
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(payload)
-        os.replace(tmp_path, str(_ACCUMULATOR_STATE_PATH))
+        os.replace(tmp_path, str(state_path))
     except Exception:
         try:
             os.unlink(tmp_path)

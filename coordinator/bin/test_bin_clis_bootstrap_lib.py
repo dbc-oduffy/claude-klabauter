@@ -99,10 +99,26 @@ def _bare_name_importers(source: str, siblings: set[str]) -> list[tuple[str, int
     ]
 
 
+def _registers_lib_module(node: ast.AST) -> bool:
+    """`sys.modules["lib"] = ...` — a hand-rolled bootstrap that execs lib/__init__ by path."""
+    return (
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(t, ast.Subscript)
+            and isinstance(t.value, ast.Attribute)
+            and t.value.attr == "modules"
+            and isinstance(t.slice, ast.Constant)
+            and t.slice.value == "lib"
+            for t in node.targets
+        )
+    )
+
+
 def _bootstraps_lib(source: str) -> bool:
     tree = ast.parse(source)
     return any(
-        isinstance(node, ast.Import) and any(alias.name == "lib" for alias in node.names)
+        (isinstance(node, ast.Import) and any(alias.name == "lib" for alias in node.names))
+        or _registers_lib_module(node)
         for node in ast.walk(tree)
     )
 
@@ -171,6 +187,11 @@ _EXEMPT: dict[tuple[str, str], str] = {
         "target is not a coordinator/bin script — a dynamically-discovered "
         "write-surface declaration module, resolved at runtime from whatever "
         "the discovery scan finds"
+    ),
+    ("coordinator_core/install/sandbox_check.py", "_tier1d_registry_manifest_integrity"): (
+        "target is not a coordinator/bin script — it is coordinator/bin/lib/"
+        "coordinator_registry.py itself, loaded after the probe puts its own "
+        "directory on sys.path"
     ),
 }
 

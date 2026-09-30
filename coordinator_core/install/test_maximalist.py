@@ -186,9 +186,9 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     (claude_home / ".claude" / "bin").mkdir(parents=True)
 
     # `claude_klabauter_root` is a SEPARATE fixture tree from `coord_root` -- the
-    # executable `bin/` surface (`claude-author`, `gen-claude-klabauter-live-root-pointer.py`)
+    # executable `bin/` surface (`claude-author`)
     # migrated wholesale to claude-klabauter in commit `b644d5a9` (2026-07-22),
-    # so production code now resolves these two paths under
+    # so production code now resolves these paths under
     # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the DoE clone's
     # `coord_root` (which still correctly houses `templates/`). Mirroring
     # that split here (rather than leaving these files under `coord_root/bin`)
@@ -198,17 +198,6 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     # accident.
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-
-    # gen-claude-klabauter-live-root-pointer.py is invoked as `python3 <path>` via a real
-    # subprocess (Step 3.5a.1b, advisory, out of C13's scope) -- must be
-    # valid Python, not a shell stub.
-    claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
-    claude_klabauter_pointer.write_text(
-        "import os, sys\n"
-        'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
-        'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
-    )
 
     # claude-author wrapper source -- installed via pure-Python cp+chmod, not a
     # subprocess call; content is irrelevant, executability + copy fidelity is.
@@ -362,7 +351,6 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
         "detect-existing-claude-home",
         "install-health-run",
         "gen-content-root-pointer",
-        "gen-claude-klabauter-live-root-pointer.py",
         "gen-claude-author-shim",
         "gen-claude-author-launcher",
         "gen-settings-hooks",
@@ -1804,18 +1792,20 @@ def test_env_var_propagated_to_subprocess_phase(stub_env, monkeypatch, tmp_path)
     # about the env var reaching a real subprocess, not about the mutation
     # guard itself.
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    # Rewrite the real subprocess-invoked phase (gen-claude-klabauter-live-root-pointer.py)
-    # to record the resolution-journal env var it inherits, proving it
-    # reaches a subprocess phase's environment, not only in-process ones.
+    # Stand in for the `machine-local` CLI the registry-seed phases spawn as a
+    # real subprocess, recording the resolution-journal env var it inherits --
+    # proving it reaches a subprocess phase's environment, not only in-process
+    # ones.
     seen_log = tmp_path / "journal-env-seen.log"
-    claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
-    claude_klabauter_pointer.write_text(
-        "import os, sys\n"
+    recorder = tmp_path / "record_env.py"
+    recorder.write_text(
+        "import os\n"
         f'with open({str(seen_log)!r}, "w") as f:\n'
         '    f.write(os.environ.get("COORDINATOR_INSTALL_RESOLUTION_JOURNAL", ""))\n'
-        'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
-        'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
+    )
+    monkeypatch.setattr(
+        "coordinator_core.install._shared.resolve_machine_local_cli",
+        lambda coord_root: [sys.executable, str(recorder)],
     )
 
     rc = maximalist.run(**_run_kwargs(stub_env))

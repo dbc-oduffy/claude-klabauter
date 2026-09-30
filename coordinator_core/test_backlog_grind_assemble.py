@@ -3488,21 +3488,22 @@ def _load_entry_point_shim():
 #: Declaration for the register-aging sweep (C5,
 #: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
 #: MISMATCH vs the classifier's `symbol` prediction (`state/audits/2026-08-26-the-core-register-
-#: inventory.md`). Each row is `"<subcommand-label>.<callee-name>"` (e.g. `"brief.main"` names the
+#: inventory.md`). Each row is `"<callee-label>:<callee-name>"` (e.g. `"brief:main"` names the
 #: `brief` SUBCOMMAND's callee `main`, defined in this package's own `__init__.py` -- there is no
-#: `brief.py` module; `"apply.main_apply"`/`"apply.main_drop"` name callees in `apply.py`, but the
-#: leading segment is the subcommand label, not a real module path). Not a fully-qualified dotted
-#: subject the generic AST resolver in `register_rows.py` can check -- that correlation is already
+#: `brief.py` module; `"apply:main_apply"`/`"apply:main_drop"` name callees in `apply.py`, but the
+#: leading segment is a label, not a real module path, and the colon keeps it from ever reading as
+#: a dotted symbol -- `grind_rows` IS a real module, so its row aged out the dotted spelling). Not a
+#: fully-qualified dotted subject the generic AST resolver in `register_rows.py` can check -- that correlation is already
 #: covered, structurally, by `_extract_allowlist_from_entry_point_shim` below. Declared `opaque`
 #: rather than widened to a resolver special-case.
 _EXPECTED_CALLEE_BY_SUBCOMMAND__SUBJECT_CLASS = "opaque"
 
 _EXPECTED_CALLEE_BY_SUBCOMMAND = {
-    "brief": "brief.main",
-    "mint-run-id": "brief.main",
-    "apply": "apply.main_apply",
-    "drop": "apply.main_drop",
-    "grind-row": "grind_rows.main",
+    "brief": "brief:main",
+    "mint-run-id": "brief:main",
+    "apply": "apply:main_apply",
+    "drop": "apply:main_drop",
+    "grind-row": "grind_rows:main",
 }
 
 
@@ -3593,7 +3594,7 @@ class TestTrampolineDispatchRouting:
             "allowlist tuple but has no entry in "
             "_EXPECTED_CALLEE_BY_SUBCOMMAND above -- add BOTH a dispatch "
             "branch in entry_point_shim.py's _backlog_grind_assemble_entry "
-            "AND a row here ('<subcommand>': '<module>.<callee>') before "
+            "AND a row here ('<subcommand>': '<module>:<callee>') before "
             "this test will pass."
         )
 
@@ -3645,10 +3646,10 @@ class TestTrampolineDispatchRouting:
 
             return _spy
 
-        monkeypatch.setattr(bga, "main", _make_spy("brief.main"))
-        monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply.main_apply"))
-        monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply.main_drop"))
-        monkeypatch.setattr(bga_grind_rows, "main", _make_spy("grind_rows.main"))
+        monkeypatch.setattr(bga, "main", _make_spy("brief:main"))
+        monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply:main_apply"))
+        monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply:main_drop"))
+        monkeypatch.setattr(bga_grind_rows, "main", _make_spy("grind_rows:main"))
 
         full_argv = [subcommand, "mise-en-place"]
         exit_code = shim._backlog_grind_assemble_entry(full_argv)

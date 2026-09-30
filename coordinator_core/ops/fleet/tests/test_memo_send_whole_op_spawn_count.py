@@ -29,13 +29,11 @@ Negative spec:
 from __future__ import annotations
 
 import subprocess
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Iterator, NamedTuple
 
 import pytest
 
 from coordinator_core.benchmarks.budget import load_manifest
+from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.git import git_state
 from coordinator_core.ops.ceremony import git_native
 
@@ -49,61 +47,6 @@ from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
-class _AttributedSpawn(NamedTuple):
-    argv: tuple[str, ...]
-    origin: str
-
-
-#: Frame-file suffix -> gate-site name, matching the gate's own
-#: `_LEGITIMIZED_SITES` key shape (`(relpath, enclosing, argv0, ordinal)`'s
-#: `relpath`/`enclosing` pair). Compared as `Path(...).as_posix()` suffixes
-#: so the match holds on Windows (drive letters and backslashes never enter
-#: the comparison).
-_GIT_NATIVE_SUFFIX = "coordinator_core/ops/ceremony/git_native.py"
-_RUN_GIT_SUFFIX = "coordinator_core/git/run.py"
-_COMMIT_SIGNING_SUFFIX = "coordinator_core/git/commit_signing.py"
-
-
-def _attribute_frame(frame) -> str | None:
-    filename = Path(frame.f_code.co_filename).as_posix()
-    if filename.endswith(_GIT_NATIVE_SUFFIX) and frame.f_code.co_name == "_invoke":
-        return "_git._invoke"
-    if filename.endswith(_RUN_GIT_SUFFIX) and frame.f_code.co_name == "run_git":
-        return "run_git"
-    if (
-        filename.endswith(_COMMIT_SIGNING_SUFFIX)
-        and frame.f_code.co_name == "write_signed_commit_object"
-    ):
-        return "write_signed_commit_object"
-    return None
-
-
-@contextmanager
-def _count_spawns_attributed(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[_AttributedSpawn]]:
-    recorded: list[_AttributedSpawn] = []
-    real_popen = subprocess.Popen
-
-    class _Popen(real_popen):  # type: ignore[misc,valid-type]
-        def __init__(self, args, *a, **kw):
-            origin = "unattributed"
-            frame = __import__("sys")._getframe(1)
-            while frame is not None:
-                site = _attribute_frame(frame)
-                if site is not None:
-                    origin = site
-                    break
-                frame = frame.f_back
-            argv = tuple(str(x) for x in args) if isinstance(args, (list, tuple)) else (str(args),)
-            recorded.append(_AttributedSpawn(argv=argv, origin=origin))
-            super().__init__(args, *a, **kw)
-
-    monkeypatch.setattr(subprocess, "Popen", _Popen)
-    try:
-        yield recorded
-    finally:
-        monkeypatch.undo()
 
 
 def _budget() -> dict:

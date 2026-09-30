@@ -108,7 +108,7 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 
@@ -232,7 +232,7 @@ def emit_abandoned_claims(repo_root: Path) -> str:
 
         named = rows[:_MAX_NAMED]
         lines = [
-            f"- ⚠ {len(rows)} baton(s) read `status: claimed` but the claiming session is "
+            f"- ⚠ {len(rows)} baton(s) carry `claimed_by` but the claiming session is "
             f"not in this box's registry — not proof of abandonment (another machine, or a "
             f"messaging gate that is off, looks identical), but nothing is tracking them:"
         ]

@@ -16,9 +16,11 @@ cases stub it deliberately, because what is under test is the handover and not t
 
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 
 from coordinator_core.ops import roadmap_blitz_land as mod
+from coordinator_core.session import record_homes
 
 _EMPTY_LANDING = {
     "approved": [],
@@ -129,10 +131,10 @@ def _xs_baton(root, name, deployment_state, shipped_in=None):
     ]
     if shipped_in:
         lines.append(f"shipped_in: {shipped_in}")
-    path = root / "state" / "handoffs" / f"{name}.md"
+    path = Path(record_homes.record_path(str(root), "handoffs", f"{name}.md"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\n" + "\n".join(lines) + "\n---\n\nbody\n", encoding="utf-8")
-    return f"state/handoffs/{name}.md"
+    return Path(record_homes.record_path("", "handoffs", f"{name}.md")).as_posix()
 
 
 def test_a_closed_row_names_the_terminal_state_the_driver_hands_to_the_ship_transition(repo):

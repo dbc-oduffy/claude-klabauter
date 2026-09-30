@@ -296,6 +296,10 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/hooks/guard_manufactured_blocker.py': ('git-internal', 'per-session has-fired marker inside the session dir under <git-common-dir>/coordinator-sessions: _mark_fired_this_session'),
+    'coordinator_core/install/hook_plane_verdict.py': ('outside-repo', 'rule surface files under <claude_home>/rules: write_rule_surface'),
+    'coordinator_core/ops/handoff_discharge_landed.py': ('git-internal', 'O_EXCL batch lock under the git common dir: _acquire_lock; the handoff stamp write itself goes through claimed_write.replace_text'),
+    'coordinator_core/telemetry/traffic_manifest.py': ('in-repo-non-state', 'operator-named --out file for a generated traffic manifest; no state/ target'),
     'coordinator_core/hooks/flag_em_poll_in_flight.py': ('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
     'coordinator_core/hooks/guard_doctrine_surface_bash_write.py': ('in-repo-non-state', 'no write: the raw-write vocabulary appears only in docstrings and patterns the guard detects'),
     'coordinator_core/hooks/guard_doctrine_surface_ratio_precommit.py': ('outside-repo', 'accumulator json under machine_local_dir() (settings home): _save_accumulator'),
@@ -402,7 +406,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/cartography_chunk_table.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: write_chunk_table [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/cartography_symbols.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_symbols_artifact'),
     'coordinator_core/ops/cartography_tree.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
-    'coordinator_core/ops/ceremony/consumed_handoff_stamp.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _commit_and_push_follow_up'),
     'coordinator_core/ops/ceremony/detached_spawn.py': ('to-fix', 'raw-write site(s): _append_to_failures_archive, _log_spawn_failure, advance_failures_cursor, clear_failures_log, record_child_failure; runtime observed=yes (n=158), sample=/tmp/pytest-of-root/pytest-705/test_exhausts_retries_and_logs0/state/housekeeping-failures.log'),
     'coordinator_core/ops/ceremony/git_native.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _apply_trailers, _write_pathspec_file'),
     'coordinator_core/ops/ceremony/housekeeping_liveness.py': ('to-fix', 'raw-write site(s): stamp_liveness; runtime observed=yes (n=24), sample=/tmp/pytest-of-root/pytest-705/test_stamp_liveness_writes_par0/state/housekeeping-liveness.json'),
@@ -418,7 +421,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/coordinator_setup_state.py': ('claims-explicitly', 'claim token in _atomic_write'),
     'coordinator_core/ops/cruft_sweep.py': ('claims-explicitly', "claim token in _append_log_row [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/decision_record_mint.py': ('to-fix', 'raw-write site(s): <module-level>, mint_next_dr_id; runtime observed=yes (n=9), sample=/tmp/pytest-of-root/pytest-716/test_mint_first_number_in_empt0/state/decision-record-reservations/DR-1.reserved'),
-    'coordinator_core/ops/deliverable_cascade.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: _commit_mutated_paths [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/deliverable_equivalence.py': ('to-fix', "raw-write site(s): _is_immutable_path_local; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/deliverable_ledger_write.py': ('to-fix', 'raw-write site(s): _restore_original_content, upsert_deliverable_ledger_rows; runtime observed=yes (n=93), sample=/tmp/pytest-of-root/pytest-716/test_header_bytes_preserved_ve0/state/deliverable-equivalence.yaml.ledger-write.tmp.24772'),
     'coordinator_core/ops/dev_sync.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _sync_plugin'),

@@ -90,6 +90,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.win_portability import no_console_creationflags
 
 from .gate_report import parse_junitxml, parse_vitest_json
@@ -310,7 +311,7 @@ def run_selected(
                 raise GroupTimeout(f"pytest group exceeded {group_timeout_s}s: {repo_root}")
             return parse_junitxml(junit_path)
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            rmtree_or_raise(Path(tmp_dir), label="source-edit-gate")
 
     if runner == "vitest":
         vitest_bin = shutil.which("pnpm") or shutil.which("npx")
@@ -336,6 +337,6 @@ def run_selected(
                 raw = ""
             return parse_vitest_json(raw)
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            rmtree_or_raise(Path(tmp_dir), label="source-edit-gate")
 
     return None

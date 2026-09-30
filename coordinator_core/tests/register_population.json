@@ -193,6 +193,30 @@
       "_SHELL_SUFFIXES"
     ],
     [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_BOOTSTRAP_NAMES"
+    ],
+    [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_FLOOR"
+    ],
+    [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_FUNCS"
+    ],
+    [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_KNOWN_INERT"
+    ],
+    [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_LOADER_TERMINALS"
+    ],
+    [
+      "coordinator/tests/test_bin_cli_patch_seams_module_scoped.py",
+      "_TEST_GLOBS"
+    ],
+    [
       "coordinator/tests/test_bin_trampoline_engineless_import.py",
       "ENGINELESS_SAFE_TRAMPOLINES"
     ],
@@ -565,6 +589,22 @@
       "_CONSUMED_HANDOFF_WITH_SHIPPED_IN"
     ],
     [
+      "coordinator/tests/test_path_equality_conformance.py",
+      "IMPLEMENTATIONS"
+    ],
+    [
+      "coordinator/tests/test_path_equality_conformance.py",
+      "_CENSUS_EXPECTED"
+    ],
+    [
+      "coordinator/tests/test_path_equality_conformance.py",
+      "_CENSUS_NAMES"
+    ],
+    [
+      "coordinator/tests/test_path_equality_conformance.py",
+      "_CENSUS_ROOTS"
+    ],
+    [
       "coordinator/tests/test_percolate_ignore.py",
       "_CORPUS_PATHS"
     ],
@@ -711,10 +751,6 @@
     [
       "coordinator/tests/test_run_report_retirement_grep_clean.py",
       "_EXCLUDE_DIRS"
-    ],
-    [
-      "coordinator/tests/test_safe_commit_offer_sigterm_handler.py",
-      "_NO_CONSOLE"
     ],
     [
       "coordinator/tests/test_schema_cli.py",
@@ -1261,6 +1297,10 @@
       "SURFACES"
     ],
     [
+      "coordinator_core/bash_guards/tests/test_doctrine_surface_bash_write_onboarding.py",
+      "SURFACES"
+    ],
+    [
       "coordinator_core/bash_guards/tests/test_doctrine_surface_variable_expansion.py",
       "_IDS"
     ],
@@ -1275,6 +1315,10 @@
     [
       "coordinator_core/bash_guards/tests/test_find_exec_rewrite_output_equivalence.py",
       "_OUTPUT_CASES"
+    ],
+    [
+      "coordinator_core/bash_guards/tests/test_folded_guard_transport_parity.py",
+      "_ENGINE_OMITS_DOE_WIKI_CITATION"
     ],
     [
       "coordinator_core/bash_guards/tests/test_folded_guard_transport_parity.py",
@@ -1327,6 +1371,14 @@
     [
       "coordinator_core/bash_guards/tests/test_guard_band_membership.py",
       "_SIX_COMBINATIONS"
+    ],
+    [
+      "coordinator_core/bash_guards/tests/test_guard_doctrine_surface_bash_advisory.py",
+      "HEREDOC"
+    ],
+    [
+      "coordinator_core/bash_guards/tests/test_guard_doctrine_surface_bash_advisory.py",
+      "SURFACES"
     ],
     [
       "coordinator_core/bash_guards/tests/test_guard_doctrine_surface_bash_write_port.py",
@@ -1890,7 +1942,7 @@
     ],
     [
       "coordinator_core/benchmarks/tests/test_assembler_brightline_conformance.py",
-      "_ASSEMBLER_NAMES"
+      "_ASSEMBLER_PACKAGES"
     ],
     [
       "coordinator_core/benchmarks/tests/test_assembler_brightline_conformance.py",
@@ -2314,6 +2366,10 @@
     ],
     [
       "coordinator_core/distill/tests/test_log_normalize.py",
+      "COCKPIT_BULK_GLOB_ROWS"
+    ],
+    [
+      "coordinator_core/distill/tests/test_log_normalize.py",
       "_TAILED_ROW"
     ],
     [
@@ -2327,10 +2383,6 @@
     [
       "coordinator_core/docindex/tests/test_entry_kinds.py",
       "WIKI_FIELDS"
-    ],
-    [
-      "coordinator_core/docindex/tests/test_index_digest.py",
-      "_SKIP_DIR_NAMES"
     ],
     [
       "coordinator_core/docindex/tests/test_index_drift.py",
@@ -2649,6 +2701,10 @@
       "REPLAY_PINS"
     ],
     [
+      "coordinator_core/git/test_commit_trailers.py",
+      "_ONLY_ATTRIBUTION_ARGS"
+    ],
+    [
       "coordinator_core/git/tests/test_action_guard_default_path.py",
       "_NOWIN"
     ],
@@ -2797,6 +2853,10 @@
       "_GRAVESTONED_NAMES"
     ],
     [
+      "coordinator_core/hooks/tests/test_auto_push_no_credential_remote.py",
+      "_NO_CRED_ERR"
+    ],
+    [
       "coordinator_core/hooks/tests/test_c4_ownership_inherited_at_dispatch_tripwires.py",
       "_DR_258_PATH"
     ],
@@ -2857,12 +2917,24 @@
       "_FORBIDDEN_SUBSTRINGS"
     ],
     [
+      "coordinator_core/hooks/tests/test_repin_cloud_engine_root.py",
+      "_REMOTE"
+    ],
+    [
+      "coordinator_core/hooks/tests/test_session_start_cloud_focus.py",
+      "_NOWIN"
+    ],
+    [
       "coordinator_core/hooks/tests/test_stop_dispatch.py",
       "_OP_NAMES"
     ],
     [
       "coordinator_core/hooks/tests/test_ue_knowledge_distrust_message_text.py",
       "_FORBIDDEN_SUBSTRINGS"
+    ],
+    [
+      "coordinator_core/hooks/tests/test_warm_hook_migration_smoke.py",
+      "REGISTERED_OPS"
     ],
     [
       "coordinator_core/install/test_ensure_venv.py",
@@ -2941,6 +3013,10 @@
       "_MODULE_PATH"
     ],
     [
+      "coordinator_core/install/test_resolve_publisher_root_source_override.py",
+      "_MODULE_PATH"
+    ],
+    [
       "coordinator_core/install/test_substrate.py",
       "_C13_MEASURED_GAP_NAMES"
     ],
@@ -2969,24 +3045,12 @@
       "NAMES"
     ],
     [
-      "coordinator_core/install/tests/test_fleet_env_pin_advance.py",
-      "_INSTALLED_VERSIONS"
+      "coordinator_core/install/tests/test_hook_plane_verdict.py",
+      "TEN_KEYS"
     ],
     [
-      "coordinator_core/install/tests/test_fleet_env_pin_advance.py",
-      "_REGENERATE_COMMAND"
-    ],
-    [
-      "coordinator_core/install/tests/test_fleet_env_pin_advance.py",
-      "_REPORT_ARTIFACT_PATH"
-    ],
-    [
-      "coordinator_core/install/tests/test_fleet_env_publish_reachability.py",
-      "_NOT_THIS_CHUNKS_TO_PUBLISH"
-    ],
-    [
-      "coordinator_core/install/tests/test_fleet_env_publish_reachability.py",
-      "_PLAN_SCOPE"
+      "coordinator_core/install/tests/test_install_outputs_are_not_tracked.py",
+      "GENERATED"
     ],
     [
       "coordinator_core/install/tests/test_install_surface_live.py",
@@ -3003,34 +3067,6 @@
     [
       "coordinator_core/install/tests/test_live_source_tree_forwarders.py",
       "_REAL_BIN_TEMPLATES_MANIFEST"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_ALLOWLISTED_FUNCTION_SITES"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_ALLOWLISTED_RELPATHS"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_PATH_MUTATION_CALL_NAMES"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_SCAN_ROOTS"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_SPAWN_CALL_NAMES"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_SYS_PATH_MUTATION_METHOD_NAMES"
-    ],
-    [
-      "coordinator_core/install/tests/test_no_per_repo_fleet_dependency_resolution.py",
-      "_VENV_CREATE_CALL_NAMES"
     ],
     [
       "coordinator_core/install/tests/test_no_persisted_settings_home.py",
@@ -3329,6 +3365,14 @@
       "GUARDED_MODULES"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_cli_mark_landed.py",
+      "_LEGACY_SCRIPT"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_cloud_spawn_brief.py",
+      "_ARGS"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_emit.py",
       "_REAL_TEST_MAPPED_PATHS"
     ],
@@ -3343,6 +3387,10 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py",
       "_V5_FRAGMENT"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py",
+      "_V5_FRAGMENT_ZERO_STAGE"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py",
@@ -3375,6 +3423,10 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_grind_stages.py",
       "_NEW_MODULES"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_mark_landed.py",
+      "_DAG_SCRIPT_WITH_MARKER"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_no_tree_survey.py",
@@ -3625,6 +3677,10 @@
       "_QUALIFIERS"
     ],
     [
+      "coordinator_core/ops/fleet/tests/test_memo_summary_and_lint_w5c.py",
+      "_LEGACY"
+    ],
+    [
       "coordinator_core/ops/fleet/tests/test_migrate_vocabulary_discharges_archival.py",
       "_GIT_ENV"
     ],
@@ -3655,14 +3711,6 @@
     [
       "coordinator_core/ops/review_mint/tests/test_execute_review.py",
       "_STAGE_SCHEMAS"
-    ],
-    [
-      "coordinator_core/ops/review_mint/tests/test_op.py",
-      "_FRAGMENT"
-    ],
-    [
-      "coordinator_core/ops/review_mint/tests/test_roundtrip.py",
-      "_TIERS"
     ],
     [
       "coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py",
@@ -3945,6 +3993,10 @@
       "_LOADER"
     ],
     [
+      "coordinator_core/ops/tests/test_doctor_env_prefixed_hooks.py",
+      "_ENV_CMD"
+    ],
+    [
       "coordinator_core/ops/tests/test_eager_op_modules_covers_every_register_op.py",
       "_EXCLUDED_FILENAMES"
     ],
@@ -3975,6 +4027,10 @@
     [
       "coordinator_core/ops/tests/test_generator_provenance.py",
       "MUTATES"
+    ],
+    [
+      "coordinator_core/ops/tests/test_generator_provenance.py",
+      "_C2_DECLARED_EMPTY"
     ],
     [
       "coordinator_core/ops/tests/test_generator_provenance.py",
@@ -4041,6 +4097,10 @@
       "_WRAPPED_ACC_BODY"
     ],
     [
+      "coordinator_core/ops/tests/test_handoff_discharge_landed.py",
+      "_GIT_ENV"
+    ],
+    [
       "coordinator_core/ops/tests/test_handoff_normalize.py",
       "_GIT_ENV"
     ],
@@ -4067,6 +4127,10 @@
     [
       "coordinator_core/ops/tests/test_initiatives_store.py",
       "_REQUIRED_FIELDS"
+    ],
+    [
+      "coordinator_core/ops/tests/test_invoke_from_argv.py",
+      "_KNOWN_CLI_STDERR_NOTICES"
     ],
     [
       "coordinator_core/ops/tests/test_invoke_from_argv.py",
@@ -4162,6 +4226,14 @@
     ],
     [
       "coordinator_core/ops/tests/test_plan_status_transition_live_foreign_holder.py",
+      "_GIT_ENV_KEYS"
+    ],
+    [
+      "coordinator_core/ops/tests/test_plan_status_transition_records_exit_criterion.py",
+      "_FLAGS"
+    ],
+    [
+      "coordinator_core/ops/tests/test_plan_status_transition_standdown.py",
       "_GIT_ENV_KEYS"
     ],
     [
@@ -4377,14 +4449,6 @@
       "_STORE_PATH"
     ],
     [
-      "coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py",
-      "_SOURCE_SCRIPT"
-    ],
-    [
-      "coordinator_core/percolate/tests/test_bin_script_self_name_survives_publication.py",
-      "_STORE_PATH"
-    ],
-    [
       "coordinator_core/percolate/tests/test_boundary_identifiers_survive_publish.py",
       "_STORE_PATH"
     ],
@@ -4407,6 +4471,10 @@
     [
       "coordinator_core/percolate/tests/test_composed_directory_and_basename_rename.py",
       "_FILE_SURFACE"
+    ],
+    [
+      "coordinator_core/percolate/tests/test_engine.py",
+      "_BROKEN_TREE"
     ],
     [
       "coordinator_core/percolate/tests/test_engine.py",
@@ -4553,6 +4621,10 @@
       "_COLLAPSE_SIGNED_OFF"
     ],
     [
+      "coordinator_core/percolate/tests/test_published_surface_private_names.py",
+      "_RENAMED_MODULES"
+    ],
+    [
       "coordinator_core/percolate/tests/test_registry_slug_scrub_coverage.py",
       "_PRE_EXISTING_GAPS"
     ],
@@ -4583,6 +4655,10 @@
     [
       "coordinator_core/percolate/tests/test_round_refusal_restores_dest.py",
       "_FILE_SURFACE"
+    ],
+    [
+      "coordinator_core/percolate/tests/test_scripts_row_doe_scrub.py",
+      "_PROSE_SPELLINGS"
     ],
     [
       "coordinator_core/percolate/tests/test_scripts_row_doe_scrub.py",
@@ -4781,6 +4857,10 @@
       "_SCRIPT_EXTENSIONS"
     ],
     [
+      "coordinator_core/roadmap_planning_assemble/tests/test_decisions_file_flag.py",
+      "_BASE"
+    ],
+    [
       "coordinator_core/roadmap_planning_assemble/tests/test_roadmap_planning_assemble.py",
       "_SCHEMA_TOP_LEVEL_KEYS"
     ],
@@ -4858,6 +4938,10 @@
     ],
     [
       "coordinator_core/session/tests/test_no_untracked_relocation.py",
+      "_PATH_WRAPPERS"
+    ],
+    [
+      "coordinator_core/session/tests/test_no_untracked_relocation.py",
       "_SCAN_ROOTS"
     ],
     [
@@ -4909,6 +4993,26 @@
       "_TWO_CEREMONY_ROWS"
     ],
     [
+      "coordinator_core/sizing_assemble/test_interaction_mode_touchpoints.py",
+      "_APPETITES"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_interaction_mode_touchpoints.py",
+      "_JTBD_UNCLEAR"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_interaction_mode_touchpoints.py",
+      "_PROBE_SIGNALS"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_interaction_mode_touchpoints.py",
+      "_TSHIRTS"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_interaction_mode_touchpoints.py",
+      "_WELL_TRODDEN"
+    ],
+    [
       "coordinator_core/snippet_sync/tests/test_verify.py",
       "_ORPHAN_SNIPPET"
     ],
@@ -4919,6 +5023,10 @@
     [
       "coordinator_core/spawn_policy/tests/test_pinned_api_doc.py",
       "PINNED_API_DOC"
+    ],
+    [
+      "coordinator_core/sprint_planning_assemble/tests/test_decisions_file_flag.py",
+      "_BASE"
     ],
     [
       "coordinator_core/sprint_planning_assemble/tests/test_sprint_planning_assemble.py",
@@ -4975,6 +5083,10 @@
     [
       "coordinator_core/subagent_sandbox/tests/test_provision_report_root_resolution.py",
       "_SNIPPET_BODY"
+    ],
+    [
+      "coordinator_core/telemetry/tests/test_traffic_coverage.py",
+      "PENDING"
     ],
     [
       "coordinator_core/test_archive_stamp.py",
@@ -5451,6 +5563,14 @@
     [
       "coordinator_core/tests/test_hot_path_surface_test_target_guard.py",
       "HOT_PATH_SURFACES"
+    ],
+    [
+      "coordinator_core/tests/test_housekeeping_is_called_by_the_ceremonies.py",
+      "CONSUMES_MANIFEST"
+    ],
+    [
+      "coordinator_core/tests/test_housekeeping_is_called_by_the_ceremonies.py",
+      "_BRIEFS"
     ],
     [
       "coordinator_core/tests/test_housekeeping_is_the_one_job.py",
@@ -6481,10 +6601,6 @@
       "_SIX_SITES"
     ],
     [
-      "coordinator_core/tests/test_work_branch_predicate_single_oracle.py",
-      "_WITHHELD_LITERAL_SITES"
-    ],
-    [
       "coordinator_core/updatedocs/tests/test_directory_md.py",
       "REAL_REFRESHED_LINE"
     ],
@@ -6599,6 +6715,10 @@
     [
       "coordinator_core/warm/tests/test_handoff_housekeeping_warm_serves.py",
       "_ALLOWLIST_PATH"
+    ],
+    [
+      "coordinator_core/warm/tests/test_hook_http_stamps_origin_worktree.py",
+      "_EVENTS"
     ],
     [
       "coordinator_core/warm/tests/test_http_leg_is_fenced_not_borrowed.py",
@@ -6866,6 +6986,10 @@
     ],
     [
       "coordinator_core/write_guards/tests/test_guard_class_relay.py",
+      "MATCHERS"
+    ],
+    [
+      "coordinator_core/write_guards/tests/test_guard_class_relay.py",
       "_GUARD_MODULE"
     ],
     [
@@ -7025,7 +7149,7 @@
       "_VALID_FM"
     ]
   ],
-  "candidate_ids_sha256": "4874587a226950c0356131b6a568781c9a31f0fdecb130f3af5b95d1b0103e5e",
+  "candidate_ids_sha256": "4f7530af581e4a2ce5b6b6d773f544df4c36713b03315bd4be634fc5502476cb",
   "candidate_roots": [
     "coordinator/tests",
     "coordinator_core"

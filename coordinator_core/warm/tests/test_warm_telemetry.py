@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -15,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import telemetry
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +48,7 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="warm runtime base")
 
 
 def test_record_invocation_counts_warm_and_cold_separately():

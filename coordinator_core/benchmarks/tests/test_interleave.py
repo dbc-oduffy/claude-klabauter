@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 from unittest import mock
 
@@ -11,6 +12,21 @@ from coordinator_core.benchmarks.interleave import (
     default_baseline_primitives,
     run_interleaved,
 )
+from coordinator_core.telemetry import op_latency
+
+
+@pytest.fixture(autouse=True)
+def _restore_benchmark_origin_env():
+    # run_interleaved declares benchmark origin into the process-global env.
+    sentinel = object()
+    before = os.environ.get(op_latency.ORIGIN_ENV, sentinel)
+    try:
+        yield
+    finally:
+        if before is sentinel:
+            os.environ.pop(op_latency.ORIGIN_ENV, None)
+        else:
+            os.environ[op_latency.ORIGIN_ENV] = before
 
 
 def _const_primitive(name: str, value: float) -> Primitive:

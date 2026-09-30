@@ -142,7 +142,7 @@ def _set_field(text: str, field: str, value: str) -> str:
 
     line_re = re.compile(rf"^{re.escape(field)}:.*$", re.MULTILINE)
     if line_re.search(body):
-        body = line_re.sub(f"{field}: {value}", body, count=1)
+        body = line_re.sub(lambda _m: f"{field}: {value}", body, count=1)
     else:
         body = body.rstrip("\n") + f"\n{field}: {value}"
     return head + body + tail

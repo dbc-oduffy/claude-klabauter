@@ -107,11 +107,16 @@ def test_the_definition_site_still_holds_the_definition():
 _PLUGIN_ROOT_NAMES = ("resolve_plugin_cli_script_root", "UNRESOLVED_PLUGIN_CLI_ROOT")
 
 
-def _count_textual_occurrences(name: str) -> dict[str, int]:
+def _definitions_of(name: str) -> dict[str, int]:
+    """Per-file count of `def <name>` / `<name> =` / `<name>: T =` binding lines.
+
+    A use (`resolve_plugin_cli_script_root() or UNRESOLVED_PLUGIN_CLI_ROOT`) is
+    what the definition site prescribes to consumers; only a second binding is a fork.
+    """
+    binding = re.compile(rf"^\s*(?:def\s+{name}\b|{name}\s*(?::[^=\n]+)?=(?!=))", re.MULTILINE)
     counts: dict[str, int] = {}
     for f in _dispatch_path_modules() + [_DEFINITION_SITE]:
-        text = f.read_text(encoding="utf-8")
-        n = text.count(name)
+        n = len(binding.findall(f.read_text(encoding="utf-8")))
         if n:
             counts[str(f.relative_to(_PKG_ROOT))] = n
     return counts
@@ -123,10 +128,10 @@ def test_resolve_plugin_cli_script_root_is_defined_exactly_once():
     assert hasattr(cli_dispatch, "resolve_plugin_cli_script_root")
 
     for name in _PLUGIN_ROOT_NAMES:
-        counts = _count_textual_occurrences(name)
+        counts = _definitions_of(name)
         offenders = {k: v for k, v in counts.items() if k != str(_DEFINITION_SITE.relative_to(_PKG_ROOT))}
         assert not offenders, (
-            f"{name!r} appears outside {_DEFINITION_SITE.relative_to(_PKG_ROOT)}: {offenders}"
+            f"{name!r} is bound outside {_DEFINITION_SITE.relative_to(_PKG_ROOT)}: {offenders}"
         )
         assert counts.get(str(_DEFINITION_SITE.relative_to(_PKG_ROOT)), 0) >= 1, (
             f"{name!r} not found in its one legal definition site"

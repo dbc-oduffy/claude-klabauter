@@ -126,24 +126,30 @@ class TestGitIsBehindEqualShaShortCircuit:
         mock_probe.assert_not_called()
 
 
+def _head_and_oldest_reachable():
+    """HEAD and the oldest commit reachable from it: an ancestor by construction on any history,
+    including one rewritten after `MIN_KNOWN_GOOD_SHA` was pinned (that floor need not be reachable)."""
+    def _git_out(*args):
+        return subprocess.run(
+            ["git", *args], capture_output=True, text=True, cwd="coordinator_core",
+            **no_console_creationflags(),
+        ).stdout.split()
+
+    head = _git_out("rev-parse", "HEAD")[0]
+    oldest = _git_out("rev-list", "--max-parents=0", "HEAD")[-1]
+    if oldest == head:
+        pytest.skip("single-commit history has no distinct ancestor to probe")
+    return head, oldest
+
+
 class TestGitIsBehindRealAncestry:
     def test_ancestor_sha_returns_true(self):
-        # MIN_KNOWN_GOOD_SHA is an ancestor of this checkout's HEAD by construction —
-        # the floor is a committed-in-the-past SHA relative to any checkout built on it.
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core",
-            **no_console_creationflags(),
-        ).stdout.strip()
-        result = _git_is_behind(FLOOR, head)
-        assert result is True
+        head, oldest = _head_and_oldest_reachable()
+        assert _git_is_behind(oldest, head) is True
 
     def test_descendant_sha_returns_false(self):
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core",
-            **no_console_creationflags(),
-        ).stdout.strip()
-        result = _git_is_behind(head, FLOOR)
-        assert result is False
+        head, oldest = _head_and_oldest_reachable()
+        assert _git_is_behind(head, oldest) is False
 
     def test_unresolvable_sha_returns_none(self):
         result = _git_is_behind(

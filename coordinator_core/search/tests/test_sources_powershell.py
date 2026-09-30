@@ -51,13 +51,13 @@ def test_get_content_absolute_operand_passthrough(workdir):
 def test_get_content_relative_operand_joins_cwd(workdir):
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
-    with open(os.path.join(sub, "c.txt"), "w", newline="") as fh:
+    with open(os.path.join(sub, "c.txt"), "w", newline="", encoding="utf-8") as fh:
         fh.write("x")
     assert _produce(["Get-Content", "c.txt"], sub) == "x\r\n"
 
 
 def test_get_content_totalcount(workdir):
-    with open(os.path.join(workdir, "many.txt"), "w", newline="") as fh:
+    with open(os.path.join(workdir, "many.txt"), "w", newline="", encoding="utf-8") as fh:
         fh.write("\n".join(str(i) for i in range(1, 21)) + "\n")
     out = _produce(["Get-Content", "-TotalCount", "3", "many.txt"], workdir)
     assert out == "1\r\n2\r\n3\r\n"
@@ -189,7 +189,7 @@ def test_get_content_declines_non_utf8_bytes(workdir):
 
 def test_get_content_declines_oversized_file_without_reading(workdir):
     path = os.path.join(workdir, "big.txt")
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * (MAX_RENDER_BYTES + 1))
     with pytest.raises(Unanswerable):
         _produce(["Get-Content", "big.txt"], workdir)
@@ -197,7 +197,7 @@ def test_get_content_declines_oversized_file_without_reading(workdir):
 
 def test_get_content_at_cap_file_is_still_served(workdir):
     path = os.path.join(workdir, "exact.txt")
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * MAX_RENDER_BYTES)
     assert _produce(["Get-Content", "exact.txt"], workdir) == "x" * MAX_RENDER_BYTES + "\r\n"
 

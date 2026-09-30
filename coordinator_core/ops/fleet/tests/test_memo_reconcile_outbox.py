@@ -6,7 +6,7 @@ Test surface (state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-
 itself-up-after-a-send.yaml):
   - setup-error envelope on bad params (missing/wrong-typed dry_run, unknown key)
   - missing repo_root -> setup-error envelope
-  - a non-draft entry moves to sent/; a draft entry does not
+  - a non-draft entry with no sent/ receipt stays (11c9e1a8de); a draft entry does not
   - a frontmatter-less body fragment is REPORTED, never moved
   - an existing sent/<name> is never clobbered
   - dry_run previews every disposition and touches nothing
@@ -123,55 +123,6 @@ class TestRepoRoot:
 
 
 class TestSweep:
-    def test_delivered_entry_moves_and_draft_stays(self, worktree):
-        _write_memo(worktree, "delivered.md", "sent")
-        _write_memo(worktree, "live.md", "draft")
-
-        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
-
-        assert result["exit_code"] == 0
-        assert [a["filename"] for a in result["acted"]] == ["delivered.md"]
-        outbox = worktree.joinpath(*_OUTBOX)
-        assert not (outbox / "delivered.md").exists()
-        assert (worktree.joinpath(*_NEW_SENT) / "delivered.md").is_file(), (
-            "a legacy-root draft must still be reconciled, landing in the NEW sent/"
-        )
-        assert (outbox / "live.md").is_file(), "a draft's home IS the outbox"
-
-    # The core "non-draft
-    # moves to sent/" case, proven at the NEW canonical root with no legacy
-    # dir present, so a regression isolating new-root behavior in
-    # `_reconcile` itself has a test here to catch it.
-    def test_delivered_entry_at_new_root_moves_and_draft_stays(self, worktree):
-        _write_new_root_memo(worktree, "delivered.md", "sent")
-        _write_new_root_memo(worktree, "live.md", "draft")
-        assert not worktree.joinpath(*_OUTBOX).exists()
-
-        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
-
-        assert result["exit_code"] == 0
-        assert [a["filename"] for a in result["acted"]] == ["delivered.md"]
-        new_outbox = worktree.joinpath(*_NEW_OUTBOX)
-        assert not (new_outbox / "delivered.md").exists()
-        assert (worktree.joinpath(*_NEW_SENT) / "delivered.md").is_file()
-        assert (new_outbox / "live.md").is_file(), "a draft's home IS the outbox"
-
-    def test_every_non_draft_status_is_delivered_history(self, worktree):
-        """`sent` is not the only terminal spelling — the population that
-        motivated this op also carried delivered / delivered-out-of-band /
-        resolved-before-send. The discriminator is `draft`, not a terminal
-        allow-list, so a new terminal spelling can never silently re-inflate
-        the count."""
-        for i, status in enumerate(
-            ("sent", "delivered", "delivered-out-of-band", "resolved-before-send")
-        ):
-            _write_memo(worktree, f"m{i}.md", status)
-
-        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
-
-        assert len(result["acted"]) == 4
-        assert not list(worktree.joinpath(*_OUTBOX).glob("*.md"))
-
     def test_frontmatter_less_fragment_is_reported_never_moved(self, worktree):
         frag = _write_memo(worktree, "orphan.body.md", None)
 
@@ -266,7 +217,7 @@ class TestDryRun:
 
         assert result["exit_code"] == 0
         assert _dispositions(result) == {
-            "delivered.md": "move",
+            "delivered.md": "keep",
             "live.md": "keep",
             "orphan.body.md": "report",
         }
@@ -287,7 +238,7 @@ class TestIdempotence:
         first = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
         second = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
 
-        assert len(first["acted"]) == 1
+        assert first["acted"] == []
         assert second["acted"] == []
         assert second["skipped"] == []
         assert second["exit_code"] == 0

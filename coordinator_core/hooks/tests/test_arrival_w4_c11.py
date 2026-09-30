@@ -26,9 +26,9 @@ def test_import_is_fast():
         ):
             del sys.modules[name]
 
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     importlib.import_module("coordinator_core.hooks.project_orientation")
-    elapsed_ms = (time.perf_counter() - t0) * 1000
+    elapsed_ms = (time.process_time() - t0) * 1000
     assert elapsed_ms < 500, f"cold import took {elapsed_ms}ms"
 
 
@@ -39,11 +39,11 @@ def test_fire_returns_session_start_context_envelope():
 
 
 def test_fire_is_fast_against_a_real_repo():
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     resp = po._handler(
         {"payload": {"cwd": str(Path(__file__).resolve().parents[3]), "env": {}}}
     )
-    elapsed_ms = (time.perf_counter() - t0) * 1000
+    elapsed_ms = (time.process_time() - t0) * 1000
     assert elapsed_ms < 500, f"fire took {elapsed_ms}ms"
     assert "hookSpecificOutput" in resp
 

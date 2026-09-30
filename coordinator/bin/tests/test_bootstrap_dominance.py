@@ -296,7 +296,16 @@ def _analyze_bin_dir(bin_dir: Path) -> list[Violation]:
 # NOT reachable via an unbootstrapped path (e.g. the function's sole
 # in-module caller is itself unreachable dead code verified by other means
 # this analysis cannot see) -- never to silence a real finding.
-_REVIEWED_DISPOSITIONS: dict[str, str] = {}
+_REVIEWED_DISPOSITIONS: dict[str, str] = {
+    "test_cross_repo_memo_roundtrip.py:_resolve_content_root_for_tests": (
+        "pytest helper, not a CLI entry point: the engine import is wrapped in "
+        "`except Exception` and falls back to a sibling-checkout probe"
+    ),
+    "test_cross_repo_memo_roundtrip.py:_resolve_test_claude_klabauter_root": (
+        "pytest helper, not a CLI entry point: it puts coordinator/bin/lib on "
+        "sys.path itself before the cc_invoke import"
+    ),
+}
 
 
 def _live_violations() -> list[Violation]:

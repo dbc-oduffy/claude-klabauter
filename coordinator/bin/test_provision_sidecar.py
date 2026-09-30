@@ -112,7 +112,7 @@ def test_happy_path_returns_path_and_writes_file(git_repo: Path, policy_path: Pa
     lines = out.splitlines()
     assert len(lines) == 1, f"stdout must be exactly one line, got: {out!r}"
     rel_path = lines[0]
-    assert rel_path.startswith("state/subagent-share/sess-happy-1/")
+    assert rel_path.startswith(".coordinator-local/subagent-share/sess-happy-1/")
 
     doc_path = git_repo / rel_path
     assert doc_path.is_file(), f"sidecar file must exist on disk at {doc_path}"

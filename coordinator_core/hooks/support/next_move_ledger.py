@@ -548,7 +548,7 @@ def drain_intake(session_id: str) -> dict:
         return report
 
     try:
-        claim_fd = os.open(draining, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        claim_fd = os.open(draining, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         report["deferred"] = True
         return report

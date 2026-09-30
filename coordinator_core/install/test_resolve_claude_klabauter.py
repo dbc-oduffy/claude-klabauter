@@ -725,7 +725,7 @@ def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_p
     assert "IMPORT_OK" in result.stdout
 
 
-def test_run_target_in_process_puts_the_target_script_dir_on_sys_path(tmp_path: Path):
+def test_run_target_in_process_puts_the_target_script_dir_on_sys_path(tmp_path: Path, monkeypatch):
     """A forwarded target may import its own ``lib.*`` siblings.
 
     ``runpy.run_path`` on a plain FILE path contributes NOTHING to
@@ -742,6 +742,10 @@ def test_run_target_in_process_puts_the_target_script_dir_on_sys_path(tmp_path: 
     (``os.execv`` gets the script dir from interpreter startup) and shows up
     only on Windows.
     """
+    # Another test in the same worker may have cached a different `lib`
+    # package; the target must import the fixture's.
+    for cached in [n for n in sys.modules if n == "lib" or n.startswith("lib.")]:
+        monkeypatch.delitem(sys.modules, cached)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     bin_dir = claude_klabauter_root / "coordinator" / "bin"
     (bin_dir / "lib").mkdir(parents=True)

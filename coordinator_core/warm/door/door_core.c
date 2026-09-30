@@ -527,8 +527,6 @@ static const char *const door_install_class_basenames[] = {
     "break_glass",
     "coordinator-install",
     "coordinator-uninstall",
-    "fleet-env-bind",
-    "fleet-env-cutover",
     "gen-settings-hooks",
     "install-claude-author-wrapper",
     "install-coordinator-content-repo-precommit-hook",

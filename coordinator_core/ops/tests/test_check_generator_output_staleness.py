@@ -513,3 +513,115 @@ def test_compute_all_staleness_merges_local_and_vendored_keys(tmp_path, monkeypa
     monkeypatch.setattr(cgos, "read_content_root_pointer", lambda: "")
     results = cgos.compute_all_staleness(local_repo)
     assert any(key.startswith("coordinator-content-repo:") or key == "<coordinator-content-repo clone unresolved>" for key in results)
+
+
+_KNOWN_RED_SCRIPT = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "regenerate-known-red-registry.py"
+
+
+def _load_known_red_module(tmp_path: Path, monkeypatch, *, unmarked: list[str], entries: dict):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("regen_known_red_under_test", _KNOWN_RED_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    registry_path = tmp_path / "known-red.json"
+    registry_path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    calls = []
+
+    def fake_derive(target=mod.DEFAULT_TARGET, workers=None):
+        calls.append(target)
+        return {"unmarked_failed": unmarked, "marked_failed": []}
+
+    monkeypatch.setattr(mod, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(mod, "load_registry", lambda: json.loads(registry_path.read_text(encoding="utf-8")))
+    monkeypatch.setattr(mod, "_derive_report", fake_derive)
+    return mod, registry_path, calls
+
+
+def test_known_red_write_without_entry_change_stamps_verified_at(tmp_path, monkeypatch):
+    mod, path, calls = _load_known_red_module(tmp_path, monkeypatch, unmarked=["a::t"], entries={"a::t": {}})
+    assert mod.main(["--write"]) == 0
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(data["verified_at"], str) and data["verified_at"].endswith("Z")
+    assert "generated" not in data
+    assert data["entries"] == {"a::t": {}}
+    assert len(calls) == 1
+
+
+def test_known_red_write_on_drift_exits_nonzero_and_writes_nothing(tmp_path, monkeypatch):
+    mod, path, calls = _load_known_red_module(tmp_path, monkeypatch, unmarked=["a::t", "b::t"], entries={"a::t": {}})
+    before = path.read_text(encoding="utf-8")
+    assert mod.main(["--write"]) != 0
+    assert path.read_text(encoding="utf-8") == before
+    assert len(calls) == 1
+
+
+def test_known_red_derive_called_once_with_or_without_write(tmp_path, monkeypatch):
+    mod, path, calls = _load_known_red_module(tmp_path, monkeypatch, unmarked=["a::t"], entries={"a::t": {}})
+    before = path.read_text(encoding="utf-8")
+    mod.main([])
+    assert len(calls) == 1
+    assert path.read_text(encoding="utf-8") == before
+    mod.main(["--write"])
+    assert len(calls) == 2, "--write must add no second derivation"
+
+
+def test_agent_install_manifest_stamp_key_reads_as_string():
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location("gen_tested_platforms_under_test", root / "coordinator" / "bin" / "generate-tested-platforms.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    (entry,) = mod.GENERATES
+    assert entry["stamp_key"] != "tested_platforms"
+    stamp, _detail = cgos.extract_stamp(root / entry["artifact"], entry["stamp_key"])
+    assert isinstance(stamp, str) and stamp.endswith("Z")
+
+
+def test_tested_platforms_write_splices_stamp_without_reflowing(tmp_path):
+    import importlib.util
+    import re
+
+    root = Path(__file__).resolve().parents[3]
+    src = (root / "docs" / "install" / "agent-install-manifest.json").read_text(encoding="utf-8")
+    assert re.search(r'"tested_platforms_verified_at": "[^"]+"', src)
+    assert json.loads(src)["tested_platforms"] == ["macos", "windows"]
+
+
+# Red until state/bash-guards/known-red.json is regenerated with --write, which refuses
+# while the registry has drift; the failure names what is still unstamped.
+@pytest.mark.designed_red
+def test_prime_exit_criterion_five_named_modules_classify_clean():
+    """Per-module readers over the live files; the five are named, never swept."""
+    import ast
+
+    from coordinator_core.ops import generator_provenance as gp
+
+    root = Path(__file__).resolve().parents[3]
+
+    def tree_of(rel: str) -> ast.Module:
+        return ast.parse((root / rel).read_text(encoding="utf-8"))
+
+    for rel in ("coordinator/bin/regenerate-known-red-registry.py", "coordinator/bin/generate-tested-platforms.py"):
+        generates = gp._extract_generates(tree_of(rel))
+        assert isinstance(generates, list) and generates, rel
+        for entry in generates:
+            stamp, detail = cgos.extract_stamp(root / entry["artifact"], entry["stamp_key"])
+            assert isinstance(stamp, str) and stamp, (rel, entry["artifact"], detail)
+
+    assert gp._extract_generates(tree_of("coordinator_core/contract/cockpit_schema/emit_schema.py")) == []
+
+    for rel in ("coordinator_core/ops/distill_apply_disposal.py", "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py"):
+        tree = tree_of(rel)
+        generates = gp._extract_generates(tree)
+        if isinstance(generates, list) and generates and all(g.get("stamp_key") for g in generates):
+            continue
+        # AC2 reasoned-at-site path: still UNDECLARED by the checker, asserted as that outcome.
+        assert generates is None, rel
+        mutates = gp._extract_mutates(tree)
+        assert gp._valid_mutates_shape(mutates), rel
+        assert gp._mutates_concrete_patterns(mutates), rel
+        lines = (root / rel).read_text(encoding="utf-8").splitlines()
+        (idx,) = [i for i, ln in enumerate(lines) if ln.startswith("MUTATES")]
+        assert lines[idx - 1].lstrip().startswith("#"), f"{rel}: no site-reason comment above MUTATES"

@@ -8,6 +8,7 @@ primitive whose whole job is to tell hosts apart.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import pathlib
 
@@ -290,6 +291,7 @@ def test_scan_path_for_finds_a_file_with_no_exec(tmp_path, monkeypatch):
 
 def test_scan_path_for_respects_pathext_on_windows(tmp_path, monkeypatch):
     monkeypatch.setattr(EL, "IS_WINDOWS", True)
+    monkeypatch.setattr(EL.os, "pathsep", ";")
     target = tmp_path / "nvidia-smi.EXE"
     target.write_text("")
     env = {"PATH": str(tmp_path), "PATHEXT": ".EXE;.BAT"}
@@ -333,6 +335,7 @@ def test_nvidia_via_windows_system32(monkeypatch):
     monkeypatch.setattr(EL, "IS_DARWIN", False)
     monkeypatch.setattr(EL, "IS_LINUX", False)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os.path, "join", ntpath.join)
     monkeypatch.setattr(EL.os.path, "exists",
                         lambda p: p == r"C:\Windows\System32\nvidia-smi.exe")
     got = EL._accelerator_uncached({})

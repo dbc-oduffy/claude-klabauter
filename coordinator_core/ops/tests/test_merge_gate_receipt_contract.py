@@ -137,11 +137,11 @@ def test_a_blank_body_sidecar_from_the_real_writer_does_not_credit(tmp_path, mon
 
 
 def test_a_non_reviewer_receipt_does_not_credit(tmp_path, monkeypatch) -> None:
-    """(4): a receipt stamped for agent_type `executor` gives FAIL -- an
-    executor applies work, it does not render a review verdict, and is not
+    """(4): a receipt stamped for agent_type `review-integrator` gives FAIL --
+    it integrates findings, it does not render a review verdict, and is not
     a `DELEGATE_REVIEWERS` member."""
     doc_text = _render_receipt_doc(
-        session_id=_SESSION, agent_type="executor", stamped_at="2026-09-20T12:00:00+00:00"
+        session_id=_SESSION, agent_type="review-integrator", stamped_at="2026-09-20T12:00:00+00:00"
     )
     _write_sidecar(tmp_path, doc_text)
 

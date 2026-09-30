@@ -861,3 +861,24 @@ def test_plain_row_spec_with_no_plan_tasks_spine_stays_a_single_executor(tmp_pat
 
     assert [row["id"] for row in minted] == ["C1"]
     assert "depends_on" not in minted[0]
+
+
+_WRITES_UNDER_ONLY_INVENTORY = textwrap.dedent(
+    """\
+    ## Chunk table
+
+    | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+    |---|---|---|---|---|---|---|---|
+    | C1 | `docs/plans/fixture.md` | sweep a directory | writes_under: `coordinator_core/fixture_dir/` | — | scoped pytest | S | pending |
+    | C2 | `docs/plans/fixture.md` | file plus directory | `coordinator_core/fixture_a.py` writes_under: `docs/wiki/` | — | scoped pytest | S | pending |
+    """
+)
+
+
+def test_writes_under_footprint_is_minted_onto_the_row():
+    minted = {r["id"]: r for r in im.mint_rows(im.parse_chunk_table(_WRITES_UNDER_ONLY_INVENTORY))}
+    assert minted["C1"]["writes"] == []
+    assert minted["C1"]["writes_under"] == ["coordinator_core/fixture_dir/"]
+    assert minted["C1"]["surface"] == "coordinator_core/fixture_dir/"
+    assert minted["C2"]["writes"] == ["coordinator_core/fixture_a.py"]
+    assert minted["C2"]["writes_under"] == ["docs/wiki/"]

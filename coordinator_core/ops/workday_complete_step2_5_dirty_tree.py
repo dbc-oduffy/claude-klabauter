@@ -13,7 +13,8 @@ Purpose: classifies every dirty path in the cwd's git repo (via `git status
                      silently skip. Rename destinations (`R*` status) and
                      untracked (`??`) paths never take this branch.
     SUBMODULE      — gitlink (mode 160000); silently skip (LEAVE-ALONE).
-    LEAVE-ALONE    — `state/handoffs/` or `.git/`; silently skip (concurrent-
+    LEAVE-ALONE    — `state/handoffs/`, `.git/`, or the engine's own
+                     `state/engine-provenance-counts.jsonl`; silently skip (concurrent-
                      session territory — NOT `archive/handoffs/`, which is a
                      distinct, AUTO-COMMIT-eligible root).
     ORPHAN-TMP     — basename matches `*.tmp.[0-9]*.[0-9]*` (an Edit-tool
@@ -178,18 +179,15 @@ from __future__ import annotations
 import dataclasses
 
 # `.gitignore` stays a concrete `MUTATES` path, not a `GENERATES` entry, by
-# design: `_append_to_gitignore` makes a surgical, deduplicated append onto a
-# shared file this module did not create and does not own the rest of
-# (`_act_gitignore`). A stamped `GENERATES` entry would claim this module
-# emits `.gitignore` wholesale, which is false, and stamping a file this
-# module only ever appends one line to is not an option.
-# `generator_provenance.py :: _build_record` therefore scores this module
-# UNDECLARED (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md,
-# P012-C5) -- an accepted outcome, not a gap: a surgical edit to a shared
-# file has no honest declaration under the checker's current vocabulary.
-# Filed to C6's checker-vocabulary finding. Do not add `GENERATES = []` (the
-# module writes) and do not rewrite this path as a glob to dodge
-# `_mutates_concrete_patterns`.
+# design: this module edits a shared file surgically (`_act_gitignore`) and
+# neither created nor owns the rest of it. A stamped `GENERATES` entry would
+# claim this module emits `.gitignore`, which is false, and `.gitignore`
+# cannot carry a stamp. `generator_provenance.py :: _build_record` therefore
+# scores this module UNDECLARED
+# (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md, P012-C5)
+# -- an accepted outcome, not a gap. Filed to C6's checker-vocabulary
+# finding. Do not add `GENERATES = []` (the module writes) and do not
+# rewrite the path as a glob to dodge `_mutates_concrete_patterns`.
 MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
 import fnmatch
@@ -211,6 +209,10 @@ _GIT_TIMEOUT_SECS = 30
 # ---------------------------------------------------------------------------
 # Unit 3 message text (AUTO-GITIGNORE / AUTO-COMMIT act blocks use these).
 # ---------------------------------------------------------------------------
+# The engine's own provenance side file: gitignored in fleet repos, but a fresh
+# repo has no such rule yet, so it would otherwise classify as NEEDS-PM.
+_ENGINE_TELEMETRY_PATH = "state/engine-provenance-counts.jsonl"
+
 _GITIGNORE_COMMIT_MSG = "chore(gitignore): exclude orphaned transients at workday-complete"
 
 # AUTO-GITIGNORE basename/prefix allow-list — pattern written to .gitignore.
@@ -519,7 +521,11 @@ def _classify_main_pass(
                 continue
 
         # 3. LEAVE-ALONE.
-        if path.startswith("state/handoffs/") or path.startswith(".git/"):
+        if (
+            path.startswith("state/handoffs/")
+            or path.startswith(".git/")
+            or path == _ENGINE_TELEMETRY_PATH
+        ):
             counters.leave += 1
             continue
 

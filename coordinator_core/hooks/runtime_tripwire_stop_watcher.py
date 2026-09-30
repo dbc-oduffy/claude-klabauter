@@ -246,7 +246,9 @@ def _main_impl() -> int:
     lock = lock_dir / "stop-watcher.pid"
 
     try:
-        lock_dir.mkdir(parents=True, exist_ok=True)
+        from coordinator_core.session.core import ensure_session  # noqa: PLC0415
+
+        ensure_session(session_id, sessions_base=str(sessions_dir), root=str(git_root))
     except Exception as exc:
         sys.stderr.write(f"RUNTIME TRIPWIRE: lock dir creation failed ({lock_dir}): {exc}\n")
 

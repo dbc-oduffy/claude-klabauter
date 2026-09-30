@@ -92,7 +92,6 @@ _SUBJECT_SITES = [
     # abs-path-ok: literal marker copied from the cited source file's own message text, not a
     # path this test resolves or joins.
     ("coordinator_core/resolve_coordinator_clone.py", "flat ~/.claude/plugins/coordinator-claude"),
-    ("coordinator_core/plugin_health/forwarder_drift.py", "coordinator-content-repo coordinator/ dir"),
     ("coordinator_core/write_guards/nudge_session_display_name_as_identifier.py", '"claude-klabauter"'),
     ("coordinator_core/ops/check_generator_output_staleness.py", 'f"coordinator-content-repo@{sha}"'),
     ("coordinator_core/ops/check_generator_output_staleness.py", 'f"coordinator-content-repo:{pair.artifact}"'),

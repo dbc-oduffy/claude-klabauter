@@ -201,41 +201,40 @@ from coordinator_core.ops._param_alias import aliased_param, spellings
 _REVIEW_STAGE_SCHEMA_RELPATH = "schemas/review-stage.schema.json"
 
 
-def _load_review_roster_and_stage_schemas() -> tuple:
-    """Best-effort load of the v5 review roster fragment plus DoE's stage
-    schemas (AC22) -- reusing ``review_mint.op.load_fragment``'s own
-    content-root resolution for the fragment, never a duplicated pointer.
+class NoReviewStageError(ValueError):
+    """The plan route cannot compose an execute-review stage. An execute workflow
+    without one runs unreviewed and its plan can never be stamped implemented, so
+    emission is refused rather than degraded to emit.py's narration."""
 
-    Returns ``(fragment, stage_schemas)``, each ``None`` on any failure
-    (unresolvable DoE root, missing file, unparseable JSON, or a stage
-    schema file whose ``$defs`` is not a mapping) -- ``compose_script``
-    degrades to its own narration on either being ``None``; this never
-    raises and never guesses a roster.
+
+def _load_review_roster_and_stage_schemas() -> tuple:
+    """Load the v5 review roster fragment plus DoE's stage schemas (AC22) --
+    reusing ``review_mint.op.load_fragment``'s own content-root resolution for the
+    fragment, never a duplicated pointer. Returns ``(fragment, stage_schemas)``;
+    raises ``NoReviewStageError`` naming whichever input is unavailable.
     """
     try:
         fragment = _load_review_roster_fragment()
-    except (FileNotFoundError, OSError, ValueError):
-        return None, None
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise NoReviewStageError(f"review roster fragment unloadable ({exc})") from exc
 
     content_root = read_content_root_pointer()
     if not content_root:
-        return fragment, None
+        raise NoReviewStageError("DoE root pointer unresolved; review-stage schemas unlocatable")
 
     content_root = content_root_for(content_root)
     if content_root is None:
-        return fragment, None
+        raise NoReviewStageError(f"{content_root} is not a coordinator content root")
     schema_path = content_root / _REVIEW_STAGE_SCHEMA_RELPATH
-    if not schema_path.is_file():
-        return fragment, None
 
     try:
         doc = json.loads(schema_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return fragment, None
+    except (OSError, ValueError) as exc:
+        raise NoReviewStageError(f"review-stage schemas unloadable at {schema_path} ({exc})") from exc
 
     stage_schemas = doc.get("$defs") if isinstance(doc, dict) else None
     if not isinstance(stage_schemas, dict):
-        return fragment, None
+        raise NoReviewStageError(f"{schema_path} carries no `$defs` mapping")
 
     return fragment, stage_schemas
 
@@ -928,8 +927,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         # AC22: the plan route loads the roster fragment and DoE's stage
         # schemas itself, through the existing content-root pointer resolution
         # -- never a caller-supplied fragment param, and never a guessed
-        # roster on an unresolvable sibling root (degrades to emit.py's own
-        # narration instead).
+        # roster on an unresolvable sibling root (refuses instead).
         review_roster_fragment, review_stage_schemas = _load_review_roster_and_stage_schemas()
         script = emit_script(
             plan_path,

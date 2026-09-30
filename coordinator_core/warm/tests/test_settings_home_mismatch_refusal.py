@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -52,6 +51,7 @@ import pytest
 
 from coordinator_core.warm import caller_context, server, settings_home_claim
 from coordinator_core.warm.tests.test_server_loop import _FakeIO, _FakeVersionState, _frame
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +83,7 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="warm runtime base")
 
 
 def _serve(frame: bytes, dispatch) -> _FakeIO:

@@ -48,14 +48,8 @@ Negative-spec (hard-won, restated for this row):
   - Does NOT catch `CommitRefused`/`FilterUnsupported` and retry, guess, or
     widen scope -- a refusal from `commit_paths` is returned as a structured
     error, unmodified in substance, so the caller sees exactly why nothing
-    was written. There is no signing-shaped carve-out here: DR-308
-    (`docs/decisions/DR-308-signed-commit-enforcement-is-declined-as.md`)
-    declines a mechanism that can ever refuse a commit over a signing
-    failure, so `commit_paths` never raises one -- a broken signing setup
-    lands the commit unsigned and reports it via `CommitOutcome.sign_
-    warning` instead (see the handler body below). klabauter#34's operator
-    remedy text existed only for the refusal shape this decision removed
-    and was deleted with it.
+    was written. No signing-shaped carve-out: `commit_paths` never raises over a signing failure; a
+    broken signing setup lands the commit unsigned and reports `CommitOutcome.sign_warning`.
   - Does NOT use `params.repo_root` as the worktree-resolution source (D3:
     socket-authoritative common_dir only).
 """
@@ -292,23 +286,9 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
 
 
 def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
-    """Per DD4 (A5). One BATCHED ``claim_index.lookup(paths)`` call, then a
-    liveness check on each returned claimant that is not this session --
-    called BEFORE ``commit_paths`` runs (the caller passes the pre-commit
-    pathspec), but this step never refuses the commit: a path a live peer
-    holds is reported, not blocked.
-
-    Zero additional process spawns: ``claim_index.lookup`` is an in-memory
-    rebuild over the on-disk touch-record corpus, and ``liveness.
-    session_live`` (its own docstring) resolves off ``meta.json``/pid-recency
-    reads for the common case -- the same batched-lookup-plus-disk-read
-    shape ``session-claim-cli.py``'s own ``who-claims-path`` already uses.
-
-    Returns a bounded ``warnings`` list, never raises: a lookup failure (or
-    an ``UNANSWERABLE`` claim-index entry) degrades to ONE "claim state
-    indeterminate" warning for the whole call rather than a per-path one --
-    the underlying cause (an aborted rebuild) is call-wide, not path-wide --
-    and the commit still lands either way.
+    """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant,
+    before ``commit_paths`` runs. Reports a live peer's hold; never refuses, never spawns, never raises:
+    a lookup failure or ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning.
     """
     if not paths:
         return []
@@ -493,13 +473,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         deleted_paths (list[str], optional) -- repo-relative paths to record
                                        as removed in this commit. A path still
                                        present in the worktree is refused.
-        untracked_paths (list[str], optional) -- repo-relative paths this
-                                       commit removes from HEAD and the index
-                                       while the worktree keeps the file
-                                       (`git rm --cached`). Declared, never
-                                       inferred here: the phantom-deletion
-                                       refusal on `deleted_paths` cannot tell
-                                       this apart from a stale shared index.
+        untracked_paths (list[str], optional) -- paths this commit removes from HEAD and the index
+                                       while the worktree keeps the file (`git rm --cached`).
+                                       Declared, never inferred: the phantom-deletion refusal cannot
+                                       tell this from a stale shared index.
         message   (str, required)   -- the commit message.
         prefer_staged (list[str], optional) -- paths whose STAGED bytes are
                                        committed in preference to differing
@@ -533,18 +510,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        Session-Id trailer under the env-
                                        ladder alone, blinding the review-
                                        brightline gate (coordinator-claude#52a).
-        declared_reverts (list[str], optional) -- paths this call is
-                                       deliberately reverting to an older
-                                       exact blob. This route always runs
-                                       `commit_paths`'s staged-rollback check
-                                       (`detect_rollback=True`, P2d); a path
-                                       named here is excluded from that
-                                       check's candidate set, not merely
-                                       exempted from refusal. Absent path(s)
-                                       whose new value matches an older
-                                       first-parent version raise
-                                       `StagedRollbackRefused`, returned here
-                                       as a structured refusal.
+        declared_reverts (list[str], optional) -- paths deliberately reverted to an older exact blob;
+                                       excluded from `commit_paths`'s staged-rollback check
+                                       (`detect_rollback=True`), which otherwise raises
+                                       `StagedRollbackRefused`, returned as a structured refusal.
     Returns:
         {"committed": True, "sha": str, "staged_preferred": [str, ...],
          "worktree_over_staged": [str, ...], "warnings": [str, ...],
@@ -556,12 +525,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         `write_guards` module CLASS transition in this commit, per path
         under `coordinator_core/write_guards/`. It never gates or delays
         the commit above -- a step failure degrades to a `skips` entry.
-        `warnings` additionally carries one entry per named path a LIVE
-        peer session holds a touch-claim on (A5/DD4) -- run BEFORE this
-        commit lands, from one batched `claim_index.lookup` plus a
-        per-claimant liveness read, zero added process spawns. This never
-        refuses the commit; a lookup/liveness failure degrades to a
-        "claim state indeterminate" warning instead.
+        `warnings` also carries one entry per named path a live peer session holds a touch-claim on;
+        never a refusal (see `_peer_claim_warnings`).
         Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
@@ -641,9 +606,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
-    # An untracked path leaves HEAD like a deleted one, so every consumer
-    # below that asks "what did this commit touch" (claims, trailers, gates,
-    # the ledger) reads the union; only `commit_paths` tells them apart.
+    # An untracked path leaves HEAD like a deleted one: downstream consumers read the union.
     raw_removed = list(raw_deleted) + list(raw_untracked)
 
     # Filter FIRST, before anything else touching the guard-class-relay step
@@ -654,9 +617,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
     )
 
-    # A5 (DD4): one batched claim_index.lookup + per-claimant liveness read,
-    # BEFORE commit_paths runs -- a live peer holding a named path is
-    # reported, never refused (see `_peer_claim_warnings` docstring).
+    # A live peer holding a named path is reported, never refused.
     peer_claim_warnings = _peer_claim_warnings(
         worktree_root, list(raw_paths) + raw_removed
     )
@@ -668,26 +629,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if gate_refusal is not None:
         return _error(gate_refusal)
 
-    # Declared-vs-actual EOL, for the executables THIS COMMIT touches -- the
-    # write-scoped v2 the eol family's deletion left owed (kill-ledger K-064's
-    # returns-when spec; `docs/reference/eol-drift-detection.md`). Filter-first
-    # like `guard_paths` above: a commit carrying no `.cmd`/`.ps1`/`.sh`/`.bat`
-    # spawns nothing and reads nothing.
-    #
-    # BEFORE the commit, not after, and NOT a refusal. Before, so the tree that
-    # lands already carries correct bytes. Not a refusal, because the repair is
-    # provably content-neutral -- check-in normalization maps the drifted and
-    # repaired files to the same blob -- so there is nothing for an operator to
-    # adjudicate and nothing a refusal would protect.
-    # A repair-side exception is a worse defect than the drift it looks for
-    # (NEGATIVE SPEC, `eol_declared` module docstring) -- neither function is
-    # documented to raise, but nothing upstream of this line guarantees it,
-    # so this is wrapped rather than trusted.
-    # `prefer_staged` paths are excluded: that parameter exists precisely
-    # because the caller wants the INDEX content committed while deliberately
-    # leaving the working tree diverged (see `worktree_over_staged` below).
-    # Repairing those bytes anyway overrides a deliberate operator choice,
-    # even though it would not change what lands.
+    # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
+    # Filter-first: a commit with no `.cmd`/`.ps1`/`.sh`/`.bat` spawns and reads nothing. BEFORE the commit so
+    # the tree that lands carries correct bytes; not a refusal, since the repair is content-neutral.
+    # Wrapped, not trusted: a repair-side exception is worse than the drift (`eol_declared` negative spec).
+    # `prefer_staged` paths are excluded: the caller deliberately diverged the worktree from the index.
     try:
         prefer_staged_set = set(raw_prefer_staged)
         eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
@@ -707,14 +653,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # module docstring). Never blocks: `apply_missing_trailers` degrades to
     # `message` unchanged on any resolution failure.
     #
-    # SIGNING: `commit_paths` honours `commit.gpgsign` (claude-klabauter#34)
-    # -- when set, it spawns `git commit-tree -S` for the ONE object that
-    # needs a real signature rather than hand-writing it, and hand-writing
-    # resumes for every commit after (or every commit at all, when unset --
-    # zero added cost). A signing failure (empty/unreadable signing key,
-    # missing agent, wrong `gpg.format`) never refuses the commit: it lands
-    # unsigned and `outcome.sign_warning` carries why, surfaced into
-    # `warnings` below rather than silently dropped.
+    # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
+    # `outcome.sign_warning` is surfaced into `warnings` below.
     message = apply_missing_trailers(
         message,
         worktree_root,
@@ -744,19 +684,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # "already done" from "failed" without parsing prose.
         return _error(str(exc), nothing_to_commit=True)
     except IndexStaleAfterCommit as exc:
-        # THE COMMIT LANDED. Reporting this as an error is the single most
-        # expensive mistake available on this op: `_error` says `committed:
-        # False`, the caller retries, and the same work is committed twice.
-        # `commit_paths` splices the index AFTER the ref swap by design, so a
-        # peer holding `.git/index.lock` for the width of that splice lands
-        # here with real work in history -- routine at the ~50-session load
-        # norm, not exotic.
-        #
-        # Recovered as a SUCCESS carrying the outcome the splice would have
-        # returned, with the stale index reported as a warning rather than a
-        # failure, because that is all the residue actually is: peers' `git
-        # status` misreports these paths until any subsequent index write
-        # refreshes it.
+        # THE COMMIT LANDED. Reporting an error here (`committed: False`) makes the caller retry and
+        # commit twice. `commit_paths` splices the index AFTER the ref swap, so a peer holding
+        # `.git/index.lock` lands here routinely. Recovered as a SUCCESS with the stale index as a warning.
         # `cast`, not a runtime check: `IndexStaleAfterCommit.outcome` is typed
         # `object` there only to keep `index_write` free of an import cycle
         # back to `commit.py`. The sole raiser passes a real `CommitOutcome`.
@@ -781,10 +711,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     warnings = []
     warnings.extend(peer_claim_warnings)
     if outcome.sign_warning is not None:
-        # First-class, not appended after the others: a caller that only
-        # reads the first warning (or greps for "sign") should still see
-        # this one, and it is the only warning here that means "this commit
-        # is not what the branch's protection rules expect it to be."
+        # First-class: the only warning meaning "this commit is not what the branch's protection expects."
         warnings.append(outcome.sign_warning)
     if index_stale_warning is not None:
         # First, because it is the one warning here that changes what the
@@ -816,11 +743,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # these paths and they are not in the commit, which is indistinguish-
         # able from delivery on the success line alone. Bounded at five like
         # every other join in this envelope.
-        # A declared deletion of a path HEAD never carried no longer reaches
-        # this branch at all -- `commit_paths` now raises
-        # `PhantomDeletionDeclared` before any tree, commit, ref or index
-        # write, so `no_delta` here holds only the ordinary "already at HEAD"
-        # case.
+        # `PhantomDeletionDeclared` is raised before any write, so `no_delta` is only "already at HEAD".
         matched = list(outcome.no_delta)
         declared = len(raw_paths) + len(raw_removed)
 

@@ -5,7 +5,7 @@ Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C1
 
 Purpose: Verify the draft/list/discard/compose verbs and subcommand scaffolding:
 C1 tests:
-  - Test 1: draft creates state/memo-outbox/<topic>.md with valid frontmatter
+  - Test 1: draft creates .coordinator-local/memo-outbox/<topic>.md with valid frontmatter
   - Test 2: draft on existing topic exits 2 with collision hint (AC11)
 
 The former C2 send-lifecycle tests (Test 3-7: send consumes outbox, missing
@@ -158,7 +158,8 @@ def _with_content_root(env: dict[str, str]) -> dict[str, str]:
     """Forward CONTENT_ROOT into a test env dict unless the caller already set it."""
     if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
         env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
-    return env
+    # The isolated registry reads as a consumer box, where memos default off.
+    return {"MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS": "on", **env}
 
 
 def _run_dispatcher(args: list[str], env: dict[str, str], stdin_text: str = "") -> subprocess.CompletedProcess:
@@ -356,7 +357,7 @@ def test_draft_creates_outbox_file() -> None:
         if result.returncode != 0:
             raise AssertionError(f"{name}: " + (f"draft exited {result.returncode}: stdout={result.stdout!r} stderr={result.stderr!r}"))
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "test-c1-draft.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "test-c1-draft.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: " + (f"outbox file not found at {outbox_path}. stdout: {result.stdout!r}"))
 
@@ -428,7 +429,7 @@ def test_draft_collision_exits_2() -> None:
         if result1.returncode != 0:
             raise AssertionError(f"{name}: " + (f"first draft failed: exit {result1.returncode}, stderr: {result1.stderr!r}"))
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "collision-topic.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "collision-topic.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: " + (f"outbox file not found after first draft: {outbox_path}"))
 
@@ -544,7 +545,7 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
         if result.returncode != 0:
             raise AssertionError(f"{name}: " + (f"resolved sibling receiver should exit 0, got {result.returncode}. stderr: {result.stderr!r}"))
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "sibling-recv.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "sibling-recv.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: " + (f"resolved sibling receiver should create the draft: {outbox_path}"))
 
@@ -622,13 +623,13 @@ def test_draft_premise_check_advisory_fires_and_does_not_crash() -> None:
                 f"resolved local receiver, but stderr carried none of it: {result.stderr!r}"
             )
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "premise-pin.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "premise-pin.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: the draft should still be written: {outbox_path}")
 
 
 def _make_outbox_file(sender_repo: str, topic: str, content: str) -> str:
-    outbox_dir = os.path.join(sender_repo, "state", "memo-outbox")
+    outbox_dir = os.path.join(sender_repo, ".coordinator-local", "memo-outbox")
     os.makedirs(outbox_dir, exist_ok=True)
     path = os.path.join(outbox_dir, f"{topic}.md")
     with open(path, "w", encoding="utf-8") as f:
@@ -897,7 +898,7 @@ def test_compose_prints_path_default() -> None:
         if not os.path.isabs(stdout_path):
             raise AssertionError(f"{name}: " + (f"compose should print absolute path, got: {stdout_path!r}"))
 
-        expected_outbox = os.path.join(sender_repo, "state", "memo-outbox", f"{topic}.md")
+        expected_outbox = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", f"{topic}.md")
         if not os.path.samefile(stdout_path, expected_outbox):
             raise AssertionError(f"{name}: " + (f"compose path {stdout_path!r} does not match expected {expected_outbox!r}"))
 
@@ -976,7 +977,7 @@ def test_compose_open_without_editor() -> None:
             raise AssertionError(f"{name}: " + (f"compose --open without EDITOR should exit 0, got {result.returncode}: {result.stderr!r}"))
 
         combined = result.stdout + result.stderr
-        expected_outbox = os.path.join(sender_repo, "state", "memo-outbox", f"{topic}.md")
+        expected_outbox = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", f"{topic}.md")
         if topic not in combined:
             raise AssertionError(f"{name}: " + (f"compose --open should include topic in output. output: {combined!r}"))
 

@@ -47,7 +47,6 @@ def test_cartography_ops_derived_from_registry_map_not_hardcoded() -> None:
     for suffix in (
         "tree",
         "file_index",
-        "churn",
         "symbols",
         "edges",
         "count_references",

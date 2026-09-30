@@ -304,6 +304,35 @@ def test_accepts_signals_honours_the_tier_persona_cap():
     assert standard[0].agents[-1] == "coordinator:docs-checker"
 
 
+def test_v4_full_tier_caps_signal_personas_at_three_total():
+    stages = parse_stages(
+        _v4_fragment(),
+        "full",
+        signals={
+            "named": [
+                "coordinator:eng-director",
+                "coordinator:staff-ux",
+                "coordinator:docs-checker",
+            ]
+        },
+    )
+    personas = [
+        a
+        for s in stages
+        for a in s.agents
+        if a
+        in {
+            "coordinator:staff-eng",
+            "coordinator:vp-product",
+            "coordinator:eng-director",
+            "coordinator:staff-ux",
+        }
+    ]
+    assert len(personas) == 3
+    assert "coordinator:staff-ux" not in personas
+    assert stages[1].agents[-1] == "coordinator:docs-checker"
+
+
 def test_a_signal_already_on_the_stage_is_not_duplicated():
     stages = parse_stages(
         _v4_fragment(),

@@ -172,7 +172,7 @@ def _claim_offer_marker(cwd: str, session_id: str) -> bool:
         ensure_session_dir(session_dir, session_id)
         marker = os.path.join(session_dir, _MARKER_NAME)
         try:
-            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             return False
         except OSError:

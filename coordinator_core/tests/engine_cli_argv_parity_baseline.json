@@ -21,6 +21,14 @@
     {
       "module": "coordinator_core/backlog_grind_assemble/directives.py",
       "directive_id": "",
+      "cli": "coordinator-resolve-validation-cmd",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/backlog_grind_assemble/directives.py",
+      "directive_id": "",
       "cli": "executor-dispatch-prompt-template",
       "unresolved": true,
       "unaccepted": [],
@@ -30,6 +38,14 @@
       "module": "coordinator_core/backlog_grind_assemble/directives.py",
       "directive_id": "",
       "cli": "spinoff-handoff-template",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/backlog_grind_assemble/directives.py",
+      "directive_id": "",
+      "cli": "tier-u-grant-cli",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -219,6 +235,102 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/execute_plan_assemble/apply.py",
+      "directive_id": "",
+      "cli": "emit-dispatch-workflow",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/apply.py",
+      "directive_id": "",
+      "cli": "review-exec-auth-stamp",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/apply.py",
+      "directive_id": "",
+      "cli": "session-claim-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/pre_execution.py",
+      "directive_id": "d1",
+      "cli": "pickup-assemble",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/pre_execution.py",
+      "directive_id": "d2",
+      "cli": "review-exec-auth-stamp",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/pre_execution.py",
+      "directive_id": "d3",
+      "cli": "session-claim-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/execute_plan_assemble/pre_execution.py",
+      "directive_id": "d4",
+      "cli": "emit-dispatch-workflow",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/learn_lessons_pipeline/__init__.py",
+      "directive_id": "d-age-sweep",
+      "cli": "age-sweep-lessons",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/learn_lessons_pipeline/__init__.py",
+      "directive_id": "d-assert-outbox-empty",
+      "cli": "lessons-outbox-drain",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/learn_lessons_pipeline/__init__.py",
+      "directive_id": "d-drain-outbox",
+      "cli": "lessons-outbox-drain",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/learn_lessons_pipeline/__init__.py",
+      "directive_id": "d-extract-lessons",
+      "cli": "extract-lessons",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/learn_lessons_pipeline/__init__.py",
+      "directive_id": "d-verify-extraction",
+      "cli": "extract-lessons",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/merge_assemble/__init__.py",
       "directive_id": "d0",
       "cli": "node-ceremony-gate",
@@ -283,6 +395,22 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/ops/dispatch_emit/queue_emit.py",
+      "directive_id": "",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/ops/dispatch_emit/queue_select.py",
+      "directive_id": "",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/orient_assemble/readers_clean_ops.py",
       "directive_id": "",
       "cli": "agent-worktree-sweep",
@@ -316,6 +444,14 @@
     },
     {
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "",
+      "cli": "coordinator-git-maintenance",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-ceremony-hook-output",
       "cli": "workday-start-health-probes",
       "unresolved": true,
@@ -332,6 +468,14 @@
     },
     {
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-goal-coverage",
+      "cli": "goal-coverage-scan",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-hook-currency",
       "cli": "workday-start-health-probes",
       "unresolved": true,
@@ -342,6 +486,14 @@
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-claude-klabauter-bin-sentinel",
       "cli": "workday-start-health-probes",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-plugin-drift",
+      "cli": "check-plugin-drift",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -366,6 +518,22 @@
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-working-repo-registration",
       "cli": "workday-start-health-probes",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-workweek-trail-scope",
+      "cli": "workweek-trail-scope",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-workweek-trail-scope",
+      "cli": "workweek-trail-scope",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -507,6 +675,14 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/roadmap_planning_assemble/scaffold_directive.py",
+      "directive_id": "",
+      "cli": "coordinator-doc-new",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/sprint_planning_assemble/__init__.py",
       "directive_id": "",
       "cli": "",
@@ -548,6 +724,14 @@
     },
     {
       "module": "coordinator_core/workstream_complete/directives_completion.py",
+      "directive_id": "d-baton-chain-closure",
+      "cli": "baton-chain-closure",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_completion.py",
       "directive_id": "d-complete-entry",
       "cli": "coordinator-complete-entry",
       "unresolved": true,
@@ -558,6 +742,14 @@
       "module": "coordinator_core/workstream_complete/directives_completion.py",
       "directive_id": "d-fold-execution-observations",
       "cli": "coordinator-fold-execution-record",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_completion.py",
+      "directive_id": "d-plan-reversibility-eligibility",
+      "cli": "plan-reversibility-eligibility",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -574,14 +766,6 @@
       "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
       "directive_id": "",
       "cli": "coordinator-queue-append",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
-      "directive_id": "d-attest-review-verified",
-      "cli": "archive-stamp-cli",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -619,6 +803,14 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/workstream_complete/directives_memo_lifecycle.py",
+      "directive_id": "",
+      "cli": "archive-stamp-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/workstream_complete/directives_review.py",
       "directive_id": "d-classify-dispatch-shape",
       "cli": "classify-dispatch-shape",
@@ -630,14 +822,6 @@
       "module": "coordinator_core/workstream_complete/directives_review.py",
       "directive_id": "d-close-coverage-advisory",
       "cli": "",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/workstream_complete/directives_review.py",
-      "directive_id": "d-freeze-and-dispatch-review-partition-integrator",
-      "cli": "fan-out-integrator",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

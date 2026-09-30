@@ -47,7 +47,7 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
         self.flat = os.path.join(self._tmp, "coordinator-claude")
         os.makedirs(os.path.join(self.flat, ".claude-plugin"))
         os.makedirs(os.path.join(self.flat, "schemas"))
-        with open(os.path.join(self.flat, ".claude-plugin", "plugin.json"), "w") as fh:
+        with open(os.path.join(self.flat, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as fh:
             fh.write("{}")
         with open(_REAL_MANIFEST, "rb") as src:
             payload = src.read()
@@ -57,7 +57,7 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
         self.settings_home = os.path.join(self._tmp, "settings-home")
         os.makedirs(os.path.join(self.settings_home, "machine-local"))
         with open(
-            os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w"
+            os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w", encoding="utf-8"
         ) as fh:
             fh.write(f"schema = 1\n\"repos.content_root\" = '{self.flat}'\n")
 

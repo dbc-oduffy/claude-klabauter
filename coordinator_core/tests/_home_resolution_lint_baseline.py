@@ -105,11 +105,6 @@ FORWARD_SLASH_BASELINE: list[tuple[str, int, str]] = [
         192,
         'if basename == "coordinator" and p.endswith("/coordinator"):',
     ),
-    (
-        "coordinator_core/install/check_install_singularity.py",
-        386,
-        'if claude_home_cmp.endswith("/.claude") or claude_home_cmp.endswith("/.claude/"):',
-    ),
 ]
 
 # 2026-07-29 update: 13 of the original 18 BARE_OR_BASELINE sites fixed --

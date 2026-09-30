@@ -100,10 +100,9 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
     """5 candidate rows must cost exactly the manifest's
     `resolution_calls_for_5_candidate_rows` total REAL `subprocess.run`
     SPAWNS reachable from the three underlying resolution primitives
-    (`_repo_root`/`content_root`/`_claude_klabauter_root`), not 5x that count. Only
-    `_claude_klabauter_root()` still spawns in the steady state (see the trailing
-    comment block below) — `resolution_calls_for_5_candidate_rows` is 1,
-    not 3 or 2.
+    (`_repo_root`/`content_root`/`_claude_klabauter_root`), not 5x that count. All three
+    resolve in-process in the steady state — `resolution_calls_for_5_candidate_rows`
+    is 0, not 3, 2 or 1.
 
     Calls the REAL `content_root()`/`_claude_klabauter_root()` (no substitution) with
     every resolver env override cleared — the steady state on an installed

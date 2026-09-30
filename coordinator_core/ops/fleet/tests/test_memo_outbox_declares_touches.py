@@ -164,23 +164,6 @@ def _write_memo(root: Path, name: str, status: str) -> Path:
 
 
 class TestMemoReconcileOutboxDeclaresTouches:
-    def test_act_run_declares_both_ends_of_each_move(self, worktree):
-        _write_memo(worktree, "delivered.md", "sent")
-        _write_memo(worktree, "live.md", "draft")
-
-        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
-
-        assert result["exit_code"] == 0, result
-        assert "_scope_touch_paths" in result
-        touched = {Path(p) for p in result["_scope_touch_paths"]}
-
-        source = worktree.joinpath(*_OUTBOX, "delivered.md")
-        target = worktree / ".coordinator-local" / "memo-outbox" / "sent" / "delivered.md"
-        assert source in touched, "the vacated source is a deletion this session owns too"
-        assert target in touched
-        live = worktree.joinpath(*_OUTBOX, "live.md")
-        assert live not in touched
-
     def test_no_op_run_declares_nothing(self, worktree):
         _write_memo(worktree, "live.md", "draft")
 

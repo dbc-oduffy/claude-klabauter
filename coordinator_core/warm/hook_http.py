@@ -646,6 +646,11 @@ def _decision_to_response(event_name: str, result: Mapping[str, Any]) -> Dict[st
     putting it on a wire. One narrowing-to-response step, not two copies of it drifting
     apart as either caller changes.
     """
+    # A handler may return its deny already nested in `hookSpecificOutput` (the
+    # harness envelope shape); reading only the flat keys drops it as no-objection.
+    nested = result.get("hookSpecificOutput")
+    if isinstance(nested, Mapping) and nested.get("permissionDecision") == "deny":
+        result = {**result, **nested}
     decision = result.get("permissionDecision") or result.get("decision")
     if decision == "deny":
         reason = (

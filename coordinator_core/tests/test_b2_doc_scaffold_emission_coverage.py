@@ -95,6 +95,15 @@ def _package_source(module) -> str:
     return "\n".join(chunks)
 
 
+def _delegates_to_shared_emitter(source: str) -> bool:
+    """A host that builds its directive through `scaffold_directive.build_scaffold_directive`
+    names the CLI by delegation; the emitter's own source must still name it."""
+    if "build_scaffold_directive" not in source:
+        return False
+    emitter = importlib.import_module("coordinator_core.roadmap_planning_assemble.scaffold_directive")
+    return "coordinator-doc-new" in inspect.getsource(emitter)
+
+
 def _check_row_emitted(row: DoctypeHostRow) -> tuple[bool, str]:
     """An `emitted` row's `module` must import cleanly and its source must
     carry the type's value as a quoted string literal, alongside the
@@ -113,7 +122,7 @@ def _check_row_emitted(row: DoctypeHostRow) -> tuple[bool, str]:
             f"{_pair(row)}: expected type {row.type!r} as a quoted string "
             f"literal, not found in {row.module}"
         )
-    if "coordinator-doc-new" not in source:
+    if "coordinator-doc-new" not in source and not _delegates_to_shared_emitter(source):
         return False, (
             f"{_pair(row)}: module {row.module!r} never names cli "
             "'coordinator-doc-new'"

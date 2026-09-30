@@ -27,7 +27,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
     coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")
     os.makedirs(coord_bin, exist_ok=True)
     wrapper_src = os.path.join(coord_bin, "claude-author.py")
-    with open(wrapper_src, "w") as fh:
+    with open(wrapper_src, "w", encoding="utf-8") as fh:
         fh.write("#!/usr/bin/env python3\nprint('claude-author')\n")
 
     claude_home_dir = str(tmp_path / "home")
@@ -75,7 +75,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
     assert replace_calls[-1][1] == wrapper_dst
 
     assert os.path.isfile(wrapper_dst)
-    with open(wrapper_dst) as fh:
+    with open(wrapper_dst, encoding="utf-8") as fh:
         assert "claude-author" in fh.read()
     if not sys.platform.startswith("win"):
         mode = os.stat(wrapper_dst).st_mode
@@ -95,7 +95,7 @@ def test_windows_install_cleans_up_temp_on_copy_failure(tmp_path, orch, monkeypa
     coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")
     os.makedirs(coord_bin, exist_ok=True)
     wrapper_src = os.path.join(coord_bin, "claude-author.py")
-    with open(wrapper_src, "w") as fh:
+    with open(wrapper_src, "w", encoding="utf-8") as fh:
         fh.write("#!/usr/bin/env python3\nprint('claude-author')\n")
 
     claude_home_dir = str(tmp_path / "home")

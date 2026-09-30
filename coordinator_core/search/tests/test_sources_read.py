@@ -41,7 +41,7 @@ def test_cat_absolute_operand_passthrough(workdir):
 def test_cat_relative_operand_joins_cwd(workdir):
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
-    (open(os.path.join(sub, "c.txt"), "w")).write("x")
+    (open(os.path.join(sub, "c.txt"), "w", encoding="utf-8")).write("x")
     assert _produce(["cat", "c.txt"], sub) == "x"
 
 
@@ -61,7 +61,7 @@ def test_cat_declines_absent_operand():
 
 
 def test_head_default_n10(workdir):
-    with open(os.path.join(workdir, "many.txt"), "w", newline="") as fh:
+    with open(os.path.join(workdir, "many.txt"), "w", newline="", encoding="utf-8") as fh:
         fh.write("\n".join(str(i) for i in range(1, 21)) + "\n")
     out = _produce(["head", "many.txt"], workdir)
     assert out == "\n".join(str(i) for i in range(1, 11)) + "\n"
@@ -230,7 +230,7 @@ def test_declines_non_utf8_bytes(workdir):
 
 def test_declines_oversized_file_without_reading(workdir):
     path = os.path.join(workdir, "big.txt")
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * (MAX_RENDER_BYTES + 1))
     with pytest.raises(Unanswerable):
         _produce(["cat", "big.txt"], workdir)
@@ -238,6 +238,6 @@ def test_declines_oversized_file_without_reading(workdir):
 
 def test_at_cap_file_is_still_served(workdir):
     path = os.path.join(workdir, "exact.txt")
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * MAX_RENDER_BYTES)
     assert _produce(["cat", "exact.txt"], workdir) == "x" * MAX_RENDER_BYTES

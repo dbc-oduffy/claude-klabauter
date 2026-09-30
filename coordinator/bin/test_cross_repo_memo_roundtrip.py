@@ -6,7 +6,7 @@ Spec backlink: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md
 Purpose: `send` was killed 2026-08-23 alongside `memo.send` (PM ruling: a killed op
 dies outright, no stub) and came back as a bare forwarder once `memo.send` was
 rebuilt (C2) with a NEW, narrower contract — `dry_run` + `topic` only, everything
-else read off the already-staged `state/memo-outbox/<topic>.md` draft. This file
+else read off the already-staged `.coordinator-local/memo-outbox/<topic>.md` draft. This file
 is a fresh fixture, not a restoration of the pre-kill `test_cross_repo_memo_
 roundtrip.py` (which asserted the retired campaign/self-receipt/legacy-flag
 machinery against the old title/body/kind wire params — none of that comes back,
@@ -14,7 +14,7 @@ CLAUDE.md § brightline "kill means kill forever").
 
 Covers:
   - `send <topic>` delivers a staged draft: receiver-side file lands committed in
-    the receiver repo, the sender-side draft moves to state/memo-outbox/sent/,
+    the receiver repo, the sender-side draft moves to .coordinator-local/memo-outbox/sent/,
     the sent-ledger gains a row, and stdout names the receiver-side path.
   - `send <topic>` with no staged draft hard-errors (no direct-write fallback —
     DR-210) and does not touch either repo.
@@ -100,7 +100,8 @@ if _CONTENT_ROOT_FOR_TESTS:
 def _with_content_root(env: dict) -> dict:
     if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
         env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
-    return env
+    # The isolated registry reads as a consumer box, where memos default off.
+    return {"MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS": "on", **env}
 
 
 def skip_test(name: str, reason: str) -> None:
@@ -255,9 +256,13 @@ def test_send_delivers_staged_draft() -> None:
         if draft_result.returncode != 0:
             raise AssertionError(f"{name}: draft setup failed: exit {draft_result.returncode}, stderr={draft_result.stderr!r}")
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "roundtrip-topic.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "roundtrip-topic.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: outbox file missing after draft: {outbox_path}")
+
+        # memo.send refuses a draft whose body is still memo.draft's placeholder comments.
+        with open(outbox_path, "a", encoding="utf-8") as f:
+            f.write("\nRoundtrip send body\n")
 
         send_result = _run_dispatcher_in_repo(
             sender_repo, ["send", "roundtrip-topic"], env=env,
@@ -287,11 +292,11 @@ def test_send_delivers_staged_draft() -> None:
 
         if os.path.exists(outbox_path):
             raise AssertionError(f"{name}: outbox draft should be gone after send (moved to sent/): {outbox_path}")
-        sent_path = os.path.join(sender_repo, "state", "memo-outbox", "sent", "roundtrip-topic.md")
+        sent_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "sent", "roundtrip-topic.md")
         if not os.path.isfile(sent_path):
             raise AssertionError(f"{name}: sent/ copy missing: {sent_path}")
 
-        ledger_path = os.path.join(sender_repo, "state", "memo-outbox", "sent-ledger.jsonl")
+        ledger_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "sent-ledger.jsonl")
         if not os.path.isfile(ledger_path):
             raise AssertionError(f"{name}: sent-ledger.jsonl missing: {ledger_path}")
         with open(ledger_path, encoding="utf-8") as f:
@@ -452,7 +457,7 @@ def test_draft_title_with_newline_refused() -> None:
         if "--title" not in result.stderr or "newline" not in result.stderr:
             raise AssertionError(f"{name}: refusal message should name --title and newline: {result.stderr!r}")
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "newline-title-topic.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "newline-title-topic.md")
         if os.path.exists(outbox_path):
             raise AssertionError(f"{name}: no draft should be written on a refused --title: {outbox_path}")
 
@@ -529,7 +534,7 @@ def test_draft_summary_file_resolves_into_draft() -> None:
                 f"stdout={draft_result.stdout!r} stderr={draft_result.stderr!r}"
             )
 
-        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "summary-file-topic.md")
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "summary-file-topic.md")
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: outbox file missing after draft: {outbox_path}")
         with open(outbox_path, encoding="utf-8") as f:

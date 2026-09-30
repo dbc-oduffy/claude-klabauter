@@ -235,6 +235,46 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "memo.transition": {
+        "green_path": {
+            "ceiling": 2,
+            "reason": (
+                "First measured 2026-09-30 (high-traffic-strangle B1): the claim green path pays one git hash-object -w, which the counter reports unattributed, plus one _git._invoke update-index --cacheinfo."
+            ),
+        },
+    },
+    "memo.draft": {
+        "green_path": {
+            "ceiling": 0,
+            "reason": (
+                "First measured 2026-09-30 (high-traffic-strangle B1): the staged draft is an in-process write with no git spawn on the green path."
+            ),
+        },
+    },
+    "memo.compose": {
+        "green_path": {
+            "ceiling": 0,
+            "reason": (
+                "First measured 2026-09-30 (high-traffic-strangle B1): compose over a staged draft stays in-process with no git spawn on the green path."
+            ),
+        },
+    },
+    "memo.reconcile_outbox": {
+        "green_path": {
+            "ceiling": 0,
+            "reason": (
+                "First measured 2026-09-30 (high-traffic-strangle B1): reconciling the outbox ledger is filesystem-only with no git spawn on the green path."
+            ),
+        },
+    },
+    "handoff.transition": {
+        "green_path": {
+            "ceiling": 0,
+            "reason": (
+                "First measured 2026-09-30 (high-traffic-strangle B1) on the claim verb only: an in-process frontmatter write with no git spawn."
+            ),
+        },
+    },
 }
 
 _MIN_REASON_LEN = 40

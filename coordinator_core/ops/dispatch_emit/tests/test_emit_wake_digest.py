@@ -355,11 +355,8 @@ def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(
     assert stage_schemas == _V5_STAGE_SCHEMAS
 
 
-def test_dispatch_emit_degrades_when_the_content_root_is_unresolvable(monkeypatch):
+def test_dispatch_emit_refuses_when_the_content_root_is_unresolvable(monkeypatch):
     from coordinator_core.ops.dispatch_emit import op as op_mod
-
-    def _raise():
-        raise FileNotFoundError("no sibling root")
 
     monkeypatch.setattr(
         op_mod,
@@ -367,9 +364,8 @@ def test_dispatch_emit_degrades_when_the_content_root_is_unresolvable(monkeypatc
         lambda: (_ for _ in ()).throw(FileNotFoundError("no sibling root")),
     )
 
-    fragment, stage_schemas = op_mod._load_review_roster_and_stage_schemas()
-    assert fragment is None
-    assert stage_schemas is None
+    with pytest.raises(op_mod.NoReviewStageError, match="no sibling root"):
+        op_mod._load_review_roster_and_stage_schemas()
 
 
 def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path, monkeypatch):

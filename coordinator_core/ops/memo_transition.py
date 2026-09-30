@@ -1069,7 +1069,11 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
         return None
 
     if not params.get("correct_realization"):
-        raise MutateAbort("memo is already actioned with a different disposition — cannot re-action")
+        same_decision = params.get("decision") and params.get("decision") == read_fm_field_unquoted(
+            fm_text, "decision"
+        )
+        route = "; to amend the note or realized_by only, pass --correct-realization" if same_decision else ""
+        raise MutateAbort(f"memo is already actioned with a different disposition — cannot re-action{route}")
 
     new_decision = params.get("decision")
     cur_decision = read_fm_field_unquoted(fm_text, "decision")

@@ -189,6 +189,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import copy
 import difflib
 import functools
 import json
@@ -216,6 +217,35 @@ from coordinator_core.text.query_record_display import (
 from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
+
+# Content-keyed parse memos (never mtime/size). They hold the parser's raw
+# output; callers must take a _clone because _load_record mutates the result.
+_PARSE_CACHE_MAXSIZE = 2048
+
+
+def _clone(value):
+    """Copy a parser result; fast path for the dict/list/scalar shapes the parser emits.
+
+    Contract: output shares no mutable container with the input.
+    """
+    t = type(value)
+    if t is dict:
+        return {k: _clone(v) for k, v in value.items()}
+    if t is list:
+        return [_clone(v) for v in value]
+    if t in (str, int, float, bool, type(None)):
+        return value
+    return copy.deepcopy(value)
+
+
+@functools.lru_cache(maxsize=_PARSE_CACHE_MAXSIZE)
+def _parse_frontmatter_cached(text: str) -> dict:
+    return parse_frontmatter(text)
+
+
+@functools.lru_cache(maxsize=_PARSE_CACHE_MAXSIZE)
+def _parse_yaml_cached(text: str):
+    return parse_yaml(text)
 
 
 class _RecordsCollectError(Exception):
@@ -1698,7 +1728,7 @@ def _load_record(
             _LOG.warning('records.query: cannot read %s: %s', fpath, exc)
             return None
         try:
-            fm = parse_yaml(raw.decode('utf-8', errors='replace'))
+            fm = _clone(_parse_yaml_cached(raw.decode('utf-8', errors='replace')))
         except Exception as exc:  # noqa: BLE001 — mirrors query-records.js's catch-all _parseYaml try/except
             sys.stderr.write(
                 f'records.query: YAML parse failed for '
@@ -1724,7 +1754,7 @@ def _load_record(
         # `parseFrontmatter` negative-spec (both cases collapse to the same
         # no-frontmatter result). Skip silently either way, matching
         # query-records.js's own silent-skip default (includeUnparseable=false).
-        parsed = parse_frontmatter(text)
+        parsed = _clone(_parse_frontmatter_cached(text))
         fm = parsed['frontmatter']
         if fm is None:
             return None

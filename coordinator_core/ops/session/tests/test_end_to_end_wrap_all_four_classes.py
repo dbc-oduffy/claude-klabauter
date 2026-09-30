@@ -26,18 +26,12 @@ one writer module survives — `coordinator_core.subagent_sandbox.provision_repo
      the real spawn-time entrypoint) (state/subagent-share/<sid>/...)
   3. C3 — REMOVED (state/kill-ledger.md K-007, 2026-08-19): was
      workstream_complete.chain_partition_verdict_store.write_verdict_record
-  4. C4 — coordinator_core.ops.artifact_emit's "artifact.emit" op, driven
-     through the REAL coordinator_core.ipc.dispatch_message (the ONLY seam
-     that turns a handler's `_scope_touch_paths` self-report into a claim)
-     (state/cockpit-emission.json) — `_envelope.resolve_context`/`.emit`
-     are patched only to avoid the full 21-section envelope build, mirroring
-     `coordinator_core/ops/tests/test_artifact_emit_scope_touch.py`'s own
-     precedent; the declaration path itself is exercised for real.
+  4. C4 — REMOVED (docs/decisions/DR-351-the-emission-is-deleted-not-halted.md,
+     2026-08-23): was the "artifact.emit" op
 
-Then runs a real wrap ceremony — `safe_commit_offer.commit_session_offer`,
-the only wrap mechanism actually landed as of this chunk (C6's claim-aware
-Step 2.5 branch is still `pending` in the plan's own AC8 row) — and asserts
-NONE of the fixtures remain dirty afterward.
+Then runs a real wrap ceremony — `safe_commit_offer.commit_session_offer`
+only; this test does not drive Step 2.5 directly (C6 landed, AC8 met) — and
+asserts NONE of the fixtures remain dirty afterward.
 
 Negative half, in the SAME tree (both halves or the proof is worthless):
 a live peer session's own artifact, written under `state/subagent-share/
@@ -53,21 +47,15 @@ Spec backlink: pln-in-process-engine-writers-decl-33016a § C7 (AC9)
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import io
 import pytest
 import yaml
 
-import coordinator_core.ipc as ipc
-import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (artifact.emit)
-from coordinator_core.ipc import dispatch_message
-from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 from coordinator_core.subagent_sandbox.provision_report import _provision
@@ -124,7 +112,7 @@ def _write_policy(tmp_path: Path, *eligible_types: str) -> Path:
 
 
 def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_peer_artifact(
-    tmp_path, monkeypatch, capsys, exercise_suspended_op
+    tmp_path, monkeypatch, capsys
 ) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

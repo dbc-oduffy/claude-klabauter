@@ -6,6 +6,7 @@ already-judged observation (`--falsifier-verdict/--falsifier-output/--prose`).
 """
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 
 from coordinator_core.execute_plan_assemble.tests.test_close_out_goal_refusal import (
@@ -19,6 +20,7 @@ from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import 
     _land_the_shipping_chunk,
     _run_git,
 )
+from coordinator_core.session import record_homes
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -54,7 +56,7 @@ def _seed(root, *, exit_criterion_met=None, with_prime=True):
     plan = root / "plan.md"
     plan.write_text(_SPINELESS_PLAN.format(goal_frontmatter=goal_fm), encoding="utf-8")
     _run_git(["add", "plan.md"], root)
-    sizing = root / "state/sizings/2026-08-27-fixture-sizing.yaml"
+    sizing = Path(record_homes.record_path(str(root), "sizings", "2026-08-27-fixture-sizing.yaml"))
     sizing.parent.mkdir(parents=True, exist_ok=True)
     sizing.write_text("estimate:\n  tshirt: M\n", encoding="utf-8")
     _run_git(["add", "state"], root)
@@ -108,7 +110,7 @@ def test_output_with_yaml_structure_round_trips(tmp_path):
 def test_refused_stamp_leaves_no_record_behind(tmp_path, capsys):
     _init_repo(tmp_path)
     plan = _seed(tmp_path)
-    (tmp_path / "state/sizings/2026-08-27-fixture-sizing.yaml").unlink()
+    Path(record_homes.record_path(str(tmp_path), "sizings", "2026-08-27-fixture-sizing.yaml")).unlink()
     plan.write_text(
         plan.read_text(encoding="utf-8").replace("baseline_ref:", "baseline_ref: 0000000 #", 1),
         encoding="utf-8",

@@ -142,6 +142,8 @@ def discover_consumes_manifest_modules(
         if not _CONSUMES_MANIFEST_DEF_RE.search(text):
             continue
         rel = path.relative_to(coordinator_core)
+        if "tests" in rel.parts or rel.name.startswith("test_"):
+            continue
         package = rel.parts[0]
         found.setdefault(package, path)
     return found

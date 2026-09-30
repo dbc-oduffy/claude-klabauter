@@ -68,6 +68,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.roadmap.blitz_land import LandingRefused, _set_field
+from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.fleet._common import (
     Move,
@@ -479,7 +480,7 @@ def _discharge(worktree_root: Path, plan_ids_param: Optional[List[str]]) -> dict
             continue
 
         try:
-            path.write_text(new_text, encoding="utf-8")
+            replace_text(path, new_text)
         except OSError as exc:
             refused.append({
                 "baton": baton_id, "plan": matched_plan,

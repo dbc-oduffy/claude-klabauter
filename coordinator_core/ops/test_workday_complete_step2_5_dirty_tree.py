@@ -513,7 +513,7 @@ def test_peer_claim_perturbation_resolvable_then_broken_never_commits(
 ):
     """Perturbation proof (AC5/AC8): with the peer's claim resolvable, the
     peer's file is named and never committed. Breaking that resolution (an
-    unreadable peer touched.txt -> `ScopeResult.indeterminate=True` ->
+    unreadable peer touch-record.jsonl ->`ScopeResult.indeterminate=True` ->
     `ownership["degraded"]=True`) must degrade the SAME path to AMBIGUOUS,
     not to a false peer-attribution and never to a commit -- proving the
     peer-protection is load-bearing, not a coincidence of one code path."""

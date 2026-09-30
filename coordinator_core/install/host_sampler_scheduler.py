@@ -57,6 +57,7 @@ Spec backlink: state/handoffs/2026-08-15-kill-it-if-it-cannot-pay-for-itself.md 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -204,7 +205,7 @@ def register_host_sampler_task(
         )
         print(
             f"  To sample anyway, every {_INTERVAL_MINUTES}m via cron:\n"
-            f"    */{_INTERVAL_MINUTES} * * * * {sys.executable} {script}"
+            f"    */{_INTERVAL_MINUTES} * * * * {shlex.quote(sys.executable)} {shlex.quote(str(script))}"
         )
         return False
 

@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import client
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 _MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
@@ -310,4 +311,4 @@ def test_open_pipe_round_trips_over_a_real_unix_socket(tmp_path) -> None:
         assert received and b'"ping"' in received[0]
         assert b'"pong"' in line
     finally:
-        shutil.rmtree(short_dir, ignore_errors=True)
+        rmtree_or_raise(Path(short_dir), label="posix transport short dir")

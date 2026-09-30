@@ -96,8 +96,10 @@ def _load_shim():
     return module
 
 
-def test_resolution_error_leads_with_bootstrap_remedies(tmp_path):
+def test_resolution_error_leads_with_bootstrap_remedies(tmp_path, monkeypatch):
     shim = _load_shim()
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
 
@@ -108,12 +110,11 @@ def test_resolution_error_leads_with_bootstrap_remedies(tmp_path):
 
     bootstrap_flag_idx = message.index("--engine-root")
     bootstrap_env_idx = message.index("COORDINATOR_ENGINE_ROOT")
-    bootstrap_sentinel_idx = message.index(".claude-klabauter-live-root")
+    assert ".claude-klabauter-live-root" not in message
     post_bootstrap_idx = message.index("machine-local set")
 
     assert bootstrap_flag_idx < post_bootstrap_idx
     assert bootstrap_env_idx < post_bootstrap_idx
-    assert bootstrap_sentinel_idx < post_bootstrap_idx
 
 
 def test_env_var_bootstrap_remedy_actually_resolves(monkeypatch, tmp_path):

@@ -118,6 +118,8 @@ def test_b_live_citation_refuses_with_path_line(tmp_path):
     )
     ids = {c["id"] for c in result["candidates"]}
     assert "docs/decisions/DR-201-bar.md" not in ids
+    preview_reasons = {s["id"]: s["reason"] for s in result["skipped"]}
+    assert "docs/wiki/stray.md:1" in preview_reasons["docs/decisions/DR-201-bar.md"]
 
     result2 = _handler(
         {

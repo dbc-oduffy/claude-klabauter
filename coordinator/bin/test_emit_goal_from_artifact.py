@@ -51,12 +51,18 @@ SUBJECT = os.path.join(SCRIPT_DIR, "emit-goal-from-artifact.py")
 
 
 _SHIM_BODY = '''#!/usr/bin/env python3
+import json
 import os
 import sys
 
 log = os.environ.get("SHIM_LOG")
+events_path = sys.argv[sys.argv.index("--events-file") + 1]
+with open(events_path, encoding="utf-8") as fh:
+    events = json.load(fh)
 with open(log, "a", encoding="utf-8") as f:
-    f.write(" ".join(sys.argv[1:]) + "\\n")
+    f.write(json.dumps({"argv": sys.argv[1:], "events": events}) + "\\n")
+# The emitter reads one outcome per event from the batch call's stdout.
+sys.stdout.write(json.dumps([{"ok": True} for _ in events]))
 sys.exit(0)
 '''
 
@@ -104,6 +110,14 @@ def _read_log(log: str) -> list[str]:
         return []
     with open(log, encoding="utf-8") as f:
         return [ln for ln in f.read().splitlines() if ln]
+
+
+def _calls(log: str) -> list[dict]:
+    return [json.loads(ln) for ln in _read_log(log)]
+
+
+def _events(log: str) -> list[dict]:
+    return [ev for call in _calls(log) for ev in call["events"]]
 
 
 FIXTURE_LEGIBILITY = """schema: goal
@@ -252,27 +266,28 @@ def test_emit_goal_from_artifact(tmp_path):
     log1 = os.path.join(tmp_base, "log1.log")
     r1 = _run_emitter(repo, shim, log1)
     assert r1.returncode == 0, f"emitter exits 0 for a valid goal artifact: stderr={r1.stderr}"
-    lines1 = _read_log(log1)
-    assert len(lines1) == 1, f"append-goal-event.py invoked exactly once, got {len(lines1)}"
+    calls1 = _calls(log1)
+    assert len(calls1) == 1, f"append-goal-event.py invoked exactly once, got {len(calls1)}"
 
-    inv = lines1[0]
-    assert "--period repo" in inv, inv
-    assert "DoE-2026" in inv, inv
-    assert "goal-legibility" in inv, inv
+    (ev,) = calls1[0]["events"]
+    assert ev["period"] == "repo", ev
+    assert "DoE-2026" in ev["period_value"], ev
+    assert "goal-legibility" in ev["text"], ev
 
     _write_goal(repo, "goal-tooling.yaml", FIXTURE_TOOLING)
     log6 = os.path.join(tmp_base, "log6.log")
     r6 = _run_emitter(repo, shim, log6)
     assert r6.returncode == 0, f"emitter exits 0 for two goal artifacts: rc={r6.returncode}"
-    lines6 = _read_log(log6)
-    assert len(lines6) == 2, f"two goal artifacts -> two invocations, got {len(lines6)}"
+    calls6 = _calls(log6)
+    assert len(calls6) == 1, f"two goal artifacts -> ONE batch invocation, got {len(calls6)}"
+    assert len(calls6[0]["events"]) == 2, calls6
 
     log7a = os.path.join(tmp_base, "log7a.log")
     log7b = os.path.join(tmp_base, "log7b.log")
     _run_emitter(repo, shim, log7a)
     _run_emitter(repo, shim, log7b)
-    assert sorted(_read_log(log7a)) == sorted(_read_log(log7b)) and _read_log(log7a), \
-        "identity chain stable — same args across two runs"
+    assert _events(log7a) == _events(log7b) and _events(log7a), \
+        "identity chain stable — same events across two runs"
 
     repo_bad = os.path.join(tmp_base, "repo-bad")
     _write_goal(repo_bad, "bad-goal.yaml", FIXTURE_BAD)
@@ -303,46 +318,39 @@ def test_emit_goal_from_artifact(tmp_path):
         [sys.executable, SUBJECT, "--root", repo, "--repo", "myorg/myrepo"],
         capture_output=True, text=True, env=env12, **no_console_creationflags(),
     )
-    lines12 = _read_log(log12)
-    assert lines12, "shim log not created"
-    inv12 = lines12[0]
-    assert "--repo" in inv12, inv12
-    assert "myorg/myrepo" in inv12, inv12
-    assert "--root" in inv12, inv12
+    calls12 = _calls(log12)
+    assert calls12, "shim log not created"
+    argv12 = calls12[0]["argv"]
+    assert argv12[argv12.index("--repo") + 1] == "myorg/myrepo", argv12
+    assert "--root" in argv12, argv12
 
     repo_c11 = os.path.join(tmp_base, "repo-c11")
     _write_goal(repo_c11, "goal-no-parent.yaml", FIXTURE_NO_PARENT)
     log13 = os.path.join(tmp_base, "log13.log")
     _run_emitter(repo_c11, shim, log13)
-    lines13 = _read_log(log13)
-    assert lines13 and "--parent-goal-id " in lines13[0], \
-        f"parent_goal_id absent-from-artifact still emits --parent-goal-id (D9): {lines13}"
-    assert lines13 and "--weekly-perceptible" not in lines13[0], \
-        f"weekly_perceptible absent-from-artifact -> flag absent (D9): {lines13}"
+    events13 = _events(log13)
+    assert events13 and "parent_goal_id" not in events13[0], \
+        f"parent_goal_id absent-from-artifact -> key absent from the event: {events13}"
+    assert "weekly_perceptible" not in events13[0], \
+        f"weekly_perceptible absent-from-artifact -> key absent (D9): {events13}"
 
     _write_goal(repo_c11, "goal-with-parent.yaml", FIXTURE_WITH_PARENT)
     log15 = os.path.join(tmp_base, "log15.log")
     _run_emitter(repo_c11, shim, log15)
-    lines15 = [ln for ln in _read_log(log15) if "goal-with-parent" in ln]
-    inv15 = lines15[0] if lines15 else ""
-    assert "--parent-goal-id goal-parent-quarter" in inv15, inv15
-    assert "--weekly-perceptible true" in inv15, inv15
+    ev15 = next((e for e in _events(log15) if "goal-with-parent" in e["text"]), {})
+    assert ev15.get("parent_goal_id") == "goal-parent-quarter", ev15
+    assert ev15.get("weekly_perceptible") is True, ev15
 
     repo_kr = os.path.join(tmp_base, "repo-krstatus")
     _write_goal(repo_kr, "goal-kr-status.yaml", FIXTURE_KR_STATUS)
     log16 = os.path.join(tmp_base, "log16.log")
     _run_emitter(repo_kr, shim, log16)
-    lines16 = _read_log(log16)
-    inv16 = lines16[0] if lines16 else ""
-    assert "--key-results-status" in inv16, inv16
-    assert '"kind":"outcome"' in inv16 or '"kind": "outcome"' in inv16, inv16
-    assert "evidence_source" not in inv16, "key_results_status[] JSON drops evidence_source (C11 field map)"
-    assert "weekly_perceptible" not in inv16, "key_results_status[] JSON drops per-KR weekly_perceptible (C11 field map)"
-
-    assert inv16 and "--key-results-status" in inv16
-    json_start = inv16.index("--key-results-status") + len("--key-results-status ")
-    parsed, _end = json.JSONDecoder().raw_decode(inv16[json_start:])
-    assert isinstance(parsed, list) and parsed and parsed[0].get("id") == "kr-1", parsed
+    events16 = _events(log16)
+    krs = events16[0].get("key_results_status") if events16 else None
+    assert isinstance(krs, list) and krs and krs[0].get("id") == "kr-1", events16
+    assert krs[0].get("kind") == "outcome", krs
+    assert "evidence_source" not in krs[0], "key_results_status[] drops evidence_source (C11 field map)"
+    assert "weekly_perceptible" not in krs[0], "key_results_status[] drops per-KR weekly_perceptible (C11 field map)"
 
     repo_status = os.path.join(tmp_base, "repo-status")
     _write_goal(repo_status, "goal-status-active.yaml", FIXTURE_STATUS_ACTIVE)
@@ -350,16 +358,16 @@ def test_emit_goal_from_artifact(tmp_path):
     _write_goal(repo_status, "goal-status-abandoned.yaml", FIXTURE_STATUS_ABANDONED)
     log18 = os.path.join(tmp_base, "log18.log")
     _run_emitter(repo_status, shim, log18)
-    lines18 = _read_log(log18)
+    events18 = _events(log18)
 
-    inv_active = next((ln for ln in lines18 if "goal-status-active" in ln), "")
-    assert "--status active" in inv_active, "artifact status 'active' maps to wire status 'active'"
+    ev_active = next((e for e in events18 if "goal-status-active" in e["text"]), {})
+    assert ev_active.get("status") == "active", "artifact status 'active' maps to wire status 'active'"
 
-    inv_achieved = next((ln for ln in lines18 if "goal-status-achieved" in ln), "")
-    assert "--status done" in inv_achieved, "artifact status 'achieved' maps to wire status 'done'"
+    ev_achieved = next((e for e in events18 if "goal-status-achieved" in e["text"]), {})
+    assert ev_achieved.get("status") == "done", "artifact status 'achieved' maps to wire status 'done'"
 
-    inv_abandoned = next((ln for ln in lines18 if "goal-status-abandoned" in ln), "")
-    assert "--status dropped" in inv_abandoned, "artifact status 'abandoned' maps to wire status 'dropped'"
+    ev_abandoned = next((e for e in events18 if "goal-status-abandoned" in e["text"]), {})
+    assert ev_abandoned.get("status") == "dropped", "artifact status 'abandoned' maps to wire status 'dropped'"
 
 
 def test_help_flag_prints_usage_and_exits_zero():

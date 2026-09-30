@@ -59,6 +59,8 @@ EXCLUDED_MODULES = {
         "the peer's active rewrite surface under external_gate[0]; no deletion row here.",
     "coordinator_core/git/commit_context.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/commit_signing.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_delta.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_trailers.py":
@@ -82,6 +84,12 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/ls_files_bytes.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/published_tree_classification.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/push_stall.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/rollback_check.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/remote_url.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/repo_root.py":
@@ -98,7 +106,11 @@ EXCLUDED_MODULES = {
         "plan's scope:.",
     "coordinator_core/ops/ceremony/chunk_commits.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/commit_admission.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_exec_bit.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/commit_path_legality.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_message.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",

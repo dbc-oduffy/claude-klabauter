@@ -340,7 +340,7 @@ def test_plan_doc_oos_block_injection_ordering(root):
     write(spec_l, "C1\tedit foo\tfoo.py\nC2\tedit bar\tbar.py\n")
     code, so_l, se_l = run_helper(repo_l, spec_file=spec_l)
     assert code == 0, "2-chunk spec must exit zero"
-    assert so_l.count("Out-of-scope — plan document, do NOT touch") == 2, "plan-doc OOS heading per block"
+    assert so_l.count("Out-of-scope — plan document, do not touch") == 2, "plan-doc OOS heading per block"
     assert so_l.count("block_subagent_plan_body_write") == 2, "enforcement hook named per block"
     plan_idx = so_l.find("Out-of-scope — plan document")
     disk_idx = so_l.find("Disk-first verification preamble")

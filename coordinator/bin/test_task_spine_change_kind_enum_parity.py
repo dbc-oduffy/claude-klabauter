@@ -49,7 +49,7 @@ import json
 import os
 import re
 
-_SSOT_CITATION = "docs/wiki/lessons-outbox-schema.md § Change-kind enum"
+_SSOT_CITATION = "lessons-outbox-schema.md § Change-kind enum"
 
 
 def _repo_bin_dir() -> str:

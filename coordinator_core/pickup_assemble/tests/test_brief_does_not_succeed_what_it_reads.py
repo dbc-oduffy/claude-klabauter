@@ -23,6 +23,9 @@ from coordinator_core.pickup_assemble.tests._git_harness import (
     git as _git,
     init_repo as _init_repo,
 )
+from coordinator_core.session import record_homes
+
+_TARGET_REL = Path(record_homes.record_path("", "handoffs", "target.md")).as_posix()
 
 pytestmark = [
     pytest.mark.cadence,
@@ -49,7 +52,7 @@ def holder_reads_live(monkeypatch):
 
 
 def _seed(repo: Path, name: str, extra_fm: str) -> Path:
-    path = repo / "state" / "handoffs" / name
+    path = Path(record_homes.record_path(str(repo), "handoffs", name))
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
         f'title: "Test Handoff {name}"\n'
@@ -92,13 +95,13 @@ def test_briefing_a_live_baton_twice_mints_nothing_and_enrols_it(
     target_before = target.read_bytes()
 
     for _ in range(2):
-        pb.brief("state/handoffs/target.md", repo_root=repo, claim_at_brief=True)
+        pb.brief(_TARGET_REL, repo_root=repo, claim_at_brief=True)
         cdir = _claims_root(repo) / "target.md"
         assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_BRIEF
 
     assert held.read_bytes() == held_before
     assert target.read_bytes() == target_before
-    assert sorted(p.name for p in (repo / "state" / "handoffs").iterdir()) == [
+    assert sorted(p.name for p in Path(record_homes.home_dir(str(repo), "handoffs")).iterdir()) == [
         "held.md",
         "target.md",
     ]

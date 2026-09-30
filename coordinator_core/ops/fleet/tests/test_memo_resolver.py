@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     suggest_nearest_receiver,
     undeliverable_checkout_refusal,
 )
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 
 @pytest.fixture(autouse=True)
@@ -275,12 +275,12 @@ class TestMachineLocalImplSecondVectorDeterministic:
             assert "MACHINE_LOCAL_IMPL" not in os.environ
 
             monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl_script))
-            assert registry_home() == decoy_machine_local
+            assert registry_home().resolve() == decoy_machine_local.resolve()
             assert read_registry_repos() == {
                 "repos.decoy_receiver": "/nonexistent/decoy-repo"
             }
         finally:
-            shutil.rmtree(durable_dir, ignore_errors=True)
+            rmtree_or_raise(Path(durable_dir), label="memo resolver durable dir")
 
 
 class TestResolveReceiverInboxZeroMatch:

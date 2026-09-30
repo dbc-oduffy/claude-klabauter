@@ -135,11 +135,11 @@ class TestAttachAcceptsPlainYaml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             initiatives_dir = os.path.join(tmp, "initiatives")
             os.makedirs(initiatives_dir)
-            with open(os.path.join(initiatives_dir, "my-init.yaml"), "w") as f:
+            with open(os.path.join(initiatives_dir, "my-init.yaml"), "w", encoding="utf-8") as f:
                 f.write('id: "my-init"\nlabel: "My Initiative"\nstatus: active\n')
 
             record_path = os.path.join(tmp, "silent-failure.yaml")
-            with open(record_path, "w") as f:
+            with open(record_path, "w", encoding="utf-8") as f:
                 f.write(
                     'id: "silent-failure"\n'
                     'label: "Silent Failure"\n'
@@ -151,7 +151,7 @@ class TestAttachAcceptsPlainYaml(unittest.TestCase):
             rc = self._run_attach(record_path, "my-init", initiatives_dir)
             self.assertEqual(rc, 0, self._last_stderr)
 
-            with open(record_path) as f:
+            with open(record_path, encoding="utf-8") as f:
                 new_content = f.read()
 
             parsed = yaml.safe_load(new_content)
@@ -164,17 +164,17 @@ class TestAttachAcceptsPlainYaml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             initiatives_dir = os.path.join(tmp, "initiatives")
             os.makedirs(initiatives_dir)
-            with open(os.path.join(initiatives_dir, "new-init.yaml"), "w") as f:
+            with open(os.path.join(initiatives_dir, "new-init.yaml"), "w", encoding="utf-8") as f:
                 f.write('id: "new-init"\nlabel: "New"\nstatus: active\n')
 
             record_path = os.path.join(tmp, "record.yaml")
-            with open(record_path, "w") as f:
+            with open(record_path, "w", encoding="utf-8") as f:
                 f.write("id: rec-1\ninitiative: old-init\nstatus: active\n")
 
             rc = self._run_attach(record_path, "new-init", initiatives_dir)
             self.assertEqual(rc, 0, self._last_stderr)
 
-            with open(record_path) as f:
+            with open(record_path, encoding="utf-8") as f:
                 parsed = yaml.safe_load(f.read())
             self.assertEqual(parsed["initiative"], "new-init")
             self.assertEqual(parsed["id"], "rec-1")
@@ -183,11 +183,11 @@ class TestAttachAcceptsPlainYaml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             initiatives_dir = os.path.join(tmp, "initiatives")
             os.makedirs(initiatives_dir)
-            with open(os.path.join(initiatives_dir, "an-init.yaml"), "w") as f:
+            with open(os.path.join(initiatives_dir, "an-init.yaml"), "w", encoding="utf-8") as f:
                 f.write('id: "an-init"\nlabel: "A"\nstatus: active\n')
 
             record_path = os.path.join(tmp, "list.yaml")
-            with open(record_path, "w") as f:
+            with open(record_path, "w", encoding="utf-8") as f:
                 f.write("- one\n- two\n")
 
             rc = self._run_attach(record_path, "an-init", initiatives_dir)
@@ -198,17 +198,17 @@ class TestAttachAcceptsPlainYaml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             initiatives_dir = os.path.join(tmp, "initiatives")
             os.makedirs(initiatives_dir)
-            with open(os.path.join(initiatives_dir, "fenced-init.yaml"), "w") as f:
+            with open(os.path.join(initiatives_dir, "fenced-init.yaml"), "w", encoding="utf-8") as f:
                 f.write('id: "fenced-init"\nlabel: "Fenced"\nstatus: active\n')
 
             artifact_path = os.path.join(tmp, "handoff.md")
-            with open(artifact_path, "w") as f:
+            with open(artifact_path, "w", encoding="utf-8") as f:
                 f.write("---\nkind: handoff\n---\nbody text\n")
 
             rc = self._run_attach(artifact_path, "fenced-init", initiatives_dir)
             self.assertEqual(rc, 0, self._last_stderr)
 
-            with open(artifact_path) as f:
+            with open(artifact_path, encoding="utf-8") as f:
                 content = f.read()
             self.assertIn("initiative: fenced-init", content)
             self.assertIn("body text", content)

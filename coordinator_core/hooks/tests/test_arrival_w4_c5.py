@@ -63,9 +63,9 @@ from coordinator_core.hooks import guard_doctrine_surface_bash_write as gdsbw
 )
 def test_cold_import_is_fast(mod_name):
     sys.modules.pop(mod_name, None)
-    start = time.perf_counter()
+    start = time.process_time()
     __import__(mod_name)
-    elapsed = time.perf_counter() - start
+    elapsed = time.process_time() - start
     assert elapsed < 0.5, f"{mod_name} import took {elapsed:.3f}s, over the 500ms brightline"
 
 

@@ -167,109 +167,28 @@ _PUSH_MAX_RETRIES = 3
 #: exhausted budget reports a genuine `failed`, never `unconfirmed`, and the
 #: caller is not left with "unknown" (`docs/wiki/close-ceremony-residue.md`).
 #:
-#: SIZING, measured 2026-08-26 against `github.com` from this box, quiet:
-#:     git ls-remote origin HEAD        p50 669.5ms  (min 610.3, max 701.3)
-#:     git push --dry-run origin HEAD   p50 753.9ms  (min 610.1, max 796.4)
-#: The full ladder is 3 pushes + 2 fetches = 5 network legs ~= 3.8s, plus a local
-#: rebase and the ladder's own `rev-parse`/`rev-list` spawns. The original 12.0s
-#: was ~3x that network cost -- but DR-401 (2026-09-01, see the sibling
-#: `CADENCE_PUSH_RETRY_BUDGET_SECS` docstring below) refutes the `git push
-#: --dry-run` proxy this sizing rests on as underpriced by an order of
-#: magnitude: it never opens a real pack-negotiation/transfer round trip.
-#: Measured directly (DR-401), a genuine no-op `git push` on this box under
-#: its documented 50-70-session load norm ranged 2.07s-15.31s (n=6) --
-#: 12.0s sat BELOW that measured floor, exactly the shortfall DR-401 already
-#: corrected for the cadence sibling. R26 (2026-09-26,
-#: docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md) applies the
-#: same correction here: raised to 18.0 to clear the measured 15.31s worst
-#: case with headroom for THIS ladder's own retry legs (unlike the cadence
-#: sibling's single-attempt shape, this budget spans up to
-#: `_PUSH_MAX_RETRIES` fetch+rebase+re-push cycles) -- deliberately a
-#: DIFFERENT literal from `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) rather
-#: than the same one, so the two remain independently tunable per their own
-#: distinct callers. This constant's own end-to-end guard (`ipc.py`'s 30.0s
-#: dispatch timeout, see below) has ample headroom to absorb the raise, per
-#: `state/audits/2026-09-26-inbox-blitz-fyi-rest-reconfirm.md` (`26-rationale`).
+#: SIZING: the full ladder is 3 pushes + 2 fetches (~3.8s quiet) plus a local rebase, but a no-op
+#: `git push` under the load norm measures 2.07s-15.31s (DR-401). 18.0s clears that worst case with
+#: headroom for up to `_PUSH_MAX_RETRIES` fetch+rebase+re-push cycles, and stays a different literal
+#: from `CADENCE_PUSH_RETRY_BUDGET_SECS` so the two tune independently.
 #:
 #: A CEILING, NEVER A TARGET, and deliberately well under the 30s dispatch guard
 #: so THIS is what stops the ladder and the guard stays a backstop whose breach
 #: means a real defect -- the same shape `ipc.py`'s `_OP_TIMEOUT_OVERRIDES` block
 #: records for `percolate.build_token_index`. Ratchets DOWN only: the remedy for a
 #: ladder that does not fit is a cheaper ladder, never a wider number here. The
-#: measured floor above is the one term nothing in this repo can shrink -- see
-#: the guard test asserting `PUSH_RETRY_BUDGET_SECS >= <this floor>`
-#: (`test_push_retry_budget_vs_p90.py`), mirroring `CADENCE_PUSH_RETRY_BUDGET_SECS`'s
-#: own guard.
+#: measured floor above is the one term nothing in this repo can shrink
 PUSH_RETRY_BUDGET_SECS: float = 18.0
 
-#: C5 (2026-08-30, docs/plans/2026-08-30-the-cockpit-publish-rejoins-the-
-#: push-that-survived.md) sized this at 6.0 from `git ls-remote`/`git push
-#: --dry-run` timings (~600-750ms, quiet) as a stand-in for the cost of a
-#: real `git push`. DR-401 (2026-09-01) supersedes that premise: those two
-#: commands never open a pack-negotiation/transfer round trip the way an
-#: actual `git push` does, so they underpriced the leg they were sized to
-#: stand in for by an order of magnitude. Measured directly (DR-401): a
-#: genuine no-op `git push` (`Everything up-to-date`, nothing to transfer)
-#: on this box under its documented 50-70-session load norm ranges 2.07s to
-#: 15.31s, not the ~750ms the dry-run proxy reported. A 6.0s budget sat
-#: below that floor -- it could time out a push that had already succeeded
-#: server-side and would report `unconfirmed`/`failed` for work that landed.
+#: SIZING (DR-401): a no-op `git push` under the load norm measures 2.07s-15.31s (n=6); `git ls-remote`/
+#: `--dry-run` never open a pack round trip and underpriced it tenfold. 16.0s clears the worst single leg
+#: and covers the dominant one-attempt case; a failed repo retries in `push_cadence.PUSH_CADENCE_INTERVAL_SECS`
+#: regardless. Additive headroom over this budget is derived in each sibling constant's own docstring in
+#: `push_cadence.py` (`SWEEP_TOTAL_CEILING_SECS`, `EXIT_SWEEP_CEILING_SECS`), not a ratio.
 #:
-#: SIZING (DR-401): 16.0s clears the measured worst-case single-leg floor
-#: (15.31s) with headroom, covering the common case (one push attempt) that
-#: dominates cadence traffic -- the retry leg (fetch + `rebase --onto` +
-#: re-push) fires only on the `non-fast-forward` class, not every tick. A
-#: cadence sweep that fails a repo this tick retries in
-#: `push_cadence.PUSH_CADENCE_INTERVAL_SECS` (600s) regardless, so 16.0s
-#: does not need to cover a worst-case retry chain the way the interactive
-#: `PUSH_RETRY_BUDGET_SECS` does -- that 600s backstop is what keeps the
-#: publish guarantee intact at a budget sized for the dominant single-attempt
-#: case. Ratchets in step with `push_cadence.SWEEP_TOTAL_CEILING_SECS`/
-#: `EXIT_SWEEP_CEILING_SECS`, never independently -- CORRECTION (P052-C5,
-#: docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-timeout.md):
-#: the prior wording here claimed both were "re-derived to the same ratios
-#: C5 set (EXIT = 2x this budget, SWEEP_TOTAL > EXIT)"; that was already
-#: false at HEAD (`EXIT_SWEEP_CEILING_SECS` = 17.0 against this 16.0 budget
-#: is +1.0s headroom, not 2x) independent of this plan. The actual
-#: relationship each sibling constant's own docstring in `push_cadence.py`
-#: derives is additive headroom over this budget, not a ratio.
-#:
-#: ARM B (P052-C1, docs/research/2026-09-10-git-push-progress-stall-
-#: measurement.md): the fixed-elapsed budget below stays a RETAINED
-#: FALLBACK, not the primary hang instrument -- `git_native.push_streamed`'s
-#: silence watchdog (`STALL_SILENCE_SECS` = 14.036s, steady-state
-#: inter-line silence) is primary; this 16.0s ladder deadline is the
-#: layered backstop for the case the watchdog cannot see (e.g. the process
-#: never reaching a push leg at all). The two bounds answer different
-#: questions and must not be conflated: `STALL_SILENCE_SECS` is a
-#: steady-state SILENCE window measured between progress lines once
-#: transfer has started; the measured first-line grace (`H` = 0.237s,
-#: spawn-to-first-counter) is smaller still and is NOT this budget -- this
-#: 16.0s number remains the whole-ladder elapsed deadline, unchanged by
-#: either. The surviving total-duration bound for one `push_streamed` call
-#: is `ipc.DISPATCH_TIMEOUT_SECS` (30.0s, the un-raisable end-to-end op
-#: guard) -- named here as the candidate C2's `total_timeout` parameter
-#: takes, so a push that never goes silent (one progress line every
-#: `STALL_SILENCE_SECS - e` forever) is still bounded. This ladder's own
-#: 16.0s deadline (`budget_secs`/`_remaining_or_none`) additionally bounds
-#: every REMOTE leg below -- push, fetch, rebase-recovery, set-upstream --
-#: via the shared `deadline` computed at entry; none of those legs falls
-#: back silently to `git_native`'s own `REMOTE_BUDGET_SECS` default, since
-#: the cadence caller (`push_cadence.py`) always passes `budget_secs`
-#: explicitly (`_remaining_or_none` returns `None`, keeping git_native's
-#: default, ONLY for a caller that never set a budget at all -- see that
-#: function's own docstring).
-#:
-#: MEASURED FLOOR this clears, n=6 direct measurements under the documented
-#: 50-70-session load norm: 2.07s, 2.85s, 5.64s, 8.54s, 14.54s, 15.31s (max
-#: 15.31s). Cross-repo corroboration: `cross-repo/inbox/2026-09-01-project-
-#: rag-em-push-cadence-cap-below-noop-floor.md` measured 7.8-10.0s (n=3) on a
-#: different box the same day. The measurement is kept here and in DR-401
-#: rather than as its own runtime constant (review-integrator, 2026-09-01,
-#: per overengineering-reviewer finding 3): its only consumer was the guard
-#: test asserting `CADENCE_PUSH_RETRY_BUDGET_SECS >= <this floor>`, i.e. a
-#: production symbol that existed so an assertion could be spelled against a
-#: sibling literal set in the same edit.
+#: This ladder deadline is the retained fallback behind `git_native.push_streamed`'s silence watchdog
+#: (`STALL_SILENCE_SECS`); it bounds every remote leg via the shared `deadline`. A single `push_streamed`
+#: call is bounded by `ipc.DISPATCH_TIMEOUT_SECS`.
 CADENCE_PUSH_RETRY_BUDGET_SECS: float = 16.0
 
 #: The push budget for a CEREMONY op, which is a different job from the cadence
@@ -401,12 +320,8 @@ def _is_indeterminate_push_result(result: "git_native.GitResult") -> bool:
     not one git itself reported. Only the timeout text names a result that
     was never observed.
 
-    `result.stall_killed` (P052-C3) is the second, independent arm: a
-    silence-watchdog kill from `git_native.push_streamed` also never observed
-    the push's true outcome -- the child may have already landed the objects
-    server-side before the watchdog terminated it -- so it is `unconfirmed`
-    on the same reasoning as a subprocess timeout, never `failed`. The
-    existing timeout arm's text is unchanged; this is an `or` in front of it.
+    `result.stall_killed` is the second arm: a `push_streamed` silence kill also never observed the
+    outcome (objects may have landed), so it is `unconfirmed`, never `failed`.
     """
     return result.stall_killed or (
         result.returncode == -1 and bool(_PUSH_TIMEOUT_RE.search(result.stderr or ""))
@@ -434,34 +349,13 @@ def resolve_post_push_sha(worktree_root: Union[str, Path], pre_push_sha: Optiona
     threaded out of `push_with_retry`, more invasive, not less).
 
     Verification is by PATCH identity (`git_native.patch_id`), not the
-    token-trailer `git log --grep` the agree branch (`commit()`, above) uses
-    for its OWN pre-push resolution: that mechanism depends on the per-call
-    `Commit-Token:` trailer minted inside `commit()`, which `CommitOutcome`
-    does not carry back to any caller, and threading it out to three call
-    sites (one of which -- the two `consumed_handoff_stamp.py` /
-    `post_commit_tail.py` follow-up commits -- doesn't mint a token at all,
-    using `git_native.commit_scoped` directly) is exactly the "new plumbing"
-    (b) is supposed to avoid. Patch identity, not whole-TREE identity: a
-    `rebase --onto` that only moves a commit's PARENT (the only kind
-    `push_with_retry` performs) reapplies the identical diff, but the
-    resulting TREE (new parent's tree + our diff) is only identical to the
-    pre-push tree (old parent's tree + our diff) when the two parents'
-    trees themselves already matched -- false the moment the concurrent
-    peer commit that forced the reject touches any path disjoint from ours,
-    which is the ordinary rebase-retry case, not an edge case (state/
-    bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
-    cc84495b2bb1.yaml: a whole-tree check false-negatived on exactly this).
-    `patch_id` hashes the diff a commit introduces independent of its
-    parent, so a clean reparent still compares equal while a concurrent
-    peer's DIFFERENT diff does not. Patch identity is checked SECOND, behind
-    an ancestry check, because it cannot see an EMPTY peer commit: an empty
-    commit introduces no diff, and `git patch-id` hashes an empty diff to
-    the same value regardless of commit, so a peer `--allow-empty` landing
-    on top of ours would patch-match a genuinely empty follow-up commit and
-    a patch-id-only check would adopt it. Ancestry separates the two cleanly
-    in every case — a rebase rewrites our commit and so drops it out of the
-    new tip's history, while anything built on top of ours necessarily
-    keeps it as an ancestor.
+    token-trailer `git log --grep` the agree branch uses: `CommitOutcome` carries no `Commit-Token:`
+    back to callers, and two follow-up commits mint none. Patch identity, not whole-TREE identity: a
+    parent-only `rebase --onto` reapplies the identical diff, but the new tree differs whenever a
+    concurrent peer touched a disjoint path -- the ordinary retry case. `patch_id` ignores the parent.
+    Checked SECOND, behind an ancestry check, because an empty commit's diff hashes identically for
+    every commit: a peer `--allow-empty` on top of ours would patch-match. A rebase rewrites our commit
+    out of the new tip's history; anything built on ours keeps it as an ancestor.
     `pre_push_sha` is the caller's own
     already-verified value (`commit_outcome.committed_sha` in
     `run_commit_pipeline`; the pre-push `rev_parse_head()` capture in the
@@ -592,15 +486,8 @@ class PushOutcome:
             1). `None` is the explicit "this path never counted legs" sentinel
             under the same rule as `pushed_count`, and `log_failure` renders
             it `after ?` rather than substituting a number.
-        landed_sha -- the post-push HEAD sha on ANY landed push (`acted ==
-            ["push"]`), set unconditionally whenever the push itself
-            succeeded -- unlike `pushed_range`/`pushed_count`, which stay
-            `None` together on a landed push with no resolvable upstream tip
-            (a genuine first push on a fresh branch, see `pushed_range`'s own
-            docstring). A caller that only needs "what did HEAD become",
-            never "what range did this land", reads this field instead of
-            partitioning `pushed_range` and handling its `None` case itself.
-            `None` on every non-landed outcome, same as `pushed_range`.
+        landed_sha -- the post-push HEAD sha on any landed push, set even when `pushed_range`/
+            `pushed_count` stay `None` (first push on a fresh branch). `None` on a non-landed outcome.
     """
 
     exit_code: int
@@ -1383,11 +1270,8 @@ class _UpstreamInfo(Tuple[str, str, str]):
 
     @property
     def branch_ref(self) -> str:
-        """`refs/heads/<branch-basename>` on the REMOTE side -- the exact
-        refspec target `git push <remote> HEAD:<this>` needs to reach the
-        tracked upstream, derived from `ref_path` (`refs/remotes/<remote>/
-        <basename>`) rather than re-parsing `abbrev`, which is ambiguous
-        for a basename containing `/`.
+        """`refs/heads/<basename>` on the remote: the `git push <remote> HEAD:<this>` target, from `ref_path`
+        (not `abbrev`, which is ambiguous for a basename containing `/`).
         """
         prefix = f"refs/remotes/{self.remote_name}/"
         return "refs/heads/" + self.ref_path[len(prefix):]
@@ -1630,25 +1514,10 @@ def push_with_retry(
     that line, since nothing was in fact overridden (see that call site
     below for the reasoning).
 
-    `use_streamed_push` (P052-C3, 2026-09-10) -- keyword-only, default
-    `False`. When `True`, the push leg's NO-UPSTREAM call
-    (`git_native.push(root, ...)`, the genuine-first-push /
-    day-branch-publish shape) uses `git_native.push_streamed` instead --
-    `git push --progress` watched for a silence stall -- so a hung child is
-    killed on `STALL_SILENCE_SECS` of silence rather than riding the whole
-    `budget_secs` ladder deadline out. A stall-kill sets
-    `GitResult.stall_killed`, which `_is_indeterminate_push_result` now also
-    matches, so it lands in `PushOutcome.unconfirmed`, never `failed` and
-    never retried blind. `push_streamed`'s own `total_timeout` is passed as
-    `ipc.DISPATCH_TIMEOUT_SECS` (30.0s) -- the surviving total-duration
-    bound named in the plan's AC8, so a child that keeps emitting progress
-    lines close together forever is still terminated. `False` (the default)
-    keeps every existing caller -- the interactive ladder, the ceremony
-    push, and this leg when an upstream IS configured (`push_refspec`,
-    untouched by this opt-in) -- byte-identical. NEVER ambient: no env var,
-    no module-level flag; the cadence caller
-    (`ops.push_outstanding.push_outstanding` -> `warm.push_cadence._sweep_one`)
-    is the one sanctioned consumer as of this chunk.
+    `use_streamed_push` (default `False`, never ambient): the no-upstream push uses
+    `git_native.push_streamed`, killed on `STALL_SILENCE_SECS` of silence or `ipc.DISPATCH_TIMEOUT_SECS`
+    total. A stall kill lands in `PushOutcome.unconfirmed`, never `failed`, never retried blind. Only the
+    cadence caller (`ops.push_outstanding.push_outstanding`) passes it.
     """
     root = Path(worktree_root)
 
@@ -1717,19 +1586,10 @@ def push_with_retry(
                 ],
                 attempts=attempt,
             )
-        # A configured upstream is pushed by EXPLICIT refspec
-        # (`HEAD:<upstream_info.branch_ref>`), never a bare `git push`: under
-        # `push.default=simple`, a bare push refuses outright the moment the
-        # tracked upstream's name differs from the local branch's own name --
-        # the standard cloud-harness shape (a local `work/vm/<date>` tracking
-        # a differently-named `origin/claude/<session>`). Naming both sides
-        # resolves the SAME upstream `_resolve_upstream_local` already read
-        # (0 extra spawns) without writing `--set-upstream`, which would
-        # silently repoint tracking rather than publish to what is already
-        # configured. No configured upstream (`upstream_info is None`, a
-        # genuine first push) keeps the prior bare-push behaviour unchanged
-        # -- that shape is handled entirely by the no-upstream-refusal /
-        # `publish_day_branch` arm below.
+        # A configured upstream is pushed by explicit refspec (`HEAD:<branch_ref>`): under
+        # `push.default=simple` a bare push refuses when the upstream's name differs from the local
+        # branch's, and `--set-upstream` would repoint tracking. No upstream keeps the bare push
+        # (handled by the `publish_day_branch` arm below).
         if upstream_info is not None:
             push_result = (
                 git_native.push_refspec(
@@ -1745,12 +1605,8 @@ def push_with_retry(
                 )
             )
         elif use_streamed_push:
-            # P052-C3: the streamed primitive owns its own silence and
-            # total-duration bounds (`STALL_SILENCE_SECS`,
-            # `DISPATCH_TIMEOUT_SECS`) rather than `leg_timeout` -- a stall
-            # kill must fire on silence, not on this ladder's own
-            # per-attempt remainder, which a still-progressing push may
-            # legitimately exceed (AC8/AC9).
+            # `push_streamed` owns its silence and total bounds; `leg_timeout` would kill a
+            # still-progressing push.
             push_result = git_native.push_streamed(
                 root, total_timeout=DISPATCH_TIMEOUT_SECS
             )

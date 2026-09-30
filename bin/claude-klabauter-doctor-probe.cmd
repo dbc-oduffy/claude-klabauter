@@ -13,7 +13,7 @@ REM     launcher -- the PowerShell binder eats a bare `--` before this script
 REM     ever sees argv, silently dropping it and everything meant to follow it.
 REM     Measured against pwsh 7.6.4 -- see coordinator_core/test_bin_launcher_
 REM     parity.py::test_argv_fidelity_matrix.
-REM Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C7
+REM Spec backlink: archive/specs/2026-07/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C7
 REM
 REM Resolves a Python interpreter and runs the co-located entrypoint "claude-klabauter-doctor-probe.py"
 REM directly. install-substrate.py substitutes __PYTHON_BIN__ with the
@@ -38,6 +38,12 @@ REM isolated behind its own `goto` label instead, so `%ERRORLEVEL%` is read
 REM outside any parenthesized block (fresh at that point, not frozen at
 REM block-parse-time) with no delayed expansion needed.
 set "_py=__PYTHON_BIN__"
+REM No placeholder-vs-placeholder test here: install-substrate.py replaces EVERY
+REM __PYTHON_BIN__ occurrence, so such a test compares the baked path against
+REM itself, is unconditionally true, and discards the bake precisely when it
+REM succeeded. The existence test below is the property that actually matters and
+REM already covers the unbaked case -- the literal token is not a path, so it
+REM falls through to the probe tiers on its own.
 if not "%_py%"=="" if exist "%_py%" goto :run_baked
 set "_py="
 

@@ -29,8 +29,9 @@ or refuse-to-delete only.
 
 Successor: the victim's `superseded_by:` field
 (`_common.parse_frontmatter_field`), or else any record whose `supersedes:`
-names the victim's id, collected in the same scan pass. May be absent (as it
-is for DR-316 at authoring time).
+names the victim's id, collected in the same scan pass. May be absent.
+The module text names no deletable record id: a live-surface citation here
+would strand the very record this op exists to delete.
 
 Citation-stranding refusal — ONE batched search, never a per-record spawn:
 a single `git grep -n -w -E 'DR-(<id1>|<id2>|…)' -- <live pathspecs>` spawn
@@ -40,7 +41,7 @@ the candidate set is empty. The live pathspecs
 `docs/decisions`, `docs/reference`, `docs/wiki`, `CLAUDE.md`. Everything
 else — `archive/`, `state/`, `docs/plans/`, `docs/research/`,
 `docs/problems/`, `tasks/`, generated indexes — counts as history and is not
-searched, matching the DR-405 renumbering precedent: "Citations … in
+searched, matching the decision-renumbering precedent: "Citations … in
 archived and frozen artifacts are deliberately left stale: they describe
 what was true when written." A hit on id X is IGNORED when it is in X's own
 file, when it is in X's successor's file (that file IS the live pointer), or
@@ -74,7 +75,6 @@ mirroring `fleet.archive_terminal_sizings` before its close-verb caller.
 Spec: docs/plans/2026-09-11-delete-superseded-drs-and-put-the-prune-rule-to-the-pm.md (C1)
 Spec backlinks:
   - DR-211: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md (D1/D2/D3/D4)
-  - DR-405: renumbering precedent for excluding history surfaces from citation search
   - DR-293: never-infer boundary (status is read, never written)
 
 Negative-spec:
@@ -443,6 +443,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         if dry_run:
             result, scan_skipped = _handle_preview(worktree_root, cap)
+            # A preview must account for every superseded record: candidate or refusal.
+            result["skipped"] = scan_skipped
             n = len(result.get("candidates") or [])
             outcome = "nothing-to-do" if not n else "applied"
             detail = None

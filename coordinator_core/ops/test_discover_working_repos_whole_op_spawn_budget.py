@@ -15,7 +15,7 @@ THREE times on a real invocation:
 ...on BOTH the Tier-A-non-empty branch and the Tier-A-empty/Tier-B branch
 (there, `_tier_a()` contributes 0 and `_tier_b()`'s own `_sort_unique(
 results)[:30]` tail contributes the matching 1). The all-tiers-empty path is
-0: every `_sort_unique` call sees an empty list and early-returns before
+0 from a cwd outside any clone (the cwd clone is itself a candidate): every `_sort_unique` call sees an empty list and early-returns before
 spawning (see that function's `if not lines: return []` guard).
 
 Why this was previously unmeasured: `_tier_a()` reads `Path.home() /
@@ -165,6 +165,9 @@ class TestWholeOpSpawnBudget:
         )
 
     def test_all_tiers_empty_spawns_zero(self, tmp_path, monkeypatch) -> None:
+        """Runs from a cwd with no `.git` above it: `_cwd_repo()` would otherwise
+        contribute the invoking clone, and the merge tail's one sort would spawn."""
+        monkeypatch.chdir(tmp_path)
         assert m._tier_a() == []
 
         monkeypatch.setattr(m, "_TIER_B_CANDIDATES", [str(tmp_path / "does-not-exist")])
@@ -185,6 +188,19 @@ class TestWholeOpSpawnBudget:
             "manifest key spawn_count_budget.op_total_all_empty is missing "
             f"or stale -- measured value is {call_count['n']}"
         )
+
+    def test_cwd_clone_alone_spawns_the_one_merge_sort(self, tmp_path, monkeypatch) -> None:
+        clone = tmp_path / "clone"
+        (clone / ".git").mkdir(parents=True)
+        monkeypatch.chdir(clone)
+        monkeypatch.setattr(m, "_TIER_B_CANDIDATES", [str(tmp_path / "does-not-exist")])
+        monkeypatch.setenv(
+            "MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir")
+        )
+
+        call_count = _install_counting_run(monkeypatch)
+        assert m.main([]) == 0
+        assert call_count["n"] == 1
 
     def test_existing_keys_still_present(self) -> None:
         budget_entry = _manifest_spawn_budget()

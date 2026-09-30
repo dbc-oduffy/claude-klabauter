@@ -41,20 +41,20 @@ from coordinator_core.tests._commit_surface_roster import (
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 COMMENT_DOCSTRING_CEILINGS = {
-    "coordinator_core/ops/ceremony/git_native.py": 3433,
-    "coordinator_core/ops/ceremony/commit_gates.py": 520,
-    "coordinator_core/ops/ceremony/push.py": 1147,
-    "coordinator_core/ops/ceremony/commit_v2.py": 409,
-    "coordinator_core/ops/ceremony/tail_ops.py": 352,
+    "coordinator_core/ops/ceremony/git_native.py": 3423,
+    "coordinator_core/ops/ceremony/commit_gates.py": 519,
+    "coordinator_core/ops/ceremony/push.py": 1130,
+    "coordinator_core/ops/ceremony/commit_v2.py": 401,
+    "coordinator_core/ops/ceremony/tail_ops.py": 267,
     "coordinator_core/git/git_state.py": 379,
-    "coordinator_core/git/git_index.py": 237,
+    "coordinator_core/git/git_index.py": 161,
 }
 
 MARKER_CEILINGS = {
-    "coordinator_core/ops/ceremony/git_native.py": 110,
+    "coordinator_core/ops/ceremony/git_native.py": 109,
     "coordinator_core/ops/ceremony/commit_gates.py": 0,
-    "coordinator_core/ops/ceremony/push.py": 30,
-    "coordinator_core/ops/ceremony/commit_v2.py": 10,
+    "coordinator_core/ops/ceremony/push.py": 24,
+    "coordinator_core/ops/ceremony/commit_v2.py": 9,
     "coordinator_core/ops/ceremony/tail_ops.py": 15,
     "coordinator_core/git/git_state.py": 0,
     "coordinator_core/git/git_index.py": 0,

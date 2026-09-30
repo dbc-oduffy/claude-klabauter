@@ -1222,6 +1222,27 @@ def run():
     assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
 
 
+def test_r10_module_constant_cycle_terminates_unresolved(tmp_path):
+    """A Name cycle between module constants must terminate (bounded hops)
+    and stay unresolved rather than recurse or resolve."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_cyclic_constant.py",
+        """
+_A = _B / "x"
+_B = _A / "y"
+
+def run():
+    _A.write_text("x")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [r for r in records if r.generator == "coordinator_core/gen_cyclic_constant.py"]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
 def test_r5_tempfile_gettempdir_base_excluded(tmp_path):
     _write(
         tmp_path,
@@ -1886,3 +1907,23 @@ def test_c5_modules_keep_concrete_mutates_undeclared(rel_path, concrete_path):
     assert _mutates_concrete_patterns(mutates) == [concrete_path] or concrete_path in _mutates_concrete_patterns(
         mutates
     )
+
+
+@pytest.mark.parametrize(
+    ("module", "concrete_path"),
+    [
+        ("coordinator_core/ops/distill_apply_disposal.py", "state/distillation-log.md"),
+        ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", ".gitignore"),
+    ],
+)
+def test_c5_reasoned_at_site_modules_keep_concrete_mutates_without_generates(module, concrete_path):
+    """The two C5 modules take the reasoned-at-site outcome: the concrete path
+    stays in MUTATES, no GENERATES is declared, and the reasoning is recorded
+    above the declaration."""
+    source = (_REPO_ROOT / module).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert _extract_generates(tree) is None
+    mutates = _extract_mutates(tree)
+    assert isinstance(mutates, list)
+    assert _mutates_concrete_patterns(mutates) == [concrete_path]
+    assert "stays a concrete `MUTATES` path" in source

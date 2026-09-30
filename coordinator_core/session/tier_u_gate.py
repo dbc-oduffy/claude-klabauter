@@ -155,6 +155,12 @@ Negative-spec:
     ``classify_command`` has already returned (in this case, an empty
     match list). The classifier's job stays "what shape is this command,"
     never "what did the repo declare about its own wrapper."
+  - OWN-SUITE LEG (``_resolving_own_tier_from_inside_its_suite``) refuses,
+    before the grant, a pytest-run process resolving this repo's own
+    on-disk tier. Two residuals, deliberately unguarded: the R6
+    ``fast_tier_unscoped_reason`` declaration exit (guarding it would
+    break a fixture repo that declares one), and a child env built from
+    scratch, which drops ``PYTEST_CURRENT_TEST``.
   - Does NOT let the declaration blanket-authorize. It is checked only
     against the LITERAL resolved ``fast_test_cmd`` string for this repo,
     re-resolved here via ``resolve_validation_cmd.cs_resolve_fast_test_cmd``
@@ -248,6 +254,43 @@ def _fast_tier_unscoped_declaration_covers(cmd: str, repo_root: Optional[str]) -
         return False
     resolved = cs_resolve_fast_test_cmd(root, _quiet=True)
     return resolved.exit_code == 0 and resolved.cmd == cmd
+
+
+def _resolving_own_tier_from_inside_its_suite(
+    cmd: str, repo_root: Optional[str]
+) -> Optional[str]:
+    """Return ``fast_test_cmd`` / ``full_test_cmd`` when a pytest-run process
+    is resolving this repo's own on-disk tier; else None.
+
+    Hit requires a non-empty ``PYTEST_CURRENT_TEST`` AND ``cmd`` equal to, or
+    extending by a space, the key's value read from ``repo_root``'s own
+    ``coordinator.local.md``. The on-disk read (never the env-overridable
+    ``cs_resolve_fast_test_cmd``) keeps stub-injecting tests out of reach.
+
+    Inheritance inversion: ``engine_provenance_counter.record_engine_provenance``
+    wants the inherited ``PYTEST_CURRENT_TEST`` snapshot as its signal; here,
+    as in ``telemetry.op_latency.invocation_origin``, the inherited snapshot is
+    the hazard -- a test's child carries a live ceremony's grant with it.
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    root = repo_root if repo_root is not None else os.getcwd()
+    for key in ("fast_test_cmd", "full_test_cmd"):
+        configured = cs_read_local_md_key(root, key)
+        if configured and (cmd == configured or cmd.startswith(configured + " ")):
+            return key
+    return None
+
+
+def _own_suite_refusal(key: str, tier: str) -> TierUGateResult:
+    return TierUGateResult(
+        proceed=False,
+        refusal_message=(
+            f"Refusing to run: a test process (PYTEST_CURRENT_TEST is set) "
+            f"resolved this repo's own {key} (Tier {tier}).\n"
+            "Point COORDINATOR_FAST_TEST_CMD at a stub."
+        ),
+    )
 
 
 def _fast_tier_shape_declaration(repo_root: Optional[str]) -> Optional[str]:
@@ -409,6 +452,9 @@ def enforce_tier_u_gate(
         # PM ruling 2026-08-04, the grant ask is the only Tier-F escape
         # hatch; a stale fast_tier_unscoped_reason declaration must not
         # discharge a Tier-F command for free.
+        own_key = _resolving_own_tier_from_inside_its_suite(cmd, repo_root)
+        if own_key:
+            return _own_suite_refusal(own_key, "F")
         granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
         if granted:
             return TierUGateResult(proceed=True)
@@ -432,6 +478,10 @@ def enforce_tier_u_gate(
     # Tier-U leg (detected Tier U, or UNCLASSIFIABLE declared unscoped).
     if _fast_tier_unscoped_declaration_covers(cmd, repo_root):
         return TierUGateResult(proceed=True)
+
+    own_key = _resolving_own_tier_from_inside_its_suite(cmd, repo_root)
+    if own_key:
+        return _own_suite_refusal(own_key, "U")
 
     granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
     if granted:

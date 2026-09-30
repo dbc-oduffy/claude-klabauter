@@ -174,10 +174,12 @@ def _run_one_cycle(
     --staged").
     """
     spawn_total = [0]
+    spawn_argv_chars: List[int] = []
     real_spawn = asyncio.create_subprocess_exec
 
     async def _counting_spawn(*argv, **kwargs):
         spawn_total[0] += 1
+        spawn_argv_chars.append(sum(len(str(a)) + 1 for a in argv[4:]))
         return await real_spawn(*argv, **kwargs)
 
     lookup_candidate_counts: List[int] = []
@@ -198,6 +200,7 @@ def _run_one_cycle(
     result = dict(result)
     result["_process_time_ms"] = elapsed_ms
     result["_git_spawns"] = spawn_total[0]
+    result["_git_spawn_pathspec_chars"] = spawn_argv_chars
     result["_archive_lookup_calls"] = len(lookup_candidate_counts)
     result["_archive_candidate_reads"] = sum(lookup_candidate_counts)
     return result
@@ -381,11 +384,18 @@ def test_memo_overflow_corpus_survives_the_argv_budget_and_dirty_memo_is_retaine
         f"result={result!r}"
     )
     assert dirty_record["path"].exists(), "dirty memo must still be present in the inbox on disk"
-    assert result["_git_spawns"] == 1, (
-        f"the overflow branch must still spawn exactly 1 git process (the "
-        f"inherited main-index resync), unchanged from the non-overflow "
-        f"case -- a second spawn here means the generalised "
-        f"fallback_pathspecs fix regressed: result={result!r}"
+    from coordinator_core.ops.fleet._common import _ARGV_PATHSPEC_BUDGET
+
+    chars = result["_git_spawn_pathspec_chars"]
+    expected_spawns = max(1, -(-sum(chars) // _ARGV_PATHSPEC_BUDGET))
+    assert all(c <= _ARGV_PATHSPEC_BUDGET for c in chars), (
+        f"a resync argv exceeded the pathspec budget: result={result!r}"
+    )
+    assert result["_git_spawns"] == expected_spawns, (
+        f"the main-index resync must spawn one git process per "
+        f"{_ARGV_PATHSPEC_BUDGET}-char pathspec chunk and no more (tmp-path "
+        f"length decides whether this corpus needs 1 or 2 chunks): "
+        f"result={result!r}"
     )
 
 

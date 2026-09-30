@@ -591,10 +591,6 @@ def declared_deletion_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
-# ---------------------------------------------------------------------------
-# Carry gate
-# ---------------------------------------------------------------------------
-
 _HANDOFF_PATH_RE = re.compile(r"^state/handoffs/[^/]+\.md$")
 
 _CARRY_GATE_RESTAGE_HINT = (
@@ -702,10 +698,6 @@ def carry_gate(
     return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
 
 
-# ---------------------------------------------------------------------------
-# Attribution gate
-# ---------------------------------------------------------------------------
-
 _ATTRIBUTION_GATE_REMEDY = (
     "state the purpose, invariant or trap without naming the reviewer."
 )
@@ -714,13 +706,9 @@ _ATTRIBUTION_GATE_REMEDY = (
 def _head_text(
     spine: Optional[dict], common_dir: Path, path: str
 ) -> Optional[str]:
-    """The decoded text of `path`'s blob per `spine` (a `read_tree_spine`
-    result), or `None` when the path is absent from the spine, the blob is
-    unreadable, or it is not valid UTF-8 -- all three read as "no HEAD
-    source", mirroring `commit_v2.py::_blob_source`'s own posture (this
-    module deliberately keeps its own copy rather than importing that
-    private helper across modules -- see this file's own negative-spec on
-    cross-module coupling). Never raises.
+    """The decoded text of `path`'s blob per `spine`, or `None` if absent, unreadable, or not UTF-8.
+
+    Own copy of `commit_v2.py::_blob_source`'s posture; never raises.
     """
     if spine is None:
         return None
@@ -745,49 +733,17 @@ def attribution_gate(
     deliberate_stage: bool = False,
 ) -> GateOutcome:
     """Refuse a commit whose staged content ADDS a reviewer-attribution line
-    (`coordinator_core.attribution.scan_added_lines`) to a non-exempt
-    tracked path -- a sibling to `carry_gate` and `deletion_block_gate`
-    (same module, same `GateOutcome` shape), in-process and zero-spawn.
+    (`coordinator_core.attribution.scan_added_lines`) to a non-exempt tracked path.
 
-    Reads only:
-      1. `is_exempt_path` -- pure string compare, no IO. Filters
-         `gate_paths` to `remaining` FIRST; an empty `remaining` returns
-         `skipped=True` having read nothing.
-      2. HEAD bytes for `remaining`, one scoped `read_tree_spine` +
-         `read_object` per path -- the same object-cache-warm read
-         `commit_v2._pre_commit_guard_sources` already makes.
-      2b. Rename sources: `_staged_deletions_and_renames_in_process` is
-          called ONCE over the UNFILTERED `gate_paths` (not `remaining`),
-          so a rename source under an exempt root (e.g. a purge rewrite
-          moving a `state/` file into tracked source) still resolves. Every
-          returned deletion/rename source's HEAD text is pooled -- lines
-          joined into ONE old-side text -- and used as `old_text` for
-          EVERY path in `remaining` that HEAD does not have. `old_text` is
-          `None` only when the commit vacates no HEAD path at all (no
-          deletion, no rename source).
-      3. New bytes: worktree `read_text()`. For a path in `prefer_staged`,
-         or every path when `deliberate_stage`, the staged index blob is
-         also read (`parse_index_identity` + `read_object`) and scanned
-         too when it differs from the worktree text -- a superset scan,
-         never a miss of what will actually commit.
-      4. A path the worktree no longer has is a deletion candidate UNLESS
-         the index still carries a blob for it (checked via the same
-         `parse_index_identity` call, made for every path in `remaining`
-         so this holds regardless of `prefer_staged`) -- that blob is what
-         `commit_paths` will actually commit, so it is scanned, not
-         skipped as a deletion.
-      5. Undecodable (non-UTF-8) bytes are binary and are skipped.
+    In-process and zero-spawn: `read_tree_spine`/`read_object`/`parse_index_identity` only.
+    Exempt paths are filtered first; an empty remainder returns `skipped=True`. `old_text` is the
+    path's HEAD text, else the pooled HEAD text of every deletion/rename source (resolved over the
+    UNFILTERED `gate_paths`, since a source may sit under an exempt root), else `None`. New bytes are
+    the worktree text, plus the staged blob when `prefer_staged`/`deliberate_stage` and it differs;
+    a path gone from the worktree but still staged scans its staged blob. Non-UTF-8 is skipped.
 
-    All reads route through `read_tree_spine`/`read_object`/
-    `parse_index_identity`, none of which spawns a subprocess -- no `git`
-    process is reachable from this function.
-
-    Diagnostics are `<path>:<line_no>: adds reviewer attribution
-    ("<match>")`, capped at 5, followed by exactly one remedy line in the
-    guard-messaging register (WHAT HAPPENED, already stated per-line; WHAT
-    TO DO INSTEAD, stated once).
-
-    There is no override key and no bypass.
+    Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, capped at 5, then one
+    remedy line. No override key, no bypass.
     """
     root = Path(worktree_root)
     remaining = [p for p in gate_paths if not is_exempt_path(p)]
@@ -797,8 +753,7 @@ def attribution_gate(
     common_dir = resolve_git_common_dir(root)
     spine = read_tree_spine(root, remaining)
 
-    # Rename-source pool -- resolved over the UNFILTERED gate set (a rename
-    # source may itself sit under an exempt root), never over `remaining`.
+    # Rename-source pool: over the UNFILTERED gate set (a source may sit under an exempt root).
     try:
         staged_deletions, rename_sources = _staged_deletions_and_renames_in_process(
             root, set(gate_paths)
@@ -816,10 +771,7 @@ def attribution_gate(
                 rename_pool_lines.extend(text.splitlines())
     rename_pool_text = "\n".join(rename_pool_lines) if rename_pool_lines else None
 
-    # Index identities for EVERY path in `remaining` -- needed both for
-    # step 3's staged-scan widening (`prefer_staged`/`deliberate_stage`) and
-    # step 4's worktree-missing-but-still-staged check, which applies
-    # regardless of either flag.
+    # Index identities for every path in `remaining`: staged-scan widening and the staged-only check.
     try:
         index_identities = parse_index_identity(root, wanted=set(remaining))
     except (IndexParseError, _IndexV4ParseError):
@@ -863,12 +815,9 @@ def attribution_gate(
             if widen and index_text is not None and index_text != worktree_text:
                 candidates.append(index_text)
         elif index_text is not None:
-            # Worktree-missing but still staged -- that blob is what
-            # actually commits, so it is scanned, not treated as a
-            # deletion (step 4).
+            # Worktree-missing but still staged: that blob is what commits, so scan it.
             candidates.append(index_text)
-        # else: a genuine deletion (worktree gone, no staged blob) -- no
-        # bytes to scan.
+        # else: a genuine deletion -- no bytes to scan.
 
         for new_text in candidates:
             for match in scan_added_lines(new_text, old_text, path):
@@ -883,10 +832,6 @@ def attribution_gate(
     capped.append(_ATTRIBUTION_GATE_REMEDY)
     return GateOutcome(passed=False, skipped=False, diagnostics=capped)
 
-
-# ---------------------------------------------------------------------------
-# Op-scope coverage gate
-# ---------------------------------------------------------------------------
 
 _REGISTRY_MAP_RELPATH = "coordinator_core/ops/_registry_map.py"
 _OP_SCOPES_RELPATH = "coordinator_core/op_scopes.py"
@@ -999,25 +944,14 @@ def op_scope_coverage_gate(
     """Refuse a commit staging `_registry_map.py` that would register an op with no
     matching `_OP_KEY_SCOPE` entry.
 
-    Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are two
-    independently-maintained tables -- registering an op in the former carries no
-    structural requirement to add it to the latter, and an omitted entry silently
-    defaults to `"none"` scope (see `op_scopes.py`'s own module docstring) rather than
-    failing loud. Three ops (`ceremony.chunk_commits`, `chain_ancestry_waivers.reap`,
-    `scratchpad.sweep`) shipped this way at once; for `chain_ancestry_waivers.reap` the
-    default was actively wrong -- its REMOVE-ONLY reaper fell back to the engine
-    process's cwd instead of the caller's worktree, exactly the state its own module
-    docstring carries a DO-NOT-RUN-AGAINST-THE-LIVE-TREE warning for. This gate is the
-    commit-time backstop `test_dispatch_message.py::
-    test_op_key_scope_table_covers_all_registered_ops` already proves as a predicate,
-    but that test only fires when someone happens to run that file -- this makes the
-    same check unavoidable at the point the omission is introduced.
+    Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are maintained independently,
+    and an op omitted from the latter silently defaults to `"none"` scope rather than failing loud
+    (wrong for `chain_ancestry_waivers.reap`, whose reaper then fell back to the engine's cwd). This
+    makes `test_dispatch_message.py::test_op_key_scope_table_covers_all_registered_ops` unavoidable
+    at commit time.
 
-    Direction is deliberately one-way: only `OP_MODULE_MAP - _OP_KEY_SCOPE` (a
-    registered-but-unclassified op) is a violation. `_OP_KEY_SCOPE` legitimately carries
-    more entries than `OP_MODULE_MAP` (225 vs 222 at gate-authoring time) -- test-only or
-    legacy scope entries with no live registry counterpart are not a defect this gate has
-    any business flagging.
+    One-way: only `OP_MODULE_MAP - _OP_KEY_SCOPE` (registered but unclassified) is a violation;
+    `_OP_KEY_SCOPE` legitimately carries entries with no live registry counterpart.
 
     Scope filter: `skipped=True`, no file read at all, unless `_registry_map.py` is
     among `gate_paths` -- a commit that does not touch the registry has nothing for this
@@ -1044,14 +978,8 @@ def op_scope_coverage_gate(
         "predicate could not be evaluated" case above. See `_extract_dict_str_keys`'s own
         docstring and `_MultipleModuleBindingsError`.
 
-    Protects against an op silently defaulting to
-    `"none"` scope for lack of an `_OP_KEY_SCOPE` entry -- git has no notion
-    of this cross-table registration invariant, only file content. Every
-    call re-reads both source files and re-parses their dict literals fresh;
-    nothing persists between calls. Outlet: the EM authoring the op
-    registration adds the missing entries per `_OP_SCOPE_GATE_REMEDY`
-    (printed in the diagnostics above), re-stages, and re-invokes -- a fresh
-    sub-second gate call, no human wait.
+    Every call re-reads and re-parses both files; nothing persists. Remedy: add the missing entries
+    per `_OP_SCOPE_GATE_REMEDY`, re-stage, re-invoke.
     """
     gate_scope: Set[str] = set(gate_paths)
     if _REGISTRY_MAP_RELPATH not in gate_scope:
@@ -1161,10 +1089,6 @@ def op_scope_coverage_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
 _PROG_NAME = "check-workstream-complete-deletion-blocks.sh"
 
 
@@ -1175,23 +1099,9 @@ def _parse_cli_args(argv: Sequence[str]) -> Optional[tuple]:
     a bare `--` with zero trailing paths is equivalent to omitting it
     (whole-index mode), matching the original's header comment.
 
-    Pathspec separator normalisation (2026-08-26 bug-backlog, P2+P3) lives
-    HERE, not at any one caller -- `gate_scope` in `deletion_block_gate` is
-    an exact-string set built from `git diff --cached --name-status`
-    output, which always spells paths with forward slashes; any pathspec
-    producer that hands over a Windows-separated path would otherwise drop
-    silently out of scope. Normalising in this one shared parse point
-    covers every caller by construction (a directive builder, a hand
-    invocation, a future sibling ceremony) rather than depending on each
-    one replicating the same `.replace` call.
-
-    PLATFORM-CONDITIONAL (`os.name == "nt"`), not a blanket strip: a
-    backslash is always a path separator on Windows and never legal in a
-    filename there, but on POSIX it is a legal filename character. An
-    unconditional strip would rewrite a genuine POSIX filename containing
-    a backslash into a path that matches nothing, silently dropping it out
-    of the gate's scope -- the same silent narrowing this normalisation
-    exists to prevent, in the other direction.
+    Pathspec separators are normalised here, once, for every caller: `gate_scope` is an exact-string
+    set built from `git diff --cached --name-status` (forward slashes). Conditional on `os.name == "nt"`:
+    on POSIX a backslash is a legal filename character and stripping it would drop the path from scope.
     """
     if len(argv) < 1:
         return None

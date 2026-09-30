@@ -1057,8 +1057,16 @@ def test_percolation_and_path_steps_enabled_writes_rc_block(monkeypatch, tmp_pat
     assert calls[0]["sentinel_id"] == "SETTINGS_HOME_BIN"
 
 
-def test_c10a_steps_disabled_does_not_replace_legacy_whoami(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+@pytest.mark.parametrize("mutation_disabled", [True, False])
+def test_c10a_steps_leave_legacy_whoami_dir_alone(monkeypatch, tmp_path, mutation_disabled):
+    """Step C10a-1 (legacy `coordinator-whoami` real dir -> compat pointer) is
+    retired: `_c10a_steps` never replaces the dir, whatever the mutation
+    guard says."""
+    if mutation_disabled:
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    else:
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+        monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     install_base = tmp_path / "home"
     settings_home_path = tmp_path / "settings-home"
     plugin_root = tmp_path / "plugin-root"
@@ -1077,42 +1085,8 @@ def test_c10a_steps_disabled_does_not_replace_legacy_whoami(monkeypatch, tmp_pat
     rc = _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False)
 
     assert rc == 0
-    assert legacy_whoami.is_dir() and not legacy_whoami.is_symlink(), (
-        "disabled mutation must not replace the legacy real dir with a pointer"
-    )
-    assert "REFUSED" in capsys.readouterr().err
-
-
-def test_c10a_steps_enabled_replaces_legacy_whoami(monkeypatch, tmp_path):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
-    install_base = tmp_path / "home"
-    settings_home_path = tmp_path / "settings-home"
-    plugin_root = tmp_path / "plugin-root"
-    bin_dst = settings_home_path / "bin"
-    for d in (install_base, settings_home_path, plugin_root, bin_dst):
-        d.mkdir(parents=True)
-
-    legacy_whoami = install_base / ".claude" / "coordinator-whoami"
-    legacy_whoami.mkdir(parents=True)
-    (legacy_whoami / "marker").write_text("real dir", encoding="utf-8")
-
-    dst_whoami = settings_home_path / "coordinator-whoami"
-    dst_whoami.mkdir(parents=True)
-    (dst_whoami / "marker").write_text("already relocated", encoding="utf-8")
-
-    rc = _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False)
-
-    assert rc == 0
-    # `Path.is_symlink()` only detects the NTFS `IO_REPARSE_TAG_SYMLINK` tag
-    # -- the Windows branch here creates a directory junction
-    # (`IO_REPARSE_TAG_MOUNT_POINT` instead), which `is_symlink()` reports
-    # as False even though it IS the compat pointer this asserts for. Use
-    # this repo's own `is_pointer` (symlink-OR-junction) instead — see its
-    # docstring for the identical idempotence bug this sidesteps.
-    assert _shared.is_pointer(legacy_whoami), (
-        "with the guard unset the legacy real dir must still be replaced by a compat pointer"
-    )
+    assert not _shared.is_pointer(legacy_whoami)
+    assert (legacy_whoami / "marker").read_text(encoding="utf-8") == "real dir"
 
 
 def test_c10a_steps_without_allow_venv_fallback_skips_venv_step_entirely(monkeypatch, tmp_path, capsys):

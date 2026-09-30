@@ -412,7 +412,7 @@ def _emit_test_red_record(ft_rc: int, ft_content: str, classify_rc: int) -> None
 
         outcome = "green" if ft_rc == 0 else ("build-failure" if classify_rc == 2 else "test-failures")
         runner, failing = parse_failing_nodeids(ft_content)
-        repo_root = os.getcwd()
+        repo_root = str(_REPO_ROOT)
         with recording_declared_writes(cwd=repo_root):
             write_test_red_record(
                 repo_root=Path(repo_root),

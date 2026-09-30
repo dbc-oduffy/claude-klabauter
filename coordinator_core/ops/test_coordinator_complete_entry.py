@@ -23,6 +23,9 @@ import pytest
 from coordinator_core.ops import coordinator_complete_entry as m
 from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.session import record_homes
+
+_HANDOFF_H = Path(record_homes.record_path("", "handoffs", "h.md")).as_posix()
 
 # Declared, not excused: this file spawns real git because the module under test
 # writes real commit-completion state (frontmatter, idempotency guard) that its own
@@ -1068,7 +1071,7 @@ class TestResolveSessionCommits:
 
         m._resolve_session_commits(
             str(repo), _HEX_SID, "2026-09-01",
-            frozenset({"docs/plans/my-plan.md", "state/handoffs/h.md"}),
+            frozenset({"docs/plans/my-plan.md", _HANDOFF_H}),
         )
 
         assert len(fake.calls) == 2
@@ -1079,14 +1082,14 @@ class TestResolveSessionCommits:
         sep = scoped_argv.index("--")
         assert scoped_argv[sep + 1:] == [
             ":(literal)docs/plans/my-plan.md",
-            ":(literal)state/handoffs/h.md",
+            f":(literal){_HANDOFF_H}",
         ]
 
     def test_entry_scope_paths_normalises_plan_and_handoff(self, tmp_path):
         repo = str(tmp_path)
-        abs_handoff = os.path.join(repo, "state", "handoffs", "h.md")
+        abs_handoff = record_homes.record_path(repo, "handoffs", "h.md")
         scope = m._entry_scope_paths(repo, "my-plan", abs_handoff)
-        assert scope == frozenset({"docs/plans/my-plan.md", "state/handoffs/h.md"})
+        assert scope == frozenset({"docs/plans/my-plan.md", _HANDOFF_H})
         assert m._entry_scope_paths(repo, "", "") == frozenset()
 
     def test_end_to_end_real_git_warns_on_peer_commit_of_plan(self, tmp_path):

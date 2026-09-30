@@ -283,7 +283,13 @@ def _parse_core_inventory(path: Path) -> tuple[CoreRegister, ...]:
 
 
 def _core_45() -> tuple[CoreRegister, ...]:
-    return _parse_core_inventory(_CORE_INVENTORY_PATH)
+    """The inventory's registers whose file still exists. A deliberately deleted register file
+    leaves the population here; leg 2 (`register_population.json`) is what reports the vanish."""
+    return tuple(
+        core
+        for core in _parse_core_inventory(_CORE_INVENTORY_PATH)
+        if (REPO_ROOT / core.register.repo_relative_path).is_file()
+    )
 
 
 def _is_subject_leaf(value: str) -> bool:

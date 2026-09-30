@@ -38,8 +38,9 @@ _CORE = _REPO_ROOT / "coordinator_core"
 #: `commit_scoped` and `commit_authored_content`). Matches the argv-literal
 #: convention every producer in this repo already writes ("never a bare
 #: `git commit`, never shell=True" -- see each producer's own docstring),
-#: so a NEW raw-commit call site is caught by this same shape.
-_COMMIT_ARGV_RE = re.compile(r'\[\s*["\']commit(-tree)?["\']')
+#: so a NEW raw-commit call site is caught by this same shape. The lookbehind
+#: excludes a dict subscript like `report["commit"]`, which is not an argv list.
+_COMMIT_ARGV_RE = re.compile(r'(?<![\w\])])\[\s*["\']commit(-tree)?["\']')
 
 #: Producers wired to the ledger (C5/C11) -- each file below is expected to
 #: call (or, for `git_native.py`, contain the deferred import of)

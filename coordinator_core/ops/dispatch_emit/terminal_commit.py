@@ -81,6 +81,7 @@ from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.ops.dispatch_emit.commit_request import (
     PREFIX_CLAIM_LABEL,
     CommitRequest,
@@ -276,7 +277,7 @@ def _stamp_coded_commit(
 
     def restore() -> None:
         for rel, text in originals.items():
-            (worktree_root / rel).write_text(text, encoding="utf-8", newline="")
+            replace_text(worktree_root / rel, text)
 
     for plan_rel in sorted(source_rows):
         original = _read_rel(worktree_root, plan_rel)
@@ -289,7 +290,7 @@ def _stamp_coded_commit(
         if invalid is not None and check_plan_tasks_source(original) is None:
             restore()
             return {"coded_stamp_error": f"{plan_rel}: stamped spine fails schema: {invalid}"}
-        (worktree_root / plan_rel).write_text(updated, encoding="utf-8", newline="")
+        replace_text(worktree_root / plan_rel, updated)
         originals[plan_rel] = original
         rows_coded[plan_rel] = flipped
 

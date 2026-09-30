@@ -123,7 +123,7 @@ def _normalise_for_compare(text: str) -> str:
     which is exactly how a baked shim reads as drifted.
     """
     text = text.replace("\r", "")
-    return _BAKED_PY_LINE.sub(_TOKEN_PY_LINE, text)
+    return _BAKED_PY_LINE.sub(lambda _m: _TOKEN_PY_LINE, text)
 
 
 def _is_native_image(path: Path) -> bool:

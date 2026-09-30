@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import (
     batched_process_time_ms,
     single_invocation_tree_process_time,
@@ -59,6 +60,7 @@ def _run(argv: list, k: int, once: bool) -> dict:
 
 
 def main(argv: list = None) -> int:
+    declare_benchmark_origin()
     raw_argv = sys.argv[1:] if argv is None else argv
 
     if "--" in raw_argv:

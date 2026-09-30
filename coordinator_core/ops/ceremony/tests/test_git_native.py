@@ -2967,6 +2967,9 @@ def test_push_streamed_silent_but_clean_exit_is_not_a_hang(tmp_path, monkeypatch
     assert result.stderr == ""
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="asserts the total-duration bound kills a never-silent child: a deadline that CPU time cannot see"
+)
 def test_push_streamed_never_silent_but_terminated_by_total_bound(tmp_path, monkeypatch):
     """(d) AC8 -- a child that emits a progress line every
     `silence_secs - epsilon` forever is still terminated by the surviving

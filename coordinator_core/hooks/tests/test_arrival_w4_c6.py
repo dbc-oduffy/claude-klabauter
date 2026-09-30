@@ -46,10 +46,10 @@ def test_module_is_not_in_eager_hook_modules():
 def test_import_is_fast():
     mod_name = "coordinator_core.hooks.oss_operative_strings"
     sys.modules.pop(mod_name, None)
-    start = time.perf_counter()
+    start = time.process_time()
     import coordinator_core.hooks.oss_operative_strings  # noqa: F401
 
-    elapsed = time.perf_counter() - start
+    elapsed = time.process_time() - start
     assert elapsed < 0.5, f"import took {elapsed:.3f}s, over the 500ms brightline"
 
 

@@ -162,7 +162,7 @@ def test_uproject_present_missing_trust_caveats(tmp_path: Path) -> None:
     assert violations[0].startswith("detector-output missing: *.uproject present in repo (")
     assert violations[0].endswith(
         "sub/Game.uproject) but ## Trust caveats section absent — regenerate "
-        "via bin/regenerate-orientation-cache"
+        "via bin/regenerate-orientation-cache.py"
     )
 
 

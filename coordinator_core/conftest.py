@@ -74,6 +74,7 @@ for _mod_name in [
         del sys.modules[_mod_name]
 
 from coordinator_core import memo_corpus
+from coordinator_core.benchmarks.isolated_clone import CloneTeardownLeak, rmtree_or_raise
 
 # Box-scoped, not directory-scoped: admission thresholds come from machine-local, so a
 # configured, loaded box would make every CLI-driving test hold up to `max_hold_s`
@@ -299,6 +300,9 @@ _REAL_DOE_CROSS_REPO_MEMO_SCHEMA_RELPATH = os.path.join(
 _STUB_DOE_SEED_RELPATHS = (
     _REAL_DOE_MANIFEST_RELPATH,
     _REAL_DOE_CROSS_REPO_MEMO_SCHEMA_RELPATH,
+    # dispatch.emit's plan route refuses to emit without an execute-review stage.
+    os.path.join("coordinator", "contract", "review-roster-fragment.json"),
+    os.path.join("coordinator", "schemas", "review-stage.schema.json"),
 )
 
 
@@ -550,7 +554,9 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
         def _drop_warm_base() -> None:
             try:
-                shutil.rmtree(_warm_base, ignore_errors=True)
+                rmtree_or_raise(_warm_base, label="conftest warm runtime base")
+            except CloneTeardownLeak:
+                raise
             except Exception:  # noqa: BLE001 -- see above
                 for parent, dirnames, filenames in _REAL_WALK(_warm_base, topdown=False):
                     for name in filenames:

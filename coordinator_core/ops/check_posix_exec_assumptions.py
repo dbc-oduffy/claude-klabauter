@@ -799,26 +799,6 @@ _PLAN_TASKS_RESOLVE_REASON = (
     "its shape is among this directory's other ~60 same-shaped entrypoints."
 )
 
-_SCOPED_GIT_COMMIT_REASON = (
-    "coordinator/bin/scoped-git-commit — the POSIX leg of a deliberate "
-    "two-leg pair, not a portability hole. The Windows leg is the tracked "
-    "sibling coordinator/bin/scoped-git-commit.cmd, generator-owned by "
-    "coordinator/bin/gen-launcher-shim.py (2026-07-19 Windows de-bash "
-    "campaign) — it resolves a Python interpreter and runs this exact "
-    "entrypoint python-direct, no bash re-exec. On POSIX the shebang + exec "
-    "bit ARE the invocation mechanism (this is a direct-run CLI, not merely "
-    "typed-as-bare-word) — the em-operating-doctrine's `scoped-git-commit` "
-    "PATH-bareword invocation shape depends on it; on Windows the `.cmd` is "
-    "the actual invocation path and this file's shebang/mode bit are inert. "
-    "Both legs are demonstrably present, satisfying the module's admission "
-    "test. Not baseline-eligible: this file gained its shebang/exec bit "
-    "today (edbf2cd18, fixing a real misfire — direct invocation without "
-    "them silently failed), and the baseline is a frozen, shrink-only "
-    "anchor that cannot grow to cover a new violation, however "
-    "well-precedented its shape is among this directory's other ~60 "
-    "same-shaped entrypoints."
-)
-
 _M8_REVIEW_TRAIL_SNAPSHOT_REASON = (
     "FROZEN REVIEW-EVIDENCE SNAPSHOT, not live code. Everything under this "
     "prefix is a verbatim point-in-time copy of the claude-klabauter engine's own "
@@ -968,32 +948,6 @@ _REASON_CHMOD_RMTREE_UNBLOCK = (
     "same rmtree failure for a read-only directory tree. The broad literal "
     "is the correct, minimal construct for a callback that does not know "
     "in advance which of the two node types it was called for."
-)
-
-_REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
-    "Admission test: the path_separator/posix_mode_bits two-way "
-    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
-    "vs-carveout.md)'s 'Known residual' shape -- a genuine structural "
-    "Windows guard in a form `_is_windows_guarded()` cannot see (here, "
-    "split across two functions rather than a same-function branch/"
-    "early-return), not a hypothetical or a route-around. Satisfied "
-    "because the guard is independently verifiable by reading the two "
-    "functions' own contracts, cited below. "
-    "`os.access(script_path, os.X_OK)` in `_run_one_entrypoint` only runs "
-    "when `interpreter is None`, and `_resolve_entrypoint_gate_interpreter` "
-    "(the sole producer of that value, called once per `run_entrypoint_gate` "
-    "sweep) returns `None` if-and-only-if `os.name != \"nt\"` -- see that "
-    "function's own docstring and its `if os.name != \"nt\": return None` "
-    "body. The guard is real, just expressed across two functions rather "
-    "than as a local branch `_is_windows_guarded()` can see -- that "
-    "function only walks the enclosing FUNCTION's own AST (an inline `If`, "
-    "an `and`-chain, or a same-function bare early-return), never a "
-    "second function's return-value contract, so a cross-function guard "
-    "like this one is structurally out of its reach regardless of shape -- "
-    "this call never executes on Windows, where `os.access(..., os.X_OK)` "
-    "would otherwise lie (returns True for any readable file). Restructuring "
-    "the call site to satisfy the detector would not change what actually "
-    "runs; the invariant already holds."
 )
 
 _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP = (
@@ -1213,27 +1167,6 @@ _REASON_HASATTR_FCHMOD_FEATURE_GUARD = (
     "for a construct that already ports correctly."
 )
 
-_REASON_ACCESS_XOK_TEST_ASSERTION_DEGRADES = (
-    "Admission test: the path_separator/posix_mode_bits two-way "
-    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
-    "vs-carveout.md), CARVE-OUT side ('a permission-bit construct whose "
-    "Windows behavior is a platform semantic gap no code change can "
-    "close') -- satisfied because `os.access(path, os.X_OK)` on Windows "
-    "returns True for any readable file regardless of actual "
-    "executability, so this assertion degrades to a vacuous pass there "
-    "rather than a wrong decision. `os.access(slot, os.X_OK)` here is a "
-    "TEST ASSERTION verifying a property `_write_agent_forwarder` "
-    "establishes, not a production decision input the code branches on -- "
-    "nothing reads this value back to choose behaviour. On Windows the "
-    "assertion is trivially true and the test still passes; it verifies "
-    "less there, which is a known, named limitation (same discipline as "
-    "`_REASON_CHMOD_DIR_GAP`'s directory-chmod gap), not silently-passing "
-    "debt or a defect this call could fix by porting -- there is no "
-    "Windows-native equivalent 'is this file executable' primitive this "
-    "stdlib call could be swapped for that would make the assertion "
-    "meaningful there."
-)
-
 #: Fleet repo keys these exemptions are granted FOR. Values are the
 #: `repos.<key>` machine-local registry vocabulary (== `repo_key_for_root`
 #: of that repo's canonical clone directory), named here so a typo in a
@@ -1250,7 +1183,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/scoped-git-commit": _SCOPED_GIT_COMMIT_REASON,
         },
     },
     "extensionless_exec": {
@@ -1259,7 +1191,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/scoped-git-commit": _SCOPED_GIT_COMMIT_REASON,
         },
     },
     "mode_100755": {
@@ -1268,7 +1199,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/scoped-git-commit": _SCOPED_GIT_COMMIT_REASON,
         },
     },
     "path_separator": {
@@ -1302,7 +1232,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
             "coordinator_core/bash_guards/tests/test_write_bump_marker.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
             "coordinator_core/tests/test_verify_templates_bin_sync.py": _REASON_CHMOD_MODE_PRESERVATION,
-            "coordinator_core/percolate/engine.py": _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY,
             "coordinator/bin/refresh-plugin-live-install.py": _REASON_CHMOD_RMTREE_UNBLOCK,
             # C7-install (2026-08-13): shape (c), the one place an
             # EXEMPTIONS entry is the FIRST choice -- a pytest.mark.skipif
@@ -1349,7 +1278,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # real FIX in this batch, `_settings_home.py`'s
             # `resolve_machine_local_cli`, was ported in this same change
             # rather than exempted -- see its `os.name != "nt"` guard.
-            "coordinator_core/bash_guards/tests/test_advisory_session_dedupe.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/install/tests/test_bin_family_refresh.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_credential_directory_is_hardened.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_door_credential.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
@@ -1364,7 +1292,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # exec-bit-dependent, POSIX-only end to end, same shape as
             # `_REASON_CHMOD_EXEC_FOR_SH`'s sites elsewhere in this dict.
             "coordinator_core/install/sandbox_check.py": _REASON_CHMOD_EXEC_FOR_SH,
-            "coordinator_core/install/tests/test_forwarder_write_never_writes_through_a_hardlink.py": _REASON_ACCESS_XOK_TEST_ASSERTION_DEGRADES,
             "coordinator_core/orientation/regenerate_cache.py": _REASON_HASATTR_FCHMOD_FEATURE_GUARD,
             "coordinator_core/orientation/test_regenerate_cache.py": _REASON_CHMOD_RELATIVE_INVARIANT,
             "coordinator_core/warm/election.py": _REASON_POSIX_ONLY_MODULE_CROSS_FUNCTION_GAP,

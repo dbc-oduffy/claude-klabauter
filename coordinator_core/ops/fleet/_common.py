@@ -1327,7 +1327,7 @@ def _bump_open_resync_failure_row(
         count = count if isinstance(count, int) and count >= 1 else 1
         line = f"occurrences: {count + 1}\n"
         if re.search(r"^occurrences:.*$", text, flags=re.M):
-            text = re.sub(r"^occurrences:.*\n?", line, text, count=1, flags=re.M)
+            text = re.sub(r"^occurrences:.*\n?", lambda _m: line, text, count=1, flags=re.M)
         else:
             text = text if text.endswith("\n") else text + "\n"
             text += line

@@ -780,9 +780,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/git_scope.py",
         "coordinator_core/hooks/auto_push.py",
         "coordinator_core/hooks/context_pressure_precompact.py",
-        "coordinator_core/hooks/day_branch_assert.py",
         "coordinator_core/hooks/example_retrieval_repo_detect.py",
-        "coordinator_core/hooks/subagent_fabrication_check.py",
         "coordinator_core/install/clone_sibling_repo.py",
         "coordinator_core/install/first_run.py",
         "coordinator_core/install/prereq_probe.py",
@@ -825,7 +823,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/emit/sections/_shared.py",
         "coordinator_core/ops/emit/sections/handoff_columns.py",
         "coordinator_core/ops/ensure_doe_clone.py",
-        "coordinator_core/ops/fan_out_integrator.py",
         "coordinator_core/ops/gate_dimension_review.py",
         "coordinator_core/ops/generate_exec_summary.py",
         "coordinator_core/ops/generator_provenance.py",
@@ -844,7 +841,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/promote_shipped_in_flight_stubs.py",
         "coordinator_core/ops/propagate_body.py",
         "coordinator_core/ops/reap_in_flight_claims.py",
-        "coordinator_core/ops/reap_orphaned_agent_dirs.py",
         "coordinator_core/ops/record_history.py",
         "coordinator_core/ops/release_tagging.py",
         "coordinator_core/ops/renormalize_index.py",
@@ -862,7 +858,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/staleness_git.py",
         "coordinator_core/ops/strategic/version_highlights.py",
         "coordinator_core/ops/sync_main.py",
-        "coordinator_core/ops/tracker/push_suggestion.py",
         "coordinator_core/ops/verify_arch_audit_atlas_refresh.py",
         "coordinator_core/ops/verify_fix_files_changed.py",
         "coordinator_core/ops/verify_orientation_cache_sync.py",
@@ -926,7 +921,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/git_scope.py", "FOREIGN_REPO_GIT_TIMEOUT_SECONDS"),
         ("coordinator_core/hooks/auto_push.py", "GIT_PUSH_TIMEOUT_SECS"),
         ("coordinator_core/hooks/auto_push.py", "GIT_READ_TIMEOUT_SECS"),
-        ("coordinator_core/hooks/subagent_fabrication_check.py", "_GIT_STATUS_TIMEOUT_SECONDS"),
         ("coordinator_core/install/first_run.py", "_PUBLISH_ROUND_ADVISORY_BUDGET_SECS"),
         ("coordinator_core/install/prereq_probe.py", "_NETWORK_PROBE_TIMEOUT_SECS"),
         ("coordinator_core/machine_resolver.py", "_GIT_TIMEOUT"),
@@ -942,7 +936,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/ops/create_github_remote.py", "_NETWORK_TIMEOUT"),
         ("coordinator_core/ops/detect_changed_dependency_manifests.py", "_GIT_TIMEOUT_SECONDS"),
         ("coordinator_core/ops/draft_plan_aging.py", "_GIT_LOG_TIMEOUT_SECS"),
-        ("coordinator_core/ops/fan_out_integrator.py", "_SUBPROCESS_TIMEOUT_SECS"),
         ("coordinator_core/ops/gate_dimension_review.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/generate_exec_summary.py", "_SUBPROCESS_TIMEOUT_SECS"),
         ("coordinator_core/ops/merge_branch_into_workstream.py", "_GIT_TIMEOUT"),
@@ -984,8 +977,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 196
-_PINNED_DIAL_CEILING = 70
+_PINNED_RUNNER_CEILING = 191
+_PINNED_DIAL_CEILING = 68
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1027,10 +1020,8 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "commit"),
-        ("coordinator_core/hooks/day_branch_assert.py", "_current_branch", "branch"),
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
-        ("coordinator_core/ops/fan_out_integrator.py", "_git_current_branch", "branch"),
         ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),
         ("coordinator_core/ops/git_maintenance.py", "run_tier", "prune"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "add"),
@@ -1051,7 +1042,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 41
+_PINNED_VERB_CEILING = 39
 
 
 def _runner_message(sites: list) -> str:

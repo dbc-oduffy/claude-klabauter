@@ -27,6 +27,8 @@ from coordinator_core.telemetry.op_latency import _NON_PRODUCTION_ORIGINS, UNKNO
 
 SCHEMA_VERSION = "1"
 
+GENERATES = []  # writes only to the caller-supplied `--out` path, never a tracked artifact
+
 
 def build_manifest(
     repo_root: Path,
@@ -120,7 +122,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     text = json.dumps(build_manifest(repo_root, since=args.since), indent=2)
     print(text)
     if args.out is not None:
-        args.out.write_text(text + "\n", encoding="utf-8")
+        args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
     return 0
 
 

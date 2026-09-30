@@ -43,7 +43,7 @@ class TestVendoredFallbackRung(unittest.TestCase):
         self.settings_home = os.path.join(self._tmp, "settings-home")
         os.makedirs(os.path.join(self.settings_home, "machine-local"))
         with open(
-            os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w"
+            os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w", encoding="utf-8"
         ) as fh:
             fh.write("schema = 1\n")
         self.home = os.path.join(self._tmp, "home")

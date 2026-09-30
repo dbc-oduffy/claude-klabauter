@@ -23,13 +23,13 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import client
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
 _REAL_ENGINE_TOKEN = client.engine_token
 
@@ -66,7 +66,7 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="warm runtime base")
 
 
 @pytest.fixture(autouse=True)

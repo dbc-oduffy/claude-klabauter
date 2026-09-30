@@ -65,7 +65,7 @@ def test_clean_no_missing_qualified_and_extensioned(tmp_path: Path):
     content_root = tmp_path / "doe"
 
     _write_claude_klabauter_oracle(agent_bin, "foo.py")
-    _write_claude_klabauter_oracle(agent_bin, "bar.js")
+    _write_claude_klabauter_oracle(agent_bin, "bar.py")
     _write_doe_fence(content_root, "skills", "SKILL.md", "Run `coordinator/bin/foo` then `coordinator/bin/bar.js`.")
 
     result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
@@ -82,7 +82,7 @@ def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
     content_root = tmp_path / "doe"
 
-    _write_claude_klabauter_oracle(agent_bin, "query-records.js")
+    _write_claude_klabauter_oracle(agent_bin, "query-records.py")
     _write_doe_fence(
         content_root,
         "skills",
@@ -97,11 +97,11 @@ def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
     assert result.missing == ["lint-frontmatter"]
 
 
-def test_extension_normalization_qualified_citation_matches_js_oracle(tmp_path: Path):
+def test_extension_normalization_qualified_citation_matches_py_oracle(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
     content_root = tmp_path / "doe"
 
-    _write_claude_klabauter_oracle(agent_bin, "query-records.js")
+    _write_claude_klabauter_oracle(agent_bin, "query-records.py")
     _write_doe_fence(content_root, "commands", "workday-start.md", "Run two `coordinator/bin/query-records` calls.")
 
     result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
@@ -162,7 +162,7 @@ def test_qualified_citation_trailing_period_does_not_swallow_punctuation(tmp_pat
     agent_bin = tmp_path / "claude-klabauter-bin"
     content_root = tmp_path / "doe"
 
-    _write_claude_klabauter_oracle(agent_bin, "query-records.js")
+    _write_claude_klabauter_oracle(agent_bin, "query-records.py")
     _write_doe_fence(content_root, "skills", "SKILL.md", "See coordinator/bin/query-records.")
 
     result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)

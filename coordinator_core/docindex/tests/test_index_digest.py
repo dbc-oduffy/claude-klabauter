@@ -33,6 +33,7 @@ from pathlib import Path
 
 import yaml
 
+from coordinator_core.cartography._skip_dirs import SKIP_DIR_NAMES
 from coordinator_core.docindex.compare import CompareError, extract_region, region_digest
 from coordinator_core.frontmatter.primitives import split_frontmatter
 
@@ -41,20 +42,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 # coordinator_core/frontmatter/tests/test_roadmap_approval_identity.py's convention.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_SKIP_DIR_NAMES = frozenset(
-    {
-        ".git",
-        "node_modules",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "dist",
-        "build",
-        "state",
-        "archive",
-        "tasks",
-    }
-)
+_SKIP_DIR_NAMES = SKIP_DIR_NAMES | {"state", "archive", "tasks"}
 
 
 def _discover_self_declaring_index_docs() -> list[Path]:

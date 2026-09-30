@@ -284,7 +284,7 @@ def main(argv: list[str]) -> int:
         print(
             "usage: execute-plan-assemble apply <plan-path> [--autonomous] "
             "[--session-id <id>]",
-            file=sys.stderr if argv else sys.stdout,
+            file=sys.stdout if argv else sys.stderr,
         )
         return apply_base.APPLY_EXIT_OK if argv and argv[0] in ("--help", "-h") else 2
 
