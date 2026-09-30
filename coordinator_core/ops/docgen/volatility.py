@@ -113,6 +113,9 @@ REDACTED_TOKEN = "<REDACTED>"
 
 MINT_FIELDS: frozenset[str] = frozenset({"deliverable_id", "branch"})
 
+# Volatility mechanism 3: no carry path, always minted/derived fresh.
+# "run_id" (audit-record's run_id_placeholder field,
+# date-derived via _today() with no CLI carry path) was a real registry gap,
 # previously patched only in the C6 test's private _LOCAL_EXTRA_REDACT.
 TIME_FIELDS: frozenset[str] = frozenset(
     {
@@ -167,7 +170,24 @@ def _p(field: str, flag: str | None = None, *, value_field: str | None = None) -
     return FieldPolicy(field=field, injectable_flag=flag, value_field=value_field)
 
 
+# Per-type volatile-field policy — the closed set, exhaustive over all 22
+# extracted types (C2's templates/*.json). A type absent from this dict (or
+# present with an empty tuple) carries NO volatile fields at all — see
 # DETERMINISTIC_TYPES below for the two such types this audit found.
+#
+# Verified line-for-line against templates/*.json's declared frontmatter field
+# keys (not merely the oracle's ``main()``) — e.g. ``goal-seed`` carries
+# ``branch``/``handoff_id`` but NOT ``deliverable_id`` (excluded from the
+# oracle's ``_spine_types`` set) — a real asymmetry, not an omission.
+# ``roadmap-baton`` USED TO carry ``deliverable_id`` but NOT ``handoff_id``
+# (excluded from the oracle's handoff-id-minting doc_type tuple) — that
+# exclusion was a break-class defect (AC13, docs/plans/2026-08-01-baton-
+# spine-information-integrity.md § A5): minted roadmap batons carried
+# ``stub_id``/``deliverable_id`` with no ``handoff_id`` at all, so any
+# fleet-side consumer joining on ``handoff_id`` missed the entire
+# roadmap-baton record class. Fixed at the same commit as this comment —
+# ``roadmap-baton`` now carries ``handoff_id`` like every other
+# handoff-family doc_type below.
 _POLICY: dict[str, tuple[FieldPolicy, ...]] = {
     "audit-record": (
         _p("created"),
@@ -304,7 +324,18 @@ def redact_text(text: str, doc_type: str, *, token: str = REDACTED_TOKEN) -> str
     for field in redact_only_fields_for(doc_type):
         pattern = re.compile(rf"^(\s*{re.escape(field)}:[ \t]*).*?(\r?)$", flags=re.MULTILINE)
         text = pattern.sub(lambda m: m.group(1) + token + m.group(2), text)
+    marker = _MARKER_DATE_PATTERNS.get(doc_type)
+    if marker is not None:
+        text = marker.sub(lambda m: m.group(1) + token + m.group(2), text)
     return text
+
+
+# Closed set of comment-line volatiles that ``key:`` matching cannot reach. Only the date
+# slot of the exact ``<!-- spinoff: {created} by`` marker prefix is redacted; ``who`` and
+# ``authoring_session`` are context-deterministic and stay compared.
+_MARKER_DATE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "spinoff": re.compile(r"^(<!-- spinoff: )[^ \t\r\n]+( by )", flags=re.MULTILINE),
+}
 
 
 class VolatilitySetError(AssertionError):

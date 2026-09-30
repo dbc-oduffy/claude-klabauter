@@ -43,7 +43,10 @@ def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, t
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    # machine_local_impl_resolve
     # .claude_home() consults CLAUDE_CONFIG_DIR before CLAUDE_HOME; leaving it
+    # unpinned would let an ambient dev-box/CI value silently override the
+    # fixture and resolve against a real path instead of tmp_path.
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
     candidates = _rrp._machine_local_path_candidates()
@@ -84,7 +87,13 @@ def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(m
     assert "machine-local CLI not found" in captured.err
 
 
+# ---------------------------------------------------------------------------
+# coordinator_registry.py — split-repo manifest fallback: settings-home
+# candidate must be tried before the mirror candidate. Exercised via a real
+# subprocess import (import-time behavior) with fake machine-local
+# executables planted at each candidate location so which one "wins" is
 # externally observable from the resulting _MANIFEST_PATH.
+# ---------------------------------------------------------------------------
 
 _FAKE_ML_SCRIPT = """#!/usr/bin/env python3
 import sys
@@ -165,6 +174,8 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
+        # No .pop() here: env is
+        # a from-scratch dict built by _base_env(), which never populates
         # CONTENT_ROOT/REPO_CONTENT_ROOT in the first place (unlike os.environ.copy()).
 
         result = _run_registry_import_subprocess(env)

@@ -127,9 +127,20 @@ _SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4)
 _V4_ONLY_FIELDS = ("excluded_consumer", "eligible_glob")
 
 # `delivery` is REQUIRED from schema_version 3 onward; on a v1/v2 registry it is
+# absent everywhere and defaults to "paste", which is what those versions meant
+# implicitly.
 _VALID_DELIVERIES = ("paste", "inject")
 
+# Sibling-plugin (example-game-workbench-repo) file-exists conditional consumers are
 # ALWAYS at the flat live-install layout ($CLAUDE_HOME-or-$HOME/.claude/plugins/
+# example-game-workbench-repo/...), decoupled from plugin_root — mirrors the retired
+# bash oracle's unconditional $HOME anchoring ("Sibling plugin entries keep
+# $HOME because they are always at the flat install layout"). Resolving these
+# relative to plugin_root is only correct when plugin_root itself IS that
+# live-install path; when plugin_root is the DoE SOURCE tree (the real
+# --plugin-dir production resolution path per coordinator-content-repo's own CLAUDE.md), a
+# plugin_root-relative resolution silently lands on a nonexistent/wrong-layout
+# path and all 14 example-game-repo/game-dev conditional consumers vanish with no error.
 _SIBLING_PLUGIN_MARKER = "../../example-game-workbench-repo/"
 
 

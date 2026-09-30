@@ -144,7 +144,10 @@ def test_missing_description_raises_value_error():
         _run(_workflow_scaffold({"name": "demo"}))
 
 
+# ---------------------------------------------------------------------------
 # (e) ROUND-TRIP drift guard (AC7) — via dispatch_message, the real C2<->C3
+# runtime coupling, not just an import of the handler.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
@@ -166,8 +169,19 @@ def test_round_trip_scaffold_output_validates_clean(tmp_path, pattern):
     assert result["error_count"] == 0
 
 
+# ---------------------------------------------------------------------------
+# (f) AC7a — hand-authored fixture corpus (large, realistic, populated
+# agent() prompt bodies) + hand-mutated malformed variants.
+#
+# NOTE (deviation, documented per the plan's AC7a instruction): no real
+# shipped fleet Workflow .mjs corpus exists in-repo at C3-authoring time —
 # this fixture is SYNTHESIZED to be representative of the shipped shape
+# (multi-phase, parallel fan-out, populated multi-sentence agent() prompts),
+# not copied from a real script. It intentionally reuses the C2 large-fixture
 # scaffolding shape (test_workflow_validate.py's LARGE_REALISTIC_SCRIPT) but
+# is authored independently here so C3's own test module does not import
+# C2's test module as a fixture source.
+# ---------------------------------------------------------------------------
 
 LARGE_REALISTIC_FIXTURE = '''\
 export const meta = {

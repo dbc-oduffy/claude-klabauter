@@ -277,6 +277,17 @@ def test_a_pulled_plan_is_reported_and_left_alone(tmp_path):
     assert _status(root, plan) == "draft"
 
 
+def test_a_pull_naming_no_plan_lands_as_pulled_not_refused(tmp_path):
+    """A planner that declines a duplicate writes no plan; the pull is the outcome."""
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1", "reason": "duplicate"}]})
+
+    assert out["pulled"] == out["pulled_without_plan"] == ["b-1"]
+    assert out["refused"] == []
+
+
 def test_a_pulled_plan_writes_the_missing_link_and_leaves_status_alone(tmp_path):
     """The regression this row exists for: an unlinked `pulled` plan must gain the
     baton->plan edge so a later `plan_gate` read stops reporting `plan: None` and
@@ -1268,10 +1279,9 @@ def test_a_pulled_pm_decision_carries_no_plan_and_is_not_refused(tmp_path):
     assert out["pulled"] == ["b-1"]
 
 
-def test_a_pulled_verdict_on_a_PLANNABLE_route_still_refuses_a_missing_plan(tmp_path):
-    # The carve-out is per-route, not a blanket tolerance: a route that DOES carry a
-    # plan must still refuse when the verdict names none, or the landing would silently
-    # skip the baton->plan link the `pulled` lane exists to repair.
+def test_a_pulled_verdict_on_a_PLANNABLE_route_naming_no_plan_is_reported_not_refused(tmp_path):
+    # A pull is the verdict; the link is a repair. Naming no plan lands the pull and names the
+    # baton in `pulled_without_plan`, so a skipped link is visible without stopping the loop.
     root = _repo(tmp_path)
     _baton(root, "b-1", deliverable_id="dlv-b-1")
 
@@ -1280,8 +1290,8 @@ def test_a_pulled_verdict_on_a_PLANNABLE_route_still_refuses_a_missing_plan(tmp_
         {"waveIndex": 0, "pulled": [{"batonId": "b-1", "route": "plan", "planPath": None}]},
     )
 
-    assert [r["baton"] for r in out["refused"]] == ["b-1"]
-    assert "planPath" in out["refused"][0]["reason"]
+    assert out["refused"] == []
+    assert out["pulled"] == out["pulled_without_plan"] == ["b-1"]
 
 
 def test_a_ready_verdict_on_a_pm_only_route_is_refused_not_crashed(tmp_path):
@@ -1329,16 +1339,15 @@ def test_every_pm_only_route_is_accepted_by_the_pulled_lane(tmp_path):
         assert out["pulled"] == ["b-1"]
 
 
-def test_a_verdict_carrying_no_route_still_refuses_a_missing_plan(tmp_path):
-    # An unknown or absent route stays on the REFUSING side: a legacy wave result with no
-    # `route` must still get the baton->plan link repair the pulled lane exists for,
-    # rather than being silently skipped as plan-free.
+def test_a_verdict_carrying_no_route_reports_a_missing_plan(tmp_path):
+    # An unknown or absent route is treated as plan-carrying: the skipped link is named.
     root = _repo(tmp_path)
     _baton(root, "b-1", deliverable_id="dlv-b-1")
 
     out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1"}]})
 
-    assert [r["baton"] for r in out["refused"]] == ["b-1"]
+    assert out["refused"] == []
+    assert out["pulled_without_plan"] == ["b-1"]
 
 
 # ---------------------------------------------------------------------------

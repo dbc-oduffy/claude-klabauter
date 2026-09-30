@@ -177,6 +177,9 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
             redirect_target = tokens[i + 1]
             if redirect_target == _DEVNULL_TARGET:
                 # Exact `/dev/null` only -- see `_DEVNULL_TARGET`'s own
+                # docstring. Every other token in this segment is still
+                # scanned normally by this same loop and by the
+                # `head_base`-driven branches below.
                 continue
             targets.append(redirect_target)
 
@@ -192,7 +195,12 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
         if len(positional) >= 2:
             targets.append(positional[-1])
     elif head_base == "mkdir":
+        # `mkdir` can create multiple directories in one invocation; every
+        # positional argument is its own target. Triggered regardless of
+        # `-p` presence -- a bare `mkdir /elsewhere/dir` is exactly as
+        # real a foreign-repo write as `mkdir -p /elsewhere/dir`, and the
         # plan's own enumeration ("mkdir -p") names the OBSERVED shape from
+        # the two cited incidents, not an exhaustive gate on the flag.
         targets.extend(positional)
     elif head_base == "sed":
         targets.extend(_sed_inplace_targets(args))
@@ -215,10 +223,23 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
     return targets
 
 
+#: PowerShell cmdlet-shaped write-sink table (C4e follow-up, 2026-08-07,
 #: `docs/reference/guard-dialect-coverage.md` row 15). ADDITIVE to the
 #: `WRITE_SINK_BINARIES` table above, not a replacement -- `cp`/`mv`/`tee`/
+#: `mkdir`/`install`/`sed`/`rsync`/`tar` stay a BASH-only table exactly as
 #: before; this is a SEPARATE, PowerShell-only table for the cmdlets C3's
+#: triage named as the genuinely unmatched gap (row 15's own worked list):
+#: `New-Item`, `Set-Content`, `Add-Content`, `Copy-Item`, `Move-Item`,
+#: `Out-File`, `Tee-Object`. `cp`/`mv` PowerShell ALIASES are deliberately
+#: NOT duplicated here (C3's triage: they already fire via alias collision
+#: on the bash-shaped classifier reused elsewhere in this fleet); `>`/`>>`
+#: are the same operator characters in both dialects and are likewise left
+#: alone here, not re-derived. Every entry is a lowercased FULL cmdlet name
+#: only -- short aliases (`ni`, `sc`, `ac`, `cpi`, `mi`) are NOT covered,
+#: same "do not enumerate evasions" posture the rest of this module
+#: applies; a caller consulting this table must lowercase its own head
 #: token first, mirroring `WRITE_SINK_BINARIES`'s own basename-normalize
+#: contract.
 PS_WRITE_SINK_CMDLETS = frozenset(
     {"new-item", "set-content", "add-content", "copy-item", "move-item", "out-file", "tee-object"}
 )
@@ -294,7 +315,11 @@ def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> L
     return targets
 
 
+#: `Set-Location` and its built-in aliases (`cd`, `sl`, `chdir`) -- the
+#: PowerShell-leg cwd-tracking parity fix (2026-08-07/08, backlog row
+#: `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`).
 #: Lowercased full names only, matching `PS_WRITE_SINK_CMDLETS`'s own
+#: "caller lowercases its head token first" contract.
 PS_SET_LOCATION_ALIASES = frozenset({"set-location", "cd", "sl", "chdir"})
 
 
@@ -369,13 +394,20 @@ def nearest_existing_ancestor(path: str) -> Optional[str]:
     return None
 
 
+#: Windows drive-letter absolute form, e.g. `C:\Users\...` or `C:/Users/...`.
+#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
 #: `_WINDOWS_DRIVE_ABSOLUTE_RE` -- `bash_guards` must not import `coordinator_
+#: core.ops` (see `translate_msys_path`'s own docstring for why).
 _WINDOWS_DRIVE_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
+#: Git-for-Windows MSYS toplevel drive-mount form, e.g. `/c/Users/...`.
+#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
 #: `_MSYS_ABSOLUTE_RE`, same provenance note as above.
 _MSYS_ABSOLUTE_RE = re.compile(r"^/[A-Za-z]/")
 
+#: A bare drive-mount with no trailing path segment at all, e.g. `/c` or
 #: `/C` -- `_MSYS_ABSOLUTE_RE` requires a trailing `/`, so this second
+#: pattern exists purely to catch that one-segment edge the first misses.
 _MSYS_BARE_DRIVE_RE = re.compile(r"^/[A-Za-z]$")
 
 
@@ -538,15 +570,64 @@ def resolve_relative(base: str, target: str) -> Optional[str]:
     return native.join(b, t)
 
 
+# ---------------------------------------------------------------------------
+# Interpreter-payload write-sink extraction (C5 plan "the outside-repo bump
+# never looks inside an interpreter body", 2026-08-14, see the PM-ratified
 # reversal recorded in this module's own top docstring). SEPARATE from
+# `extract_write_sink_targets_for_segment` above and NEVER consumed by C4
+# (`bump_foreign_repo_write.py`) -- opted in by `bump_outside_repo_write.py`
+# (C5) only. Operates on the RAW command STRING, not an already-tokenized
+# segment: by the time `_command_tokenizer.resolve_command_positions` hands
+# back tokenized segments, a heredoc BODY has already been stripped
+# (`_strip_heredocs`, deliberately, for its 33 other consumers), so the
+# write-sink shapes this section recognizes are only ever visible in the
+# raw text.
+# ---------------------------------------------------------------------------
 
 _PYTHON_C_FLAG_INTERPRETERS = frozenset({"python", "python3"})
 
+#: Quoted-string literal, single- or double-quoted, with escape support --
 #: matched with a NEGATIVE LOOKBEHIND against an immediately preceding
+#: identifier character, so a bare variable name butted up against a quote
+#: never matches.
+#:
 #: VALUE-PRESERVING PREFIXES ARE ADMITTED; `f` IS NOT. The prefix set below
+#: (`r`/`b`/`u`, and the `rb`/`br` pairs, either case) names exactly those
+#: prefixes whose literal TEXT is the value -- for `r'...'` more literally
+#: than for a plain quote, not less. `f'...'` stays excluded, and that
+#: exclusion is the one the plan's AC5 actually argues for ("an f-string ...
+#: yields NOTHING"): this module has no Python parser, does not evaluate an
+#: interpolation, and treating an f-string as a literal path would be simply
+#: wrong. Lumping `r` in with `f` was collateral from one lookbehind serving
+#: both -- a raw string interpolates nothing. `fr`/`rf` stay excluded too:
+#: the lookbehind still sees the `f` on either arm.
+#:
 #: NOT A SINK-TABLE WIDENING. No new write shape is recognized here.
+#: ``Path(r'x').write_text(...)`` is the SAME shape as ``Path('x').
+#: write_text(...)``; only the string-literal reader was failing to see its
+#: own literal. On Windows -- first-class in this repo -- a raw string is the
+#: idiomatic spelling for a backslash path, which is precisely the absolute,
+#: repo-crossing shape ``bump_outside_repo_write`` exists to catch, so the
+#: gap sat directly under this module's own purpose. Measured 2026-08-31:
+#: ``Path(r'S/X.md').write_text('x')`` and ``open(r'S/X.md','w')`` each
+#: yielded NO target while their unprefixed twins yielded one.
+#:
+#: The escape alternation is unchanged and stays correct for a raw string's
+#: SPAN; the captured value is used as ``group(...)[1:-1]`` with no
+#: unescaping anywhere in this module, so raw and cooked literals of the
+#: same text yield the identical string.
+#:
 #: WHY THE FAMILY IS WIDER THAN THE EVIDENCE (Kira, 2026-08-31). ``r`` is the
+#: only prefix with a measured defect behind it; ``b``/``u``/``rb``/``br`` are
+#: admitted by the same value-preserving argument in the paragraph above, not
 #: by any observed shape. They are in because EXCLUDING them would need its
+#: own justification -- a ``b'...'`` path operand is legal Python and its span
+#: and captured value behave identically here -- not because anyone was seen
+#: writing one. ``f``/``fr``/``rf`` remain deliberately OUT and that IS
+#: evidence-backed: an f-string's value is not knowable from its span, so
+#: reading one would yield a target that is not the path written. If this
+#: alternation is ever narrowed, narrow it to ``[rR]`` and keep the f-string
+#: exclusion; do not narrow by deleting the lookbehind.
 _PY_LITERAL_PREFIX = r"(?:[rRbBuU]|[rR][bB]|[bB][rR])?"
 _PY_QUOTED_LITERAL = (
     r"(?<![A-Za-z0-9_])"
@@ -573,7 +654,25 @@ _PY_SHUTIL_RE = re.compile(
 )
 
 
+#: ONE alternation, tried in encounter order at each scan position -- see
+#: `_strip_comments_and_docstrings` for why this replaced two sequential
+#: passes (code-reviewer sidecar `ffbcb84d`, findings 1 and 2, EM-directed
+#: fix). `re.sub` scans left to right and, at each position, tries
+#: alternatives in the order written, so whichever construct's opener
+#: STARTS FIRST in the text wins -- exactly the ordering semantics a
+#: two-pass strip cannot express, since the second pass has no memory of
+#: what the first pass already consumed:
+#:
+#:   1. `"""..."""` / `'''...'''` -- a PAIRED triple-quoted block, non-greedy.
+#:   2. `#...` to end of line -- a comment, tried only once no paired
+#:      triple-quote opens earlier at this position.
 #:   3. `"""...` / `'''...` to END OF TEXT -- an UNTERMINATED triple-quote
+#:      opener with no matching close anywhere in the remaining text. Only
+#:      reached when neither #1 nor #2 matched at this position, i.e. this
+#:      is a real string-literal opener, not a comment containing a stray
+#:      `"""`/`'''` token (that case is caught by #2 first, since the `#`
+#:      that starts the comment necessarily precedes the stray quote chars
+#:      inside it).
 _PY_COMMENT_OR_STRING_RE = re.compile(
     r'"""[\s\S]*?"""'
     r"|'''[\s\S]*?'''"
@@ -643,7 +742,11 @@ _PY_BIND_PATH_RE = re.compile(
     re.MULTILINE,
 )
 
+#: Any OTHER assignment to a name (`NAME =`, `NAME +=`, `for NAME in`,
+#: `with ... as NAME`, `NAME, x =`). A name matching this anywhere in the
 #: body beyond its single `_PY_BIND_PATH_RE` binding is DROPPED rather than
+#: resolved -- "never a guess" applies to rebinding exactly as it applies to
+#: a variable receiver.
 _PY_REBIND_RE = re.compile(
     r"^[ 	]*(?:for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b"
     r"|([A-Za-z_][A-Za-z0-9_]*)\s*(?:[-+*/|&^]|//|\*\*|>>|<<)?=(?!=)"
@@ -655,6 +758,7 @@ _PY_BOUND_WRITE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:write_text|write_bytes)\("
 )
 
+#: `NAME.open(<mode>)` through a bound receiver -- mode-checked like
 #: `_PY_DOT_OPEN_RE`.
 _PY_BOUND_OPEN_RE = re.compile(
     r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*open\(\s*"

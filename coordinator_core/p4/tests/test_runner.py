@@ -80,6 +80,7 @@ class _FakePopen:
 
 class TestRun:
     def test_passes_explicit_identity_flags_never_ambient_env(self, monkeypatch):
+        # D1/D2: the runner always passes -p/-u/-c explicitly — this is
         # what makes "P4CONFIG-beats-env" a non-issue: the runner never
         # consults P4CONFIG or ambient P4* env at all.
         captured = {}

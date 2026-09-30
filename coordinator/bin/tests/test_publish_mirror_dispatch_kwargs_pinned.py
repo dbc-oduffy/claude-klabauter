@@ -95,7 +95,20 @@ publish = _load_publish_module()
 _STRUCTURALLY_SEPARATE_KWARGS = frozenset({"changed_paths"})
 
 #: Excluded for a DIFFERENT reason than `_STRUCTURALLY_SEPARATE_KWARGS`, and the
+#: distinction is the whole point of keeping two sets. `changed_paths` is not part
+#: of the `bind_kwargs` contract at all. `foreign_dir_names` IS a mirror-dispatch
 #: kwarg -- it is simply one this repo must never make REQUIRED of a consumer's
+#: `sync_mirror`. Two copies of `publish_sync.py` can win
+#: `_resolve_publish_sync_module_path` (this repo's engine copy, or a percolate
+#: root's own override such as coordinator-content-repo's `setup/publish_sync.py`) and the two
+#: cannot land a new parameter atomically. Putting this name in `bind_kwargs`
+#: would make `check_publish_sync_contract` reject whichever copy lags, taking a
+#: live publish path down -- the exact fail-closed-on-skew shape the incident in
+#: this module's docstring describes, inverted onto the copy that is behind rather
+#: than ahead. `dispatch_mirror_like` passes it only when a runtime signature probe
+#: says the resolved module accepts it, so its absence from the two pins below is
+#: intentional and is itself pinned by
+#: `test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs`.
 _DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names"})
 
 #: `sync_mirror` declares `injected_paths`, but `dispatch_mirror_like` deliberately

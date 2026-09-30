@@ -374,7 +374,9 @@ def promote_lesson(
     }
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("queue.promote")
@@ -439,6 +441,19 @@ def _queue_promote_handler(
         )
         return {"skipped": True, "reason": str(exc)}
 
+    # Self-report scope-touch contract (design (b), 2026-08-04 — see
     # coordinator_core.ipc's module-level comment above `_SCOPE_TOUCH_PATHS_KEY`).
+    # `out_path` is the ONE file this call actually wrote (promote_lesson's write
+    # primitive is a single write-temp + atomic-rename) — declare exactly that.
+    # This IS a cross-repo write (the coordinator-content-repo outbox, not the caller's own
+    # worktree) — as of the 2026-08-04 F1 fix, `_record_self_reported_touches`
+    # anchors containment on the CALLER's OWN repo, so this declaration is
+    # SKIPPED (logged, never recorded) whenever the caller's worktree isn't
+    # the coordinator-content-repo root itself. That is deliberate, not a bug: recording a
+    # claim in a repo this caller has no standing in was reproduced stealing
+    # a live native session's own file in that repo (see the ipc.py contract
+    # comment). The write still lands on disk; it stays an orphan at the
+    # coordinator-content-repo sink, which owns its own adoption path for that residual.
+    # `dispatch_message` strips this key before the wire envelope is built.
     result["_scope_touch_paths"] = [result["out_path"]]
     return result

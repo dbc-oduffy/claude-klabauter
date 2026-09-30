@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 # DR-054 console-flash guard: 0 (no-op) on POSIX where CREATE_NO_WINDOW
+# doesn't exist. Matches this engine's existing convention (dag.py,
+# machine_resolver.py, person_resolver.py, ...).
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 DEFAULT_TIMEOUT_S = 20.0

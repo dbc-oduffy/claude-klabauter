@@ -401,7 +401,14 @@ def _target_is_always_allowed(
     if target_cf is None:
         return False
 
+    # System temp / session scratchpad -- shared classifier (see module
     # docstring, "ALWAYS-ALLOWED DESTINATIONS"), NOT the settings-home/
+    # sandbox containment-list mechanism below: `target_is_bare_temp_scratch`
+    # both covers the full recognized-temp-root set AND re-asserts the
+    # no-git-repo conjunction itself, so it is correct even if a future
+    # caller ever invokes this helper without first excluding
+    # git-resolved candidates the way `check_bump_outside_repo_write` does
+    # today.
     if target_is_bare_temp_scratch(target_dir, env=env):
         return True
 
@@ -420,7 +427,11 @@ def _target_is_always_allowed(
     return False
 
 
+# ---------------------------------------------------------------------------
+# AC4 -- inline `python`/`python3 -c` payload unwrap. bash/sh/zsh are
+# already unwrapped for free by `resolve_command_positions` itself (module
 # docstring, "INLINE PYTHON `-c` PAYLOADS").
+# ---------------------------------------------------------------------------
 
 
 def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[str]:
@@ -442,7 +453,10 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
     return None
 
 
+# ---------------------------------------------------------------------------
+# Candidate extraction -- plain-bash write sinks only (see module docstring,
 # "WRITE-SINK CLASSIFICATION", for why this deliberately excludes git).
+# ---------------------------------------------------------------------------
 
 
 def _iter_write_sink_candidates(
@@ -759,8 +773,24 @@ def check_bump_outside_repo_write(
          marker (checked against the session's own anchor gitdir) already
          clears it.
     """
+    # DIALECT GATE (C4e, 2026-08-07 -- guard-dialect-coverage.md row 15;
+    # follow-up dispatch, same date, converted the blanket PowerShell SILENT
+    # below into real detection once the PM authorized extending this
     # cohort's scope into `_write_bump_sink_shapes.py`). `Dialect.POWERSHELL`
+    # now routes to `_check_bump_outside_repo_write_powershell`, which
+    # detects ONLY the cmdlet-shaped write table C3's triage named as the
+    # genuinely unmatched gap (`New-Item`/`Set-Content`/`Add-Content`/
+    # `Copy-Item`/`Move-Item`/`Out-File`/`Tee-Object`, added to
     # `_write_bump_sink_shapes.py` as `PS_WRITE_SINK_CMDLETS`/
+    # `extract_write_sink_targets_powershell`) -- `cp`/`mv` PowerShell
+    # aliases are NOT duplicated here (already fire via alias collision
+    # elsewhere) and `>`/`>>` are left alone (same operator characters in
+    # both dialects, not this leg's to re-derive). Every other PowerShell
+    # shape -- a bare redirect, an alias, an unrecognized cmdlet, or a
+    # command this dialect's tokenizer cannot parse at all -- still records
+    # SILENT and declines, per "prefer SILENT to a guess wherever PowerShell
+    # semantics are unclear" (see that function's own docstring). `Dialect.
+    # BASH`/`None` falls through unchanged below (AC4).
     dialect = dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None)
     if dialect is Dialect.POWERSHELL:
         return _check_bump_outside_repo_write_powershell(cmd, session_id, cwd, payload)
@@ -774,6 +804,9 @@ def check_bump_outside_repo_write(
         return None
 
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- decide from the parsed
+    # command alone, no subprocess, whether this command has a write sink at
+    # all. `echo hello`/`git status --short` never reach the git spawns
+    # below.
     candidates = list(_iter_write_sink_candidates(cmd, cwd))
     if not candidates:
         return None
@@ -795,7 +828,15 @@ def check_bump_outside_repo_write(
     assigned = _names_assigned_in(cmd)
     for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
         if _is_unexpanded_variable_target(raw_target, assigned):
+            # Own branch, BEFORE git-root resolution: `_resolve_relative`
             # already resolved `$D` LITERALLY against `effective_cwd`, so
+            # from a repo root it lands at `<repo>/$D` -- which the
+            # git-root check below would then correctly find INSIDE the
+            # anchor's own repo and silently skip (this guard's whole
+            # predicate is "no git root at all"). That is exactly how this
+            # class fell between both guards' contracts (bug-backlog
+            # 4a1e7c93b256) -- caught here, ahead of that check, so a
+            # same-repo-looking `$D` target never reaches it.
             if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
                 continue
             stood_down = environment_stands_the_bump_down(env)
@@ -836,8 +877,15 @@ def check_bump_outside_repo_write(
             _sandbox_root(anchor_git_root_str, effective_sid) if agent_class == AGENT_CLASS_SUBAGENT else ""
         )
 
+        # C1 -- classify via the SAME closed-set membership test C4 uses.
+        # This guard's own defining predicate (`target_gitdir is not None:
+        # continue`, above) means `target_dir` never resolves to a git repo
+        # by the time execution reaches here, so a `publish.mirrors.*.path`
+        # match (itself always a real repo) is structurally unreachable --
         # this always classifies DESTINATION_FOREIGN in practice. Classified
         # explicitly anyway (rather than hardcoding DESTINATION_FOREIGN)
+        # per C5's own instruction to consume C1 for classification, not
+        # re-derive or assume it.
         destination_class = (
             DESTINATION_PUBLISH
             if target_is_publish_destination(target_dir, env=env)
@@ -955,6 +1003,8 @@ def _check_bump_outside_repo_write_powershell(
     matched_any_cmdlet = False
     cwd_unresolved = False
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- collected here, from the
+    # parsed command alone (no subprocess), and checked for emptiness below
+    # BEFORE `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns.
     candidates: List[Tuple[str, str]] = []
 
     for tokens, _pipe_before in segments:
@@ -1019,6 +1069,9 @@ def _check_bump_outside_repo_write_powershell(
         )
 
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- no candidate at all means
+    # no write sink was parsed out of this command; return before
+    # `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns a `git`
+    # subprocess.
     if not candidates:
         return None
 

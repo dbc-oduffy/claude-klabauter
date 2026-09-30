@@ -19,27 +19,6 @@ The knowledge was previously local to ``coordinator_core.plugin_health.sentinel`
 ported launch sites did not. This module promotes it to one shared seam so the
 constraint is encoded once instead of rediscovered per module.
 
-Launchable-extension-map precedent (bash/sh branch, keep-not-port):
-    This module's ``.sh``/``.bash`` -> ``bash`` entries in
-    ``_INTERPRETER_BY_SUFFIX``, and the ``bash``/``sh`` branch of
-    ``_shebang_launcher``, are the SAME shape CLAUDE.md's own § Runtime
-    conventions already blesses for ``.js`` -> ``node``: "a capability, not
-    a dependency." Nothing on claude-klabauter's own build/install/test critical path
-    REQUIRES bash to complete -- this module offers to correctly LAUNCH a
-    ``.sh`` file some caller already resolved (a sibling repo's own script
-    resolved defensively across a repo boundary), exactly as it offers to
-    launch a ``.js`` via ``node`` when a caller resolves one of those instead. The
-    bash entries are therefore a keep, not migration debt: contingent
-    irreducibility (CLAUDE.md § Runtime conventions) does not apply here
-    because nothing about claude-klabauter's OWN work depends on the target actually
-    being bash -- the module's job ends at "launch what the caller found,"
-    the same way the ``.js`` entry's job ends at "launch what the caller
-    found" regardless of whether node happens to be installed. See
-    ``docs/2026-07-29-debash-residual-sites-spec.md`` Group E for the
-    disposition ruling this codifies (PM ruling 2026-07-28/29: keep, document,
-    do NOT add a CLAUDE.md carve-out entry -- a capability map is not a
-    shell-out carve-out).
-
 Call sites become::
 
     run([*resolve_launchable(script), *args])
@@ -52,10 +31,10 @@ Resolution order (Windows only -- see the POSIX note below):
        substrate's own sanctioned Windows entry point and may carry setup the raw
        script does not.
     2. Shebang sniff -- read the script's first line and resolve its DECLARED
-       interpreter (python/bash/sh/node), when readable and recognised. Catches
+       interpreter (python/node), when readable and recognised. Catches
        transitional oracles whose CONTENT was ported (e.g. bash -> Python) before
        their filename caught up -- see ``_shebang_launcher``'s docstring.
-    3. Interpreter prefix keyed on file extension (``.js`` -> node, ``.sh`` -> bash,
+    3. Interpreter prefix keyed on file extension (``.js`` -> node,
        ``.py`` -> this interpreter, ...) -- used when the file is unreadable/absent
        or its shebang is unrecognised.
     4. Bare path -- nothing better is known; let the failure be the caller's, loud.
@@ -68,8 +47,11 @@ Negative-spec:
       loader on the platform that has no loader to speak of. The Windows-only shebang
       sniff (tier 2) is a DIFFERENT mechanism from POSIX bare-path exec -- it reads the
       file ourselves rather than relying on the OS loader, and only for the small
-      python/bash/sh/node vocabulary we recognise; anything else falls through to the
+      python/node vocabulary we recognise; anything else falls through to the
       extension map exactly as before.
+    - **Never returns a shell-interpreter prefix.** A ``.sh``/``.bash`` target or a
+      bash/sh-shebanged file resolves to its bare path; on Windows the loud
+      WinError 193 is the caller's. Claude-klabauter launches no shell script.
     - Does NOT validate that the interpreter exists, that the script exists, or that
       the script is executable. It is a pure argv-shape function -- callers keep their
       own existence checks and their own error reporting.
@@ -93,8 +75,6 @@ _INTERPRETER_BY_SUFFIX = {
     ".js": "node",
     ".cjs": "node",
     ".mjs": "node",
-    ".sh": "bash",
-    ".bash": "bash",
 }
 
 
@@ -119,11 +99,7 @@ def _shebang_launcher(script_path: str) -> List[str]:
     migration (``docs/plans/2026-07-16-bash-clean-slate-residual-migration.md``)
     ported several ``bin/*.sh`` oracles' CONTENT to Python before their
     filename caught up, leaving transitional ``.sh``-named files whose body
-    is a Python script. A naive extension guess forces ``bash <file>.sh`` on
-    those, which then tries to interpret the Python body as shell syntax
-    (``import: command not found``) -- a Windows-only failure mode invisible
-    on POSIX, where the shebang is honored regardless of the ``.sh`` name.
-    Reading the shebang directly resolves the file's true interpreter
+    is a Python script. Reading the shebang directly resolves the file's true interpreter
     regardless of what its extension claims.
     """
     try:
@@ -137,8 +113,6 @@ def _shebang_launcher(script_path: str) -> List[str]:
     name = m.group("name")
     if "python" in name:
         return [sys.executable]
-    if name in ("bash", "sh"):
-        return [shutil.which("bash") or "bash"]
     if name == "node":
         return [shutil.which("node") or "node"]
     return []

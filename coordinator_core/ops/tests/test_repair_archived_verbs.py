@@ -333,3 +333,39 @@ def test_in_flight_to_shipped_repair_clears_nothing(tmp_path):
     assert result["exit_code"] == 0, result
     assert result["applied"] is True
     assert result["provenance_cleared"] == []
+
+
+# ---------------------------------------------------------------------------
+# (g) The sanctioned wrapper reaches clear_advancement — the handler alone is
+# not an operator surface (it is deliberately not a registered op).
+# ---------------------------------------------------------------------------
+
+def test_cs_wrapper_clear_advancement_alone_clears_false_cascade(tmp_path, capsys):
+    from coordinator_core.archive_stamp import cs_repair_archived_shipped_in
+
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped_co_tenant(repo, "2026-08-01_wrapper-clear.md")
+
+    rc = cs_repair_archived_shipped_in(
+        str(hpath), "false-cascade: advancement never applied", clear_advancement=True
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    text = hpath.read_text(encoding="utf-8")
+    assert "advanced_by" not in text
+    assert "advanced_at" not in text
+    assert "deployment_state: shipped" in text
+    assert "shipped_in: deadbeef" in text
+
+
+def test_cs_wrapper_without_any_action_is_refused(tmp_path, capsys):
+    from coordinator_core.archive_stamp import cs_repair_archived_shipped_in
+
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped_co_tenant(repo, "2026-08-01_wrapper-none.md")
+    before = hpath.read_text(encoding="utf-8")
+
+    rc = cs_repair_archived_shipped_in(str(hpath), "r")
+
+    assert rc == 1
+    assert hpath.read_text(encoding="utf-8") == before

@@ -128,7 +128,13 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
+#: The exact basename this guard protects -- imported from `_blanket_
+#: disarm.py`, the module that defines what "the disarm marker" means, so
+#: the two can never independently drift on the string. Never relaxed to a
+#: substring/prefix match (see `_sentinel_creation_guard.SentinelCreation
 #: Detector._is_target`): an unrelated file merely CONTAINING this string
+#: in a longer name is a different file, not the marker `_blanket_disarm`
+#: reads.
 _TARGET_BASENAME = MARKER_BASENAME
 
 _detector = SentinelCreationDetector(_TARGET_BASENAME)

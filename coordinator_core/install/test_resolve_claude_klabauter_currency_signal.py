@@ -186,7 +186,8 @@ def test_the_post_commit_writer_makes_the_door_say_the_number(
     assert (cache_home / "coordinator" / "engine-currency.json").is_file()
     out = _door_says(monkeypatch, mirror, source_repo)
     assert "3 commit(s)" in out
-    assert "percolate-round.py" in out
+    assert "coordinator-publish.py" in out
+    assert "percolate-round.py" not in out
 
 
 def test_the_writer_declines_a_repo_that_is_not_the_engine_source(

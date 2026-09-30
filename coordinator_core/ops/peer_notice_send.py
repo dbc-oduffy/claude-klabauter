@@ -108,7 +108,13 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session import harness_registry
 from coordinator_core.session.reachability import messaging_available
 
+#: Cap on stored ``message`` length. A notice is advisory text surfaced
+#: inline in a PreToolUse ``additionalContext`` block (see
+#: ``write_guards.nudge_peer_notice_unread``) -- an unbounded message could
 #: blow up that advisory regardless of ``_MAX_NOTICES`` bounding the notice
+#: COUNT. Anything past the cap is truncated at send time, not at read time,
+#: so every reader (the op and the guard) sees the same already-bounded text
+#: rather than re-deciding the cut point independently.
 _MAX_MESSAGE_LEN = 2000
 
 

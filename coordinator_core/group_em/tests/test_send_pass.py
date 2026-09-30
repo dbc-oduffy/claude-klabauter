@@ -262,6 +262,7 @@ def test_resolve_addressee_returns_live_name(tmp_path):
 def test_resolve_addressee_refuses_on_repoint(tmp_path):
     repo_root = str(tmp_path)
     # The live roster now shows a DIFFERENT session id under that peer's old
+    # slot -- the queried (now-stale) session id is absent entirely.
     rows = [_FakeRow("peer-sid-NEW", "claude-klabauter-e0")]
 
     name = send_pass.resolve_addressee(
@@ -501,7 +502,11 @@ def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
     assert third["open_obligations"] == []
 
 
+# ---------------------------------------------------------------------------
 # DECLINATIONS -- "a tick that sends nothing records which obligation it
+# declined and why, and cannot close on an empty result". The empty-roster leg
+# is also the plan's acceptance oracle; these cover the paths it does not.
+# ---------------------------------------------------------------------------
 
 
 def test_empty_roster_declines_the_obligation_to_look(tmp_path):

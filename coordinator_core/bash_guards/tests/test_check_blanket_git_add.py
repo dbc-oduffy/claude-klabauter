@@ -458,7 +458,22 @@ def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch, tmp
     assert guard._hazard_registry_repo_roots() == []
 
 
+# ---------------------------------------------------------------------------
+# `-u` with a pathspec: the narrower spelling of an already-permitted command.
+#
+# `git add -u -- X` is a STRICT SUBSET of `git add -- X` (same paths, minus
+# the untracked files), and the latter has always been permitted. Refusing the
+# narrower spelling protected nothing and pushed committers toward the coarser
+# form -- which is not hypothetical: example-store-repo `176ce18` was committed with
 # a literal three-file pathspec, exactly the discipline SC-DR-014 asks for, and
+# still swept ~164 lines of a peer's in-progress work, because a file pathspec
+# scopes to the FILE and not to the committer's hunks within it. Reported twice
+# in one evening by example-store-repo-em (2026-09-03 cross-repo/inbox,
+# `scoped-commit-guard-the-permitted-form-has-now-caused-the-harm-twice`).
+#
+# `-A` keeps denying with or without a pathspec: it has no subset relation to
+# a permitted form.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

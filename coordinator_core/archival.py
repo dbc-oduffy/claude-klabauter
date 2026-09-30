@@ -132,10 +132,17 @@ def _is_terminal_or_archived_child(path: str) -> bool:
 
     meta = _read_meta(path)
     status = meta.get("status") if meta else None
+    # Normalize case/whitespace so `status: Consumed`/
     # `CONSUMED` are recognized; fail-closed default (None/absent) is untouched
+    # since (None or "") == "".
     normalized_status = (status or "").strip().lower()
 
+    # Rule 3 (DR-084): a definitive terminal deployment_state excludes the
+    # child regardless of `status`. Checked ahead of the status-only early
+    # return below so a `status: open` + terminal `deployment_state` child
+    # (the close-handoff verb's shape) is still caught. `in_flight` is not a
     # member of HANDOFF_TERMINAL_DEPLOYMENT, so this cannot fire for the
+    # consumed/claimed+in_flight carve-out case handled further down.
     normalized_deployment_state = (
         (meta.get("deployment_state") or "").strip().lower() if meta else ""
     )
@@ -146,7 +153,28 @@ def _is_terminal_or_archived_child(path: str) -> bool:
         return False
 
     if normalized_status in ("consumed", "claimed"):
+        # Inverted (docs/reference/handoff-legal-state-table.md § "Ruling:
+        # terminality is a deployment_state question, never a status one"):
+        # a claimed/consumed child is terminal ONLY at a deployment_state the
         # table calls terminal (HANDOFF_TERMINAL_DEPLOYMENT, already tested
+        # by rule 3 above) — never by "anything but in_flight". The old
+        # carve-out here tested `deployment_state == "in_flight"` as the ONLY
+        # non-terminal case, which silently treated a reparked baton
+        # (`claimed` + `ready_to_fire`/`awaiting_gate` — a session flips
+        # deployment_state back without dropping status: claimed) as
+        # terminal: exactly the census-row-1 false-positive the table names
+        # and archive_terminal_handoffs._classify_branch Branch A shared
+        # (reconciled together, C3).
+        #
+        # One exception, preserved on purpose: a record with NO
+        # deployment_state key at all (absent, pre-DR-084 legacy shape) is
+        # not "reparked" — it never carried the field — so status alone
+        # still decides for it, matching this predicate's pre-DR-084
+        # behavior and test_terminal_child_excluded's fixture. Any record
+        # that DOES carry a deployment_state is judged by rule 3's positive
+        # membership test alone: `in_flight`, `ready_to_fire`, and
+        # `awaiting_gate` are all equally non-terminal, never inferred
+        # terminal from not being `in_flight`.
         deployment_state = (meta.get("deployment_state") or "").strip().lower() if meta else ""
         if deployment_state:
             return False
@@ -240,7 +268,46 @@ def reverse_membership(
     return frozenset(live_children)
 
 
+# ---------------------------------------------------------------------------
+# DR-242 predicate: was this handoff EVER claimed or shipped?
+# ---------------------------------------------------------------------------
+#
+# Relocated (2026-08-06) from `coordinator_core.tests._baton_dag_oracle` — that
+# module is a differential ORACLE for coordinator_core.dag's pointer-resolution
+# job (C6), and `claimed_or_shipped_at_path` had accreted onto it as a sixth
+# production import site despite having nothing to do with that oracle's
+# actual job (it inspects a candidate parent's OWN frontmatter; it never reads
+# a child-referencing field, so it never participates in any pointer-DAG
+# comparison). Six production modules (archive_stamp, baton_assemble x2,
+# baton_assemble/apply, ops/baton_drift_sweep, ops/handoff_archive_transition,
+# coordinator/bin/handoff-archive-transition.py) were importing a predicate
+# out of a package literally named `tests` — if that directory is ever
+# excluded from an install/packaging payload (the ordinary thing to do with a
+# tests directory), every one of those sites breaks at import time, on the
+# handoff-supersession hot path. See DR-242's own decision doc and this
+# module's `reverse_membership`/`_is_terminal_or_archived_child` above, which
+# this predicate is a sibling of (both gate handoff-archival mutations) but
+# does NOT reuse — see the negative-spec below.
+#
 # `_frontmatter`/`_field` immediately below are a DELIBERATE, byte-for-byte
+# duplicate of `_baton_dag_oracle._frontmatter`/`_field`'s hand-rolled
+# regex-based frontmatter reader, not a delegation to
+# `coordinator_core.frontmatter.primitives.split_frontmatter` or
+# `coordinator_core.dag._read_meta` (both already available in this package
+# and used elsewhere in this repo). This is a relocation, not a redesign: the
+# oracle module's own copy of these two helpers stays in place, unchanged,
+# because IT still needs its own independent frontmatter parsing for its
+# actual job — the C6 differential comparison against coordinator_core.dag's
+# pointer resolution (`build_children_index`, exercised by
+# test_c6_pointer_normalization.py). That independence claim was never about
+# `claimed_or_shipped`/`claimed_or_shipped_at_path` (neither is compared
+# against a second implementation anywhere), so this predicate's own logic is
+# single-sourced here and re-exported from the oracle module for its existing
+# test importers — see `_baton_dag_oracle.py`'s own note at the re-export
+# site. The two `_frontmatter`/`_field` copies are intentional, independently
+# maintained duplicates serving two unrelated consumers (this production gate
+# vs. that differential oracle), not accidental drift — a future fix to one
+# is not automatically owed to the other.
 
 
 _CLAIMED_STATUS_VALUES: Tuple[str, ...] = ("claimed", "consumed", "superseded")

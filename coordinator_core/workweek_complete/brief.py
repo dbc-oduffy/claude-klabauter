@@ -134,6 +134,10 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 _CEREMONY_NAME = "workweek-complete"
 
 #: Stored VERBATIM in the grant record's `note` (write_tier_u_grant never
+#: normalizes it). Names the ceremony's Tier-U consumers so an auditor
+#: reading a live grant can tell what it was minted for: Step 2's
+#: `plugin-ecosystem/run.js` and Step 8's `/parallel-code-review` Test-Output
+#: Capture, both of which fire before Step 16's nested `/merge-to-main`.
 _TIER_U_GRANT_NOTE = (
     "implicit ceremony grant: /workweek-complete Step 0.9 — bounds Step 2 "
     "(plugin-ecosystem suite) and Step 8 (/parallel-code-review Test-Output "
@@ -504,7 +508,20 @@ def _build_directives(
             args=["revoke", "--only-ceremony", _CEREMONY_NAME],
         ),
     ]
+    # `hard_block` is metadata only — the halt contract in apply.py does not
+    # read it; it exists so the skill-body render (C6) can preserve
+    # hard-block-vs-advisory granularity per AC9/C8 (see C4's census note on
+    # which of the 4b-4k gates are hard-blocking).
+    # A grant that could not be minted (or handed back) must not turn a
     # ceremony that otherwise fully succeeded into `PARTIAL_MUTATION`,
+    # whose contract tells the operator to stop and reconcile. Both legs
+    # are best-effort for the same reason `merge_assemble.apply`'s handler
+    # tolerates exit 1: `write_tier_u_grant`/`revoke_tier_u_grant` return
+    # False on an INFRA condition (unresolvable sid — routine on a box
+    # running dozens of concurrent sessions), and the DR-088 layer-5 guard
+    # fails CLOSED, so an unminted grant refuses the Tier-U consumer rather
+    # than authorizing it. The failure still reaches the operator, in
+    # `report["degraded"]`.
     best_effort_ids = {
         "d_step0_9_tier_u_grant_write",
         "d_step13_7_tier_u_grant_handback",

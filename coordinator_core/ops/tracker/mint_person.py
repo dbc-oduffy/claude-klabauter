@@ -149,6 +149,7 @@ from coordinator_core.tracker_projection import fold_person_registry, resolve_al
 # Maps `person_resolver.ALIAS_BUNDLE_KEYS` bundle keys to the
 # `tracker_entities.ALIAS_NAMESPACES` namespace each resolves under — 1:1 on
 # every member. See "ALIAS NAMESPACE MAPPING" in the module docstring for why
+# `github_id` carries a namespace of its own rather than riding under `github`.
 _BUNDLE_KEY_TO_NAMESPACE: dict[str, str] = {
     "github": "github",
     "github_id": "github_id",
@@ -190,7 +191,9 @@ def _mint_person_core(*, bundle: dict[str, str], repo_root: Path) -> dict:
     return {"minted": True, "reason": "created", "person_id": person_id}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.mint_person")

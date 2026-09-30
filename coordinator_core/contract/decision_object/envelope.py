@@ -100,8 +100,27 @@ def _emit(obj: Mapping[str, Any]) -> Mapping[str, Any]:
 emit = _emit
 
 
+# ---------------------------------------------------------------------------
 # Reader of a PERSISTED envelope's judgment-point shape.
+#
+# `apply_base.judgment_points_by_id` is the in-process sibling: it takes the
+# `judgment_points` list this process just built and indexes it without shape
+# checks, because a producer bug there should raise. This one takes an object
+# re-read from `.git/coordinator-sessions/decisions/*.json`, where a malformed
+# entry is a data state rather than a producer bug, and it lives beside the
+# writer so a rename of `judgment_points` or a point's `id` moves the site
+# `pickup_assemble.apply` depends on rather than silently starving it.
+#
 # GRAVESTONE (`decision_object/resume.py`, `resume_decisions`/`ResumeRefused`/
+# `_legal_disposition_values`): the resume-from-persisted-decision-object read
+# path for `--decisions` payloads (docs/plans/2026-09-02-the-loader-fires-the-
+# assembly-not-the-em.md, chunk C3). The free-prose judgment-point leg it
+# depended on never shipped, so it had zero non-test production callers at
+# removal (Item 67, docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-
+# 2026-09-11.md); deleted whole rather than DR'd, matching Item 34's
+# precedent -- a DR for removing zero-caller dead code is ceremony out of
+# proportion to the cut.
+# ---------------------------------------------------------------------------
 
 def judgment_points_by_id(
     decision_object: Mapping[str, Any],

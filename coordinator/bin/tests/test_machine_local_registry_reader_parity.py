@@ -78,7 +78,9 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
 
 
+# ---------------------------------------------------------------------------
 # AC2: MACHINE_LOCAL_REGISTRY_DIR-seeded parity cases
+# ---------------------------------------------------------------------------
 
 
 def _parity_case(monkeypatch, tmp_path, key):
@@ -139,7 +141,9 @@ def test_parity_env_override(monkeypatch, tmp_path):
     assert mine == theirs == "env-wins"
 
 
+# ---------------------------------------------------------------------------
 # MINOR-1: MACHINE_LOCAL_REGISTRY_DIR unset, COORDINATOR_SETTINGS_HOME pinned
+# ---------------------------------------------------------------------------
 
 
 def test_parity_via_settings_home_not_registry_dir_override(monkeypatch, tmp_path):
@@ -181,6 +185,11 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     assert mine == "C:/coordinator-content-repo"
 
     # PINNED DIVERGENCE (see module docstring's "Two divergences... ACCEPTED"
+    # list, item 3): the oracle does no normalization anywhere in its body and
+    # returns the raw stored value unrepaired. `mlir.registry_get` repairs it.
+    # This is deliberate — see module docstring — so assert the divergence
+    # explicitly rather than leaving it merely unasserted (which is what let
+    # this exact case go unpinned before this test was extended).
     theirs = machine_resolver.registry_get("repos.content_root")
     assert theirs == "/x/coordinator-content-repo"
     assert mine != theirs

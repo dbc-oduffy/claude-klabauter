@@ -16,6 +16,10 @@ DEFAULT_SWEEP_FILES_THRESHOLD = 10
 DEFAULT_SWEEP_LINES_THRESHOLD = 15
 
 # DEFAULT_THRESHOLD_COMMITS/DAYS used to
+# be declared independently here AND in doc_registry.py (the actual
+# registry-driven config-resolution module) -- two editable copies of the
+# same tuned fleet default is a drift risk. doc_registry.py is now the
+# single owner; import from there instead of re-declaring.
 
 _COMMIT_RECORD_SEP = "\x1e"
 _COMMIT_FIELD_SEP = "\x1f"

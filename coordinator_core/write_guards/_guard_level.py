@@ -12,6 +12,22 @@ _BLAST_RADIUS = (
 )
 
 
+#: Shared by the Edit/Write and Bash doctrine-surface advisories.
+DOCTRINE_SURFACE_ADVISORY = (
+    "CLAUDE.md-class file: rarely the right home for a \"remember this\" -- "
+    "prefer a structural guard, a test, or a wiki page.\n"
+    "Doctrine text is the shortest form a fresh agent can act on; "
+    "bloated doctrine gets ignored."
+)
+
+
+def doctrine_surface_advisory(extra: str = "") -> Dict[str, Any]:
+    """Warn-and-pass envelope carrying ``DOCTRINE_SURFACE_ADVISORY``; ``extra``
+    is one appended line (e.g. a runnable follow-up command)."""
+    text = DOCTRINE_SURFACE_ADVISORY + (f"\n{extra}" if extra else "")
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": text}}
+
+
 def level_for(guard_name: str) -> str:
     """`strict` when `coordinator_core.machine_profile.guard_level` is not
     importable, so a missing resolver never loosens a guard."""

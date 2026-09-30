@@ -66,6 +66,17 @@ Negative-spec:
       `resolves` list names it.
     - Do NOT treat `recommendation` on a judgment point as a control-flow
       input anywhere in `_execute_directives` — it is offer-only.
+    - Do NOT stage the whole tree in the commit tail: only paths dirtied
+      during this pass (after minus before, less live peers' paths) are
+      committed, never `-A` or a directory pathspec.
+    - Do NOT release the session's full claim surface from the tail: only the
+      committed paths' claims are released, and only after a sha lands.
+    - Do NOT push from the tail; publication is the push checkpoint's job.
+
+Commit tail: after the directive loop, `_run_workweek_commit_tail` commits the
+paths this pass dirtied through `directives_commit_tail.run_close_commit` and
+folds its outcome into `report["commit"]`. Fail-closed skips are reported as
+`attempted: False` with a `workweek-commit:*` reason and never stop apply.
 """
 
 from __future__ import annotations
@@ -102,17 +113,39 @@ from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
-from coordinator_core.workweek_complete.brief import CONSUMES_MANIFEST, brief
+from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
+from coordinator_core.session import scope as session_scope
+from coordinator_core.session.core import resolve_session_id
+from coordinator_core.workstream_complete import directives_commit_tail
+from coordinator_core.workweek_complete.brief import (
+    CONSUMES_MANIFEST,
+    _resolve_repo_root_for_doc_staleness,
+    brief,
+)
 from coordinator_core.contract.apply_base import assert_dispatchable
 
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
 
+# ---------------------------------------------------------------------------
 # Exit-code contract (apply-side, 0-4) — SEPARATE from `brief.WorkweekExitCode`
+# (0-3). computed-skills.md § Exit-code contract for a mutating half requires
+# each half to pin its own enumeration; this one is never reused by brief().
+# Built from the shared `ceremony_common.apply_halt` ladder (C2h) so this
+# module's numbering can never independently drift from
+# `workday_complete.apply`'s own.
+# ---------------------------------------------------------------------------
 WorkweekApplyExitCode = build_ceremony_halt_exit_codes("WorkweekApplyExitCode")
 
+_WORKWEEK_COMMIT_SUBJECT = "chore(workweek-complete): commit ceremony outputs"
 
+
+#: THE closed dispatch table (security-load-bearing — see module docstring).
 #: Every key is a literal member of `brief.CONSUMES_MANIFEST`; every value is
+#: this module's own fixed, `Path(__file__)`-relative script location under
+#: `coordinator/bin/`. Resolved once at import time — never mutated at
+#: runtime, never resolved via glob/search.
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 
@@ -265,7 +298,16 @@ def _execute_directives(
 
     try:
         for directive in directives:
+            # An `already_satisfied` directive ran in an earlier pass and hits
+            # `continue` below without ever dispatching, so its verb name is
+            # never resolved by the main loop either. Admission-checking it here
+            # would refuse the WHOLE run over a name that cannot dispatch --
+            # a false refusal on a replayed directive whose verb has since left
             # `ASSEMBLER_DISPATCHABLE` (slice-B review finding 1, 2026-08-20).
+            # A gate-blocked directive is deliberately NOT skipped: it is still
+            # a live member of this run's list and dispatches the moment its
+            # gate resolves, so an un-admitted verb there is a structurally
+            # invalid list, which is exactly what this pre-pass exists to catch.
             if directive.get("already_satisfied"):
                 continue
             _resolve_cli(directive["cli"])
@@ -340,6 +382,118 @@ def _execute_directives(
     return int(WorkweekApplyExitCode.SUCCESS), report
 
 
+def _dirty_snapshot(root: Any) -> Optional[dict[str, str]]:
+    """`{path: xy}` for every dirty path under `root`, or `None` when git could
+    not answer — never an empty dict on failure, which would make every
+    pre-existing dirty file read as ceremony output."""
+    result = git_native.status_porcelain(root, untracked_all=True)
+    if not result.ok:
+        return None
+    return {path: xy for xy, path in parse_porcelain_paths(result.stdout, unquote=True)}
+
+
+def _resolve_commit_root() -> Optional[str]:
+    return _resolve_repo_root_for_doc_staleness()
+
+
+def _in_linked_worktree(root: Any) -> bool:
+    """Filesystem-only, zero spawns. True unless the nearest `.git`-bearing
+    ancestor of cwd is `root` itself; a cwd with no `.git` ancestor reads as
+    linked (fail closed)."""
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / ".git").exists():
+            return candidate != Path(root).resolve()
+    return True
+
+
+def _prepare_commit_tail() -> tuple[Optional[str], str, Optional[dict[str, str]], Optional[str]]:
+    """Resolves root and session id and takes the pre-pass snapshot. Returns
+    `(root, sid, before, skip_reason)`; a non-None reason means no tail."""
+    try:
+        root = _resolve_commit_root()
+    except Exception:  # noqa: BLE001
+        root = None
+    if not root:
+        return None, "", None, "workweek-commit:no-repo-root"
+    try:
+        sid = resolve_session_id(str(root)) or ""
+    except Exception:  # noqa: BLE001
+        sid = ""
+    if not sid:
+        return root, "", None, "workweek-commit:no-session-id"
+    if _in_linked_worktree(root):
+        return root, sid, None, "workweek-commit:linked-worktree"
+    return root, sid, _dirty_snapshot(root), None
+
+
+def _run_workweek_commit_tail(
+    root: Any, before: Optional[dict[str, str]], decisions: dict[str, Any], sid: str
+) -> dict[str, Any]:
+    """Commits exactly the paths this pass dirtied (after minus before, less
+    live peers' paths) through bare `run_close_commit`, then releases only the
+    claims of what landed and re-reads status over the committed paths."""
+    after = _dirty_snapshot(root)
+    if before is None or after is None:
+        return {"attempted": False, "skipped": "workweek-commit:snapshot-failed"}
+    delta = set(after) - set(before)
+    preexisting = sorted(set(after) & set(before))
+    try:
+        peers = directives_commit_tail.resolve_known_concurrent_paths(Path(root), sid)
+    except directives_commit_tail.PeerAttributionUnavailable:
+        return {
+            "attempted": False,
+            "skipped": "workweek-commit:peer-attribution-unavailable",
+        }
+    stage = sorted(delta - peers)
+    withheld = sorted(delta & peers)
+    deleted = [p for p in stage if "D" in after[p]]
+    stage_paths = [p for p in stage if "D" not in after[p]]
+    report: dict[str, Any] = {
+        "attempted": True,
+        "committed_sha": None,
+        "commit_failed": False,
+        "staged": stage_paths,
+        "deleted": deleted,
+        "withheld_peer": withheld,
+        "preexisting_dirty": preexisting,
+        "post_commit_dirty": [],
+        "diagnostics": [],
+    }
+    if not stage:
+        return report
+    try:
+        outcome = directives_commit_tail.run_close_commit(
+            root,
+            session_id=sid,
+            subject=decisions.get("subject") or _WORKWEEK_COMMIT_SUBJECT,
+            stage_paths=stage_paths,
+            deleted_paths=deleted,
+        )
+    except Exception as exc:  # noqa: BLE001
+        report["commit_failed"] = True
+        report["error"] = str(exc)
+        return report
+    report["commit_failed"] = bool(outcome.commit_failed)
+    report["committed_sha"] = outcome.committed_sha
+    report["diagnostics"] = list(outcome.diagnostics)
+    if not outcome.committed_sha:
+        return report
+    committed = stage_paths + deleted
+    try:
+        session_scope.release_committed_claims(sid, committed, cwd=str(root))
+    except Exception:  # noqa: BLE001 - best-effort; a stale claim is the safe residue
+        pass
+    check = git_native.status_porcelain(root, paths=committed)
+    if not check.ok:
+        report["post_commit_check"] = "unreadable"
+    else:
+        report["post_commit_dirty"] = sorted(
+            {path for _xy, path in parse_porcelain_paths(check.stdout, unquote=True)}
+        )
+    return report
+
+
 def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
     """`apply()` — recomputes the brief in-process (never trusts a
     caller-supplied decision object) and executes every execution-ready
@@ -371,9 +525,26 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         judgment_points = envelope.get("judgment_points", [])
         effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
+        root, sid, before, pre_skip = _prepare_commit_tail()
         exit_code, report = _execute_directives(
             directives, judgment_points, effective_decisions, composition_budget=composition_budget
         )
+        if pre_skip is None and not report["results"] and exit_code == int(
+            WorkweekApplyExitCode.DIRECTIVE_FAILED
+        ):
+            pre_skip = "workweek-commit:nothing-dispatched"
+        if pre_skip is not None:
+            commit: dict[str, Any] = {"attempted": False, "skipped": pre_skip}
+        else:
+            try:
+                commit = _run_workweek_commit_tail(root, before, effective_decisions, sid)
+            except Exception as exc:  # noqa: BLE001 - the tail never crashes apply
+                commit = {"attempted": True, "commit_failed": True, "error": str(exc)}
+        report["commit"] = commit
+        if exit_code == int(WorkweekApplyExitCode.SUCCESS) and (
+            commit.get("commit_failed") or commit.get("post_commit_dirty")
+        ):
+            exit_code = int(WorkweekApplyExitCode.PARTIAL_MUTATION)
         exit_label = exit_code_label(exit_code, report)
         if exit_code == int(WorkweekApplyExitCode.SUCCESS):
             outcome = "success"

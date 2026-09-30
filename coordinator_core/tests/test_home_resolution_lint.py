@@ -74,11 +74,49 @@ from coordinator_core.tests._home_resolution_lint_baseline import (
     X_OK_BASELINE,
 )
 
+# Rule 5 (`rung_order`, C5) baseline lives HERE rather than in
+# `_home_resolution_lint_baseline.py` -- that module is owned by C8's
+# re-seed pass.
+#
+# 2026-08-08 (C8 re-seed, discovery widened per C1/C4): C8 identified 7
+# genuine false positives, 6 of one shape -- a default-arg ladder rung whose
 # FALLBACK is `Path.home()` itself (`os.environ.get(KEY, str(Path.home()))`),
 # which already resolves USERPROFILE correctly on Windows -- plus 1 of a
+# different shape (`check-machine-path-leak.py:327`).
+#
+# 2026-08-08 (C8b re-seed, post-C5b/`1e2f3e11`): C5b fixed the underlying
+# `_classify_rung` defect that made the 6 default-arg sites above
+# double-count a nested `Path.home()` call as a same-order self-
+# transposition. Verified live (`test_rung_order_baseline_has_no_stale_
+# entries` before this edit named exactly these 6 rows -- the 5 unique
+# `(path, text)` keys below plus the duplicate-text sandbox_check.py:919
+# row -- as no-longer-matching a live finding): all 6 now go clean and are
+# removed rather than re-baselined.
+#
+# `coordinator/bin/check-machine-path-leak.py:327` -- `os.environ.get("HOME")
 # or os.path.expanduser("~")` -- was baselined here as a DIFFERENT shape
+# (not a default-arg ladder rung; C5b's fix does not touch it) at the prior
+# re-seed. As of the C8 re-seed (2026-08-08), it no longer matches a live
+# `find_rung_order_violations()` finding at all: an unguarded `expanduser`
+# terminal is scored as a WARNING by `find_rung_order_warnings()`, not a
+# hard violation, per this file's own `test_no_rung_order_violation`
+# docstring and the C5d fix (`e2ff100e`) that introduced that split. Removed
+# per `test_rung_order_baseline_has_no_stale_entries`, which named this
+# exact row as stale (verified: `find_rung_order_violations()` total=0
+# corpus-wide this run). The line still carries its own prior code-review
 # note (F4: falls back to `os.path.expanduser`, which honors `USERPROFILE`
+# on Windows) -- that reasoning is preserved in the rule-4 (`bare_or`)
+# adjudication instead, where the same line is evaluated under a different,
+# stricter rule that does NOT exempt an unguarded `expanduser` rung (see
+# `find_bare_home_or_chains`'s own docstring: "`expanduser` is not exempting
+# either way ... the vulnerable site itself, not evidence the chain already
+# guards against it") -- that rule's finding for this same line is a
+# genuine, unbaselined, reportable defect, not folded into this ledger.
+#
+# An empty tuple is the correct terminal state for this ledger the same way
 # X_OK_BASELINE going to zero was: rung_order violations are 0 corpus-wide
+# as of this run, and a NEW rung-order violation now fails
+# `test_no_rung_order_violation` outright, which is the whole point.
 RUNG_ORDER_BASELINE: tuple[tuple[str, int, str], ...] = ()
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -194,7 +232,9 @@ def test_forward_slash_baseline_has_no_stale_entries():
     )
 
 
+# ---------------------------------------------------------------------------
 # Rule 4 (highest value): CLAUDE_HOME/HOME `or`-chain with no USERPROFILE rung.
+# ---------------------------------------------------------------------------
 
 
 def test_home_or_userprofile_present_at_every_claude_home_site():
@@ -231,8 +271,11 @@ def test_bare_or_baseline_has_no_stale_entries():
     )
 
 
+# ---------------------------------------------------------------------------
+# Rule 5 (C5): a home-resolution ladder rung out of the master order
 # CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home(). Baseline is local to
 # this file -- see `RUNG_ORDER_BASELINE`'s own comment above.
+# ---------------------------------------------------------------------------
 
 
 def test_no_rung_order_violation():

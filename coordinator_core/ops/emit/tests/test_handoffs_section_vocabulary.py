@@ -33,7 +33,15 @@ from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 from coordinator_core.ops.emit.sections import handoff_columns
 from coordinator_core.win_portability import no_console_creationflags
 
+# The tail of this file (`test_compute_handoff_columns_resolves_shipped_in_
+# via_git` and its sibling) resolves `shipped_in` via a real `git log`
+# lookup against a throwaway repo -- the production behaviour under test is
+# that real git resolution, not a mocked stand-in for it. Most tests above
+# it mock `_query_records` only, not git, but the module-level marker covers
+# the file uniformly per Rule 2(b).
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -118,7 +126,10 @@ def test_status_superseded_still_coerces_to_claimed_grandfathered(mock_qr, tmp_p
     assert records[0]["status"] == "claimed"
 
 
+# ---------------------------------------------------------------------------
 # status axis: old DR-084 vocabulary is TOLERATED (coerced up to the new wire
+# vocabulary at ingest) — transitional shim, restored 2026-07-23
+# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("old_status,expected", [("active", "open"), ("consumed", "claimed")])
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
@@ -235,7 +246,10 @@ def test_deployment_state_shared_vocabulary_passes_through_unchanged(
     assert records[0]["deployment_state"] == deployment_state
 
 
+# ---------------------------------------------------------------------------
 # deployment_state axis: old DR-084 vocabulary is TOLERATED — abandoned splits
+# into continued/closed via _coerce_legacy_abandoned, restored 2026-07-23
+# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_deployment_state_abandoned_without_successor_coerces_to_closed_stale(

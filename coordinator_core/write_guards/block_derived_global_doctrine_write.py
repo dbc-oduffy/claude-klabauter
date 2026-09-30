@@ -36,10 +36,9 @@ deny-the-deriver guard would risk.
 Exact target set (do NOT widen): the ONE derived surface,
 ``<home>/.claude/CLAUDE.md``, for every plausible home root this host's
 ``Path.home()``/``~`` could resolve to (``HOME``, ``USERPROFILE``,
-``os.path.expanduser("~")``), plus ``CLAUDE_HOME`` honored as a direct
-``.claude`` root (that env var points AT ``.claude``, not at ``$HOME`` — the
-same asymmetry ``block_dev_side_mirror_wiki`` and
-``block_home_dir_memo_delivery`` both preserve). Deliberately NOT
+``os.path.expanduser("~")``), plus ``<claude_config_dir()>/CLAUDE.md``
+(``CLAUDE_CONFIG_DIR``, else ``home_dir() / ".claude"``; ``CLAUDE_HOME`` names
+the PARENT of ``.claude``, never ``.claude`` itself). Deliberately NOT
 ``coordinator_core.claude_md_budget.is_claude_md_class``/
 ``is_governed_claude_md`` — both of those predicates ALSO match
 ``global-doctrine/CLAUDE.md`` (the authoring surface, where writes are
@@ -108,6 +107,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.write_guards._guard_level import apply_level
@@ -121,6 +121,11 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE"
 
 #: NEGATIVE-SPEC: there is deliberately no literal fallback root here. A
+#: message that fabricates a path for an unregistered root hands the reader
+#: somewhere that does not exist — and a codename literal in that position
+#: publishes as a redaction placeholder naming nothing at all. When the
+#: registry lookup fails, `_deny_reason` names the registry key the operator
+#: sets instead of inventing a location.
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -177,15 +182,16 @@ def _expand_tilde(file_path: str, home: str) -> str:
 def _derived_live_target_suffixes() -> List[str]:
     """Normalized candidate strings for the ONE derived surface this guard
     governs — ``<home>/.claude/CLAUDE.md`` for every home root
-    ``_home_candidates`` resolves, plus ``CLAUDE_HOME`` honored as a direct
-    ``.claude`` root (see module docstring)."""
+    ``_home_candidates`` resolves, plus ``<claude_config_dir()>/CLAUDE.md``
+    (Convention A: ``CLAUDE_HOME`` is the parent of ``.claude``)."""
     targets: List[str] = []
     for home in _home_candidates():
         targets.append(_normalize(home.rstrip("/\\") + "/.claude/CLAUDE.md"))
 
-    claude_home = os.environ.get("CLAUDE_HOME", "")
-    if claude_home and claude_home.strip():
-        targets.append(_normalize(claude_home.strip().rstrip("/\\") + "/CLAUDE.md"))
+    try:
+        targets.append(_normalize(str(claude_config_dir()).rstrip("/\\") + "/CLAUDE.md"))
+    except Exception:
+        pass
 
     seen = set()
     out: List[str] = []

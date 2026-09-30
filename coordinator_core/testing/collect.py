@@ -46,6 +46,9 @@ FAMILY_RUNNER_KIND: dict[str, str] = {
 ALL_FAMILIES: frozenset[str] = frozenset(FAMILY_GLOBS)
 
 # DEC-2: exact-basename frozenset, matched against directory BASENAMES only
+# (never a path glob), pruned in-place during os.walk so excluded subtrees are
+# never descended. Forward-safe against a newly-added venv and portable to
+# other repos (not a DoE-specific two-path hardcode).
 EXCLUDED_DIRNAMES: frozenset[str] = frozenset(
     {".git", "node_modules", ".venv", "site-packages", ".coordinator-venv"}
 )

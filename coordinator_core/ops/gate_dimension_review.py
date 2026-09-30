@@ -255,7 +255,26 @@ def _review_dimension_check(
 
     repo_root_str = str(repo_root)
 
+    # ONE spawn, invariant in len(changed_files).
+    #
+    # `changed_files` cannot go into argv at all: above ~1400 paths it
+    # overflows the Windows cap (WinError 206) and the whole check used to
     # fail open with UNAVAILABLE. Pathspec-batching that argv (the first fix)
+    # closed the fail-open but bought a cost linear in the changeset: 2000
+    # paths measured 718.75ms across 55 processes, over the DR-344 500ms
+    # brightline, and the bulk changesets on this branch run past 26,000
+    # files. `git log` has no `--pathspec-from-file`, so the pathspec is
+    # taken out of the argument list entirely: ask git once for the range's
+    # own commits-and-touched-paths and intersect in process. Building
+    # `wanted` is O(len(changed_files)), linear and cheap but real; the
+    # git-output scan against it below is the part that's free, O(paths in
+    # range) and independent of how many paths the caller asked about.
+    #
+    # Set membership, not a scan.
+    #
+    # `-z` because a non-ASCII path is otherwise quoted and would not match
+    # the caller's own spelling. Separators are normalised on both sides so a
+    # Windows caller passing backslashes still matches git's forward slashes.
     wanted = {p.replace("\\", "/").strip() for p in changed_files if p.strip()}
 
     rc, out, err = _run_git(

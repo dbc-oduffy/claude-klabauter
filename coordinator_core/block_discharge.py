@@ -83,7 +83,12 @@ def _append_record(path: str, record: dict) -> bool:
         directory = os.path.dirname(path)
         os.makedirs(directory, exist_ok=True)
         line = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+        # coordinator_core.atomic_append is the one atomic-multi-process-append
         # primitive: plain os.open(..., O_APPEND) is both non-atomic under
+        # concurrent writers on Windows (CRT emulates it via seek+write) AND
+        # silently rewrites '\n' to '\r\n' there (CRT text-mode translation),
+        # even for already-encoded bytes. Reuse rather than re-open-code either
+        # fix here.
         atomic_append.append_line(path, line)
         return True
     except OSError:

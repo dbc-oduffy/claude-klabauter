@@ -152,7 +152,16 @@ class TestGrantRouteClearsBumpForeignRepoWriteOnce:
         try:
             assert _dispatch_decision(cmd, sid, str(repos["anchor"])) == "deny"
 
+            # 2. Run the grant CLI for that guard name -- the in-process
+            # entrypoint `python3 -m coordinator_core.session.em_guard_grant
+            # grant <guard> <reason>` resolves to. `main()` takes no
+            # explicit session/cwd override (matching the real CLI's own
+            # argv shape), so the calling session is resolved the same way
             # the real CLI resolves it: `COORDINATOR_SESSION_ID` plus the
+            # process cwd -- both pinned to this test's own sid/anchor here
+            # so the grant lands where this test's assertions expect it,
+            # never onto whatever ambient session happens to be running
+            # this suite.
             monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
             monkeypatch.chdir(repos["anchor"])
             exit_code = eg.main(["grant", GUARD_NAME, "clearing a genuine cross-repo write"])

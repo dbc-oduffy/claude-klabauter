@@ -120,6 +120,8 @@ def test_argv_convention_matches_the_sibling_module(
         "with errors='replace' and defeats the byte-exactness it exists for"
     )
     # No `timeout=`: the bound is `run.LOCAL_PLUMBING_BUDGET_SECS`, and a
+    # module-private number here is exactly what test_shared_git_runner exists
+    # to stop growing back.
 
 
 def test_use_cache_false_sees_files_added_after_the_first_cached_call(

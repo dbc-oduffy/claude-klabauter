@@ -29,7 +29,10 @@ from coordinator_core.ops import warm_guard_evaluate
 from coordinator_core.warm import hook_http
 from coordinator_core.warm.entry_seam import try_warm_guard_dispatch
 
+#: Deliberately SCOPED (`-- foo.py`) so `check_git_commit_safe_commit_advise` -- an
 #: UNCONDITIONAL advisory-deny on any bare, unscoped `git commit`, independent of both
+#: this test's override and any repo state -- never fires alongside it. An unscoped form
+#: would make the assertions below fail for a reason that has nothing to do with
 #: `COORDINATOR_OVERRIDE_NO_VERIFY` or the env-forwarding boundary this suite pins.
 _NO_VERIFY_CMD = "git commit --no-verify -m x -- foo.py"
 
@@ -255,8 +258,14 @@ class TestEagerRegistrationEntry:
 
         ops._eager_import_all()
 
+        # `ipc.get_op_handler` is deliberately NOT used for the assertion: it has
+        # its own registry-miss lazy-import fallback (`_lazy_import_and_lookup`,
+        # keyed off the op name by convention) that would silently re-discover
         # this module even with a broken/missing `_EAGER_OP_MODULES` entry --
+        # confirmed by manually breaking that entry and observing
         # `get_op_handler` still resolve the handler. Reading `ipc._REGISTRY`
+        # directly is the only check that is actually gated on
+        # `_eager_import_all()` having done the registering.
         assert ipc._REGISTRY.get("warm_guard.evaluate") is not None
 
 

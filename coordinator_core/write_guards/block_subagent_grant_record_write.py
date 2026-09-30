@@ -210,7 +210,15 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 46 -- unique within the HARD-DENY phase (checked against the
 #: full set of hard-deny modules' PRIORITY values at HEAD this session: 10,
+#: 20, 30, 40, 45, 50, 56, 65, 125, 130, 132 taken). Ordering rationale:
+#: this module governs the SAME artifact family (the write-grant surface)
 #: as ``block_unauthorized_claude_md_write`` (PRIORITY 45) -- slotting
+#: immediately after it keeps the two grant-adjacent hard-deny legs
+#: co-located in the phase's evaluation order, ahead of the unrelated
+#: ``block_consumed_handoff_edit`` (50) and ``block_memo_status_hand_edit``
+#: (56) legs that follow. The phase runs first-non-None-wins, so relative
+#: order among non-overlapping-path guards has no behavioral effect here --
+#: this is a readability/grouping choice, not a correctness requirement.
 PRIORITY = 46
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}

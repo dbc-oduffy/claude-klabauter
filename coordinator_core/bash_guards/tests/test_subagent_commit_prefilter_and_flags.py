@@ -81,7 +81,11 @@ def _allows(monkeypatch, cmd):
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
+# ---------------------------------------------------------------------------
+# Hole (a) -- prefilter short-circuit for committing ops without "commit"
 # in their name. One case per op name in _COMMITTING_OP_NAMES that lacks
+# the substring.
+# ---------------------------------------------------------------------------
 
 
 def test_prefilter_admits_session_boot_sweep(monkeypatch):
@@ -260,21 +264,41 @@ def test_no_agent_id_em_main_loop_allows_scoped_git_commit():
     assert guard.check(payload) is None
 
 
+# ---------------------------------------------------------------------------
+# B-commit-matchers Finding 1 (P0, BLOCKED verdict) -- fourteen registered
 # committing ops missing from _COMMITTING_OP_NAMES, several bypassing even
+# the widened prefilter with no obfuscation (the exact "closed hole reopens
+# on a different name" pattern this module's history keeps producing).
+# One denial case per op name added by this fix.
+# ---------------------------------------------------------------------------
 
 _NEWLY_ADDED_COMMITTING_OPS = (
     "commit.exec_bit_change",
     "ceremony.post_commit_tail",
     # "fleet.archive_shipped_handoffs" REMOVED -- op key SUBSUMED (not
+    # renamed), module deleted 2026-08-25 (C1b, docs/plans/2026-08-25-the-
+    # handoff-auto-archive-comes-back-capped.md) -- see guard.py's own
     # _COMMITTING_OP_NAMES comment.
     "fleet.archive_release_accumulator",
     "fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings",
+    # "fleet.archive_actioned_memos" was REMOVED here for a period -- op
+    # KILLED outright by PM ruling (ops/ceremony/tail_ops.py), between its
+    # 2026-08-23 kill and its b8795931a rebuild; during that window it was a
+    # dead allowlist entry that made the archival caller census read as nine
+    # instead of eight. It is a RETURN now -- registered again, live. See
     # guard.py's own _COMMITTING_OP_NAMES comment.
     "fleet.archive_completed_handoffs",
     "fleet.archive_paper_trail",
     "fleet.archive_queue_entry",
+    # "fleet.prune_closed_bugs", "handoff.archive_transition", and
+    # "ceremony.commit" REMOVED (C3, docs/plans/2026-08-29-the-push-
+    # subsystem-leaves-and-then-the-pipeline-can-go.md): all three are among
+    # the six dead entries the `d20d56893` 200ms sweep left in
     # `_COMMITTING_OP_NAMES` -- unregistered names this fixture must not
+    # assert membership for once the real set drops them. See
+    # `block_subagent_commit.py`'s own allowlist comment for the removal
+    # record.
     "handoff.ship_and_archive",
 )
 _NEWLY_ADDED_COMMITTING_OPS__SUBJECT_CLASS = "op-name"
@@ -302,23 +326,75 @@ def test_newly_added_committing_ops_all_members_of_the_set():
     assert not missing, f"fixture list references names not in the real set: {missing}"
 
 
+# ---------------------------------------------------------------------------
+# B-commit-matchers Finding 1b -- durability. A hand-maintained
 # _COMMITTING_OP_NAMES drifts (it just did, three times in this file's
+# history). This derives the population of committing ops from the real op
+# registry + a static source scan for known commit-sink call sites, and
 # asserts _COMMITTING_OP_NAMES covers it.
+#
+# STATED LIMIT (see the module docstring's 2026-08-02 part-8 entry): this is
+# a single-module static source scan for a DIRECT call to a known sink
+# helper. It does NOT catch an op that reaches a commit only by delegating
+# to another op module's handler function (e.g. ``handoff.ship_and_archive``
+# routes through ``fleet.archive_shipped_handoffs``'s own ``_handle_act``,
+# which this scan cannot see without also statically tracing call graphs
+# across modules) -- that class of gap needs a human re-grep, same as the
+# one that found this op by hand. An honest partial guard, not a full one.
+#
+# AST, not substring (coordinator:code-reviewer, 2026-08-17): the scan used
 # to be ``any(marker in source for marker in _COMMIT_SINK_CALL_MARKERS)`` --
+# a whole-module substring test that can't tell a real call site from the
+# same text sitting in a comment or a string. It produced exactly one false
+# positive live: ``repo_setup.validate_target_root`` was flagged and added
 # to ``_COMMITTING_OP_NAMES`` because ``bootstrap_repo.py`` has the literal
+# text ``commit_scoped(`` inside a comment explaining why that module does
+# NOT call it; the handler itself is read-only. The scan below instead
+# parses each module and looks for an actual ``ast.Call`` node whose callee
+# name matches a sink -- comments, strings, and docstrings can no longer
+# match.
+# ---------------------------------------------------------------------------
 
 _COMMIT_SINK_CALL_MARKERS = (
     "archive_and_commit(",
     "rm_and_commit(",
     "commit_scoped(",
     "commit_with_message_file(",
+    # Sixth pass (2026-08-27): the marker list is the ratchet's real reach,
+    # and it was one name short of the op every commit now routes through.
+    # `ceremony.commit` (ops/ceremony/commit_op.py :: _handler) called
+    # `run_commit_pipeline(...)` directly -- a genuine sink, absent from the
+    # four markers above -- so the scan walked that module, found no Call it
+    # recognized, and passed while `ceremony.commit` sat outside
     # _COMMITTING_OP_NAMES. The guard meant to deny a subagent's committing-op
+    # invoke therefore granted the live committer by name. Found by plan
+    # triage, not by this test, which is the tell: a hand-maintained marker
+    # tuple bounds a mechanical scan, so the scan is only ever as complete as
+    # its least-recently-updated name.
+    #
+    # "run_commit_pipeline(" RETIRED (C3, docs/plans/2026-08-29-the-push-
+    # subsystem-leaves-and-then-the-pipeline-can-go.md): its subject,
+    # `commit_pipeline.run_commit_pipeline`, is deleted (C4 of the same
+    # plan) and its one op-registered caller this marker existed to catch,
     # `ceremony.commit`, was already removed from `_COMMITTING_OP_NAMES` by
+    # this same pass as one of the six dead entries the `d20d56893` sweep
+    # left behind -- see `block_subagent_commit.py`'s own allowlist comment.
+    # No live registered op reaches git via `run_commit_pipeline(...)` any
+    # more, so the marker's stated justification evaporated before the
+    # delete did; retiring it here is the stronger of the two reasons to
+    # act, not merely a consequence of the delete.
+    #
+    # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
+    # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) reaches git
+    # via `commit_paths(...)` directly -- not `run_commit_pipeline` -- so it
+    # needed its own marker, same lesson as the sixth-pass entry above.
     "commit_paths(",
 )
 
 
 #: Bare callee names derived from ``_COMMIT_SINK_CALL_MARKERS`` by stripping
+#: the trailing ``(`` -- one source of truth for both the marker strings
+#: (kept for their doc value in the frozenset above) and the AST scan below.
 _COMMIT_SINK_CALL_NAMES = frozenset(
     marker[:-1] for marker in _COMMIT_SINK_CALL_MARKERS
 )
@@ -326,7 +402,13 @@ _COMMIT_SINK_CALL_NAMES = frozenset(
 _KNOWN_DELEGATION_ONLY_COMMITTING_OPS = frozenset({"handoff.ship_and_archive"})
 
 
+# Keep decision, ceremony.scoped_git_commit (C3(c)): see
 # block_subagent_commit.py's own _COMMITTING_OP_NAMES comment (coordinator:
+# code-reviewer, 2026-08-27, Finding 4) for the rationale -- retained
+# deliberately, a killed op's name nothing can invoke. The one fact that
+# comment doesn't carry: 104 occurrences of this exact string across
+# coordinator_core/bash_guards/ are denial fixtures keyed to it, so removing
+# the entry is a fixture rewrite, not a correctness fix.
 
 
 def _source_calls_a_commit_sink(source: str) -> bool:

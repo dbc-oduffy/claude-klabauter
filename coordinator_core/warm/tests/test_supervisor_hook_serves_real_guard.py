@@ -43,7 +43,11 @@ from typing import Optional
 from coordinator_core.warm import cookie, skew, supervisor
 
 
+#: Cookie minted by the most recent `_bind_handler`, so `_post` can present
 #: it without every call site threading it. The listener now REQUIRES the
+#: boot cookie on every non-health request; these tests bind a `tmp_path`
+#: engine root, so reading the AMBIENT cookie here would authenticate
+#: against the wrong root and refuse.
 _BOUND_TOKEN: Optional[str] = None
 
 

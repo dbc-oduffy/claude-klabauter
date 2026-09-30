@@ -15,7 +15,44 @@ import pytest  # noqa: E402
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+# ---------------------------------------------------------------------------
 # AC-1: KNOWN_TYPES — exact 31-type set
+#
+# Golden pin derived from schemas/coordinator-registry.manifest.json (source
+# of truth). Reconciled 2026-07-25: this pin had drifted silently because the
+# hand-rolled fail_test() helper (fixed in 23f65fce) let these assertions run
+# to completion without ever raising, so three real upstream manifest edits
+# in coordinator-content-repo never got mirrored here:
+#   - "flight-recorder" REMOVED — DoE commit 3aa9a79f ("C8(subsume): retire
+#     flight-recorder — rm schema, repoint registry+artifact-shape to
+#     run-report") deleted the flight-recorder schema and repointed the
+#     registry to run-report; the type was subsumed, not merely renamed.
+#   - "run-report" ADDED — the same 3aa9a79f repoint.
+#   - "tier-u-grant" ADDED — DoE commit 58cdc600 ("Tier-U grant token schema +
+#     manifest registration").
+#   - "sizing-object" ADDED — DoE commit adf618d5 ("register sizing-object
+#     doc-type — manifest row + drift-guard fixture").
+#   - "subagent-sidecar" ADDED — manifest registration closing AC-10's unmet
+#     half (agent-side decision-object container scaffolder, schemaName null
+#     — schema-of-record is schemas/decision-object.schema.json $defs/
+#     subagent_sidecar, not a standalone file); retires the coordinator-doc-
+#     new / type_enum.py local shims that pre-dated this manifest row.
+# Reconciled 2026-08-02 (stale-test cleanup, triage-F): DoE commit 410eae0d1
+# ("manifest + skills: --type and kind now agree", deliverable
+# dlv-baton-kind-vocabulary-one-axis-per-field-1be219) renamed the docTypes
+# entries so the --type flag agrees with the kind value each scaffolds:
+#   - "spinoff-roadmap" RENAMED to "roadmap-baton" (legacy spelling remains a
+#     permanent CLI-side alias in coordinator-doc-new, not a second manifest
+#     row).
+#   - "spinoff-goal" RENAMED to "goal-seed" (same alias treatment).
+#   - "spinoff-roadmap-creator" RENAMED to "roadmap-seed" (same alias
+#     treatment).
+# Prior reconciliation history (2026-07-12: spike-result, strategic-self-
+# description, workflow; 2026-07-11: spinoff-goal, spinoff-roadmap-creator,
+# goal, recovery) retained below for context. Do NOT weaken this to a
+# subset/superset check — it is an exact-set pin; add new entries here in the
+# same commit that adds a type to the manifest.
+# ---------------------------------------------------------------------------
 _EXPECTED_KNOWN_TYPES: frozenset[str] = frozenset({
     "handoff",
     "spinoff",
@@ -85,6 +122,8 @@ def test_central_receiver_ids():
 
 
 # AC-7: CENTRAL_REPO_BASENAMES retired (C1 — basename anchor abandoned; the
+# manifest key was removed; the Python constant is gone). No assertion here.
+# The validate-frontmatter-schema.js consumer must be updated separately.
 
 
 def test_sidecar_suffixes():
@@ -97,7 +136,15 @@ def test_sidecar_suffixes():
     }
 
 
+# ---------------------------------------------------------------------------
+# AC-9: repo_key_to_em_id — central anchor and normal cases (C1)
+#
+# repos.content_root resolves to the manifest-derived canonical central identity
+# (identity.centralReceiverIds[0] == "coordinator-content-repo-em"), NOT the retired
+# "claude-central-em" literal — see _central_canonical_id() in
+# coordinator_registry.py. "claude-central-em" remains a valid receiver alias
 # (see CENTRAL_RECEIVER_IDS) but is no longer the canonical return here.
+# ---------------------------------------------------------------------------
 
 
 def test_repo_key_to_em_id_content_root_canonical():
@@ -147,9 +194,19 @@ def test_content_root_em_alias_in_central_receiver_ids():
     assert "coordinator-content-repo-em" in reg.CENTRAL_RECEIVER_IDS
 
 
+# ---------------------------------------------------------------------------
+# C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
+#
 # The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (CONTENT_ROOT,
 # REPO_CONTENT_ROOT, repos.content_root) into names no machine has ever set,
+# leaving the split-repo layout's manifest bootstrap with zero live rungs and
+# an import-time FileNotFoundError. These tests exercise the module in a
+# fresh subprocess (import-time behavior can't be observed by re-importing an
 # already-imported module) with CONTENT_ROOT/REPO_CONTENT_ROOT unset, covering both
+# the pointer-present and pointer-unreachable cases.
+#
+# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
+# ---------------------------------------------------------------------------
 import subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
 import tempfile  # noqa: E402
@@ -221,12 +278,21 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
         assert "_vendor" in result.stdout
 
 
+# ---------------------------------------------------------------------------
+# The two tests above assert the ladder's
 # PRESENCE (case a passes via whatever ambient rung this dev box happens to
+# carry; case b asserts a negative and can't witness a working rung). Four
 # prior reviews shipped BLOCKER-1 (a present-but-INERT ladder on a real OSS
+# box) through exactly that gap. This test closes it: a payload-shaped
+# fixture tree (coordinator/bin/lib/ not flattened + lib/ flattened, per
+# setup/publish-targets.portable) imported under a genuinely OSS-shaped
 # environment (empty HOME/USERPROFILE/COORDINATOR_SETTINGS_HOME, no
 # CLAUDE_PLUGIN_ROOT, no .coordinator-content-root pointer reachable), with the manifest
+# reachable ONLY via the new marketplace-cache rung
 # (_mp_marketplace_cache_rung(), BLOCKER-1a) under a synthetic CLAUDE_HOME —
 # asserting import SUCCEEDS and _MANIFEST_PATH resolves inside that rung's
+# fixture, not merely that some path got printed.
+# ---------------------------------------------------------------------------
 import shutil  # noqa: E402
 
 _COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
@@ -323,7 +389,15 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
         )
 
 
+# ---------------------------------------------------------------------------
+# C1D: content_root() gets the same codename-free rung ladder, in-process via
+# monkeypatch (not a subprocess — content_root() runs at CALL time, not import
+# time, so isolating just its own rungs from the ambient machine's real
 # CONTENT_ROOT/REPO_CONTENT_ROOT/registry state is enough; the module import at the
+# top of this file already proved import-time behavior above).
+#
+# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
+# ---------------------------------------------------------------------------
 import tempfile as _tempfile  # noqa: E402
 
 import pytest  # noqa: E402

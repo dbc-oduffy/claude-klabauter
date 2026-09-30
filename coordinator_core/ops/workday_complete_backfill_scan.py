@@ -63,31 +63,31 @@ Negative-spec (do NOT "fix" mid-port — faithfully reproduced oracle quirks):
       do NOT "fix" this seam. (The test suite pins its own process TZ to UTC
       so fixture commits and the window agree deterministically in CI/local
       runs — that's a test-determinism fix, not a change to this seam.)
-    - Per-day-coverage residual (2026-07-19 PM ruling — daily changelogs are a
-      per-day narrative, not per-machine): under the per-day coverage
-      predicate, a day carrying a changelog block AND a daily-summary record
-      is "covered," so a concurrent peer whose own unmerged branch never
-      wraps that day is NOT re-flagged as a gap, even though that peer's own
-      work is itself unrecorded. This is a deliberate consequence of retiring
-      per-machine attribution wholesale, not a bug: the prior TM5/TM6
-      false-negative
-      (see cross-repo/inbox/2026-07-13-claude-central-em-backfill-scan-engine-migration.md
-      § Regression oracle) was itself an artifact of per-machine EXCLUSIVITY
-      ATTRIBUTION — retiring that attribution wholesale retires the tradeoff
-      it existed for. The full-day union span (below) only covers
-      fully-skipped days; merged peer work is reached only when the peer's
-      branch merged into the union refs (work/*/* ∪ main ∪ HEAD) before the
-      wrapping machine ran. The genuine "authored nothing, only pulled a
-      peer's work" reconcile-only case is a merge-only day, already excluded
-      by `--no-merges`. See also: the 2026-07-19 per-day-changelog memos
-      (cross-repo/inbox/2026-07-19-claude-central-em-changelog-de-machine-gap-predicate.md,
-      cross-repo/inbox/2026-07-19-claude-central-em-changelog-append-day-de-machine-filename.md),
-      the 2026-07-01 multi-machine-coverage blind-spot-1 plan
-      (docs/plans/2026-07-01-workday-complete-multi-machine-coverage.md), and
-      the 2026-06-30 machine-a incident it documents (a machine's merged work
-      dangled uncovered because coverage was checked per-machine).
-    - AND-not-OR coverage (2026-08-06 fix, superseding the 2026-07-19 DEC-1
-      OR): `_day_covered` requires BOTH a week-changelog block (live under
+    - Per-day coverage, not per-machine: a day is covered when it carries a
+      changelog block AND a daily-summary record (existence) AND, when it has
+      commits, its summary anchor is tip-aligned (`_tip_gap_days`). Tip
+      alignment reads each `archive/daily-summaries/<day>*.md`'s live
+      `covered_tip_sha` (`changelog_ops._recorded_anchor_sha`) against the day's
+      full-day-union tip:
+        * some anchor equals or descends from the tip -> covered;
+        * every anchor is a strict ancestor of the tip (a same-day commit
+          landed after the wrap) -> gap, emitted as the ordinary row;
+        * an anchor that is neither ancestor nor descendant (a concurrent peer
+          holds the tip on another branch) -> covered. This diverged-anchor
+          residual is deliberate: a peer whose own branch never wraps the day
+          is not re-flagged;
+        * no resolvable anchor (`none`, `null`, missing, fenced-only,
+          unresolvable) -> covered, with a stderr WARN naming the day.
+      Ancestry comes from one lookback-wide `rev-list --parents`, walked in
+      process. A walk that leaves that window before meeting its target
+      reports "not related", which can only push a day toward covered — the
+      clock-skew residual. The tip leg costs a fixed number of git processes
+      per scan regardless of `--lookback`; the per-day loop spawns none.
+      The union span only covers fully-skipped days; merged peer work is
+      reached only when the peer's branch merged into the union refs
+      (work/*/* ∪ main ∪ HEAD) before the wrapping machine ran. A merge-only
+      day is excluded by `--no-merges`.
+    - AND-not-OR coverage: `_day_covered` requires BOTH a week-changelog block (live under
       `state/week-changelog/` or swept into `archive/week-changelogs/<week>/`,
       see `_has_changelog_block`) AND
       `archive/daily-summaries/<day>*.md` to exist — see `_day_covered`'s own
@@ -105,9 +105,9 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, time as _dtime, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.daily_day import local_day as _coordinator_local_day
@@ -359,7 +359,7 @@ def _day_covered(root: str, state_root: Optional[str], day: str) -> bool:
     Legitimately summary-less days (Step 7's `skip_no_new_work` disposition —
     see `coordinator_core/workday_complete/brief.py` `jp_step4b_analyst_dispatch`)
     are NOT a false-positive risk under AND: that disposition requires zero new
-    commits for the day, and `_scan_day` below only calls this predicate before
+    commits for the day, and `main` only emits a row through
     `_scan_full_day_union` — a day with zero commits in the full-day union ref
     span never gets a row appended regardless of what this predicate returns
     (see `_scan_full_day_union`'s early `if not entries: return`). The AND
@@ -429,7 +429,13 @@ def _rev_parse_parent(root: str, sha: str) -> str:
     return out or sha
 
 
-def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> None:
+def _scan_full_day_union(
+    root: str,
+    day: str,
+    prev_day: str,
+    out: List[str],
+    refs: Optional[List[str]] = None,
+) -> None:
     """Full-day union span (AC3/DEC-3): union of `git log --no-merges` across
     work/*/* ∪ main ∪ HEAD (local + origin), deduped by SHA. base = parent of
     the oldest commit, tip = newest, count = unique non-merge commit count,
@@ -464,7 +470,8 @@ def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> 
     in-repo consumer reads `cols[4]` at all, so the redundancy is unowned
     until a `shas`-reading consumer exists, in this repo or the mirror side.
     """
-    refs = _collect_union_refs(root)
+    if refs is None:
+        refs = _collect_union_refs(root)
     if not refs:
         return
     lines = _git_lines(
@@ -511,22 +518,153 @@ def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> 
 
 
 # ---------------------------------------------------------------------------
-# per-day scan
+# tip-alignment leg
 # ---------------------------------------------------------------------------
 
+_NO_ANCHOR_VALUES = frozenset({"", "none", "null"})
 
-def _scan_day(
-    root: str,
-    state_root: Optional[str],
-    day: str,
-    prev_day: str,
-    out: List[str],
-) -> None:
-    """Emit exactly one row for `day` if it is uncovered (per `_day_covered`),
-    else emit nothing. No per-machine fan-out (2026-07-19 per-day PM ruling)."""
-    if _day_covered(root, state_root, day):
-        return
-    _scan_full_day_union(root, day, prev_day, out)
+
+def _day_anchor_tokens(root: str, day: str) -> Dict[str, List[str]]:
+    """Map each `archive/daily-summaries/<day>*.md` path to its live anchor
+    token (empty list when the file carries none or a none/null value)."""
+    from coordinator_core.ops.changelog_ops import _recorded_anchor_sha
+
+    found: Dict[str, List[str]] = {}
+    pattern = os.path.join(root, "archive", "daily-summaries", f"{day}*.md")
+    for path in sorted(glob.glob(pattern)):
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            found[path] = []
+            continue
+        tok = _recorded_anchor_sha(text)
+        found[path] = [tok] if tok and tok.lower() not in _NO_ANCHOR_VALUES else []
+    return found
+
+
+def _day_tips(
+    root: str, refs: List[str], days: List[str]
+) -> Dict[str, str]:
+    """Union tip per day from ONE `git log` over the whole span, bucketed by
+    host-local calendar day. A commit stamped exactly 23:59:59 belongs to both
+    that day and the next, matching the inclusive `_window_args` bounds."""
+    wanted = set(days)
+    first, last = min(days), max(days)
+    prev_first = _date_minus(first, 1)
+    if not prev_first:
+        return {}
+    lines = _git_lines(
+        [
+            "-C",
+            root,
+            "log",
+            "--no-merges",
+            "--format=%ct %H",
+            *_window_args(prev_first, last),
+            *refs,
+        ]
+    )
+    buckets: Dict[str, List[Tuple[int, str]]] = {}
+    seen: Set[str] = set()
+    for ln in lines:
+        parts = ln.split(" ", 1)
+        if len(parts) != 2 or parts[1] in seen:
+            continue
+        try:
+            ts = int(parts[0])
+            dt = datetime.fromtimestamp(ts)
+        except (ValueError, OverflowError, OSError):
+            continue
+        seen.add(parts[1])
+        owners = [dt.date().isoformat()]
+        if dt.time() == _dtime(23, 59, 59):
+            owners.append((dt.date() + timedelta(days=1)).isoformat())
+        for owner in owners:
+            if owner in wanted:
+                buckets.setdefault(owner, []).append((ts, parts[1]))
+    tips: Dict[str, str] = {}
+    for day, entries in buckets.items():
+        tip, _oldest = _tip_and_oldest(entries)
+        if tip:
+            tips[day] = tip
+    return tips
+
+
+def _parent_graph(root: str, refs: List[str], anchors: List[str], since_day: str) -> Dict[str, List[str]]:
+    """Parent map from ONE `git rev-list --parents` over the union refs and the
+    resolved anchors, bounded below by `since_day`."""
+    graph: Dict[str, List[str]] = {}
+    for ln in _git_lines(
+        ["-C", root, "rev-list", "--parents", f"--since={since_day}T00:00:00", *refs, *anchors]
+    ):
+        fields = ln.split()
+        if fields:
+            graph[fields[0]] = fields[1:]
+    return graph
+
+
+def _tip_gap_days(root: str, covered_days: List[str], refs: List[str]) -> Set[str]:
+    """Existence-covered days whose every resolvable summary anchor is a strict
+    ancestor of the day's union tip. Warns on stderr for a covered day with no
+    resolvable anchor. Spawns a fixed number of git processes (at most four,
+    counting the caller's `for-each-ref`) independent of `len(covered_days)`."""
+    if not covered_days:
+        return set()
+    per_day = {day: _day_anchor_tokens(root, day) for day in covered_days}
+    tokens = sorted({t for files in per_day.values() for toks in files.values() for t in toks})
+    resolved: Dict[str, Optional[str]] = {}
+    if tokens:
+        from coordinator_core.ops.changelog_ops import _batch_resolve_commits
+
+        resolved = _batch_resolve_commits(Path(root), tokens)
+    day_anchors: Dict[str, Set[str]] = {}
+    for day, files in per_day.items():
+        shas = {resolved.get(t) for toks in files.values() for t in toks}
+        day_anchors[day] = {s for s in shas if s}
+
+    tips = _day_tips(root, refs, covered_days)
+    graph: Optional[Dict[str, List[str]]] = None
+    closures: Dict[str, Set[str]] = {}
+
+    def closure(start: str) -> Set[str]:
+        cached = closures.get(start)
+        if cached is not None:
+            return cached
+        seen_nodes: Set[str] = set()
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node in seen_nodes:
+                continue
+            seen_nodes.add(node)
+            stack.extend(graph.get(node, ()) if graph is not None else ())
+        closures[start] = seen_nodes
+        return seen_nodes
+
+    gaps: Set[str] = set()
+    for day in covered_days:
+        tip = tips.get(day)
+        if tip is None:
+            continue
+        anchors = day_anchors[day]
+        if not anchors:
+            print(
+                f"workday_complete_backfill_scan: WARN {day}: no resolvable "
+                f"covered_tip_sha in {sorted(per_day[day])} — tip alignment "
+                f"unchecked, day treated as covered",
+                file=sys.stderr,
+            )
+            continue
+        if tip in anchors:
+            continue
+        if graph is None:
+            floor = _date_minus(min(covered_days), 2)
+            all_anchors = sorted({a for s in day_anchors.values() for a in s})
+            graph = _parent_graph(root, refs, all_anchors, floor or min(covered_days))
+        tip_closure = closure(tip)
+        if all(a in tip_closure for a in anchors):
+            gaps.add(day)
+    return gaps
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +803,7 @@ def main(argv: List[str]) -> int:
 
     out: List[str] = []
 
+    days: List[Tuple[str, str]] = []
     i = lookback
     while i >= 1:
         day = _date_minus(today, i)
@@ -674,7 +813,16 @@ def main(argv: List[str]) -> int:
         prev_day = _date_minus(day, 1)
         if not prev_day:
             continue
-        _scan_day(root, state_root, day, prev_day, out)
+        days.append((day, prev_day))
+
+    covered = [d for d, _p in days if _day_covered(root, state_root, d)]
+    covered_set = set(covered)
+    refs = _collect_union_refs(root) if days else []
+    gap_days = _tip_gap_days(root, covered, refs) if covered else set()
+    for day, prev_day in days:
+        if day in covered_set and day not in gap_days:
+            continue
+        _scan_full_day_union(root, day, prev_day, out, refs)
 
     for line in out:
         print(line)

@@ -96,7 +96,10 @@ ABSENT = object()
 
 _TREE_MODE = 0o40000
 
+#: Tree-sha-keyed, content-addressed, bounded the same way
 #: `commit_walk._COMMIT_CACHE` and `git_objects._OBJECT_CACHE` are -- see
+#: those modules' own comments for why bounding a content-addressed cache is
+#: still worth doing on a warm long-running engine.
 _TREE_CACHE_MAX_ENTRIES = 4096
 _TREE_CACHE: "Dict[Tuple[str, str], Optional[Dict[str, Tuple[int, str]]]]" = {}
 
@@ -180,6 +183,9 @@ def find_exact_blob_rollbacks(
     findings: List[RollbackFinding] = []
     for path, new_value in candidates.items():
         # Depth counts VERSIONS of the path, not commits: a commit that did
+        # not touch `path` adds no version. V(1) is head's own value -- equal
+        # to it is no change, never a finding (counting it made every
+        # unchanged claimed path a depth-1 hit, and three tripped breadth-3).
         version = 0
         previous: object = _NO_VERSION
         for _step, sha in ancestors:

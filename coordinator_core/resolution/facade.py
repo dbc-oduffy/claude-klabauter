@@ -162,6 +162,11 @@ def guard_plugin_root(
 
 
 #: Named RUNNABLE SCRIPT for the unreachable verdict — never a slash command
+#: (claude-klabauter#31 item 2; a cold path with no engine can have no session
+#: to run one in). ``scripts/setup.py`` is claude-klabauter's own standalone
+#: installer (see its module docstring, Responsibility 3): it idempotently
+#: writes the ``repos.claude_klabauter`` registry key this probe checks, so
+#: running it from a claude-klabauter checkout is what would flip the verdict.
 _UNREACHABLE_REMEDIATION_SCRIPT = "scripts/setup.py"
 
 

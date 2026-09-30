@@ -150,8 +150,12 @@ def _bounded(old_text: str, line: str) -> str:
     lines.append(line)
     if len(lines) > MAX_RECORDS:
         lines = lines[-MAX_RECORDS:]
+    # Byte budget, not character budget: `record_commit_attempt` serializes
+    # with ensure_ascii=False, so non-ASCII content is multi-byte on disk —
+    # counting Python characters here would silently let the real file exceed
     # MAX_BYTES. `len(lines) > 1` bounds the loop even for a single record
     # whose own UTF-8 encoding alone exceeds MAX_BYTES (newest-survives rule
+    # below still applies — that one line is kept regardless).
     while (
         len(lines) > 1
         and sum(len(l.encode("utf-8")) + 1 for l in lines) > MAX_BYTES

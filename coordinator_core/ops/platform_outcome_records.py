@@ -46,6 +46,7 @@ except ImportError:  # pragma: no cover - exercised only on a broken environment
 
 # Mirrors platform-outcome.schema.json's SECONDARY staleness constant
 # (PLATFORM_OUTCOME_STALENESS_DAYS = 30), named here rather than encoded as a
+# bare magic number, per that schema's own stated convention.
 PLATFORM_OUTCOME_STALENESS_DAYS = 30
 
 PLATFORM_ENUM_ORDER = ["macos", "linux", "windows"]

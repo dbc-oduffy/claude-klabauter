@@ -269,7 +269,10 @@ def test_sink_sets_are_derived_from_part14_not_re_enumerated():
     assert "run" not in guard._OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES
 
 
+# ---------------------------------------------------------------------------
+# Layer 2 -- end-to-end verdicts. The adversarial corpus: every row is a
 # real commit reached through text the payload ASSEMBLES.
+# ---------------------------------------------------------------------------
 
 _ASSEMBLY_COMMANDS = [
     ("concat-in-os-system", "python3 -c \"import os; os.system('scoped-git'+'-commit -m x')\""),
@@ -306,7 +309,9 @@ _ASSEMBLY_COMMANDS = [
     ("shell-true-opaque", "python3 -c \"import subprocess,os; subprocess.run(os.environ['X'], shell=True)\""),
 ]
 
+#: Boundary anchoring is the one thing folding must not take with it: a name
 #: ASSEMBLED into ``evil-scoped-git-commit`` is no more that helper than the
+#: contiguous spelling is.
 _BOUNDARY_NEGATIVE_COMMANDS = [
     ("evil-prefixed-assembled", "python3 -c \"import os; os.system('evil-scoped-git'+'-commit -m x')\""),
     (
@@ -316,7 +321,11 @@ _BOUNDARY_NEGATIVE_COMMANDS = [
     ),
 ]
 
+#: Realistic usage: commands a dispatched agent would plausibly run that
+#: mention commit-ish text. This corpus is the false-positive budget, and
+#: every row must ALLOW. It is the measurement that chose mechanism 2's
 #: shipped narrowing (`_OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES`): with the
+#: brief's un-narrowed shape, four of these denied.
 _REALISTIC_COMMANDS = [
     (
         "pytest-one-test-file",
@@ -420,7 +429,15 @@ _REALISTIC_COMMANDS = [
 
 #: PART 18's PRICED COST, and the only two rows that left `_REALISTIC_
 #: COMMANDS` to get here. Both are ``subprocess.run([sys.executable, ...])``:
+#: an argv vector whose PROGRAM SLOT does not resolve, which part 18 refuses
+#: because an unresolved program is exactly what mechanism 2 exists for. They
+#: were measured at part 17 and the trade was TAKEN at a cost of two, not
+#: overlooked -- the decision is recorded at
 #: ``_ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES`` in the guard. They are cheap: each
+#: bites only a command that BOTH routes through ``python3 -c`` AND mentions
+#: commit-ish text, and the workaround is to spell the program (``'python3'``)
+#: or to invoke pytest directly instead of through an interpreter payload --
+#: which the ``pytest-one-test-file`` row above still does, and still allows.
 _PART18_PRICED_DENY_COMMANDS = [
     (
         "pytest-argv-file",
@@ -508,7 +525,10 @@ _ARGV_SLOT0_ALLOW_COMMANDS = [
 
 
 #: PART 19 (2026-08-05) -- the four SINK-IDENTIFICATION gaps, each confirmed
+#: ``GUARD=ALLOW`` at the part-18 HEAD. Parts 16-18 all asked what a sink
 #: RECEIVED; none of these got that far, because the call was never
+#: recognised as a sink. Grouped by gap, with the alias/spelling variants
+#: that prove each fix is a rule rather than a patched spelling.
 _PART19_SINK_ID_DENY_COMMANDS = [
     ("alias-run", "python3 -c \"from subprocess import run as r; import sys; r(sys.argv[1:])\""),
     (
@@ -543,6 +563,7 @@ _PART19_SINK_ID_DENY_COMMANDS = [
         "python3 -c \"import subprocess,json; d=json.load(open('c.json')); subprocess.run(**d)\"",
     ),
     # Gap 4 -- slot 0 was known, and it was an INTERPRETER running an
+    # unknown program.
     (
         "nested-python-c",
         "python3 -c \"import subprocess,os; subprocess.run(['python3','-c',os.environ['X']])\"",
@@ -566,7 +587,11 @@ _PART19_SINK_ID_DENY_COMMANDS = [
     ),
 ]
 
+#: Part 19's narrowness, row by row -- the shapes that must NOT move, because
+#: each is a spelling honest work uses and none of them hides a program.
+#: ``nested-resolvable-c-*`` is the load-bearing pair: a resolvable nested
 #: payload is RECURSED into, not blanket-refused, so it allows when its own
+#: contents allow.
 _PART19_SINK_ID_ALLOW_COMMANDS = [
     (
         "local-alias-run-unresolved-element",
@@ -606,7 +631,13 @@ _PART19_SINK_ID_ALLOW_COMMANDS = [
 ]
 
 
+#: PART 20 (2026-08-05) -- part 19's stated residual, closed. Both brief rows
+#: were confirmed ``GUARD=ALLOW`` at part 19's HEAD: ``subprocess.getoutput``
+#: and ``getstatusoutput`` run a shell command line, and fell between the
+#: argv door (they are not in that family) and the whole-command-text door
+#: (``subprocess`` is subtracted from the module leg). The alias rows are the
 #: load-bearing half -- they prove admission is by RESOLVED RECEIVER, so it
+#: cannot be evaded by renaming and does not depend on the spelling.
 _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS = [
     (
         "getoutput-environ",
@@ -641,6 +672,10 @@ _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS = [
 ]
 
 #: Part 20's NARROWNESS, and the reason the leg is receiver-qualified at all:
+#: ``getoutput`` is a name honest code hangs off its own objects. Each row
+#: here reaches a ``.getoutput``/bare ``getoutput`` that is NOT
+#: ``subprocess``'s, and each must still ALLOW -- a name-only admission would
+#: have denied all three for nothing.
 _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
     (
         "unrelated-module-receiver",
@@ -783,7 +818,9 @@ def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected):
         assert result == expected, label
 
 
+# ---------------------------------------------------------------------------
 # Part 19 (2026-08-05) -- sink IDENTIFICATION, not slot resolution.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -812,6 +849,9 @@ def test_identified_sink_with_a_knowable_program_still_allows(monkeypatch, label
 def _disable_part19(monkeypatch):
     monkeypatch.setattr(guard, "_payload_bindings", lambda tree: guard._EMPTY_BINDINGS)
     #: Spelled out rather than read off `_NON_INERT_ATTRIBUTE_PREFIXES`: part
+    #: 21 dropped the ``exec`` root, and this substitute must keep reproducing
+    #: PART 18's behaviour (both roots, plain ``startswith``) or the measured
+    #: baseline below silently drifts with a later edit.
     monkeypatch.setattr(
         guard,
         "_name_is_process_creation",
@@ -1173,7 +1213,10 @@ def test_communicate_is_subtracted_from_the_program_slot_family():
     )
 
 
+# ---------------------------------------------------------------------------
+# Part 20 (2026-08-05) -- the whole-command-text sinks that could only be
 # admitted RECEIVER-QUALIFIED.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1291,6 +1334,11 @@ def test_subprocess_shell_out_surface_is_audited_not_sampled():
         and issubclass(getattr(_subprocess, name), BaseException)
     }
     #: Windows-only: `STARTUPINFO` configures a `CreateProcess` call and
+    #: `Handle` wraps a Windows process/thread handle -- both are inputs to
+    #: the argv-vector family above, not sinks in their own right, and both
+    #: are absent from `dir(subprocess)` on POSIX. Gated the same way the
+    #: stdlib itself gates them (`sys.platform == "win32"`), so a POSIX run
+    #: of this audit still fails loudly if either name ever appears there.
     windows_only = {"STARTUPINFO", "Handle"} if sys.platform == "win32" else set()
     accounted = argv_family | command_line_family | non_executing | exceptions | {
         "CompletedProcess"
@@ -1335,7 +1383,9 @@ def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
     guard._fold_python_c_payload.cache_clear()
 
     moved = {label for label in live if live[label] and not before[label]}
+    #: ``getoutput-assembled-commit-identity`` is absent on purpose: its
     #: argument RESOLVES, so mechanism 1 already denied it on content before
+    #: part 20 identified the sink. It is a deny row, not a moving row.
     assert moved == {
         "part20-deny:" + label
         for label, _cmd in _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS

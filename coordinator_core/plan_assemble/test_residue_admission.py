@@ -10,6 +10,8 @@ from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 from coordinator_core.resolve_coordinator_clone import ResolveCoordinatorCloneError
 from coordinator_core.plan_assemble import residue as residue_mod
 # Fixture helpers are IMPORTED from the sibling module, never copied: two
+# drifting definitions of the same residue corpus is a worse failure than
+# the import coupling, and importing them does not import its pytestmark.
 from coordinator_core.plan_assemble.test_residue import (
     _make_residue_dir,
     _patch_content_root,
@@ -150,7 +152,14 @@ def test_next_move_three_arms_ac4(
     assert str(tmp_path) not in sized_result["next_move"]
     assert "Render segments[] in order." in sized_result["next_move"]
 
+    # execution
+    # DR-346 (2026-08-21, PM-ratified) retired the corpus walk that used to
+    # resolve `origin_plan_id` by search -- `governing_plan` (a repo-relative
+    # FK, resolved by the same root-confined stat `sizing_object` uses, never
+    # a search) is now the only field that admits `execution`. A citation
+    # via `origin_plan_id` alone, with no `governing_plan` stamped, reads
     # `unsized` (`UNSIZED_UNSTAMPED_NEXT_MOVE_PREFIX`) -- that stranding arm
+    # is not this test's concern.
     plan_ref = tmp_path / "docs" / "plans" / "2026-08-20-a.md"
     plan_ref.parent.mkdir(parents=True)
     plan_ref.write_text(

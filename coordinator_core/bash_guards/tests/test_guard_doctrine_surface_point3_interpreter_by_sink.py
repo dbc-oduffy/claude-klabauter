@@ -31,6 +31,8 @@ ALLOW_CASES = [
     ("nested call in the path argument still resolves the mode", f"python3 -c \"open('/tmp/x','w').write(str(len(open('{GOV}').read())))\""),
 ]
 
+#: Measured against a reconstruction of the old predicate, not assumed: the
+#: cases the pre-narrowing interpreter leg actually denied. Everything else in
 #: ALLOW_CASES is a control. See `test_the_regression_cover_is_labelled_honestly`.
 REGRESSION_COVER = {
     "read governed, write scratch",

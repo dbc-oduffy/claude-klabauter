@@ -204,15 +204,30 @@ _TAIL_CAP_BYTES = _TAIL_MAX_CHUNKS * _TAIL_CHUNK_BYTES
 _MAX_WALKBACK_LINES = 64
 
 # ALLOW-LIST of state-bearing line shapes (module docstring (c)) — the walk-back
+# treats everything NOT matching this as a control/metadata line to walk past,
+# never as something to classify. Inverted from a deny-list on 2026-08-30
+# (state/audits/2026-08-30-group-em-classifier-blindness.md): the transcript
+# line-type vocabulary is open and demonstrably growing (`atis-latch` appeared
+# on 40/48 sampled sessions the day it shipped with no code change here), so a
 # deny-list goes UNKNOWN-blind on every new addition while an allow-list only
+# ever degrades to "walk one more line back". `assistant` and `user` are
+# state-bearing by type; `system` is state-bearing ONLY for the three subtypes
+# the ladder itself models in `_classify_one` — every other `system` subtype
+# (and every other type entirely: `attachment`, `atis-latch`, `ai-title`,
+# `cost-state`, `mode`, `permission-mode`, `last-prompt`, `queue-operation`,
+# `file-history-snapshot`, `file-history-delta`, etc.) is walked past.
 _STATE_BEARING_SYSTEM_SUBTYPES = frozenset(
     {"away_summary", "stop_hook_summary", "turn_duration"}
 )
 
+# Step 2's grace window before an in-flight tool call downgrades from
 # PRODUCING:tool-in-flight to PAUSED:tool-unanswered. Inherited from the
+# spike's probe-paused.py:114-148 as a bare literal with no traceable
 # measurement basis — named here honestly as INHERITED-UNVERIFIED, not as a
+# calibrated constant. Do not cite this as measured.
 _TOOL_UNANSWERED_GRACE_SECONDS = 90
 
+# Tools whose stop_reason=="tool_use" arm resolves to PAUSED:asking-human
 # rather than PRODUCING:tool-in-flight (module docstring (c), step 2).
 _ASKING_HUMAN_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
@@ -394,6 +409,9 @@ def _has_live_delegation_evidence(delegation_evidence: bool) -> bool:
 
 _DELEGATION_ACTIVITY_GRACE_SECONDS = 120
 # calibrated debounce window (that file's _DEBOUNCE_SECONDS, empirically derived
+# 2026-07-30 from 176,949 mid-run windows) — reused here as "recently active" rather
+# than re-derived, since it already answers the adjacent question "is this subagent
+# still mid-turn" from the same mtime-shaped evidence.
 
 
 def _subagents_dir_for(transcript_path: Optional[str]) -> Optional[str]:

@@ -103,8 +103,13 @@ def test_an_unenumerated_identity_says_so(
     assert header == guard._unenumerated_header_line("my-exec-worker")
     assert "on no roster" in header
     assert "findings" not in header.lower()
+    # (2026-09-06) Strengthened from an equality against the bare
     # `_TYPE_UNENUMERATED_HEADER_LINE`: naming the CAUSE without naming the
     # IDENTITY still leaves the reader unable to act, because the roster is
+    # checkable and the string is not. Three sessions across two repos spent
+    # hours on a Workflow-dispatched planner unable to tell an absent
+    # `agent_type` from a present-but-unrostered one — this deny was
+    # compatible with both readings.
     assert "my-exec-worker" in header
 
 

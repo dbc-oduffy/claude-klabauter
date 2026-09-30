@@ -296,8 +296,14 @@ def main(argv: List[str]) -> int:
     inbox_moves = 0
     archive_moves = 0
 
+    # Phase 1: flat cross-repo/*.md (non-README) -> cross-repo/inbox/
+    #
     # Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    # evidence): the collision check stays per-item and spawn-free
+    # (`os.path.exists`, unchanged) -- ONLY the git-spawning leg (`_move_one`
+    # per src) is collapsed. Every item in a phase shares the same
     # destination DIRECTORY, so `_move_batch` runs it as one batched
+    # trackedness probe plus one `git mv`/`git add` for the whole phase.
     inbox_items: List[Tuple[str, str, str]] = []
     for src in sorted(glob.glob(os.path.join(cross_repo_dir, "*.md"))):
         if not os.path.isfile(src):

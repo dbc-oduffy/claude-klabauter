@@ -205,7 +205,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 reason="_install_one (POSIX branch): shutil.copyfile + chmod +x, content-diff short-circuited",
             ),
         ),
+        # Windows branch: same op, target dir resolved under
         # `%LOCALAPPDATA%` (falling back to `~/AppData/Local`) instead of
+        # `~/.local`; never `~/.local/bin`, which is not an idiomatic
+        # Windows PATH entry (see `_default_wrapper_bin_dir`'s docstring).
         ShapedClause(
             discovered_by="Path(params['wrapper_src']).name (the installed leaf filename)",
             entry_template=WriteSurfaceEntry(

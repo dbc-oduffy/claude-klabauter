@@ -161,7 +161,13 @@ def test_gate_fails_loud_when_agent_bin_empty_scan(tmp_path: Path) -> None:
     ledger_path = tmp_path / "ledger.json"
     _write_ledger(ledger_path, [])
 
+    # coordinator_claude_klabauter_root() resolves this checkout's own real root in
+    # this test process (there is no way to force it to fail without
+    # mutating process-wide env/registry state a parallel test run may also
     # depend on), so this asserts the CONTRACT via the explicit-override
+    # path instead: a directory that exists but is not a real
+    # coordinator/bin/ (empty) must still refuse to report green, exactly
+    # like an unresolvable one would.
     missing_dir = tmp_path / "does-not-exist"
     result = big.check_bin_inventory_gate(
         agent_bin=missing_dir, inventory_path=inventory_path, ledger_path=ledger_path

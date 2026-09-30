@@ -58,7 +58,9 @@ _lesson_cli = _load_cli(_LESSON_PROMOTE_PATH, "coordinator_lesson_promote")
 _queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
 
 
+# ---------------------------------------------------------------------------
 # AC1-pos — content_root() resolves from CONTENT_ROOT env override
+# ---------------------------------------------------------------------------
 
 
 def test_content_root_returns_env_override():
@@ -72,6 +74,7 @@ def test_content_root_returns_env_override():
 def test_content_root_strips_empty_env():
     """content_root() ignores CONTENT_ROOT='' (empty string is not a valid override)."""
     # Also clears REPO_CONTENT_ROOT (rung 1b) so this machine's real ambient
+    # override doesn't win before the mocked machine-local rung is reached.
     with (
         unittest.mock.patch.dict(os.environ, {"CONTENT_ROOT": "", "REPO_CONTENT_ROOT": ""}, clear=False),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value="/ml/doe"),

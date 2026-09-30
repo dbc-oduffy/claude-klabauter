@@ -124,7 +124,12 @@ def test_wrap_leaves_none_of_the_migrated_writer_tail_fixtures_dirty_and_refuses
     baton_rel = baton_result["path"]
     assert (repo / baton_rel).is_file(), "fixture failure: replan baton was not written"
 
+    # -----------------------------------------------------------------
+    # Peer fixture — a real claiming writer (touch_written_path via
+    # subagent_sandbox.provision_report._provision), but claimed by a
     # DIFFERENT live session. Not one of this plan's four seam entry
+    # points; included as the negative half's real artifact.
+    # -----------------------------------------------------------------
     peer_policy = _write_policy(tmp_path, C1_ELIGIBLE_TYPE)
     peer_rel = _provision(
         {"agent_type": C1_ELIGIBLE_TYPE, "session_id": peer_id},
@@ -165,7 +170,9 @@ def test_wrap_leaves_none_of_the_migrated_writer_tail_fixtures_dirty_and_refuses
             f"not survive to a committable state: git status:\n{after}"
         )
 
+    # -----------------------------------------------------------------
     # THE NEGATIVE HALF: the live peer's artifact is untouched.
+    # -----------------------------------------------------------------
     assert peer_rel in after, (
         "a live peer's artifact was swept by this session's wrap — exactly "
         f"the cross-session-sweep incident this plan exists to prevent:\n{after}"

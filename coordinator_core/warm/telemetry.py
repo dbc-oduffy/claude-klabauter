@@ -219,6 +219,14 @@ def record_client_cold_fallback(
     """
     record: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     # WHAT A BARE TIMESTAMP COULD NOT ANSWER. This file recorded 1600 rows in
+    # 13 seconds on 2026-08-25 (~123/s) -- a burst that is, by the shape of
+    # this instrument, many short-lived processes each taking one miss rather
+    # than one process retrying. Which processes, and running which op, was
+    # unanswerable from the rows, so the defect could not be chased at all
+    # (state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-
+    # seconds.yaml). Both keys are OMITTED when unknown, so the six days of
+    # rows already on disk keep their exact shape and a caller that cannot
+    # name its op is not made to invent one.
     if op is not None:
         record["op"] = op
     if pid is not None:
@@ -561,7 +569,13 @@ def warm_rate(engine_root: Optional[Path] = None) -> dict:
 
 DEGRADE_FILENAME = "degrade.jsonl"
 
+#: A request WAS delivered to a transport handler and this process chose
+#: (or was forced) to answer without the served warm response -- the
 #: distinction PM ruling 2 draws against the HARNESS-side silent fail-open
+#: `http-hook-loopback`/`http-front-door`'s own `cannot_observe_reason`
+#: already names: that reason is honest about the caller never reaching us
+#: at all, and silent about what happens once one does. `kind="cold_run"`
+#: is this module's answer for the latter.
 KIND_COLD_RUN = "cold_run"
 
 KIND_HOOK_TIMEOUT = "hook_timeout"
@@ -731,9 +745,30 @@ class ServerTelemetry:
         transport: Optional[str] = None,
         engine_token: Optional[str] = None,
     ):
+        # `transport` names which transport's life this row describes, and is
+        # OMITTED from `snapshot()` when None. That default is what keeps the
+        # pipe server's rows byte-identical to the ~seven days already on disk.
+        # It exists because the HTTP transport was untelemetered until
+        # 2026-08-26 and, once it is not, both transports append to the SAME
+        # `telemetry.jsonl` -- an undifferentiated file would silently change
+        # the denominator under every existing census. Absence therefore means
+        # "the pipe server, or a row written before this field", and a reader
+        # separating the two populations filters on the presence of this key
+        # rather than inferring one.
         # `engine_token` names WHICH ENGINE GENERATION this life served, and
+        # is OMITTED from `snapshot()` when None, on the identical contract as
+        # `transport` above -- absence means "a row written before this field",
+        # never "no token".
+        #
         # WHY IT IS LOAD-BEARING RATHER THAN DECORATIVE: `supervisor_pipe_name`
+        # embeds `skew.compute_client_token(root)`, so an old-token and a
         # new-token generation elect on DISTINCT pipe names and legitimately
+        # coexist during a stamp rotation's drain window. A concurrent-listener
+        # high-water taken across the whole file therefore counts that designed
+        # overlap as if it were orphaning, and can never fall to 1 no matter how
+        # correct the election is. Keying lifetimes by this field is what turns
+        # that census from an unfalsifiable global number into the per-generation
+        # one the single-instance property is actually about.
         self._lock = threading.Lock()
         self._clock = clock
         self._transport = transport

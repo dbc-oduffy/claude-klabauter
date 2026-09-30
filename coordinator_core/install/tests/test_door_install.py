@@ -104,6 +104,11 @@ def test_install_removes_shadowing_ps1_sibling(tmp_path):
     shadow.write_text("# stand-in for the generic .ps1 forwarder body\n", encoding="utf-8")
 
     # Ownership moved 2026-08-22: `install_door()` is the WINDOWS-only
+    # path, so claiming the bare name from inside it was dead code on
+    # POSIX. `scripts/setup.py :: install_warm_door` now calls
+    # `claim_bare_name` once, after either branch lands a real door.
+    # This test covers the helper; the real-path coverage lives in
+    # scripts/test_setup.py :: test_install_warm_door_posix_branch_claims_the_bare_name.
     door_install.install_door(bin_dst, engine_root)
     assert shadow.exists(), (
         "install_door must NOT claim the bare name itself -- it is unreachable "
@@ -266,7 +271,11 @@ def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkey
 
 def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, monkeypatch):
     # PREBUILT-BRANCH TEST, SO PLATFORM IS THE SKIP KEY, NOT FILE PRESENCE.
+    # `install_door` routes on platform first and POSIX never reads the prebuilt
     # pair at all -- it compiles. Skipping on `_PREBUILT_DOOR_EXE.exists()`
+    # instead ran this Windows assertion down the POSIX build branch on any box
+    # carrying the ignored local `door` artifact, where it can only ever report
+    # DID NOT RAISE.
     if sys.platform != "win32":
         pytest.skip("install_door only reads the prebuilt exe/sidecar pair on Windows")
     if not door_install._PREBUILT_DOOR_EXE.exists():

@@ -324,12 +324,12 @@ def test_handler_five_way_merge_all_legs_fire_in_fixed_order(tmp_path):
                     ):
                         # The silent Workflow-run capture leg is folded into the same
                         # gather but must never contribute to the merged text — left
-                        # un-mocked here (its default early-exit on a non-Workflow
-                        # tool_name returns None) so this test also proves it stays
+                        # un-mocked here (the handler never schedules it for a non-Workflow
+                        # tool_name, and its own early-exit returns None) so this test also proves it stays
                         # silent by construction, not merely by omission.
                         result = asyncio.run(
                             pad._handler(
-                                {"session_id": SESSION, "tool_name": "Bash"}
+                                {"session_id": SESSION, "tool_name": "Agent"}
                             )
                         )
 
@@ -430,3 +430,31 @@ def test_handler_reads_no_params_field_beyond_the_seven_mapped_fields(
 
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "GROUP EM WATCH" in context
+
+
+def test_handler_schedules_no_thread_for_tool_name_gated_legs_that_cannot_fire():
+    spawned = []
+
+    async def _record(fn, *args, **kwargs):
+        spawned.append(fn.__name__)
+        return ""
+
+    with mock.patch("asyncio.to_thread", _record):
+        asyncio.run(pad._handler({"session_id": SESSION, "tool_name": "Read"}))
+    assert spawned == [
+        "_check_context_pressure_sync",
+        "_check_runtime_tripwire_sync",
+        "_check_group_em_watch_arm_sync",
+    ]
+
+    for tool_name, extra, leg in (
+        ("Agent", {}, "_check_first_agent_dispatch_sync"),
+        ("Workflow", {"transcript_path": "t.jsonl"}, "_capture_workflow_run_record_sync"),
+        ("Bash", {"command": "git commit -m x"}, "_release_claims_on_bash_commit_sync"),
+    ):
+        spawned.clear()
+        with mock.patch("asyncio.to_thread", _record):
+            asyncio.run(
+                pad._handler({"session_id": SESSION, "tool_name": tool_name, **extra})
+            )
+        assert leg in spawned

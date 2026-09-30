@@ -142,6 +142,9 @@ _HOT_PATH_MARKERS = ("write_guards/", "bash_guards/", "hooks/", "ops/session/")
 
 #: FIRE-SET: the four walk-only forms, each mapped to its offered importable
 #: symbol. See module docstring "FIRE-SET". `--absolute-git-dir` joined this
+#: set on 2026-08-19: it was silent while `repo_root.absolute_git_dir` always
+#: spawned, and that function is now walk-only, so staying silent would hide a
+#: real elimination rather than avoid a false claim.
 _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
     "--show-toplevel": "coordinator_core.git.repo_root.show_toplevel",
     "--git-dir": "coordinator_core.git.repo_root.git_dir",
@@ -149,7 +152,9 @@ _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
     "--absolute-git-dir": "coordinator_core.git.repo_root.absolute_git_dir",
 }
 
+#: SILENT SET: the two forms that genuinely still spawn. Named here (not merely
 #: absent from `_FIRE_FLAG_TO_OFFER`) so a reader — and the guard's own
+#: self-tests — can see this is a deliberate exclusion, not an oversight.
 _SILENT_FLAGS = frozenset({"--show-prefix", "--is-inside-work-tree"})
 
 _OFFER_TEMPLATE = (
@@ -261,6 +266,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # One advisory envelope per response (INTERFACE.md) — lead with the
+        # first (lowest-ordinal-in-source-order) fire flag found.
         flag = fire_flags[0]
         symbol = _FIRE_FLAG_TO_OFFER[flag]
         reason = _OFFER_TEMPLATE.format(symbol=symbol, flag=flag, file_path=file_path)

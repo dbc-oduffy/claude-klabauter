@@ -245,7 +245,11 @@ def test_nongit_no_override_no_arg_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
+# ---------------------------------------------------------------------------
+# C5 sibling: gone-delivery sweep (2026-09-11 fix 1 — the sweep gets a
 # trigger). Same `main()`/`_run` harness; `COORDINATOR_OUTBOX_DIR` points at
+# an empty dir throughout so only the gone-delivery leg is under test.
+# ---------------------------------------------------------------------------
 
 def test_no_deliveries_at_all_silent(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)

@@ -32,6 +32,14 @@ def test_unreadable_handoff_surfaced_as_parse_error_stub(tmp_path):
     os.chmod(blocked, 0o000)
 
     try:
+        # Root (and any ACL-bypassing principal) reads mode-000 files, so the fixture
+        # cannot produce an unreadable file there; probe rather than test geteuid.
+        try:
+            blocked.read_bytes()
+        except OSError:
+            pass
+        else:
+            pytest.skip("fixture cannot make a file unreadable for this principal (e.g. root)")
         results = _collect_handoffs_with_parse_errors(tmp_path)
     finally:
         os.chmod(blocked, 0o644)

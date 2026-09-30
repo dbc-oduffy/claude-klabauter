@@ -19,7 +19,11 @@ _MATCHING_CAPTURE_OPTS = set(gate._MIRRORED.values()) | gate._CAPTURE_ONLY
 
 
 def test_mirrored_contract_only_capture_only_literal_content():
+    # Ground truth captured by hand this session — not derived from
     # gate._MIRRORED/_CONTRACT_ONLY/_CAPTURE_ONLY, unlike the fixtures
+    # above. A wrong edit to those tables must fail this test even though
+    # it would leave the derived fixtures and their assertions self-
+    # consistent (review-integrator finding #3, coordinatorcode-reviewer-e234de67.md).
     assert gate._MIRRORED == {
         "label": "label",
         "agent_type": "agentType",

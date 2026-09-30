@@ -24,13 +24,26 @@ class TailReader:
         self._path = path
         self._offset = 0
         self._buffer = ""
+        # One incremental decoder per reader. A plain bytes.decode() per
+        # chunk corrupts any multi-byte character straddling a read
+        # boundary -- with errors="replace" the leading bytes become U+FFFD
+        # immediately and the rest of the sequence arrives orphaned, so the
         # character is lost PERMANENTLY rather than merely late. An
+        # incremental decoder holds those trailing bytes until the next read
+        # completes them. (Review: code-reviewer slice 1, P1.)
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._line_offset = 0
         self._pending = ""
         self._line_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         if seek_to_tail:
+            # One-shot bounded-tail snapshot: seed the offset so the FIRST
             # poll() reads at most TAIL_BUFFER_BYTES rather than the whole
+            # file from byte 0. For a caller that polls exactly once (a
+            # hot-path hook taking a single snapshot, never a watcher that
+            # polls the same file repeatedly), this is the difference
+            # between a bounded tail read and a whole-file read — the
+            # carried offset and shrink-reset machinery below are unused
+            # either way for a one-shot caller.
             try:
                 size = os.stat(self._path).st_size
                 self._offset = max(size - TAIL_BUFFER_BYTES, 0)

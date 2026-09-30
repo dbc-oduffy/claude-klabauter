@@ -63,20 +63,62 @@ import coordinator_core.bash_guards as _bash_guards_pkg
 from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards._verdict import collecting, was_silent
 
+#: Modules that are never command guards, excluded structurally rather than
+#: content-wise: the dispatcher itself (never a guard) and its checks
+#: registry module.  `commit_tripwires` is deliberately NOT listed here --
+#: it falls out of the scan by the payload/cmd-signature filter below, per
+#: this module's own docstring.
 #: `commit_tripwires` is EXPLICITLY excluded here, not left to fall out of
+#: the by-construction filter alone -- `docs/reference/guard-dialect-
+#: coverage.md` states all five of its `check_*` functions "take no
+#: cmd/payload argument at all," but `check_staged_pathspec_divergence`
+#: (line 842) in fact takes a `cmd: str` first parameter, so the
+#: by-construction filter below would otherwise pick it up. That function
+#: is dialect-neutral by construction (a raw regex for a literal `git
+#: commit -- <path>` pattern, no `record_silent`/dialect import anywhere
+#: in the module) and is invoked from `dispatch_checks.py` as a repo-state
+#: check alongside its four siblings, not registered as an independent
+#: command guard -- kept excluded per the reference doc's authoritative
+#: scoping rather than re-litigated here. Flagged as a doc inaccuracy in
+#: this chunk's own report, not corrected in the doc.
 _NEVER_A_GUARD = frozenset({"dispatch", "dispatch_checks", "commit_tripwires"})
 
+#: One PowerShell-idiom command per discovered guard, chosen to land in
+#: that guard's own detection domain (git-literal, sentinel-basename,
+#: destructive-cmdlet, cross-repo-write, etc.) per `docs/reference/
+#: guard-dialect-coverage.md`'s row-by-row triage. A lambda so sentinel
 #: guards can read their own `_TARGET_BASENAME` off the live module rather
+#: than a basename hand-copied here and liable to drift from the guard's
+#: own constant.
 _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
+    # Positional-target form ("New-Item <target>"), NOT "-Path ...
+    # -ItemType File" -- matches each sentinel-creation guard's own
+    # PowerShell test class (`TestPowerShellDialect._ps_payload`,
+    # `test_new_item_cmdlet_denies`) exactly. The flagged form was
+    # confirmed (debug session, this chunk's rescope) to genuinely miss
+    # detection for the disarm-marker/worktree-sentinel guards' PS
     # cmdlet matcher -- a fixture artifact in the ORIGINAL test, not a
+    # guard defect: the plain form these guards' own authors already
+    # wrote reaches detection cleanly.
     "block_approval_sentinel_creation": (
         lambda mod: f"New-Item {mod._TARGET_BASENAME}"
     ),
     "block_disarm_marker_sentinel_creation": (
         lambda mod: f"New-Item {mod._TARGET_BASENAME}"
     ),
+    # `Remove-Item <sentinel>`, per this guard's own
+    # `TestPowerShellDialect.test_new_item_cmdlet_denies` sibling class
+    # (`test_block_dev_repo_sentinel_removal.py`) -- routed to
     # `check_advisory`, NOT `check` (see `_ENTRY_OVERRIDE` below): `check`
+    # is a retired dead leg no longer registered in `dispatch.py`
+    # (module's own docstring, "not reachable through the live dispatch
+    # chain, only directly callable"); `check_advisory` is "the guard's
+    # sole registered leg."
+    # Unquoted target, matching the guard's own PowerShell test class
     # exactly (`_payload("Remove-Item %s" % SENTINEL, ...)`) -- a quoted
+    # target ("...") was confirmed (debug session, this chunk's rescope)
+    # to miss this guard's PS matcher; fixture artifact, not a guard
+    # defect.
     "block_dev_repo_sentinel_removal": (
         lambda mod: f"Remove-Item {mod._TARGET_BASENAME}"
     ),
@@ -92,8 +134,13 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "block_subagent_destructive_action": (
         lambda mod: "Remove-Item -Recurse -Force C:/scratch/target"
     ),
+    # The two grant guards entered this test's population on 2026-08-19 with
     # the same subagent-boundary MATCHERS widening. Each fixture is the
     # `_MODULE_M_GRANT` constant from that guard's OWN test file, which its
+    # `TestPowerShellParity.test_subagent_grant_denies_via_powershell` already
+    # proves reaches a deny under the PowerShell tool name -- copied rather
+    # than invented so the fixture is known to land in the guard's detection
+    # domain (see this table's own header comment).
     "block_subagent_grant_acquisition": (
         lambda mod: (
             'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
@@ -143,7 +190,16 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "guard_no_optional_locks": lambda mod: "git status",
     "guard_reap_stale_git_lock": lambda mod: "git status",
+    # The four below entered this table on 2026-08-30, when the meta-test
+    # `test_every_powershell_declared_guard_has_a_fixture` was found red:
     # each declares `MATCHERS = COMMAND_TOOL_NAMES` (PowerShell included) and
+    # had no fixture, so BOTH property tests KeyError'd rather than
+    # certifying anything. Each command below was measured against its own
+    # guard under this file's own `_powershell_payload` shape before being
+    # written here -- not invented from the module's prose.
+    #
+    # Same positional-target `New-Item <target>` form as the sentinel-
+    # creation guards above, and for the same reason.
     "block_fleet_delegation_creation": (
         lambda mod: f"New-Item {mod._TARGET_BASENAME}"
     ),
@@ -154,11 +210,24 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         )
     ),
     "guard_host_subagent_bash_spawn_shapes": lambda mod: "rg TODO",
+    # A PowerShell-native write cmdlet at a governed surface. This one was
+    # a MISS until 2026-08-30: the guard declared PowerShell but carried
+    # only POSIX write markers, so `Set-Content <gov>` bare-cleaned. The
     # capability landed with `_PS_WRITE_CMDLET_RE` in the same session that
+    # authored this row -- the fixture and the capability are deliberately
+    # the same change, since a fixture proving nothing is worse than none.
     "guard_doctrine_surface_bash_write": (
         lambda mod: "Set-Content CLAUDE.md 'corrupted'"
     ),
+    # `p4_verb_fence` matches the PARSED ARGV VERB, never the literal string
+    # "p4 submit" -- a matcher on that phrase would let `p4.exe -p <port>
+    # ... submit` through, which is the exact defect D6 exists to prevent.
+    # This fixture carries a global flag (`-p ssl:host:1666`) and a `-c`
+    # flag ahead of the verb, so a PASS here proves the verb-resolution
+    # walk (`_p4_verb_and_args`'s global-flag skip loop), not a naive
+    # string match, is what reaches `submit` under PowerShell. Applicability
     # (`_is_p4_gated`, D1's marker check) is supplied via `_MONKEYPATCH_FOR`
+    # below -- this repo's own `coordinator.local.md` is not p4-mirrored.
     "p4_verb_fence": (
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
@@ -184,7 +253,15 @@ _ENTRY_OVERRIDE: Dict[str, str] = {
     "block_dev_repo_sentinel_removal": "check_advisory",
 }
 
+#: Per-guard extra payload fields merged over the base PowerShell payload.
+#: `block_reviewer_bash_outside_allowlist` fail-closes to allow (returns
+#: before ever reaching dialect/detection logic) unless `agent_id` matches
+#: its bare-hex-or-named-teammate identity shape AND `agent_type` is the
 #: sole `_CONFINED_FINDINGS_AGENTS` member -- a generic payload never
+#: reaches this guard's detection at all, per its own
+#: `test_block_reviewer_bash_outside_allowlist.py::_payload`/`_confine`
+#: helpers (default `agent_id="deadbeef0123"`, confined
+#: `agent_type="coordinator:code-reviewer"`).
 _PAYLOAD_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "block_reviewer_bash_outside_allowlist": {
         "agent_id": "deadbeef0123",
@@ -204,10 +281,26 @@ def _hazard_repo_monkeypatch(mod: Any, mp: pytest.MonkeyPatch) -> None:
     mp.setattr(mod, "_is_hazard_repo", lambda git_root: True)
 
 
+#: Per-guard monkeypatch preparation, applied to the live module (via the
+#: same seam each guard's own test file patches) immediately before the
+#: guard is called. Returns extra kwargs `_call_guard` should merge in
+#: (empty for guards needing only the patch, not an extra parameter).
+#: These seams (repo-hazard scoping, branch-set candidate enumeration) are
 #: APPLICABILITY gates independent of PowerShell-vs-bash dialect -- a
+#: guard that never gets past them under ANY dialect is not exercising
+#: the dialect/SILENT question at all, so this test drives them open the
+#: same way each guard's own author already does.
 _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]] = {
+    # This guard is behind the SAME `_is_hazard_repo` applicability gate
+    # `guard_branch_set_precedence`/`guard_longlived_branch_naming` used to
+    # share here before both were deleted (docs/plans/2026-08-21-the-
+    # advisory-band-gets-smaller-cheaper-and-honest.md, C6) -- entered this
     # test's population on 2026-08-19 when the subagent-boundary MATCHERS
     # parity widened its `MATCHERS` from `("Bash",)` to `COMMAND_TOOL_
+    # NAMES`. Its `check()` returns early at "REPO SCOPING" for any
+    # non-hazard repo, so without this seam the fixture command never
+    # reaches `_classify_segment` under EITHER dialect and the clean it
+    # returns says nothing about PowerShell.
     "block_noncanonical_branch_creation": lambda mod, mp: (
         _hazard_repo_monkeypatch(mod, mp) or {}
     ),
@@ -217,6 +310,11 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
         {},
     )[-1],
     # `governed_surfaces` is a REQUIRED positional this guard's caller
+    # (`dispatch.py`) resolves per call -- `_call_guard` cannot infer it, and
+    # omitting it is a TypeError, not a clean. Supplied here as the four
+    # governed doctrine surfaces, matching what the live resolver hands the
+    # guard; `check` fails OPEN on an empty list, so a real value is what
+    # makes this fixture exercise anything.
     "guard_doctrine_surface_bash_write": lambda mod, mp: {
         "governed_surfaces": [
             "CLAUDE.md",
@@ -447,11 +545,24 @@ class TestMatchersConsistency:
 
 #: Substring a module's source must carry, near its own MATCHERS/hold
 #: reasoning, to count as a DOCUMENTED hold rather than silent drift --
+#: the discharging artifact for "why does a PowerShell-capable classifier
 #: stay excluded from MATCHERS" is the ruling of record in
+#: `docs/reference/guard-tool-name-membership.md`, so a real hold cites it.
 _HOLD_CITATION_MARKER = "guard-tool-name-membership.md"
 
 
 #: Deliberately narrower than "references `Dialect.POWERSHELL` anywhere" --
+#: that would also catch every "declined-conversion" guard that only
+#: reaches PowerShell code to call `record_silent()` and return `None`
+#: (e.g. `guard_head_tail_rewrite`, `block_subagent_plan_body_bash_write`,
+#: `bump_outside_repo_write`), which is CORRECT, declared-SILENT behaviour,
+#: not the capability/declaration asymmetry this class targets. What
+#: actually distinguishes `block_subagent_destructive_action.py`'s prior
+#: state is a function that FORMATS AND RETURNS a PowerShell-specific deny
+#: reason string -- i.e. genuinely classifies and denies, not merely
+#: declines to rule. Matched via the same string shape every such deny
+#: return in this codebase uses: `return f"PowerShell ...` / `return
+#: "PowerShell ...`.
 _POWERSHELL_DENY_RETURN_RE = re.compile(r'return\s+f?["\']PowerShell\b')
 
 

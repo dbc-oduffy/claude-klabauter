@@ -181,6 +181,15 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
         module, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
     )
     # `expected_em_session_id` is OPTIONAL in production (added 2026-08-14 as a
+    # review finding, so the resolved identity can be cross-checked against the
+    # dispatching EM's session). The double must accept it: a stub narrower than
+    # the real signature raises TypeError at call time, which surfaces as the
+    # guard erroring rather than as the verdict under test. `**kw` (not a
+    # named `expected_em_session_id=""` param) so the double survives the NEXT
+    # signature change too, not just this one -- same convention already used
+    # by the sibling double in
+    # `test_block_reviewer_bash_outside_allowlist_named_dispatch_effective_type.py`'s
+    # `_capturing(git_root, agent_id, **kw)`.
     monkeypatch.setattr(
         module,
         "_read_backpointer_subagent_type",
@@ -188,8 +197,22 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
     )
     monkeypatch.setattr(module, "_write_block_log", lambda *a, **kw: None, raising=False)
     # `block-reviewer-bash-outside-allowlist` sits early in CONFINEMENT_DENY and
+    # reads the SAME payload identity every caller of this helper supplies, so
+    # in a quarantined test home it answers for guards it is not being asked
+    # about. In production it does not confine `coordinator:executor` at all:
     # DR-125 removed that type from `_helpers._CONFINED_FINDINGS_AGENTS`, no
+    # `bash_policy:` key confines it, and leg 3
+    # (`is_confined_by_roster_absence`) excludes it because the dispatch-seam
+    # roster enumerates it. Under the suite's home quarantine that roster is
     # UNRESOLVABLE -- `resolve_roster()` finds no content-root pointer -- and leg 3
+    # then fails CLOSED by design, denying every executor command regardless of
+    # what the cell under test is probing. That turns an advisory cell red and,
+    # worse, can hand a deny-asserting cell a green from the wrong guard.
+    # Restoring leg 3's production answer keeps each cell attributable to its
+    # own guard; it changes no guard's shipped behaviour. Same seam and
+    # rationale as `test_block_reviewer_bash_outside_allowlist.py`'s own
+    # `_stub_roster_absence_leg` fixture. Types the roster genuinely confines
+    # (`coordinator:code-reviewer`) are unaffected -- leg 2 still confines them.
     monkeypatch.setattr(
         reviewer_guard, "is_confined_by_roster_absence", lambda effective_type: False
     )
@@ -552,8 +575,12 @@ class TestBlockReviewerBashOutsideAllowlist:
                 cmd, agent_id="deadbeef0123", agent_type="coordinator:code-reviewer"
             )
 
+        # `curl` is outside the reviewer's Bash allowlist (`ls`/`cat`/`head`/
         # `tail`/`wc`/`find`/`file`/`stat`/`grep` -- see `_READONLY_FS_
         # BINARIES` -- are all IN it, so a base command must avoid every
+        # member or this asserts a false "baseline must deny" failure that
+        # is a test-authoring bug, not a guard finding). Any confined
+        # agent's non-allowlisted command must deny, prefix-reshaped or not.
         _assert_bypass_resistant(decide, "curl https://example.com")
 
 

@@ -34,6 +34,8 @@ import time
 from typing import Optional
 
 
+# Single shared home for the
+# Windows-popup-guard creationflags idiom; harness.py and op_fixtures.py import
 # this instead of each re-declaring `getattr(subprocess, "CREATE_NO_WINDOW", 0)`.
 SUBPROCESS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -127,10 +129,16 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
     error_envelope = False
     try:
         parsed = json.loads(stdout)
+        # A parsable-but-non-dict JSON
         # body (a bare list/scalar) is not a valid JSON-RPC envelope either; only
+        # a dict without an "error" key is accepted.
         error_envelope = not isinstance(parsed, dict) or "error" in parsed
     except (json.JSONDecodeError, ValueError):
+        # Rewritten to name the actual
+        # mechanism: unparsable stdout is treated as an invalid sample regardless
         # of returncode. A healthy exit 0 always emits a parsable JSON-RPC
+        # envelope, so a parse failure alone is sufficient grounds to invalidate
+        # the sample -- it does not "route via the returncode check".
         error_envelope = True
 
     if completed.returncode != 0 or error_envelope:

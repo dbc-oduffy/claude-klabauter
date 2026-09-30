@@ -69,6 +69,7 @@ def _run_shell(command: str) -> str:
         )
     else:
         result = subprocess.run(
+            # popup-intentional-last-resort: shell=True spawns a cmd.exe
             # intermediary that CREATE_NO_WINDOW does not suppress; the
             # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             command, shell=True, capture_output=True, text=True, timeout=10,
@@ -83,6 +84,7 @@ def _mask_clock(text: str) -> str:
     return _CLOCK_RE.sub("HH:MM:SS", text)
 
 
+#: Every calendar field `date(1)` prints, extracted independently of the
 #: ORDER and PUNCTUATION it prints them in. See `_date_facts`.
 _WEEKDAY_RE = re.compile(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b")
 _MONTH_RE = re.compile(

@@ -1335,7 +1335,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # `_REASON_CHMOD_EXEC_FOR_SH`) exempted twelve `os.chmod(script,
             # 0o755)` sites setting the exec bit on a generated
             # `#!/usr/bin/env bash` drop-in that `install_health_run.main()`
-            # invoked via `resolve_by_shebang` + `subprocess.call`. That
+            # invoked via a shebang-sniffing launcher + `subprocess.call`. That
             # dispatch is deleted outright -- a leg is now a `_NATIVE_LEGS`
             # row (`DeclaredLaunch` argv, always `sys.executable`, never a
             # shebang-sniffed interpreter) -- and the file's own remaining

@@ -148,7 +148,20 @@ _LOG = logging.getLogger(__name__)
 _FAMILY = "handoff"
 
 # Scan-rail refusal reasons. NEGATIVE SPEC: these never reach the cockpit
+# wire. They are `_scan_terminal`'s own refusals, reported through the
+# opt-in `skipped` out-param (and `plan_sweep`'s `scan_skipped`), which no
+# wire-building caller passes — `_handle_act`'s wire `skipped` keeps only
+# the reasons the producer contract already publishes, so AC-4's
+# byte-identity holds without an allowlist for a future reason to drift out
+# of. A rail that refuses a candidate MUST name itself here: a bare
+# `continue` makes "every rail still refuses" and "every rail silently
+# drops everything" indistinguishable from outside, which is how AC-2 was
+# ticked on a mechanism that reported nothing.
+#: Re-exported under this module's own scan-rail naming convention — the
+#: single definition lives in `coordinator_core.ops.ceremony.git_native`
 #: (`REASON_WORKTREE_DIRTY`), shared with `archive_sizings.py`'s identical
+#: gate rather than duplicated (the two copies used to read byte-for-byte
+#: the same string from two module-local constants).
 _SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE = "shipped-in-unresolvable"
@@ -241,6 +254,9 @@ _SUPPORTED_PACK_IDX_VERSION = 2
 
 
 # A `shipped_in` may be ABBREVIATED. git's own minimum useful abbreviation is
+# 7 hex; anything shorter is refused rather than range-searched, because the
+# match set gets wide enough that "some object starts with this" stops being
+# evidence about the recorded commit at all.
 _MIN_ABBREV_SHA_HEX = 7
 
 
@@ -670,8 +686,32 @@ def _dirty_handoff_relpaths(
     )
 
 
+# ---------------------------------------------------------------------------
+# Cheap frontmatter pre-filter (C4, AC-12) — a byte-level answer to
+# `_classify_branch`'s own `status` / `deployment_state` question, paid
+# BEFORE `dag._read_meta`'s full read+sha256+YAML parse, for the ~96% of
+# records that question alone refuses.
+#
+# Spec backlink: state/dispatch-briefs/2026-08-26-the-sweep-stops-paying-
+# for-a-room-it-nev/C4.md (staff-eng Finding 2, option (a); Finding 6's
+# closed fall-through enumeration).
+#
 # THE PRE-FILTER LIVES ENTIRELY HERE. It never replaces, wraps, or narrows
+# `dag._read_meta` — it only decides, per record, whether to call it at all.
 # It may only ever produce a SUPERSET of what `_classify_branch` over a full
+# parse would admit: uncertain always falls through to the full parse, and
+# `_prefilter_qualifies` below mirrors `_classify_branch`'s own True/False
+# formula rather than re-deriving a parallel rule that could drift from it.
+#
+# Negative-spec: does NOT resolve `shipped_in` (Branch B's "shipped"
+# sub-case) — a `deployment_state` already in the terminal set always
+# survives the pre-filter (returns None, "cannot disqualify") regardless of
+# `shipped_in`, deferring that refinement to the full parse + `_classify_
+# branch` exactly as today. Does NOT implement YAML 1.1's yes/no/on/off or
+# timestamp resolution — this repo's own `dag._parse_scalar` doesn't either
+# (only null/~, true/false, int, float), so `_prefilter_plain_scalar` mirrors
+# THAT parser, not the YAML spec.
+# ---------------------------------------------------------------------------
 
 _PREFILTER_READ_BYTES = 4096
 
@@ -864,7 +904,27 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
                 )
         return True, "", deployment_state, True
 
+    # Branch A: status == claimed (dual-tolerant fallback to the
+    # archived-schema grandfather "consumed", per DR-084). Reconciled with
+    # archival._is_terminal_or_archived_child (C3, docs/reference/
+    # handoff-legal-state-table.md § "Ruling: terminality is a
+    # deployment_state question, never a status one"): Branch B above
+    # already qualifies every claimed/consumed record whose
+    # deployment_state is terminal, so by the time control reaches here
+    # deployment_state is definitively NOT a member of
     # _TERMINAL_DEPLOYMENT_STATES. The old test — "terminal unless
+    # deployment_state == in_flight" — silently qualified a reparked baton
+    # (`claimed` + `ready_to_fire`/`awaiting_gate`, a session flipping
+    # deployment_state back without dropping status: claimed) as terminal:
+    # the census-row-1 false positive the table names. `ready_to_fire` and
+    # `awaiting_gate` are exactly as non-terminal as `in_flight` — none of
+    # the three is ever inferred terminal from "not in_flight".
+    #
+    # One exception, preserved on purpose and mirrored from
+    # archival._is_terminal_or_archived_child's own carve-out: a record
+    # with NO deployment_state key at all (absent, pre-DR-084 legacy
+    # shape) never carried the field, so it was never "reparked" — status
+    # alone still decides for it, exactly as it always has.
     if normalized_status in ("claimed", "consumed") and not deployment_state:
         return True, "", "consumed", False
 
@@ -990,7 +1050,11 @@ def _scan_terminal(
     if not live_paths:
         return results
 
+    # Populated LAZILY (C4): a record the cheap pre-filter can already refuse
+    # never pays `dag._read_meta`'s full read+hash+parse here — only a
     # pre-filter SURVIVOR does. The backfill that used to top this up for the
+    # whole live corpus is gone with Check 3: nothing downstream asks about a
+    # non-candidate node any more, so the lazy read is now the only read.
     metas: Dict[str, dict] = {}
     live_set_str: List[str] = [str(p) for p in live_paths]
 
@@ -998,7 +1062,15 @@ def _scan_terminal(
         if skipped is not None:
             skipped.append({"id": candidate_id, "reason": reason})
 
+    # Pass 1 — classify-first (C3, staff-eng Finding 1), now pre-filtered
+    # (C4). Branch A/B qualification is pure-memory (no git spawn, no
+    # no live-session resolution), so it runs over the
+    # WHOLE corpus first and collects only the survivors the remaining,
+    # costlier rails need to see. A record refused here (the bulk of the
+    # live corpus) never reaches the dirty rail below — for a record that is
     # BOTH worktree-dirty AND non-terminal this is a DESIGNED
+    # reason-precedence change (not-terminal wins), not a regression; see
+    # this module's own plan citation.
     prefilter_survivors: List[Tuple[Path, str, dict]] = []
     for p, key in zip(live_paths, live_set_str):
         rel = rel_id(p, worktree_root)
@@ -1029,6 +1101,8 @@ def _scan_terminal(
         return results
 
     # Rail 1 — worktree-dirty exclusion, scoped to SURVIVORS ONLY (C3).
+    # known_dirty_relpaths (in-plane reuse) short-circuits the git status
+    # spawn entirely; see this function's own docstring.
     if known_dirty_relpaths is not None:
         dirty_relpaths = known_dirty_relpaths
     else:
@@ -1046,7 +1120,54 @@ def _scan_terminal(
 
 
     for p, rel, meta, status_label, _branch_b_qualified in remaining:
+        # Check 3 (childlessness) was DELETED here on 2026-08-28, on the same
+        # PM ruling that removed the guard from `handoff_archive_transition`:
+        # "has a child means nothing to whether it should be archived or not...
+        # either a baton is used up or it's not." This sweep is archival on the
+        # ruling's own words, so the ruling reaches it.
+        #
+        # It had already been half-retired: DR-324 narrowed it so a live
         # SUCCESSION child no longer retained a Branch-B candidate, leaving only
+        # a live `forked_from` spinoff blocking. That surviving half rested on
+        # the claim that archiving would strand the spinoff's origin pointer --
+        # a claim whose citation ("DR-224, AC4") does not resolve and whose
+        # premise is false: see the deletion note in handoff_archive_transition
+        # and the measurement pinned in
+        # coordinator_core/tests/test_coverage_dag_archived_repo_root.py
+        # (TestSpinoffOriginSurvivesArchivalOfItsOrigin).
+        #
+        # The fail-closed `reverse_membership` ValueError arm went with it: once
+        # children do not decide archival, an error computing children is not a
+        # reason to retain forever.
+        #
+        # Check 4 (live claim holder) was DELETED here on 2026-09-04, on the PM
+        # ruling that closes the carve-out the block above had kept open:
+        # "a claim on a baton shouldn't prevent it from getting archived. What
+        # matters is that the baton is complete, not the liveness of the
+        # holder." Same principle as Check 3's deletion, one check later --
+        # completeness is the criterion, holder liveness is not a criterion at
+        # all. Both arms went: the claim-dir arm (cs_claim_holder_live) and the
+        # consumed_by-names-a-live-session fallback, since both were holder
+        # liveness under two different keys.
+        #
+        # It had no protective effect to lose. A holder still mid-work carries a
+        # non-terminal deployment_state, so Check 1 retains that baton on its own
+        # without any help from here; the only shape this check actually caught
+        # was terminal-AND-still-held, i.e. a session that had finished its work
+        # and not yet exited. On that shape it deferred archival of correctly
+        # finished work until some later session swept -- and it made the
+        # quick-wrap close condition (no terminal record left in state/handoffs
+        # when you report) unreachable by the very session that earned it.
+        #
+        # The window it did incidentally cover -- a holder stamping a terminal
+        # state and then reverting it, with the file moving out from under it --
+        # is real but is one this module already accepts for every unclaimed
+        # baton. If it ever needs covering, the shape is a re-read at move time,
+        # not a liveness gate. Deleting this also deleted the sweep's ONE
+        # resolve_live_session_ids() call and its per-candidate claim-dir stat.
+        #
+        # Checks 1/2 (terminality, worktree-clean) are untouched, and so is the
+        # fail-closed shipped_in retention in `_classify_branch`.
 
         terminal_since = _terminal_since(meta, p)
         note = status_label
@@ -1141,7 +1262,11 @@ def plan_sweep(
         return moves, skipped
 
     requested_set = set(candidate_ids)
+    # _scan_terminal's own return value is already oldest-first sorted; the
+    # cap slot for a caller-supplied candidate_id is decided by that order,
+    # NOT by the order candidate_ids happened to arrive in — the FIRST `cap`
     # requested ids in OLDEST-FIRST terminal order get applied, the rest
+    # (still requested, still terminal) are deferred.
     oldest_first_requested = [cid for cid in terminal_by_id if cid in requested_set]
     allowed_ids = set(oldest_first_requested[:cap])
     deferred_ids = set(oldest_first_requested[cap:])

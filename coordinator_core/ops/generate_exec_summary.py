@@ -84,7 +84,11 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.state_root import StateRootError
 from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state
 
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# THIS module is the real implementer of the write (main() below) -- `sources`
 # names itself, mirroring the sibling CLI trampoline's own GENERATES entry
+# (coordinator/bin/generate-exec-summary.py), which names this file as its
+# `sources` for the SAME artifact/stamp_key pair.
 GENERATES = [
     {
         "artifact": "docs/exec-summary.md",
@@ -678,7 +682,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if check_only:
         sys.stdout.write(output + "\n")
+        # The rendered `generated: <iso_now>` line changes on every run by
+        # construction, so a raw byte-for-byte compare against the existing
+        # target would report "stale" unconditionally even when nothing else
+        # changed. Strip that one line from both sides before comparing --
         # this is the SAME normalization the MANAGED-section HAND-fence
+        # extraction already treats as immaterial to freshness.
         def _drop_generated_line(text: str) -> str:
             return "\n".join(
                 line for line in text.splitlines() if not line.startswith("generated: ")
@@ -705,6 +714,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(target, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(output + "\n")
 
+    # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(target)
 

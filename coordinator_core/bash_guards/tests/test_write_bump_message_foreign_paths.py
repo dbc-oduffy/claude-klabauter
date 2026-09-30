@@ -57,7 +57,9 @@ _SESSION_ID = "751ab9de-9319-4d63-b174-36145a4a3045"
 _SANDBOX_ROOT = "state/subagent-share/751ab9de-9319-4d63-b174-36145a4a3045"
 
 _SHORT_TARGET = "x-repo"
+# abs-path-ok: synthetic MSYS-shaped token, never read from disk -- mirrors
 # test_write_bump_message.py's _LONG_RAW_MSYS_TOKEN, exercising the same
+# realistic-length production shape, not a real machine path.
 _LONG_TARGET = (
     "/c/Users/example-operator/AppData/Local/Temp/claude/X--claude-klabauter/a-very-long-"
     "synthetic-foreign-target-path-that-is-much-longer-than-x-repo.txt"
@@ -97,7 +99,12 @@ def test_subagent_message_prose_bytes_stable_across_short_and_long_target(tmp_pa
     assert long_measurement.over_cap is False
 
 
+# ---------------------------------------------------------------------------
 # `session_repo` is NOT-FOREIGN -- it renders exactly once, in the untouched
+# contrast form, never backticked-and-suppressed like a SUBJECT path would
+# be, and never duplicated the way `target_repo`/`raw_target` legitimately
+# can be (R1).
+# ---------------------------------------------------------------------------
 
 
 def test_em_message_session_repo_renders_exactly_once(tmp_path):

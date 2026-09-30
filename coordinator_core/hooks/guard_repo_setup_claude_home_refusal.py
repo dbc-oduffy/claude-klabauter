@@ -73,7 +73,9 @@ from coordinator_core.ipc import register_op
 
 _COMMAND_TOOL_NAMES = ("Bash", "PowerShell")
 
+#: Identifiers naming the engine-plane scaffold mechanism. A bare substring
 #: test would deny a command that merely MENTIONS one of these strings; see
+#: `_names_scaffold_mechanism` below.
 _SCAFFOLD_MECHANISM_MARKERS = (
     "repo-setup-args-and-register",
     "coordinator_core.install.scaffold_structure",
@@ -83,6 +85,7 @@ _SCAFFOLD_MECHANISM_MARKERS = (
 _ROOT_FLAG_RE = re.compile(r"--(?:root|target)(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
 
 #: ``--dry-run`` is the scaffold CLI's own no-write mode. NEGATIVE-SPEC:
+#: this is a no-write exemption, never a bypass.
 _DRY_RUN_RE = re.compile(r"(?:^|\s)--dry-run(?:[=\s]|$)")
 
 _LEADING_CD_RE = re.compile(

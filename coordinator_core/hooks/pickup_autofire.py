@@ -95,6 +95,7 @@ from coordinator_core.ipc import register_op
 _PICKUP_COMMAND_NAMES = frozenset({"pickup"})
 
 # Kept literally identical to `mise_autofire.py :: _MISE_COMMAND_NAMES`; a
+# verb in one and not the other starts the run half-wired, silently.
 _BATON_GRAB_COMMAND_NAMES = frozenset({"mise-en-place", "warp-speed-execute"})
 
 _BATON_PATH_FAMILIES = (

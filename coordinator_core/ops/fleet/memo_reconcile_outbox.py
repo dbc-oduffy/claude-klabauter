@@ -338,6 +338,15 @@ def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> di
     result = build_act_result(_MODE, acted, skipped, [])
 
     # Claim the REAL write set (ipc.py's `_SCOPE_TOUCH_PATHS_KEY` contract:
+    # paths actually written this call, never the `MUTATES` surface -- the two
+    # legitimately diverge, and a `report`/`keep`/clobber-skip entry moves
+    # nothing). Both ends of every `os.replace` are declared: the vacated
+    # source as well as the new `sent/` target, because a move is a deletion
+    # at the source and Check 5's sink must be able to attribute that deletion
+    # to this session too. Without this, every file this op lands in `sent/`
+    # reaches `compute_scope` as an owner-less orphan -- one of the four
+    # undeclared-op-output orphans in 2026-08-27's scope-warnings.log, the arm
+    # gating the scope-strict flip (Check 5, `bash_guards/dispatch_checks.py`).
     _written: list = []
     for entry in acted:
         target = entry.get("path")

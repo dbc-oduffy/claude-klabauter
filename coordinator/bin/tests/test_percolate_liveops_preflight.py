@@ -240,7 +240,10 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
     if sys.platform.startswith("win") or sys.platform == "darwin":
         cased = canonical.upper()
     else:
+        # POSIX filesystems are case-sensitive by default -- an
         # uppercased path would name a DIFFERENT (nonexistent) directory,
+        # not a variant of this one, so casing isn't portably exercisable
+        # here. Trailing-separator variance still is, below.
         cased = canonical
 
     registry = {

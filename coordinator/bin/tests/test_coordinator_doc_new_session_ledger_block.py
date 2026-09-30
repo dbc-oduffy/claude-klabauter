@@ -86,6 +86,8 @@ class SessionLedgerBlockIdenticalAcrossScaffoldersTest(unittest.TestCase):
 
     def test_comment_lines_match_the_oneline_grammar_parse_session_ledgers_reads(self):
         # AC6: the comment's declared grammar is the one _ONELINE_RE in
+        # session_ledger actually parses -- assert a scaffolded block's
+        # documented format string round-trips through that regex shape.
         from coordinator_core.session_ledger import aggregate_chain_loe
 
         sample_row = "2026-08-11 | abc123 | S | 1d / 0o | did the thing"

@@ -144,10 +144,39 @@ async def _handler(params: dict, repo_root=None) -> dict:
     return context_only("PreToolUse", f"[em-code-dispatch nudge] {nudge_message}")
 
 
+# =============================================================================
+# op(payload) — synchronous, in-process, stdin->stdout trampoline entry point.
+#
+# Purpose: full line-for-line port of nudge-em-code-dispatch.js's `main()`
+# orchestration for the DoE-resident stdin->stdout hook stub
+# (coordinator/hooks/scripts/nudge-em-code-dispatch.py), replacing the `node`
+# cold-spawn on every Write/Edit/MultiEdit (constraint 7, performant-or-dead).
+#
 # This is a DELIBERATELY SEPARATE code path from the `_handler`/register_op
+# async op above: that op is the pcore-04 mcp_tool IPC-daemon integration
+# (flat-scalar `field()`/`present()` payload contract, MultiEdit edits[] NOT
+# forwarded) — a different transport wired to a different (currently unused)
+# consumer. `op()` below consumes the SAME raw PreToolUse JSON payload the JS
+# hook received (nested tool_input, full
+# MultiEdit edits[] array) and reproduces every JS branch, including the F7
 # bootstrap/out-of-repo carve-out, EXT_EXECUTOR_MAP/COORDINATOR_PATH_MARKERS
+# executor-type derivation, and the pending-dispatch artifact write — none of
+# which the pcore-04 op implements. Do not conflate the two; do not route the
+# DoE stub through the async op above.
+#
+# Contract: takes the raw stdin-parsed payload dict, returns a Form-A
+# hookSpecificOutput dict (see context_only()) when the nudge fires, or None
+# for every silent-allow/bypass path. Never raises on well-formed input;
+# callers (the DoE stub) wrap this in a broad try/except for fail-open ALLOW
+# on any resolve/import/run failure per constraint discipline.
+#
+# Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292
+# Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js (435 lines, ported whole)
+# =============================================================================
 
+# ---------------------------------------------------------------------------
 # Executor type derivation — extension -> type mapping. Mirrors JS EXT_EXECUTOR_MAP.
+# ---------------------------------------------------------------------------
 _EXT_EXECUTOR_MAP: dict[str, str] = {
     ".py": "python-executor",
     ".js": "js-executor",
@@ -172,6 +201,7 @@ _EXT_EXECUTOR_MAP: dict[str, str] = {
     ".sql": "sql-executor",
 }
 
+# Path markers that signal coordinator-domain files -> coordinator-executor override.
 # Mirrors JS COORDINATOR_PATH_MARKERS.
 _COORDINATOR_PATH_MARKERS: list[str] = [
     "coordinator/",
@@ -344,7 +374,28 @@ def _resolve_session_id_op(payload: dict) -> str:
     return f"{hostname}-{os.getpid()}"
 
 
+# ---------------------------------------------------------------------------
+# Semantic-bypass mechanism (AC6) — the size floor for the nudge.
+#
+# Purpose: `op()` had zero occurrences of a length/diff-size/changed-line
+# threshold of any kind — a one-character Edit nudged identically to a
+# full-file rewrite. Plan 2026-08-01-advisory-firing-shape-predicate.md C5
+# REJECTS deriving that floor from a session-local transcript histogram or
+# from recent-commit diff sizes: one session's datapoint, wrong unit (a
+# commit aggregates many Edit calls and excludes reverted ones; the hook
+# sees exactly one tool call), and it measures what happened rather than
 # what SHOULD have been dispatched. This module ships the PLAN-PREFERRED
+# alternative instead of a guessed number: a semantic-bypass mechanism. An
+# edit confined to whitespace, to comment/docstring text, or to a single
+# identifier rename is defensible without a threshold — it is closer to
+# what the nudge is FOR (steering substantive code authorship to a
+# dispatched executor) than any character count would be.
+#
+# Negative-spec: this bypass exists ONLY on `op()`. The async `_handler`
+# above (the pcore-04 mcp_tool op) never receives old_string/new_string or
+# MultiEdit edits[] — see the module's MultiEdit negative-spec — so it has
+# no diff to classify and is unaffected by this mechanism.
+# ---------------------------------------------------------------------------
 
 _WORD_RE = re.compile(r"\w+|\W+")
 
@@ -515,7 +566,25 @@ def op(payload: dict) -> dict | None:
     raw_sid = payload.get("session_id")
     has_true_session_id = isinstance(raw_sid, str) and raw_sid.strip() != ""
 
+    # TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
+    # dropped `artifact_note` ("Artifact written."/"") from the rendered message —
+    # the artifact is a best-effort convenience file (see
+    # `_write_pending_dispatch_artifact`'s own docstring), not something the EM
+    # needs stated in the advisory to act on; `ambiguous`/`multiple_code_files`
+    # still gate whether the artifact is written, only its mention in text is
+    # cut. Also dropped "EM, not typist.", "Code write:" -> "Write:", "Dispatch
+    # an executor instead", and the "agent-dispatch-economics.md" doc-pointer
+    # parenthetical — the brief below already names type/task, and the
+    # sentinel path is the one piece of information this message must carry
+    # that nothing else in the envelope does. Measured after this trim: hooks
     # 216 / write_guards 171 prose bytes (both <= MESSAGE_PROSE_CAP_BYTES ==
+    # 220) against the corpus rows in guard_message_corpus.py, on this tree —
+    # the sentinel path embeds session_id, so a session_id longer than this
+    # module's own test-fixture uuid-suffixed one could still push a live
+    # firing over cap; that residual is inherent to the sentinel contract
+    # (`dispatch_nudge_sentinel.sentinel_path`), out of this chunk's scope
+    # (constraint per this chunk's body: "Trim the text, not the builder
+    # calls").
     sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
 
     nudge_message = (

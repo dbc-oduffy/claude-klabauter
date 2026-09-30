@@ -87,7 +87,9 @@ def test_compose_script_refuses_before_touching_pathspec_derivation():
     assert "zero waves" in str(excinfo.value)
 
 
+# ---------------------------------------------------------------------------
 # compose_script — top-level body, never an uninvoked wrapper (BREAK-CLASS)
+# ---------------------------------------------------------------------------
 
 
 def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
@@ -229,6 +231,7 @@ def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error():
 
 def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_matters():
     # UNDECLARED never reaches agentType derivation in a real run: pathspec's
+    # commit_pathspec refuses it first (NoWritesDeclaredError). Regression
     # guard for that ordering -- see _row_agent_type's UNDECLARED docstring.
     waves = [[_wave_row("C1", UNDECLARED)]]
     with pytest.raises(NoWritesDeclaredError):
@@ -621,7 +624,7 @@ def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const _incompleteChunks = [];" in script
     assert "_incompleteChunks.push(id)" in script
-    assert "incomplete_chunks: _incompleteChunks" in script
+    assert "incomplete_chunks: [...new Set([..._incompleteChunks, ..._notStarted])]" in script
 
 
 @pytest.mark.parametrize(
@@ -783,8 +786,40 @@ def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
     assert [c.id for c in request.chunks] == ["C2"]
 
 
+def test_compose_script_threads_expected_branch_into_the_marker():
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    with_branch = compose_script(waves, name="wf", description="d", expected_branch="feat-x")
+    without = compose_script(waves, name="wf", description="d")
+    assert parse_marker(with_branch).expected_branch == "feat-x"
+    assert parse_marker(without).expected_branch is None
+
+
+def _emit_with_head(tmp_path, head_text):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text(head_text, encoding="utf-8")
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/x.py"]))
+    return emit_script(plan, repo_root=tmp_path)
+
+
+def test_emit_script_captures_the_head_branch_into_the_marker(tmp_path):
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
+    script = _emit_with_head(tmp_path, "ref: refs/heads/feat-x\n")
+    assert parse_marker(script).expected_branch == "feat-x"
+
+
+def test_emit_script_maps_a_detached_head_to_no_expected_branch(tmp_path):
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
+
+    script = _emit_with_head(tmp_path, "0123456789abcdef0123456789abcdef01234567\n")
+    assert parse_marker(script).expected_branch is None
+
+
 def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
     # Refusal 1 (every row UNDECLARED) must keep raising -- it is not the
+    # same shape as every row explicitly declaring `writes: []`.
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
     with pytest.raises(NoWritesDeclaredError):
         compose_script(waves, name="wf", description="all-undeclared")
@@ -1621,6 +1656,28 @@ def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule()
     assert "status (DONE | BLOCKED | PARTIAL)" in script
 
 
+def test_withdrawn_and_void_rows_get_their_own_tokens_that_never_halt():
+    """A row withdrawn by its own gate, and a conditional row that never armed,
+    decided nothing: each declares a token distinct from the halt token, and
+    the emitted halt matcher fires on neither."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+    )
+
+    assert emit._WITHDRAWN_TOKEN in script
+    assert emit._VOID_TOKEN in script
+    assert len({emit._STOP_RULE_TOKEN, emit._WITHDRAWN_TOKEN, emit._VOID_TOKEN}) == 3
+
+    rx = re.compile(emit._STOP_RULE_JS_RE.strip("/"))
+    for token in (emit._WITHDRAWN_TOKEN, emit._VOID_TOKEN):
+        assert not rx.search(f"DONE: nothing changed\n{token}: the gate withdrew this row")
+        assert not rx.search(f"{token}: arm-A-only under an arm-B measurement")
+    helper = emit._run_row_helper_js()
+    assert emit._WITHDRAWN_TOKEN not in helper
+    assert emit._VOID_TOKEN not in helper
+
+
 def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper():
     """Placement is the whole design (§ Design D4) -- unified into the ONE
     shared `_runRow` helper, not a per-wave halt gate any more."""
@@ -1867,3 +1924,101 @@ def test_ordinary_prose_does_not_raise(tmp_path):
         encoding="utf-8",
     )
     emit.emit_script(plan_path, repo_root=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Absent edit targets -- a row authored before its surface was deleted
+# ---------------------------------------------------------------------------
+
+
+def _absent_target_plan(tmp_path, *rows: tuple):
+    """One spine row per ``(id, change_kind, writes, extra)``."""
+    body = ""
+    for row_id, kind, writes, *rest in rows:
+        body += (
+            f"- id: {row_id}\n  title: row {row_id}\n  change_kind: {kind}\n"
+            "  surface: pkg\n  writes:\n"
+            + "".join(f"    - {w}\n" for w in writes)
+            + (rest[0] if rest else "")
+        )
+    return _plan_with_row(tmp_path, body)
+
+
+def _emit_findings(plan_path, root):
+    out: list = []
+    script = emit_script(plan_path, repo_root=root, findings_out=out)
+    return script, out
+
+
+def test_edit_row_against_an_absent_path_warns_naming_row_path_and_kind(tmp_path):
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
+
+    _, findings = _emit_findings(plan, tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.WARN
+    assert findings[0].code == emit.ABSENT_EDIT_TARGET_CODE
+    for named in ("'C1'", "pkg/deleted.py", "'code-edit'"):
+        assert named in findings[0].message
+
+
+def test_edit_row_against_a_present_path_does_not_warn(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "live.py").write_text("x = 1\n", encoding="utf-8")
+    plan = _absent_target_plan(tmp_path, ("C1", "script-edit", ["pkg/live.py"]))
+
+    assert _emit_findings(plan, tmp_path)[1] == []
+
+
+def test_creating_kinds_do_not_warn_on_an_absent_path(tmp_path):
+    plan = _absent_target_plan(
+        tmp_path,
+        ("C1", "wiki-new", ["pkg/new-page.md"]),
+        ("C2", "test-edit", ["pkg/test_new.py"]),
+    )
+
+    assert _emit_findings(plan, tmp_path)[1] == []
+
+
+def test_a_later_row_editing_what_an_earlier_row_creates_is_not_flagged(tmp_path):
+    plan = _absent_target_plan(
+        tmp_path,
+        ("C1", "wiki-new", ["pkg/made.py"]),
+        ("C2", "code-edit", ["pkg/made.py"], "  depends_on:\n    - chunk: C1\n      gate_kind: output-consumption-runtime\n"),
+    )
+
+    assert _emit_findings(plan, tmp_path)[1] == []
+
+
+def test_absent_target_finding_never_refuses_the_emit(tmp_path):
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
+
+    script, findings = _emit_findings(plan, tmp_path)
+
+    assert findings and script
+    assert_zero_errors(script)
+
+
+def test_no_repo_root_or_no_sink_is_a_no_op(tmp_path):
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
+
+    assert _emit_findings(plan, None)[1] == []
+    assert emit_script(plan, repo_root=tmp_path)
+
+
+def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path):
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    reply = _dispatch_emit(
+        {"plan_path": str(plan), "output_path": str(out_dir / "e.mjs"), "target_root": str(tmp_path)},
+        repo_root=tmp_path,
+    )
+
+    hits = [f for f in reply["findings"] if f["code"] == emit.ABSENT_EDIT_TARGET_CODE]
+    assert len(hits) == 1
+    assert reply["ok"] is True
+    assert reply["warn_count"] >= 1

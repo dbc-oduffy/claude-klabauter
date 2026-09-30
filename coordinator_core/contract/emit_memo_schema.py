@@ -60,11 +60,35 @@ from typing import Any
 from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _VALID_KINDS
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 
+# ---------------------------------------------------------------------------
+# x-schema-version — bumped independently of DoE's prior vendored "1.0.0"
+# pin. This is a NEW emission lineage (generated-from-SSOT, not
+# hand-authored-and-vendored); the version literal lives in exactly this one
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
+# single-literal-source discipline.
+# ---------------------------------------------------------------------------
 MEMO_SCHEMA_VERSION = "1.9.0"
 
+#: Generator-provenance declaration: emit_schemas() writes both of these
+#: fixed tracked artifacts to this module's own directory by default.
+#:
+#: `sources` must name every file whose change moves the emitted bytes, or the
+#: staleness sweep watches the wrong set. It previously named only this module
+#: and `memo_send.py`, omitting the two constant modules this one imports —
 #: so commit 9937e9a959 added `notice` to `memo_kinds.VALID_KINDS`, changed
+#: what the next emission would produce, and moved nothing the sweep was
+#: looking at. `memo_send.py` stays: it writes no byte here, but the `kind`
+#: and `summary` descriptions both cite its DEC-1 send-time gate by name, so
+#: a change to that gate makes this module's prose wrong.
+#:
+#: KNOWN GAP, not closed here: `stamp_key` is `x-schema-version`, whose value
+#: is a semver. `check_generator_output_staleness` needs a commit-ish or a
 #: timestamp to open a range, so both pairs resolve INDETERMINATE
+#: ("since_point is neither a resolvable commit-ish nor a parseable
+#: timestamp: '1.8.0'") and this declaration cannot actually fire today.
+#: Closing it means emitting a provenance stamp carrying the source commit,
+#: which changes bytes two repos vendor and re-diffs on every emit — a
+#: contract tradeoff, not a mechanical fix, so it is named rather than taken.
 GENERATES = [
     {
         "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
@@ -88,7 +112,17 @@ GENERATES = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# x-bump-class / x-bump-note — DoE's bump-class annotation (memo
+# 2026-07-27-coordinator-content-repo-em-bump-class-shipped-and-a-correction.md), sibling
+# keys to x-schema-version. Closed vocabulary per that memo:
+# top-level-array-additive | nested-field-additive | major. Non-behavioural
+# (an `x-` annotation key changes no record's validity) so it does NOT bump
 # MEMO_SCHEMA_VERSION — this pair only records how the CURRENT version
+# (1.0.0 -> 1.2.0) changed shape, mirroring DoE's own hand-added values so
+# their vendored copy and this emission converge rather than drift again.
+# Single definition each, consumed at both emission sites below.
+# ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
     "1.8.0 -> 1.9.0 widens the `kind` field's documented vocabulary by one "
@@ -750,8 +784,14 @@ def _build_archived_memo_schema() -> dict[str, Any]:
         "x-bump-note": MEMO_SCHEMA_BUMP_NOTE,
         "x-generated-by": "coordinator_core.contract.emit_memo_schema.emit_schemas",
         "applies_to": "cross-repo/archive/*.md",
+        # A top-level "kinds" field
+        # here re-arms the exact _byKind landmine this module's docstring
         # names as CRITICAL to avoid: load_schemas() special-cases BOTH the
+        # literal "x-kinds" and "kinds" keys for _byKind registration, and
+        # this file (unlike cross-repo-memo.schema.json) is genuinely
+        # delivered to the shared schemas_dir that gets load_schemas()'d.
         # Nothing in build_type_to_glob/_TYPE_TO_GLOB_SUPPLEMENTS reads a
+        # "kinds" field, so it is dropped outright rather than renamed.
         "description": (
             "Archived cross-repo memo — outbound memos relayed and archived at "
             "cross-repo/archive/. GENERATED PROJECTION, not hand-vendored — see "

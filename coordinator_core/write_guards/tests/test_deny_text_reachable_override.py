@@ -172,9 +172,23 @@ def test_block_priority_ledger_edit_check_deny():
     assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
+# ---------------------------------------------------------------------------
+# nudge_improvement_queue_write / nudge_baton_body_bar -- 2026-07-30
 # escape-mechanism rework (COORDINATOR_QUEUE_PUNT is unreachable from inside
+# a session; the deny/advisory text must not instruct the reader to take an
+# action that cannot work from there). These two use the `VAR="<reason>"`
 # shape (not `VAR=1`). `_VIOLATION_RE` in the bash_guards sibling this module
+# mirrors was ITSELF extended (same 2026-07-30 dispatch) to also match that
+# reason-shaped form, so it is no longer true that this shape is outside the
+# regex's scope -- it is asserted directly here anyway, not because the regex
+# can't see it, but because these two tests need one more guarantee the
+# shared `assert_render_carries_reachability_constraint` helper doesn't check:
+# the rendered text must carry `operator_override_note`'s output verbatim,
+# AND must NOT instruct the reader to "re-run the write" with an env var (the
+# exact dead-end shape this whole gate exists to catch, just spelled with a
 # different var shape -- COORDINATOR_QUEUE_PUNT's write already landed by the
+# time this text renders, so "re-run" is doubly wrong here).
+# ---------------------------------------------------------------------------
 
 
 def test_nudge_improvement_queue_write_deny_omits_the_override_note():

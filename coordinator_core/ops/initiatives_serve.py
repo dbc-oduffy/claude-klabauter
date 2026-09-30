@@ -15,11 +15,11 @@ Self-registration: importing this module calls
 Add this module to ``coordinator_core/ops/__init__.py`` to trigger registration
 at start_server() time.
 
-Read-path: ``_simple_yaml_load`` (scalar-only, no PyYAML dependency) is imported
-from ``coordinator_core.ops.emit.sections.initiatives``.  It is correct ONLY for
+Read-path: ``simple_yaml_load`` (scalar-only, no PyYAML dependency) is imported
+from ``coordinator_core.yaml_flat``.  It is correct ONLY for
 the flat ``state/initiatives/*.yaml`` shape (no arrays).  Do NOT use it for stub
 handoff frontmatter — stub frontmatter carries ``blocks``/``blocked_by`` as YAML
-arrays that ``_simple_yaml_load`` cannot parse correctly.
+arrays that ``simple_yaml_load`` cannot parse correctly.
 
 Worktree resolution mirrors ``handoff_children.py``:
   - When ``repo_root`` is provided (router-supplied git common dir), the worktree
@@ -37,8 +37,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.yaml_flat import simple_yaml_load
 
 _LOG = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
         fname = fpath.name
         try:
             content = fpath.read_text(encoding="utf-8")
-            fm = _simple_yaml_load(content)
+            fm = simple_yaml_load(content)
         except Exception as exc:  # noqa: BLE001 — parity with emit porter quarantine
             _LOG.warning("initiative.serve_set: skipping %s — parse error: %s", fname, exc)
             continue

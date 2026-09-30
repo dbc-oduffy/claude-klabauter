@@ -107,6 +107,7 @@ def test_prune_is_a_no_op_and_byte_identical_when_the_oldest_record_is_inside_th
     the file is left byte-for-byte untouched."""
     now = time.time()
     # Outside RETAIN_SECONDS but inside PRUNE_TRIGGER_SECONDS -- would be
+    # dropped BY a rewrite, but no rewrite is triggered, so it survives.
     line = _record(now - watch_spool.RETAIN_SECONDS - 60, "stale-but-not-triggering")
     _write_lines(tmp_path, [line])
     before = _raw_contents(tmp_path)

@@ -85,7 +85,9 @@ def _target_path(monkeypatch, tmp_path):
     return str(tmp_path / "fleet-delegation.json")
 
 
+# ---------------------------------------------------------------------------
 # Base cases -- unconditional deny (no agent_id gate), all four MATCHERS.
+# ---------------------------------------------------------------------------
 
 
 class TestBaseCases:

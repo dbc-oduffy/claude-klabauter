@@ -27,9 +27,9 @@ FIVE LEGS, none of which may be dropped.
   with itself the moment the constant changed instead of the source.
 
   LEG 2 (`test_the_exception_list_is_closed_and_pinned`) -- `_settings_home`
-  is the one known, DELIBERATE one-sided field (see the comment above
-  `_KNOWN_ONE_SIDED_FIELDS` below). The exception set is asserted to be
-  EXACTLY `{"_settings_home"}`; a second one-sided field must fail here
+  and `_dispatch_key` are the known, DELIBERATE one-sided fields (see the
+  comment above `_KNOWN_ONE_SIDED_FIELDS` below). The exception set is
+  asserted to be EXACTLY `{"_settings_home", "_dispatch_key"}`; a second one-sided field must fail here
   rather than being silently absorbed into a list that grows without a
   reader.
 
@@ -95,7 +95,11 @@ _INNER_FUNC_NAME = "_try_warm_dispatch_inner"
 #: doors folded their own top-level stamp of it into a REFUSE-mode `_env`
 #: entry, while `client.py` keeps stamping the legacy top-level field. Any
 #: other one-sided field is unpinned and must fail `test_envelope_field_sets_match`.
-_KNOWN_ONE_SIDED_FIELDS = frozenset({"_settings_home"})
+#:
+#: `_dispatch_key` is one-sided by design: only `client.py` mints the per-request
+#: reconcile key. `server.py :: _handle_request` pops it with a None default, so a
+#: door-produced envelope without it is safe (no reconcile poll is offered).
+_KNOWN_ONE_SIDED_FIELDS = frozenset({"_settings_home", "_dispatch_key"})
 
 
 def _resolve_key(node: ast.expr, local_str_bindings: "dict[str, str] | None" = None) -> "str | None":
@@ -589,13 +593,13 @@ def test_both_doors_agree_with_each_other():
 
 
 def test_the_exception_list_is_closed_and_pinned():
-    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_settings_home"}` -- pinned so a
+    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_settings_home", "_dispatch_key"}` -- pinned so a
     SECOND one-sided field cannot be added to the exception set without this
     failing and forcing a reviewer to look at it, and so a field silently
     REMOVED from the exception set (making it start being enforced) is
     equally visible."""
     assert _KNOWN_ONE_SIDED_FIELDS == frozenset(
-        {"_settings_home"}
+        {"_settings_home", "_dispatch_key"}
     ), (
         "the exception list changed without this pin being updated -- "
         f"got {sorted(_KNOWN_ONE_SIDED_FIELDS)}. `_settings_home` (folded "

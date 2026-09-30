@@ -18,7 +18,18 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CLAUDE_HOME_PY = _REPO_ROOT / "coordinator" / "lib" / "claude-home" / "_claude_home.py"
 
+# coordinator/bin/coordinator-settings-home in THIS repo is a bare-name
+# forwarder to a harness-injected ~/.claude/bin copy (per its own docstring:
 # "Forwards to the CLAUDE_HOME-resolved ~/.claude/bin/coordinator-settings-home"),
+# not the resolver itself — verified: invoking it against a scratch HOME
+# raises "resolver not installed ... run /coordinator:setup". The actual
+# resolver (the bash oracle's original target, once at
+# templates/bin/coordinator-settings-home) lives only in the coordinator-content-repo
+# sibling repo now — same cross-repo boundary as detect-hardware.sh/
+# spawn-hidden.sh's caller class (this repo's own CLAUDE.md: "Discovery-
+# resolved surfaces ... belong in coordinator-claude, not here"). T6-T8
+# resolve it via the coordinator-content-repo root pointer and skip (not fail) when that
+# sibling checkout is unavailable on this machine.
 _CLI_REL = "coordinator/templates/bin/coordinator-settings-home"
 
 
@@ -157,8 +168,19 @@ def test_t12_python_machine_local_delegates_to_settings_home(tmp_path):
 
 
 def test_t13_python_machine_local_warns_but_continues_on_divergent_realpaths(tmp_path):
+    # See test_t7's comment: both dirs need content, not just existence, to
+    # register as divergent under current _is_absent_or_empty_husk semantics.
+    #
     # DELIBERATE BEHAVIOR CHANGE from the bash oracle's T13 (which asserted
+    # fail-loud/non-zero): _claude_home.py's `machine-local` subcommand no
+    # longer fails loud on divergence. It now WARNS on stderr and continues,
+    # deterministically preferring settings-home — verified by direct
+    # invocation; the tool's own stderr message says so explicitly
     # ("DIVERGENT MACHINE-LOCAL HOMES — CONTINUING, preferring settings-home
+    # (new)... the substrate->settings-home migration is now performed
+    # natively by the coordinator install step"). This is intentional product
+    # evolution, not a latent bug — the port asserts CURRENT behavior rather
+    # than reproducing the stale fail-loud assertion.
     home_dir = tmp_path / "t13" / "home"
     settings_dir = tmp_path / "t13" / "settings"
     (home_dir / ".claude" / "machine-local").mkdir(parents=True)

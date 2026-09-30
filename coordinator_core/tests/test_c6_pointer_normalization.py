@@ -36,7 +36,10 @@ from coordinator_core.content_root_pointer import read_content_root_pointer
 from . import _baton_dag_oracle as oracle
 
 
+# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_dag_edge_kinds.py
+# convention).
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -165,8 +168,29 @@ def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
     all_corpus_paths = oracle.collect_corpus_paths(root)
     handoff_dir = os.path.dirname(all_corpus_paths[0])
 
+    # ONE forward pass over the corpus, then N in-memory lookups.
+    #
+    # This loop used to call `dag.referenced_by` per baton, and that function
+    # re-walks the ENTIRE live_set on every call -- one `_read_meta` per node
+    # per call, plus a second full pass to rebuild `id_index`. At 296 live
+    # batons over a 1236-file corpus that is ~730,000 file opens, and the test
+    # did not finish inside a 180s per-test timeout. Because it carries no
+    # tier marker it is selected by the FAST tier, so the whole tier stalled
+    # at ~36% and everything ordered after it never ran; under `-n` it
+    # presented as `node down: Not properly terminated`, which reads as
+    # flakiness rather than as one test that never returns.
+    #
+    # `build_reverse_edge_index` + `referenced_by_indexed` is the seam built
+    # for exactly this shape -- see that function's own docstring, which
+    # records the same defect measured on `session.boot_sweep`'s backstop
+    # (176 candidates over ~548 nodes = 96,534 file opens, 21.5s) and its
     # equivalence argument: the per-node work is target-INDEPENDENT, so it
+    # hoists verbatim and only the final comparison stays in the loop.
+    #
     # `_FRONTMATTER_CACHE` does not rescue the old shape and its absence is
+    # not the bug: it caches PARSING, while every `_read_meta` still does
+    # `read_bytes()` + sha256 by design to close a TOCTOU window. The cost is
+    # the reads, so the fix has to be asking fewer times.
     reverse_index = dag.build_reverse_edge_index(
         all_corpus_paths, handoff_dir=handoff_dir, edge_kinds=edge_kinds
     )

@@ -175,8 +175,27 @@ def _tests_stub_skipped_gated(
     )
 
 
+# ---------------------------------------------------------------------------
+# Dimension registry — the seam. C2 (types), C3 (docstrings), C5 (review),
+# and C7 (latency) each replace their slot via register_dimension(); C4
+# replaces "tests" (and lifts the SKIPPED(gated) stub once G4 lands). Do NOT
+# inline a real dimension's logic here — that recreates the "five inline
+# implementations" C1 explicitly rules out.
+# ---------------------------------------------------------------------------
 # UNREACHABLE-BY-DEFAULT, for four of the five slots. C2/C3/C5/C7 have all
+# landed and each self-registers at the bottom of this module via an
+# unconditional import, so "types", "docstrings", "review" and "latency" are
+# replaced with their real checks before any caller can observe these stubs.
+# They survive as the fallback the seam is built around -- an import that
 # cannot resolve leaves UNAVAILABLE rather than a missing key -- not as a
+# statement about what is wired.
+#
+# THEIR TEXT MUST NOT SAY "not landed". It did, naming the chunk that had
+# already landed, and cost a session: reading this literal and stopping here
+# yields "the review dimension is a stub, nothing enforces review coverage",
+# which is false and was reported as fact to a PM and a group EM before the
+# registry was inspected at runtime. `register_dimension` at the foot of this
+# module is the second half of the sentence this dict starts.
 _DIMENSION_REGISTRY: dict[str, DimensionCheck] = {
     "types": _stub_unavailable(
         "types", "mypy strict-override ledger unavailable (C2 landed; this slot is "
@@ -260,8 +279,12 @@ def _overall_verdict(results: list[DimensionResult]) -> Verdict:
     state/lessons/2026-08-07-a-gate-that-measures-a-corpus-must-not-l-*.yaml
     on gates that measure nothing and still say pass).
     """
+    # An empty `results` list
+    # falls through every any() check to a vacuous PASS on zero measurements,
     # the same bug class be57f525e fixed for all-UNAVAILABLE/SKIPPED. Not
     # reachable from the shipped handler (DIMENSION_NAMES is fixed at 5), but
+    # this is a general-purpose helper a future caller could invoke with a
+    # partial/empty list.
     if not results:
         return Verdict.UNAVAILABLE
     if any(r.verdict is Verdict.ERROR for r in results):

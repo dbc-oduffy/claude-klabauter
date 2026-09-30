@@ -105,22 +105,38 @@ _HEAD_TAIL_CMD = "find . -type f | head -n 5"
 _HEAD_TAIL_UNSERVED_CMD = "docker ps | head -n 5"
 
 # A genuine for-loop (FOR_LOOP is the shape-classifier's primary match)
+# immediately followed by a literal top-level `find ... -exec rm {} \;`
+# segment -- the narrow case `check_find_exec_rewrite`'s own segment scan
+# recognizes and translates (rm is a translatable verb), confirmed against
+# the real seam function rather than assumed: `_shape_classifier` matches
 # FOR_LOOP on the leading `for ... do ... done` and `check_find_exec_rewrite`
+# separately finds the trailing `find -exec` as its own top-level segment
+# (segment scanning is command-wide, not scoped to the loop body).
 _FOR_LOOP_FIND_EXEC_CMD = (
     'for i in 1 2 3; do echo $i; done; find . -name "*.tmp" -exec rm {} \\;'
 )
 
 # A bare glob for-loop -- FOR_LOOP-shaped per `_shape_classifier`, but no
+# `find -exec` anywhere, so `check_find_exec_rewrite` returns `None`.
 _FOR_LOOP_BARE_GLOB_CMD = 'for f in *.txt; do rm "$f"; done'
 
 # `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped (a
+# two-segment `generator | head` pipeline), but `docker` is not one of
+# `check_head_tail_plumbing_rewrite`'s recognized upstream generators
 # (find/ls/grep), so that seam returns a BARE ADVISORY (no `updatedInput`)
+# saying the rewrite is "not offered automatically" -- NOT a confirmed
+# outlet. This is a common, entirely benign command that must never deny.
 _HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD = "docker ps | head -n 20"
 
 # A three-segment pipeline into `tail` -- HEAD_TAIL_PLUMBING-shaped, but
+# `check_head_tail_plumbing_rewrite`'s own two-segment-only shape means this
+# gets a bare advisory ("longer chain than this rewrite... covers"), not a
+# rewrite.
 _HEAD_TAIL_LONG_CHAIN_CMD = "cat file.txt | tail -n +2 | sort | uniq -c"
 
 # FOR_LOOP wrapping a literal `find -exec chmod ...` -- `chmod` is outside
+# `check_find_exec_rewrite`'s translatable-verb set (rm/cat/wc -l), so that
+# seam returns a bare advisory, not a rewrite.
 _FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD = (
     'for i in 1 2 3; do echo $i; done; find . -name "*.log" -exec chmod 644 {} \\;'
 )
@@ -156,6 +172,9 @@ class TestNonBashOrEmpty:
 class TestHeadTailPlumbing:
     def test_advises_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_denies_on_windows`,
+        # asserting a deny envelope under `host_is_windows=True`. This
+        # guard's own deny branch is retired as structurally unreachable --
+        # it gated on `_seam_confirmed_rewrite` against the SAME seam an
         # earlier-registered `ADVISORY_REWRITE` chain entry
         out = guard.check(_payload(_HEAD_TAIL_UNSERVED_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
@@ -170,9 +189,19 @@ class TestHeadTailPlumbing:
 
     def test_advisory_message_names_its_escape_hatch(self):
         # RETARGETED (DR-280, 2026-08-07): was
+        # `test_deny_message_names_its_escape_hatch`, reading `_deny_reason`
+        # under `host_is_windows=True`. This guard never denies any more --
+        # read the advisory context instead, still under a forced Windows
+        # host to confirm the escape hatch survives that leg too.
+        #
         # RETARGETED AGAIN (2026-08-17, PM ruling on the override-key
+        # message-register doctrine): a guard message names the guard that
+        # fired and nothing else about its override -- no key, no assignment
+        # form (docs/reference/guard-override-keys.md, opening sentence).
         # `operator_override_note` no longer interpolates `_OVERRIDE_ENV`
+        # into the rendered text at all; the escape hatch is "named" via a
         # doc pointer, not the literal `COORDINATOR_*` key. Asserting the
+        # bare key string was stale against that doctrine.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
@@ -187,6 +216,17 @@ class TestSeamConfirmedOutletMessageShape:
 
     def test_summary_is_self_contained_not_a_dangling_placeholder(self):
         # RETARGETED (DR-280, 2026-08-07): this guard's deny branch is
+        # retired as structurally unreachable, so there is no deny template
+        # left to read -- was asserting "Use instead: ..." (the DENY
+        # template's own sentence) via `_deny_reason` under
+        # `host_is_windows=True`. Now reads the advisory template instead
+        # (which this guard renders on every host, forced or real), whose
+        # own "consider %s here too" sentence carries the identical
+        # regression risk the old "below." placeholder produced ("consider
+        # below. here too", both misdescribing the outlet and dragging the
+        # override note out of that sentence) -- see `_outlet_from_seam_
+        # result`'s docstring for why `summary` must read sensibly standing
+        # alone in EITHER template.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "use the seam-confirmed single-process rewrite" in ctx
@@ -194,8 +234,18 @@ class TestSeamConfirmedOutletMessageShape:
 
     def test_override_note_lands_in_example_cue_window_not_consider_sentence(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_override_note_lands_
+        # in_example_cue_window_not_use_instead_sentence`, reading
+        # `_deny_reason` -- the deny template's "Use instead:" sentence no
+        # longer renders (this guard never denies). Same regression check,
+        # against the advisory template's "consider ... here too" sentence
+        # instead.
+        #
         # RETARGETED AGAIN (2026-08-17, override-key message-register
+        # ruling): `operator_override_note` no longer interpolates the bare
         # `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS` key -- it renders a doc
+        # pointer only. The regression this test guards against (the note
+        # drifting back into the "consider" sentence instead of trailing the
+        # Example) still applies to the doc pointer.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         use_line = next(
@@ -304,6 +354,9 @@ class TestWhileReadLoop:
 
     def test_advisory_names_its_escape_hatch(self):
         # RETARGETED (2026-08-17, override-key message-register ruling):
+        # see `TestHeadTailPlumbing.test_advisory_message_names_its_escape_
+        # hatch` above for the same fix on this guard's other shape -- the
+        # escape hatch is named via a doc pointer, never the bare key.
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
@@ -354,17 +407,24 @@ class TestBareSeamAdvisoryNeverDenies:
 
 class TestPrecedence:
     def test_grep_via_bash_precedence_stays_silent(self):
+        # Simultaneously grep-via-Bash and head/tail-plumbing:
         # GREP_VIA_BASH outranks HEAD_TAIL_PLUMBING in SHAPE_PRECEDENCE, so
+        # this guard must not fire (AC-7).
         cmd = "grep -rn TODO src/ | head -n 5"
         assert guard.check(_payload(cmd), host_is_windows=True) is None
 
     def test_multi_probe_banner_precedence_stays_silent_for_for_loop(self):
+        # A banner-echoed command followed by several probes, immediately
         # followed by a for-loop -- MULTI_PROBE_BANNER outranks FOR_LOOP.
         cmd = (
             'echo "=== probes ==="; pwd; whoami; '
             'for f in *.txt; do rm "$f"; done'
         )
-        assert guard.check(_payload(cmd), host_is_windows=True) is None
+        # The banner echo is itself a label, so the one membership exception
+        # (LABEL_OR_EXIT_ECHO) answers -- but never with the for-loop arm.
+        ctx = _advisory_context(guard.check(_payload(cmd), host_is_windows=True))
+        assert "label-or-exit-echo" in ctx
+        assert "`for-loop`" not in ctx
 
     def test_for_loop_precedence_fires_for_loop_arm_over_while_read(self):
         # A command that is both FOR_LOOP and WHILE_READ_LOOP shaped fires
@@ -500,6 +560,11 @@ class TestPowerShellDialect:
 
     def test_head_tail_plumbing_advises_on_powershell_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_head_tail_plumbing_
+        # rewrites_on_powershell`, asserting `permissionDecision == "deny"`
+        # -- this guard's deny branch (including its PowerShell leg, which
+        # shares `_verdict_head_tail`'s own `platform_verdict_for_shape`
+        # call site) is retired as structurally unreachable. Now asserts an
+        # advisory allow instead, even with Windows forced.
         out = guard.check(
             _ps_payload("ls . | Select-Object -First 5"),
             host_is_windows=True,
@@ -510,8 +575,21 @@ class TestPowerShellDialect:
         assert "permissionDecisionReason" not in hso
 
     def test_non_head_tail_powershell_command_fires_no_advisory(self):
+        # A no-shape-matched PowerShell command must not fire an advisory --
+        # that is this test's load-bearing assertion, and it is unchanged.
+        #
+        # It does, however, record SILENT rather than returning a bare
         # clean. C6 widened this guard's `MATCHERS` to include PowerShell,
+        # which subjects it to the standing repo-wide contract in
+        # `tests/test_no_false_clean_on_unparsed_dialect.py`: a guard
         # DECLARING PowerShell must back that declaration with measured
+        # behaviour, and a bare `None` is indistinguishable from "this
+        # guard was never invoked" -- precisely the confusion C6 exists to
+        # end. That contract is owned by another workstream and is not this
+        # plan's to weaken, so the recorded-silence side won.
+        #
+        # `record_silent` is inert outside `collecting()`, so nothing about
+        # what an agent actually sees changed here.
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -538,6 +616,7 @@ class TestPowerShellForLoopAndPipelineForeachObject:
 
     @requires_powershell_grammar
     def test_powershell_for_loop_advises_not_silent(self):
+        # Row-14 superseding note (D2): `foreach ($x in $y) { git log -1 $x }`
         # now classifies as a real FOR_LOOP match and gets the same generic
         # advisory the bash leg's bare-glob FOR_LOOP fallback renders.
         out = guard.check(
@@ -577,6 +656,9 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert "pipeline-foreach-object" in ctx
 
     def test_no_private_shape_precedence_walk_remains(self):
+        # AC11: `_verdict_powershell` must classify via
+        # `_shape_classifier.classify_command` -- the module-level
+        # `classify_command` name it calls is that same function, not a
         # locally re-derived SHAPE_PRECEDENCE walk.
         import inspect
 
@@ -677,4 +759,73 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
 
         source = inspect.getsource(self.dc._bt_python3_invocation)
         assert "os.replace(tmp_path, cache_path)" in source
+
+
+class TestLabelOrExitEcho:
+    """LABEL_OR_EXIT_ECHO: membership-keyed, appended to or standing beside
+    the primary verdict; silent on the not-the-shape cases."""
+
+    _LABEL_ONLY = 'echo "--- status ---"; pwd; git status'
+    _EXIT_READOUT = "make build; echo $?"
+    _HEAD_TAIL_PLUS_LABEL = 'find . -type f | head -n 5; echo "--- done ---"'
+    _BANNER_PLUS_LABEL = 'echo "=== a ==="; grep foo f.txt; git status; echo "--- b"'
+
+    def test_label_only_fires_own_advisory(self):
+        ctx = _advisory_context(guard.check(_payload(self._LABEL_ONLY)))
+        assert "label-or-exit-echo" in ctx
+
+    def test_exit_readout_fires_own_advisory(self):
+        ctx = _advisory_context(guard.check(_payload(self._EXIT_READOUT)))
+        assert "label-or-exit-echo" in ctx
+
+    def test_primary_description_stays_first_and_echo_line_is_appended(self):
+        ctx = _advisory_context(guard.check(_payload(self._HEAD_TAIL_PLUS_LABEL)))
+        assert ctx.index("head-tail-plumbing") < ctx.index("Echo cost:")
+        assert ctx.count("BASH-SPAWN ADVISORY") == 1
+
+    def test_echo_line_sits_outside_the_example_cue_window(self):
+        ctx = _advisory_context(guard.check(_payload(self._HEAD_TAIL_PLUS_LABEL)))
+        before, after = ctx.split("Echo cost:")
+        assert before.rstrip(" ").endswith("\n")
+
+    def test_other_guards_primary_shape_still_gets_own_echo_advisory(self):
+        out = guard.check(_payload(self._BANNER_PLUS_LABEL))
+        assert out is not None
+        assert "label-or-exit-echo" in _advisory_context(out)
+
+    def test_override_key_not_named_in_echo_line(self):
+        assert "COORDINATOR_" not in guard._LABEL_ECHO_APPENDED_LINE
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hi",
+            "echo $f; ls",
+            'echo "$f"; ls',
+            "echo a; echo b",
+            "echo hi > out.txt; ls",
+            "echo x | cat; ls",
+        ],
+    )
+    def test_not_the_shape_is_silent(self, cmd):
+        assert guard.check(_payload(cmd)) is None
+
+    def test_override_suppresses(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
+        assert guard.check(_payload(self._LABEL_ONLY)) is None
+
+    @pytest.mark.parametrize("host_is_windows", [True, False])
+    def test_never_denies(self, host_is_windows):
+        out = guard.check(_payload(self._LABEL_ONLY), host_is_windows=host_is_windows)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    def test_powershell_leg_stays_silent_for_write_host(self):
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": 'Write-Host "--- x ---"; Get-Location; git status'},
+            "session_id": "s",
+        }
+        out = guard.check(payload)
+        if out is not None:
+            assert "label-or-exit-echo" not in _advisory_context(out)
 

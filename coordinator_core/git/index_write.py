@@ -266,6 +266,19 @@ def _splice_locked(
     handle.close()
     if not _replace_with_retry(lock_path, index_path):
         # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
+        # function's own docstring promises `IndexWriteLockBusy` or
+        # `IndexWriteError`; the `try:` around this line carries only a
+        # `finally:`, so a Windows `PermissionError` escaped as neither and
+        # a caller written correctly against that contract still would not
+        # catch it. Captured at 2/200 with 12 concurrent committers.
+        #
+        # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
+        # the whole disposition here: `commit.py` splices the index AFTER
+        # the ref swap, deliberately (an index matching a commit that never
+        # landed is the same lie in the other direction), so reaching this
+        # line means the commit ALREADY LANDED. The failure leaves a stale
+        # index, not lost work, and the honest report says so rather than
+        # implying the commit failed.
         raise IndexStaleAfterCommit(
             f"{index_path} could not be updated -- a peer held it. The "
             f"commit LANDED; only the shared index is stale. `git status` "

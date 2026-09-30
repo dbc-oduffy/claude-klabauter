@@ -45,6 +45,7 @@ def _epoch_to_filetime_ticks(epoch: float) -> int:
 class TestFiletimeConversion:
     def test_known_good_pair(self):
         # 2026-08-08T00:00:00Z, verified independently: FILETIME ticks for
+        # this instant computed via (epoch + 11644473600) * 1e7.
         epoch = 1783929600.0
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
@@ -100,15 +101,22 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch("") is None
 
     def test_float_procstart_falls_through_not_truncated_into_filetime(self):
+        # A JSON float must never silently truncate via int() into the
         # FILETIME leg (Defect 1) -- it is neither a genuine int nor a
         # ctime/ISO-8601 string, so it must yield None, not a coincidentally
+        # "valid" epoch from truncated ticks.
         epoch = time.time() - 60
         ticks_float = float(_epoch_to_filetime_ticks(epoch))
         assert hr._proc_start_to_epoch(ticks_float) is None
 
     def test_numeric_string_tries_ctime_and_iso_before_filetime(self):
+        # A numeric-looking string (e.g. "133...") must not be swallowed
         # into the FILETIME leg via a bare int(raw) ahead of the ctime/
         # ISO-8601 string branches -- but as of the digits-string FILETIME
+        # leg it IS a legitimate last-resort shape once those two both
+        # fail, matching the 54/54 live Windows records measured
+        # 2026-08-14 (procStart rendered as a digits string, not a bare
+        # int).
         epoch = time.time() - 60
         in_band_ticks = _epoch_to_filetime_ticks(epoch)
         result = hr._proc_start_to_epoch(str(in_band_ticks))
@@ -121,11 +129,14 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch(str(out_of_band_ticks)) is None
 
     def test_signed_digits_string_not_admitted_as_filetime(self):
+        # No sign handling on the digits-string leg -- str.isdigit() rejects
+        # a leading '-', so a negative numeric string must still fall
         # through to None rather than being admitted as a FILETIME.
         in_band_ticks = _epoch_to_filetime_ticks(time.time() - 60)
         assert hr._proc_start_to_epoch("-" + str(in_band_ticks)) is None
 
     def test_bool_procstart_rejected(self):
+        # bool is an int subclass in Python -- must not be admitted to the
         # FILETIME leg (mirrors _parse_one's own pid bool-rejection).
         assert hr._proc_start_to_epoch(True) is None
         assert hr._proc_start_to_epoch(False) is None

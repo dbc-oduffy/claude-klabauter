@@ -525,7 +525,20 @@ def test_runtime_tripwire_fails_open_when_seam_raises(monkeypatch):
 
     assert pad._check_runtime_tripwire_sync("test-session-rt-seam-raises", "") == ""
 
+# ---------------------------------------------------------------------------
+# Failure isolation across the fold.
+#
 # This op replaced four separate hook PROCESSES, and a process boundary
+# isolates a crash for free: one raising script could not suppress the other
+# three's advisories. A bare asyncio.gather gives that away silently -- it
+# propagates the first exception and abandons its siblings' results. All four
+# legs read transcripts and sentinel files off a shared disk on a box running
+# ~50 concurrent sessions, so a transient read failure is the expected case.
+#
+# Found by coordinator-content-repo-1d, 2026-08-26, while carrying the property into their
+# hook-transport plan. The module's existing concurrency reasoning is correct
+# and answers a different question; failure isolation was not the axis.
+# ---------------------------------------------------------------------------
 
 
 def _raise(exc):

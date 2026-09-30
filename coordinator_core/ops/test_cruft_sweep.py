@@ -14,7 +14,9 @@ import pytest
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# _init_git_repo below spawns real `git` via an aliased subprocess import
 # (`import subprocess as _subprocess`) -- SPAWN-RATCHET Rule 2 declaration,
+# not a baseline entry: see coordinator_core/tests/test_no_new_spawning_tests.py.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -26,7 +28,15 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
+# root bypasses mode-0o000 denial, so chmod-based "unreadable" fixtures never
+# trip there; Windows has no POSIX mode bits at all.
+_CHMOD_DENIAL_UNRELIABLE = sys.platform == "win32" or (
+    hasattr(os, "geteuid") and os.geteuid() == 0
+)
+_REASON_CHMOD_DENIAL = "chmod 0o000 permission denial is not reliable on Windows or as root"
+
+
+@pytest.mark.skipif(_CHMOD_DENIAL_UNRELIABLE, reason=_REASON_CHMOD_DENIAL)
 def test_build_uuid_blocklist_unreadable_file_marks_incomplete(tmp_path, capsys):
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
@@ -50,10 +60,7 @@ def test_build_uuid_blocklist_unreadable_file_marks_incomplete(tmp_path, capsys)
     assert "unreadable handoff file" in capsys.readouterr().err
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
-    reason="chmod 0o000 permission denial is not reliable on Windows or as root",
-)
+@pytest.mark.skipif(_CHMOD_DENIAL_UNRELIABLE, reason=_REASON_CHMOD_DENIAL)
 def test_build_uuid_blocklist_unreadable_handoffs_dir_marks_incomplete(tmp_path, capsys):
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
@@ -86,7 +93,7 @@ def test_build_uuid_blocklist_all_readable_is_complete(tmp_path):
     assert "33333333-3333-3333-3333-333333333333" in blocklist
 
 
-@pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
+@pytest.mark.skipif(_CHMOD_DENIAL_UNRELIABLE, reason=_REASON_CHMOD_DENIAL)
 def test_run_handler_aborts_apply_on_incomplete_blocklist(tmp_path):
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
@@ -109,7 +116,7 @@ def test_run_handler_aborts_apply_on_incomplete_blocklist(tmp_path):
         os.chmod(blocked, 0o644)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
+@pytest.mark.skipif(_CHMOD_DENIAL_UNRELIABLE, reason=_REASON_CHMOD_DENIAL)
 def test_run_handler_dry_run_does_not_abort_on_incomplete_blocklist(tmp_path):
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
@@ -201,7 +208,7 @@ def test_sweep_orphans_successful_delete_counted_as_pruned(tmp_path):
     assert not child.exists()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-subtree fixture is POSIX-only")
+@pytest.mark.skipif(_CHMOD_DENIAL_UNRELIABLE, reason=_REASON_CHMOD_DENIAL)
 def test_sweep_scratch_warns_on_unwalkable_subtree(tmp_path, capsys):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -491,11 +498,13 @@ def test_dir_size_bytes_still_sums_normally_under_a_generous_budget(tmp_path):
 def test_dir_size_bytes_no_st_blocks_platform_falls_back_to_st_size(tmp_path, monkeypatch):
     d = tmp_path / "winlike"
     d.mkdir()
-    expected_size = 0
     for i in range(5):
         content = ("x" * (100 + i * 37)).encode("utf-8")
         (d / f"file-{i}.txt").write_bytes(content)
-        expected_size += len(content)
+    # The fallback sums st_size over the root and every entry, so the root
+    # directory's own st_size (filesystem-dependent: 4096 on ext4, 0 on NTFS)
+    # is part of the expected total.
+    expected_size = d.stat().st_size + sum(f.stat().st_size for f in d.iterdir())
 
     monkeypatch.setattr(cruft_sweep.os, "stat_result", object)
 

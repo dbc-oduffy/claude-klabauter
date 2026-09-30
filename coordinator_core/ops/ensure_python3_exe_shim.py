@@ -236,7 +236,9 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
             return 0
         stale = True
 
+    # At this point the shim is absent or stale — a shim WILL be installed.
     # Honor CHECK_ONLY: report what would happen and return without
+    # mutating.
     if check_only:
         print(f"python3-exe-shim: check failed: {py3_exe} is stale or absent (would install)")
         return 1

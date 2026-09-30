@@ -291,7 +291,11 @@ class TestPlaceholderShapedBlockedByDoesNotResolve:
     blocker must surface as dangling, never silently resolve/clear."""
 
     def test_placeholder_shaped_blocker_id_surfaces_as_dangling_not_clear(self) -> None:
+        # Blocker is a real, `shipped` handoff on disk — but its id is
         # placeholder-shaped, so `_HANDOFF_ID_PATTERN` refuses to index it at
+        # all (same as a genuinely absent/never-existed blocker id from the
+        # resolver's point of view): this is what makes the id "dangling"
+        # despite the underlying handoff being real and terminal.
         placeholder_id = "hnd-placeholder-replace-with-one-l-5f04ba"
         dependent = _roadmap_handoff("hnd-dep-000005", blocked_by=[placeholder_id])
 
@@ -626,7 +630,11 @@ class TestAsymmetryGuardSkipsNonRoadmapKindBlocker:
         assert result["cleared_by_shas"] == ["4" * 40]
 
 
+#: The "dead" (terminal-but-not-shipped) states, derived from the SAME
 #: schema-backed enum `gate_eval.py` itself reads — HANDOFF_TERMINAL_DEPLOYMENT
+#: minus "shipped". Iterating this set (rather than hard-coding
+#: "abandoned"/"continued"/"closed" literals) means a future enum widening is
+#: automatically exercised by these tests, not silently missed.
 _DEAD_STATES = sorted(HANDOFF_TERMINAL_DEPLOYMENT - {"shipped"})
 
 
@@ -1332,7 +1340,9 @@ class TestC5ContinuedIntoShippedTerminusClears:
         result = evaluate_gate(lvv06, [lvv06, lvv05, terminus])
 
         assert result["verdict"] == "clear"
+        # cleared_by_shas/cleared_blocker_ids stay 1:1-paired against the
         # ORIGINAL blocked_by id (lvv-05), never the terminus id — the
+        # gate-cascade-clear verb requires this pairing.
         assert result["cleared_blocker_ids"] == ["lvv-05"]
         assert result["cleared_by_shas"] == [_TERMINUS_SHA]
         both_hops = [
@@ -1785,7 +1795,31 @@ class TestC7DisposedDanglingRefTriageProjectionParity:
         assert result["disposed_ids"] == []
 
 
+# ---------------------------------------------------------------------------
+# C6d — downstream-consequence pin: WHY the roadmap-baton-supersession-hazard
+# plan's C2/C3 (blocked_by_dependents refusal + d6 judgment-point) are
+# load-bearing, not cosmetic. This class pins CURRENT gate_eval.py behaviour
+# and is expected to PASS against HEAD — it is not a red test. It exists to
+# make explicit what only lived implicitly in gate_eval.py's own docstring
+# (rule 2 / module docstring "CLEAR predicate"): a `blocked_by` member
+# stamped `deployment_state: continued` never mechanically clears its
+# dependent's gate on its own — `evaluate_gate` requires SHIPPED
+# specifically, and a `continued` member is only ever rescued by
+# `_chase_continuation` resolving its `continued_into` terminus as
+# genuinely `shipped` (see gate_eval.py's rule 2 exception). Neither
+# `_chase_continuation` nor `_resolve_continuation_target` ever reads
+# `kind` — the discriminator is `deployment_state` alone. When the chased
+# terminus's `deployment_state` is not `shipped`, the chase yields
+# outcome="open" and the dependent surfaces — permanently when that state
+# is itself terminal, across repeat re-evaluation, since
+# nothing in this module writes back a "seen and decided" marker. This is
+# the hazard docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md
+# exists to guard against at supersession time: a candidate roadmap baton
+# force-superseded (flipped to `continued`) while a LIVE dependent still
 # lists it in `blocked_by` leaves that dependent SURFACE-locked forever,
+# never auto-clearing, unless an operator (or C2's refusal / C3's
+# judgment-point) intervenes before the supersession happens.
+# ---------------------------------------------------------------------------
 
 
 def _session_handoff_terminus(deployment_state: str) -> dict:
@@ -1820,7 +1854,11 @@ class TestC6dContinuedBlockerNeverMechanicallyClearsDependent:
         assert terminus["kind"] != "spinoff-roadmap"
 
 
+# ---------------------------------------------------------------------------
+# C2 — scaffold sentinel (docs/plans/2026-08-03-gate-dependency-template-
 # emission-spec.md § C2): an unfilled coordinator-doc-new `PLACEHOLDER`
+# default is not authored prose and must never clear/free.
+# ---------------------------------------------------------------------------
 
 
 class TestC2ScaffoldSentinelGateDependencySurfacesNeverClears:
@@ -1940,6 +1978,7 @@ class TestC2ScaffoldSentinelPrefixTestNotSubstring:
         result = evaluate_gate(handoff, [handoff])
 
         # Still surfaces (no witness given) — but via the ORDINARY
+        # `_evaluate_prose_gate` no-witness line, never the sentinel's.
         assert result["verdict"] == "surface"
         assert not any(
             "unfilled" in e and "scaffold placeholder" in e for e in result["evidence"]
@@ -2211,7 +2250,14 @@ class TestTriageReviewDueRerouteNotFiredWhenBlockedByEmpty:
         assert result["status"] == "indeterminate"
 
 
+# ---------------------------------------------------------------------------
+# consumes_gate_evidence — the single-source-of-truth predicate mirroring
+# evaluate_gate's own SC / demoted-1a / rule-0 precedence, exported so
+# handoff_reconcile.py never re-derives it locally (the exact bug class
+# this module's own docstring already records once — see "C4
 # RECONCILIATION" — recurring because a mirror drifted when the precedence
+# order itself moved underneath it, DR-259 + the C2 scaffold sentinel).
+# ---------------------------------------------------------------------------
 
 
 def _io_leg_covers_prose_true(observed: bool = True) -> dict:
@@ -2792,7 +2838,11 @@ class TestDeriveReadinessBlockingNotesNeverReadAtAll:
 
 class TestDeriveReadinessScaffoldSentinelNeverConsulted:
     def test_unfilled_scaffold_placeholder_does_not_park_readiness(self) -> None:
+        # consult_prose_gates=False also suppresses the C2 scaffold-sentinel
+        # branch (checked ahead of everything else in evaluate_gate_triage's
         # default path) — an unfilled `PLACEHOLDER` in blocking_notes must
+        # not park derive_readiness's verdict the way it parks the default
+        # triage projection.
         handoff = _readiness_handoff(
             "awaiting_gate",
             blocked_by=[],
@@ -2901,6 +2951,8 @@ class TestGateIndexBuiltOnceForSweep:
         a = _roadmap_handoff("hnd-a-000011", blocked_by=["hnd-tc1-000011"])
 
         # Two DIFFERENT list objects with equal contents — a second sweep's
+        # freshly-collected corpus must never be served the first sweep's
+        # cached index merely because the contents happen to match.
         corpus_sweep_1 = [tc1, a]
         corpus_sweep_2 = [tc1, a]
 

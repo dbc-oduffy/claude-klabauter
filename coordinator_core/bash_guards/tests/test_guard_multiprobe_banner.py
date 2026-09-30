@@ -98,8 +98,14 @@ def _payload(command, agent_id=None, agent_type=None):
     return p
 
 
+#: NOT every-segment-recognized -- `git diff --stat` and `git log -1` are
+#: NOT among `_bt_probe_segment_kind`'s recognized forms (only bare `git
+#: status`/`git rev-parse HEAD`/`git branch --show-current` session-fact
 #: forms are), so this fixture exercises the GENERIC-advisory leg, not the
 #: seam-confirmed-rewrite leg -- see `_BANNER_CMD_CONFIRMED` below for the
+#: latter. Kept under its original name/shape (pre-2026-07-29 promotion)
+#: because several tests below only care about SHAPE detection, not about
+#: rewrite confirmation.
 _BANNER_CMD = (
     'echo "=== git status ==="; git status; git diff --stat; git log -1'
 )
@@ -139,15 +145,37 @@ class TestNonBashOrEmpty:
 class TestMultiProbeBannerVerdict:
     def test_banner_command_advises_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): this guard's own deny branch was
+        # retired as structurally unreachable -- it gated on
+        # `_seam_confirmed_rewrite` against the SAME seam the
+        # earlier-registered `"multiprobe-banner-rewrite"` chain entry
+        # already consumes and returns on first, so through the real
+        # dispatcher the gate could never open. Was
+        # `test_banner_command_denies_on_windows`, asserting a deny envelope
+        # under `host_is_windows=True`; now asserts the guard advises
+        # (never denies) even with Windows forced, using the same
         # ALL-RECOGNIZED fixture so the seam-confirmed-outlet content
+        # assertions below are unchanged.
         out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
+        # New (2026-07-29): the Example is the LITERAL rewritten command
+        # BX-16 already computed for THIS command, not a fixed template --
         # it starts with `_bt_python3_invocation()`'s RESOLVED, runnable
+        # interpreter path (never the bare literal "python3" -- see that
+        # function's own docstring: a bare `python3` is frequently absent
+        # on stock Windows), followed by ` -c `. Matched structurally
+        # against the same resolver the guard itself calls, per C2's
+        # identical fix (commit 39eedda26) rather than a second hardcoded
+        # literal.
         assert dc._bt_python3_invocation() + " -c" in ctx
         # RETARGETED (2026-08-17, override-key message-register ruling): a
+        # guard message names the guard that fired and nothing else about
+        # its override -- no key (docs/reference/guard-override-keys.md,
+        # opening sentence). `operator_override_note` no longer interpolates
         # the bare `COORDINATOR_OVERRIDE_MULTIPROBE_BANNER` key; it renders
+        # a doc pointer only. Asserting the literal key was stale.
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the rendered
+        # message carries the DISPLAY constant (the settings-root pointer),
         # not the repo-root-relative RESOLUTION form this asserted.
         assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
@@ -161,6 +189,28 @@ class TestMultiProbeBannerVerdict:
         import os
 
         # RETARGETED (DR-280, 2026-08-07): this test used to be named
+        # `test_host_is_windows_default_tracks_real_host` and pinned that
+        # omitting the `host_is_windows` kwarg still resolved the real host
+        # and denied under a faked Windows `os.name` -- that was this
+        # guard's ONE test allowed to touch `os.name`, proving the default
+        # still worked, not driving the platform leg. Now that this guard's
+        # deny branch is retired (it always renders the advisory template,
+        # regardless of `host_is_windows`), there is no platform-tracking
+        # default left to pin for THIS guard specifically -- what remains
+        # worth pinning is that omitting the kwarg under a faked Windows
+        # `os.name` still advises rather than denying, i.e. the retirement
+        # holds even on the one path this test used to exercise.
+        #
+        # The sibling seam call (`check_multiprobe_banner_rewrite`) is
+        # monkeypatched to a canned confirmed-rewrite result rather than
+        # left to run for real under a monkeypatched `os.name` -- that
+        # function's OWN interpreter-path resolution (unrelated to what
+        # THIS test is proving) legitimately depends on the real OS via
+        # `pathlib`, which raises `UnsupportedOperation` when `os.name` is
+        # faked to "nt" on an actual POSIX interpreter (Python 3.14 refuses
+        # to instantiate `WindowsPath` off a real Windows host) -- an
+        # artifact of faking the OS this way, not a bug on a real Windows
+        # host.
         monkeypatch.setattr(os, "name", "nt")
         monkeypatch.setattr(
             guard,
@@ -178,12 +228,44 @@ class TestMultiProbeBannerVerdict:
 
     def test_banner_with_unrecognized_segment_allows_silently(self):
         # 2026-08-06 (B2 friction fix): `_BANNER_CMD` carries `git diff
+        # --stat`/`git log -1`, neither a recognized session-fact probe --
+        # the sibling rewrite chain entry does NOT confirm an outlet for
+        # this exact command, so this guard has no per-command outlet to
+        # offer. It used to fall back to a fixed generic advisory
+        # (misdescribing any command without a literal `pwd`/`whoami`/`git
+        # status`); it now allows silently instead, on every platform.
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=True) is None
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
 
     def test_advisory_example_is_the_full_sibling_chain_rewrite(self):
+        # MERGED (DR-280 cleanup, 2026-08-07): this test used to be two --
+        # `test_banner_confirmed_rewrite_example_matches_sibling_chain_entry`
         # (the Example shown must be BYTE-IDENTICAL to what
+        # `check_multiprobe_banner_rewrite` itself would compute -- proves
+        # this guard reads the sibling's answer rather than re-deriving a
+        # parallel one that could drift) and
+        # `test_advisory_example_carries_the_full_rewrite_not_bare_evidence`
         # (RETARGETED from `test_deny_command_field_carries_full_command_
+        # not_bare_evidence` -- Review: code-reviewer, Finding 1, C19a --
+        # originally pinned via the deny template's "Command:" field that
+        # this guard's now-retired deny branch used to render, proving the
+        # rewrite named the FULL caller command rather than a stand-in
+        # derived from bare banner-marker evidence alone).
+        #
+        # Once the deny branch was retired under DR-280, both tests were
+        # retargeted onto the SAME assertion -- the advisory template's
+        # Example field is the only surviving outlet, and it carries the
+        # sibling chain's full computed rewrite either way -- leaving two
+        # byte-identical test bodies. Merged into one; this single identity
+        # assertion still pins BOTH original regressions: (1) this guard
+        # reads the sibling's answer rather than re-deriving a parallel one
+        # that could drift, and (2) that rewrite is the FULL command (every
+        # recognized probe, including the trailing `git rev-parse HEAD`
+        # segment that is NOT part of the banner-marker echo, folded into
+        # one `git status --porcelain=v2 --branch` call per the module
+        # docstring) rather than a stand-in derived from bare banner-marker
+        # evidence alone. Do not re-split without re-deriving a case where
+        # the two claims can actually diverge.
         from coordinator_core.bash_guards.dispatch_checks import (
             check_multiprobe_banner_rewrite,
         )
@@ -194,6 +276,7 @@ class TestMultiProbeBannerVerdict:
         assert expected_cmd in ctx
 
     def test_below_min_segment_threshold_allows(self):
+        # Only 2 segments -- a single labeled probe, not the N-unrelated-
         # probes shape (mirrors _shape_classifier._MIN_BANNER_SEGMENTS).
         assert (
             guard.check(
@@ -207,18 +290,34 @@ class TestMultiProbeBannerVerdict:
         assert guard.check(_payload(cmd), host_is_windows=True) is None
 
     def test_grep_via_bash_precedence_stays_silent(self):
+        # This command is simultaneously grep-via-Bash and a banner probe;
         # _shape_classifier's fixed precedence makes GREP_VIA_BASH the
+        # primary match, so this guard must not fire (AC-7: never
+        # misdescribe what tripped a command).
         cmd = 'echo "=== search ==="; grep -rn TODO src/; ls -la; git status'
         assert guard.check(_payload(cmd), host_is_windows=True) is None
 
     def test_head_tail_plumbing_present_but_not_primary_allows_silently(self):
+        # A command that is simultaneously a banner probe AND carries
         # head/tail plumbing (but NOT grep-via-Bash): MULTI_PROBE_BANNER
         # still outranks HEAD_TAIL_PLUMBING in SHAPE_PRECEDENCE (this guard
+        # is still the one asked to evaluate it, not silently deferring to
+        # a shape it doesn't own), but the piped `git log --oneline | head
+        # -5` segment is a genuinely composed stage the sibling rewrite
+        # chain entry treats as unrecognized (per its own docstring: "a
+        # piped stage inside a banner chain is genuinely composed... treat
+        # it the same as any other unrecognized segment") -- no outlet
+        # describes this exact command, so 2026-08-06 this allows silently.
         cmd = 'echo "=== facts ==="; git log --oneline | head -5; pwd; whoami'
         assert guard.check(_payload(cmd), host_is_windows=True) is None
 
     def test_banner_precedence_wins_even_with_head_tail_plumbing_present(self, monkeypatch):
+        # Same three-shapes-at-once command as above, but with the sibling
+        # rewrite seam monkeypatched to a confirmed result -- isolates the
         # precedence claim (MULTI_PROBE_BANNER wins over HEAD_TAIL_PLUMBING,
+        # so THIS guard is the one that fires, naming the banner shape, not
+        # head/tail) from the separate "is this exact command's rewrite
+        # confirmed" question covered by the test above (AC-7/BX-12).
         cmd = 'echo "=== facts ==="; git log --oneline | head -5; pwd; whoami'
         monkeypatch.setattr(
             guard,
@@ -377,6 +476,7 @@ class TestPowerShellDialectWiring:
     def test_powershell_grep_precedence_stays_silent_same_as_bash(self):
         # AC-7 precedence: GREP_VIA_BASH outranks MULTI_PROBE_BANNER in
         # SHAPE_PRECEDENCE on both dialects -- the PowerShell leg must not
+        # misdescribe this as a banner probe either.
         cmd = 'echo "=== search ==="; grep -rn TODO src/; git status'
         bash_result = guard._classify_for_dialect(cmd, Dialect.BASH)
         ps_result = guard._classify_for_dialect(cmd, Dialect.POWERSHELL)
@@ -469,7 +569,22 @@ class TestDispatchReachability:
         }
 
         # RETARGETED 2026-08-30. This asserted `result is None` -- that a
+        # Bash-only revert makes a PowerShell payload unreachable. That is
+        # unsatisfiable by construction, and has been since C1 landed the
+        # normalization this file's own sibling test depends on:
+        # `dispatch.evaluate_payload_json` computes
         # `_gating_tool_name = "Bash" if _raw_tool_name in COMMAND_TOOL_NAMES
+        # else _raw_tool_name`, so BOTH command tool names gate as "Bash"
+        # against the master gate AND against every `entry.matchers`. A
+        # Bash-only entry therefore still runs on a PowerShell payload --
+        # deliberately, that being how "guards fire under both tool names"
+        # was implemented -- and each guard re-checks the dialect itself.
+        #
+        # What this test can still prove, and what the sibling above actually
+        # rests on, is that the revert reaches the CHAIN: the built entry
+        # carries the reverted matchers rather than a stale import-time copy.
+        # Measured, not assumed: the entry below reads ('Bash',) here while
+        # the PowerShell-declaring siblings still read both.
         chain = dispatch._build_guard_chain(
             cmd=cmd,
             session_id="sess-ac15-reverted",

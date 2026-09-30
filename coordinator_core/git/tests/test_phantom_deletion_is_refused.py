@@ -72,3 +72,57 @@ def test_an_ordinary_commit_declares_no_deletion_and_is_unaffected(repo):
 
     assert out.sha
     assert (repo / "gone.txt").exists()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_an_untracked_path_leaves_head_and_the_index_and_stays_on_disk(repo):
+    _git(repo, "rm", "--cached", "-q", "gone.txt")
+
+    out = gcommit.commit_paths(
+        repo, [], "untrack gone.txt", untracked_paths=["gone.txt"]
+    )
+
+    assert out.sha
+    assert "gone.txt" not in _git(repo, "ls-tree", "--name-only", "-r", "HEAD").stdout.split()
+    assert "gone.txt" not in _git(repo, "ls-files").stdout.split()
+    assert (repo / "gone.txt").read_text(encoding="utf-8") == "gone\n"
+    assert _git(repo, "status", "--porcelain").stdout.strip() == "?? gone.txt"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_an_untracked_path_needs_no_prior_rm_cached(repo):
+    out = gcommit.commit_paths(
+        repo, ["keep.txt"], "untrack gone.txt", untracked_paths=["gone.txt"]
+    )
+
+    assert out.sha
+    assert "gone.txt" not in _git(repo, "ls-tree", "--name-only", "-r", "HEAD").stdout.split()
+    assert (repo / "gone.txt").exists()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_an_untracked_path_that_head_never_carried_is_refused(repo):
+    before = _head(repo)
+    (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(gcommit.PhantomDeletionDeclared):
+        gcommit.commit_paths(
+            repo, ["keep.txt"], "untrack new.txt", untracked_paths=["new.txt"]
+        )
+
+    assert _head(repo) == before
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_declaring_the_same_present_path_deleted_is_still_refused(repo):
+    with pytest.raises(CommitRefused) as excinfo:
+        gcommit.commit_paths(
+            repo, [], "untrack gone.txt",
+            deleted_paths=["gone.txt"], untracked_paths=["gone.txt"],
+        )
+
+    assert "still present in the worktree" in str(excinfo.value)

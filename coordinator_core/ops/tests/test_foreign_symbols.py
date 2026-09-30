@@ -49,7 +49,13 @@ from coordinator_core.ops.foreign_symbols import (
 )
 from coordinator_core.ops.foreign_symbols import _envelope_for_file
 
+# ---------------------------------------------------------------------------
+# Cockpit's real per-extension file census (chunk C2 body, verbatim): three
+# legitimate zeros (.cts, .jsx, .cjs) that must read as corpus facts, and a
+# live .mjs (106 files) that must not be excused by a healthy .ts total.
+# Derived here as a fixture constant, never hardcoded as a language list —
 # classify_foreign_symbol_coverage is exercised per EXTENSION.
+# ---------------------------------------------------------------------------
 _COCKPIT_CENSUS = {
     ".ts": 1292,
     ".tsx": 405,
@@ -83,7 +89,12 @@ def _result(files=None, diagnostics=None, languages=None):
     }
 
 
+# ---------------------------------------------------------------------------
 # Arm 1 — DEPENDENCY ABSENT. Never skipped: this must be loud on every
+# machine, installed or not — it is the arm that catches the degrade path
+# being wired to look like success. Exercised through build_foreign_symbols
+# itself via the pinned monkeypatch seam, `_import_symbol_extract`.
+# ---------------------------------------------------------------------------
 
 
 def test_dependency_absent_is_its_own_loud_state(monkeypatch):
@@ -170,7 +181,13 @@ def test_missing_grammar_uses_real_diagnostic_text_shape():
     assert ts_findings[0]["detail"]
 
 
+# ---------------------------------------------------------------------------
 # Arm — PARTIAL COVERAGE. symbols > 0 for an extension whose language is
+# nonetheless named by an error-level, language-level (file=None)
+# diagnostic — the shape symbol_extract produces when a grammar loads for
+# some files but not others: a healthy-looking non-zero symbol count with a
+# skipped-file count silently dropped underneath it.
+# ---------------------------------------------------------------------------
 
 
 def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent():
@@ -732,6 +749,8 @@ def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
 
 def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure():
     # Precedence test: `code` is populated but names a DIFFERENT diagnostic
+    # class, even though the prose WOULD prefix-match the drop message —
+    # the field must win and this must stay a parse_failure.
     diagnostic = {
         "level": "error",
         "message": "symbol name invariant violated — coincidental prefix match",

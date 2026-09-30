@@ -358,6 +358,8 @@ def test_read_index_fresh_true_bypasses_an_open_cache_scope(tmp_path):
         assert "b.txt" in fresh_snap
 
         # A subsequent ordinary call still returns the ORIGINAL cached
+        # snapshot -- `fresh=True` does not silently refresh the scope's
+        # cache entry for later ordinary callers.
         still_cached = read_index(repo)
         assert "b.txt" not in still_cached
 

@@ -121,7 +121,21 @@ _DIVERGENCE_TIMEOUT_SECS = 120
 _COMMIT_TIMEOUT_SECS = 300
 _MACHINE_LOCAL_TIMEOUT_SECS = 15
 
+#: Safety margin under Windows `CreateProcess`'s ~32767-char command-line
+#: ceiling (AC-7; Review: code-reviewer P2 -- a flat path-count bound like
 #: the prior `_STAGE_BATCH_SIZE = 500` is wrong because path length varies
+#: wildly across a real scaffold: this tree's own paths run from ~55 chars
+#: (`state/subagent-share/<uuid>/coordinator<role>-<hash>.md`) to 80+
+#: (`state/bug-backlog/<date>-<slug>-<hash>.yaml`-shaped names), so a
+#: count-based bound can pack far more bytes onto the command line than a
+#: shorter-path scaffold would, silently approaching the ceiling on a
+#: deep/large scaffold -- the worst time to discover it. Batches are now
+#: built by cumulative argv bytes instead (`_batch_paths_by_byte_budget`).
+#: NOT sized flush to 32767: this margin (~4700 bytes) is headroom for
+#: quoting/escaping overhead `CreateProcess` may add per-arg beyond a raw
+#: UTF-8 byte count, for `git`'s own resolved absolute path length varying
+#: by install location, and for `_argv_bytes` being a best-effort
+#: approximation of the composed command line, not an exact accounting.
 _STAGE_BATCH_MAX_ARGV_BYTES = 28000
 
 
@@ -369,8 +383,20 @@ def _batch_paths_by_byte_budget(
     return batches
 
 
+#: Environment forced onto the `git add` batching subprocess ONLY (Review:
+#: code-reviewer P3 follow-up — `_extract_failed_path_from_git_stderr`
+#: previously matched ANY quoted substring anywhere in stderr, which can
+#: misattribute an unrelated quoted fragment -- a hint/advice line, or a
 #: quoted token inside a DIFFERENT path -- as the failing path. Anchoring
+#: the parse to git's own known message templates (below) only makes the
+#: parse SAFE if git's wording is deterministic; git's stderr is a gettext
 #: string that translates under `LC_ALL`/`LANG`/`LANGUAGE`, so without this
+#: the anchored English patterns would silently stop matching under a
+#: non-English locale (fails safe -- degrades to the honest batch-scoped
+#: message) but a caller relying on THIS message being English could not
+#: prove that. Pinning explicitly removes the ambiguity: the `add` call
+#: this dict is applied to always produces English git messages, so a
+#: pattern match here is a real match, never a locale-dependent guess.
 _GIT_ADD_LOCALE_ENV_OVERRIDES = {"LC_ALL": "C", "LANG": "C", "LANGUAGE": "C"}
 
 
@@ -384,7 +410,14 @@ def _git_add_batch_env() -> dict:
     return env
 
 
+#: Git's own KNOWN, C-locale `add`-failure message shapes only -- never a
+#: bare "any quoted substring" scan (the misattribution this replaces).
 #: Anchored at the start of a line (`re.MULTILINE`) so a quoted fragment
+#: embedded mid-sentence in an unrelated advice/hint line cannot match.
+#: Deliberately narrow: a git version/message this list doesn't cover
+#: degrades to `None` (the honest batch-scoped fallback), which is the
+#: correct outcome for an unrecognized shape -- see the module's own
+#: fail-safe contract below.
 _GIT_ADD_STDERR_PATTERNS = [
     re.compile(r"^fatal: pathspec '([^']+)' did not match any files", re.MULTILINE),
     re.compile(r'^error: open\("([^"]+)"\)', re.MULTILINE),
@@ -569,6 +602,8 @@ def main(argv: List[str]) -> int:
     if not dry_run:
         dirty = _git_status_porcelain(root_path)
         # BEHAVIOUR CHANGE (2026-07-22, break-class fix): an unverifiable
+        # working tree is UNKNOWN, not clean — abort rather than mutate a
+        # repo whose 'git status' we could not confirm is clean.
         if dirty is None:
             _print("")
             _print(f"bootstrap-repo: unable to verify {root_path} has a clean working tree (git status check failed).")
@@ -714,6 +749,12 @@ def main(argv: List[str]) -> int:
     untracked = _git_lines(["ls-files", "--others", "--exclude-standard"], root_path)
     modified = _git_lines(["diff", "--name-only"], root_path)
 
+    # COUNT (AC-7): every untracked/modified path is staged for the SAME
+    # single "chore(coordinator): bootstrap" commit below, so a per-file
+    # `git add` loop (N+1 `.git/index.lock` acquisitions for N files) is
+    # behaviour-preserving to collapse into one `add` per batch. Batched
+    # (never a single unbounded pathspec) to stay clear of a platform
+    # argument-length ceiling on a very large scaffold -- see
     # `_batch_paths_by_byte_budget` / `_STAGE_BATCH_MAX_ARGV_BYTES`.
     stage_targets = untracked + modified
     for batch in _batch_paths_by_byte_budget(stage_targets, root_path):
@@ -745,6 +786,13 @@ def main(argv: List[str]) -> int:
             )
 
     # AMBIENT-REPO fix (bug-backlog 2026-08-28-two-bootstrap-ops-bare-commit-
+    # into-an-operator-selected-repo): `git diff --cached --name-only` reports
+    # EVERY staged path, including one an operator (or a peer) staged into
+    # this ambient repo before bootstrap ever ran -- it is not scoped to what
+    # THIS run added. `stage_targets` (this run's own untracked+modified list,
+    # captured before staging) is the honest scope; intersecting it against
+    # what actually landed in the index (`staged_files`) drops any path this
+    # run's own `git add` batch failed to stage.
     staged_files = _git_lines(["diff", "--cached", "--name-only"], root_path)
     staged_set = set(staged_files)
     scoped_commit_paths = [p for p in stage_targets if p in staged_set]
@@ -785,6 +833,8 @@ def main(argv: List[str]) -> int:
         return 1
 
     if proc.returncode != 0:
+        # Faithful oracle repro: the commit is NOT advisory-wrapped like scaffold —
+        # a rejecting pre-commit hook propagates straight through, skipping the
         # "bootstrap complete" trailer below (AC-HOOK-FAIL).
         return proc.returncode
 

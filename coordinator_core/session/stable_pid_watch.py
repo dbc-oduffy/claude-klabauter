@@ -118,6 +118,9 @@ from coordinator_core.session import core
 from coordinator_core.session import liveness
 
 # Mirrors ops/session/reap.py::_AGENT_STALE_SECONDS (24h). Not imported from
+# there: reap is an op module whose import pulls asyncio/shutil/the op
+# registry onto a cadence path that must stay a directory walk and a stat.
+# Kept as a named local with the backlink instead.
 _NO_META_RECENCY_SECONDS: int = 24 * 3600
 
 STATUS_MISS = "MISS"
@@ -253,8 +256,35 @@ def scan_stable_pid_misses(
             continue
         meta_path = sdir / "meta.json"
         if not meta_path.is_file():
+            # No meta.json at all is normally not a session record (e.g. a
+            # stray non-session subdirectory under the hub) — not counted.
+            # EXCEPT a dir carrying a record file (2026-08-22, C4,
+            # docs/plans/2026-08-22-track-touched-files-pays-only-for-the-
+            # append.md; widened off the `touched.txt` literal 2026-08-25,
+            # C5, docs/plans/2026-08-25-the-legacy-touch-record-is-retired-
+            # by-repointing-its-writers.md § AC6): a record file is this
+            # repo's own signal that a session genuinely ran here, so a
+            # meta.json-less dir bearing one is NOT "not a session record"
+            # — it is exactly the population this watch exists to keep
+            # visible. Keyed on the touch-record FAMILY (`touch_record.
+            # discover_family` plus its legacy `touched.txt` sibling) rather
+            # than a single literal, so a future record rename only DEFERS
             # this signal, never DISABLES it. Conservatively counted as a
+            # miss (this module's own contract, see the "unreadable" branch
+            # below) rather than silently dropped from the denominator,
+            # which is the AC8 gap this branch closes.
+            # Recency-scoped (2026-08-26): only while that record is newer
             # than _NO_META_RECENCY_SECONDS. Unscoped, this branch counted a
+            # 223-dir fossil corpus a bulk migration back-filled — see this
+            # module's docstring for the measurement.
+            # Scoped to directories that have reached the event which OWES
+            # them a `core.init` — a touch — and reached it inside the
+            # window. `meta.json` is written LAZILY, so "no meta.json yet" is
+            # the NORMAL state of a working session for anywhere from three
+            # seconds to forty minutes after it starts; counting that is
+            # reporting a race as a hazard. See `_init_is_owed` for the
+            # measurement and for why this replaced both the
+            # newest-of-any-file mtime key and the directory-age check.
             if not _init_is_owed(sdir, now):
                 continue
             checked += 1

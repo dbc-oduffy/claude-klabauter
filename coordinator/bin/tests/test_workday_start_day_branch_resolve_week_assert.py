@@ -121,6 +121,8 @@ def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch, tmp_path, c
     assert rc == 1
     out = capsys.readouterr().out
     # The CLI must print banner()'s own rendered text VERBATIM -- not a
+    # second, similar-but-different renderer (AC-1 constraint for this
+    # mid-session path).
     assert fail_message in out
     assert "day-branch NOT cut" in out
 
@@ -163,7 +165,16 @@ def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch, tmp_path):
     assert calls == [os.getcwd()]
 
 
+# ---------------------------------------------------------------------------
+# The publish leg (2026-09-02). `/workday-start` must leave a day branch that
 # EXISTS and IS PUBLISHED, in one move, with no operator step in between.
+#
+# Before this leg nothing published a boot-cut day branch at all:
+# `assert_day_branch` runs `session_ensure_branch(caller="boot")`, whose
+# contract is no network call, and the `auto_push.push_once` its comment
+# named had had no per-commit caller since C6/C7 of
+# docs/plans/2026-08-30-who-pushes-and-when.md.
+# ---------------------------------------------------------------------------
 
 
 def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):

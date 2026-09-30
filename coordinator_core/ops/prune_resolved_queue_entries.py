@@ -297,7 +297,11 @@ def _atomic_replace(path: str, new_lines: list[str]) -> None:
     try:
         with os.fdopen(fd, "w", newline="") as fh:
             for line in new_lines:
+                # awk's `print` always appends its ORS ("\n") to every
                 # emitted record, INCLUDING a final input line that itself
+                # lacked a trailing newline — replicate that oracle behavior
+                # (a faithful port, not a "fix": the oracle always newline-
+                # terminates its last line).
                 fh.write(line if line.endswith("\n") else line + "\n")
         os.replace(tmp_path, path)
         declare_write(path)

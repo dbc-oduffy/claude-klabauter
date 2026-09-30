@@ -160,6 +160,8 @@ GENERATES = []
 
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE"
 
+#: tool_input keys that can carry the target path, in probe order.
+#: NotebookEdit uses notebook_path; the rest use file_path. Mirrors
 #: block_home_dir_memo_delivery.py's own ``_PATH_KEYS``.
 _PATH_KEYS = ("file_path", "notebook_path")
 
@@ -237,6 +239,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     # Tool-name guard — defense-in-depth (MATCHERS already filters this at
+    # the engine level, but every sibling guard re-checks defensively).
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -268,6 +271,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         Path(casefold_path(legacy_share_dir(git_root, session_id))),
     ]
     # A tool-supplied file_path is contractually absolute (every MATCHERS
+    # tool requires it), but a relative string is joined against git_root
+    # rather than left to resolve() against this PROCESS's cwd (which need
+    # not be the payload's cwd at all) — fail-open on a stray relative path
+    # would be the wrong direction for a containment check.
     candidate_raw = file_path if Path(file_path).is_absolute() else str(Path(git_root, file_path))
     candidate = Path(casefold_path(candidate_raw))
     if contained_path(candidate, sandbox_roots) is not None:

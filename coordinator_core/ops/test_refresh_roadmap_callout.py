@@ -27,7 +27,16 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
+# Declared, not excused: the `test_self_commit_*` tests spawn a real git
+# process because `main(..., self_commit=True)` under test performs a real
+# `git add`/`git commit` (opt-in detached-render self-commit disposition)
+# and the tests assert against real `git log`/`git show` output -- no mock
+# stands in for the commit-or-not decision. Each test seeds/commits its own
+# repo, so `_init_git_repo` is not hoisted to module scope -- per-test
+# isolation (each test's assertions depend on a fresh, known commit log).
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -48,7 +57,19 @@ STALE PLACEHOLDER TEXT
 
 
 def test_known_roadmap_with_callout_invokes_refresh(tmp_path, capsys, monkeypatch):
+    # The prior version of this test asserted
+    # `rc is not None` (always true for an int-returning function) and
+    # `X or True` (always true regardless of X), providing zero real
+    # coverage of the "known roadmap with a callout delegates to the
+    # refresh-queries rendering engine" path.
+    #
     # 2026-07-17 (refresh-queries BIG_PORT item): the delegate target
+    # switched from `subprocess.run(["node", ".../refresh-queries.js", ...])`
+    # to a direct in-process import of
+    # `coordinator_core.text.refresh_queries.main` (refresh-queries.js is
+    # retired). Mock that import target (patched at its use site inside
+    # refresh_roadmap_callout, matching the local-import-inside-main shape)
+    # and assert it was invoked with the expected argv instead.
     stub_index = _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
     fake_cc_root = tmp_path / "fake-cc-root"
     fake_cc_root.mkdir()

@@ -249,6 +249,9 @@ def _raise_nested_block_guard(fn_name: str, key: str) -> None:
     )
 
 
+#: A block-scalar header: the ``|`` / ``>`` style byte, then the optional
+#: explicit-indentation digit and chomping indicator in EITHER order (YAML
+#: 1.2 §8.1.1 permits ``|2-`` and ``|-2`` alike), then an optional trailing
 #: comment. Anchored whole so a value that merely CONTAINS a pipe cannot match.
 _BLOCK_SCALAR_HEADER_RE = re.compile(
     r'^(?P<style>[|>])'
@@ -327,7 +330,11 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     explicit = hm.group('indent') or hm.group('indent_b')
     chomp = hm.group('chomp_a') or hm.group('chomp_b')
 
+    # `_fm_key_line_pattern`'s trailing `.*$` already consumed any `\r` as
     # part of the key line (`.` matches `\r`; MULTILINE `$` matches before
+    # `\n`), so `rest` can only ever begin with the bare `\n`. Do not
+    # "restore" a `\r\n` branch here — it would be unreachable and would
+    # imply a case that cannot occur.
     rest = fm[m.end():]
     if rest.startswith('\n'):
         rest = rest[1:]
@@ -558,8 +565,13 @@ def insert_fm_field(
             cr = '\r' if m.group(0).endswith('\r') else ''
             return fm[:insert_at] + '\n' + new_line + cr + fm[insert_at:]
 
+    # Append-only (or anchored fallback).
     # The line ending is detected on the ORIGINAL `fm`, never on the rstrip()ed
+    # text: rstrip() eats the trailing `\r\n`, so a document whose only CRLF was
+    # its terminator (`'title: T\r\n'`, and every single-line CRLF frontmatter)
+    # was misdetected as LF — and because `trimmed + eol` re-supplies the
     # stripped ending, the existing last line was silently DOWNGRADED to LF too,
+    # contradicting this function's own mixed-endings contract above.
     eol = '\r\n' if '\r\n' in fm else '\n'
     trimmed = fm.rstrip()
     return trimmed + eol + new_line + eol

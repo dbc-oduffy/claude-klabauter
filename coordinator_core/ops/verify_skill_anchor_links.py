@@ -149,6 +149,8 @@ class ScanReport(NamedTuple):
     historical: int = 0
     dropped_section_lines: int = 0
     # matched `_CITATION_LINE_RE` — a coarse format-drift visibility signal,
+    # diagnostic only (never affects exit code). Distinct from a line with no
+    # `§` at all, which is not a citation and is correctly never counted.
 
 
 class Manifest(NamedTuple):
@@ -449,7 +451,10 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
                         kind = "DEAD"
                     results.append(AnchorResult(kind, rel, line_no, value, cited))
 
+    # Every consumer vanishing (all skipped, none
     # read) must COULD-NOT-CHECK, not a clean 0. Without this, "found
+    # nothing" (exit 0, zero coverage) and "looked at nothing" collapse into
+    # the same code — exactly the defect class this rewrite exists to close.
     if consumer_list and len(skipped) == len(consumer_list):
         joined = ", ".join(skipped)
         return ScanReport(

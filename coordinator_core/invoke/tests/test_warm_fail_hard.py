@@ -39,6 +39,10 @@ def _run(
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", boot_wait_secs)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", allow_unstamped)
     # Isolates the warm-miss policy under test from the SEPARATE
+    # dispatch-axis stamp gate (already covered by test_dispatch_message.py's
+    # own gate tests) -- this repo's own tree is genuinely unstamped, so a
+    # cold-dispatch assertion here would otherwise fail on the wrong check
+    # whenever `allow_unstamped` is False.
     monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: True)
     monkeypatch.setattr(
         "coordinator_core.warm.settings.is_warm_enabled", lambda: warm_enabled

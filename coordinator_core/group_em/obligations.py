@@ -61,11 +61,17 @@ from typing import Any, Optional
 from coordinator_core.session import machinery_paths
 
 #: Valid intake ops, mirroring DoE's own closed `_INTAKE_OPS` vocabulary at
+#: the landed sha. Kept as our own tuple rather than importing theirs --
+#: this plane conforms to the wiki contract, not to a cross-repo import.
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
 _INTAKE_SCHEMA = 1
 
+#: Corpus-mutator declaration (generator-provenance sweep): `record` appends
+#: to `.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
 #: file per session id, a data-dependent set GENERATES cannot name. Same
+#: extension-scoped glob convention as the sibling counters in this tree
+#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 

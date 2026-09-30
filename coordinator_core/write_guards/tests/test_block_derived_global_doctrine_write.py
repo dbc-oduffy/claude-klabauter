@@ -27,6 +27,7 @@ def _fixed_home(monkeypatch):
     monkeypatch.setenv("HOME", "/Users/alice")
     monkeypatch.setenv("USERPROFILE", r"C:\alice")
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -66,9 +67,26 @@ class TestFiresOnDerivedLiveCopy:
     def test_windows_separator_case_varied_denied(self):
         _deny(r"c:\alice\.CLAUDE\CLAUDE.MD")
 
-    def test_claude_home_direct_root_denied(self, monkeypatch):
+    def test_claude_home_parent_root_denied(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_HOME", "/opt/claude-home")
-        _deny("/opt/claude-home/CLAUDE.md")
+        _deny("/opt/claude-home/.claude/CLAUDE.md")
+
+    def test_claude_home_parent_root_backslash_form_denied(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_HOME", "/opt/claude-home")
+        _deny("\\opt\\claude-home\\.claude\\CLAUDE.md")
+
+    def test_claude_home_is_not_a_direct_claude_root(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_HOME", "/opt/claude-home")
+        _allow("/opt/claude-home/CLAUDE.md")
+
+    def test_claude_config_dir_denied(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/opt/cfg")
+        _deny("/opt/cfg/CLAUDE.md")
+
+    @pytest.mark.parametrize("bad", ["/opt/claude-home/.claude", "relative/home"])
+    def test_bad_claude_home_does_not_raise_and_home_roots_hold(self, monkeypatch, bad):
+        monkeypatch.setenv("CLAUDE_HOME", bad)
+        _deny("/Users/alice/.claude/CLAUDE.md")
 
     def test_tilde_expansion_denied(self):
         _deny("~/.claude/CLAUDE.md")

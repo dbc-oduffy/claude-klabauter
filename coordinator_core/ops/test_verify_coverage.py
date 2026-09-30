@@ -489,6 +489,14 @@ def test_unreadable_subdirectory_fails_gate_not_silently_clean(tmp_path):
     (locked_dir / "hidden.md").write_text("# hidden\n", encoding="utf-8")
     os.chmod(locked_dir, 0o000)
     try:
+        # Root (and any ACL-bypassing principal) lists a mode-000 directory
+        # anyway, so the scan cannot fail and the premise is void.
+        try:
+            os.listdir(locked_dir)
+        except OSError:
+            pass
+        else:
+            pytest.skip("Process can read a chmod-000 directory (running as root).")
         r = _run(root, root)
     finally:
         os.chmod(locked_dir, 0o755)

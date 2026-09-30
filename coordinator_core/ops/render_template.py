@@ -280,7 +280,9 @@ def main(argv: List[str]) -> int:
             with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
                 f.write(rendered)
             os.replace(tmp_path, output_path)
+            # DR-276: declared AFTER the atomic replace lands, never before —
             # the contract is a report of what was ACTUALLY written, not of
+            # an intended surface.
             declare_write(output_path)
         except OSError as exc:
             try:

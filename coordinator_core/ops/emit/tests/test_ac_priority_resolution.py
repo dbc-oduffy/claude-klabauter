@@ -31,7 +31,9 @@ def node_dir(tmp_path: Path) -> Path:
     return d
 
 
+# ---------------------------------------------------------------------------
 # AC3 — a CONTINUATION inherits its predecessor priority.
+# ---------------------------------------------------------------------------
 
 
 def test_ac3_continuation_inherits_predecessor_priority(node_dir: Path):
@@ -49,7 +51,14 @@ def test_ac3_continuation_inherits_predecessor_priority(node_dir: Path):
     assert result["source_id"] == "PARENT_id"
 
 
+# ---------------------------------------------------------------------------
 # AC4 — MID-CHAIN OVERRIDE wins. This is the acceptance oracle, not an
+# illustration:
+#     A (explicit: high)
+#     +-- B (explicit: low)      <- mid-chain PM override
+#         +-- C (no explicit call)
+# C resolves to low, and — separately, explicitly — does NOT resolve to high.
+# ---------------------------------------------------------------------------
 
 
 def test_ac4_mid_chain_override_wins(node_dir: Path):
@@ -136,6 +145,8 @@ def test_ac7_none_sentinel_terminates_walk_vs_absent_entry(node_dir: Path):
     assert result_absent["source_id"] == "A2_id"
 
     # The two cases must produce DIFFERENT results — a test checking only
+    # (i) would pass against an implementation that treats deletion and
+    # clearing alike.
     assert result_cleared["effective_priority"] != result_absent["effective_priority"]
     assert result_cleared["source_id"] != result_absent["source_id"]
 

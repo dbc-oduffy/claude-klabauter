@@ -92,6 +92,8 @@ import re
 import sys
 from typing import List, Optional
 
+from coordinator_core._settings_home import is_doubled_claude_home
+
 _SCHEMA_VERSION_RE = re.compile(r"^[1-9][0-9]*$")
 _STAMP_LINE_RE = re.compile(r"^schema_version:\s*(.*)$", re.MULTILINE)
 
@@ -170,9 +172,7 @@ def main(argv: List[str]) -> int:
         repo_root = repo_root_override
     else:
         claude_home = os.environ.get("CLAUDE_HOME", "")
-        # Separator-agnostic: a Windows CLAUDE_HOME arrives backslash-separated
-        claude_home_cmp = claude_home.replace("\\", "/") if claude_home else claude_home
-        if claude_home_cmp and _strip_one_trailing_slash(claude_home_cmp).endswith("/.claude"):
+        if is_doubled_claude_home(claude_home):
             print(
                 f"probe-onboarding-currency: FATAL: CLAUDE_HOME='{claude_home}' ends in '/.claude'.",
                 file=sys.stderr,

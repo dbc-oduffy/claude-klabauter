@@ -38,6 +38,9 @@ def test_npm_view_usage_names_exactly_one_package_spec():
         pytest.skip("npm not on PATH -- oracle needs the real binary's --help text")
 
     # Resolved to the PATHEXT-suffixed sibling (npm.cmd on Windows), not the bare "npm" --
+    # a bare name raises FileNotFoundError under CreateProcess without shell=True, which is
+    # exactly the live Windows-portability gap this repo's own cruft_sweep.py and
+    # find_polluter.py document at their own npm call sites.
     proc = subprocess.run(
         [npm_path, "view", "--help"],
         capture_output=True,

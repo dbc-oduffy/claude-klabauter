@@ -56,6 +56,10 @@ Negative-spec:
   - Does NOT relocate or touch any of the 7 existing misplaced files (spec
     Anti-scope) — this module only evaluates a PreToolUse payload; it has no
     write path of its own.
+  - Does NOT fire on ``*.census-steps.md`` (nor its archival forms) at
+    ``.coordinator-local/plan-sidecars/`` -- the census-document schema
+    declares that path canonical, so a subagent-share redirect is wrong. The
+    same lens at the legacy ``state/plan-sidecars/`` root still advises.
   - Does NOT re-list the five lens names as a literal (AC5) — imports
     ``provision_report._PLAN_DERIVABLE_LENS`` instead.
   - Does NOT hard-block (spec Anti-scope) — a guard that asks a model to
@@ -103,8 +107,16 @@ _ROW_39_LENSES = frozenset(_PLAN_DERIVABLE_LENS.values())
 #: in the tree -- one call site does not make a convention, and
 #: `machinery_paths.plan_sidecars_dir` already owns the directory itself.
 _SIDECAR_DIR_RE = re.compile(
-    r"(?:^|/)(?:state|\.coordinator-local)/plan-sidecars/([^/]+)$"
+    r"(?:^|/)(state|\.coordinator-local)/plan-sidecars/([^/]+)$"
 )
+
+#: The census-document class is a tracked doctrine artifact that DoE's
+#: ``census-document.schema.json`` (``applies_to``) declares canonical at
+#: ``.coordinator-local/plan-sidecars/``. A subagent-share redirect there
+#: would hide the file from the tests that read it, so the advisory stays
+#: silent for exactly this lens at exactly this root.
+_CENSUS_LENS = "census-steps"
+_CENSUS_CANONICAL_ROOT = ".coordinator-local"
 
 #: The archival rename-on-existing timestamp segment, e.g.
 #: ``2026-07-27T19-46-54Z`` — verified against real files on disk (colons
@@ -175,7 +187,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         match = _SIDECAR_DIR_RE.search(file_path_norm)
         if not match:
             return None
-        filename = match.group(1)
+        root, filename = match.group(1), match.group(2)
         if not filename:
             return None
 
@@ -185,6 +197,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _stem, lens = parsed
 
         if lens in _ROW_39_LENSES:
+            return None
+        if lens == _CENSUS_LENS and root == _CENSUS_CANONICAL_ROOT:
             return None
 
         reason = _REASON_TEMPLATE.format(lens=lens)

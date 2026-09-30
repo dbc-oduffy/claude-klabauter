@@ -211,7 +211,7 @@ with no instrument behind it.
 
 Selection rule: per op, the single `(route, confidence)` bucket from
 `op_adjudication.adjudicate`'s all-time arm carrying the largest `n` --
-not necessarily the bucket `op_verdicts` would convict on, since several of
+not necessarily the bucket a conviction would rest on, since several of
 these rows have no `EXACT`/`FLOOR` bucket large enough to convict at all and
 citing the largest-n bucket regardless of confidence is more informative than
 citing nothing. `route`/`confidence`/`n`/`p95_ms`/`t_start_min`/`t_start_max`
@@ -278,10 +278,34 @@ class OpSuspendedError(RuntimeError):
 SUSPENSION_BAR_MS = 2000.0
 
 
+# Measured 2026-08-21 by `op_census.breaches` (top_n=null) over the current
+# op-latency generation, corroborated by a direct full-generation read. Every row
 # here blew SUSPENSION_BAR_MS on MAX. Ops that breached DR-344's 500ms brightline
+# but stayed under 2s on max are deliberately ABSENT — they are defects, but they
+# are not box-occupying defects, and this table is the box's defence, not the
+# brightline's enforcement.
+#
+# The four `test.*` fixtures that breach by construction are also absent, and not
+# by carve-out: their max latencies (66-110ms) simply fit. A rule that needed an
+# exception for its own test fixtures would be the wrong rule.
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
+    # -----------------------------------------------------------------------
+    # PM ruling 2026-08-30, on a thin-sample figure put to them directly:
+    # *"2,242ms p50 over four samples -- this is enough to suspend."* That
     # overrides the n >= 30 threshold `OVER_BAR_OPS_PENDING_REMEDY`'s own
+    # governing plan set ("recording a thin (n < 30) figure AS a conviction is
+    # the failure this chunk exists to avoid"). The threshold was a drafting
+    # choice about evidentiary caution; the bar is the PM's, and they have ruled
+    # that an op over it on the conviction axis comes off the box while the
+    # sample is still thin, not after it has occupied the box long enough to
     # earn n=30. Both entries below were UNADJUDICATED under the old threshold.
+    #
+    # The op the ruling was actually given on -- `ceremony.session_instructions`,
+    # p50 2,242.2ms over n=4 -- is NOT here: it was already killed 2026-08-27
+    # under DR-344 and is not registered, so its rows predate its removal and
+    # there is nothing left to suspend. The ruling is applied to the two ops
+    # that share its shape and are still live.
+    # → state/audits/2026-08-30-the-op-table-against-both-admission-criteria.md
     "session.reap_claims_for_repos": {
         "c2_citation": {
             "route": None,
@@ -362,11 +386,75 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
+    # -----------------------------------------------------------------------
+    # K-103 .. K-115 — the 200ms sweep, PM ruling 2026-08-27. (`review_trail.write`
+    # is NOT part of this batch's numbering: it was already ruled a gravestone
+    # today at K-060 under DR-372/DR-374, and this commit is the drain that entry
+    # names as its follow-on. It rides along here for the registration work only.)
+    #
+    # The bar for these fourteen is 200ms of PROCESS time, not this table's
     # own SUSPENSION_BAR_MS (2000ms) and not DR-344's 500ms brightline. PM
+    # ruling, verbatim across three turns: "Everything still over the bar gets
+    # deleted", "any over 200ms get killed. deleted", "422ms for a commit is an
+    # offender". This is the same threshold the `session.boot_sweep` gravestone
+    # convicted on three commits earlier at 77341a0fa ("one process over 200ms
+    # needs a fix, and this spends 6 processes on one archival batch"), so the
+    # number is not new here — its application as a DELETE disposition is.
+    #
+    # Every row below is a gravestone, not a suspension: the code is drained
+    # from the registration surfaces in the same commit. A name with no
+    # implementation keeps the refusal loud instead of degrading to
     # METHOD_NOT_FOUND — the property the boot_sweep row exists to hold.
+    #
+    # UNIT IS STATED PER ROW, AND IT IS NOT UNIFORM. Eight rows carry process
+    # time from the `process_ms` column of the op-latency sink. Six carry WALL
+    # CLOCK only, because they have zero `process_ms` rows on this corpus —
+    # they were never instrumented on the axis that governs. This module's own
+    # header says a suspension justified by wall clock is not evidence, and
+    # that judgement is not suspended for these six: they are convicted on the
+    # PM's ruling with the evidence gap named, not concealed. The remedy if one
+    # is ever disputed is to measure it, and the instrument exists
+    # (`benchmarks/process_time.batched_process_time_ms`).
+    #
+    # EVERY process_ms FIGURE BELOW IS A FLOOR, NOT A CEILING. The axis is
+    # `time.process_time()` (CPU time attributed to THIS interpreter), which
+    # cannot see, and does not sum, a child process's own CPU time. An op that
+    # spawns git or another subprocess pays a real cost this table's own
+    # process_ms number does not carry -- the recorded figure floors the
+    # op's true process cost rather than bounding it. This gap is silent on
+    # nine rows (the eight `process_ms` rows below plus `review_trail.write`'s
     # `process_ms_cold`); the six WALL_CLOCK rows already name their own,
+    # different gap in the comment above.
+    #
+    # WHICH OF THE NINE SPAWN AT ALL -- the cheap discriminator that decides
+    # whether the floor gap above is live or moot for a given row (read
+    # directly off each row's implementation this session, not inferred):
+    #   spawns a subprocess:     ceremony.commit (commit_pipeline.py, git),
+    #                            handoff.archive_transition (git_native._git),
+    #                            review_trail.write (subprocess.run),
+    #                            deliverable.cascade_terminal (2 git spawns
     #                            PER ADVANCED CANDIDATE -- see below)
+    #   does NOT spawn:          write_surface.emit_manifest,
+    #                            roadmap.serve,
+    #                            handoff.reconcile_open
+    #   unestablished:           ceremony.post_commit_tail -- it CALLS
+    #                            deliverable.cascade_terminal's retained
+    #                            compute in-process, so it inherits that
+    #                            row's spawns by composition. Listed as
+    #                            unestablished rather than moved: this
+    #                            session measured the cascade, not the tail.
     # CORRECTED 2026-08-30 (state/audits/2026-08-30-the-cascade-16ms-figure-
+    # measured-a-no-op.md): `deliverable.cascade_terminal` was recorded here
+    # as non-spawning off a re-measurement that had advanced zero candidates.
+    # It spawns `git log` + `git status` per advanced candidate, unbatched,
+    # via archive_stamp.stamp_shipped_in's scope-derived leg. A row read off
+    # an implementation at a shape where the work does not run reads as
+    # spawn-free for the same reason it reads as fast.
+    # The four that do not spawn are fine exactly as recorded -- their
+    # process_ms figure already covers the whole of their cost, because there
+    # is no child process for `time.process_time()` to miss. The floor
+    # caveat has teeth on the four that spawn, and on the tail that composes
+    # one of them.
     "ceremony.post_commit_tail": {
         "c2_citation": {
             "route": None,
@@ -461,7 +549,13 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
+    # fleet.prune_closed_bugs — REMOVED by delegated PM assent (autonomous-mode
+    # APM ruling), and pruned from both test_op_suspension_ratchet
     # _RATIFIED_SUSPENSIONS lists in this same commit. Not the old op earning its
+    # way back: ops/fleet/prune_bugs.py is the v2 rebuild
+    # (docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md). Measured
+    # before lifting: handler dry-run, mode already-terminal, 56-71ms process
+    # time over 6 runs, 0 spawns, 7 candidates of 176 records.
     "ceremony.commit": {
         "c2_citation": {
             "route": "warm_server",
@@ -505,7 +599,14 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
+    # eol.census — K-062 gravestoned this op id on 2026-08-27 but left it with
     # no roster row, so dispatch answered METHOD_NOT_FOUND: true, and useless. A
+    # caller learns nothing from it about why the id is gone.
+    #
+    # eol.audit_producers, cut in the same K-entry, deliberately gets NO row: it
+    # was cut on redundancy, never on cost, and this roster is a record of cost
+    # convictions. A row here with a 0ms "breach" is a dial in disguise — the
+    # ratchet's own evidence guard says so, and it is right.
     "eol.census": {
         "c2_citation": {
             "route": "in_process",
@@ -958,16 +1059,48 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
+    # fleet.archive_completed_handoffs — REMOVED 2026-08-26 by PM ruling, and
     # pruned from test_op_suspension_ratchet._RATIFIED_SUSPENSIONS in this same
+    # commit (that direction was got wrong once before; see that frozenset's
+    # own comment).
+    #
+    # NOT an op earning its way back — that lane does not exist and this is not
+    # it. The row recorded `max_ms: 26111.9, n: 1` and its refusal text read
+    # "Killed, not suspended — the old implementation does not come back. If
+    # the job is still needed, plan a new one under 500ms." That is exactly
+    # what happened: `ops/fleet/archive_handoffs.py` was DELETED at 648f2e4eb
+    # and the op key re-registered by `ops/fleet/archive_terminal_handoffs.py`,
+    # a from-scratch rebuild. The row was keyed to an op NAME whose
+    # implementation no longer existed, so it had stopped suspending the thing
+    # that was killed and started blocking the replacement the ruling asked
+    # for. Same shape as the `review_trail.write` correction above, on firmer
+    # ground: there the code was unchanged, here it was rebuilt as directed.
+    #
+    # Measured before removal, not after — the rebuilt op through its
+    # registered handler, live corpus, cold interpreter included:
+    # 212.5ms CPU / 267.2ms wall / 4 processes on dry_run, against the row's
+    # 26111.9ms. Two orders of magnitude apart.
+    # → docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md
+    #   § AC-8, and state/audits/2026-08-25-the-handoff-archive-op-earns-its-
+    #   way-back.md § AC-7 re-take 2026-08-26.
+    #
     # NEGATIVE SPEC for anyone re-adding this key: a suspension row is keyed by
+    # NAME, and a name survives the deletion of the code it named. Before
+    # writing one, check that the implementation you measured is the
+    # implementation the key resolves to today.
 }
 
 
 # --- OTHER OVER-BAR OPS THE C2 QUERY FOUND (2026-08-30, plan `2026-08-29-a-
+# zero-is-under-one-tick-not-unmeasured.md`, C4) ---------------------------
+#
 # NOT a second SUSPENDED_OPS, and membership here does nothing operational.
 # Membership in SUSPENDED_OPS refuses dispatch (module docstring above); the
 # plan that produced this table draws a hard line between CONVICTING an op --
+# writing down that its own evidence puts it over a brightline bar -- and
 # REMEDYING it -- suspending, gravestoning, or fixing it, which that plan
+# `confidence` is the spawns axis only (EXACT|FLOOR|SPAWNS-UNKNOWN|None); `verdict`
+# is the n axis (`adjudicated` when n >= 30, else `unadjudicated`).
 OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
     "records.query": {
         "convicted": True,
@@ -980,6 +1113,7 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
         },
         "all_time": {"p95_ms": 312.5, "n": 831},
         "confidence": "EXACT",
+        "verdict": "adjudicated",
         "route": None,
         "note": (
             "Absent from SUSPENDED_OPS entirely. p95 859.4ms over the 500ms "
@@ -1000,7 +1134,8 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "window": "24h_production",
             "unit": "process_ms",
         },
-        "confidence": "UNADJUDICATED",
+        "confidence": None,
+        "verdict": "unadjudicated",
         "route": None,
         "note": (
             "n=4 (n=6 all-time). The most suspicious figure in the sweep -- "
@@ -1017,7 +1152,8 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "window": "24h_production",
             "unit": "process_ms",
         },
-        "confidence": "UNADJUDICATED",
+        "confidence": None,
+        "verdict": "unadjudicated",
         "route": None,
         "note": (
             "This op NAME already carries its own SUSPENDED_OPS row above -- "
@@ -1039,6 +1175,7 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "unit": "process_ms",
         },
         "confidence": "FLOOR",
+        "verdict": "adjudicated",
         "route": None,
         "note": (
             "n=56 is adjudicable, but the op SPAWNS (14 of 88 all-time rows "
@@ -1057,7 +1194,8 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "window": "24h_production",
             "unit": "process_ms",
         },
-        "confidence": "UNADJUDICATED",
+        "confidence": None,
+        "verdict": "unadjudicated",
         "route": None,
         "note": "n=6. Recorded as unadjudicated, not convicted.",
     },
@@ -1071,6 +1209,7 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "unit": "process_ms",
         },
         "confidence": "FLOOR",
+        "verdict": "adjudicated",
         "route": None,
         "note": (
             "SPAWNS (54 of 136 all-time rows, max 2): a FLOOR over the 200ms "
@@ -1089,6 +1228,7 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "unit": "process_ms",
         },
         "confidence": "EXACT",
+        "verdict": "adjudicated",
         "route": "in_process",
         "note": (
             "Over the 200ms fix bar on its face, but this op is ALREADY "
@@ -1107,9 +1247,21 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
 }
 
 
+# The second admission axis (staff-eng F6 / DR-349 addendum): an op that never
 # breaches SUSPENSION_BAR_MS on MAX can still hold the box for more cumulative
+# box-seconds than the whole roster combined, and the max-only criterion is blind
+# to it (C1's occupancy scan; state/audits/2026-08-23-the-op-table-against-both-
 # admission-criteria.md). `admitted_on` below is the SIGNATURE this plan lifts
+# ahead of the PM gate (C4's ratchet-completeness guard needs it to import NOW);
+# the ratified value is a C2-recommended, PM-ratified absolute box-seconds figure
+# and lands at C6 together with the admitted rows, in the same commit as the
+# roster change (the plan's one-commit constraint).
+#
+# `math.inf` is the placeholder, not a guess at the ratified number: it makes the
+# occupancy leg of `admitted_on` inert (nothing has infinite occupancy) rather
+# than silently admitting or excluding rows on a number nobody has ratified yet.
 # This is a ratchet exactly like `SUSPENSION_BAR_MS`: once C6 sets a finite value,
+# it may only be LOWERED, never raised back toward `math.inf`.
 OCCUPANCY_BAR_SECS: float = math.inf
 
 
@@ -1197,8 +1349,29 @@ def refusal_message(method: str) -> str:
             note = raw_note.strip()
     return (
         # A NUMBER TRAVELS WITHOUT ITS INSTRUMENT UNLESS THE MESSAGE CARRIES IT.
+        # `session.boot_sweep`'s max_ms is 30016.6 and its note is "8/8 ended in
         # caller_timeout at 30s" -- the figure is `ipc.DISPATCH_TIMEOUT_SECS`,
+        # the point where the dispatcher gave up, not a duration anything ran
+        # for. Rendering it as "measured max 30016ms" and dropping the note read
+        # to two EMs (claude-klabauter-em and coordinator-content-repo-em, 2026-08-26) as a
+        # measured 15x overshoot of the bar, and a cross-repo plan sized a
+        # from-scratch rewrite against it before either of us read the note that
+        # was in the record all along. The record was honest; the message was
+        # not. DoE's own corpus had already ruled this class three days earlier
+        # -- state/lessons/2026-08-23-a-number-without-its-instrument-gets-acted
+        # -on-as-the-other-instrument.md.
+        #
+        # A timeout-derived figure is a FLOOR on the op's cost and says nothing
+        # about its real duration: the op could be barely over the bar or
+        # hundreds of times over it. That distinction is exactly what a sizing
+        # decision turns on, so it is rendered here rather than left for a
+        # reader to go find.
+        # THE BAR NAMED MUST BE THE BAR IT DIED ON. The 200ms sweep
+        # (K-060..K-073) convicts on process time against a 200ms line;
         # rendering those rows against SUSPENDED_BAR_MS told the caller the op
+        # was 1938ms into a 2000ms budget -- under it -- when the actual finding
+        # was 421.9ms of process time against 200ms. Same defect class as the
+        # instrument note above: the record was honest, the message was not.
         f"{method} is off: {_bar_clause(record)}. "
         + (f"How that number arose: {note} " if note else "")
         + (f"{fallback} " if fallback else "")
@@ -1215,7 +1388,9 @@ def _successor_is_live(record: object) -> bool:
     return bool(isinstance(record, dict) and record.get("successor_live"))
 
 
+#: The process-time line the 2026-08-27 sweep convicts on (PM ruling). Distinct
 #: from `SUSPENSION_BAR_MS`, which is a wall-clock box-occupancy bar, and from
+#: DR-344's 500ms brightline. Like both, it may be LOWERED, never raised.
 PROCESS_BAR_MS: float = 200.0
 
 

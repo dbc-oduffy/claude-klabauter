@@ -616,10 +616,27 @@ def check_head_tail_plumbing_rewrite(
     if kind is None or parsed is None:
         return None
 
+    # Fail open when the upstream `find`/`ls` root does not resolve on THIS
+    # host -- an unquoted Windows path (`find C:\Users\x\tmp`) is
+    # de-escaped by bash's own tokenizing before this guard ever sees it
+    # (`C:\Users\x\tmp` -> `C:Usersxtmp`; not this guard's doing, see
+    # `_command_tokenizer.py`'s own module docstring), and the generated
+    # `os.walk`/`os.listdir` root would then be that same de-separated,
     # non-existent path. Left alone, the ORIGINAL `find`/`ls` command would
+    # fail LOUDLY (`find: 'C:Usersxtmp': No such file or directory`) --
+    # substituting a rewrite here instead would swap that loud failure for
+    # a silent, zero-line, exit-0 result an agent reads as "no matches"
+    # rather than "your path was wrong". Not offering the rewrite (`None`,
+    # not `_advisory`) lets the original command run and produce its own
+    # error -- no guess at intent, no attempt to repair the path. A root
+    # that DOES exist is completely unaffected by this check.
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
         return None
 
+    # SERVE the answer in-process instead of handing back a python3 one-liner,
+    # for the `find`-census shape C0's spike (docs/research/2026-09-10-in-
+    # process-census-evaluator-spike.md) certified faithful. `None` here means
+    # `coordinator_core.search.census` declined the shape -- fall through to
     # the existing generator rewrite below UNCHANGED, never guessing (AC4).
     if kind == "find":
         served = _bt_serve_find_census(up_tokens, is_head, n, payload)
@@ -637,6 +654,11 @@ def check_head_tail_plumbing_rewrite(
         else:
             body_lines = ["_out = []"]
     # TAIL: the whole stream must still be OBSERVED (there is no way to know
+    # which items are the last `n` without seeing them all), so this bounds
+    # MEMORY via a fixed-size ring (`_bt_tail_ring_buffer_lines`) rather than
+    # walk time -- `_out` is already exactly the last `n` items once the
+    # ring buffer is in place, so the final slice collapses to `_out` itself
+    # instead of re-slicing a list that was never allowed to grow past `n`.
     elif n > 0:
         slice_expr = "_out"
         body_lines = ["import collections"] + _bt_tail_ring_buffer_lines(gen_lines, kind, n)

@@ -71,6 +71,10 @@ SUPPORTED_VERSIONS = frozenset({1})
 MAX_FIELD_LEN = 200
 
 # Same shape as `guard_settings_integrity._TAIL_KEY_RE`: last two
+# path segments, forward-slash-joined. Used only to validate that a
+# `script`/carrier-key field is already in tail-key normal form —
+# never to compute one from a raw command token (that stays this
+# module's caller's job, via `_tail_key`, to avoid a circular import).
 _TAIL_KEY_SHAPE_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")

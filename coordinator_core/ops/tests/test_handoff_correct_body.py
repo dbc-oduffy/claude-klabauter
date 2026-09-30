@@ -69,6 +69,7 @@ import coordinator_core.ops.handoff_correct_body  # noqa: F401 — fires @regist
 import coordinator_core.ops.handoff_discharge_criteria  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
+from coordinator_core.session.core import SESSION_ENV_PRECEDENCE as _SESSION_ENV_PRECEDENCE
 from coordinator_core.ops.handoff_correct_body import (
     _CORRECTION_MARKER_PREFIX,
     _CORRECTION_SECTION_HEADING,
@@ -2086,6 +2087,82 @@ def test_live_and_archived_twin_resolves_to_live_root(tmp_path, monkeypatch):
     assert "The count was 25." in live_text, "correction must land on the LIVE file"
     assert "Archived twin body." in archived_text, "the archived twin must stay untouched"
     assert _CORRECTION_MARKER_PREFIX not in archived_text
+
+
+def test_relative_path_with_live_and_archived_twin_resolves_to_live_root(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    name = "2026-08-06-twin-relative.md"
+    live = _seed_claimed_handoff(repo, name)
+    archived = _seed_archived_handoff(
+        repo, name, month="2026-08", body="\n# Archived twin body.\n"
+    )
+    _set_calling_session(monkeypatch)
+
+    result = _run(_handler(
+        {
+            "handoff_path": f"state/handoffs/{name}",
+            "old_string": "The count was 29.",
+            "new_string": "The count was 25.",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert "The count was 25." in live.read_text(encoding="utf-8")
+    archived_text = archived.read_text(encoding="utf-8")
+    assert "Archived twin body." in archived_text
+    assert _CORRECTION_MARKER_PREFIX not in archived_text
+
+
+@pytest.mark.parametrize("env_var", _SESSION_ENV_PRECEDENCE)
+def test_each_precedence_env_spelling_resolves_and_is_stamped(tmp_path, monkeypatch, env_var):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, f"2026-08-06-env-{env_var}.md")
+    monkeypatch.setenv(env_var, _AUTHOR_SESSION)
+
+    result = _run(_handler(
+        {
+            "handoff_path": str(hpath),
+            "old_string": "The count was 29.",
+            "new_string": "The count was 25.",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["session_id"] == _AUTHOR_SESSION
+    assert result["session_source"] == env_var
+    assert f"(resolved via {env_var})" in hpath.read_text(encoding="utf-8")
+
+
+def test_roadmap_authoring_session_with_other_sessions_claimed_by_is_author_basis(
+    tmp_path, monkeypatch
+):
+    """Possession fails (holder is someone else), so the author arm runs; a
+    roadmap-shaped authoring_session skips the equality gate and authorizes
+    with basis=author, and the claim disagreement is not stamped because
+    the basis is not holder."""
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(
+        repo,
+        "2026-08-06-roadmap-other-claimer.md",
+        authoring_session="state/roadmap/claude-klabauter-strangler-2026-07-04/",
+        claimed_by=_HOLDER_SESSION,
+    )
+    _set_calling_session(monkeypatch, _OTHER_SESSION)
+
+    result = _run(_handler(
+        {
+            "handoff_path": str(hpath),
+            "old_string": "The count was 29.",
+            "new_string": "The count was 25.",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["ownership_basis"] == "author"
+    assert "The count was 25." in hpath.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

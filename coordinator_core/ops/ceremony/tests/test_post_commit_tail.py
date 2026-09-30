@@ -560,7 +560,7 @@ def test_module_does_not_import_ceremony_lock():
 
 
 # ---------------------------------------------------------------------------
-# (l) origin-stub-close follow-up commit routes through commit_scoped — a
+# (l) origin-stub-close follow-up commit routes through commit_paths — a
 # peer's deliberately-staged partial-hunk content on a path in the closed
 # set survives verbatim (the claude-klabauter 506748a0 incident shape,
 # closed). Real git required (fixtures.real_git) -- divergence cannot be
@@ -583,9 +583,43 @@ def test_origin_stub_close_follow_up_commit_preserves_peer_staged_divergence(tmp
     assert pushed is None  # push_mode="none" -- no attempt, not a failure
     assert push_status == m.PUSH_STATUS_NOT_ATTEMPTED
     assert _committed_content_at_head(repo, "docs/plans/some-stub.md") == "STAGED\n"
-    # Worktree content is untouched -- commit_scoped never re-derives the
+    # Worktree content is untouched -- commit_paths never re-derives the
     # diverged path's content from the worktree.
     assert (repo / "docs/plans/some-stub.md").read_text(encoding="utf-8") == "WORKTREE\n"
+
+
+def _git_run(repo: Path, *args: str) -> None:
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(
+        ["git", *args], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags()
+    )
+
+
+def test_origin_stub_close_commit_leaves_index_agreeing_with_head(tmp_path):
+    from .test_commit_leaves_index_agreeing_with_head import (
+        assert_commit_leaves_index_agreeing_with_head,
+    )
+
+    repo = real_git_repo(tmp_path)
+    rel = "docs/plans/some-stub.md"
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text("BASE\n", encoding="utf-8")
+    _git_run(repo, "add", "--", rel)
+    _git_run(repo, "commit", "-q", "-m", "add stub")
+    (repo / rel).write_text("CLOSED\n", encoding="utf-8")
+
+    def _commit() -> None:
+        _sha, _pushed, _status, error = m._commit_and_push_origin_stub_close(
+            repo, [rel], "deadbeef", push_mode=PUSH_MODE_NONE
+        )
+        assert error is None, error
+
+    assert_commit_leaves_index_agreeing_with_head(
+        repo, _commit, [rel], peer_path="peer-unrelated.txt"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +642,7 @@ def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
     rewrites its sha. A concurrent peer push lands on the shared branch
     first, forcing a genuine non-fast-forward reject; the returned sha must
     be the post-rebase commit `resolve_post_push_sha` adopted, never the
-    pre-push sha `commit_scoped` minted before the reject fired."""
+    pre-push sha `commit_paths` minted before the reject fired."""
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -662,7 +696,7 @@ def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
     assert error is None, error
     assert pushed is True
     assert push_status == m.PUSH_STATUS_PUSHED
-    # The rebase-retry branch genuinely fired: the sha `commit_scoped` minted
+    # The rebase-retry branch genuinely fired: the sha `commit_paths` minted
     # before the reject differs from the sha that finally landed.
     assert captured_pre_push_sha["sha"] is not None
     assert follow_up_sha != captured_pre_push_sha["sha"]

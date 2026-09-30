@@ -191,6 +191,8 @@
               "required": ["incomplete_chunks", "inline_review"],
               "properties": {
                 "incomplete_chunks": { "type": "array", "items": { "type": "string" } },
+                "script_path": { "type": "string" },
+                "session_id": { "type": "string" },
                 "inline_review": {
                   "anyOf": [
                     { "type": "null" },

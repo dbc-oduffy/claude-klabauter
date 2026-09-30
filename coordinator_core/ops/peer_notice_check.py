@@ -47,6 +47,8 @@ from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 
+#: Sentinel sort key for a missing/malformed ``created_at`` -- sorts before
+#: every real timestamp (oldest), so such a record still surfaces rather than
 #: being silently starved to the tail by a ``_MAX_NOTICES``-bounded caller.
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 

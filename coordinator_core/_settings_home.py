@@ -122,6 +122,33 @@ def _check_not_the_forbidden_real_home(resolved: Path) -> None:
     )
 
 
+def doubled_claude_home_parent(raw: str) -> Optional[str]:
+    """Return the parent of *raw* when it ends in a ``.claude`` segment, else None.
+
+    The single normalisation for the CLAUDE_HOME-ends-in-``.claude`` test:
+    trailing separators of either kind are ignored, both ``/`` and ``\\`` split
+    segments, and the leaf compares case-insensitively (``.CLAUDE`` is the same
+    directory on macOS and Windows). The parent may be ``""`` (bare ``.claude``),
+    so test the result with ``is not None``, never truthiness.
+    """
+    if not raw:
+        return None
+    trimmed = raw.rstrip("/\\")
+    cut = max(trimmed.rfind("/"), trimmed.rfind("\\"))
+    if trimmed[cut + 1 :].casefold() != ".claude":
+        return None
+    return trimmed[:cut] if cut > 0 else trimmed[: cut + 1]
+
+
+def is_doubled_claude_home(raw: str) -> bool:
+    """True when *raw* ends in a ``.claude`` segment (see `doubled_claude_home_parent`).
+
+    The non-raising form, for callers whose contract is a finding, a boolean, or
+    an exit code rather than a ValueError.
+    """
+    return doubled_claude_home_parent(raw) is not None
+
+
 def reject_doubled_claude_home(var: str, raw: str) -> None:
     """Raise ValueError when *raw* already ends in a ``.claude`` segment.
 
@@ -142,20 +169,13 @@ def reject_doubled_claude_home(var: str, raw: str) -> None:
     guard. Call this from every seam that accepts a CLAUDE_HOME-analog value —
     env override or op param alike.
 
-    Four older hand-rolled copies of this same test predate this helper and are
-    NOT routed through it, because each returns a finding or a boolean rather
-    than raising and rewriting them would change their pinned contracts:
-    `install/check_install_singularity.py`, `install/ensure_venv.py`,
-    `install/uninstall_legs.py`, `ops/probe_onboarding_currency.py`. This is
-    the seam a fifth site should adopt instead of writing a fifth copy.
+    Callers whose contract is a finding, a boolean, or an exit code rather than
+    a raise use `is_doubled_claude_home` / `doubled_claude_home_parent`; never
+    hand-roll the suffix test.
     """
-    if not raw:
+    parent = doubled_claude_home_parent(raw)
+    if parent is None:
         return
-    trimmed = raw.rstrip("/\\")
-    cut = max(trimmed.rfind("/"), trimmed.rfind("\\"))
-    if trimmed[cut + 1 :].casefold() != ".claude":
-        return
-    parent = trimmed[:cut] if cut > 0 else trimmed[: cut + 1]
     raise ValueError(
         f"{var} must name the home directory, not the .claude directory; "
         f"got {raw!r}. The '.claude' segment is appended by the resolver"

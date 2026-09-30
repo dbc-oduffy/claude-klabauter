@@ -26,7 +26,11 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: the "commit.anchors" op reads Plan/Plan-Id/Deliverable-Id
+# trailers off real STAGED DIFF content and asserts it performs no git writes
 # (COMPUTE_ONLY) -- both properties are of git's own staging/commit behaviour, not
+# reproducible against a mock. Tests build/mutate their own repo per-test via
+# `_init_repo`, so the fixture is not hoisted to module scope.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -176,6 +180,7 @@ class TestNatureSubjectDerivation:
         _init_repo(tmp_path)
         common = _common_dir(tmp_path)
         # Write a known commit subject into COMMIT_EDITMSG (git writes this before
+        # prepare-commit-msg fires; we simulate it here).
         (common / "COMMIT_EDITMSG").write_text(
             "fix: correct off-by-one in partition key derivation\n\n# Comments are ignored\n",
             encoding="utf-8",
@@ -790,7 +795,9 @@ class TestFullTrailerBlock:
             assert deliverable_idx < anchor_idx
 
 
+# ---------------------------------------------------------------------------
 # (d) COMPUTE_ONLY assertion
+# ---------------------------------------------------------------------------
 
 class TestComputeOnly:
     """Op performs zero git writes and zero state/ writes (COMPUTE_ONLY invariant)."""

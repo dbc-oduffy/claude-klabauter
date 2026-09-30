@@ -13,7 +13,14 @@ from coordinator_core.ops import check_atlas_watch_drift
 from coordinator_core.ops.check_atlas_watch_drift import run
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns real git because the ported bash-oracle
+# contract (test_atlas_watch_drift.py, coordinator-content-repo) depends on real commit/mtime
+# state in `docs/architecture/systems/` that `check_atlas_watch_drift.run()` reads
+# via git plumbing -- no mock stands in for that. Each test builds its own fresh
+# tmp_path repo via `_init_repo`, so mutation-heavy staleness scenarios need
 # per-test isolation, not a module-scope hoist. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -115,7 +122,9 @@ def test_nonzero_exit_emits_error(tmp_path):
     assert not any(ln.startswith("FRESH delta") for ln in lines), lines
 
 
+# ---------------------------------------------------------------------------
 # AC8c — malformed stdout -> MALFORMED, never silently FRESH
+# ---------------------------------------------------------------------------
 
 
 def test_malformed_stdout_emits_malformed(tmp_path):

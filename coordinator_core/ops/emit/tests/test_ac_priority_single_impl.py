@@ -74,7 +74,13 @@ def _emission_records(tmp_path: Path, records: list[dict], ledger_entries: dict,
         return handoffs_section.collect(ctx)
 
 
+# ---------------------------------------------------------------------------
+# AC16 — dangling target: a ledger entry whose target_id resolves to no
 # emitted handoff is REPORTED in the malformed bucket, never carried as a
+# record. Inverse: a non-"handoff" target_kind entry is NOT flagged by the
+# handoffs section (the ledger holds assignments for targets defined
+# elsewhere; a plan-targeted entry is not a handoffs-section defect).
+# ---------------------------------------------------------------------------
 
 
 def test_dangling_handoff_target_reported_not_carried_as_record(tmp_path: Path):
@@ -173,6 +179,10 @@ def test_ledger_hand_edit_is_redirected_and_names_priority_set():
 
     assert result is not None
     # a69586381 flipped this guard from a hard deny to an ADVISORY redirect (guard-class
+    # census, DR-27): it now emits `additionalContext` and no `permissionDecision` at all.
+    # That is the doctrine's ergonomics-over-enforcement default — the acceptance criterion
+    # here was never "deny", it was "the redirect names the op", which the advisory shape
+    # carries verbatim. Pin the message, not the enforcement class.
     hook_output = result["hookSpecificOutput"]
     assert "permissionDecision" not in hook_output
     reason = hook_output["additionalContext"]

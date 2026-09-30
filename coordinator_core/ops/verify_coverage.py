@@ -253,10 +253,21 @@ def walk_markdown(
 
 _SUBAGENT_RE = re.compile(r"subagent_type\s*[:=]\s*['\"]?([a-z][a-z0-9_:\-]*[a-z0-9])['\"]?")
 
+# Marker-vocabulary discriminator: a `coordinator:<token>` ref sharing its line
 # with one of these nouns is prose DOCUMENTING a fence/sentinel/marker/block
+# token, not dispatching it -- see extract_references docstring.
 _MARKER_NOUN_RE = re.compile(r"\b(fence|sentinel|marker|block)s?\b", re.IGNORECASE)
 
+# Shape-based proximity bound for the marker-noun discriminator: both of the
+# real marker-documentation examples this discriminator was built for put the
 # noun IMMEDIATELY after the closing backtick ("`coordinator:fleet-only`
+# fence", "`coordinator:percolate-only` sentinel block") -- a genuine
+# dispatch reference sharing its line with a marker noun elsewhere in the
+# prose ("dispatch `coordinator:foo-worker` to check the marker file") does
+# not have that adjacency. Bounding the search window to the text
+# immediately trailing the ref (not the whole line) keeps the discriminator a
+# shape rule, not a token list, while closing the false-negative the token-
+# adjacent shape doesn't share.
 _MARKER_NOUN_WINDOW_CHARS = 12
 
 _WORKER_HEADER_RE = re.compile(r"^##+\s+Worker Dispatch Recommendations", re.IGNORECASE)
@@ -326,6 +337,14 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
         ref_name = m.group(2).replace("\n", "")
         if not leading_slash:
             # Only inspect the window immediately TRAILING the matched ref
+            # (not the whole line) -- both real marker-documentation
+            # examples put the noun right after the closing backtick, and
+            # bounding the window avoids dropping a genuine dispatch
+            # reference whose surrounding prose happens to mention a marker
+            # noun elsewhere on the same line (see extract_references
+            # docstring). Sliced directly off `body` at the match end (not
+            # re-located inside a single line's text) so this still works
+            # correctly when the match itself spans a hard-wrap newline.
             trailing_window = body[m.end():m.end() + _MARKER_NOUN_WINDOW_CHARS]
             if _MARKER_NOUN_RE.search(trailing_window):
                 continue
@@ -406,6 +425,9 @@ REF_ALLOWLIST: Set[str] = {
     "feature-dev",
     # FORWARD-reference: DoE is authoring this M-tier reviewer (DR-133); claude-klabauter
     # pre-registered its lens in _PLAN_DERIVABLE_LENS so the sidecar files to
+    # state/plan-sidecars/ the day it ships. Landing the entry BEFORE the agent
+    # exists is the point -- see cross-repo/archive/2026-08-05-coordinator-content-repo-em-plan-
+    # reviewer-lens-registration.md (decision: partial). Drop when DR-133 ships.
     "coordinator:plan-reviewer",
     "coordinator:fleet-only",
     "coordinator:research-",
@@ -421,7 +443,13 @@ REF_ALLOWLIST: Set[str] = {
     "coordinator:reviewer",
     "schema-migration-auditor",
     "coordinator:hook-doctor",
+    # Real artifact (example-retrieval-repo:example-retrieval-repo-context-builder exists), but the
     # bare-name occurrence flagged here is inside prose DOCUMENTING a failure
+    # mode ("subagent_type: example-retrieval-repo-context-builder errors with `Agent
+    # type not found`" -- docs/wiki/example-retrieval-repo.md), not a dispatch site.
+    # Qualifying it there would falsify the quoted error text. Allowlisted
+    # rather than teaching the sweep to recognize an inline-code-span-in-prose
+    # context (broader parser change, not worth it for one project-local ref).
     "example-retrieval-repo-context-builder",
     "str",
     # RETIRED-agent: doctrine fixtures quote these two retired agent ids by
@@ -451,7 +479,46 @@ def main(argv: List[str]) -> int:
     violations: List[dict] = []
     scan_errors: List[str] = []
     files_scanned = 0
+    # Exclude dist/ (generated publish-repo snapshots), review-trail/ (immutable
+    # historical code-review findings that deliberately quote wrong refs),
+    # archive/ (historical records -- a period-correct ref is not an orphan), and
+    # vendor/ (vendored third-party content -- e.g. corpus/vendor/ docs whose
+    # type/struct tokens like `state:int32` are not dispatch references).
+    #
+    # audits/, subagent-share/ and tasks/ carry archive/'s rationale verbatim, not
+    # a looser one: an audit record dated 2026-08-01 naming the agent that session
+    # actually dispatched stays TRUE when the agent is later retired, and rewriting
+    # it to name a live agent would make the record false. Same for a completed
+    # dispatch's sidecar and for tasks/ ephemera. Scoping archive/ alone fixed one
+    # directory rather than the class, so the gate HALTed /update-docs on 19
+    # period-correct references (claude-klabauter, 2026-08-06).
+    #
+    # recovered/ is the same class a third time, asked for BY NAME rather than
+    # found by a halt: example-retrieval-repo-em (cross-repo/archive/2026-08-16-example-retrieval-repo-
+    # em-ceremony-cli-defects-found-running-workweek-complete.md, section 2)
+    # carries a verbatim port under docs/recovered/ banner-marked "Historical
+    # record -- paths and tool names are example-game-repo-era and may be stale", and it
+    # contributed 8 of their 9 remaining orphans, all commands that genuinely
+    # existed when the document was written. /update-docs Phase 11h2 HALTS on a
+    # non-zero verify-coverage, so a correctly-preserved historical document
+    # blocked their docs pipeline outright.
+    #
+    # They asked which of two shapes we wanted, and the exclusion set is the
     # right one: REF_ALLOWLIST needs a new entry per orphaned REF, so it grows
+    # with every recovered document and encodes nothing about WHY those refs are
+    # exempt, while the exclusion set encodes exactly the rationale that applies
+    # -- a period-correct ref is not an orphan. Their own read, and it is the
+    # consistent one.
+    #
+    # Basename-scoped like every other member here, so a `recovered/` anywhere in
+    # the tree is excluded, not only `docs/recovered/`. Deliberate and consistent
+    # with `archive`/`audits`/`tasks`, which over-match the same way: the name is
+    # the claim. A directory called `recovered` holding live surfaces someone
+    # will act on would be misnamed, and no such directory exists in this repo
+    # today.
+    #
+    # inbox/, sent/ and dispatch-briefs/ are the same class again, found the same
+    # way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).
     # A DELIVERED memo -- inbound under cross-repo/inbox/ or outbound under
     walk_dir_errors: List[str] = []
     for file in walk_markdown(

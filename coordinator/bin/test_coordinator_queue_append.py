@@ -257,6 +257,7 @@ def test_missing_required_field_exits_nonzero() -> None:
 def test_invalid_enum_value_exits_nonzero() -> None:
     name = "Test 4 — invalid --status value exits non-zero, stderr names valid values"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Note: enum validation runs before file I/O, so invalid enum exits before writing.
         # QUEUE_APPEND_OUTPUT_ROOT is set but the CLI should reject before touching the FS.
         result = _run_cli(
             [
@@ -550,7 +551,9 @@ def test_schema_doc_not_runtime_parsed() -> None:
             return
 
 
+# ---------------------------------------------------------------------------
 # Test 7b — schema-load fails loud (rewired: bad CLAUDE_KLABAUTER_ROOT, not COORDINATOR_SCHEMAS_DIR)
+# ---------------------------------------------------------------------------
 
 def test_schema_load_fails_loud_via_env_override() -> None:
     """C2 testability seam: when the native schema seam cannot be reached, the
@@ -629,7 +632,9 @@ def test_id_flag_rejected_as_unknown() -> None:
         return
 
 
+# ---------------------------------------------------------------------------
 # Test 9 — central queue_scope writes to CLAUDE_KLABAUTER_ROOT, not cwd
+# ---------------------------------------------------------------------------
 
 def _improvement_queue_required_args(extra: list[str] | None = None) -> list[str]:
     args = [
@@ -1090,7 +1095,20 @@ def test_multiline_body_roundtrip() -> None:
             return
 
 
+# ---------------------------------------------------------------------------
+# --body-file — the argv-immune body transport
+#
+# `--body` cannot carry a multi-line value through the `.cmd` launcher leg:
+# cmd.exe truncates its whole command line at the first LF during its own
 # parse, so `%*` (and `%CMDCMDLINE%`, hence `raw_cmdline_recovery`) are already
+# one line before the launcher body runs. That known-bad leg is asserted in
+# coordinator_core/test_bin_launcher_parity.py::test_argv_fidelity_matrix
+# (`cmd-multiline-truncated`); these tests assert the ESCAPE HATCH from it,
+# which is why they drive `--body-file` rather than re-measuring the launcher.
+#
+# Filed as: state/bug-backlog/2026-08-19-published-caller-imports-a-mirror-only-
+# name-from-the-live-tree.yaml (the "stores only the FIRST LINE" finding).
+# ---------------------------------------------------------------------------
 
 def test_body_file_carries_multiline_body() -> None:
     body_input = "First line.\n\nThird line after a blank one.\nFourth line."
@@ -1294,6 +1312,7 @@ def test_system_block_without_session_id() -> None:
     name = "Test C2b — system block with unresolvable session (provenance_completeness=unknown)"
     with tempfile.TemporaryDirectory() as tmpdir:
         # Explicitly clear CLAUDE_CODE_SESSION_ID so it's not inherited from
+        # the test runner's environment. An empty string strips to empty → unresolved.
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
@@ -1627,7 +1646,10 @@ def test_lessons_facets_absent_when_not_passed() -> None:
                 raise AssertionError(f"{name}: " + (f"facet key {facet_key!r} should be ABSENT when not passed; "
                     f"got parsed[{facet_key!r}]={parsed[facet_key]!r}"))
                 return
+            # Also verify the raw YAML does not start a line with the key name.
             # Line-anchored (^…MULTILINE) prevents substring false-positives
+            # (e.g. "how_to_apply_notes:"). Review: code-reviewer F3 — plain substring
+            # `in raw` was not line-anchored and missed null-key lines.
             raw_key = facet_key + ":"
             if re.search(r'^' + re.escape(raw_key), raw, re.MULTILINE):
                 raise AssertionError(f"{name}: " + (f"raw YAML contains {raw_key!r} key line when facet was not passed. "
@@ -1767,7 +1789,9 @@ def test_lesson_add_under_pytest_never_hits_warm() -> None:
             return
 
 
+#: Source of the `sitecustomize.py` the two seam-ABSENCE tests put on a child
 #: process's PYTHONPATH. `site` imports `sitecustomize` after it has processed
+#: every `.pth` file, so this runs late enough to undo what they installed.
 _DROP_EDITABLE_FINDER_SRC = (
     "import sys\n"
     "sys.meta_path[:] = [\n"
@@ -1870,8 +1894,17 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     coord_dir = os.path.join(tmpdir, "coordinator_core")
     os.makedirs(coord_dir, exist_ok=True)
 
+    # require_engine_on_path (repo_identity.py's module-level side effect) front-
     # inserts CLAUDE_KLABAUTER_ROOT (= tmpdir here) at sys.path[0] before the real repo
+    # root, so this fake `coordinator_core` package becomes the ONE regular
+    # package Python resolves for every `coordinator_core.*` import in the
     # spawned CLI -- real coordinator_core on PYTHONPATH included. Symlink
+    # every real top-level entry this fixture doesn't itself override (this
+    # fake only ever adds `invoke.py`), __init__.py included (the real one
+    # carries package-level re-exports other modules import directly), so
+    # `coordinator_core.git` / `coordinator_core.pickup_assemble` (needed by
+    # repo_identity.py and cli_shared.py) still resolve to the genuine
+    # implementation instead of 404ing against a partial stub package.
     for _entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
         if _entry in ("invoke", "invoke.py", "__pycache__"):
             continue
@@ -1882,7 +1915,15 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
 
     stash_path_repr = repr(os.path.join(tmpdir, "_schema_fields_stash.json"))
     schema_op_preamble = (
+        # The real transport passes params via `--params-file <path>`, never
+        # positional argv -- see coordinator/bin/lib/cc_invoke.py::cc_invoke's
         # "Params transport" note (ARG_MAX-immunity on Windows/msys). A fake
+        # engine reading `sys.argv[2]` as JSON therefore parses the literal
+        # string "--params-file" and dies with a JSONDecodeError before the
+        # stubbed op ever answers, turning every routing test that mounts this
+        # preamble permanently red for a reason unrelated to what it asserts.
+        # The positional leg is kept as a fallback so this stub stays faithful
+        # to BOTH call conventions coordinator_core.invoke accepts.
         "import json, os, sys\n"
         "_op = sys.argv[1] if len(sys.argv) > 1 else ''\n"
         "_params_raw = '{}'\n"
@@ -1992,6 +2033,12 @@ def test_routing_seam_absent_uses_legacy() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
 
+        # claude_klabauter_dir has no coordinator_core.invoke -> seam absent for EVERY op,
+        # including the schema.describe/schema.validate calls legacy_fn's own
+        # _validate()/_build_yaml() make — which now have no legacy fallback either.
+        # (coordinator_core's other submodules ARE populated, real-symlinked, so
+        # repo_identity.py's own module-level `coordinator_core.git` import doesn't
+        # 404 before the CLI ever reaches the seam-absence path under test.)
         # Do NOT set QUEUE_APPEND_OUTPUT_ROOT so the live routing gate is exercised.
         _populate_engine_root_minus_invoke(claude_klabauter_dir)
         result = _run_cli(
@@ -2207,14 +2254,20 @@ def test_skipped_envelope_emits_warn_no_path() -> None:
             raise AssertionError(f"{name}: " + (f"skipped path must NOT print a path to stdout; got: {result.stdout!r}"))
             return
 
+        # WARN must appear in stderr.
+        # Require warn: unconditionally (case-insensitive). The prior
         # disjunction (warn: OR CLAUDE_KLABAUTER_ROOT) would pass on any error mentioning CLAUDE_KLABAUTER_ROOT without
+        # a WARN line present, defeating the AC12 assertion. AC12 requires the legacy WARN message
+        # parity — warn: must always be present on the skipped path.
         combined = result.stdout + result.stderr
         if "warn:" not in combined.lower():
             raise AssertionError(f"{name}: " + (f"skipped path must emit 'warn:' to stderr; got stderr={result.stderr!r}"))
             return
 
 
+# ---------------------------------------------------------------------------
 # Test R6 — QUEUE_APPEND_OUTPUT_ROOT bypass skips native path when seam present (F8)
+# ---------------------------------------------------------------------------
 
 def test_output_root_bypass_skips_native() -> None:
     """When QUEUE_APPEND_OUTPUT_ROOT is set AND CLAUDE_KLABAUTER_ROOT points at a capture-mode fake,
@@ -2268,7 +2321,9 @@ def test_output_root_bypass_skips_native() -> None:
             return
 
 
+# ---------------------------------------------------------------------------
 # Test R7 — QUEUE_APPEND_OUTPUT_ROOT relative path rejected with clean error
+# ---------------------------------------------------------------------------
 
 def test_output_root_relative_path_rejected() -> None:
     """QUEUE_APPEND_OUTPUT_ROOT set to a relative path must exit non-zero with a
@@ -2538,8 +2593,19 @@ def test_why_and_why_file_are_mutually_exclusive() -> None:
         assert "mutually exclusive" in result.stderr, f"stderr did not name the conflict: {result.stderr!r}"
 
 
+# ---------------------------------------------------------------------------
+# Swept-tmp-root refusal (2026-09-18)
+#
+# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
 # A QUEUE_APPEND_OUTPUT_ROOT naming a temp-dir path a completed pytest run
+# already tore down (e.g. inherited by a long-lived warm engine daemon spawned
+# mid test-run) used to be honoured anyway: os.makedirs(exist_ok=True)
+# silently recreated the missing tree, the write "succeeded" into a directory
+# nothing durable ever named, and the CLI printed a plausible path and exited
 # 0. This process's own PYTEST_CURRENT_TEST (set by pytest for the duration of
+# this test) is inherited by the child CLI subprocess unchanged — exactly the
+# shape a polluted long-lived process carries.
+# ---------------------------------------------------------------------------
 
 
 def test_swept_output_root_refuses_instead_of_writing() -> None:

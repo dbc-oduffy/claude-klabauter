@@ -372,6 +372,9 @@ _LESSON_BODY_FLAGS: tuple[tuple[str, str], ...] = (
 _LESSON_BODY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_BODY_FLAGS)
 
 
+#: The title transport pair. `coordinator-lesson-add` requires EXACTLY ONE
+#: of `--title`/`--title-file`, so these are not facets: running them through
+#: the generic loop below would forward both halves of a mutually-exclusive
 #: pair over a REQUIRED field. Forwarded by `_lesson_title_args`.
 _LESSON_TITLE_FLAGS: tuple[tuple[str, str], ...] = (
     ("title", "--title"),
@@ -380,7 +383,9 @@ _LESSON_TITLE_FLAGS: tuple[tuple[str, str], ...] = (
 
 _LESSON_TITLE_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_TITLE_FLAGS)
 
+#: The `why` transport pair. `--why-file` is a second body-shaped pair over an
 #: OPTIONAL facet, not a seventh facet: the CLI resolves the two through
+#: `resolve_optional_prose`, which refuses both at once.
 _LESSON_WHY_FLAGS: tuple[tuple[str, str], ...] = (
     ("why", "--why"),
     ("why_file", "--why-file"),
@@ -388,6 +393,12 @@ _LESSON_WHY_FLAGS: tuple[tuple[str, str], ...] = (
 
 _LESSON_WHY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_WHY_FLAGS)
 
+#: Optional `decisions["lessons"][n]` keys → the `coordinator-lesson-add` flag
+#: that carries them, in the order they are appended to the directive's argv.
+#: Every optional flag the CLI accepts appears here: a facet the EM composes but
+#: the assembler has no flag for is a facet silently dropped on the way to disk,
+#: which is what forces an author to bypass the directive and hand-run the CLI.
+#: The body pair leads (its two keys are handled by `_lesson_body_args`, and
 #: the generic loop skips them via `_LESSON_BODY_KEYS`); the facets follow.
 _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + _LESSON_TITLE_FLAGS + _LESSON_WHY_FLAGS + (
     ("trigger", "--trigger"),
@@ -400,8 +411,22 @@ _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + _LESS
 _LESSON_BODY_SPOOL_RELDIR = "state/ceremony/wsc-lesson-body"
 
 
+#: `preflight.decisions_template`'s discoverable stand-in for the bare
+#: `None` a free-value key gets by default (`__init__.py::build_decisions_
 #: template`). `_LESSON_REQUIRED_KEYS`/`_LESSON_BODY_KEYS`/
 #: `_LESSON_OPTIONAL_FLAGS` plus the queue-append facet keys
+#: `_iter_capturable_lessons` reads for `wants_queue` are ALL represented
+#: here, keyed to `None`, so a caller can discover every key this module's
+#: builders read by looking at the template's OWN output rather than
+#: reverse-engineering this module's source — the exact gap
+#: `build_lesson_capture_directives`'s `ValueError`s used to surface only a
+#: round trip later, after a malformed `--decisions` was already composed
+#: and rejected. A single-entry list, not an empty one: an empty `[]`
+#: reads as "the shape is a list of lessons" with no clue what a lesson
+#: dict looks like, which is the same discoverability gap in a different
+#: costume. Never resolved to anything else at runtime — this is a static
+#: hint, not a computed fact, so it carries no `resolved_free_values`
+#: entry the way `governing_plan_slug` does.
 LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
     {
         "title": None,
@@ -424,7 +449,10 @@ LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
     }
 ]
 
+#: Union source for `build_decisions_template`'s static-shape overrides
 #: (mirrors `FREE_VALUE_KEYS`'s own per-submodule union pattern) — a free-
+#: value key that wants a discoverable non-`None` template default rather
+#: than the generic `None` every other free-value key gets.
 FREE_VALUE_KEY_STATIC_DEFAULTS: dict[str, Any] = {
     _KEY_LESSONS: LESSONS_TEMPLATE_DEFAULT,
 }
@@ -552,11 +580,33 @@ def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Pa
     return ["--body-file", _spool_body_to_file(repo_root, body)]
 
 
+#: The scope values `coordinator-lesson-add` will accept. Authority is
 #: DOWNSTREAM of this module -- lesson-add forwards `--scope` verbatim to the
+#: record-writing CLI, whose enum is the real gate, and the same three values
+#: are hard-coded at `coordinator/bin/coordinator-queue-append.py`'s own
 #: `_VALID_LESSON_SCOPES`. Duplicated here rather than imported.
+#:
+#: Review: overengineering-reviewer (finding #4) — the prior comment here
+#: claimed this could not be imported because a bin script is "not an
+#: importable module". That claim is false and this session's own diff
+#: falsifies it twice over: `coordinator/bin/tests/test_cc_invoke_
+#: indeterminate.py` and `test_cross_repo_memo_indeterminate_reconcile.py`
+#: both import across this exact boundary (one via `sys.path.insert` onto
+#: `bin/lib`, the other via `SourceFileLoader` on the hyphenated `.py`), and
+#: `ceremony_common.cli_dispatch.load_cli_module` (this package's own
 #: `apply.py` sibling) does the same at PRODUCTION runtime to invoke bin
+#: CLIs from `workstream_complete`/`workday_complete`/`workweek_complete`.
+#: The honest reason for duplicating anyway: `load_cli_module` is scoped to
 #: directive DISPATCH time and its own docstring disclaims isolating a
+#: loaded script's top-level side effects/argv/env -- reaching for it here,
+#: at directive-BUILD time (this module runs well before any directive
+#: executes), to read one three-value constant would import
+#: `coordinator-queue-append.py`'s full top-level (argparse setup and all)
+#: on a path that has nothing to do with dispatching it, for a cost this
+#: three-value enum does not justify. If a fourth value is ever added, this
+#: set is one of three places that must move together; the alternative --
 #: discovering the mismatch at dispatch -- costs a PARTIAL_MUTATION after
+#: the commit tail has landed.
 _VALID_LESSON_SCOPES = frozenset({"universal", "project", "wiki-only"})
 
 
@@ -589,8 +639,17 @@ def _iter_capturable_lessons(
         scope = str(lesson.get("scope") or "").strip()
         if scope not in _VALID_LESSON_SCOPES:
             # VALIDATED HERE, BEFORE THE COMMIT TAIL, because the cost of
+            # validating it downstream was measured: example-market-data-repo-em
+            # supplied `scope: "local"`, the assembler forwarded it unchecked,
+            # `coordinator-lesson-add` rejected it, BOTH lesson directives
             # returned exit 1 -- and the commit tail had ALREADY SUCCEEDED, so
             # apply returned exit 4 (PARTIAL_MUTATION) on a ceremony that
+            # looked done while both lessons were silently lost. They found it
+            # by grepping state/lessons/ afterwards (cross-repo/archive/
+            # 2026-08-11-example-market-data-repo-em-workstream-complete-engine-
+            # defects.md, defect 2). A caller-supplied value the engine can
+            # check must not be checked by a subprocess that runs after the
+            # irreversible half.
             raise ValueError(
                 f"decisions[{_KEY_LESSONS!r}][{idx}] has scope {scope!r}, which "
                 f"is not one of {sorted(_VALID_LESSON_SCOPES)!r}. Supply a valid "

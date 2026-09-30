@@ -188,16 +188,39 @@ GENERATES = []
 _REGISTRY_REPOS_PREFIX = "repos."
 
 #: `repos.*` keys whose value is a CONTAINER of repos, not a repo. They carry
+#: the prefix but not its semantics, and enumerating one as a repo root is a
+#: correctness bug, not a cosmetic one: `repos.fleet_root` resolves to a bare
+#: drive root on this box, so `target_is_registered_repo` answered True for
+#: EVERY path on that drive, and rule B7's foreign-root leg (which reads this
+#: same enumeration) compiled it to a two-character, case-insensitive
+#: drive-letter pattern -- reporting the tail of the English word "prefi|x:|"
+#: as an absolute foreign repo root. Measured 2026-08-30.
+#:
+#: The concept is NOT new here: `coordinator/bin/lib/git_hook_install.py`
 #: already carries `_CONTAINER_REGISTRY_KEYS` with the identical membership
+#: and reasoning (its heal sweep would otherwise report a correct entry as a
+#: broken repo). Duplicated rather than imported because this module sits on
+#: the PreToolUse hot path and must not pull `coordinator/bin/lib` into its
+#: import graph; `test_container_registry_keys_agree_across_holders` pins the
+#: two copies together so they cannot drift silently.
 _CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
 
+#: Prefix every enumerated registry key must carry to be treated as a
+#: publish-destination entry -- `publish.mirrors.<name>.path` /
 #: `publish.mirrors.<name>.owner`, disjoint from `_REGISTRY_REPOS_PREFIX` by
+#: construction (verified at HEAD -- see plan's § Design). C1
+#: (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
 _REGISTRY_PUBLISH_MIRRORS_PREFIX = "publish.mirrors."
 
 _PUBLISH_PATH_SUFFIX = ".path"
 _PUBLISH_OWNER_SUFFIX = ".owner"
 
+#: Append-only observability log filename (AC18), sibling to C0's own
+#: single-value `write_bump_launch_cwd` record under the same per-session
 #: directory. Deliberately a SEPARATE file: C0's record is a single scalar
+#: overwritten idempotently at SessionStart, and appending log lines into
+#: it would break that single-value contract for every reader of this
+#: package's other modules.
 _APPLICABILITY_LOG_FILENAME = "write_bump_applicability_log"
 
 

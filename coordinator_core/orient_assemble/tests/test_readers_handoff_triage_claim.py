@@ -149,7 +149,18 @@ def test_title_containing_unbalanced_brackets_still_advertised_when_unclaimed(wo
     assert "untouched" in filtered
 
 
+# --- 2026-08-06-orient-assemble-reader-repo-scope C4: caller-threaded
+# `repo_root` reconciliation (sites (a)/(b)/(c)) ---------------------------
+#
+# THE BUG THIS COVERS: readers_handoff_triage was internally split-brained
+# — (a)/(b) scanned claude-klabauter's own plans regardless of the caller's root, and
+# (c) (director review F4) resolved the ledger-claim join, `repo_root=`
 # keyword, AND `git_common_dir` against the module-pinned `_REPO_ROOT`
+# even when a caller (e.g. Coordinator-content-repo's `/workday-start`) threaded a
+# foreign root through `collect(repo_root=...)`. (c) is the sharper failure
+# mode: the suppression filter fails OPEN from a foreign root (no ledger
+# claim ever found at the wrong path), so a still-worked handoff gets
+# confidently, wrongly advertised as pickup-ready — not silently omitted.
 
 
 def test_read_orphaned_plans_threads_the_caller_root(tmp_path, monkeypatch):

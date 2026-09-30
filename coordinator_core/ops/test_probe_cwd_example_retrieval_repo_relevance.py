@@ -102,7 +102,19 @@ def test_no_binding_is_silent(test_home, tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
+# ---------------------------------------------------------------------------
+# Test 2: non-UE, bound via registry.toml, MCP healthy.
+#
+# Reproduces the bash oracle's pre-existing quirk: _registry_bound() reads
 # under settings_home()/machine-local (bridged, under COORDINATOR_TEST_HOME,
+# to <home>/.coordinator-claude-settings/machine-local) — NOT
+# <home>/.claude/machine-local, where this fixture (matching the bash test's
+# write_registry_with_rag()) writes. The registry path therefore never
+# resolves in this scenario and the probe stays silent — this is the SAME
+# outcome the bash oracle produces (verified: its own Test 2 fails
+# identically). Do not "fix" this expectation without also revisiting the
+# bash contract.
+# ---------------------------------------------------------------------------
 
 def test_non_ue_bound_via_registry_reproduces_bash_oracle_quirk(test_home, tmp_path, monkeypatch, capsys):
     _write_registry_with_rag(test_home)
@@ -170,7 +182,18 @@ def test_whoami_mock_triggers_ue_enrichment(test_home, tmp_path, monkeypatch, ca
     pwd = _fake_pwd(tmp_path)
 
     # _resolve_py_interpreter() returns COORDINATOR_PYTHON as a single
+    # executable token, invoked directly as `[py, "-c", script]`, where
     # `script` is a MULTI-LINE Python source string. A real interpreter
+    # binary handles that fine, but simulating it via a fabricated
+    # cross-platform executable hits a genuine Windows batch-launcher limit:
+    # a `.cmd` launcher's `%*` argument-forwarding truncates at the first
+    # embedded newline inside a quoted argument (verified directly — `%*`
+    # loses everything after line 1 of `script`), so the mock never sees the
+    # full script and can't detect the `coordinator_whoami` marker. Rather
+    # than relaying through a batch shim, intercept the module's
+    # `subprocess.run` call directly — this is the same "mock the runner,
+    # not the platform's process-exec plumbing" approach used in
+    # find_polluter's test suite for its analogous `npm` invocation.
     real_run = subprocess.run
 
     def _fake_whoami_run(args, **kwargs):

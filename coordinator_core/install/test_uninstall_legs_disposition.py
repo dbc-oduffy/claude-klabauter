@@ -97,8 +97,14 @@ class TestClassifyEntryDisposition:
         assert record.disposition == DISPOSITION_REVERSED
 
     def test_none_end_marker_on_rc_block_is_not_forced_either(self):
+        # The prior version passed
         # attempted_ok=False and asserted DISPOSITION_CANNOT_SAFELY, which
+        # is exactly what the ordinary (unforced) path already produces for
+        # attempted_ok=False -- it could not distinguish "not forced by
+        # Rule 2" from "would have landed there anyway." Using
+        # attempted_ok=True (matching the sibling hook-gate-region test)
         # actually proves non-forcing: DISPOSITION_REVERSED would be
+        # impossible here if Rule 2 accidentally forced rc-block+None too.
         entry = _entry(kind="rc-block", path="~/.bashrc", begin_marker="# begin", end_marker=None)
         record = classify_entry_disposition(entry, attempted_ok=True, reason="stripped")
         assert record.disposition == DISPOSITION_REVERSED
@@ -457,7 +463,10 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "did not report" in text
 
 
+# Derived from the production declaration, never restated. A local copy would
 # let a reorder of configure_git._SETTINGS silently change the leg's unset
+# order while every test below stayed green -- and that order is the whole
+# safety property (see test_declaration_order_is_the_safe_unset_order).
 HELP_BROWSER_SETTINGS = tuple(
     s for s in configure_git._SETTINGS if s.unset_group == "help-browser"
 )

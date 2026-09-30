@@ -130,7 +130,9 @@ def test_probe_uv_pass():
     assert rec["status"] == "pass"
 
 
+# ---------------------------------------------------------------------------
 # probe_gh — three-step hard gate + optional COORDINATOR_GH_PROBE_REPO sub-probe
+# ---------------------------------------------------------------------------
 def test_probe_gh_pass_no_probe_repo(monkeypatch):
     monkeypatch.delenv("COORDINATOR_GH_PROBE_REPO", raising=False)
     calls = {"n": 0}

@@ -35,6 +35,7 @@ __all__ = [
 ]
 
 # JS Number.MIN_SAFE_INTEGER / MAX_SAFE_INTEGER — the bounds Zod's
+# `z.number().int()` emits on every integer field (§ 1 of the T4e port recipe).
 _SafeInt = Annotated[int, Field(ge=-9007199254740991, le=9007199254740991)]
 
 
@@ -435,8 +436,18 @@ class HandoffSummary(BaseModel):
     present-as-null, never an absent key — `extra="forbid"` makes an
     unknown emitted key a hard validation failure)."""
 
+    # ── Human axis (C9, activation-gated) ───────────────────────────────
+    # Spec backlink: docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9, § The
+    # hazard. NEW prefixed keys, never a value on `owner` — PM ruling, 2026-08-19.
     # Genuinely OPTIONAL (true absence-allowed) AND nullable, same
+    # `x-zod-nullable-optional` combo as `additional_predecessors`/`forked_from`/
+    # `disposed_successors` above: the emit sections (ops/emit/sections/handoffs.py)
+    # omit these keys entirely while `_shared.human_axis_vendored()` is False, and a
+    # bare `.optional()` (unwrapped to non-nullable T by emit_schema.py's
+    # `_unwrap_optional_non_nullable`) would lose the ability to distinguish
+    # "not yet vendored" (absent) from "vendored, no value resolved" (null) once the
     # switch flips. MINOR-bump-additive: see emit_schema.py's CONTRACT_VERSION
+    # changelog comment for the 3.12.0 -> 3.13.0 row.
     human_assignee: str | None = Field(
         default=None,
         json_schema_extra={"x-zod-nullable-optional": True},

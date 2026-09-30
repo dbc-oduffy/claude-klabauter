@@ -179,7 +179,14 @@ def _parse_checkboxes(body: str) -> "list[dict]":
         cm = _CHECKBOX_LINE_RE.match(lines[i])
         ordinal += 1
         criterion_id = None
+        # F1 (chain-review Slice B): resolve identity from the checkbox
+        # item's OWN text first (including wrapped continuation lines) —
+        # real handoff bodies wrap acceptance criteria across multiple
+        # lines, so the line immediately above a checkbox is usually the
         # PREVIOUS item's continuation, not this item's identity tag. Only
+        # fall back to preceding context — bounded at the END of the
+        # previous item's own text, never crossing into its continuation
+        # lines — when this item's own text carries no AC token.
         idm = _CRITERION_ID_RE.search(own_texts[pos])
         if idm:
             criterion_id = idm.group(0)
@@ -422,7 +429,16 @@ async def _handler(
     ending = target["ending"]
 
     if is_split:
+        # F4 (chain-review): after a split, the still-unmet line MUST remain
+        # the one addressable by criterion_id — identity is owned by the
+        # checkbox's OWN text (F1's governing principle), so the caller's
         # unmet_text is REQUIRED to carry it, rather than this op injecting
+        # it (mutating human-authored text) or accepting a new out-of-band
+        # identity parameter (reintroducing the shape F1 removed). Only
+        # enforced when the criterion being split actually carries a
+        # resolvable identity — a checkbox with none was never addressable
+        # by criterion_id before the split either, so there is nothing to
+        # preserve.
         if target["criterion_id"] is not None:
             wanted_id = _normalize_criterion_id(target["criterion_id"])
             found_ids = {

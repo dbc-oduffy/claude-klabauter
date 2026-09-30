@@ -45,6 +45,8 @@ import entry_point_shim  # noqa: E402
 import cc_invoke  # noqa: E402
 
 # name -> dotted engine module, per `entry_point_shim._ENGINE_ENTRIES`'s own
+# construction of these three (the only three routed through
+# `_native_route_entry`).
 _ROUTED_TARGETS = {
     "pickup-assemble": "coordinator_core.pickup_brief",
     "baton-assemble": "coordinator_core.baton_assemble",
@@ -109,7 +111,11 @@ def test_state1_seam_absent_falls_back_to_legacy_entry(monkeypatch, name, dotted
         "_simple_entry",
         lambda n, d: _fake_legacy,
     )
+    # Rebuild the entry with the patched _simple_entry as its closed-over
+    # legacy_entry -- `_native_route_entry` binds `legacy_entry` at
     # construction time, so patching `_simple_entry` after `_ENGINE_ENTRIES`
+    # is built has no effect on the already-built closure. Constructing a
+    # fresh one here is the only way to observe the patched legacy path.
     routed = entry_point_shim._native_route_entry(name, dotted)
     monkeypatch.setattr(cc_invoke, "route", _seam_absent_route)
 

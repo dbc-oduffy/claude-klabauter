@@ -125,7 +125,26 @@ def test_none_scoped_op_omits_origin_worktree(monkeypatch):
     assert "_caller_cwd" in captured_msg
 
 
+# ---------------------------------------------------------------------------
+# AC7 — the import-graph ratchet.
+#
 # The other AC6/AC7 test above asserts the warm-DISABLED path never binds
+# `warm.client`. AC7 additionally pins the warm-ENABLED path's own dependency
+# set, on two axes the plan names explicitly:
+#
+#   (a) importing it registers NO `coordinator_core.ops.*` module -- the
+#       guarantee `warm/tests/test_client_does_not_import_op_registry.py`
+#       delivers, re-asserted here at this call site because it is the whole
+#       of the 2026-08-06 audit's import-cycle objection (plan section "The
+#       2026-08-06 ruling that named this surface, and why it does not bind").
+#   (b) a ratchet on the COUNT of `coordinator_core.*` modules the helper's
+#       import path pulls, against the 19 pinned in `invoke/__main__.py`'s own
+#       measured comment. A count, never a timing -- AC7 says so.
+#
+# Both run in a FRESH interpreter: this test process has already imported
+# much of `coordinator_core`, so an in-process `sys.modules` read here would
+# measure the test runner, not the helper.
+# ---------------------------------------------------------------------------
 
 _AC7_MODULE_CEILING = 19
 

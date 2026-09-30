@@ -311,14 +311,43 @@ def test_drops_absent_untracked_path_and_reports_it(repo):
     assert "never-created.py" in out["dropped_absent"]
 
 
-def test_refuses_an_undeclared_deletion_of_a_tracked_path(repo):
+def test_stages_a_declared_write_gone_from_disk_as_a_deletion(repo):
     (repo / "tracked.py").write_text("x\n", encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
     _git(["add", "tracked.py"], repo)
     _git(["commit", "-q", "-m", "add tracked"], repo)
     (repo / "tracked.py").unlink()
 
     request = CommitRequest(
-        chunks=(ChunkCommit(id="C3", title="t3", paths=("tracked.py",)),),
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("tracked.py", "a.py")),),
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True, out
+    assert out["deleted_paths"] == ["tracked.py"]
+    ls = subprocess.run(
+        ["git", "ls-tree", "--name-only", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.split()
+    assert "tracked.py" not in ls
+    assert "a.py" in ls
+
+
+def test_refuses_an_undeclared_deletion_of_a_tracked_path(repo):
+    # A prefix claim is not a declared write: its absence stays refused.
+    (repo / "state").mkdir()
+    (repo / "state" / "gone.md").write_text("g\n", encoding="utf-8")
+    _git(["add", "state/gone.md"], repo)
+    _git(["commit", "-q", "-m", "add gone"], repo)
+    (repo / "state" / "gone.md").unlink()
+    (repo / "report.md").write_text(
+        "created-under-prefix: state/gone.md\n", encoding="utf-8"
+    )
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", prefixes=("state/",), report="report.md"),
+        ),
     )
     script = _write_script(repo, request)
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
@@ -326,13 +355,14 @@ def test_refuses_an_undeclared_deletion_of_a_tracked_path(repo):
     assert "undeclared deletion" in out["error"]
 
 
-def test_refuses_an_unknown_incomplete_id(repo):
+def test_an_incomplete_id_the_marker_never_carried_is_reported_not_refused(repo):
+    # A row that never started is in the digest's incomplete list but not the marker.
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),))
     script = _write_script(repo, request)
     out = _call(repo, {"script_path": script, "incomplete_chunks": ["C99"]})
-    assert out["committed"] is False
-    assert "C99" in out["error"]
+    assert out["committed"] is True
+    assert out["unmarked_incomplete"] == ["C99"]
 
 
 def test_refuses_a_prefix_chunk_whose_report_has_no_claim_list(repo):
@@ -443,3 +473,256 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
     assert out["committed"] is True
     assert elapsed_ms < 200, f"process time {elapsed_ms}ms exceeds the 200ms bar"
     assert spawn_count == 0, f"expected zero spawns, saw {spawn_count}"
+
+
+_PLAN = """---
+title: p
+---
+
+# Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C3
+  title: t3
+  change_kind: code-edit
+  surface: a.py
+  disposition: open
+  deferred: false
+- id: C4
+  title: t4
+  change_kind: code-edit
+  surface: a.py
+  deferred: false
+  body: |
+    multi-line
+    body
+- id: C5
+  title: t5
+  change_kind: code-edit
+  surface: a.py
+  disposition: open
+  deferred: false
+- id: C9
+  title: t9
+  change_kind: code-edit
+  surface: a.py
+  disposition: coded
+  disposition_ref: abc1234
+```
+
+Trailing prose.
+"""
+
+
+def _show(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "show", *args], cwd=str(repo), capture_output=True, text=True,
+        check=True, **no_console_creationflags(),
+    ).stdout
+
+
+def _spine(text: str) -> list:
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import locate_fenced_block
+
+    return yaml.safe_load(locate_fenced_block(text).body)
+
+
+def test_stamps_committed_rows_coded_in_a_second_plan_only_commit(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "b.py").write_text("b\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="C4", title="t4", paths=("b.py",)),
+            ChunkCommit(id="C5", title="t5", paths=("c.py",)),
+        ),
+        plan_path="docs/plan.md",
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": ["C5"]})
+    assert out["committed"] is True
+    assert out["rows_coded"] == {"docs/plan.md": ["C3", "C4"]}
+    sha = out["sha"]
+    assert out["coded_sha"] and out["coded_sha"] != sha
+    # Product commit carries no plan edit; the stamp commit carries only it.
+    assert _show(repo, f"{sha}:docs/plan.md") == _PLAN
+    stamp = _show(repo, "--stat", "--format=%s", "HEAD")
+    assert f"mark 2 rows coded ({sha[:7]})" in stamp
+    assert "docs/plan.md" in stamp and "a.py" not in stamp
+
+    committed = _show(repo, "HEAD:docs/plan.md")
+    assert committed == (repo / "docs" / "plan.md").read_text(encoding="utf-8")
+    rows = _spine(committed)
+    assert [r["id"] for r in rows] == ["C5", "C3", "C4", "C9"]
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["C5"]["disposition"] == "open"  # incomplete: untouched
+    assert by_id["C3"]["disposition"] == "coded"
+    assert by_id["C4"]["disposition"] == "coded"
+    assert by_id["C3"]["disposition_ref"] == sha
+    assert by_id["C4"]["body"] == "multi-line\nbody\n"
+    assert committed.endswith("```\n\nTrailing prose.\n")
+
+    from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+
+    assert check_plan_tasks_source(_PLAN) is None
+    assert check_plan_tasks_source(committed) is None
+
+
+def test_inventory_spine_maps_rows_back_to_source_plans(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_PLAN, encoding="utf-8")
+    inv = repo / "state" / "mise-inventory"
+    inv.mkdir(parents=True)
+    (inv / "run1.md").write_text(
+        "---\nrun_id: run1\n---\n\n## Chunk table\n\n"
+        "| ID | Spec path | Summary | Footprint | Deps | Verification | Complexity | Disposition |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| P1 | `docs/plan.md` | s | `a.py` | — | v | S | pending |\n"
+        "| P1-C5 | `docs/plan.md` | s | `b.py` | — | v | S | pending |\n",
+        encoding="utf-8",
+    )
+    spine_text = "---\nrun_id: run1\nderived_from: mise inventory record\n---\n\n## Tasks\n"
+    (inv / "run1.spine.md").write_text(spine_text, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "seed plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "b.py").write_text("b\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="P1.C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="P1-C5", title="t5", paths=("b.py",)),
+            ChunkCommit(id="P1.C4", title="t4", paths=("c.py",)),
+        ),
+        plan_path="state/mise-inventory/run1.spine.md",
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": ["P1.C4"]})
+    assert out["committed"] is True
+    assert out["rows_coded"] == {"docs/plan.md": ["C3", "C5"]}
+    by_id = {r["id"]: r for r in _spine(_show(repo, "HEAD:docs/plan.md"))}
+    assert by_id["C3"]["disposition"] == "coded"
+    assert by_id["C5"]["disposition"] == "coded"
+    assert by_id["C5"]["disposition_ref"] == out["sha"]
+    assert by_id["C4"].get("disposition", "open") == "open"
+    # The minted spine is never stamped.
+    assert (inv / "run1.spine.md").read_text(encoding="utf-8") == spine_text
+
+
+def test_stamp_failure_is_reported_and_product_commit_stands(repo, monkeypatch):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    real = get_op_handler("ceremony.commit_v2")
+    calls = []
+
+    def flaky(params, repo_root):
+        calls.append(params)
+        if len(calls) == 2:
+            return {"committed": False, "sha": None, "error": "refused"}
+        return real(params, repo_root)
+
+    monkeypatch.setattr(terminal_commit, "get_op_handler", lambda key: flaky)
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
+        plan_path="docs/plan.md",
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True and out["sha"]
+    assert "refused" in out["coded_stamp_error"]
+    assert "rows_coded" not in out
+    assert (repo / "docs" / "plan.md").read_text(encoding="utf-8") == _PLAN
+    assert _show(repo, "--format=%H", "-s", "HEAD").strip() == out["sha"]
+
+
+def _branch_request(repo: Path, expected) -> str:
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
+        expected_branch=expected,
+    )
+    return _write_script(repo, request)
+
+
+def _head(repo: Path) -> str:
+    return _show(repo, "--format=%H", "-s", "HEAD").strip()
+
+
+def test_branch_mismatch_refuses_and_head_is_unchanged(repo):
+    script = _branch_request(repo, "some-other-branch")
+    before = _head(repo)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is False
+    assert out["refused"] == "branch-mismatch"
+    assert out["expected_branch"] == "some-other-branch"
+    assert out["observed_branch"]
+    assert _head(repo) == before
+
+
+def test_branch_mismatch_writes_no_bookkeeping_record(repo):
+    script = _branch_request(repo, "some-other-branch")
+    out = _call(
+        repo,
+        {
+            "script_path": script,
+            "incomplete_chunks": [],
+            "session_id": "12345678-1234-4234-8234-123456789abc",
+            "inline_review": {
+                "integration_stem": "stem1",
+                "slices": 1,
+                "fixes": 0,
+                "wave_sidecar_paths": ["w.md"],
+                "prep_sidecar": "p.md",
+                "plan_id": "plan-x",
+            },
+        },
+    )
+    assert out["refused"] == "branch-mismatch"
+    assert not (repo / ".coordinator-local").exists()
+
+
+def test_detached_head_refuses(repo):
+    script = _branch_request(repo, None)
+    _git(["checkout", "-q", "--detach"], repo)
+    before = _head(repo)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is False
+    assert out["refused"] == "detached-head"
+    assert out["observed_branch"] == "HEAD"
+    assert _head(repo) == before
+
+
+def test_matching_branch_commits_with_branch_check_ok(repo):
+    head_ref = (repo / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+    observed = head_ref.removeprefix("ref: refs/heads/")
+    script = _branch_request(repo, observed)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True
+    assert out["branch_check"] == "ok"
+
+
+def test_marker_without_expected_branch_commits_not_recorded(repo):
+    script = _branch_request(repo, None)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True
+    assert out["branch_check"] == "not-recorded"
+
+
+def test_unreadable_head_refuses(repo, monkeypatch):
+    script = _branch_request(repo, None)
+    before = _head(repo)
+    monkeypatch.setattr(terminal_commit, "head_branch", lambda _root: None)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is False
+    assert out["refused"] == "branch-unreadable"
+    assert _head(repo) == before

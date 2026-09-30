@@ -131,7 +131,9 @@ class TestMatch:
         assert candidate["to_repo"] == str(self_repo)
 
 
+# ===========================================================================
 # 2. MISMATCH
+# ===========================================================================
 
 class TestMismatch:
     def test_to_resolves_to_a_different_registered_repo(self, tmp_path, monkeypatch):
@@ -161,7 +163,9 @@ class TestMismatch:
         assert candidate["to_repo"] == str(other_repo)
 
 
+# ===========================================================================
 # 3. UNRESOLVED + suggestion (defect 2, GREEN)
+# ===========================================================================
 
 class TestUnresolvedWithSuggestion:
     def test_near_miss_receiver_gets_did_you_mean_suggestion(self, tmp_path, monkeypatch):

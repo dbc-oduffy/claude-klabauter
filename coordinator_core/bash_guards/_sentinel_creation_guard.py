@@ -197,6 +197,10 @@ REASON_INDIRECTION = "indirection"
 
 INDIRECTION_REMEDY = (
     # Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window deliberately:
+    # `_message_size` exempts a backticked command only inside one, so the
+    # earlier "rather than naming an interpreter" phrasing was charged 295
+    # prose bytes against a 220 cap for saying the same thing. Measured
+    # 2026-09-12: 252 total / 45 exempt / 207 prose.
     "Use instead: `./path/to/script.sh` -- invoke the script, do not name "
     "an interpreter (`bash path/to/script.sh` is what denies); this works "
     "only when the file is executable and has a shebang. For a "
@@ -236,7 +240,11 @@ _SED_INPLACE_RE = re.compile(r"^(?:-i|--in-place)")
 
 _PYTHON_BASENAME_RE = re.compile(r"^python[0-9.]*$")
 
+#: `dd`'s output-file `key=value` operand, e.g. `of=<target>`,
+#: `of=<target> conv=notrunc`. `dd` takes ALL of its operands in `key=value`
 #: form -- unlike `_FILE_ARG_COMMANDS` above, there is no bare positional
+#: filename argument to catch, so `dd` was entirely unguarded by rule 2
+#: until this rule was added (2026-07-28).
 _DD_OF_RE = re.compile(r"^of=(.+)$")
 
 
@@ -252,7 +260,12 @@ class SentinelCreationDetector:
     def __init__(self, target_basename: str) -> None:
         self.target_basename = target_basename
         # Case-INSENSITIVE (2026-07-30, H4 fix, same reasoning as
+        # `_is_target` below): a `python -c` payload or unparseable-legacy
+        # command mentioning the sentinel in a different case
         # (`.COORDINATOR-BASH-GUARDS-DISARMED`) still creates a file the
+        # read side finds on this fleet's case-insensitive-but-case-
+        # preserving default filesystem, so the mention check must not be
+        # case-sensitive either.
         self._mention_re = re.compile(re.escape(target_basename), re.IGNORECASE)
 
     def _is_target(self, token: str) -> bool:
@@ -289,8 +302,17 @@ class SentinelCreationDetector:
                 return True
         return False
 
+    #: Passthrough wrapper binaries that run their remaining argv unchanged
+    #: (BX-13 fix, 2026-07-29, confirmed live): `nice touch <sentinel>` was
+    #: never recognized because only a leading `VAR=value` assignment was
+    #: skipped, not a wrapper TOKEN -- so this guard's argv0-position check
     #: landed on `nice` (not a `_FILE_ARG_COMMANDS` member) and allowed a
+    #: command that still creates the sentinel for real. Same set
     #: `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
+    #: Widened (2026-07-29, code-reviewer Finding 3) -- see
+    #: `block_subagent_destructive_action.py`'s sibling copy for the full
+    #: rationale: `setsid`/`strace`/`doas`/`busybox` were unrecognized
+    #: passthrough wrappers.
     _PASSTHROUGH_WRAPPERS = frozenset(
         {
             "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -298,8 +320,19 @@ class SentinelCreationDetector:
         }
     )
 
+    #: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the
+    #: skip above tolerated the wrapper BINARY token but never the wrapper's
+    #: OWN argument(s) -- `timeout 30 touch <sentinel>`, `ionice -c2 touch
+    #: <sentinel>`, `stdbuf -oL touch <sentinel>` all landed argv0 on
     #: `30`/`-c2`/`-oL` (not a `_FILE_ARG_COMMANDS` member), so the create/
+    #: overwrite still happened for real while this guard allowed. Same
     #: flag-set `dispatch_checks.py`'s `_BYPASS_WRAPPER_ARG_FLAGS` uses for
+    #: the identical wrapper-argument gap in `check_no_verify` -- own-module
+    #: copy per this package's no-cross-module-coupling convention.
+    #: `_skip_wrapper_own_argv` itself now lives in `_command_tokenizer.py`
+    #: (2026-07-30, M8 consolidation) -- imported at module scope above
+    #: rather than hand-maintained as a staticmethod here; see that module's
+    #: own docstring for the five-copy history this closes.
 
     @staticmethod
     def _env_skip_index(seg_tokens: List[str]) -> int:
@@ -308,10 +341,21 @@ class SentinelCreationDetector:
         n = len(seg_tokens)
         while i < n:
             # BRACE-GROUPING FIX (2026-07-29, code-reviewer Finding 1,
+            # confirmed live): `{ touch <sentinel>; }` was never peeled here
+            # -- only `VAR=value`/`env`/passthrough-wrapper tokens were. Bash
+            # requires a space after `{` (a reserved word, not an operator),
+            # so `shlex.split` always yields it as its own token; peeling it
+            # exposes the true command-position head, mirroring the sibling
+            # destructive-action guard's identical fix.
             if seg_tokens[i] == "{":
                 i += 1
                 continue
             # PAREN-GROUPING FIX (2026-07-29, EM-run confinement-corpus
+            # pass, confirmed live): `( touch <sentinel>; )` has the exact
+            # same shape as the brace fix directly above -- `(` is
+            # whitespace-separated in the tested shape and, like `{`,
+            # `shlex.split` always yields it as its own token, so it was
+            # never peeled here either.
             if seg_tokens[i] == "(":
                 i += 1
                 continue
@@ -401,8 +445,14 @@ class SentinelCreationDetector:
     def _evaluate_legacy(self, cmd: str) -> bool:
         return bool(self._mention_re.search(cmd))
 
+    # -----------------------------------------------------------------
     # INDIRECTION-WRAPPER PASS (2026-07-28 addition -- see module
     # docstring "INDIRECTION-WRAPPER HARDENING"). Reuses
+    # `block_subagent_destructive_action`'s tokenizer/segmenter/env-strip/
+    # interpreter-normalization/depth-cap primitives, driven by THIS
+    # detector's own leaf classifier (`_classify_payload`, which re-runs
+    # the base four-plus-dd rules and then recurses into this same pass).
+    # -----------------------------------------------------------------
 
     def _classify_payload(self, payload: str, depth: int) -> Optional[str]:
         tokens = _tokenize_full_command(payload)
@@ -422,6 +472,7 @@ class SentinelCreationDetector:
         {"cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
     )
 
+    #: `xargs` options that consume the NEXT token as their operand. An
     #: option outside this set and `_XARGS_BARE_OPTIONS` fails closed.
     _XARGS_OPERAND_OPTIONS = frozenset(
         {

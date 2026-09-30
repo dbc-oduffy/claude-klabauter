@@ -45,6 +45,8 @@ def test_staged_path_resolves_verbatim_from_index_snapshot():
 
 def test_staged_deletion_lands_in_absent_set_not_tree_input():
     # Path resolves _SOURCE_STAGED (diverged) but has no index entry --
+    # staged for deletion. Must be explicit ABSENT, never silently dropped
+    # and never resurrected via a HEAD spine fallback.
     resolution = {"gone.txt": _SOURCE_STAGED}
     index_snapshot: dict = {}
     head_spine = {"": {"gone.txt": (0o100644, _SHA_A)}}

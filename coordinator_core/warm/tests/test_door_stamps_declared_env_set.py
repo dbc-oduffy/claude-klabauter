@@ -27,6 +27,9 @@ pytestmark = [
 _ENV_FIELD = "_env"
 
 #: The full declared set (`door_env_set.h` / `env_forwarding.FORWARDING_SET`),
+#: named here rather than imported from the header -- this file asserts the
+#: WIRE shape the binary actually produces, not a re-derivation of the C
+#: leg's own table.
 _DECLARED_NAMES = (
     "COORDINATOR_SETTINGS_HOME",
     "COORDINATOR_SESSION_ID",

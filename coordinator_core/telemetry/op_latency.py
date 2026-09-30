@@ -137,8 +137,22 @@ from coordinator_core import atomic_append
 
 _DISABLE_ENV = "COORDINATOR_OP_LATENCY_DISABLE"
 
+#: Execution routes a logical op can take. THE one place this set is stated
+#: (AC6c, docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C12).
+#:
 #: The invariant AC6c needs is MUTUAL EXCLUSION PER LOGICAL OP, not writer
+#: ownership: a given op takes exactly one of these routes, never two. Writer
+#: ownership alone does not hold the line -- a call that goes over `http` while
+#: a shim also calls `ipc.dispatch_from_hook` emits a second
+#: `record_op_started`/`record_op_latency` pair however careful each writer is,
+#: and that double-count corrupts the traffic census the warm-engine win figures
+#: are derived from. Cross-process is the gap: `dispatch_message` is already the
+#: sole chokepoint WITHIN a process, so nothing below this line is about
+#: double-counting inside one interpreter.
+#:
 #: Ownership rule, once exclusion holds: the process that EXECUTES the op owns
+#: the record. In-process route -> the caller's own hook process; http route ->
+#: the warm server.
 IN_PROCESS = "in_process"
 WARM_SERVER = "warm_server"
 HTTP_SERVER = "http_server"
@@ -160,19 +174,41 @@ def execution_route() -> str:
     return declared if declared in EXECUTION_ROUTES else IN_PROCESS
 
 
+#: Invocation ORIGIN — what kind of caller produced this row. Orthogonal to
 #: `route` above, which records the TRANSPORT (which process served the op) and
+#: says nothing about the nature of the caller. Both ship: a warm-server row and
+#: a benchmark row are different facts, and neither answers the other's question.
+#:
+#: Why this exists (the contamination the census could not see): `ping` recorded
+#: 10,832 completions in seven days, none of them production traffic — five
+#: benchmark modules (`benchmarks/floor.py`, `harness.py`, `interleave.py`,
+#: `concurrency_probe.py`, `op_fixtures.py`) time it as the engine's bare-invoke
+#: floor. Before this field, an in-process test dispatch and a real one were
+#: indistinguishable on disk, so EVERY completion count used to convict an op
+#: was contaminated by an unknown amount. Measured 2026-08-25 against the live
+#: sink: `route` and `source_path` both describe transport, and exactly 9 rows in
+#: a 29,596-row generation carried a fixture-shaped `t_start` — so no read-time
+#: heuristic could recover origin either. It has to be written down at the sink.
 PRODUCTION = "production"
 TEST = "test"
 BENCHMARK = "benchmark"
 INVOCATION_ORIGINS = frozenset({PRODUCTION, TEST, BENCHMARK})
 
+# Readers are told "treat absent origin as
+# unknown, never as production" but had nothing to spell that with, and
 # `entry.get("origin", PRODUCTION)` is the tempting wrong reach given this
+# module's own default direction. This is what a READER substitutes for a
+# missing "origin" key on a pre-existing row -- the writer (invocation_origin
+# above) never returns it and never will. Deliberately NOT added to
 # INVOCATION_ORIGINS: that frozenset gates what a caller may DECLARE, and
+# nobody may declare themselves unknown.
 UNKNOWN = "unknown"
 
 _NON_PRODUCTION_ORIGINS = frozenset({TEST, BENCHMARK})
 
+#: A harness declares its own origin here; benchmark runners set it to
 #: `BENCHMARK`. Same env-var-not-import discipline as ROUTE_ENV: this module is
+#: on the dispatch hot path and must not import a harness to ask what it is.
 ORIGIN_ENV = "COORDINATOR_INVOCATION_ORIGIN"
 
 _PYTEST_ENV = "PYTEST_CURRENT_TEST"
@@ -444,10 +480,10 @@ def process_clock_resolution_ms() -> Optional[float]:
 
     Returns ``None`` until this process has recorded a non-zero row -- an
     unobserved resolution is honestly unmeasured, matching this module's
-    `spawns`-omission convention: a null field is "not counted", never "0".
-    A consumer needing the tick for rows written before the first non-zero
-    observation derives it from the population instead (every non-zero value
-    in the sink is a multiple of it), which is what `op_adjudication` does.
+    `spawns`-omission convention: a null is "not counted", never "0". The
+    only reader is `op_budget_breaches`' self-assessment; `process_time` rows
+    carry no per-row copy. A consumer needing the tick for sink rows derives
+    it from the population (every non-zero value is a multiple of it).
     """
     return _PROCESS_CLOCK_RESOLUTION_MS
 
@@ -475,6 +511,17 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         key_source = "envelope"
         if repo_root is None:
             # A None repo_root means the JSON-RPC envelope carried no
+            # `_origin_worktree` (see ipc.resolve_request_repo) — it does NOT mean
+            # the invocation happened outside a repo. Dropping the row here made
+            # every such op invisible to this instrument: `hooks.postuse_advisory_dispatch`
+            # fires on every PostToolUse Write|Edit|MultiEdit|NotebookEdit|Agent and
+            # recorded ZERO rows in 85 hours, so it was absent from every ranking
+            # built on this ledger while plausibly being the single largest consumer.
+            # A blind instrument cannot support the kill disposition's budget rule
+            # (docs/wiki/cost-budgets-and-the-kill-disposition.md: measurement answers
+            # "does this fit"), so fall back to the process cwd rather than dropping.
+            # Zero-spawn: git_common_dir resolves by pure-Python upward walk and is
+            # lru_cached — see its docstring's "hot path may treat this as zero-spawn".
             try:
                 repo_root = Path.cwd()
             except OSError:
@@ -867,7 +914,12 @@ def record_fact_span(
     _write_entry(entry, repo_root)
 
 
+# The longest a client-side subprocess.run(timeout=) waits before killing an
+# invocation, for any op that has not overridden its budget — see
+# coordinator/bin/lib/cc_invoke.py::_op_timeout_ceiling:
 #   max(FLOOR=10, engine_budget(op)=DISPATCH_TIMEOUT_SECS default 30 + MARGIN=10) == 40
+# A "started" row younger than this is unfinished, not vanished. Kept as a
+# named module constant rather than inlined so a future cc_invoke change to
 # the FLOOR/MARGIN/DISPATCH_TIMEOUT_SECS numbers has one place to update.
 DEFAULT_STALENESS_CUTOFF_SECS: float = 40.0
 
@@ -964,14 +1016,36 @@ def pairing_summary(
     }
 
 
+#: The bar a breach is measured against. Deliberately NOT a per-op caller
+#: timeout: a caller timeout is a dial somebody chose, so an op that was
+#: given a bigger dial reads as compliant against it, and the ops this view
+#: exists to find are exactly the ones that got more grace. DR-344's
+#: brightline is PM-ratified and identical for every op. Stated once, in
 #: `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS`; mirrored here as
+#: a default only so this module keeps its no-new-imports property -- callers
+#: pass `bar_ms` explicitly, and
+#: `coordinator_core.telemetry.tests.test_breach_summary` asserts the two
+#: numbers still agree.
 DEFAULT_BREACH_BAR_MS: float = 500.0
 
 TREND_MIN_ATTEMPTS_PER_HALF: int = 20
 
 TREND_FLAT_BAND: float = 0.10
 
+#: Breach kinds, kept separate everywhere. Never reported as one number
+#: without the three alongside it:
+#:   over_bar       -- a `complete` row that finished but took at least
+#:                     `bar_ms`. It ran to completion and held the box for
+#:                     the whole of it.
+#:   caller_timeout -- a `complete` row with `outcome: "timeout"`. The CALLER
+#:                     gave up; the handler kept running and MAY STILL HAVE
 #:                     COMMITTED (module docstring, the "timeout" outcome).
+#:   vanished       -- a `started` row with no `complete` row sharing its
+#:                     `corr_id`, older than `staleness_cutoff_secs`. Killed
+#:                     mid-flight; whether it committed is UNKNOWN from this
+#:                     sink alone, and it carries no `elapsed_ms`, so it
+#:                     contributes nothing to `stolen_ms` rather than a
+#:                     fabricated cost.
 BREACH_KINDS = ("over_bar", "caller_timeout", "vanished")
 
 PLAUSIBLE_T_START_FLOOR: float = 1_577_836_800.0
@@ -1216,7 +1290,14 @@ def breach_summary(
             breached = False
 
         # A caller_timeout's `elapsed_ms` is the DEADLINE, not a measurement of
+        # the handler -- which by this view's own `caller_timeout` note kept
+        # running past it and may still have committed. The occupancy is real;
+        # the number is not a reading of it. Summing it into `stolen_ms`, or
+        # letting it into the percentile pool, publishes a precise-looking
+        # arbitrary value that every consumer then reads as measured -- and a
+        # kind marker beside a plausible number loses to the number (see
         # BREACH_KINDS: "contributes nothing to `stolen_ms` rather than a
+        # fabricated cost").
         if isinstance(elapsed, (int, float)) and not timed_out:
             bucket["elapsed"].append(float(elapsed))
 

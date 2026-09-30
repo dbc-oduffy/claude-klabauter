@@ -179,7 +179,9 @@ def test_unreadable_docs_plans_dir_fails_closed(spec_backlink_corpus, monkeypatc
     assert archived_outcome["outcome"] == "hit"
 
 
+# ---------------------------------------------------------------------------
 # N>1 dlv- with no covering pln- — asserts typed AMBIGUITY, not hit/miss
+# ---------------------------------------------------------------------------
 
 
 def test_ambiguous_dlv_with_no_covering_pln_is_ambiguity_not_hit_or_miss(tmp_path):
@@ -394,7 +396,9 @@ def test_stem_present_under_both_roots_is_ambiguity_not_silent_pick(tmp_path):
             encoding="utf-8",
         )
 
+    # The cited docs/plans/ path does NOT literally exist (exact-path lookup
     # misses) -- the basename `stem` instead resolves two DIFFERENT real
+    # records via the fallback (two archive/specs/YYYY-MM/ twins), which is
     # what must trip AMBIGUITY rather than a silent pick.
     _write(archive_specs_a / stem, "pln-duplicate-archived-a-000001")
     _write(archive_specs_b / stem, "pln-duplicate-archived-b-000002")

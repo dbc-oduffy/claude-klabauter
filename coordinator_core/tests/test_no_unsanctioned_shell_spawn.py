@@ -151,6 +151,7 @@ def test_argv0_from_module_constant_list_concat_and_fstring():
 
 
 def test_shell_bound_to_variable_and_starred_kwargs_are_counted():
+    # `**opts` forwarding is opaque -- whether `shell=True` ends up set is
     # statically unknowable, so C1b's SHELL_UNKNOWN bucket (the honest
     # "can't tell") applies to `g`, not SHELL_TRUE. Only the local-variable
     # `shell=use_shell` binding in `f` resolves concretely to SHELL_TRUE.

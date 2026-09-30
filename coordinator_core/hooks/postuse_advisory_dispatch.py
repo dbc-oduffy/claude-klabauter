@@ -2160,21 +2160,41 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # legs (same asyncio.gather, same failure-isolation buy-back below) but is
     # NOT zipped against `labels` and NOT folded into `texts` — it returns
     # None, never advisory text, and its result here is deliberately unused.
+    # Legs whose own first line is a tool_name gate are scheduled onto a thread only
+    # when that gate can pass: on most PostToolUse events they cannot, and a thread
+    # spawned to return "" is pure hot-path cost. The predicates mirror each leg's
+    # internal early-exit (which stays, for direct callers); results keep their
+    # positions, so the fixed merge order is unchanged.
+    async def _idle() -> None:
+        return None
+
     results = await asyncio.gather(
         asyncio.to_thread(_check_context_pressure_sync, session_id, transcript_path),
         asyncio.to_thread(_check_runtime_tripwire_sync, session_id, agent_id),
-        asyncio.to_thread(_check_first_agent_dispatch_sync, session_id, tool_name),
+        (
+            asyncio.to_thread(_check_first_agent_dispatch_sync, session_id, tool_name)
+            if tool_name == "Agent"
+            else _idle()
+        ),
         uh_coro,
         asyncio.to_thread(_check_group_em_watch_arm_sync, session_id, transcript_path),
-        asyncio.to_thread(
-            _capture_workflow_run_record_sync, session_id, transcript_path, tool_name
+        (
+            asyncio.to_thread(
+                _capture_workflow_run_record_sync, session_id, transcript_path, tool_name
+            )
+            if tool_name == "Workflow" and transcript_path
+            else _idle()
         ),
-        asyncio.to_thread(
-            _release_claims_on_bash_commit_sync,
-            session_id,
-            tool_name,
-            command,
-            repo_root,
+        (
+            asyncio.to_thread(
+                _release_claims_on_bash_commit_sync,
+                session_id,
+                tool_name,
+                command,
+                repo_root,
+            )
+            if tool_name == "Bash" and command
+            else _idle()
         ),
         return_exceptions=True,
     )

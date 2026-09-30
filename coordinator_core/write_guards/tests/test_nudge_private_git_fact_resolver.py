@@ -73,6 +73,12 @@ def test_fires_on_each_walk_only_form_in_hot_path_module(flag, expected_symbol):
     assert expected_symbol in text
     assert flag in text
     # AC5 honesty, INVERTED 2026-08-19 and deliberately kept as an assertion
+    # rather than deleted. This used to read `assert "eliminates the spawn"
+    # not in text` -- because it did not: the seam fell back to a spawn when
+    # the walk found no `.git`. That fallback is gone for every form in this
+    # list, so the ban became a pin on an understatement. The property under
+    # test is unchanged -- the offer text must state what the seam actually
+    # does -- only the truth it has to match moved.
     assert "never spawns, on any path" in text
 
 

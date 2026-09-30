@@ -224,6 +224,8 @@ class TestCheckSevenRatchetWatermark:
         root = _init_repo(tmp_path)
         (Path(root) / DEV_REPO_SENTINEL).write_text("sentinel\n", encoding="utf-8")
         # "coordinator/CLAUDE.md" has no `_LEDGER_PATH_OVERRIDES` entry (that
+        # override is `global-doctrine/CLAUDE.md`-only) -- its ledger
+        # resolves purely by the `surface_slug` convention.
         ledger_dir = Path(root) / "state" / "audits"
         ledger_dir.mkdir(parents=True, exist_ok=True)
         ledger_path = ledger_dir / "coordinator-claude-classification.md"
@@ -270,6 +272,8 @@ class TestCheckSevenRatchetWatermark:
 
     def _commit_over_watermark_surface(self, tmp_path: Path, bytes_val: int, size: int) -> str:
         # C7c: seed a surface whose LAST-COMMITTED (HEAD) size is already
+        # over the armed watermark -- grown by a route this edit-time check
+        # never saw (a merge, a Bash write, an unhooked session).
         root = self._init_watermarked_repo(tmp_path, bytes_val=bytes_val, reason="post-cut arming")
         _stage_claude_md(root, "coordinator/CLAUDE.md", size)
         _git(root, "commit", "-q", "-m", "land an over-watermark surface")

@@ -64,6 +64,9 @@ FALSE_POSITIVES = {
         "python -c 'print(\"docs say " + BT + HAZARD + BT + " is the hazard\")'"
     ),
     # Stresses the across-newlines pair matching specifically: two SEPARATE
+    # code spans on different lines, whose stray halves a newline-crossing
+    # scan could falsely pair with each other. The upstream strippers must
+    # remove this body before the pair scan ever sees it.
     "multiline_prose_two_code_spans": (
         "python - <<'PY'\n"
         'a = "' + BT + HAZARD + BT + ' is the hazard"\n'
@@ -109,7 +112,18 @@ def test_real_subshell_resolved_reset_still_denied(name):
     )
 
 
+# --- The load-bearing half of the FIX itself -------------------------------
+#
+# The two discriminators added to close the cases above are narrow by
+# construction: comments are text the shell never executes, and a backtick is
+# a spawn indicator only in the languages where it means command
+# substitution. These pin both narrowings so a later "simplification" cannot
+# widen them back into a dropped deny.
+#
 # Body VISIBILITY is what the backtick narrowing controls, so the cases below
+# assert it through CHECK 2's force-push deny rather than CHECK 1's own: a
+# `git reset --hard` whose target orphans nothing is allowed by design, which
+# would make a reset-shaped case here pass for the wrong reason.
 
 FORCE_PUSH = "git push origin main --force"
 

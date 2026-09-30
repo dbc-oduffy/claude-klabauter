@@ -124,14 +124,70 @@ from coordinator_core.write_guards import engine as write_guards_engine
 _CMD_OVERRIDE_KEY = "__cmd__"
 _CWD_OVERRIDE_KEY = "__cwd__"
 
+#: Neutral, repo-local scratch parent every `tempfile.TemporaryDirectory(...)`
+#: call below is rooted under, instead of the bare `tempfile.gettempdir()`
+#: default. `gettempdir()` resolves under the real machine's user profile
+#: (`C:\Users\<name>\AppData\Local\Temp` on Windows) -- on a real developer
 #: box that path segment is itself a REDACTION-class token in
+#: `setup/percolate-hooks/percolate-store.yaml` (a real person's name/
+#: username), so any fixture that renders `str(scratch_dir)` into a
+#: guard/hook's own rendered text (the containment-denial reason, an
+#: advisory rewrite embedding the scratch cwd, ...) trips B7 purely because
+#: of WHICH MACHINE ran the suite, never because of anything the guard
+#: actually composed. `guard_concrete_path_citations`'s own fixture already
+#: worked around this one call site with a hand-picked synthetic literal
+#: (a drive-letter-rooted stand-in path, see `_wg_concrete_path_citations_fire`
+#: below); this is the same fix generalized to every OTHER `tempfile.
+#: TemporaryDirectory` call in this module, at one source, rather than
+#: hand-patching each fixture's rendered text individually. `scratch/`
+#: matches this repo's own `.gitignore` at any depth, so nothing lands
+#: under version control; each `TemporaryDirectory` still self-cleans on
+#: context exit, same as before.
+#:
+#: A SIBLING of the repo root, never a directory NESTED under it: several
+#: fixtures below (`bump-outside-repo-write`, `bump-foreign-repo-write`,
+#: the `block_consumed_handoff_edit`/`block_cutover_phase_hand_edit`/
+#: `block_memo_status_hand_edit` "no git root resolved" legs, ...) assert
+#: on the scratch dir having NO git-repo ancestor at all -- measured live:
+#: an earlier revision of this constant nested the scratch parent inside
+#: this repo's own checkout, which put a REAL `.git` back above every
+#: scratch dir (this repo's own) and silenced every one of those rows.
+#:
+#: NOT the drive root, and never again a bare sibling of the repo root.
+#: `parents[3].parent` resolved to the top of whatever drive the checkout
+#: lives on, so running this suite MINTED a permanent
+#: `<drive>:/coordinator-guard-corpus-scratch` directory there -- the
+#: `TemporaryDirectory` children self-clean, the parent does not. PM
+#: ruling 2026-08-28: nothing writes to a drive root; every repo has its
+#: own scratch folder. The system temp root satisfies the two properties
+#: this constant actually needs -- no `.git` ancestor, and already an
 #: exempt member of `FIXTURE_SCRATCH_ROOTS` below, so a fixture path
+#: rendered into a guard message is still recognized as an echo and not
+#: reported as a redaction leak.
 _NEUTRAL_SCRATCH_PARENT = Path(tempfile.gettempdir()) / "coordinator-guard-corpus-scratch"
 
 
+#: The roots every fixture tempdir in this module is minted under -- the
+#: SSOT both message lints read to tell a fixture ECHO from a leak.
+#:
 #: Co-located with `_NEUTRAL_SCRATCH_PARENT` on purpose. Both
+#: `test_no_machine_absolute_path_in_guard_messages.py` (B7-shaped absolute
+#: paths) and `guard_message_register_lint.py` (B7 proper, redaction tokens)
+#: scan the text a guard renders, and a guard naming its real target back to
+#: the agent is the guard doing its job -- so both have to be able to
+#: recognize a path THIS module handed the guard as its input. Keying that on
+#: a location stated anywhere else is what broke: the abs-path lint keyed on
+#: `tempfile.gettempdir()` because that is where this corpus used to mint,
+#: `d1cf0b986` moved the mint root out to a repo sibling (to stop
+#: `guard_inprocess_search`'s footer latch minting phantom session dirs into
+#: the live `.git/coordinator-sessions/` hub), and the exemption stopped
+#: recognizing its own fixtures -- 15 spans across 13 guards reported as
+#: leaks, from this one line. Defined HERE, next to the mint root, a
+#: relocation cannot desync the two again.
+#:
 #: BY IDENTITY, never "looks like a scratch dir": a substring test would
 #: also clear a root a guard HARDCODED into its own prose, which is the leak
+#: class both lints exist for.
 FIXTURE_SCRATCH_ROOTS: tuple = (
     tempfile.gettempdir(),
     str(_NEUTRAL_SCRATCH_PARENT),
@@ -142,7 +198,15 @@ def is_fixture_scratch_path(candidate: str) -> bool:
     return any(candidate.startswith(root) for root in FIXTURE_SCRATCH_ROOTS)
 
 
+#: What a fixture-minted scratch path is rewritten to before a message is
 #: MEASURED (never before it is lint-scanned -- the leak lints must still see
+#: the real rendered text). Length is the point: a plausible checkout root,
+#: short and fixed, standing in for the nested pytest tempdir the fixture
+#: actually handed the guard.
+#: abs-path-ok: a synthetic stand-in, deliberately resembling no host. It is
+#: never opened, resolved or compared against -- only its LENGTH is used, as
+#: a representative checkout root. A `machine-local` lookup here would
+#: reintroduce the host-dependence this constant exists to remove.
 _MEASUREMENT_STANDIN_ROOT = "/Users/dev/repo"
 
 
@@ -196,7 +260,13 @@ def normalize_envelope_for_measurement(envelope):
 
 def fixture_scratch_spans(text: str) -> List[tuple]:
     spans: List[tuple] = []
+    # Both separator forms, because a guard is free to normalise before it
+    # renders: `guard_doctrine_surface_bash_write` does `.replace(chr(92), "/")`
+    # on its resolved plugin root, so the backslash literal this tuple holds
+    # never appears in that message and the operator's username segment fell
+    # out of every span -- B7 then reported it as a leak the guard had written.
     # Matching only the native form made the exemption HOST-SHAPED: green
+    # wherever the operator's username is not a redaction token, red where it is.
     roots: List[str] = []
     for _root in FIXTURE_SCRATCH_ROOTS:
         for _variant in (_root, _root.replace(chr(92), "/")):
@@ -251,7 +321,11 @@ def _neutral_scratch_parent() -> str:
     _NEUTRAL_SCRATCH_PARENT.mkdir(parents=True, exist_ok=True)
     return str(_NEUTRAL_SCRATCH_PARENT)
 
+#: Shared identity payloads -- same literals `test_cd_prefix_bypass.py`'s
 #: own `_SUBAGENT_IDENTITY` and `TestReviewerBashOutsideAllowlistBypass`
+#: use, duplicated here (not imported) because the plan's Anti-scope keeps
+#: this corpus decoupled from that file's own `_decision`-bound helpers --
+#: only its `_setup_<name>` factories are a shared dependency.
 _EXECUTOR_IDENTITY: Dict[str, str] = {
     "agent_id": "deadbeef0123",
     "agent_type": "coordinator:executor",
@@ -275,8 +349,20 @@ class CorpusRow:
         default=None
     )
     #: AUDIENCE AXIS (chunk C6, docs/plans/2026-08-13-guard-messages-stop-
+    #: handing-agents-the-keys.md): `None` (every existing row, unchanged --
+    #: backward-compatible default so no existing `CorpusRow(...)` call site
+    #: needs editing) means "as-authored" -- whatever identity `row.setup`
+    #: itself supplies (absent for most rows, which is EM-audience by
+    #: `session.identity.resolves_em_audience`'s own "well-formed envelope,
     #: both legs empty -> True" contract; `_EXECUTOR_IDENTITY`/
     #: `_REVIEWER_IDENTITY` for the handful of identity-gated rows, which is
+    #: subagent-audience). `fire_row_for_audience` below FORCES a row's
+    #: identity to one of the two explicit values regardless of this field
+    #: or the row's own `setup`, for a row that needs both audiences proven
+    #: independent of its authored identity -- see that function's own
+    #: docstring for why this is a firing-time override, not a second field
+    #: consulted by `fire_row` itself (which stays audience-agnostic,
+    #: unchanged).
     audience: Optional[str] = None
 
 
@@ -466,7 +552,14 @@ def _bump_outside_repo_write_fire_setup(
 #: AUDIENCE AXIS (chunk C6) -- the two explicit audience values
 #: `fire_row_for_audience` forces. `SUBAGENT_AUDIENCE` reuses this module's
 #: own `_EXECUTOR_IDENTITY` (already the shared literal `test_cd_prefix_
+#: bypass.py`'s own fixtures use, per that dict's own docstring) rather than
 #: minting a third identity payload shape. `EM_AUDIENCE` is the EMPTY
+#: identity dict -- no `agent_id` key at all -- which is exactly the
+#: "well-formed envelope, both legs empty" shape `session.identity.
+#: resolves_em_audience` resolves `True` for (a fresh per-cell `session_id`
+#: with no backpointer file on disk resolves `subagent_type` to empty too),
+#: matching every existing row that does not opt into an explicit identity
+#: today.
 SUBAGENT_AUDIENCE = "subagent"
 EM_AUDIENCE = "em"
 
@@ -518,7 +611,12 @@ def fire_row(row: CorpusRow) -> GuardCapture:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
+            # guard_inprocess_search's
             # _footer() session latch keys off the CLAUDE_CODE_SESSION_ID
+            # process env var, never payload["session_id"]; setting it here
+            # (matching test_guard_inprocess_search.py's own convention)
+            # is what actually makes the per-cell isolation claim below true
+            # for that guard, rather than relying on the fresh payload id.
             mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
             extra: Dict[str, Any] = dict(row.setup(scratch_dir, mp)) if row.setup else {}
             cmd = extra.pop(_CMD_OVERRIDE_KEY, row.input)
@@ -540,9 +638,12 @@ def fire_row(row: CorpusRow) -> GuardCapture:
             )
 
 
+# ---------------------------------------------------------------------------
 # The 16 CONFINEMENT_DENY rows -- two cells per guard (one firing, one
 # non-firing), pulling every `base_cmd` from `CONFINEMENT_GUARDS`'s own
+# `_setup_<name>` factories per the module docstring's SSOT contract.
 # Registration order mirrors `CONFINEMENT_GUARDS` itself.
+# ---------------------------------------------------------------------------
 
 _DENY = dispatch.GuardBand.CONFINEMENT_DENY
 
@@ -748,7 +849,10 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     ),
     CorpusRow(
         # ADVISORY_REWRITE (see that row in `ADVISORY_REWRITE_ROWS` below).
+        # An advisory returned from a
         # CONFINEMENT_DENY-registered guard would short-circuit
+        # `evaluate_payload_json` and shadow every hard-deny guard
+        # registered after it, so the two legs are split.
         "destructive-git-revert",
         "destructive-git-revert-whole-tree-stash-fire",
         "git -C <repo> stash",
@@ -931,10 +1035,25 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     ),
     # Drift fix (C3c, 2026-08-03): five more CONFINEMENT_DENY guards are live
     # `dispatch.py` registrations not present in `CONFINEMENT_GUARDS` (the
+    # 16-row bank this block's own rows are pulled from) -- concurrent
+    # sessions registered them after that bank was last regenerated, and the
+    # module-level sanity assert below (comparing against the LIVE chain, not
+    # this bank) failed on import until these rows existed. Non-firing
+    # control rows only, same lighter-path precedent as
     # `bump-foreign-repo-write` in the ADVISORY_REWRITE block below -- a real
+    # per-guard trigger fixture for each is a job for whichever chunk owns
     # `CONFINEMENT_GUARDS`'s next regeneration, not a silent scope-creep here.
+    #
+    # `block-dev-repo-sentinel-removal` (bare `check()`) is deliberately
+    # ABSENT here (X2, 2026-08-06, apply-guard-class-census): C13 deleted its
     # CONFINEMENT_DENY `dispatch.py` registration entirely -- `check()` is no
+    # longer reachable through the live chain at all, only directly callable
+    # (unit-tested elsewhere). Its sole registered leg,
+    # `block-dev-repo-sentinel-removal-advisory`, already has its own
     # fire+control pair in `ADVISORY_REWRITE_ROWS` below; a row here naming
+    # the unregistered `check()` would fail
+    # `test_corpus_imports_cleanly_and_every_row_guard_resolves` ("names an
+    # unregistered guard").
     CorpusRow(
         "block-disarm-marker-sentinel-creation",
         "block-disarm-marker-sentinel-creation-control",
@@ -959,8 +1078,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
     ),
+    # AC10 coverage-gap closer (C7, docs/plans/2026-08-13-em-exercisable-
+    # in-band-grant-route.md): `block-subagent-guard-grant` (chunk C3) is a
     # genuinely fireable CONFINEMENT_DENY guard with no corpus row until
+    # this dispatch -- unlike its modelled sibling
+    # `block-subagent-grant-acquisition` (still a named
     # `REGISTER_COVERAGE_EXEMPTIONS` gap, not touched here), this guard
+    # wants a real fire+control pair, not an exemption. Custom setup (not
+    # `_from_factory*`) because this guard is not one of
     # `CONFINEMENT_GUARDS`'s 16 `_setup_<name>` factories.
     CorpusRow(
         "block-subagent-guard-grant",
@@ -980,9 +1105,20 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
     ),
+    # AC2 coverage-gap closer, 2026-08-17. The comment above called
+    # `block-subagent-grant-acquisition` a "still a named
     # REGISTER_COVERAGE_EXEMPTIONS gap, not touched here"; it is reachable from
+    # `_build_guard_chain`, so AC2 counted it as an uncovered guard and this
+    # module's own `test_ac2_every_reachable_guard_has_a_corpus_row` failed on
     # it. That failure was INVISIBLE to every directory-scoped run — see this
+    # module's header note on `python_files` — which is why the gap outlived
+    # the sibling row that closed the identical shape for
+    # `block-subagent-guard-grant` above.
+    #
+    # A real fire+control pair rather than an exemption: it is genuinely
+    # fireable, verified live here and already proven by the identical row in
     # `test_confinement_deny_band_shape._EXTRA_FIRING_ROWS`. Identity-gated on
+    # the raw presence of `agent_id`, per its own module docstring's
     # "IDENTITY-GATE POSTURE" section.
     CorpusRow(
         "block-subagent-findings-reject",
@@ -1126,27 +1262,66 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     ),
 ]
 
+#: Sanity invariant this module itself relies on -- every one of
 #: `CONFINEMENT_GUARDS`' 16 guard names appears in `CONFINEMENT_ROWS` at
+#: least once (checked below in the self-test, and re-checked structurally
+#: here so an import-time typo fails immediately rather than surfacing only
+#: when a later chunk's suite runs). Subset, not equality (C3c, 2026-08-03):
 #: `CONFINEMENT_ROWS` also carries five drift-fix rows (see above) for live
 #: CONFINEMENT_DENY registrations `CONFINEMENT_GUARDS`/`GUARD_NAMES` do not
+#: yet know about -- the AC2 closer test (bottom of this module) is the one
+#: that must hold by equality against the LIVE chain, not this static bank.
+#: Band-flip reconciliation (X2, 2026-08-06, apply-guard-class-census):
 #: `test_confinement_attack_corpus.py`'s own `CONFINEMENT_GUARDS` bank is a
+#: static list this chunk's write scope does not cover -- it still names
 #: these two guards, but C13/C14 moved BOTH off `CONFINEMENT_DENY` onto
 #: `ADVISORY_REWRITE` in the live `dispatch.py` chain (see this module's own
 #: `ADVISORY_REWRITE_ROWS` for their real, band-correct rows now). Excluded
+#: here, not silently dropped, so the subset check below still catches a
+#: genuine future drift for every OTHER guard in the static bank.
 _FLIPPED_TO_ADVISORY_REWRITE = {
     "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
 }
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- an import-time
+#: bare `assert` here turned one missing registration into an import
+#: failure for every test module that imports this corpus, masking whatever
+#: was broken behind it. The computation these two invariants depend on
 #: (`_FLIPPED_TO_ADVISORY_REWRITE`, `CONFINEMENT_GUARDS`, `GUARD_NAMES`,
 #: `CONFINEMENT_ROWS`) stays here; only the assertions moved.
 
 
+# ---------------------------------------------------------------------------
 # C3b -- the 13+2 ADVISORY_REWRITE/PLATFORM_CONDITIONED_DENY rows.
+#
+# Live-measured correction (this chunk, 2026-08-03): AC2 requires "every
+# guard reachable from `_build_guard_chain` in these two bands", not a fixed
+# count -- structurally introspecting `_build_guard_chain` (never `.fn()`)
 # finds 14 ADVISORY_REWRITE registrations and 2 PLATFORM_CONDITIONED_DENY
+# registrations, not 13+2=15. The extra one beyond the dispatch brief's
+# 13 is `offer-invoke-params-stdin` -- a real, live `dispatch.py`
 # registration in the ADVISORY_REWRITE band (grep-confirmed against
+# `_build_guard_chain`'s own output, not a docstring count). `branch-set-
+# precedence` and `longlived-branch-naming` were deleted (docs/plans/
+# 2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md, C6) --
+# no rows for either below. AC2's own text ("every guard reachable... gets
+# a corpus row") governs over the illustrative arithmetic, so all 16 get
+# rows below, two cells each (one firing, one non-firing), following
 # `CONFINEMENT_ROWS`'s own shape.
+#
+# "Speaks" here follows `guard_message_capture.py`'s own general definition
 # (`envelope is not None`), NOT `CONFINEMENT_ROWS`'s narrower "denies"
+# reading -- every guard in these two bands can return a non-None envelope
+# that is `allow`+advisory/rewrite rather than `deny` (e.g.
+# `git-commit-safe-commit-advise`'s allow+additionalContext), so "denies"
+# would be the wrong predicate for this band. `fire_row`/`capture_one_guard`
+# call `GuardEntry.fn()` directly (never `dispatch.evaluate_payload_json`'s
+# loop), so this reads the guard's own raw return, before any outer-loop
+# suppression (`_suppress_advisory`) is applied -- consistent with
 # `CONFINEMENT_ROWS`'s own reading of the same seam.
+# ---------------------------------------------------------------------------
 
 _REWRITE = dispatch.GuardBand.ADVISORY_REWRITE
 _PLATFORM = dispatch.GuardBand.PLATFORM_CONDITIONED_DENY
@@ -1201,8 +1376,14 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         setup=_git_repo_advisory_setup("git -C %s status"),
     ),
+    # The stash pair above pinned this
+    # guard's byte count for one verb only; `reset`/`checkout`/`restore`
+    # each carry their own `harm` wording (see `dispatch_checks.py`'s
     # `_check_destructive_git_revert_full`, the "VERB-CONDITIONED" comment)
+    # and were previously unpinned, so a wording change on any of the three
     # could silently clear `MESSAGE_PROSE_CAP_BYTES` with nothing in this
+    # suite noticing. `_git_repo_advisory_setup` is already generic over
+    # `cmd_template` -- reused verbatim, not re-implemented.
     CorpusRow(
         "destructive-git-revert-advisory",
         "destructive-git-revert-advisory-reset-fire",
@@ -1238,11 +1419,15 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        # Two-leg split (2026-08-05, mirrors `destructive-git-revert-
         # advisory` immediately above -- same CONFINEMENT_DENY shadowing
+        # hazard, `state/audits/2026-08-05-confinement-deny-band-return-
         # shapes.md`): registered in ADVISORY_REWRITE, after every
         # CONFINEMENT_DENY hard-deny guard. The paired non-firing
         # `block-dev-repo-sentinel-removal` row in `CONFINEMENT_ROWS`
         # (`test_confinement_deny_band_shape.py`'s own `_EXTRA_FIRING_
+        # ROWS`) proves the hard-deny leg (`check()`) stays silent
+        # (`None`) for this exact input.
         "block-dev-repo-sentinel-removal-advisory",
         "block-dev-repo-sentinel-removal-advisory-fire",
         "echo .coordinator-dev-repo | xargs rm",
@@ -1535,8 +1720,13 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
     ),
+    # Band-flip reconciliation (X2, 2026-08-06, apply-guard-class-census):
     # C13/C14 moved these three guards CONFINEMENT_DENY -> ADVISORY_REWRITE
+    # and their `check()` bodies to the allow+`additionalContext` envelope
     # shape -- moved here from `CONFINEMENT_ROWS` (same `guard`/`row_id`
+    # naming, same underlying `check()` logic, only the band and expected
+    # envelope shape changed) rather than re-derived, per the corpus's own
+    # "pull base_cmd from the factory" contract.
     CorpusRow(
         "check-raw-pid-liveness",
         "check-raw-pid-liveness-fire",
@@ -1578,7 +1768,13 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
             identity=_EXECUTOR_IDENTITY,
         ),
     ),
+    # `block-noncanonical-branch-creation` previously carried only a
     # non-firing control row (drift-fix precedent, `CONFINEMENT_ROWS`'s own
+    # "real per-guard trigger fixture ... not a silent scope-creep here"
+    # note) -- the band move is the natural point to add a real firing row,
+    # since it needs a hazard-repo fixture this guard's message-shape
+    # reconciliation already requires exercising the live `check()` path
+    # for.
     CorpusRow(
         "block-noncanonical-branch-creation",
         "block-noncanonical-branch-creation-fire",
@@ -1596,7 +1792,12 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
     ),
+    # Drift fix (C3c, 2026-08-03): `bump-foreign-repo-write` is a live
     # ADVISORY_REWRITE registration (`dispatch.py:1232`) not present when
+    # C3b wrote the block above -- a concurrent session registered it after
+    # C3b's snapshot was taken, and the module-level sanity assert below
+    # (comparing against the LIVE chain) failed on import until this row
+    # existed.
     CorpusRow(
         "bump-foreign-repo-write",
         "bump-foreign-repo-write-control",
@@ -1605,11 +1806,20 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
     ),
+    # narrow-write-confinement-bump.md chunk C2 (2026-08-03): AC7's own
+    # "not the incumbent bump rows' non-firing git status shape" -- this is
+    # a genuine FIRING row through the real dispatch chain (see
+    # `_bump_foreign_repo_write_fire_setup`), proving the rewritten
     # FOREIGN-class, EM-class copy actually denies and stays under
     # `MESSAGE_PROSE_CAP_BYTES` end-to-end, not merely in the pure renderer.
     # The other three variants this chunk adds (FOREIGN-subagent and both
     # PUBLISH-class templates) are NOT reachable through this real chain
+    # yet: `destination_class` wiring into this guard is this plan's C4, a
+    # separate atomic landing group not yet landed -- so a genuine
     # PUBLISH-class firing row cannot exist here until C4/C5 land. Those
+    # three variants satisfy AC7 via the explicit `measure_envelope(...)`
+    # assertion leg of its own OR clause instead
+    # (`test_write_bump_message.py::test_every_variant_fits_the_message_prose_cap_bytes`).
     CorpusRow(
         "bump-foreign-repo-write",
         "bump-foreign-repo-write-fire",
@@ -1619,7 +1829,13 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         setup=_bump_foreign_repo_write_fire_setup,
     ),
+    # Drift fix (C5, 2026-08-03): `bump-outside-repo-write` is C4's sibling
     # ADVISORY_REWRITE registration (`dispatch.py`, `bump-foreign-repo-write`'s
+    # own registration comment block) -- landed uncommitted in this tree by a
+    # concurrent session (docs/plans/2026-08-02-write-confinement-guards.md,
+    # coordinator-content-repo repo) after this block was last written, and the
+    # module-level sanity assert below (comparing against the LIVE chain)
+    # failed on import until this row existed.
     CorpusRow(
         "bump-outside-repo-write",
         "bump-outside-repo-write-control",
@@ -1637,8 +1853,12 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         setup=_bump_outside_repo_write_fire_setup,
     ),
+    # C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
+    # `stash-apply-verification-advisory` (dispatch.py:2537, landed 2026-08-30)
+    # had no corpus row. Genuinely fireable -- `check_apply_advisory` is a
     # pure text classifier (`_STASH_WORD_RE` + subcommand match on `apply`,
     # see `block_stash_destruction.py`'s "APPLY ADVISORY LEG"), no fixture
+    # repo needed since it never executes git, so a real fire+control pair.
     CorpusRow(
         "stash-apply-verification-advisory",
         "stash-apply-verification-advisory-fire",
@@ -1690,10 +1910,28 @@ PLATFORM_CONDITIONED_ROWS: List[CorpusRow] = [
         _PLATFORM,
         False,
     ),
+    CorpusRow(
+        "plumbing-and-loops",
+        "plumbing-and-loops-label-echo-fire",
+        'echo "--- status ---"; pwd; git status',
+        True,
+        _PLATFORM,
+        False,
+    ),
+    CorpusRow(
+        "plumbing-and-loops",
+        "plumbing-and-loops-label-echo-control",
+        "echo hi",
+        False,
+        _PLATFORM,
+        False,
+    ),
 ]
 
 #: Same import-time sanity shape as `CONFINEMENT_ROWS`'s own invariant above
 #: -- every live ADVISORY_REWRITE/PLATFORM_CONDITIONED_DENY registration
+#: (per `_build_guard_chain`'s own structural output, not a docstring count)
+#: has at least one row here.
 _LIVE_CHAIN_FOR_SANITY = dispatch._build_guard_chain(
     cmd="git status",
     session_id="guard-message-corpus-c3b-sanity",
@@ -1702,12 +1940,55 @@ _LIVE_CHAIN_FOR_SANITY = dispatch._build_guard_chain(
     policy_file=None,
     host_is_windows=False,
 )
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- same rationale
 #: as `_FLIPPED_TO_ADVISORY_REWRITE` above. `_LIVE_CHAIN_FOR_SANITY` stays
+#: here as the shared computation both moved assertions depend on.
 
 
+# ---------------------------------------------------------------------------
+# C3c -- write_guards/ and hooks/ rows, closing AC2 for both directories.
+#
+# Spec backlink: pln-runtime-measured-message-size--0669ac, the
+# C3c dispatch stub. Neither directory carries a `dispatch.GuardBand` (that
+# enum is a `bash_guards`-only concept on `GuardEntry`), so every row below
+# is banded via `_message_size.proxy_band(...)` -- named honestly as a
 # DIRECTORY BUCKET ("write_guards", "hooks"), never dressed up as a
+# duty-of-care classification (§ Problem's own correction on this point).
+#
+# Firing mechanism differs by directory from C3a/C3b's `fire_row`, which is
+# bash-command-shaped (a `cmd` string through `dispatch._build_guard_chain`):
 #   - write_guards: `guard.check(payload)` invoked DIRECTLY per guard, via
+#     `write_guards.engine._discover_guards()` -- never through
+#     `engine.evaluate`, whose hard-deny/advisory two-phase loop is the same
+#     first-non-None-wins short-circuit shape Anti-scope forbids treating as
+#     a capture seam for `dispatch._decision` (this chunk applies the same
+#     principle to the sibling engine).
+#   - hooks: the three modules routed onto the shared `_hook_envelope`
+#     chokepoint this wave (C6/C6b) -- `op(payload)` invoked directly, its
+#     `{"message": str}` return wrapped into a `hookSpecificOutput.
+#     additionalContext`-shaped dict so `_message_size.measure_envelope`
+#     reads it identically to a bash/write envelope.
+#
 # Coverage note (NEEDS_COORDINATOR, recorded for C11): a live reconnaissance
+# pass over the 12 hooks/ modules the plan's § Problem lists as already
+# routed through `_hook_envelope` found most of them expose `async def
+# _handler(params, ...)` (an MCP-tool-shaped op), not a plain `op(payload)
+# -> dict | None` Stop-hook function -- `nudge_em_code_dispatch` is the one
+# exception (it carries BOTH shapes; its sync `op()` is what
+# `write_guards.nudge_em_code_dispatch` delegates to, and that guard's own
+# row below covers it). A `(cmd, session_id, cwd, payload)`-shaped corpus row
+# cannot invoke an async MCP-tool handler without a second, differently-
+# shaped capture seam this chunk does not build. This chunk's hooks/ rows are
+# therefore scoped to the three modules this wave actually routed onto the
+# chokepoint (`em_report_altitude`, `nudge_harness_directive_dispatch`,
+# `nudge_unrouted_sizing`) plus `nudge_em_code_dispatch` (covered via its
+# write_guards row, same underlying `op()`) -- the remaining ~10 async-
+# handler hooks/ modules are C11's re-derivation to classify and, if in
+# scope, wire a seam for; re-litigating that census here would duplicate C11's
+# own explicitly-scoped job rather than discharge it.
+# ---------------------------------------------------------------------------
 
 _WRITE_GUARDS_BAND = proxy_band("write_guards")
 _HOOKS_BAND = proxy_band("hooks")
@@ -1900,8 +2181,11 @@ def _wg_process_time_figure_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> D
 
 def _wg_derived_global_doctrine_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     #: Set both HOME and USERPROFILE (not delenv USERPROFILE) so the
+    #: redirect actually resolves on win32 too -- `Path.home()` there reads
     #: USERPROFILE (falling back to HOMEDRIVE/HOMEPATH), never HOME; a bare
     #: `delenv("USERPROFILE")` left `Path.home()` nothing to resolve and it
+    #: raised `RuntimeError: Could not determine home directory.` (F13d,
+    #: docs/plans/2026-08-07-install-dogfood-mechanical-residue.md, C3).
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
     mp.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(scratch_dir / "authoring"))
@@ -2058,7 +2342,20 @@ def _wg_subagent_guard_grant_write_fire(
 
     from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
 
+    # Deliberately the REAL `tempfile.gettempdir()`, not `_neutral_scratch_
+    # parent()` -- unlike every other fixture in this module, this guard's
+    # OWN check logic (`guard_unlock_sentinel.sentinel_path`) independently
+    # resolves `tempfile.gettempdir()` itself (module docstring: "Do NOT
+    # hardcode `/tmp` or reach for a different temp resolution") to decide
+    # whether a write targets the live unlock-sentinel location. Redirecting
+    # this row's OWN write target elsewhere makes the two paths diverge and
+    # the guard never recognizes its own row -- verified live (silent
+    # instead of firing) after routing this one row through the neutral
+    # parent. This row's denial text embeds a real machine tempdir path
+    # (and therefore, on a real developer box, that machine's own
     # REDACTION-class username) for the same load-bearing reason
+    # `_bt_python3_invocation`'s real interpreter path does -- reported, not
+    # fixed here (see the cluster-D grind's own report).
     sentinel_path = str(
         Path(_tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}deadbeef0123.some-guard"
     )
@@ -2079,7 +2376,6 @@ def _wg_subagent_plan_body_write_fire(
         guard_mod, "_read_backpointer_subagent_type", lambda git_root, agent_id: "coordinator:executor"
     )
     mp.setattr(guard_mod, "_write_block_log", lambda *a, **kw: None)
-    mp.setattr(guard_mod, "_write_hook_emit_log", lambda *a, **kw: None)
     return {
         "tool_name": "Edit",
         "tool_input": {"file_path": "docs/plans/foo.md", "old_string": "x", "new_string": "y"},
@@ -2109,6 +2405,7 @@ def _wg_check_claude_md_size_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> 
     from coordinator_core.claude_md_budget import HARD_LIMIT_BYTES
 
     #: See `_wg_derived_global_doctrine_fire` above for why USERPROFILE is
+    #: set, not deleted (F13d, C3).
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
     content = "x" * (HARD_LIMIT_BYTES + 5000)
@@ -2292,6 +2589,12 @@ def _wg_terminal_artifact_edit_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("---\nstatus: implemented\n---\nbody\n", encoding="utf-8")
     # `new_string` must carry a forward-binding instruction tell (`_INSTRUCTION_RE`
+    # — must/should/do not/going forward). The guard checks the Edit's DELTA, not
+    # the file, and deliberately stays silent for ordinary prose: recording
+    # correspondence or history against a delivered plan is legitimate, and only
+    # an instruction meant to constrain FUTURE work is what this guard targets.
+    # A payload of plain text ("body2") exercised the silent path while the row
+    # asserted a speaker, so the row failed on the fixture rather than on the guard.
     return {
         "tool_name": "Edit",
         "tool_input": {
@@ -2809,7 +3112,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
 
 
 _WG_NAMES, _WG_IMPORT_FAILED = write_guards_engine.discover_guard_names()
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- same rationale
 #: as `_FLIPPED_TO_ADVISORY_REWRITE` above. `_WG_NAMES`/`_WG_IMPORT_FAILED`
+#: stay here as the shared computation the moved assertions depend on; a
+#: real import failure among the discovered write guards must still surface
+#: loudly, now as a failing test rather than a collection error.
 
 
 @dataclass(frozen=True)
@@ -3091,7 +3400,13 @@ def _fire_subagent_review_mark_noop() -> Optional[Dict[str, Any]]:
     )
 
 
+# --- AC10 coverage-gap closers, 2026-08-31. Three hooks modules landed
+# between 2026-08-18 and 2026-08-31 with neither a corpus row nor a named
+# exemption, which `test_ac10_coverage_gap_is_empty_or_named_exemption`
+# reports red. Two get real firing rows below; `sessionend_archive_session`
 # gets a named exemption instead (see REGISTER_COVERAGE_EXEMPTIONS -- its
+# only entrypoint archives a REAL session claim directory, and it emits no
+# agent-facing text at all).
 
 
 def _fire_nudge_autonomous_askuserquestion() -> Optional[Dict[str, Any]]:
@@ -3231,6 +3546,8 @@ def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
+# --- (7) nudge_foreground_agent_dispatch -- real firing row: `run_in_background`
+# present-and-false rewrites into a backgrounded dispatch via rewrite_input(),
 # whose attached `context` is the AC9-fixed AUTO-REROUTED advisory text.
 def _fire_nudge_foreground_agent_dispatch() -> Optional[Dict[str, Any]]:
     payload = {
@@ -3252,7 +3569,10 @@ def _fire_nudge_foreground_agent_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
 
 
+# The fire-reroute fixture above always forwards a `prompt`,
 # so it only ever exercises the reroute leg (_REROUTE_NOTICE). This fixture forwards
+# no forwardable `prompt` (D8's "absent/empty/missing prompt" trio) on an otherwise
+# identical present-and-false payload, taking the deny fallback branch instead, so
 # the corpus's banned-vocabulary sweep also scans _DENY_MSG_TEMPLATE at least once.
 def _fire_nudge_foreground_agent_dispatch_deny() -> Optional[Dict[str, Any]]:
     payload = {
@@ -3323,8 +3643,17 @@ def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
     )
 
 
+# --- (12) example_retrieval_repo_detect -- real firing row: `detect_banner(cwd)` returns
 # the UNINITIALIZED banner string for a scratch dir carrying a `.project-rag/
+# manifest.json` marker with no `graph.db` beside it. The example-game-repo-dedupe
+# probe's OWN upward walk is stubbed out here (real `.example-game-repo`/`Saved/
+# ExampleGameRepoProjectRag` markers on the machine's own home directory, several
+# levels above a bare `tempfile.gettempdir()` scratch dir, are within
 # `_find_marker_upward`'s `_MAX_LEVELS=6` walk on a real developer box and
+# silently short-circuit `detect_banner` to "" before the manifest marker
+# this row exists to exercise is ever reached -- corroborated live: this
+# row failed on a box with a real `C:\Users\<name>\.example-game-repo`) -- the
+# manifest lookup itself is left real, only the example-game-repo legs are forced
 # absent so this row exercises the UNINITIALIZED banner path regardless of
 def _git_scratch_repo(scratch: str) -> None:
     subprocess.run(["git", "init", "-q", scratch], check=True, **no_console_passthrough_kwargs())
@@ -3442,7 +3771,10 @@ def _fire_example_retrieval_repo_detect_control() -> Optional[Dict[str, Any]]:
 
 
 # --- (14) subagent_arrival_check -- structured JSON-RPC poll result, NOT an
+# advisory envelope: `_handler`'s own docstring, "Returns the pinned {"state",
+# "agent_id", "subagent_transcript_path", "reason"} shape directly (structured
 # JSON-RPC result, not an advisory envelope)". Verified live: the result carries
+# no `hookSpecificOutput` key at all.
 def _fire_subagent_arrival_check_structured() -> Optional[Dict[str, Any]]:
     result = _run_maybe_async(_hook_subagent_arrival_check._handler({}))
     assert "hookSpecificOutput" not in result, (
@@ -3453,6 +3785,8 @@ def _fire_subagent_arrival_check_structured() -> Optional[Dict[str, Any]]:
 
 
 # --- (15) subagent_fabrication_check -- structured JSON-RPC verdict result, not
+# an advisory envelope (own `_envelope()` helper returns a plain {"verdict", ...}
+# dict, no `hookSpecificOutput`). Verified live with params={}.
 def _fire_subagent_fabrication_check_structured() -> Optional[Dict[str, Any]]:
     result = _run_maybe_async(_hook_subagent_fabrication_check._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
@@ -3469,6 +3803,8 @@ def _fire_subagent_zero_tool_use_noop() -> Optional[Dict[str, Any]]:
 
 
 # --- (17) subagent_zero_tool_use_resolve -- structured JSON-RPC verdict result
+# (own `_verdict()` helper), not an advisory envelope. Verified live with
+# params={}.
 def _fire_subagent_zero_tool_use_resolve_structured() -> Optional[Dict[str, Any]]:
     result = _run_maybe_async(_hook_subagent_zero_tool_use_resolve._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
@@ -3479,6 +3815,8 @@ def _fire_subagent_zero_tool_use_resolve_structured() -> Optional[Dict[str, Any]
 
 
 # --- (18) subagent_zero_tool_use_surface -- structured JSON-RPC read result;
+# own module docstring: "this op returns a plain dict" (not an advisory
+# envelope). Verified live with params={}.
 def _fire_subagent_zero_tool_use_surface_structured() -> Optional[Dict[str, Any]]:
     result = _run_maybe_async(_hook_subagent_zero_tool_use_surface._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
@@ -3488,7 +3826,12 @@ def _fire_subagent_zero_tool_use_surface_structured() -> Optional[Dict[str, Any]
     return _to_envelope_or_none(result)
 
 
+# --- (19) suggest_sonnet_research -- real firing row: an unresolvable agent_id
+# (not a named-teammate id, not bare hex) is "not suppressed", firing the
 # DELEGATION REQUIRED advisory. `_has_deep_research_plugin` is monkeypatched to
+# False exactly as hooks/test_suggest_sonnet_research.py's own `_run` does (a
+# present deep-research plugin on the executing machine would otherwise
+# suppress this row nondeterministically).
 def _fire_suggest_sonnet_research() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
@@ -5228,11 +5571,81 @@ def fire_hook_row(row: HookRow) -> HookCapture:
     return HookCapture(name=row.guard, band=_HOOKS_BAND, envelope=envelope)
 
 
+# ---------------------------------------------------------------------------
+# C10 -- DR-118 shim-relayed prose: mapping and coverage finding.
+#
+# Spec backlink: pln-runtime-measured-message-size--0669ac,
+# chunk C10. § Problem claims the cap governs "the 73 modules above PLUS the
+# message content behind those 19 [DoE-side, coordinator/hooks/scripts/]
+# DR-118 pointer shims" because that prose is composed in coordinator_core
+# and relayed verbatim by a shim DoE cannot edit (no policy, no composition
+# -- DR-116's "resolve the engine root, hand over the raw payload... and
+# degrade unconditionally"). This is neither a clean verification pass NOR a
+# simple new-rows close -- it is PARTIAL, and both halves are recorded here
+# so the split does not get flattened into a wrong number in C9's memo.
+#
+# Every coordinator_core entrypoint an engine-importing DoE shim can reach is
+# one of exactly two shapes (grep-verified against coordinator_core/hooks/):
+#
+#   (1) Stop-hook direct-call shape -- a plain `def op(payload) -> dict |
+#       None` with NO `@register_op` handler, called by a DoE-resident
+#       stdin/stderr shim importing the module directly (confirmed by
+#       em_report_altitude.py's own docstring: "Stop events are not routed
+#       through the IPC daemon path... Transport here is the DoE-resident
+#       stdin/stderr shim calling `op(payload)` directly"). Exactly four
+#       modules carry this shape: `em_report_altitude`,
+#       `nudge_harness_directive_dispatch`, `nudge_unrouted_sizing`,
+#       `nudge_em_code_dispatch` (this one carries BOTH shapes -- see C3c's
+#       own comment above). ALL FOUR ALREADY HAVE ROWS: the first three in
 #       HOOK_ROWS above, the fourth via its WRITE_GUARD_ROWS entry (same
 #       underlying `op()`, per C3c). This slice is a VERIFICATION PASS --
+#       no new rows needed, cap-closure for the two named in C8's worklist
+#       (`nudge_harness_directive_dispatch`, `nudge_unrouted_sizing`) is
+#       already that chunk's job, not a new C10 obligation.
+#
+#   (2) IPC/`dispatch_from_hook` shape -- an `@register_op`-decorated async
+#       handler, reached via the `coordinator_core.ipc.dispatch_from_hook`
 #       seam DR-116/DR-118 built for exactly this purpose (a JSON-RPC
+#       envelope round-trip, the shim relaying `response["result"]"). 16
+#       further hooks/ modules carry ONLY this shape (grep for
+#       `register_op(` under coordinator_core/hooks/, minus the four above):
+#       `agent_completion_log`, `context_pressure_precompact`,
+#       `coordinator_reminder`, `nudge_foreground_agent_dispatch`,
+#       `nudge_named_agent_report_delivery`, `nudge_unauthorized_handoff`,
+#       `postuse_advisory_dispatch`, `example_retrieval_repo_detect`,
+#       `subagent_arrival_check`,
+#       `subagent_zero_tool_use`, `subagent_zero_tool_use_resolve`,
+#       `subagent_zero_tool_use_surface`, `suggest_sonnet_research`,
+#       `track_dispatched_agents`, `track_touched_files`,
 #       `ue_knowledge_distrust`. THESE HAVE NO CORPUS ROWS ANYWHERE in this
+#       file, and C3c's own coverage note (above) explains why: an
+#       `async def _handler(params, ...)` MCP-tool-shaped op "cannot invoke
+#       ... without a second, differently-shaped capture seam this chunk
+#       does not build" -- HookRow's `fire()` contract (a zero-arg sync
+#       callable) does not fit an async MCP handler without new harness
+#       infrastructure, the same gap C3c named and deferred to C11.
+#
+#       C11, however, is scoped purely as a doc-edit (re-deriving the
+#       hooks/ prose-vs-stderr census predicate) -- it does not add corpus
+#       coverage. No chunk in this plan currently builds an async capture
 #       seam. NEEDS_COORDINATOR (for the EM, ahead of C9's memo): this
+#       16-module population is real, uncovered DR-118-shim-relayed prose
+#       surface -- closing it is new capture-harness work outside this
+#       chunk's declared `change_kind: test-edit` / "C3's schema" framing,
+#       not a same-shaped corpus-row addition. C9's report to DoE should
+#       state coverage as "4 of the shim-reachable modules measured
+#       end-to-end; 17 async-handler modules identified but not yet
+#       captured," not claim the full 19-shim population is measured.
+#
+# Reconciling counts: 4 + 17 = 21 coordinator_core modules reachable by an
+# engine-importing DoE shim, against DoE's own runtime-classified count of
+# 19 pointer shims. The two counts are close but not proven identical --
+# DoE's shim inventory lives in their tree (out of reach this session, per
+# the plan's own review sidecar: "could not verify DoE-side claims (the 19
+# shims...) -- cross-repo, out of tree"). This module's 21-module inventory
+# is therefore the claude-klabauter-side upper bound on the shim-relayed surface, not
+# a claim of an exact 19-to-21 name-for-name mapping.
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -5281,8 +5694,18 @@ def fire_static_text_row(row: StaticTextRow) -> str:
     return row.text_fn()
 
 
+# ---------------------------------------------------------------------------
+# Self-test surface (this chunk's own AC2/AC15 proof over its 16 rows).
+# Deliberately kept in this same file, following `guard_message_capture.py`
+# (C1)'s precedent -- not auto-discovered by the suite's `python_files =
+# ["test_*.py"]` glob; run directly via
+# `pytest coordinator_core/bash_guards/tests/guard_message_corpus.py`.
 # Downstream chunks (C5's gate) import `CONFINEMENT_ROWS`/`fire_row` into
+# their own `test_*.py` modules, which is how this corpus re-enters the
+# auto-discovered suite for good. C3's own advisory/platform-band rows
 # (a later serial pass on this same file) append to `CONFINEMENT_ROWS`'s
+# sibling lists using this same `CorpusRow`/`fire_row` machinery.
+# ---------------------------------------------------------------------------
 
 
 def test_scratch_parent_is_outside_the_repo_and_is_exempt_here():

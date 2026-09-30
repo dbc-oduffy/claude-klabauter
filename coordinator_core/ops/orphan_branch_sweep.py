@@ -467,7 +467,16 @@ def main(argv: list[str]) -> int:
                 else:
                     prs = []
             if prs:
+                # Highest PR number, never a list position. `gh pr list` orders
+                # newest-first, so the `prs[-1]` this replaces selected the
+                # OLDEST of the five most recent PRs for the branch -- which
                 # made the CRITICAL classification unclearable by its own
+                # remedy: opening a fresh PR for the post-merge commits prepends
+                # to the list and is never the element read, so the sweep kept
+                # reporting the long-merged PR and kept firing. Selecting by
+                # `number` is also order-independent, which matters because the
+                # batched and per-branch `gh` paths above are not guaranteed to
+                # agree on ordering.
                 p = max(prs, key=lambda pr: pr.get("number") or 0)
                 pr_number = p.get("number", "")
                 pr_state = p.get("state", "") or ""
@@ -525,7 +534,9 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
 # C1c quartet — JSON-RPC ops (see module docstring "Registered JSON-RPC ops").
+# ---------------------------------------------------------------------------
 
 
 def _resolve_repo_dir(params: dict, repo_root: Optional[Path], key: str = "repo_root") -> _PathLike:

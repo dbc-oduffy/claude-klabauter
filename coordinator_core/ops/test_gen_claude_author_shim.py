@@ -367,7 +367,7 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "claude_shim: skipped (DoE clone not resolved" in out
+    assert "claude_shim: skipped (DoE clone unresolved" in out
 
 
 def test_graceful_skip_unresolved_noop_when_resolved(tmp_path, monkeypatch, capsys):

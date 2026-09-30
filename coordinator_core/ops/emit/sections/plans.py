@@ -69,17 +69,40 @@ from coordinator_core.ops.emit.deliverable_status import plan_review_verified
 
 from ._shared import normalize_frontmatter
 
+# Precedence tiering for resolving `reviewer` when a plan has MORE THAN ONE reviewed sidecar
+# (measured: 1 of 27 reviewed plans today — 2026-07-08-backlog-opened-closed-emission.md has
+# both a the Staff Engineer-review and a sonnet-review).
+#
+# PRIMARY signal (Review: code-reviewer Finding 3, 2026-07-21): each sidecar's own `kind:`
+# frontmatter field. `kind: sonnet-review` marks an LLM co-reviewer's self/model pass; any
+# OTHER kind (`staff-eng-review`, `eng-director-review`, or an as-yet-unseen kind) marks a
+# named human/staff review, which is the more authoritative verdict — robust to any future
+# named staff reviewer (the Data Science Reviewer, the UX Reviewer, sid, the Front-End Reviewer, ...) with zero roster maintenance, unlike a
 # hardcoded persona-name list. An UNRECOGNIZED non-`sonnet-review` kind still ranks at the
+# staff tier (never silently falls to "plain" or below `sonnet-review` — Finding 3's explicit
+# robustness ask) because the absence-of-evidence ("this isn't a known staff kind") is weaker
+# than the presence-of-evidence ("this isn't the model kind").
 _REVIEWER_SIDECAR_MODEL_KIND = "sonnet-review"
 _REVIEWER_SIDECAR_KIND_STAFF_TIER = 0
 
 # FALLBACK signal — filename-substring matching, used ONLY when a sidecar carries no `kind:`
+# frontmatter field at all (legacy/freeform review markdown with no frontmatter block —
+# measured on disk 2026-07-21: e.g. `*.sonnet-review.md`/`*.review.md` files that are bare
+# prose with no `---` fence). Named-marker ORDER (the Staff Engineer, eng-director, the Director of Engineering) is undocumented
+# precedent carried over unchanged from the pre-`kind` implementation (Review: code-reviewer
+# Finding 4 residual — no real-world named-vs-named collision has been measured to justify
+# reordering; a plain ".review.md" sidecar with no named-reviewer marker sits between the
+# named tier and the model-marker tier). Matched by substring against the sidecar's suffix
+# segment (case-insensitive); an unrecognized future marker falls back to the "plain" tier.
 _REVIEWER_SIDECAR_PRIORITY: tuple[str, ...] = ("patrik", "eng-director", "zoli")
 _REVIEWER_SIDECAR_PLAIN_TIER = 100
 _REVIEWER_SIDECAR_MODEL_MARKERS: tuple[str, ...] = ("sonnet",)
 _REVIEWER_SIDECAR_MODEL_TIER = 200
 
+# PlanStatus enum, kept in parity with coordinator_core/frontmatter/schemas/plan.schema.json's
+# own `status` enum (originally the frozen 9-value bash:1616 / 1672 set, plus `closed_partial` —
 # terminal/archivable per lifecycle_constants.PLAN_ARCHIVABLE_STATUS). Order-insensitive
+# membership set.
 _PLAN_STATUS_ENUM = frozenset({
     "draft",
     "reviewed",

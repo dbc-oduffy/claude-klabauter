@@ -95,6 +95,8 @@ def _read_store_sync(store_path: str) -> dict:
         with open(store_path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
     except OSError:
+        # Present-but-unreadable is treated the same as absent for this pure-read
+        # surface op — there is no write-side decision to protect here, unlike the
         # UNKNOWN-vs-zero distinction in hooks.subagent_zero_tool_use.
         return _empty_result()
 

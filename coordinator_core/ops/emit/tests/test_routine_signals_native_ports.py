@@ -593,6 +593,7 @@ class TestReviewTrailFactsPeriodScope:
         state_root = tmp_path / "state"
         self._write_record(state_root, "2026-07-06-101500-in-a.json", "OK")
         self._write_record(state_root, "2026-07-12-101500-in-b.json", "warn")
+        # One day before the window opens and one day after it closes — the off-by-one
         # pair, since both bounds are INCLUSIVE.
         self._write_record(state_root, "2026-07-05-101500-out-before.json", "OK")
         self._write_record(state_root, "2026-07-13-101500-out-after.json", "OK")

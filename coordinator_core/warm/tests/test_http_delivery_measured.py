@@ -53,6 +53,8 @@ pytestmark = [
         shutil.which("curl") is None, reason="curl is the transport under measurement"
     ),
     # SPAWNS REAL PROCESSES, ON A BOX RUNNING DOZENS OF PEERS. Marked so it
+    # runs at a cadence gate rather than per-commit: ~14 spawns to take one
+    # number is a fair price occasionally and an antisocial one every commit.
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
@@ -191,6 +193,10 @@ def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
     _spawn_elapsed_ms(interp_argv)
 
     # INTERLEAVED, not one batch then the other: a load spike that lands
+    # during a contiguous run of one side would be read as that side being
+    # slower. Alternating puts both under the same conditions sample by
+    # sample, which keeps the printed comparison honest even though only
+    # the curl leg is asserted against.
     curl_samples, interp_samples = [], []
     for _ in range(SAMPLES):
         curl_samples.append(_spawn_elapsed_ms(curl_argv))

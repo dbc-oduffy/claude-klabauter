@@ -220,6 +220,7 @@ import re
 import sys
 import tempfile
 from contextlib import nullcontext
+from functools import partial
 from time import perf_counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,7 +234,6 @@ from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.completion_ops import _parse_existing_commits
 from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 from coordinator_core.ops.ceremony.push import (
-    _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK,
     PUSH_MODE_NEVER,
     PUSH_MODE_SYNC,
     PUSH_STATUS_CADENCE_PENDING,
@@ -248,10 +248,14 @@ from coordinator_core.ops.ceremony.push import (
     push_with_retry,
     resolve_post_push_sha,
 )
-from coordinator_core.ops.ceremony.git_native import (
-    commit_scoped,
-    rev_parse_head,
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
 )
+from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session import scope as session_scope
 
@@ -334,12 +338,12 @@ def _commit_and_push_origin_stub_close(
     push_mode: str = PUSH_MODE_SYNC,
     sid: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
-    """Computed-mechanism follow-up commit (`git_native.commit_scoped`) for
+    """Computed-mechanism follow-up commit (`git.commit.commit_paths`) for
     the closed origin-stub file(s) -- its OWN small commit, a sibling to
     `consumed_handoff_stamp`'s AC17 follow-up commit, never left as an
     unswept dirty working-tree edit. Mirrors
     `consumed_handoff_stamp._commit_and_push_follow_up` exactly (same
-    commit_scoped/rev-parse/[push] shape, same `push_mode`
+    commit_paths/[push] shape, same `push_mode`
     gating -- DEC-1) -- not reused directly since that function's
     message/label are stamp-specific. The COMMIT is unconditional; the PUSH
     is gated by ``push_mode``: `"sync"` attempts a push here directly
@@ -356,7 +360,7 @@ def _commit_and_push_origin_stub_close(
     edit for the next ceremony pass (or the lvv-09 cadence backstop) to pick
     up -- it does not unwind the already-landed main ceremony commit.
 
-    ``follow_up_sha`` is captured via `rev_parse_head` -- Review: code-
+    ``follow_up_sha`` is `commit_paths`' ``outcome.sha`` -- Review: code-
     reviewer, Finding 1 (P1): captured a SECOND time, AFTER a landed push,
     because `push_with_retry` can fetch+rebase-onto this very commit on a
     rejected push before re-pushing, which rewrites its SHA. The pre-push
@@ -389,48 +393,25 @@ def _commit_and_push_origin_stub_close(
     """
     _pre_push_elapsed = perf_counter()
     message = _compose_origin_stub_close_message(closed_paths, committed_sha)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
+    message = apply_missing_trailers(message, worktree_root, closed_paths)
+    # `closed_paths` is non-empty (the caller returns early on an empty
+    # `closed_by_stub`). `prefer_deliberate_stage` keeps a peer's deliberately
+    # staged bytes on a committed path (506748a0 shape).
     try:
-        # Routed through the computed selector (not a raw `add_paths` +
-        # `commit_with_message_file` pair) -- see `git_native.commit_scoped`'s
-        # docstring. `closed_paths` is guaranteed non-empty here (the caller
-        # returns early on an empty `closed_by_stub`); `commit_scoped` stages
-        # internally on the AGREE branch and never re-derives staged content
-        # from the worktree on the DIVERGED branch, closing the same
-        # 506748a0 hazard the main ceremony commit is already routed around.
-        # opro-01 C-01 (review finding, s1): this flow is the same
-        # commit-then-own-sync-push shape `run_commit_pipeline` has, so it had
-        # the same two-publisher race -- the post-commit hook detaches and
-        # pushes while this call's own `push_with_retry` below races it. Tied
-        # to `push_mode` for the same reason as the pipeline: on
-        # `deferred`/`none` this call does NOT push (the guard below returns
-        # early), so the hook's push is the only one and suppressing it would
-        # strand the commit.
-        commit_result = commit_scoped(
-            closed_paths,
-            msg_path,
+        outcome = commit_paths(
             worktree_root,
-            suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
+            closed_paths,
+            message,
+            prefer_deliberate_stage=True,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
-    finally:
-        try:
-            Path(msg_path).unlink()
-        except OSError:
-            print(
-                f"skip: _commit_and_push_origin_stub_close: Path(msg_path).unlink() failed: {sys.exc_info()[1]}",
-                file=sys.stderr,
-            )
-            pass
-
-    if not commit_result.ok:
-        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {commit_result.stderr}"
-
-    rev_result = rev_parse_head(worktree_root)
-    follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
+        follow_up_sha: Optional[str] = outcome.sha
+    except IndexStaleAfterCommit as exc:
+        # Landed; only the shared index is stale. Precedes `IndexWriteError`,
+        # its base class.
+        follow_up_sha = getattr(getattr(exc, "outcome", None), "sha", None)
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {exc}"
 
     # Post-commit claim release (C3d, docs/plans/2026-08-11-claim-release-
     # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
@@ -440,9 +421,7 @@ def _commit_and_push_origin_stub_close(
     # ~703), and `sid` is `run()`'s own required "WSC session id" caller
     # param, threaded down through `_run_origin_stub_close` unchanged --
     # the SAME session this whole post-commit tail is running on behalf
-    # of, not a guess (`git_native.commit_scoped`'s own comment names
-    # exactly this self/other ambiguity as why it does not wire release
-    # in itself). Run synchronously here -- this function already executes
+    # of, not a guess. Run synchronously here -- this function already executes
     # off the event loop via the caller's `_to_thread_commit_and_push`
     # (`asyncio.to_thread`), so a second `to_thread` hop would only add a
     # needless thread-pool round trip. Failure direction mirrors every
@@ -1211,36 +1190,22 @@ def _run_completion_entry_fold(
 
     entry_relpath = resolved.relative_to(worktree_root).as_posix()
     message = _compose_completion_fold_message(entry_relpath, committed_sha)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
+    message = apply_missing_trailers(message, worktree_root, [entry_relpath])
     try:
-        commit_result = commit_scoped(
-            [entry_relpath],
-            msg_path,
+        commit_paths(
             worktree_root,
-            # `push.py`'s own set, not a local `== PUSH_MODE_SYNC`: this leg
-            # takes `PUSH_MODE_NEVER` from the close ceremony (which runs its
-            # own `push.outstanding` afterwards), and that mode suppresses the
-            # post-commit hook too -- letting it fire would spend a second
-            # push on work the caller is about to publish anyway.
-            suppress_post_commit_auto_push=(
-                push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK
-            ),
+            [entry_relpath],
+            message,
+            prefer_deliberate_stage=True,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
-    finally:
-        try:
-            Path(msg_path).unlink()
-        except OSError:
-            pass
-
-    if not commit_result.ok:
+    except IndexStaleAfterCommit:
+        pass  # landed; only the shared index is stale (precedes its base class)
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
         return {
             "acted": [],
             "skipped": [],
-            "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: git commit failed: {commit_result.stderr}"],
+            "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: git commit failed: {exc}"],
         }
 
     if push_mode == PUSH_MODE_SYNC:

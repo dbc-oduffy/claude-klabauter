@@ -345,7 +345,12 @@ def test_live_violation_checks_are_deterministic_across_n_runs():
     assert first == {name: False for name in fs.LIVE_VIOLATION_CHECKS}
 
 
+# ---------------------------------------------------------------------------
+# AC10 promotion (declared once more here at the gate level): the whole
 # LIVE_VIOLATION_CHECKS registry is re-runnable without raising, proving
+# every wired trigger is itself alive (a broken row would raise, not
+# silently report False).
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("name", sorted(fs.LIVE_VIOLATION_CHECKS))

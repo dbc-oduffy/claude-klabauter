@@ -14,7 +14,13 @@ from coordinator_core.ops.handoff_columns_query import _handler
 from coordinator_core.ops.emit.sections import handoff_columns as handoff_columns_mod
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real-git spawn is load-bearing: coverage (d) asserts the O(1) git-log
+# subprocess spawn count for a multi-record query, a budget claim that a
+# mocked git would trivially satisfy without proving anything. Per-test
+# isolation via tmp_path fixtures, not hoisted. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _OP_NAME = "handoff.columns"

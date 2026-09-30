@@ -219,7 +219,9 @@ def test_demote_if_idle_shares_single_shot_guard_with_a_concurrent_skew_drain():
     assert idle_order == []
 
 
+# ---------------------------------------------------------------------------
 # THE INVARIANT: idle never gates/delays/vetoes skew, skew never reads idle
+# ---------------------------------------------------------------------------
 
 
 def test_evict_on_skew_signature_carries_no_idle_input():

@@ -39,7 +39,45 @@ def _fake_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return home
+
+
+class TestClaudeHomeConventionA:
+    """CLAUDE_HOME names the parent of ``.claude``; CLAUDE_CONFIG_DIR names it directly."""
+
+    def _denied(self, path: Path) -> bool:
+        return guard.check(_payload(str(path))) is not None
+
+    def test_claude_home_governs_dot_claude_child(self, monkeypatch, tmp_path):
+        ch = tmp_path / "elsewhere"
+        monkeypatch.setenv("CLAUDE_HOME", str(ch))
+        assert self._denied(ch / ".claude" / "cross-repo" / "inbox" / "x.md")
+        assert self._denied(ch / ".claude" / "state" / "cross-repo" / "x.md")
+
+    def test_claude_home_direct_child_not_governed(self, monkeypatch, tmp_path):
+        ch = tmp_path / "elsewhere"
+        monkeypatch.setenv("CLAUDE_HOME", str(ch))
+        assert not self._denied(ch / "cross-repo" / "inbox" / "x.md")
+        assert not self._denied(ch / "state" / "cross-repo" / "x.md")
+
+    def test_claude_config_dir_governed(self, monkeypatch, tmp_path):
+        cfg = tmp_path / "cfgdir"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+        assert self._denied(cfg / "cross-repo" / "inbox" / "x.md")
+        assert self._denied(cfg / "state" / "cross-repo" / "x.md")
+
+    def test_doubled_claude_home_does_not_raise_and_keeps_home_roots(
+        self, monkeypatch, tmp_path, _fake_home
+    ):
+        monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "x" / ".claude"))
+        assert self._denied(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
+
+    def test_relative_claude_home_does_not_raise_and_keeps_home_roots(
+        self, monkeypatch, _fake_home
+    ):
+        monkeypatch.setenv("CLAUDE_HOME", "relative/dir")
+        assert self._denied(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
 
 
 class TestStderrNoiseRegression:

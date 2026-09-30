@@ -97,9 +97,15 @@ EXIT_OK = 0
 EXIT_DATA_ERROR = 1
 EXIT_USAGE = 2
 
+# Exceptions `_dispatch_emit` and `restamp` raise as data/refusal errors —
 # mapped to EXIT_DATA_ERROR, never re-derived here.
+# A bare `ValueError` for a missing required param
+# (e.g. `_dispatch_emit`'s `plan_path`/`output_path`/`profile_dir` checks)
 # lands here as EXIT_DATA_ERROR even though this module's own pre-checks
 # above return EXIT_USAGE for the identical logical error. Not reachable
+# today (every required-param case is pre-checked before `_dispatch_emit`
+# ever raises), but a future required param added on only one side would
+# fire this latent taxonomy mismatch.
 _DATA_ERRORS = (
     InventoryPathConflictError,
     QueuePlanConflictError,
@@ -204,6 +210,13 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="where override, read as JSON DNF from PATH (queue route, exclusive of --where)",
     )
+    parser.add_argument(
+        "--max-rows",
+        dest="max_rows",
+        default=None,
+        type=int,
+        help="refuse an --inventory minting more live rows than this (default 100)",
+    )
     parser.add_argument("--limit", default=None, type=int, help="limit override (queue route)")
     parser.add_argument(
         "--budget-tokens",
@@ -297,7 +310,11 @@ def _do_restamp(script_arg: str) -> int:
 
 
 def _print_workflow_invocation(
-    result: dict, *, is_queue_route: bool, profile_dir: "Optional[str]" = None
+    result: dict,
+    *,
+    is_queue_route: bool,
+    profile_dir: "Optional[str]" = None,
+    repo_root: "Optional[Path]" = None,
 ) -> None:
     """Print the exact ``Workflow({...})`` call to make against the just-
     written script, to stderr, on EVERY route.
@@ -305,7 +322,7 @@ def _print_workflow_invocation(
     the skills that document this emitter claim it prints this
     invocation. It printed nothing at all on the queue route -- the only
     way to find the required fire-time args (``run_stamp``, ``script_path``,
-    ``profile_dir``, per ``grind_compose._FIRE_ARGS_CHECK``) was to read the
+    ``profile_dir``, ``repo_root``, per ``grind_compose._FIRE_ARGS_CHECK``) was to read the
     emitted script's own guard. This runs unconditionally after a successful
     emit, on both routes, so the printed line is never route-dependent.
 
@@ -322,7 +339,8 @@ def _print_workflow_invocation(
             "\n  Workflow({ scriptPath: "
             f"{json.dumps(script_path)}, args: {{ run_stamp: '<YYYYMMDDThhmmssZ>', "
             f"script_path: {json.dumps(script_path)}, profile_dir: "
-            f"{json.dumps(profile_dir)} }} }})",
+            f"{json.dumps(profile_dir)}, repo_root: "
+            f"{json.dumps(repo_root.as_posix() if repo_root else None)} }} }})",
             file=sys.stderr,
         )
     else:
@@ -487,6 +505,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["plan_path"] = args.plan
     if args.inventory:
         params["inventory_path"] = args.inventory
+        if args.max_rows is not None:
+            params["max_rows"] = args.max_rows
     if preamble_text is not None:
         params["preamble"] = preamble_text
         params["preamble_path"] = args.preamble_path
@@ -548,7 +568,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     result["admission"] = admission_record
     print(json.dumps(result, indent=2, sort_keys=True))
     _print_workflow_invocation(
-        result, is_queue_route=is_queue_route, profile_dir=args.profile_dir
+        result, is_queue_route=is_queue_route, profile_dir=args.profile_dir, repo_root=repo_root
     )
 
     if not result["ok"]:

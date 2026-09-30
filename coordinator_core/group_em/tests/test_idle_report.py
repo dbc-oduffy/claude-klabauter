@@ -864,7 +864,14 @@ def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path, projects
         assert row["reason"] is None or row["reason"] in idle_report.UNKNOWN_REASONS
 
 
+# --- the refusal, as distinct from the stall ------------------------------
+#
 # Six ESCALATE verdicts landed in one tick on 2026-09-01 and all six were
+# false: a shared limit window had stopped every peer's clock at once. The
+# fix is a CHECK, not a threshold -- the tick's one real stall (`c7`, 88
+# minutes, closed quick-wrap, a named next move) sat inside the same band, so
+# any threshold that suppressed the five suppressed it too. These tests pin
+# the discriminator, not the suppression.
 
 
 def _refusal(minutes_ago, now, resets_in_minutes=180):
@@ -971,6 +978,31 @@ def test_group_em_answer_ac8_delegated_row_suppresses_but_does_not_attribute(now
     answered, within = idle_report._group_em_answer(log, "group-em-1", "peer-1", now)
     assert within is True
     assert answered is None
+
+
+def test_delegated_only_suppression_renders_its_reason_beside_hold(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    from coordinator_core.group_em import send_pass
+
+    _write(projects_dir, "4040aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
+    key = send_pass.offer_key("group-em-1", "4040aaaa-x")
+    log = [{"outcome": "offer", "offer_key": key, "offered_at": now - 60, "offered_by": "nudger-1"}]
+    monkeypatch.setattr(idle_report, "_read_group_em_log", lambda *a, **k: (log, True))
+    report = _report(tmp_path, projects_dir, now, names={"4040aaaa-x": "p"},
+                     group_em_session_id="group-em-1")
+    row = _row(report, "4040aaaa")
+    assert row["nudge-shape"] == idle_report.SHAPE_HOLD
+    assert row["answered-by-group-em"] == idle_report.ANSWERED_NO_DELEGATED
+    assert "answered-by-group-em: no (delegated offer within cooldown)" in idle_report.render(report)
+
+
+def test_unsuppressed_peer_still_renders_plain_no(tmp_path, projects_dir, now, monkeypatch):
+    _write(projects_dir, "4141aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
+    monkeypatch.setattr(idle_report, "_read_group_em_log", lambda *a, **k: ([], True))
+    row = _row(_report(tmp_path, projects_dir, now, names={"4141aaaa-x": "p"},
+                       group_em_session_id="group-em-1"), "4141aaaa")
+    assert row["answered-by-group-em"] == "no"
 
 
 def test_group_em_answer_ac9_unattributed_row_is_byte_identical(now):

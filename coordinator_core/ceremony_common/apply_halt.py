@@ -119,7 +119,11 @@ CEREMONY_HALT_EXIT_CODES: dict[str, int] = {
 
 
 #: Reverse-lookup over `CEREMONY_HALT_EXIT_CODES` PLUS the fixed `SUCCESS = 0`
+#: anchor every `build_ceremony_halt_exit_codes` enum also carries (via
 #: `extend_exit_codes`) -- `CEREMONY_HALT_EXIT_CODES` itself holds only rungs
+#: 1-4, so a bare inversion of it would label every successful ceremony
+#: `None` (docs/plans/2026-09-11-half-the-compositions-do-not-finish-clea.md
+#: § C1).
 _CEREMONY_EXIT_LABELS: dict[int, str] = {0: "SUCCESS"}
 _CEREMONY_EXIT_LABELS.update({v: k for k, v in CEREMONY_HALT_EXIT_CODES.items()})
 

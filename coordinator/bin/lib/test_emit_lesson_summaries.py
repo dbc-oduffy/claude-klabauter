@@ -42,7 +42,13 @@ except _DoeUnresolvable:
 
 _KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 
+# Declared, not excused: every test invokes emit-lesson-summaries.py as a REAL
+# subprocess (via `_run_emitter`/direct subprocess.run calls) to exercise its
+# actual CLI argv contract and stdout JSON output end-to-end -- an in-process
+# call would not observe the subprocess-boundary behaviour this emitter's own
 # CLI callers depend on. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -387,7 +393,11 @@ def test_f7_four_space_indent_scope_tags(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
 # SCOPE-OUTBOX: block-list scope_tags="universal" (no [universal] in body)
+# ---------------------------------------------------------------------------
+# Covers the F1-fixed path: block-list `scope_tags:\n  - universal` must survive the
+# parser and produce scope="universal" even when body has no [universal] marker.
 
 def test_scope_outbox_block_list(tmp_path):
     tmp3 = tmp_path
@@ -440,7 +450,11 @@ def test_ac7_nonnull_parse_status(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
 # SENTINEL: "0000-00-00" created → emitted created is None
+# ---------------------------------------------------------------------------
+# Verifies that the sentinel date used in legacy-migrated lessons emits honest null
+# rather than a fake "0000-00-00T00:00:00Z" that would pollute date-bounded queries.
 
 def test_sentinel_date_emits_null(tmp_path):
     tmp_s = tmp_path
@@ -477,7 +491,12 @@ def test_sentinel_date_emits_null(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
 # F1-OVERLAY: dual-presence — YAML has from_repo, outbox lacks it → captured value survives
+# ---------------------------------------------------------------------------
+# When a lesson is in BOTH per-entry YAML (from_repo="repo-a") AND outbox (no from_repo
+# field), the overlay must fall back to the captured value rather than wiping it with
+# None. Validates the `from_repo = outbox_rec.get("from_repo") or from_repo` fix.
 
 def test_f1_overlay_dual_presence_from_repo_survives(tmp_path):
     tmp_f1 = tmp_path

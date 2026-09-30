@@ -115,7 +115,14 @@ from coordinator_core.bash_guards.roster import guard_roster
 _PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent
 _REFERENCE_DOC = "docs/reference/guard-tool-name-membership.md § 3"
 
+#: Same non-guard-module exclusion `test_tool_name_membership.py` already
+#: uses -- dispatch.py/dispatch_checks.py are the dispatcher itself,
+#: commit_tripwires.py is a library `dispatch_checks.py` calls internally,
 #: none of the three register their own `MATCHERS` contract. Governs only
+#: `_scoped_module_stems()` / `test_discovery_found_the_expected_scope`'s
+#: module-declaration count -- NOT `_actual_matchers()`'s enforcement
+#: scope, which now covers every `guard_roster()` id including the inline
+#: entries `dispatch.py`/`dispatch_checks.py` back.
 _NON_GUARD_MODULES = {"dispatch.py", "dispatch_checks.py", "commit_tripwires.py"}
 
 _EXCLUDED_INAPPLICABLE_DECLARATION = {"block_dev_repo_sentinel_removal"}
@@ -164,6 +171,9 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-repo-setup-claude-home-refusal": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
     # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
+    # dialect-reading -- resolves its dialect via `_dialect.dialect_from_
+    # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
+    # tool-name-membership.md § 3), never inferred from command text alone.
     "p4-verb-fence": _Expected(("Bash", "PowerShell")),
     # block-venv-creation: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`),
     # PM directive 2026-09-29 -- per-repo/shared venv creation is watched
@@ -245,7 +255,15 @@ EXPECTED: Dict[str, _Expected] = {
         "vocabulary to widen onto -- reclassified from a temporary gap "
         "to permanently Bash-only.",
     ),
+    # -- Bash-only, NOT permanently correct: a real, temporary gap (6) --
+    # Bucket D, WIRED by C9 (2026-08-26). Both entries already read the
+    # dialect at their registered leg and simply never declared it; C9
+    # changed the declaration only, with no detection work. They move here
+    # to bucket (1) -- dual-declaring AND dialect-reading -- because that
     # is now literally true of both. Leaving them at NOT_YET_CONVERTED
+    # after the widening is what turned this ratchet red: the gate is
+    # comparing the live registration against this table, which is exactly
+    # the regrowth it exists to catch, fired against its own plan.
     "block-dev-repo-sentinel-removal-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -264,12 +282,38 @@ EXPECTED: Dict[str, _Expected] = {
     "git-no-optional-locks": _Expected(
         ("Bash", "PowerShell"),
     ),
+    "background-publish": _Expected(
+        ("Bash", "PowerShell"),
+    ),
     "validate-commit": _Expected(
         ("Bash", "PowerShell"),
     ),
     # -- formerly dual-declaring-but-Bash-detecting (9), now CONVERTED
+    # (C8's second pass, Finding 7 of the recensus record) -- moved to
+    # bucket (1). state/audits/2026-08-26-guard-detection-language-
+    # dependence-recensus.md Findings 2 (six module-backed) and 3 (three
     # inline) found these nine declaring `COMMAND_TOOL_NAMES` with zero
+    # `_dialect` references. The first C8 pass measured only base-argv
+    # identity and wrongly read eight of the nine as correct-as-drafted;
+    # re-measured against the PowerShell `Start-Process` anti-bypass
+    # surface specifically (the same surface that gapped
+    # `destructive-git-revert`, whose own base argv also matched
+    # identically), seven were REAL detection gaps and are now converted
+    # (a dialect-gated `_dialect.tokenize_command` +
+    # `expand_start_process_invocations` pass, narrowly scoped to
+    # `Start-Process`, ahead of each entry's existing Bash-shaped
+    # pipeline). The ninth, `destructive-git-revert-advisory`, is a thin
+    # wrapper over the SAME `_check_destructive_git_revert_full` function
+    # `destructive-git-revert`'s hard-deny leg calls, so the first C8
+    # pass's fix already covered it too -- a genuine no-change verdict,
+    # confirmed empirically, not re-derived. All nine now demonstrably
+    # branch on dialect at detection time, which is bucket (1)'s test.
     # Moving them here (rather than leaving DUAL_DECLARING_BASH_DETECTING
+    # with a corrected reason) is what bucket (1)'s own definition
+    # requires once detection genuinely branches on dialect -- see
+    # `test_dual_declaring_bash_detecting_kind_is_pinned` below, now
+    # asserting the empty set for the same reason Bucket D's two entries
+    # moved here under C9 above.
     "block-noncanonical-branch-creation": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -291,7 +335,18 @@ EXPECTED: Dict[str, _Expected] = {
     "git-commit-safe-commit-advise": _Expected(
         ("Bash", "PowerShell"),
     ),
+    # merged in from origin/main (C2, docs/plans/2026-09-02-a-write-that-
+    # discards-what-you-never-saw.md); live in guard_roster() with
     # matchers=COMMAND_TOOL_NAMES (full-universe) but unclassified here
+    # until this reconciliation. `check_stale_write`'s own candidate
+    # resolver (`_stale_write_shape_candidates`) tokenizes via the generic
+    # `_command_tokenizer.resolve_command_positions` and looks for a bare
+    # `>` redirect or a bare `tee` invocation -- zero `_dialect`/
+    # `resolve_segments_for_dialect` references anywhere in the check or
+    # its candidate resolver, the same signature the 2026-08-26 recensus
+    # used to name the other nine dual-declaring-but-Bash-detecting
+    # members. Chain-eligible for a PowerShell payload but detects with
+    # Bash-shaped `>`/`tee` argv shapes only -- bucket (3), not bucket (1).
     "stale-write": _Expected(
         ("Bash", "PowerShell"),
         DUAL_DECLARING_BASH_DETECTING,
@@ -420,9 +475,10 @@ def test_every_registered_guard_is_classified():
     docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md)
     arrived live in `guard_roster()` on origin/main only -- absent from
     this branch's pre-merge tip -- and had no classification here. Widened
-    54 -> 55 with `block-venv-creation` (PM directive 2026-09-29)."""
+    54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
+    with `background-publish`."""
     actual = _actual_matchers()
-    assert len(actual) == 55, sorted(actual)
+    assert len(actual) == 56, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -463,7 +519,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 55
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 56
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

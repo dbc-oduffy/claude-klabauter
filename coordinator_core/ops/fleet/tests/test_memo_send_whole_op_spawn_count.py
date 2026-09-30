@@ -56,7 +56,11 @@ class _AttributedSpawn(NamedTuple):
     origin: str
 
 
+#: Frame-file suffix -> gate-site name, matching the gate's own
 #: `_LEGITIMIZED_SITES` key shape (`(relpath, enclosing, argv0, ordinal)`'s
+#: `relpath`/`enclosing` pair). Compared as `Path(...).as_posix()` suffixes
+#: so the match holds on Windows (drive letters and backslashes never enter
+#: the comparison).
 _GIT_NATIVE_SUFFIX = "coordinator_core/ops/ceremony/git_native.py"
 _RUN_GIT_SUFFIX = "coordinator_core/git/run.py"
 _COMMIT_SIGNING_SUFFIX = "coordinator_core/git/commit_signing.py"

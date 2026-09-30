@@ -151,10 +151,26 @@ from coordinator_core.session.receiver_state import classify as receiver_state_c
 from coordinator_core.session.receiver_state import read_receiver_state
 from coordinator_core.session.receiver_state import reduce_transcript_tail
 
+#: The peer is actively producing -- either the harness reports it executing
 #: (`EXECUTING_STATUSES`), or an `idle` peer whose transcript tail shows live
+#: conversational activity.
 STATE_PRODUCING = "PRODUCING"
 
+#: Harness statuses that each assert the same fact: this session is executing
+#: right now. `busy` is the general one; `shell` is the narrower claim that the
+#: session is inside a shell call, and it reaches this module ONLY from the
+#: registry -- `claude agents --json` collapses it into `busy`, so a reader
+#: sampling that surface cannot see the arm is missing.
+#:
+#: Measured 2026-09-02 on this box: 5 of 28 live sessions sat in `shell`,
+#: including two of three claude-klabauter peers, and every one of them fell
 #: through to `unrecognized-status:shell` -> `STATE_UNKNOWN`. Plain UNKNOWN
+#: rows are invisible to the parked derivation, so ~18% of the fleet was in a
+#: status the ladder had no rung for -- not misclassified, unclassifiable.
+#:
+#: The under-read is safe in one direction only (an executing peer is never
+#: falsely reported parked) and that is exactly why it survived: the sensor
+#: looked healthy while it had stopped answering for a fifth of its input.
 EXECUTING_STATUSES = frozenset({"busy", "shell"})
 
 STATE_PAUSED = "PAUSED"
@@ -302,7 +318,14 @@ def _transcript_moved_since(
         return None
     if trusted:
         return activity_epoch > stamp_dt.timestamp()
+    # The untrusted (mtime) fallback
+    # is barred from answering "moved", never from answering "has not moved".
     # The bias is ONE-DIRECTIONAL: a bookkeeping rewrite can only push mtime
+    # forward, and any real write is at or before it, so `mtime <= stamp`
+    # bounds the peer's true last activity at or before the stamp too -- real
+    # evidence of stillness, and the reinstatement case a blanket `None` here
+    # silently gave up. Only the forward direction is unsafe, because that is
+    # the one a rewrite can manufacture.
     if activity_epoch <= stamp_dt.timestamp():
         return False
     return None
@@ -403,8 +426,35 @@ def classify_peer(
             reader_verdict == STATE_PAUSED and live_status in EXECUTING_STATUSES
         )
 
+        # Idle-side close (defect B): a stale PAUSED snapshot with harness
+        # `idle` is exactly the failure mode `live_busy_contradicts` cannot
+        # see -- the audit's peer 30342983 was mid-turn while the harness read
+        # `idle`, so live status is NOT trustworthy corroboration here.
+        # Staleness is measured against the reader record's OWN write time
+        # (`stamped_at`) -- never a status field -- and an indeterminate
+        # staleness fails CLOSED (never a candidate), same as an
         # over-threshold one. See `STALE_SNAPSHOT_SECONDS`'s docstring for the
+        # p50 pin.
+        #
         # AGE ALONE IS NOT THE QUESTION (2026-08-30). Age was standing in for
+        # "has this peer done anything since the snapshot?", and it answers
+        # that question wrongly in one direction: `receiver-state.json` is
+        # written by the peer's Stop hook at turn end, so a genuinely PARKED
+        # peer's snapshot does nothing but age. Past 108s every such peer was
+        # disqualified permanently, and the longer one sat stuck the more
+        # certain the roster was to hide it -- measured live on this box, the
+        # roster oscillated 0 -> 3 -> 0 across consecutive ticks and read
+        # empty while five peers sat idle, one blocked for hours on a gate
+        # only the Group EM could clear.
+        #
+        # The transcript answers it directly. A peer that has written nothing
+        # since its snapshot has not moved, however old the snapshot is; a
+        # peer whose transcript is NEWER than its snapshot has acted since,
+        # which is the mid-turn case defect B exists to catch and catches it
+        # on evidence rather than on elapsed time. Fail-closed is preserved
+        # end to end: an unreadable transcript mtime leaves the age verdict
+        # standing, and an unresolvable `stamped_at` is still never a
+        # candidate.
         staleness = None
         stale_idle_contradicts = False
         if reader_verdict == STATE_PAUSED and live_status == "idle":
@@ -431,9 +481,24 @@ def classify_peer(
             reason = reader_reason
 
         # Defect 4 close: a frozen PRODUCING verdict (typically the step-7
+        # delegation override, `classify`'s "delegated (overrides ...)"
+        # reason) is never rewritten once the session stops taking turns --
+        # `write_receiver_state` has exactly one writer, the Stop hook, and a
+        # stopped session never fires it again. Freshness is knowable from
+        # the SAME evidence bd96b64b already reads for the idle-side PAUSED
+        # guard above (`_transcript_moved_since`: has the peer's own
+        # transcript grown since `stamped_at`?) -- reused verbatim, not a
+        # second comparison, and never against `now` (a clock threshold is
+        # exactly what bd96b64b replaced). A transcript that kept moving
+        # after the verdict was frozen is positive evidence the frozen
         # PRODUCING snapshot no longer describes the peer's current state.
+        #
         # NEGATIVE SPEC: this must resolve to UNKNOWN, never PAUSED -- a
         # stale PRODUCING is "could not classify", not "guessed idle". And
+        # UNKNOWN alone is invisible to `build_candidate_roster` (only
+        # `candidate: True` rows survive), so this is surfaced as an
+        # explicit `unclassifiable: True` row instead of a silent drop --
+        # the Group EM is told "no verdict, and why" rather than nothing.
         if reader_verdict == STATE_PRODUCING:
             stamp_dt = _parse_iso_stamp(reader_record.get("stamped_at"))
             moved = _transcript_moved_since(

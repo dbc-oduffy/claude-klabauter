@@ -101,10 +101,28 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
     assert body.count("commits are NOT being auto-pushed / annotated by this hook") == 2
 
 
+# ---------------------------------------------------------------------------
 # _HOOK_GEN_STAMP <-> emitted body shape coupling (AC3, plan
+# 2026-08-14-hook-currency-stops-resting-on-a-comment.md). A checksum over
+# `_shim_body`'s output for a fixed input pins TODAY's shape — the whole
+# point of this test is that it goes RED the moment `_shim_body` grows a new
 # rung (or drops one, or reorders a line) without `_HOOK_GEN_STAMP` in
+# git_hook_install.py being bumped alongside it. The failure message says
+# what to do, not merely that a checksum moved: bump the stamp, then update
 # _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
+#
 # THE BAKED INTERPRETER PATH IS NORMALIZED OUT BEFORE HASHING (2026-08-25, gen
+# 5). `_shim_body` now interpolates `py_probe_sh.baked_python_lines`, which
+# embeds THIS machine's `sys.executable`. That literal is machine state, not
+# body SHAPE: hashing it would make this test pass only on the box that last
+# updated the constant and fail on every other one — including the fleet floor
+# (a MacBook), where the path is not even the same shape. `_normalize_baked_py`
+# replaces the assigned value with a fixed placeholder so the checksum still
+# goes red for a new/dropped/reordered rung — the thing this test exists to
+# catch — and stays green across machines. It deliberately does NOT elide the
+# whole line: the `_PY="..."` assignment and its `[ -x ]` self-heal sibling are
+# rungs, and losing either must still be caught.
+# ---------------------------------------------------------------------------
 
 _EXPECTED_BODY_SHAPE_CHECKSUM = "dab7511ca97cfcda167b65da660c7a8cc5ef3abf06ef03a30f22c05b81529c1e"
 
@@ -482,7 +500,9 @@ def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch)
     assert rc == 0
 
 
+# ---------------------------------------------------------------------------
 # The no-session gate is GENERATED from the ladder, never hand-copied.
+# ---------------------------------------------------------------------------
 
 def test_session_gate_is_generated_from_the_ladder():
     """The emitted no-session gate must name exactly SESSION_ENV_PRECEDENCE.
@@ -665,6 +685,10 @@ def test_append_block_msys_normalisation_actually_transforms_the_path():
 
     assert result.returncode == 0, result.stderr
     # A LOWERCASE drive letter, and that is correct. The expansion is pure
+    # parameter substitution -- it relocates the drive letter, it does not
+    # upcase it, and Windows drive letters are case-insensitive so either case
+    # resolves identically for the native python.exe this exists to feed.
+    # Asserted explicitly because BOTH emitters' comments spell the converted
     # form with an UPPERCASE drive letter (corrected 2026-08-31): a reader who
     assert result.stdout == "c:" + "/Users/someone/bin/tool", (
         f"expansion produced {result.stdout!r}, not the relocated drive form"
@@ -789,11 +813,26 @@ def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tm
     )
 
 
+# ---------------------------------------------------------------------------
+# THE PAIR TEST (2026-09-02). Everything about the native-door cutover was
 # verified by asking the PRODUCER's own question -- did I write the image, is
+# it manifested, does it resolve, does my report call it healthy -- and the one
 # test that asked a CONSUMER's question
+# (`test_append_block_runs_an_installed_exe_forwarder_directly`) fabricated the
+# WINDOWS artifact shape on a POSIX box, so it went green on macOS against a
+# file named `.exe` containing `#!/bin/sh`, a shape macOS cannot produce. No
+# test on any platform ever ran a consumer against the artifact its own
+# platform actually makes, and 13 repos lost `git commit` for it.
+#
 # The fixture below is therefore derived from the PRODUCER
 # (`door_install.NATIVE_IMAGE_MAGIC`) and branched on the CURRENT platform,
+# never hand-typed from a failure report -- a hand-typed fixture is exactly how
+# the defect survived. Its teeth are
+# `test_pair_fixture_goes_red_without_the_native_probe`: strip
 # `_NATIVE_PROBE_DEF` and this must FAIL. Without that control the pair test
+# passes on a body that never learned the POSIX half, which is the state this
+# suite sat in for four days.
+# ---------------------------------------------------------------------------
 
 _INCIDENT_STRINGS = ("Non-UTF-8", "SyntaxError", "can't open file")
 

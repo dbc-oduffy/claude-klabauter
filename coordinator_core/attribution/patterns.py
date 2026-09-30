@@ -24,6 +24,7 @@ PATTERNS: dict[str, re.Pattern] = {
     "reviewer_finding": re.compile(r"\breviewer finding\b", re.IGNORECASE),
     "review_corrected": re.compile(r"\bREVIEW-CORRECTED\b", re.IGNORECASE),
     # BREAK-CLASS only counts as attribution when tied to a persona/review
+    # token in the same comment — bare doctrine usage must not trip.
     "break_class_attributed": re.compile(
         rf"\bBREAK-CLASS\b(?=.{{0,40}}(?:{_PERSONA_ALT}|review|finding))"
         rf"|(?:{_PERSONA_ALT}|review|finding).{{0,40}}\bBREAK-CLASS\b",

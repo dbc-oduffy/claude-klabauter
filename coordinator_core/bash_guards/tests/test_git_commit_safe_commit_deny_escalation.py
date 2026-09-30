@@ -495,6 +495,7 @@ def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
     assert _verdict(cmd) == "rewrite"
     assert not [a for a in spawned if "diff" in a], spawned
     # Pin the pre-existing cost too, so a REGRESSION that adds a fourth
+    # spawn to this path is caught by the row that measures the path.
     assert len(spawned) == 3, spawned
 
 
@@ -540,7 +541,15 @@ def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path)
     assert " -- <paths>" in reason
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-15-blanket-gits-proffer-the-scoped-commit-helper.md)
+# -- the worktree-union escalation predicate that closes the `-a` hole the
+# two index-based predicates above deliberately exclude (PM Ruling 2,
 # finding 6). NARROWED per PM ruling: gated behind `_is_hazard_repo`, so
+# every row below monkeypatches that discriminator explicitly rather than
+# relying on a real fleet-registry match against a `tmp_path` repo, which
+# can never itself be a registered hazard repo.
+# ---------------------------------------------------------------------------
 
 
 def _force_hazard(monkeypatch, is_hazard: bool) -> None:
@@ -845,3 +854,27 @@ def test_compound_scoped_trailing_pathspec_matches_across_m_and_f_heredoc_shapes
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
     assert _verdict(cmd) == "none"
+
+
+@pytest.mark.parametrize(
+    "commit_flags, verdict, reason_key",
+    [
+        ('-m "x"', "rewrite", "additionalContext"),
+        ("-q -F - <<'EOF'\nsubject\n\nbody\nEOF", "deny", "permissionDecisionReason"),
+    ],
+    ids=["-m", "-F"],
+)
+def test_compound_unscoped_commit_is_caught_by_the_real_predicate_for_m_and_f(
+    tmp_path, commit_flags, verdict, reason_key
+):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "foreign.txt")
+    cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
+    assert _verdict(cmd) == verdict
+    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    assert "no scope" in out["hookSpecificOutput"][reason_key]
+    if "-F" in commit_flags:
+        scoped_flags = commit_flags.replace(" -F -", " -F - -- own.txt", 1)
+    else:
+        scoped_flags = commit_flags + " -- own.txt"
+    assert _verdict(_compound_cmd(repo, ["own.txt"], scoped_flags)) == "none"

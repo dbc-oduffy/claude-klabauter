@@ -668,6 +668,27 @@ def _tag_elision(result: dict[str, Any], elision_resolution) -> dict[str, Any]:
     return {**result, "elision_resolution": elision_resolution}
 
 
+def _reanchor_repo_basename(artifact_path: str, repo_root: Path) -> Optional[str]:
+    """Repo-relative form of a `/<repo-basename>/<rest>` (or bare
+    `<repo-basename>/<rest>`) paste, when the path is absent literally and
+    `<rest>` exists under `repo_root`; else `None`.
+
+    The shape is relative-looking on Windows but absolute on POSIX, so it
+    must be tried BEFORE the absolute-containment refusal or POSIX refuses
+    it as out-of-repo. A `..` segment in `<rest>` never re-anchors.
+    """
+    candidate = Path(artifact_path)
+    literal = candidate if candidate.is_absolute() else repo_root / candidate
+    if _literal_hit(literal):
+        return None
+    segments = [seg for seg in artifact_path.replace("\\", "/").split("/") if seg]
+    if len(segments) < 2 or segments[0] != repo_root.name or ".." in segments[1:]:
+        return None
+    if not _literal_hit(repo_root.joinpath(*segments[1:])):
+        return None
+    return "/".join(segments[1:])
+
+
 def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     """`artifact.{path,classification,resolution,frontmatter}` — the one
     resolver `pickup_brief` owns (§ Design, "one rule, one home"); C11
@@ -689,6 +710,9 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     # second, parallel addressing scheme: every tier below joins back onto
     # `repo_root`, and `_is_safe_elision_path` refuses an absolute outright,
     # so an un-normalized absolute silently bypassed all of them.
+    reanchored = _reanchor_repo_basename(artifact_path, repo_root)
+    if reanchored is not None:
+        artifact_path = reanchored
     candidate = Path(artifact_path)
     if candidate.is_absolute():
         resolved_abs = assert_in_repo_root(candidate, repo_root)
@@ -4039,7 +4063,11 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     """Computes the pickup decision object for one artifact — exactly the
     kept-set keys (§ pickup oracle), nothing more. `claim_at_brief=True`
     (single-artifact invocation) takes the brief-stage claim; an
-    ` AND `-joined survey never does (`brief_multi` passes False)."""
+    ` AND `-joined survey never does (`brief_multi` passes False). The claim
+    enrols the artifact into this session's held set, so the next `/handoff`
+    without an explicit predecessor supersedes it. The contract is at
+    `docs/wiki/baton-lifecycle.md` § "A single-path brief is a pickup, not a
+    read"."""
     root = repo_root if repo_root is not None else resolve_repo_root()
     if root is None:
         raise _TransportFailure("no enclosing git worktree")
@@ -4602,6 +4630,26 @@ def _reassemble_bullet_lines(artifact_arg: str) -> str:
     return " AND ".join(paths)
 
 
+#: Ceiling on the artifact paths one `brief`/`apply`/`drop` argument may fan
+#: out to. N brace groups of k alternatives expand to k^N paths, each of which
+#: `brief_multi` runs through its own claim/resolution machinery, so an
+#: uncapped malformed multi-brace argument is an amplification the direct
+#: ` AND ` form lacks. Well above any hand-typed batch.
+MAX_EXPANDED_ARTIFACTS = 64
+
+
+class ArtifactFanOutError(ValueError):
+    """An artifact argument expands to more than `MAX_EXPANDED_ARTIFACTS` paths."""
+
+
+def _fan_out_error(count_floor: int) -> ArtifactFanOutError:
+    return ArtifactFanOutError(
+        f"artifact argument expands to more than {MAX_EXPANDED_ARTIFACTS} paths "
+        f"(reached {count_floor}) -- split it into smaller batches or trim the "
+        "brace groups"
+    )
+
+
 def _expand_braces(artifact_arg: str) -> list[str]:
     """Expand ONE `PREFIX{a,b,c}SUFFIX` brace group into N literal paths.
 
@@ -4664,6 +4712,8 @@ def _expand_braces(artifact_arg: str) -> list[str]:
     for alt in alternatives:
         combined = prefix + alt.strip() + suffix
         expanded.extend(_expand_braces(combined))
+        if len(expanded) > MAX_EXPANDED_ARTIFACTS:
+            raise _fan_out_error(len(expanded))
     return expanded
 
 
@@ -4705,6 +4755,10 @@ def split_artifact_args(artifact_arg: str) -> list[str]:
     newline-separated bullet list is then reassembled into the ` AND `-joined
     form (`_reassemble_bullet_lines`) before the split below runs, so
     bullets, `AND`, and brace groups all compose freely.
+
+    Raises `ArtifactFanOutError` when the total expansion exceeds
+    `MAX_EXPANDED_ARTIFACTS`; `_expand_braces` aborts as soon as a partial
+    result crosses the cap, so k^N groups never materialise.
     """
     working = _reassemble_bullet_lines(_strip_aside(artifact_arg))
     parts = [p.strip() for p in _ARTIFACT_JOIN_RE.split(working)]
@@ -4714,6 +4768,8 @@ def split_artifact_args(artifact_arg: str) -> list[str]:
     expanded: list[str] = []
     for path in paths:
         expanded.extend(_expand_braces(path))
+        if len(expanded) > MAX_EXPANDED_ARTIFACTS:
+            raise _fan_out_error(len(expanded))
     return expanded
 
 
@@ -4871,6 +4927,9 @@ def main(argv: list[str]) -> int:
 
     try:
         results = brief_multi(artifact_path, decisions, no_claim=no_claim)
+    except ArtifactFanOutError as exc:
+        print(f"pickup-assemble: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except _TransportFailure as exc:
         # Transport failure: compute never ran, so nothing goes on stdout —
         # the exit code is the only evidence (completion-evidence contract,

@@ -1,5 +1,11 @@
+# test_name_ladder — pins coordinator_core.session.name_ladder.resolve_name
 # in isolation, plus the DRIFT-IMPOSSIBLE property this extraction exists
+# for: session-claim-cli.py's `_render_claimant_name` and dispatch_checks.
+# py's `_resolve_owner_writer_name` both delegate rung/reason resolution to
+# this module, so they cannot answer differently for the same input again
+# (state/debt-backlog/2026-09-01-shared-name-resolution-ladder-for-sessio-
 # 026b33fcd43d.yaml). Each surface's own RENDERING (markers, prose, byte
+# budget) is pinned by its own test suite, not here.
 from __future__ import annotations
 
 import importlib.machinery

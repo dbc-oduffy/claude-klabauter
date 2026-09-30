@@ -54,6 +54,7 @@ from coordinator_core.install.door_install import is_native_image as _is_native_
 
 _FORWARDER_SUFFIXES = ("", ".exe")
 
+# Suffixes whose file is a native executable, launched bare. A suffix is a
 # SUFFICIENT tell and never a necessary one -- see `_is_native_image`.
 _NATIVE_SUFFIXES = (".exe",)
 

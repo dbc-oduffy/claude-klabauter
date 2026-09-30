@@ -19,9 +19,9 @@ two tests that pinned ITS Guard-2 behaviour directly —
 end-to-end blocker-read-failure site) — retire with it, along with their
 now-unused `_make_closing_only_repo`/`_git`/`_init_repo` fixture scaffolding.
 The remaining tests below pin `_handoff_session_live` and
-`_get_handoff_consumed_by`/`_parse_handoff_consumed_by` directly — those
+`_get_handoff_claimed_by`/`_parse_handoff_claimed_by` directly — those
 helpers have live production consumers outside this module (see
-`_get_handoff_consumed_by`'s own docstring) and are unaffected by the cut.
+`_get_handoff_claimed_by`'s own docstring) and are unaffected by the cut.
 """
 
 from __future__ import annotations
@@ -51,58 +51,58 @@ def test_handoff_session_live_surfaces_note_on_read_failure(tmp_path: Path) -> N
 
     assert is_live is True, "must stay conservative-live on read failure"
     assert note is not None, "must surface a note distinguishing this from a clean None"
-    assert "_get_handoff_consumed_by raised" in note
+    assert "_get_handoff_claimed_by raised" in note
     assert "FileNotFoundError" in note
 
 
-def test_get_handoff_consumed_by_contract_unchanged_on_read_failure(
+def test_get_handoff_claimed_by_contract_unchanged_on_read_failure(
     tmp_path: Path, capsys
 ) -> None:
     missing_path = str(tmp_path / "does-not-exist.md")
 
-    val = cov._get_handoff_consumed_by(missing_path)
+    val = cov._get_handoff_claimed_by(missing_path)
 
     assert val is None
     captured = capsys.readouterr()
-    assert "_get_handoff_consumed_by" in captured.err
+    assert "_get_handoff_claimed_by" in captured.err
     assert "FileNotFoundError" in captured.err
 
 
-def test_parse_handoff_consumed_by_reads_claimed_by(tmp_path: Path) -> None:
+def test_parse_handoff_claimed_by_reads_claimed_by(tmp_path: Path) -> None:
     handoff = tmp_path / "claimed.md"
     handoff.write_text("---\nclaimed_by: session-new\n---\nBody.\n")
 
-    assert cov._parse_handoff_consumed_by(str(handoff)) == "session-new"
+    assert cov._parse_handoff_claimed_by(str(handoff)) == "session-new"
 
 
-def test_parse_handoff_consumed_by_reads_consumed_by(tmp_path: Path) -> None:
+def test_parse_handoff_claimed_by_reads_consumed_by(tmp_path: Path) -> None:
     handoff = tmp_path / "consumed.md"
     handoff.write_text("---\nconsumed_by: session-old\n---\nBody.\n")
 
-    assert cov._parse_handoff_consumed_by(str(handoff)) == "session-old"
+    assert cov._parse_handoff_claimed_by(str(handoff)) == "session-old"
 
 
-def test_parse_handoff_consumed_by_prefers_claimed_by_when_both_present(
+def test_parse_handoff_claimed_by_prefers_claimed_by_when_both_present(
     tmp_path: Path,
 ) -> None:
     consumed_first = tmp_path / "consumed-first.md"
     consumed_first.write_text(
         "---\nconsumed_by: session-old\nclaimed_by: session-new\n---\nBody.\n"
     )
-    assert cov._parse_handoff_consumed_by(str(consumed_first)) == "session-new"
+    assert cov._parse_handoff_claimed_by(str(consumed_first)) == "session-new"
 
     claimed_first = tmp_path / "claimed-first.md"
     claimed_first.write_text(
         "---\nclaimed_by: session-new\nconsumed_by: session-old\n---\nBody.\n"
     )
-    assert cov._parse_handoff_consumed_by(str(claimed_first)) == "session-new"
+    assert cov._parse_handoff_claimed_by(str(claimed_first)) == "session-new"
 
 
-def test_get_handoff_consumed_by_reads_both_vocabularies(tmp_path: Path) -> None:
+def test_get_handoff_claimed_by_reads_both_vocabularies(tmp_path: Path) -> None:
     claimed = tmp_path / "claimed.md"
     claimed.write_text("---\nclaimed_by: session-new\n---\nBody.\n")
     consumed = tmp_path / "consumed.md"
     consumed.write_text("---\nconsumed_by: session-old\n---\nBody.\n")
 
-    assert cov._get_handoff_consumed_by(str(claimed)) == "session-new"
-    assert cov._get_handoff_consumed_by(str(consumed)) == "session-old"
+    assert cov._get_handoff_claimed_by(str(claimed)) == "session-new"
+    assert cov._get_handoff_claimed_by(str(consumed)) == "session-old"

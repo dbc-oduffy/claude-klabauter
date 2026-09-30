@@ -24,27 +24,11 @@ did:
     already-ported ``coordinator_core.session_ledger.aggregate_chain_loe.main``
     (was: ``bash aggregate-chain-loe.sh --terminal-handoff <path> --format
     yaml-frontmatter``).
-  - AC4 rollup-sentence render → PATH-first shim check (``shutil.which``),
-    THEN an IN-PROCESS call to the already-ported
+  - AC4 rollup-sentence render → an IN-PROCESS call to the already-ported
     ``coordinator_core.ops.coordinator_render_rollup.main`` (was: PATH-first
     ``command -v coordinator-render-rollup.sh``, then sibling, then ``bash
-    <resolved> <deliverable_id> <repo_root>``). The PATH-first rung is
-    PRESERVED (not dropped) — it exists specifically to let a test PATH-
-    prepend a stub executable named ``coordinator-render-rollup.sh``
-    (coordinator_render_rollup.py's own docstring: "PATH-first (enables test
-    shims)"); an always-in-process call would have silently broken that
-    testability path — caught by DoE's own
-    ``coordinator/bin/tests/test-complete-entry-rollup.sh`` Test A during this
-    port's own verification. Production runs (no such shim on PATH) always
-    take the faster in-process branch. 2026-07-21: the shim invocation itself
-    dropped its hardcoded ``bash`` prefix — the resolved shim path is now
-    exec'd directly (``subprocess.run([shim, dlv_id, repo_root], ...)``),
-    letting the OS resolve the interpreter via the shim's own shebang line
-    (the sanctioned polyglot-trampoline pattern), rather than this module
-    hardcoding bash as the interpreter. Byte-identical stdout capture for the
-    existing POSIX ``#!/usr/bin/env bash`` test shim (chmod 0o755 + shebang
-    already required for direct exec); this module no longer needs bash on
-    PATH at all for its own bridges.
+    <resolved> <deliverable_id> <repo_root>``). Tests stub
+    ``_render_rollup_mod.main`` via monkeypatch.
   - Step 2.6.5a single-session LoE (was: ``bash coordinator-session-loe.sh
     --format yaml-frontmatter``) is now a fully native, in-process
     reimplementation (``_native_single_session_loe`` /
@@ -128,7 +112,6 @@ MUTATES = ["archive/completed/**/*.md"]
 import io
 import os
 import re
-import shutil
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -136,13 +119,12 @@ from datetime import date
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
-from coordinator_core.chain_attribution import bulk_grep_attributed_shas
+from coordinator_core.chain_attribution import bulk_grep_attributed_shas, shas_touching_paths
 from coordinator_core.completion_record_integrity import (
     REASON_PLACEHOLDER,
     hollow_reasons_for_fields,
 )
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
-from coordinator_core.launchable import resolve_launchable, which_path_ordered
 from coordinator_core.ops._git_root_util import git_root
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.ceremony.wsc_disposition import (
@@ -984,32 +966,6 @@ def _resolve_loe_block(disposition: str, consumed_handoff: str) -> str:
     return loe if loe else _NULL_LOE_BLOCK
 
 
-def _which_render_rollup_shim() -> str:
-    """PATH lookup for the ``coordinator-render-rollup.sh`` test shim.
-
-    `shutil.which("coordinator-render-rollup.sh")` never finds it on
-    Windows: CPython's `shutil.which` only probes `cmd + ext` for each
-    `PATHEXT` entry when `cmd` itself doesn't already end in one of those
-    extensions, and `.sh` is not a `PATHEXT` member — so it silently builds
-    candidates like `coordinator-render-rollup.sh.COM`,
-    `coordinator-render-rollup.sh.EXE`, ... none of which exist, and never
-    even tries the literal `coordinator-render-rollup.sh` filename. That
-    made the PATH-first shim rung this function exists to preserve (see
-    module docstring) permanently unreachable on Windows — a shim any test
-    prepends to PATH is silently never found, and every call falls through
-    to the in-process branch regardless of what a test set up.
-
-    Delegates to the shared `coordinator_core.launchable.which_path_ordered`
-    walk with `extensions=[]` (bare-name-only — the filename already carries
-    its own `.sh` extension, so no `PATHEXT` candidate should ever be
-    appended to it). Same underlying CPython gap `_resolve_claude_bin` in
-    `coordinator/bin/claude-author.py` guards against; that site can't import this
-    module (installed standalone) and keeps its own PATHEXT-aware walk
-    in sync by hand — see its docstring.
-    """
-    return which_path_ordered("coordinator-render-rollup.sh", extensions=[]) or ""
-
-
 def _plan_frontmatter_field(plan_file: str, key: str) -> str:
     """Reads ONE `<key>:` frontmatter line out of `plan_file` — the shared
     single-open reader behind both `_resolve_governing_deliverable_id`
@@ -1145,45 +1101,61 @@ def _git_log_runner_for_commits(argv: List[str], cwd: Optional[str]) -> tuple[in
     return result.returncode, result.stdout, result.stderr
 
 
-def _resolve_session_commits(repo_root: str, sid: str, since: str) -> List[str]:
+def _entry_scope_paths(repo_root: str, governing_plan_slug: str, consumed_handoff: str) -> frozenset:
+    """Repo-relative forward-slash paths that identify this chain's own work:
+    the governing plan and the consumed handoff. A non-own commit touching one
+    of them is a peer that committed this session's work under its own id."""
+    paths = set()
+    if governing_plan_slug:
+        paths.add(f"docs/plans/{governing_plan_slug}.md")
+    if consumed_handoff:
+        handoff = consumed_handoff
+        if os.path.isabs(handoff):
+            try:
+                handoff = os.path.relpath(handoff, repo_root)
+            except ValueError:
+                return frozenset(paths)
+        paths.add(handoff.replace(os.sep, "/"))
+    return frozenset(paths)
+
+
+def _resolve_session_commits(
+    repo_root: str, sid: str, since: str, scope_paths: frozenset = frozenset()
+) -> List[str]:
     """C3 — `commits:` is COMPUTED from this session's own attributed git
-    history, not left permanently `[]`: `completion.reconcile_commits` (the
-    only writer this field ever had) was killed 2026-08-23, and nothing
-    replaced it — every entry since has shipped `commits: []` regardless of
-    what actually landed.
+    history, not left permanently `[]`.
 
-    Wraps `chain_attribution.bulk_grep_attributed_shas`, which returns a
-    `List[str]` in `git log`'s own emission order (oldest-landed-last per
-    git's newest-first default; see that function's own docstring) — widened
-    from `FrozenSet[str]` for this task after a review found neither of its
-    two consumers depended on set-ness.
+    Own commits: `chain_attribution.bulk_grep_attributed_shas` — the commits
+    whose message carries this session's `Session-Id:` line, in `git log`'s own
+    emission order (newest first). One `--grep` walk, no per-commit diff.
 
-    `range_str="HEAD"` — branch-agnostic by design. `origin/main..HEAD` was
-    considered and rejected (this plan's own Problem statement): empty on a
-    close run from `main` itself, and wrong the moment a repo's `origin/main`
-    ref is stale relative to what actually landed.
+    Peer commits: a peer session can commit this session's working-tree work
+    under its own Session-Id, which that match cannot see. When `scope_paths` is
+    non-empty, `chain_attribution.shas_touching_paths` runs ONE pathspec-limited
+    walk and every commit it returns that is not own is named on stderr as a
+    WARN — never folded into `commits:` and never a gate on the close. An empty
+    scope spawns nothing. A `--name-only` walk over the window is refused: it
+    diffs every commit in it (measured 0.6 s for one day of this repo, over the
+    500 ms bar), where the pathspec walk costs a fraction of that.
+
+    `range_str="HEAD"` — branch-agnostic by design; `origin/main..HEAD` is empty
+    on a close run from `main` and wrong when `origin/main` is stale.
 
     `since` is the caller's ONE resolved date for this run (`main()`'s
-    `yyyymmdd`, ISO ``YYYY-MM-DD`` — a valid `git --since` value) — the
-    entry's own `created` date, so a `--for-date` backfill bounds the walk
-    to the day being backfilled, not today.
+    `yyyymmdd`, ISO ``YYYY-MM-DD``) — the entry's own `created` date, so a
+    `--for-date` backfill bounds the walk to the day being backfilled.
 
-    ONE git spawn total: `bulk_grep_attributed_shas` issues exactly one
-    `git log` call via the injected runner below; this wrapper adds no
-    second call. The amplification gate
-    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
-    refuses a per-item spawn shape — there is no per-item loop here to
-    refuse.
+    At most TWO git spawns, a constant — there is no per-item loop for the
+    amplification gate
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`) to refuse.
 
-    Fail-open at every stage, matching every other computed field in this
-    CLI: a malformed `sid` (rejected inside `bulk_grep_attributed_shas`
-    itself), a non-zero `git log` rc, or any unexpected exception from the
-    walk all degrade to `[]` with a `skip:` stderr line — a commit list is a
-    record of what happened, never a gate on whether the close proceeds, so
-    nothing here may abort `main()`.
+    Fail-open at every stage: a malformed `sid`, a non-zero `git log` rc, or any
+    unexpected exception degrades to `[]` (with a `skip:` stderr line for the
+    exception) — a commit list is a record of what happened, never a gate on
+    whether the close proceeds.
     """
     try:
-        return bulk_grep_attributed_shas(
+        own = bulk_grep_attributed_shas(
             "HEAD", sid, repo_root, _git_log_runner_for_commits, since=since
         )
     except Exception:
@@ -1192,6 +1164,30 @@ def _resolve_session_commits(repo_root: str, sid: str, since: str) -> List[str]:
             file=sys.stderr,
         )
         return []
+    try:
+        own_set = frozenset(own)
+        peers = [
+            sha
+            for sha in shas_touching_paths(
+                "HEAD", scope_paths, repo_root, _git_log_runner_for_commits, since=since
+            )
+            if sha not in own_set
+        ]
+    except Exception:
+        print(
+            f"skip: _resolve_session_commits: shas_touching_paths(...) failed: {sys.exc_info()[1]}",
+            file=sys.stderr,
+        )
+        return own
+    if peers:
+        print(
+            f"WARN: {len(peers)} commit(s) not carrying this session's "
+            "Session-Id touched this chain's plan/handoff and are NOT in commits: "
+            f"{', '.join(sha[:8] for sha in peers)} -- a peer session may "
+            "have committed this session's work under its own id; add them by hand if so",
+            file=sys.stderr,
+        )
+    return own
 
 
 def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
@@ -1205,39 +1201,6 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     dlv_id = _resolve_governing_deliverable_id(repo_root, governing_plan_slug)
     if not dlv_id:
         return ""
-
-    # PATH-first-shim preservation: the bash oracle resolved the render helper
-    # PATH-first (`command -v coordinator-render-rollup.sh`), THEN sibling —
-    # explicitly "enables test shims" per coordinator_render_rollup.py's own
-    # module docstring. An always-in-process call would silently drop that
-    # testability path (a real scope-drop per the porter-brief addendum rule
-    # 7, caught by DoE's own test-complete-entry-rollup.sh Test A, which PATH-
-    # prepends a stub `coordinator-render-rollup.sh` and expects it honored).
-    # Preserve it: PATH-first subprocess shim wins when present (mirrors the
-    # oracle's own `command -v` resolution + `bash "$_RENDER_HELPER" ...`
-    # invocation exactly); otherwise fall through to the faster in-process
-    # call to the already-ported Python module (the production path, where no
-    # such shim exists on PATH).
-    shim = _which_render_rollup_shim()
-    if shim:
-        # Bare shebang exec was a Windows regression
-        # (the retired oracle explicitly named `bash`; a bare-path exec has no
-        # shebang mechanism on Windows and silently degrades to an empty
-        # rollup). Resolve the interpreter explicitly via the shared
-        # `resolve_launchable` seam instead of relying on shebang resolution.
-        try:
-            result = subprocess.run(
-                [*resolve_launchable(shim), dlv_id, repo_root],
-                capture_output=True,
-                text=True,
-                timeout=_SUBPROCESS_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                **_CREATIONFLAGS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"skip: _resolve_rollup_sentence: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-            return ""
-        return (result.stdout or "").strip()
 
     buf = io.StringIO()
     try:
@@ -1506,7 +1469,12 @@ def main(argv: List[str]) -> int:
         # _parse_args' own gate) always wins over a computed result; a live
         # close has no seed and falls through to the computed walk, which
         # itself degrades to `[]`.
-        commits = seeded_commits if seeded_commits else _resolve_session_commits(repo_root, sid, yyyymmdd)
+        commits = seeded_commits if seeded_commits else _resolve_session_commits(
+            repo_root,
+            sid,
+            yyyymmdd,
+            _entry_scope_paths(repo_root, governing_plan_slug, consumed_handoff),
+        )
 
     if for_date is not None:
         # `--for-date` is the explicit backfill/finalize leg -- reconstructing

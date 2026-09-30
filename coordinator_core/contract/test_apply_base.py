@@ -69,7 +69,11 @@ class TestResolveCli:
         assert table == _DISPATCH_TABLE
 
 
+# ---------------------------------------------------------------------------
+# (a2) resolve_op / assert_dispatchable — resolve_cli's exact refusal shape,
 # for `directives[].op`. `ASSEMBLER_DISPATCHABLE` is monkeypatched per test
+# (it is a MappingProxyType — immutable by design) rather than mutated.
+# ---------------------------------------------------------------------------
 
 _OP_DISPATCH_TABLE = {"handoff.stamp_phase": _handler_ok, "handoff.author_fork": _handler_ok}
 _OP_DISPATCH_TABLE__SUBJECT_CLASS = "op-name"
@@ -702,7 +706,10 @@ class TestExecuteDirectivesAdvisory:
         assert "advisory_failures" not in report
 
     def test_earlier_advisory_failure_survives_a_later_partial_mutation(self, tmp_path):
+        # An advisory directive fails first (recorded, run continues), then
         # a later NON-advisory directive fails (returns PARTIAL_MUTATION).
+        # The earlier advisory failure must still be named in the report —
+        # dropping it here is exactly the silent-swallow AC4 exists to stop.
         directives = [
             {"id": "d1", "cli": "raising-cli", "advisory": True},
             {"id": "d2", "cli": "raising-cli"},

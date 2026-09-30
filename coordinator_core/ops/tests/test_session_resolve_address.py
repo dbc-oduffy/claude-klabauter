@@ -38,6 +38,10 @@ def test_reachable_shape(monkeypatch):
     assert result["outcome"] == "reachable"
     assert result["session_id"] == "sid-a"
     # Ref-qualified UNCONDITIONALLY, even for a uniquely-named sole
+    # candidate: the harness refuses a bare name for a cross-session
+    # SendMessage target (reachability's module docstring, measured live
+    # 2026-08-13). Matched by shape rather than a literal digest so the
+    # test pins the contract, not a re-typed sha256 of the fixture socket.
     assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", result["address"])
     assert result["reason"] is None
     assert result["candidates"] == []

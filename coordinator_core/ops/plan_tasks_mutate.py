@@ -799,11 +799,33 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # RETIRED 2026-07-29 — `_PM_APPROVAL_OFFER` lived here and is deliberately
 # `_GROUPING_APPROVAL_HINT` from schema_validate, which is written as an
 
+# LEGACY plans (no `grouping_approvals` key at all) have no groupings and no
 # `pm_utterance` field anywhere in their schema — `_GROUPING_APPROVAL_HINT`
+# above describes machinery that does not exist on the plan this branch
+# fires for (Review: code-reviewer Finding 4).
+#
 # REWRITTEN 2026-08-12 (DoE ruling, exit 1 —
+# cross-repo/inbox/2026-08-12-coordinator-content-repo-em-legacy-refusal-honesty-ruling.md;
 # tripwire A-REFUSAL-MAY-NOT-CLAIM-IMPOSSIBILITY-IT-CANNOT-ENFORCE). The
+# prior text carried the governed branch's impossibility claim ("there is
+# deliberately no command that satisfies this from inside the session") onto
+# a branch where a command does: `pm_approved` is a per-row boolean the same
+# agent can set via the `stamp` verb. The claim was false, and false in the
+# direction that costs the honest party everything and the self-certifying
+# party one extra call — example-cockpit-repo-em read it as impossibility, could
+# not record a verbatim PM ruling, and took a divergence (PM-ruled wont_do in
+# plan prose, spine row still `open`).
+#
+# So the protection moves from the mechanism layer to the honesty layer,
+# which is the strongest thing a self-settable boolean can carry: the
+# assertion recording the field MAKES leads, and the field is named after it,
+# never instead of it. Self-certification becomes a lie an agent has to tell
+# rather than a door it cannot find. This is NOT a relaxation into a
+# missing-field nit — "set this field to proceed" is the voice the retired
 # `_PM_APPROVAL_OFFER` banner below correctly killed, because it teaches a
 # well-meaning EM to satisfy the field. `_GROUPING_APPROVAL_HINT` above is
+# untouched by this ruling: its impossibility claim is TRUE, and the
+# membership digest is what makes it true.
 _LEGACY_PM_APPROVAL_HINT = (
     "Recording pm_approved: true on this row asserts that the PM ratified "
     "this specific cut. Nothing in this session can verify that, so stamping "
@@ -819,8 +841,21 @@ _DISPOSITION_DETAIL_OFFER = (
     "--disposition-detail \"<why>\"), then re-run resolve"
 )
 
+# `case_against` (leg 1, 2026-08-06, plan
+# docs/plans/2026-08-06-deferrals-carry-both-sides.md): the SAME two
 # scope-cut dispositions as `_PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS`
+# minus `spun_off` — nothing leaves the corpus on a spinoff, so there is
+# no scope cut to argue against, and widening this trigger set would
+# re-open a boundary the PM already ruled on 2026-08-05. Where
+# `disposition_detail` carries the case FOR closing (the EM's own
+# reasoning), `case_against` carries the case AGAINST — the strongest
+# honest argument for doing the work now — so a deferral surfaced to the
+# PM is a real decision, not an ID list the EM has already convinced
 # itself of. The vendored schema (1.6.0) makes this field REQUIRED via
+# an `allOf` conditional on the same trigger set, but is presence-only /
+# non-hard-failing at the schema layer (it checks the key exists, not
+# that its prose is non-vacuous) — this op is the hard-rejection
+# enforcement leg asked of claude-klabauter by that plan's C8 memo.
 _PLAN_TASKS_CASE_AGAINST_REQUIRED_DISPOSITIONS = frozenset({'backlogged', 'wont_do'})
 
 _CASE_AGAINST_OFFER = (
@@ -830,7 +865,9 @@ _CASE_AGAINST_OFFER = (
 )
 
 
+# Fixed, Path(__file__)-relative script location — mirrors
 # coordinator_core.workday_complete.apply._CLI_SCRIPT_ROOT's established
+# in-process-CLI-load convention (never a brief/param-derived import target).
 _HARVEST_CLI_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-harvest-deferrals.py"
 )
@@ -1178,8 +1215,35 @@ def _resolve(
         if result.status is LocateStatus.ABSENT:
             raise MutateAbort("resolve: task spine is absent — nothing to resolve")
 
+        # RETIRED 2026-08-06 (D5 ordering-deadlock fix, queue
+        # state/bug-backlog/2026-08-06-plan-tasks-mutate-d5-ordering-
+        # deadlocks-c223a7208a5a.yaml) — a PRE-write refusal used to live
+        # here: "refuse before writing a new disposition onto a spine whose
         # EXISTING row order already violates D5", checked against
+        # `old_text` as a precondition on the spine's on-disk state.
+        #
+        # That precondition is what made the deadlock this fix exists for:
+        # a spine reaches "earlier rows coded, one open row trailing them"
+        # by ordinary forward progress (code C1, then C2, ... leaving the
+        # last row open) — but the do-suborder rule (open must sort above
+        # coded) calls that same, ordinary spine ALREADY invalid, so this
+        # precondition refused every subsequent resolve call on it
+        # regardless of what the call was trying to do. There was no
+        # un-resolve verb and no reorder verb, so no edit could satisfy the
+        # precondition before making the write it was meant to gate.
+        #
+        # It is also no longer NEEDED: `_reposition_rows_for_d5` below now
+        # runs a full stable sort of the batch's post-mutation `rows` by
+        # the identical rank tuple this precondition checked, on every
+        # resolve call — so the write this precondition used to guard
+        # against ("compounding an already-invalid ordering") cannot
+        # happen anymore; the write always ends in a D5-valid order
+        # regardless of what order the spine started in. Removing this
         # precondition does not relax D5's invariant on the RESULTING
+        # spine — that invariant is still enforced (the post-mutation
+        # check below), just no longer ALSO demanded of the spine as it
+        # stood before this call, which is the half of the old contract
+        # that was unsatisfiable.
         rows = _parse_rows_or_abort(result.body, "resolve")
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
@@ -1188,7 +1252,13 @@ def _resolve(
             if rows_by_id.get(r["id"]) is None:
                 raise MutateAbort(f"resolve: task id not found: {r['id']!r}")
 
+        # Authorization gate: a CLOSED disposition is a scope decision and
+        # needs the PM's recorded assent. resolve never grants that itself —
+        # it only checks — and refuses without offering any way to satisfy
+        # the check from inside the session (see the retired
         # `_PM_APPROVAL_OFFER` banner above for why).
+        #
+        # Which signal carries the assent depends on the plan:
         #   - GOVERNED (frontmatter carries the `grouping_approvals` key at
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False

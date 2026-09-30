@@ -329,7 +329,9 @@ def test_receipt_graceful_absent(tmp_path):
     assert is_not_yet_run(receipt), "Absent receipt must return NOT_YET_RUN_SENTINEL"
 
 
+# ---------------------------------------------------------------------------
 # C1 — STEP_2_6_3 chain-slug case-a: _read_started_at unit tests
+# ---------------------------------------------------------------------------
 
 
 def test_read_started_at_present(tmp_path):
@@ -363,10 +365,14 @@ def test_read_started_at_empty(tmp_path):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
 # C1 — STEP_2_6_3: integration tests (positive / negative / absence)
+# ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
 # C3 — STEP_2_96: _read_completeness_mirror unit tests
+# ---------------------------------------------------------------------------
 
 _V1_MIRROR_OPEN = """\
 schema: completeness-checklist-mirror-v1
@@ -413,7 +419,12 @@ items:
 # STEP_1B/STEP_2_4B D-node emission integration test
 
 
+# ---------------------------------------------------------------------------
+# New direct unit tests for _session_added_plans
 # Findings 6, 7, 8, 9 (P2/nit): cover --diff-filter=A ADDED-not-MODIFIED
+# semantic, --since temporal boundary, graceful-empty on non-zero git exit,
+# and dedup logic — none of these were exercised by the existing positive tests.
+# ---------------------------------------------------------------------------
 
 
 def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
@@ -498,7 +509,9 @@ def test_read_started_at_whitespace_only(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
 # C1 — STEP_2_67A: _scan_session_scratch unit tests
+# ---------------------------------------------------------------------------
 
 
 def test_scan_session_scratch_graceful_negative_no_started_at(git_repo):
@@ -690,13 +703,26 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
     )
 
 
+# ---------------------------------------------------------------------------
 # C1 — STEP_2_67A: integration tests (Branch 11 flip via full handler invoke)
+# ---------------------------------------------------------------------------
 
 
 # pickup.handoff points at a temporally-adjacent CONCURRENT session's
 
 
+# ---------------------------------------------------------------------------
+# _resolve_in_repo — direct unit tests
+#
+# Prior coverage of _resolve_in_repo came only
+# through the full resolve_session_branches -> _resolve_branches integration path (the
+# traversal/absolute regression tests below).  That proves the end-to-end
+# behavior but doesn't pin the helper's own contract, including a case no
+# integration test exercises: a `../` traversal that resolves back INSIDE
 # the repo must be ACCEPTED, not rejected — a naive "reject any candidate
+# containing .." reimplementation would silently break this and nothing in
+# the integration suite would catch it.
+# ---------------------------------------------------------------------------
 
 
 def test_resolve_in_repo_relative_in_repo_path_contained(repo):
@@ -740,12 +766,38 @@ def test_resolve_in_repo_dot_is_contained_as_root(repo):
     assert result == repo.root.resolve()
 
 
+# ---------------------------------------------------------------------------
+# Defect A regression — foreign-repo path bleed
+#
+# pickup.handoff is producer-written and NOT trusted: an absolute path
+# (or a ../ traversal) escapes worktree_root via Path.__truediv__, letting the
 # primary-path guard validate a file in a DIFFERENT repo (e.g. Example-retrieval-repo)
+# whose frontmatter even has consumed_by: <sid> — existence + consumed_by
+# alone are insufficient; containment inside worktree_root is the invariant
+# _resolve_in_repo asserts.
+#
+# Spec backlink:
+#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
+# ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Defect A regression (plural array) — foreign-repo bleed into
+# consumed_handoff_paths, the 2026-07-13 example-cockpit-repo incident shape.
+#
+# The per-source scalar guard rejected the foreign pickup.handoff, but the
 # incident receipt still carried the foreign ABSOLUTE path AND a relativized
+# phantom (foreign basename joined to worktree_root) in the PLURAL
 # consumed_handoff_paths array + STEP_2_7 stamp target.  The final-gate
+# sanitizer (_sanitize_consumed_handoffs) enforces containment + sid-ownership
+# on the MERGED set at the one point every source converges, so no
 # foreign/absolute/phantom entry can survive into the receipt or STEP_2_7 even
+# if a per-source guard is bypassed by a different source or a future refactor.
+#
+# Spec backlink:
+#   coordinator_core/ops/ceremony/branch_resolution.py :: _sanitize_consumed_handoffs
+#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
+# ---------------------------------------------------------------------------
 
 
 def test_sanitize_drops_foreign_absolute_from_merged_set(repo, tmp_path):
@@ -806,8 +858,13 @@ def test_sanitize_drops_peer_owned_in_repo_handoff(repo):
 # both the STEP_0 evidence dict AND the STEP_2_7 node's own evidence dict,
 
 
+# REMOVED 2026-07-29 (kill-list op removal): test_step_2_7_node_carries_plural_evidence_real_read_path
 # asserted the STEP_2_7 plural-evidence contract against wsc_commit._read_step_2_7_evidence,
+# its only reader. wsc_commit.py was deleted as a dead op module and that function had no
+# live counterpart in the single-pass tail, so the contract has no surviving second party.
 # The producer side (STEP_2_7 carrying consumed_handoffs_paths) is covered by
+# test_n_handoffs_both_found_live_and_archived_scalar_is_first above (Review:
+# code-reviewer 2026-07-29 — the original "still covered above" claim here was false;
 # no test asserted the STEP_2_7 node's own evidence dict until this fix).
 
 
@@ -1113,7 +1170,30 @@ _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
 )
 
 
+# ---------------------------------------------------------------------------
 # STEP_2_65C flip half + STEP_2_65B bulk-eligibility evidence (C2)
+# ---------------------------------------------------------------------------
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C2
+#
+# Coverage:
+#   (C2-a) step_2_65c_resolving_op_names_resolve — D-node names memo.transition:resolve,
+#                                                   no "Edit" instruction in its evidence
+#   (C2-b) resolve_in_reply_to_target_open        — in_reply_to target still in inbox -> "open"
+#   (C2-c) resolve_in_reply_to_target_closed       — in_reply_to target archived -> "closed"
+#   (C2-d) resolve_in_reply_to_target_unresolvable — no match anywhere -> "unresolvable"
+#   (C2-e) scan_open_memos_attaches_bulk_eligibility — _scan_open_memos composes
+#                                                       classify_bulk_eligibility per memo
+#   (C2-f) resolve_named_memo_dispositions_issues_n_calls — N named memos -> N resolve
+#                                                            calls with the right dispositions;
+#                                                            an unnamed memo stays open
+#   (C2-g) resolve_named_memo_dispositions_unknown_memo_refused — a disposition naming a
+#                                                                  memo outside open_memos
+#                                                                  is refused, no op call issued
+#   (C2-h) resolve_named_memo_dispositions_bulk_ineligible_refused — bulk request against a
+#                                                                     non-eligible memo refused,
+#                                                                     memo stays open on disk
+#   (C2-i) resolve_named_memo_dispositions_bulk_eligible_applies — a bulk request against an
+#                                                                   eligible fyi memo applies
 
 
 def test_resolve_named_memo_dispositions_unknown_memo_refused(git_repo):
@@ -1127,8 +1207,24 @@ def test_resolve_named_memo_dispositions_unknown_memo_refused(git_repo):
     assert "not one of the open memos" in results[0]["error"]
 
 
+# ---------------------------------------------------------------------------
 # WSC_DISPOSITION / WSC_CONSUMED_HANDOFF escalate-only env override
+#
+# Spec backlink: coordinator_core.ops.ceremony.wsc_disposition.resolve_env_override
+# / normalize_override_handoff, and the resulting Branch 1 override block in
+# branch_resolution._resolve_branches. Extends claude-klabauter commit
+# 1b07cded (coordinator/bin/wsc-session-disposition.py's own resolve_disposition)
+# to this SECOND, independent disposition resolver — the two resolvers must
+# behave identically on override reach, even though this module cannot import
+# the bin script's implementation (see test_env_override_shared_helper_agrees_
+# with_bin_script below for the mechanical drift check).
+#
+# Every test below explicitly monkeypatch.delenv's both env vars first (even
+# though no pre-existing test in this file sets them) so a stray operator
 # WSC_DISPOSITION/WSC_CONSUMED_HANDOFF in the ambient test-runner environment
+# can never leak into an unrelated case, and so cases in this section cannot
+# leak into each other via ambient state.
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)

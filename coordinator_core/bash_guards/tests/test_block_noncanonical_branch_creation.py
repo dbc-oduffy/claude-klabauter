@@ -115,8 +115,11 @@ class TestGitBranchRenameVsCreate:
         ],
     )
     def test_long_form_non_create_flags_allow(self, command):
+        # pre-fix, the
         # short-flags-only `_BRANCH_NON_CREATE_FLAGS` set missed every
+        # long-form spelling, so e.g. `git branch --delete
         # stray-fix-branch` was misclassified as a CREATION of
+        # `stray-fix-branch` and denied a legitimate delete.
         assert guard.check(_payload(command)) is None
 
     def test_branch_creation_with_force_flag_still_denies(self):
@@ -142,7 +145,9 @@ class TestSwitchAndUppercaseFlags:
         _reason(guard.check(_payload("git checkout -B bad")))
 
     def test_switch_long_form_create_denies(self):
+        # pre-fix,
         # `_SWITCH_CREATE_FLAGS` was `{-c, -C}` only, so `git switch
+        # --create bad-name` bypassed the guard entirely.
         _reason(guard.check(_payload("git switch --create bad-name")))
 
     def test_switch_long_form_force_create_denies(self):
@@ -165,7 +170,11 @@ class TestSanctionedLonglivedPrefixes:
 
 class TestDenyMessageRemediation:
     def test_remediation_offers_checkout_dash_b(self):
+        # pre-fix, the
+        # message offered bare `git checkout <name>`, which errors with
+        # "did not match any file(s) known to git" in the common case:
         # this deny fires while the user is CREATING a branch, so today's
+        # canonical branch usually doesn't exist as a ref yet either.
         reason = _reason(guard.check(_payload("git checkout -b bad-name")))
         assert "git checkout -b work/" in reason
 

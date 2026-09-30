@@ -308,3 +308,58 @@ def test_human_summary_line_reports_both_views(tmp_path):
     line = epi.human_summary_line(report)
     assert "static:" in line
     assert "runtime:" in line
+
+
+def _summary_for(counts_path, tmp_path):
+    (tmp_path / "empty-bin").mkdir(exist_ok=True)
+    report = epi.build_report(tmp_path / "empty-bin", counts_path)
+    return report["runtime"], epi.human_summary_line(report)
+
+
+def test_liveness_counter_file_absent_warns(tmp_path):
+    runtime, line = _summary_for(tmp_path / "never-created.jsonl", tmp_path)
+    assert runtime["counts_file_exists"] is False
+    assert runtime["last_written_utc"] is None
+    assert "WARNING: counter file absent" in line
+    assert "a quiet detector and a dead sink both look empty" in line
+
+
+def test_liveness_counter_file_present_but_empty_warns(tmp_path):
+    counts_path = tmp_path / "counts.jsonl"
+    counts_path.write_text("", encoding="utf-8")
+    runtime, line = _summary_for(counts_path, tmp_path)
+    assert runtime["counts_file_exists"] is True
+    assert runtime["total_records"] == 0
+    assert runtime["last_written_utc"] is not None
+    assert runtime["last_written_utc"].endswith("+00:00")
+    assert "WARNING: counter empty" in line
+    assert f"counter last written {runtime['last_written_utc']}" in line
+    assert "a quiet detector and a dead sink both look empty" in line
+
+
+def test_liveness_counter_file_with_records_does_not_warn(tmp_path):
+    counts_path = tmp_path / "counts.jsonl"
+    counts_path.write_text(
+        json.dumps(
+            {
+                "caller": "require_dispatch_engine_on_path",
+                "axis": "dispatch",
+                "verdict": "consistent",
+                "imported_file": "/x",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime, line = _summary_for(counts_path, tmp_path)
+    assert runtime["counts_file_exists"] is True
+    assert runtime["total_records"] == 1
+    assert runtime["last_written_utc"] is not None
+    assert f"counter last written {runtime['last_written_utc']})" in line
+    assert "WARNING" not in line
+    assert "dead sink" not in line
+
+
+def test_note_names_liveness_fields():
+    assert "counts_file_exists" in epi.NOTE
+    assert "last_written_utc" in epi.NOTE

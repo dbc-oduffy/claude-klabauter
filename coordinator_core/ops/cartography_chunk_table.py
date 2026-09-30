@@ -139,10 +139,27 @@ __all__ = [
     "write_chunk_table",
 ]
 
+#: Schema version for this op's emitted JSON artifact — always the first key
+#: written on disk (mirrors coordinator_core.distill.manifest_schema's
+#: convention, DR-228 § D6(v)). A standalone constant (not manifest_schema's
 #: SCHEMA_VERSION) because this artifact is a genuinely different shape
+#: (chunk-table, not scope/disposal/curation-status) with its own independent
+#: version lineage. This is the version emitted when `oversized_threshold` is
+#: absent — unchanged, so an absent-param call stays byte-identical to every
+#: prior run (AC1).
 SCHEMA_VERSION: int = 1
 
+#: Schema version emitted ONLY when the caller supplies `oversized_threshold`
+#: (the additive `oversized` field). Gated on the param rather than an
+#: unconditional bump: DoE's forward-version fail-loud consumer declines any
+#: run on an unrecognized schema_version, so bumping unconditionally would
+#: trip their gate on the default (no-threshold) path for zero delivered
+#: benefit — staff-eng review Finding 0, 2026-08-06.
+#:
 #: A member of `_KNOWN_SCHEMA_VERSIONS` below, so `check_schema_version`
+#: accepts an artifact this module itself just emitted — an op whose own
+#: reader rejects its own output is a latent break for the first real
+#: caller, not a deferrable gap. Adding a future version means adding it to
 #: `_KNOWN_SCHEMA_VERSIONS`, not just defining a new constant here.
 SCHEMA_VERSION_OVERSIZED: int = 2
 

@@ -25,13 +25,7 @@ duplicates) the next time someone drops a new file in either directory.
 Enumeration keeps admission auditable: every suite in SHELL_SUITES was
 read (header + a live run) before being added.
 
-RUNNER PER SUITE: some `.bats`-named files are genuine bats suites
-(`#!/usr/bin/env bats` shebang); several are plain-bash harnesses merely
-NAMED `.bats` (their own header says so, and they carry no `#!/usr/bin/env
-bats` shebang — running those under the `bats` binary fails, they must go
-through plain `bash`). The runner is pinned per-entry rather than inferred
-from extension, because the extension lies for the plain-bash-named-.bats
-population.
+RUNNER PER SUITE: pinned per-entry; only `python3` is registered.
 
 EXCLUDED SUITES (audited 2026-07-22, commented out below with reason):
   - test-seed-skill-overrides.sh — DROP-IN detection seam (Cases 9/9b/9c)
@@ -61,7 +55,7 @@ EXCLUDED SUITES (audited 2026-07-22, commented out below with reason):
 PORTABILITY: naked Python 3, no bash wrapper anywhere in this file — per
 the repo's P0 ruling (`coordinator.local.md`: structural bash is a
 correctness/performance defect). Suites are invoked via
-`subprocess.run(["bash"/"bats", path], timeout=120)` directly.
+`subprocess.run([sys.executable, path], timeout=120)` directly.
 
 DIRECTORY SELF-RESOLUTION: resolves its own directory from `__file__` (NOT
 cwd), matching run-fast-tests.py's convention — callers may invoke this via
@@ -83,30 +77,53 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parent.parent.parent
 
+# --- Slow-tier registry: surviving shell/bats suites -----------------------
 # Enumerated, not globbed — see module docstring § REGISTRY DISCIPLINE.
+# Each entry is (path-relative-to-repo-root, runner) where runner is
+# "bash" or "bats", pinned per-suite (not inferred from extension — several
+# .bats-named files are plain-bash harnesses per their own header comment).
 SHELL_SUITES = [
     ("coordinator/bin/tests/run-lineage-dag-suites.py", "python3"),
-    ("coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh", "bash"),
-    ("coordinator/bin/tests/test-cc-root-source-guard-fix.sh", "bash"),
-    ("coordinator/bin/tests/test-d1-same-commit.sh", "bash"),
     # test-seed-skill-overrides.sh — EXCLUDED, see module docstring.
     # test-self-claim-refresh-queries.sh — EXCLUDED, see module docstring.
     # test-step-number-stability.sh — EXCLUDED, see module docstring.
     # test-terminator-suite-green.sh — EXCLUDED (cascades from
+    # test-step-number-stability.sh), see module docstring.
     # test-verify-no-console-flash.sh — SUPERSEDED, see module docstring.
+    # invoking-shell-bash4-probe.test.py — RETIRED from this runner 2026-08-17,
+    # converted to `coordinator/scripts/lib/test_invoking_shell_bash4_probe.py`
+    # and collected by pytest via the `coordinator/scripts` testpaths admit. It
+    # was the last dotted `.test.py` straggler of the 2026-07-25/07-28 migration,
+    # and being outside the test tree was ALSO what made it trip
+    # `test_no_unsanctioned_shell_spawn` — one rename cleared both. The probe it
+    # drives (invoking-shell-bash4-probe.sh) stays shell, untouched: DR-079/
+    # 2026-07-22 claude-klabauter memo, genuine keep, no Python substitute.
     # coordinator/tests/cs-session-shape.bats — EXCLUDED, see module docstring.
     # test-snippet-registry.bats — SUPERSEDED, see module docstring.
     # verify-no-console-flash-file-allow.bats — SUPERSEDED, see module docstring.
 ]
 
+# This comment previously named suites
+# (test-bootstrap-repo.sh, test-coordinator-auto-push.sh,
+# test-coordinator-safe-commit.sh, test-new-project-scaffold.sh,
 # test-migrate-cross-repo-layout.sh) that are NOT members of SHELL_SUITES
+# above -- their pytest ports live in run-fast-tests.py's
 # NATIVE_PYTEST_MODULES instead, so the comment was misdirecting a reader
+# auditing concurrent-safety risk. Corrected audit (2026-07-22,
 # review-integration pass) of all 13 current SHELL_SUITES entries: 11 use
+# an isolated mktemp/mktemp -d fixture root (or are read-only against
 # REPO_ROOT, e.g. test-d1-same-commit.sh's `git log`/`git show` calls) and
 # carry no shared-REPO_ROOT-mutation risk under MAX_WORKERS=4.
+#
 # The one entry that used to do real REPO_ROOT-relative filesystem setup —
+# deep-research-record-roundtrip.test.sh, which wrote fixed-name fixture
 # files directly under REPO_ROOT/docs/research (STEM_WEB/STEM_C) and was NOT
+# self-collision-safe across concurrent run-full-tests.py invocations — was
+# retired 2026-08-13 (C8b Group A port) in favour of the pre-existing pytest
+# port coordinator/tests/test_deep_research_record_roundtrip.py, which uses a
+# module-scoped pytest fixture over the same fixture paths and is subject to
 # the same cross-invocation caveat; it is no longer a SHELL_SUITES member so
+# the note is historical, not a live gap in this registry.
 MAX_WORKERS = 4
 PER_SUITE_TIMEOUT_SEC = 120
 
@@ -139,15 +156,6 @@ def main() -> int:
     print(f"== Slow-tier shell suite run — {len(SHELL_SUITES)} suites, "
           f"{MAX_WORKERS} workers, {PER_SUITE_TIMEOUT_SEC}s/suite timeout ==",
           flush=True)
-
-    for runner_name in ("bash", "bats", "python3"):
-        needed = any(r == runner_name for _, r in SHELL_SUITES)
-        if runner_name == "python3":
-            continue
-        if needed and __import__("shutil").which(runner_name) is None:
-            print(f"ERROR: '{runner_name}' not found on PATH but is required by a "
-                  f"registered suite", file=sys.stderr)
-            return 1
 
     results: list[tuple[str, str, float]] = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:

@@ -99,7 +99,10 @@ CYCLE_PROCESS_TIME_BUDGET_MS = 200.0
 
 N_OUTER = 3
 
+#: Comfortably above the ~4 already-terminal live records this fixture's
 #: own LIVE_STATE_COUNTS distribution produces (closed=1, continued=1,
+#: shipped=2) — cap is never the binding constraint here; the point is that
+#: whatever qualifies gets archived, not that the cap is exercised.
 CAP = 50
 
 
@@ -232,7 +235,14 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
             f"record, per cycle, per C3's own contract) -- a re-scan/re-read "
             f"regression. result={result!r}"
         )
+        # C3 (2026-08-30, the actioned-memo class gets an occasion): the ONE
+        # assertion this existing test could not already make -- that a memo
+        # actually moved, and the negative control (a non-terminal memo)
+        # stayed. Everything else (spawn count, process time) is already
+        # covered below over the SAME fixture, now that it carries a memo
+        # corpus too -- a memo-leg dirty-check regression already fails
         # `max_spawns <= GIT_SPAWN_COUNT_TOTAL_RATCHET` below with zero new
+        # test code (this chunk's own brief).
         assert len(result["memos_archived"]) == MEMO_TERMINAL_COUNT, (
             f"rep {rep}: expected all {MEMO_TERMINAL_COUNT} clean fixture memos "
             f"archived (cap={CAP} comfortably exceeds the fixture's memo count): "
@@ -309,8 +319,11 @@ def test_cap_applies_independently_per_family_not_over_the_union(tmp_path_factor
     repo, fixture = _build_and_commit_fixture(root, seed=20260830)
 
     small_cap = 2
+    # Sanity: the default fixture shape already exceeds small_cap in BOTH
     # families -- LIVE_STATE_COUNTS's own terminal live records (shipped=2,
     # closed=1, continued=1 == 4) and MEMO_TERMINAL_COUNT=5 actioned memos --
+    # so "archived == cap" below is a genuine cap-slot, never a vacuous count
+    # that just happens to equal the corpus size.
     assert MEMO_TERMINAL_COUNT > small_cap
     terminal_live_count = sum(
         count for state, count in LIVE_STATE_COUNTS.items() if state in TERMINAL_STATES

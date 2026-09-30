@@ -227,6 +227,7 @@ def _resolve_row_collision(
         cols.append("")
     existing_type = cols[2]
     # Folded for the COMPARISON only (see `_fold_agent_type`); every write
+    # below stores the caller's own spelling, never the folded one.
     existing_folded = _fold_agent_type(existing_type)
     incoming_folded = _fold_agent_type(subagent_type)
     placeholder_folded = _fold_agent_type(PLACEHOLDER_TYPE)
@@ -284,7 +285,9 @@ def _process_dispatched_sync(
         print(f"track_dispatched_agents: cannot read {dispatched}: {exc} (treating as empty)", file=sys.stderr)
         lines = []
 
+    # Dedup / collision detection — column-1 (agent_id) comparison.
     # Mirrors: cut -f1 "$DISPATCHED" | grep -qxF "$AGENT_ID"
+    # Spec backlink: docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C1(e)
     existing_idx: int | None = None
     for i, ln in enumerate(lines):
         cols = ln.rstrip("\n").split("\t")
@@ -293,6 +296,7 @@ def _process_dispatched_sync(
             break
 
     if existing_idx is not None:
+        # Dedup / enrich / collision — the shared table, not a second copy of it.
         # Mirrors: awk -F'\t' -v id="$AGENT_ID" 'BEGIN{OFS="\t"} $1==id{$3="AMBIGUOUS"} {print}'
         new_cols = _resolve_row_collision(
             lines[existing_idx].rstrip("\n").split("\t"), model, subagent_type
@@ -314,6 +318,7 @@ def _process_dispatched_sync(
                 pass
         return
 
+    # New entry: append tab-delimited row.
     # Mirrors: printf '%s\t%s\t%s\t%s\n' "$AGENT_ID" "$MODEL" "$SUBAGENT_TYPE" "$(date +%s)" >> "$DISPATCHED"
     epoch = int(time.time())
     row = f"{agent_id}\t{model}\t{subagent_type}\t{epoch}\n"
@@ -407,7 +412,17 @@ async def _handler(params: dict, repo_root=None) -> dict:
         )
         return no_advisory()
 
+    # --- Rewrite a stale harness-embedded short against the LIVE session_id ---
+    # The harness hands back a named teammate's agent_id already in canonical
+    # <name>@session-<short> form, with <short> stamped once at team creation
+    # (survives /clear, resume, compact, fork). Every OTHER writer in this
+    # codebase (track_touched_files, session/identity.py, _subagent_identity.py)
+    # builds this same teammate's canonical id fresh from the LIVE session_id —
     # so recording the harness value verbatim keys a DIFFERENT .agents/<id>/
+    # directory than every other bookkeeping surface uses for the same
+    # teammate, and every cross-writer join against it silently misses. See
+    # docs/research/spike-verdicts/2026-08-10-session-scoped-hooks-inside-a-
+    # teammate-session.md and normalize_teammate_agent_id's own docstring.
     from coordinator_core.write_guards._subagent_identity import (
         normalize_teammate_agent_id,
     )

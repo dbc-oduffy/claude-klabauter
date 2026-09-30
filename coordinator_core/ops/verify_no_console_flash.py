@@ -72,7 +72,9 @@ import re
 import sys
 from typing import Iterator, List, Sequence, Tuple
 
+# ---------------------------------------------------------------------------
 # File discovery — mirrors `grep -r --include=... $COORD_ROOT`
+# ---------------------------------------------------------------------------
 
 _PS_INCLUDE_EXACT = {"coordinator-auto-push"}
 _PS_INCLUDE_GLOBS = ("*.sh", "*.json")

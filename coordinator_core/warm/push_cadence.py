@@ -110,14 +110,14 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Union
+from typing import Callable, Iterable, Optional, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.hooks.auto_push import log_failure
 from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
 from coordinator_core.ops.push_outstanding import push_outstanding
-from coordinator_core.session.day_branch_cut_lock import holder_alive
+from coordinator_core.session.day_branch_cut_lock import record_is_stale
 
 try:
     from coordinator_core.machine_profile import machine_profile
@@ -194,6 +194,10 @@ ServedReposFn = Callable[[], Iterable[Union[str, Path]]]
 
 _cadence_lock = threading.Lock()
 _last_sweep_monotonic: Optional[float] = None
+#: First repo a ceiling-truncated sweep did not reach; the next sweep starts
+#: there. Keyed by repo, not index, so the served set growing between sweeps
+#: cannot shift the resume point. Guarded by `_cadence_lock`.
+_resume_repo: Optional[Path] = None
 
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: Generous headroom over one repo's own `push_with_retry` ladder deadline
@@ -203,10 +207,6 @@ _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: never uses -- that stale coupling held the lock ~4x the work it bounds
 #: (overengineering-reviewer finding 5).
 _SWEEP_LOCK_HOLD_SECS = CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
-#: Grace past `hold_until` before a peer calls a still-recorded holder
-#: stale, mirroring `coordinator_core.session.day_branch_cut_lock`'s own
-#: constant of the same name.
-_SWEEP_LOCK_STALE_GRACE_SECS = 60.0
 
 
 def reset_cadence_for_test() -> None:
@@ -214,9 +214,10 @@ def reset_cadence_for_test() -> None:
     production code -- a real server ticks continuously for its whole life
     and never wants to "forget" the last sweep time.
     """
-    global _last_sweep_monotonic
+    global _last_sweep_monotonic, _resume_repo
     with _cadence_lock:
         _last_sweep_monotonic = None
+        _resume_repo = None
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
@@ -250,13 +251,6 @@ def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
 
 def _sweep_lock_path(repo_root: Union[str, Path]) -> Path:
     return resolve_git_common_dir(repo_root) / _SWEEP_LOCK_NAME
-
-
-def _sweep_lock_is_stale(record: dict, now: float) -> bool:
-    if holder_alive(record.get("holder_pid")) is False:
-        return True
-    hold_until = record.get("hold_until")
-    return isinstance(hold_until, (int, float)) and now > hold_until + _SWEEP_LOCK_STALE_GRACE_SECS
 
 
 def _try_create_sweep_lock(path: Path, payload: dict) -> bool:
@@ -300,7 +294,7 @@ def _acquire_sweep_lock(
         return True
 
     record = _read_sweep_lock(path)
-    if record is None or _sweep_lock_is_stale(record, now):
+    if record is None or record_is_stale(record, now):
         try:
             path.unlink()
         except OSError:
@@ -316,7 +310,8 @@ def _release_sweep_lock(repo_root: Union[str, Path], *, pid: Optional[int] = Non
 
     Reading the record and then
     unlinking BY PATH is check-then-act: if this holder's own hold window
-    has already run past `_SWEEP_LOCK_HOLD_SECS` + `_SWEEP_LOCK_STALE_GRACE_SECS`
+    has already run past `_SWEEP_LOCK_HOLD_SECS` + the stale grace
+    `day_branch_cut_lock.record_is_stale` applies
     (this process overran its own generous budget) a peer can have already
     declared this record stale, `unlink()`ed it, and recreated it as its
     own live lock between the read below and this function's `unlink()` --
@@ -518,18 +513,30 @@ def sweep_repos(
     none: only arm A (not selected) would have widened it, which is why
     AC9/AC10's "read the widened worst case against the sweep-repos
     admission check" concern does not apply here.
+
+    ROTATION. A truncated sweep records the first repo it did not reach
+    (`_resume_repo`) and the next sweep starts there, wrapping around, so a
+    served set too large for one ceiling is covered across ticks instead of
+    the same tail being skipped every time. A sweep that reaches every repo
+    clears the cursor. The served order is otherwise preserved (no sort, no
+    shuffle).
     """
+    global _resume_repo
     deadline = clock() + total_ceiling_secs
-    seen: List[Path] = []
-    for repo in repos:
-        now = clock()
-        if now + per_repo_budget_secs > deadline:
+    ordered = list(dict.fromkeys(Path(repo) for repo in repos))
+    with _cadence_lock:
+        resume = _resume_repo
+    if resume in ordered:
+        start = ordered.index(resume)
+        ordered = ordered[start:] + ordered[:start]
+    cut: Optional[Path] = None
+    for root in ordered:
+        if clock() + per_repo_budget_secs > deadline:
+            cut = root
             break
-        root = Path(repo)
-        if root in seen:
-            continue
-        seen.append(root)
         _sweep_one(root)
+    with _cadence_lock:
+        _resume_repo = cut
 
 
 def on_idle_tick(

@@ -33,7 +33,14 @@ from coordinator_core.bash_guards.dispatch import GuardEntry
 from coordinator_core.bash_guards.roster import GuardRosterEntry, guard_roster
 from coordinator_core.ops.session.guard_settings_integrity import _tail_key
 
+# `test_lazy_reexport_resolves_and_stays_lazy` spawns a real
+# `sys.executable -c` fresh interpreter because the property under test --
+# that importing `coordinator_core.bash_guards` alone does not pull in
+# `guard_settings_integrity` -- is only observable in a process that has
+# never imported the heavy module, which no mock or same-process trick can
 # fake. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

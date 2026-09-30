@@ -309,13 +309,78 @@ def _nearest_explicit(
     return result
 
 
+# ---------------------------------------------------------------------------
+# PriorityResolveCache — per-emit-run cache, SHARED across many resolve_priority()
+# calls against the same repo corpus (C6b perf hoist).
+#
+# Problem this replaces: called once per handoff (e.g. 360x for a real corpus),
+# resolve_priority() used to pay for a full dag.walk_forward() DFS PLUS a
+# dag.build_handoff_id_index() corpus scan+parse PLUS a _build_parent_map()
+# build on every single call, even though all three are invariant for the
+# whole emit run — walk_forward's own docstring names build_handoff_id_index
+# as something to "build once per scan set", and it was instead being rebuilt
+# once per handoff over the identical directory scan (see the dispatch brief's
+# profile: build_handoff_id_index at 12.1s / 360 calls, _build_parent_map at
+# 22.6s / 360 calls, walk_forward at 15.7s / 360 calls, of a 38.4s aggregate).
+#
 # NEGATIVE-SPEC — why bypassing walk_forward() entirely (when a cache is
 # given) is byte-identical, not merely faster, STRUCTURALLY (not by corpus
+# agreement — a byte-diff over one corpus's records is confirmatory evidence,
+# never the argument itself; a diff can only fail to show a divergence that
+# happens not to be exercised by the sample under test):
+#   1. _build_parent_map's own resolve_target() call (its per-node parent
+#      lookup) has NEVER been passed id_index — not in the pre-cache
+#      walk_forward-based path, not here (see _build_parent_map above: no
+#      id_index kwarg at its resolve_target() call site, in either version
+#      of this file).
 #   2. _nearest_explicit walks ancestors EXCLUSIVELY via parent_map edges
+#      (`parent_map.get(path, [])`) — it never consults `nodes` for
+#      reachability, only for a found node's own meta (ledger key
+#      derivation). `nodes` (whether walk_forward's DFS-limited set or this
+#      cache's full-corpus set) therefore cannot change WHICH ancestors are
+#      visited, only what's available to look up once an ancestor is
+#      already reachable through parent_map.
+#   Therefore (1) + (2): walk_forward's id-index-aware DFS only ever
+#   affected which nodes got recorded into `nodes` — a lookup table, not the
 #   traversal itself — never which ancestors are REACHABLE via parent_map
+#   edges, because that reachability is fully re-derived from each path's
+#   own frontmatter (handoff_edges + a non-id-index-aware resolve_target)
+#   independent of whatever `nodes` dict happens to be sitting nearby. An
+#   id-shaped predecessor_id/origin_handoff_id ref was already unreachable
+#   through parent_map before this cache existed; this cache does not change
+#   that (preserved on purpose, per the dispatch brief's "do not fix it
+#   while you are in there" instruction) — it just stops paying to build an
+#   id_index nothing downstream ever consults. Guarded by
+#   test_priority_resolve_cache.py::test_id_shaped_predecessor_ref_cached_and_uncached_agree.
+#   3. _build_parent_map computes parent_map[path] from (path, meta,
+#      handoff_dir, repo_root) alone — it does not depend on what ELSE is in
+#      its input `nodes` dict. A parent_map built over the FULL on-disk corpus
+#      therefore has, for every path a per-call walk_forward()+_build_parent_map()
 #      pair would have produced an entry for, the IDENTICAL value — it is
+#      simply also computed for extra paths nothing will ever look up.
+#   4. The corpus-wide meta map (`nodes()`) is every handoff's real frontmatter
+#      via the SAME content-hash-cached read (dag.read_handoff_meta ==
+#      dag._read_meta) walk_forward itself used — a strict superset of what
+#      walk_forward's DFS would have visited, so a `nodes.get(path, {})` miss
+#      that the old code could theoretically hit (falling back to `{}`) cannot
+#      happen here; the value returned is the same either way whenever both
+#      paths agree, and this path never returns a WORSE (emptier) answer.
+#
+# Cache scope is per-run, NOT process-lifetime (dispatch brief's explicit
+# constraint) — construct one instance per emit() invocation and let it be
+# garbage-collected at the end; never stash an instance on a module global.
 # dag.py's own process-lifetime caches (_FRONTMATTER_CACHE, _EVER_TRACKED_CACHE)
+# are a separate, lower layer this cache sits above and does not replace —
 # see dag.py's _EVER_TRACKED_CACHE comment block for THEIR invalidation
+# contract, which this class has no bearing on.
+#
+# Keyed per handoff_dir, not globally, because _build_parent_map's own
+# docstring establishes edge resolution is fixed to a single handoff_dir per
+# walk (mirroring walk_forward's own fixed-handoff_dir call shape) — a live
+# handoff (handoff_dir = state/handoffs) and a month-archived one
+# (handoff_dir = archive/handoffs/YYYY-MM) are NOT interchangeable and each
+# get their own parent-map build the first time that handoff_dir is seen.
+# ---------------------------------------------------------------------------
 
 
 class PriorityResolveCache:

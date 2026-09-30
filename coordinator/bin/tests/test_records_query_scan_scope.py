@@ -141,6 +141,7 @@ class TestGitLastCommitEpochsBatchCwdThreading(unittest.TestCase):
             _write_and_commit(repo_dir, "docs/plans/a.md", "---\nstatus: executing\n---\n", "add a")
 
             # Process cwd is a DIFFERENT, non-git directory -- without cwd
+            # threading this must fail to resolve (no git repo there).
             prior_cwd = os.getcwd()
             os.chdir(other_td)
             try:

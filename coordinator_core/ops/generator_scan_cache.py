@@ -87,8 +87,38 @@ _CACHE_FILENAME = "generator-scan-cache.json"
 _CONTENT_CACHE_FILENAME = "generator-content-cache.json"
 _CONTENT_HASH_DIGEST_SIZE = 16
 
+#: 3 -> 4 (2026-09-06): `generator_provenance._extract_mutates` changed its
 #: SEMANTICS, not its shape -- it now resolves f-strings and names over the
+#: constants `session.machinery_paths` owns, so three `ops/fleet/memo_*`
 #: modules that previously scanned as `__MALFORMED__` -> UNDECLARED now report
+#: their real write targets. Entries are keyed on the SCANNED FILE's
+#: `(mtime_ns, size)`, which cannot see a change to the scanner itself: none of
+#: those modules was touched, so every reader would have kept being served the
+#: old verdict indefinitely. Bumping the schema is the only invalidation this
+#: store has for a scanner-semantics change, and it is what the version field
+#: is for. Bump it again on the next one.
+#:
+#: 4 -> 5 (2026-09-11, D5): `generator_provenance._call_is_write` and
+#: `_write_target_expr` now recognise the claiming seam's four names
+#: (`replace_text`/`replace_bytes`/`create_exclusive`/`append_claimed_line`,
+#: module-attribute or from-import form) as write sites, with their target
+#: at `args[0]` -- a scanner-semantics change exactly like the 3 -> 4 bump
+#: above, and for the same reason: no swept module's stat moves, so a stale
+#: entry would otherwise be served forever.
+#:
+#: Shared with the content cache (`generator-content-cache.json`) -- both
+#: files hold nothing but `FileWrites` produced by the same scanner, so one
+#: version field governs both stores. Bumping it means: (a) every stat-cache
+#: entry on every box goes cold on its next sweep (self-healing, no action
+#: needed -- `load` fails the version check and falls through to a fresh
+#: scan), and (b) the shipped content cache in this file's git history is
+#: ALSO now stale and must be regenerated in the SAME commit as whatever
+#: changed the scanner -- run
+#: `coordinator/bin/regenerate-generator-content-cache.py` and commit the
+#: result, or the fresh-clone cold path silently loses its speedup (every
+#: digest in the old-schema file fails `load_content_cache`'s version check
+#: and every stat-miss falls through to a full AST parse -- correct, never
+#: silently wrong, but back to paying the cost this store exists to avoid).
 _SCHEMA_VERSION = 5
 
 

@@ -47,12 +47,31 @@ import pytest
 from coordinator_core import _settings_home
 from coordinator_core.install import door_install, door_route_signal
 
+#: This suite is a read-only oracle against the LIVE warm plane, so it opts out
+#: of `conftest._quarantine_real_home`.
+#:
 #: Capturing `_REAL_ENGINE_ROOT` and `_REAL_DOOR_PATH` at collection time --
+#: which this file already did -- closes only half the hole. `ensure_listener`
 #: re-resolves the service directory INTERNALLY, off the quarantined
 #: `COORDINATOR_WARM_RUNTIME_BASE`, so `discovery_path()` landed in a per-test
+#: temp dir and no listener on the box could ever be visible here. The guard was
+#: unsatisfiable by construction: red on every box, forever, for a reason that
+#: had nothing to do with the route it asserts.
+#:
+#: Worse than red. Each poll's `should_spawn` answered True inside the
+#: quarantine, so a failing run spawned real detached supervisors against the
+#: real engine root -- exactly the litter `ensure_listener`'s own docstring
+#: warns about.
+#:
+#: Negative spec: nothing here may WRITE under the real home. The marker means
+#: "resolve the real home" for a read-only assertion; a test that mutates live
+#: machine config under it reintroduces the bug the quarantine exists to stop.
 pytestmark = pytest.mark.real_home
 
+#: The repo root this test suite actually runs against -- three levels up
+#: from this file (tests/ -> install/ -> coordinator_core/ -> repo root),
 #: matching `door_route_signal`'s REPO-SCOPING requirement that a caller
+#: supply the `repo_root` that matches where the executing process's sink
 #: write actually lands (module docstring's REPO-SCOPING section).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -178,9 +197,27 @@ def test_hot_path_invocation_records_warm_server_route():
     assert result.entry is not None
 
 
+#: Template for the stubbed door image (chunk C3, E4/staff-eng's settlement):
+#: a minimal executable forwarder, NOT a real built door -- it never routes
+#: through `door_install_posix_build.build_or_advise`, so a box with no
+#: prebuilt image and no toolchain is not permanently red on a module
+#: contractually forbidden to skip. The ROUTE STAMP stays real: this script
+#: forwards the op through `coordinator_core.warm.client.try_warm_dispatch`
+#: against the SAME resolved engine root the real listener was brought up
 #: against (`_REAL_ENGINE_ROOT`), so the resident server itself stamps the
+#: sink row via `warm.server._declare_execution_route` -- nothing here
+#: fabricates a route value. The shebang pins `sys.executable` (this
+#: process's own interpreter) rather than `#!/usr/bin/env python3`, so the
+#: stub cannot land on a system interpreter lacking this checkout's
+#: `coordinator_core` package on its path.
+#:
+#: `_caller_cwd` is stamped into the request envelope deliberately -- the
+#: real native door adds this (`door_core.c`), and `op_latency._write_entry`
+#: resolves the sink it writes to from the envelope's `_origin_worktree`,
+#: else `ipc.resolve_caller_cwd`'s `_caller_cwd`, else -- silently -- the
 #: EXECUTING (server) process's own cwd (`door_route_signal`'s module
 #: docstring, REPO-SCOPING section). Omitting it here would not make the
+#: route stamp fake -- it would make this test read a real row at the
 #: WRONG repo_root (the resident server's own cwd, not `_REPO_ROOT`), which
 #: is indistinguishable from `UNRESOLVED` to a caller scoped to `_REPO_ROOT`.
 _STUB_DOOR_IMAGE_TEMPLATE = """#!{python_executable}
@@ -296,8 +333,15 @@ def test_post_install_ordering_stubbed_door_image_records_warm_route(tmp_path):
     door_path = _write_stub_door_image(bin_dst)
     _assert_stub_door_image_is_executable(door_path)
 
+    # A bounded retry, same tolerance `_ensure_warm_listener` above already
+    # grants a fresh listener: this box's own load norm (50-70 active peers,
+    # module CLAUDE.md) makes a single contended pipe connect ("go cold,
+    # never spawn" -- `warm.client`'s own anti-storm table) indistinguishable,
     # on ONE attempt, from the real IN_PROCESS regression this test exists to
+    # catch. Retrying a non-mutating `ping` a bounded number of times is safe
+    # (the op is idempotent) and never raises the regression bar: any attempt
     # that reads back `WARM_SERVER` still passes, and the failure path below
+    # still runs -- and still never skips -- once every attempt is spent.
     result = door_route_signal.DoorRouteResult(door_route_signal.UNRESOLVED, None)
     for _ in range(_LISTENER_WAIT_ATTEMPTS):
         result = door_route_signal.read_door_route(door_path, _OP, repo_root=_REPO_ROOT)
@@ -351,7 +395,10 @@ def test_door_route_signal_recorded_route_value_set_is_pinned():
     assert door_route_signal.UNRESOLVED == "unresolved"
     assert door_route_signal.DISCRIMINATOR_UNAVAILABLE == "discriminator_unavailable"
 
+    # `DoorRouteResult` is a two-field NamedTuple: `route` (str) and `entry`
     # (the raw sink row, or None only when route is UNRESOLVED) -- pinned so
+    # a field rename or reorder here is caught directly rather than only
+    # showing up as an AttributeError deep in a caller.
     result = door_route_signal.DoorRouteResult(route=door_route_signal.WARM_SERVER, entry={"op": "ping"})
     assert result.route == door_route_signal.WARM_SERVER
     assert result.entry == {"op": "ping"}

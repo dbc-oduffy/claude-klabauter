@@ -104,6 +104,9 @@ def test_git_leg_refuses_when_live_path_is_nested_inside_unrelated_repo(tmp_path
     _git(["checkout", "-b", "machine-a"], enclosing_repo)
 
     # A real origin with a divergent main, so an UNGUARDED leg's
+    # fetch+checkout would actually succeed and move HEAD -- proves the
+    # assertions below exercise the guard, not an incidental "no remote"
+    # failure.
     origin = tmp_path / "origin.git"
     _git(["init", "--bare", str(origin)], tmp_path)
     _git(["remote", "add", "origin", str(origin)], enclosing_repo)

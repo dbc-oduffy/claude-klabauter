@@ -53,7 +53,10 @@ def test_g_clean_content_unchanged():
 
 
 def _find_doe_normalize_lib() -> str | None:
+    # DoE sibling repo, resolved via the shared registry-first ladder
+    # (coordinator_core.testing.content_root.resolve_content_root, which already
     # layers the CLAUDE_KLABAUTER_TEST_CONTENT_ROOT override on top) rather than a
+    # __file__-anchored checkout-depth guess.
     root = resolve_content_root()
     if not root:
         return None

@@ -397,8 +397,11 @@ def _declared_paths(row: WaveRow) -> list[str]:
     separator-shape only, not full on-disk discrimination.
     """
     if row.writes is not UNDECLARED:
+        # `WaveRow.writes` is typed `object` so one field can carry either a
         # real list or the UNDECLARED sentinel. Identity against the sentinel
+        # is the documented gate (never truthiness — `writes: []` is a
         # POSITIVE declaration), but it does not narrow for a type checker,
+        # and the sentinel is that field's only non-list inhabitant.
         declared = cast("list[str]", row.writes)
         for path in declared:
             if path.endswith("/") or path.endswith("\\"):

@@ -88,6 +88,9 @@ __all__ = [
 ]
 
 # Retired SINGLETON_BLOCKING_ACQUIRE_TIMEOUT_SECS used DISPATCH_TIMEOUT_SECS
+# + 5s margin; this keeps only the margin half live, since the ceiling now
+# tracks `ipc`'s dispatch timeout dynamically (see `_drain_ceiling_secs`)
+# rather than pinning a duplicate constant that could drift from it.
 DRAIN_CEILING_MARGIN_SECS = 5.0
 
 _DRAIN_POLL_INTERVAL_SECS = 0.05

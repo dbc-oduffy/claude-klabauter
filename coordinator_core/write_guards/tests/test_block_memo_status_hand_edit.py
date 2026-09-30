@@ -189,7 +189,10 @@ class TestLiveClaimGate:
             raise RuntimeError("indeterminate liveness read")
 
         monkeypatch.setattr("coordinator_core.liveness.cs_claim_holder_live", _raise)
+        # 2026-08-06 fix (bug-backlog
+        # 2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff):
         # a cs_claim_holder_live exception is INDETERMINATE, not "no claim"
+        # -- fails toward deny (True), not toward the advisory degrade.
         assert guard._has_live_claim(str(tmp_path), "some-memo.md") is True
 
     def test_has_live_claim_fails_toward_deny_on_unresolved_git_common_dir(

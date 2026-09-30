@@ -106,6 +106,11 @@ ENROLLED_GUARD_MODULES: Tuple[str, ...] = (
 )
 
 #: Each descriptor deliberately OVERAPPROXIMATES its guard's own real
+#: scope predicate (still applied, correctly, once the guard body is
+#: imported) -- see each guard's own future module docstring for the
+#: authoritative scope. Keyed by filename so a combined dispatcher and a
+#: conformance test can both source from THIS one dict rather than either
+#: re-declaring a copy.
 STOP_FAMILY_SCOPE_DESCRIPTORS = {
     "derive-global-doctrine-live-copy.py": GuardScopeDescriptor(
         guard_module="derive-global-doctrine-live-copy.py",
@@ -121,7 +126,18 @@ STOP_FAMILY_SCOPE_DESCRIPTORS = {
         path_suffixes=frozenset({".yaml"}),
         directory_substrings=("state/initiatives/",),
     ),
+    # Real scope: a NEW (untracked) file under either this repo's own
+    # `coordinator/` tree ("local" leg) or a resolvable sibling engine
     # checkout's root ("engine" leg). KNOWN, DOCUMENTED GAP: the "engine"
+    # leg has no fixed directory substring a cheap descriptor can name
+    # without resolving the engine root itself (exactly the import this
+    # descriptor exists to defer paying) -- an engine-leg write to a path
+    # that does not also contain "coordinator/" under-matches. Accepted for
+    # the same reason the OSS-payload-locality guard's own descriptor is
+    # scoped to "coordinator/" only: the "local" leg is the common,
+    # load-bearing case; the "engine" leg is a rare cross-repo edge the
+    # guard's own real predicate (still authoritative once imported)
+    # already fails open on when this repo's OWN write path is what fires.
     "nudge-new-file-zero-budget-ratchets.py": GuardScopeDescriptor(
         guard_module="nudge-new-file-zero-budget-ratchets.py",
         directory_substrings=("coordinator/",),

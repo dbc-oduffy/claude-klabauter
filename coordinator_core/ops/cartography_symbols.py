@@ -159,10 +159,16 @@ __all__ = [
     "write_symbols_artifact",
 ]
 
+#: Schema version for this op's emitted JSON artifact — always the first key
 #: written on disk (mirrors cartography_chunk_table.SCHEMA_VERSION's
+#: convention, DR-228 § D6(v)). A standalone constant because this artifact
+#: is a genuinely different shape (per-file symbol tables, not a
+#: bucket/chunk reduction) with its own independent version lineage.
 SCHEMA_VERSION: int = 1
 
+#: Every schema_version this module can consume without failing loud — see
 #: cartography_chunk_table._KNOWN_SCHEMA_VERSIONS for why this is a set, not
+#: a single ceiling comparison, even though only one version exists today.
 _KNOWN_SCHEMA_VERSIONS: frozenset[int] = frozenset({SCHEMA_VERSION})
 
 
@@ -232,8 +238,35 @@ def write_symbols_artifact(target_root: Path, run_id: str, artifact: Dict[str, A
                 pass
     return target
 
+# Coverage states that are infrastructure faults ONLY when symbol_extract IS
+# installed and something is genuinely broken (chunk C4a). A finding in this
+# set must fail the whole op loudly rather than returning a quietly-thin or
+# quietly-empty symbol table for the extensions it names. `parse_failure` is
+# deliberately excluded — it is already attributed onto its file's own
+# envelope entry as an "error" field by foreign_symbols, matching
+# cartography/symbols.py's existing per-file resilience, and must not fail
+# the whole batch.
+#
 # `name_invariant_drop` is deliberately EXCLUDED from this set for the same
+# reason as `parse_failure`: it is corpus hygiene, not an infrastructure
+# fault. A drop diagnostic records that upstream's
+# `ExtractionResult.__post_init__` choke point rejected ONE symbol's NAME
+# (a line terminator or an over-length name) — the file itself parsed
+# cleanly, and the drop is already routed onto that file's own envelope
+# entry via `name_invariant_drops` (never `error`, by
+# `foreign_symbols.build_foreign_symbols`) rather than being surfaced here.
+# Including it in this set would fail the whole batch over a single
+# malformed heading/identifier, exactly the kind of quietly-thin-vs-loudly-
+# wrong tradeoff this set exists to draw a line under.
+#
 # `dependency_absent` is deliberately EXCLUDED from this set (chunk C4a — PM
+# ruling 2026-08-08: "fails gracefully if the user doesn't have access to
+# example-retrieval-repo"). `symbol_extract` ships from a private repo; a user without
+# access must be able to install and use claude-klabauter without hitting an
+# exception. This state is handled separately below: it degrades to a
+# distinct, unmistakably-"not attempted" in-band marker per requested file,
+# plus a top-level coverage note — never raised, never folded into an
+# empty-but-successful extraction.
 _LOUD_COVERAGE_STATES = frozenset({"missing_grammar", "partial_coverage"})
 
 _SYMBOL_EXTRACT_REMEDY = (

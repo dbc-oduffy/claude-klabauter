@@ -141,6 +141,8 @@ class TestPreferDeliberateStagePolicy:
 
     def test_policy_on_ordinary_edit_still_lands_worktree_bytes(self, repo):
         # THE CASE THAT PROVES THE DISCRIMINATOR: index still equals HEAD, so
+        # this is an ordinary unstaged edit, not a deliberate partial stage --
+        # the policy must NOT reach for the stage here even though it is on.
         (repo / "a.txt").write_text("just an edit\n", encoding="utf-8")
 
         outcome = gcommit.commit_paths(
@@ -221,6 +223,10 @@ class TestBlobFallbackLegAlsoReportsTheLoss:
         _git(repo, "commit", "-qm", "attrs")
 
         # Partial stage: one CR-bearing blob staged, a DIFFERENT CR-bearing
+        # blob left in the worktree -- the same shape `_partial_stage`
+        # exercises for the main loop, but on a path the in-process checkin
+        # check refuses (CR bytes under an `eol=crlf` pin), forcing it
+        # through `blob_fallback`.
         (repo / "run.cmd").write_bytes(b"echo staged\r\n")
         _git(repo, "add", "run.cmd")
         (repo / "run.cmd").write_bytes(b"echo worktree\r\n")

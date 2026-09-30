@@ -4717,6 +4717,61 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwar
         )
 
 
+WORKSTATION_VERDICT_RULE = "workstation-install-verdict.md"
+
+
+def install_write_hook_plane_verdict(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Install-chain step: land `<home>/.claude/rules/workstation-install-verdict.md`,
+    whose first line is `HOOK PLANE: ARMED|UNARMED (delivery: <surface>)`.
+
+    The harness loads rules files with no hook involved, so the verdict
+    survives a dead hook plane. Install-time snapshot, refreshed only by
+    re-running setup. Skipped in a container (cloud_setup.py owns that
+    verdict). ADVISORY: any failure prints WARN and returns; zero spawns.
+    """
+    print()
+    print("--- Install: hook-plane verdict ---")
+    if args.container_optin:
+        print("SKIP [hook-plane] cloud_setup.py owns the container verdict")
+        return
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install import hook_plane_verdict as hpv
+
+        claude_home = Path.home() / ".claude"
+        plugin_root = _resolve_plugin_root_for_machine_local(_resolve_coordinator_claude_root(repo_root, args)[0])
+        try:
+            settings_home_path: Path | None = settings_home()
+        except RuntimeError:
+            settings_home_path = None
+
+        plane = hpv.derive_hook_plane(
+            claude_home=claude_home, plugin_root=plugin_root, settings_home=settings_home_path
+        )
+        status_line = hpv.hook_plane_status_line(plane)
+        lines = [
+            status_line,
+            "",
+            "# Workstation install verdict",
+            "",
+            "Written by `scripts/setup.py` at install time; re-running setup refreshes it.",
+        ]
+        problems = hpv.hook_plane_problems(plane)
+        if problems:
+            lines.append("")
+            lines.extend(f"- {problem}" for problem in problems)
+        hpv.write_rule_surface(claude_home, WORKSTATION_VERDICT_RULE, "\n".join(lines) + "\n")
+    except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
+        print(f"WARN [hook-plane] could not write the verdict: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return
+
+    written = claude_home / "rules" / WORKSTATION_VERDICT_RULE
+    tag = "PASS" if status_line.startswith("HOOK PLANE: ARMED") else "WARN"
+    print(f"{tag} [hook-plane] {status_line.removeprefix('HOOK PLANE: ')} -> {written}")
+
+
 # Probes run by --preflight, in a fixed order -- one function name per
 # `coordinator_core.install.prereq_probe` probe already SSOT for the OSS
 # Step Zero check (see that module's own docstring). Names, not the
@@ -4919,6 +4974,7 @@ def main(argv: list[str]) -> int:
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
+        install_write_hook_plane_verdict(repo_root, claude_klabauter_root_resolved, args)
 
     print()
     if probe_hard_failure:

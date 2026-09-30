@@ -183,7 +183,13 @@ def test_relocate_buckets_defers_on_existing_destination(tmp_path):
     assert deferred[0]["bucket"] == "state/review-trail/"
 
 
+# ---------------------------------------------------------------------------
+# Test trap named explicitly by the C14 stub: OSError(13, ...) IS a
+# PermissionError under CPython (OSError.__new__ remaps errno 13 to the
 # subclass), so a narrowing test built on errno 13 asserts the OPPOSITE of
+# what it reads as. Use errno 9 (EBADF) to prove the retry primitive is
+# reached and reported as a genuine, permanent, non-retryable failure.
+# ---------------------------------------------------------------------------
 
 def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path):
     root = str(tmp_path)

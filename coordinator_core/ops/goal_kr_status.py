@@ -290,7 +290,9 @@ def set_kr_status(
     return {"goal_file": str(goal_file), "kr_id": kr_id, "status": status}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("goal.set_kr_status")

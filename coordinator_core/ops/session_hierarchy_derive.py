@@ -89,7 +89,9 @@ def _atomic_write_json(path: Path, records: List[dict]) -> None:
             json.dump(records, fh, indent=2)
             fh.write("\n")
         os.replace(tmp, path)
+        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended
+        # surface.
         declare_write(path)
     except Exception:
         try:
@@ -119,8 +121,20 @@ def _stats(records: List[dict]) -> dict:
 def _run(worktree_root: Path) -> dict:
     handoffs_active = query_records("handoff", worktree_root, limit=0)
     handoffs_archived = query_records("handoff-archived", worktree_root, limit=0)
+    # 2026-09-06 (docs/plans/2026-09-06-partitioned-close-review-identity-
     # triage.md C1, AC2b): was `os.environ.get("CS_SESSION_ID", "")` — this op
+    # is `@register_op("session_hierarchy.derive")`, so it is warm-reachable
+    # directly, and under a warm-served request `os.environ` names whoever
+    # spawned the resident server, not the session whose request this is.
+    # `resolve_current_session_id` reads the per-request `session_identity_
+    # override` ContextVar first (the caller's real identity, carried across
+    # the wire) and falls back to the same env ladder cold, so the cold
     # (CLI/`main()`) path is unchanged. `CS_SESSION_ID` itself was never a
+    # name any resolver in this repo populates via the warm-carried-identity
+    # mechanism, so retaining it would have kept this stamp permanently
+    # spawner-attributed under warm dispatch. Same shape/consequence as
+    # `ops/queue_append.py`'s own `created_by_session` field (D1's applied
+    # pattern) — this op stamps the identical field name.
     created_by_session = resolve_current_session_id() or ""
 
     records = derive(handoffs_active, handoffs_archived, created_by_session, repo_root=worktree_root)

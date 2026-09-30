@@ -51,6 +51,19 @@ def _run_sentinel_cli(args: List[str]) -> int:
     script = resolve_sentinel_cli()
     argv = [*resolve_launchable(script), *args]
     # CAPTURED, never inherited. This function runs both cold (this process's
+    # own real stdout is the caller's) AND warm, in-process inside the server,
+    # under `ops.invoke_from_argv._run_entrypoint`'s `contextlib.redirect_stdout`
+    # -- which retargets the Python-level `sys.stdout` object, not this
+    # process's OS-level fd 1/stderr. A bare `subprocess.run(argv, ...)` with no
+    # stdout/stderr given inherits that untouched OS handle, so on the warm leg
+    # the child's own stdout/stderr silently miss the redirect and land wherever
+    # the warm server's real stdio was pointed at boot (typically DEVNULL) --
+    # invisible to the actual caller on the other end of the pipe. Capturing
+    # here and re-emitting through `print()` below routes the bytes through
+    # whichever `sys.stdout`/`sys.stderr` is live in THIS call, cold or warm
+    # alike, so the child's sentinel-path confirmation
+    # (`misc-session-and-guards.py autonomous-sentinel enable`'s own
+    # `print(str(_sentinel_path(...)))`) actually reaches the skill relaying it.
     try:
         result = subprocess.run(
             argv,

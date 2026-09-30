@@ -51,8 +51,12 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+# schemas/ is DoE-resident post-2026-07-22 executable-surface migration —
+# resolve via the shared two-rung helper rather than a bare
 # REPO_ROOT-relative path. data_root() raises RuntimeError when neither rung
+# resolves (no coordinator-content-repo sibling checkout); the sentinel keeps that a skip
 # for the COORDINATOR_SCHEMAS_DIR-override tests below — its only consumers —
+# instead of a collection-time crash for the module.
 try:
     SCHEMAS_DIR = data_root("schemas")
 except RuntimeError:
@@ -187,8 +191,18 @@ def test_validate_unknown_schema_name_nonzero_exit() -> None:
     assert cp.returncode != 0, f"stdout={cp.stdout!r} stderr={cp.stderr!r}"
 
 
+# ---------------------------------------------------------------------------
 # COORDINATOR_SCHEMAS_DIR override — SKIPPED, not deleted (former AC-5/AC-6).
+#
+# The Python successor (coordinator_core/frontmatter/schema_cli.py) documents
 # this as a deliberate negative-spec: "Does NOT support COORDINATOR_SCHEMAS_DIR
+# override ... schema_validate.describe()/validate() always read claude-klabauter's own
+# vendored schema set ... a deliberate, narrower scope than schema-cli.js's
+# env-override — claude-klabauter has no consumer-test schema-dir isolation need today."
+# The three tests below asserted schema-cli.js's env-override behavior, which
+# has no successor to test against; skipped (with reason) rather than deleted
+# so the former AC-5/AC-6 coverage record stays visible.
+# ---------------------------------------------------------------------------
 
 _SCHEMAS_DIR_OVERRIDE_SKIP_REASON = (
     "COORDINATOR_SCHEMAS_DIR override was NOT ported to the Python successor "

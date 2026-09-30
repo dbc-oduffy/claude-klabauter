@@ -67,6 +67,9 @@ from coordinator_core.benchmarks import op_fixtures
 from coordinator_core.benchmarks.record import ConformanceRecord, compose_machine_id
 
 #: Not a registered JSON-RPC op today (see module docstring) -- excluded
+#: from the default refresh op set until the registry gap is fixed
+#: elsewhere. Named here, not silently dropped, so a future run stops
+#: excluding it the moment it becomes real.
 _UNREGISTERED_OPS = frozenset({"coverage.gate"})
 
 

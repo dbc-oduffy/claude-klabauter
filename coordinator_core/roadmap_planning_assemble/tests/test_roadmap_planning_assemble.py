@@ -192,6 +192,12 @@ class TestRealCliStructuralAndPerf(unittest.TestCase):
     def _child_env():
         # `COORDINATOR_ENGINE_ROOT` is rung 1 of cc_invoke._resolve_claude_klabauter_root()'s
         # ladder (its predecessor `CLAUDE_KLABAUTER_ROOT` is retired — the dual-read
+        # window closed) — pinning it to THIS tree makes the real-CLI
+        # subprocess tests exercise the module under test rather than
+        # whatever engine root is published to the machine-local registry
+        # (this chunk's delivery is deliberately inert/unpublished on
+        # landing — see the module docstring and C12's own publish-
+        # allowlist job).
         env = dict(os.environ)
         env["COORDINATOR_ENGINE_ROOT"] = _ENGINE_ROOT
         return env

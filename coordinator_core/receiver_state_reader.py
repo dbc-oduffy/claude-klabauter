@@ -95,8 +95,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+#: `_parse_stamp` accepts only exact second-precision
+#: `%Y-%m-%dT%H:%M:%SZ`. If `write_receiver_state` ever emits a different
 #: ISO-8601 variant (fractional seconds, a numeric offset instead of `Z`),
 #: every record silently collapses to REASON_MALFORMED/UNAVAILABLE with no
+#: log. A stamp-format change on the writer side MUST bump `schema_version`
+#: under this reader's contract -- nothing else pins that coupling.
+#: Explicit wall-clock cutoff, stated as an assumption -- see module docstring
 #: § THE STALENESS RULE for why no measured percentile is quoted.
 STALE_AFTER_SECONDS = 3600
 
@@ -119,6 +124,8 @@ _SUPPORTED_SCHEMA_VERSION = 1
 
 def receiver_state_path(repo_root: str, session_id: str) -> Optional[str]:
     # A bare "." or ".." matches _SAFE_SID_RE (no separator to catch) but is
+    # itself a traversal component; reject explicitly rather than relying on
+    # the character class alone.
     if not session_id or session_id in (".", "..") or not _SAFE_SID_RE.match(session_id):
         return None
     return os.path.join(repo_root, _SESSIONS_DIRNAME, session_id, _SIBLING_FILENAME)

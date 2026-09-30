@@ -1774,6 +1774,8 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "research.restructure_for_repeat_topic": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
+    # Deliberate growth: freeze_diffs_batch now commits its writes via `commit_paths`, whose
+    # `hash_worktree_blobs_via_spawn` fallback reaches `git/run.py::run_git` (one spawn per batch).
     "review.freeze_diff": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
@@ -6562,6 +6564,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "queue.promote": 1,
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
+    # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
     "review.freeze_diff": 2,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,

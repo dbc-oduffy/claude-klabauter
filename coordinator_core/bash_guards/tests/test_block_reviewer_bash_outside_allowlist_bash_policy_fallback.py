@@ -95,7 +95,17 @@ def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monke
 
 
 def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkeypatch):
+    # NOTE (review finding 3, 2026-07-27): this fixture is intentionally a
+    # single-key dict, so it exercises _validate_ruleset's `except (KeyError,
     # TypeError)` MISSING-KEY path, not the isinstance/_is_str_list
+    # type-validation branches -- those are covered separately below by the
+    # *_still_denies_git_commit/_unlisted_command tests fed by
+    # _well_formed_ruleset_with_override, which supply a fixture that is
+    # otherwise complete and well-formed but carries exactly one type
+    # violation. (Renamed from
+    # test_bash_policy_malformed_entry_value_still_denies_git_commit, whose
+    # old name implied it probed value-type validation; it never reached
+    # that code.)
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -123,7 +133,19 @@ def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path, 
     assert "coordinator-doc-new" in reason
 
 
+# ---------------------------------------------------------------------------
+# AC11, type-validation branches (review finding 3, 2026-07-27): the two
+# tests above both short-circuit on _validate_ruleset's missing-key
+# `except (KeyError, TypeError)` leg, never reaching the isinstance/
 # _is_str_list checks. Each fixture below is otherwise COMPLETE and
+# well-formed -- every required key present, every other value valid -- but
+# carries exactly ONE type violation, so it can only be caught by the
+# isinstance/_is_str_list branches these tests exist to pin. A regression
+# that accidentally widened one of those checks (e.g. dropped the per-item
+# str check on a list, or the isinstance(..., dict) check on
+# git_global_options) would not be caught by the missing-key tests above,
+# but must be caught here.
+# ---------------------------------------------------------------------------
 
 _WELL_FORMED_RULESET: Dict[str, Any] = {
     "git_readonly_subcommands": ["show", "log"],
@@ -219,7 +241,18 @@ def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(t
     assert "coordinator-doc-new" in reason
 
 
+# ---------------------------------------------------------------------------
+# Divergence 14 (2026-08-10): the enforced ruleset is now hard-pinned in
 # code (`_default_ruleset()`/`_DEFAULT_RULESET_TYPE_OVERRIDES`) -- a
+# well-formed `bash_policy:` YAML entry for a confined type's RULESET no
+# longer changes the ALLOW/DENY decision at all, in EITHER direction. This
+# is the fix for the confinement-editable-by-its-own-subject defect (a
+# confined agent's own Edit tool could rewrite this YAML and the very next
+# Bash call honoured the rewrite) -- these two tests used to prove the
+# opposite (that the policy genuinely widened/narrowed the surface); they
+# now pin that a YAML ruleset entry is INERT for enforcement, which is the
+# whole point of the fix. See _resolve_ruleset's own comment.
+# ---------------------------------------------------------------------------
 
 
 def _well_formed_policy_yaml(readonly_fs_binaries) -> str:
@@ -248,6 +281,7 @@ def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallba
     _confine(monkeypatch)
     payload = _payload("sed -n 1p some-file.txt")
 
+    # Without an injected policy path, the hardcoded fallback governs --
     # "sed" is not in _READONLY_FS_BINARIES, so this denies.
     assert _assert_denied(guard.check(payload)) is not None
 
@@ -274,7 +308,17 @@ def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# Regression, updated for Divergence 14 (2026-08-10): a pre-existing
+# ``bash_policy:`` YAML entry for a confined type -- authored before
 # ``_DEFAULT_RULESET_TYPE_OVERRIDES`` grew an entry for that same type --
+# has never been able to shadow the Python-side override, and as of
+# Divergence 14 this is unconditionally true: the YAML ruleset entry is
+# never consulted for enforcement at all (see ``_resolve_ruleset``'s own
+# comment), so there is nothing left for it to shadow. This test now pins
+# that outcome directly rather than via the original green-tests-inert-
+# production layering story (retained in the comment below for history).
+# ---------------------------------------------------------------------------
 
 
 def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
@@ -283,7 +327,14 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
     _confine(monkeypatch)
     payload = _payload("python3 -m pytest -q")
 
+    # A well-formed bash_policy: entry for coordinator:code-reviewer that
+    # carries NEITHER interpreter_allowed_modules NOR
+    # interpreter_allow_scripts -- exactly what a policy row authored before
     # the pytest grant existed looks like (both keys are OPTIONAL per
+    # _validate_ruleset, defaulting to the conservative deny-more value so
+    # an already-deployed row does not fail validation). Under Divergence 14
+    # this entry is never consulted for enforcement at all, so its presence
+    # is inert either way -- the pytest allowance comes exclusively from
     # _DEFAULT_RULESET_TYPE_OVERRIDES via _default_ruleset() now.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")

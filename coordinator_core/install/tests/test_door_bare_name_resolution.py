@@ -60,9 +60,20 @@ def _resolve(dirs: "list[Path]") -> "list[Path]":
     return resolve_bare_name(_STEM, [str(d) for d in dirs], _PATHEXT)
 
 
+# WHICH FILE WON, not how the resolver spelled it. `resolve_bare_name` builds
+# each candidate as `stem + <PATHEXT entry as written>`, and PATHEXT is
 # conventionally UPPERCASE (`.COM;.EXE;...`) while the installed door is
+# lowercase `coordinator-invoke.exe`. The candidate hits on a case-insensitive
+# filesystem -- Windows' NTFS and macOS' default APFS alike -- and is then
+# recorded under PATHEXT's casing rather than the name on disk. These tests
 # are about ORDERING, so they compare identity; an equality-on-the-string
+# assertion here was red on every platform, which is why the four Windows
+# cases below never passed anywhere.
+#
+# The casing itself is a PRODUCT finding, reported and deliberately not
+# papered over here: `bare_name_door_report` compares its winner against a
 # lowercase `DOOR_INSTALLED_NAME` with `!=`, so on Windows it declares a
+# correctly-installed door "BROKEN" on casing alone.
 def _same(a: Path, b: Path) -> bool:
     return a.exists() and b.exists() and a.samefile(b)
 

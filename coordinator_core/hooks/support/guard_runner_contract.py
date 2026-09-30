@@ -133,14 +133,21 @@ from typing import FrozenSet, Optional, Tuple
 
 TRIPWIRE_TOKEN = "GUARD-ON-RUNNER-CONTRACT"
 
+#: The channel names a guard's verdict is expressed in, mirrored from
 #: `message_envelope.py`'s `CHANNEL_STOP` / `CHANNEL_ADDITIONAL_CONTEXT` /
 #: `CHANNEL_DENY` constants (NOT re-imported here -- this module stays
+#: import-free at module scope beyond the standard library). Only
 #: CHANNEL_ADDITIONAL_CONTEXT and CHANNEL_DENY are relevant to the
 #: PreToolUse write-path runner this contract targets; CHANNEL_STOP is a
+#: Stop-family shape out of scope here.
 CHANNEL_ADDITIONAL_CONTEXT = "additional_context"
 CHANNEL_DENY = "deny"
 
+#: Environment variable that puts a guard's own `message_envelope.emit()`
+#: call into measurement mode -- mirrored from `message_envelope.py`'s
 #: `MEASURE_ENV_VAR` for the same import-free-module-scope reason as the
+#: channel constants above. Per clause 9, the runner does NOT special-case
+#: this variable: measurement mode is standalone-invocation-only.
 MEASURE_ENV_VAR = "COORDINATOR_HOOK_MESSAGE_MEASURE"
 
 FORBIDDEN_OS_EXIT = r"os\._exit"

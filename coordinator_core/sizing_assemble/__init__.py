@@ -695,11 +695,18 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
 
 def _render_d_lobby_lane(resolved_route: str, tshirt: str) -> str:
     chain = stages(resolved_route, tshirt)
-    return " / ".join(chain["rows"])
+    rows = " -> ".join(chain["rows"])
+    if chain["terminal"] is None:
+        return (
+            f"{rows}. The {chain['owned_by']} room owns everything after "
+            "this row; the lobby opens no further stages."
+        )
+    return f"{rows}. The lobby owns this chain through {chain['terminal']}."
 
 
 #: DECISION POINTS the sizing band actually discriminates, never lane prose —
 #: every served arm is PROJECTED at call time from values `route()` has
+#: already computed; the registry stores no arm text.
 DISPOSITION_REGISTRY = (
     {
         "id": "d-lobby-lane",
@@ -854,7 +861,7 @@ def route(
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate, stages,
-        scout_evidence, narration, next_move, exit_criterion,
+        dispositions, scout_evidence, narration, next_move, exit_criterion,
         interaction_mode, interaction_mode_source, touchpoints} —
         READ-ONLY, mutates nothing.
     """

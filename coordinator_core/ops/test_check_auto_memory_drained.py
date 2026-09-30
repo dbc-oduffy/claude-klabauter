@@ -17,11 +17,54 @@ import pytest
 from coordinator_core.ops.check_auto_memory_drained import (
     _own_index_rows,
     _own_memory_dirs,
+    _guarded_project_roots,
     _own_residue,
     _slugify_repo_root,
     main,
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+
+
+@pytest.fixture(autouse=True)
+def _no_config_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
+def _roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **env: str) -> "list[Path]":
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    return _guarded_project_roots()
+
+
+def test_claude_home_is_parent_of_dot_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ch = tmp_path / "ch"
+    roots = _roots(monkeypatch, tmp_path, CLAUDE_HOME=str(ch))
+    assert ch / ".claude" / "projects" in roots
+    assert ch / "projects" not in roots
+
+
+def test_claude_config_dir_is_governed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "cfg"
+    roots = _roots(monkeypatch, tmp_path, CLAUDE_CONFIG_DIR=str(cfg))
+    assert cfg / "projects" in roots
+
+
+def test_unset_overrides_collapse_to_one_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roots = _roots(monkeypatch, tmp_path)
+    assert roots.count(tmp_path / "home" / ".claude" / "projects") == 1
+
+
+@pytest.mark.parametrize("bad", ["relative/dir", "/x/.claude"])
+def test_bad_claude_home_does_not_raise(
+    bad: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = _roots(monkeypatch, tmp_path, CLAUDE_HOME=bad)
+    assert tmp_path / "home" / ".claude" / "projects" in roots
 
 pytestmark = [
     pytest.mark.spawns_process,

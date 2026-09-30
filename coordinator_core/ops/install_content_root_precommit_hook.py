@@ -120,6 +120,9 @@ _GATE_REGISTRY: List[_Gate] = [
     _Gate(
         marker="guard-doctrine-surface-ratio",
         # The ENFORCING leg (1b). `guard-doctrine-surface-ratio.py` is leg 1a, an
+        # advisory-only PreToolUse guard that coordinator-content-repo's own hook roster maps to
+        # `preuse-write-dispatch.py` — naming it here installed a gate that cannot
+        # block, leaving the ratchet with no enforcing leg installed by anything.
         filename="guard-doctrine-surface-ratio-precommit.py",
         label="doctrine-surface-ratio",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_DOCTRINE_SURFACE_RATIO",
@@ -429,6 +432,10 @@ def _resolve_content_root_target(target: str) -> Optional[str]:
 
     if _canon(toplevel) != canon_content_root:
         # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
+        # unreachability. Install-time-only pre-commit hook installer (the operator
+        # runs the claude-klabauter installer/`setup.py` deliberately); a third-repo session
+        # cannot hit this ambiently, but an installing operator CAN reach it by
+        # running the installer (same basis as audit rows 6/11/12).
         print(f"{_PROG}: not coordinator-content-repo ({toplevel}) — skipping.", file=sys.stderr)
         return None
     return toplevel

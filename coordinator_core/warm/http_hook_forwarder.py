@@ -133,21 +133,60 @@ __all__ = [
     "main",
 ]
 
+#: RETIRED AS A VERDICT BY DR-402, KEPT AS A CAUSE LABEL. This text was the deny this module
+#: emitted when discovery resolved no backend, and emitting it is now the defect: a guard that
+#: never evaluated holds no verdict to report. It survives ONLY as the `cause` string the ladder
+#: stamps into its durable rung records and its loud proceed message, where "no live engine
+#: backend reachable" is a true statement of fact rather than a permission decision.
+#:
 #: DO NOT REATTACH THIS TO A `permissionDecision`. A successor reading a deny storm and reaching
+#: for the "safe default" is exactly the misunderstanding DR-402 names -- see the module
+#: docstring's ladder.
 DENY_REASON = (
     "http-hook-forwarder: no live engine backend reachable. Retrying does not start a "
     "backend sooner. Wait for a call to succeed; do not probe."
 )
 
+#: Reason text for the OTHER case this module must author a decision for: a backend that was
+#: reached and answered, but answered with a transport-level refusal rather than a verdict.
+#:
 #: WHY THIS IS A DENY AND NOT A RELAY, MEASURED. Relaying the raw status was this module's
+#: original behaviour and it is a guard-bypass hole: the harness FAILS OPEN on a non-2xx from a
 #: hook, and on `PreToolUse` it does so SILENTLY -- nothing surfaces in the tool result at all.
+#: Measured 2026-08-27 with a receiver answering every POST with a bare 401 registered as
+#: `PreToolUse`: the harness dialled, took the 401, and ran the tool anyway
+#: (`docs/research/evidence/2026-08-27-transport-error-fail-open/`). A transport error is NOT a
+#: verdict, and this module must never hand the harness one where a verdict was required.
 #: DIAGNOSTIC LIMIT, worth knowing before this text is trusted as a diagnosis. `cookie.read`
+#: collapses "no cookie exists" and "the cookie exists and could not be read" to `None` by
+#: design -- the engine keeps `CookieUnreadableError` for the boot paths that must NOT collapse
+#: them. So this module cannot distinguish an ungated backend from a gated one whose credential
+#: it failed to read, and under a deny storm those have entirely different diagnoses. Reading
+#: the cookie a second way to tell them apart is deliberately NOT done here: it would add a
+#: failure path to the hot path of every Bash call on the box to improve a log line.
 #: RETIRED AS A VERDICT BY DR-402, KEPT AS A CAUSE LABEL -- see `DENY_REASON`'s note; same
+#: disposition applies here. A backend that answered with a transport error still did not
+#: evaluate the guard, so this is a ladder entry (rung 2, then 3), never a deny.
 REFUSED_REASON = "http-hook-forwarder: engine backend refused the request"
 
 #: Reason text for the third deny this module authors: the override channel was DECLARED and then
+#: VETOED (`_env_from_request_headers` found an `httpHookAllowedEnvVars` setting vetoing the
+#: registration's own `allowedEnvVars`). Its own branch because it has NOTHING to do with backend
+#: reachability and fires against a live, healthy, unskewed backend -- a caller told the backend
+#: was unreachable will probe the listener, read the discovery record, and test skew, and every
+#: one of those steps is wasted. A deny whose stated cause is false costs more than a silent one,
+#: because it is acted upon.
 #: NAMES ITS OWN RECOVERY, because this is the one deny in this module an actor cannot act on
+#: with the tool it just lost. It fires on the Bash matcher, so every documented recovery --
+#: `claude plugin disable`, the unlock sentinel, killing the resident forwarder -- is itself a
+#: Bash call, and the deny stands for the life of the session (hook registrations are read at
+#: session start). `guard-proportionality.md`'s outlet test is exactly this: the denied actor
+#: must be able to state what it does next WITHOUT a human. So the text names the file edit,
+#: which file tools alone can make: the `enabledPlugins` entry in `~/.claude/settings.json`,
+#: which takes effect in the next session. It does not assert the veto as fact: an empty canary
+#: also results from a harness process with neither canary variable set, and this module cannot
 #: see which, so claiming one is the false-cause deny the `DENY_REASON` note warns costs more
+#: than a silent one.
 VETOED_ENV_REASON = (
     "http-hook-forwarder: the override channel is declared but its canary header (HOME / "
     "USERPROFILE) arrived empty, so no caller override reached the guard and the Bash guard "
@@ -160,7 +199,10 @@ VETOED_ENV_REASON = (
 )
 
 #: Discovery resolved a backend and it could not be reached -- distinct from `DENY_REASON`'s
+#: "nothing resolved at all". A stale record pointing at a dead process denies exactly like an
+#: absent one, but the two want different first moves: this one names the address that failed.
 #: RETIRED AS A VERDICT BY DR-402, KEPT AS A CAUSE LABEL -- see `DENY_REASON`'s note; same
+#: disposition applies here.
 UNREACHABLE_REASON = (
     "http-hook-forwarder: discovery named an engine backend but it could not be reached "
     "(refused, timed out, or reset mid-response); the discovery record may be stale"
@@ -171,19 +213,69 @@ MAX_BODY_BYTES = 1 << 20
 _FORWARD_CONNECT_TIMEOUT_SECS = 2.0
 
 #: How long the backend may spend RESPONDING once the socket is established. Deliberately an
+#: order of magnitude above the connect bound, and above the engine's own per-op dispatch budget
 #: (30 s at the time of writing), because this leg measures guard EXECUTION, not transport.
+#:
+#: WHY THE TWO LEGS CANNOT SHARE ONE NUMBER. `HTTPConnection(timeout=N)` applies N to the socket
+#: for its whole lifetime -- connect, send, AND response read -- so a single small value caps how
+#: long the engine may take to *evaluate a guard*, and a `socket.timeout` on that read is an
+#: `OSError` that lands in `do_POST`'s unreachable branch. A live backend still legitimately
+#: serving an expensive guard (a commit guard's cwd-sensitive git reads plus a delegate spawn, on
+#: a large index under fleet load) is then reported as no-backend and the command is denied.
+#: Reachability must never be adjudicated on a call the backend is still answering.
+#:
+#: Sized ABOVE the engine's own budget on purpose: the engine is the component that owns giving
+#: up on a slow op, and it already does. This module's job is to not pre-empt that decision.
 _FORWARD_READ_TIMEOUT_SECS = 45.0
 
+#: The one fixed, machine-global loopback port this module ever binds or dials -- named here so
+#: exactly one place in the tree commits the number (module docstring, "WHAT THIS MODULE DOES
+#: NOT DO"; `DR-http-hook-forwarder-fixed-port.md` Decision 3 assigns *ownership* of the port,
 #: not its value). It carries no clone identity -- routing rides the `COORDINATOR_CLONE_ROOT`
+#: header per that DR's Decision 1 -- so one number serves every clone on the box.
+#:
+#: Checked against, before picking 47623:
+#:   - IANA registered ports (0-49151, both the "well known" 0-1023 and "user/registered"
+#:     1024-49151 ranges as of the IANA Service Name and Transport Protocol Port Number
+#:     Registry) -- 47623 is unassigned in that registry.
+#:   - Windows' default dynamic/ephemeral client port range, `49152-65535`
+#:     (`netsh int ipv4 show dynamicport tcp`, Windows default since Vista) -- 47623 sits below
+#:     that range, so the OS will never hand it out to an outbound client socket and collide
+#:     with this module's own listener.
+#:   - Common dev-tool defaults in this environment (Node/Vite 5173, common debug ports
+#:     8000/8080/9000-series, Postgres 5432, Redis 6379, etc.) -- no overlap.
 FIXED_PORT = 47623
 
 #: THE FIXED-PORT SUCCESSION -- the four literals that let this module keep the seat.
+#:
+#: `coordinator_core.warm.front_door` binds this same 47623 (it took the value FROM here, per its
 #: own module docstring), so a spawned front door takes EADDRINUSE against this process and must
+#: then discriminate an ordinary lost election from a foreign squatter. It does that by
 #: `probe_existing_holder`: GET `<HEALTH_PATH>` on the bound port, and a 2xx UTF-8 JSON object
 #: carrying `DOOR_PROTOCOL_VERSION_KEY` as an int. Anything else -- refused, timed out, non-2xx,
+#: malformed, or missing the marker -- is `ForeignHolderError`, which its AC4 branch says must
+#: never be read as "no listener" nor as an ordinary defer.
+#:
+#: The marker is what lets `ensure_front_door` have a useful production caller: without it,
+#: registering one would spawn a front-door process per session that can never win the seat --
+#: ~30 concurrently on this box -- restoring nothing.
+#:
 #: THE MARKER IS A CONFORMANCE CLAIM, NOT AN IDENTITY CLAIM. It asserts "this holder speaks the
+#: front-door hook transport", never "I am a process running front_door.py". This module is not
+#: one and never becomes one; it is a legitimate ordinary-defer holder. The full holder contract
+#: -- route, status, body, version, budget, and the `POST /hook` obligation the marker also
+#: claims -- is written down at `hook-seam-warm-reach-contract.md` § The fixed-port succession
+#: (engine repo `fa736c9dba`), and is pinned engine-side by
+#: `coordinator_core/warm/tests/test_front_door_succession_contract.py`.
+#:
 #: SPELT AS LITERALS, NOT IMPORTED, for the identical reason `COOKIE_HEADER_NAME` below is: this
+#: module must keep serving when `coordinator_core` is unimportable, and the health answer in
+#: particular must not depend on an engine root resolving -- an engine-gated `/health` would 501
+#: on exactly the cold box where the succession has to work. Pinned against the engine's own
+#: constants by `test_http_hook_forwarder_health.py`, the same way the cookie header is.
+#:
 #: DO NOT BUMP `PUBLISHED_DOOR_PROTOCOL_VERSION` TO FORCE A RE-ELECTION. It gates wire shape, and
+#: `is_own_door_health_payload` accepts ANY int precisely so a bump is not a fleet restart.
 HEALTH_PATH = "/health"
 DOOR_PROTOCOL_VERSION_KEY = "door_protocol_version"
 PUBLISHED_DOOR_PROTOCOL_VERSION = 1
@@ -191,35 +283,96 @@ PUBLISHED_DOOR_PROTOCOL_VERSION = 1
 HOLDER_NAME = "doe-http-hook-forwarder"
 
 #: HTTP header the `type: "http"` registration carries `${COORDINATOR_CLONE_ROOT}` on, per
+#: `DR-http-hook-forwarder-fixed-port.md` Decision 1's routing key. The DR names the env var but
+#: leaves the on-the-wire header name unstated (the registration flip is itself deferred --
 #: `coordinator/hooks/REGISTRATIONS.md`'s note on the folded Bash entry -- so no header has
+#: been exercised end-to-end yet). Chosen here as a single module constant so the registration
+#: chunk cites this name rather than inventing its own: `X-Coordinator-Clone-Root`.
 ROUTING_HEADER_NAME = "X-Coordinator-Clone-Root"
 
+#: Credential header the warm listener's cookie gate requires on every forwarded request
 #: (`coordinator_core/warm/cookie.py` `COOKIE_HEADER`; enforced in `supervisor.py`
+#: `_cookie_is_valid`, before routing, fail-closed).
+#:
+#: NOT the door key, and the two are routinely conflated. `X-Coordinator-Door-Key` is env-sourced
 #: (`COORDINATOR_DOOR_KEY`, `door_credential.py`) and interpolates into a `type: "http"`
+#: registration; THIS one is file-sourced per engine root and the harness cannot interpolate it,
+#: which is why it is attached here at forward time rather than by the registration. A third
+#: axis, the skew token, is neither -- it self-stamps and refuses with 409, not 401.
+#:
+#: Spelt as a literal rather than imported from the engine so this module keeps forwarding when
+#: `coordinator_core` is unimportable; the value is pinned against the engine by
+#: `test_http_hook_forwarder_cookie.py`.
 COOKIE_HEADER_NAME = "X-Coordinator-Cookie"
 
 DIAL_COUNT_PATH_ENV = "COORDINATOR_FORWARDER_DIAL_COUNT_PATH"
 
+#: How many recent arrivals the counter keeps alongside the totals. A bare integer is
+#: uninterpretable while a sweep varies one registration field at a time -- the tail is what says
+#: WHICH variation dialled. Small: this is a breadcrumb, not a log.
+#: Wall-clock ceiling on the bounded wait `_resolve_backend` and `do_POST`'s `OSError` arm
+#: spend re-reading discovery before they deny. THREE SECONDS, NOT FIFTEEN, AND THE NUMBER IS
 #: ARGUED RATHER THAN INHERITED.
+#:
+#: The shape is `warm.client`'s, whose ledger is 161/166 served against a 15s deadline, p50 wait
+#: 1.30s, p90 3.05s, over a boot whose own `ready_secs` is p50 0.783s / p90 1.189s. That is prior
+#: art, not authority: this module runs inside a `PreToolUse` hook on the hot path of every Bash
+#: call on the box, and `coordinator.local.md`'s worst-host rule governs here -- the budget is set
+#: by the slowest machine any peer is sitting at, and a per-call stall is never "not a hot path".
+#: Against that text a 15s hold is not defensible; ~3s recovers 89% of the same population for a
+#: fifth of the worst-case stall, which is the trade this repo's own governing text picks.
+#:
+#: WHY A BOUNDED WAIT IS CHEAPER THAN TODAY'S DENY, on both units. A hard deny costs the caller a
+#: full model retry -- more wall clock AND more process time than any wait here. And a thread
+#: blocked on `time.sleep` between discovery reads consumes ~0 process time, so this adds no
+#: second process-time bar. That is the whole of the process-time claim; it is not a licence to
+#: treat wall clock as free, which is why the deadline above is argued down rather than adopted.
 _BACKEND_WAIT_DEADLINE_SECS = 3.0
 
 _BACKEND_WAIT_TICK_SECS = 0.1
 
+#: The three ways a dial that ARRIVED can still fail to reach a backend, counted separately.
+#: `received_total - sum(forwarded_by_event)` collapses all three into one number, and that
+#: collapse is why the incident this instrument exists for could not diagnose itself: "no record
+#: was published", "a record named a backend that refused the connection", and "a record parsed
+#: but was version-skewed and never resolved" have different owners and different fixes, and are
 #: indistinguishable in a single gap figure. They are also what makes the wait above MEASURABLE
+#: rather than merely asserted -- an effect size needs the arm it moved.
 DENY_ARM_NO_BACKEND = "no_backend"
 DENY_ARM_UNREACHABLE = "unreachable"
 DENY_ARM_SKEW = "skew"
 
+#: The two below-warm rungs of DR-402's ladder, as recorded in `degrade_log_path()` and counted
+#: in `DialCounter.rungs`. Rung 1 (warm) is not named here because it is the absence of a rung
+#: record -- a served call writes nothing, which is what keeps the degrade log readable as
+#: "everything in this file is a departure from normal".
+#:
 #: THE ARMS ABOVE DID NOT BECOME REDUNDANT. `DENY_ARM_*` says WHY warmth was unavailable (whose
+#: bug: no record published, a record naming a dead port, a version-skewed record); the rungs say
+#: WHAT WE DID ABOUT IT. A box where every call is rung 2 is healthy-ish and slow; a box where
+#: every call is rung 3 is running unguarded. Collapsing the two axes loses the second question.
 RUNG_COLD = "cold"
 RUNG_PROCEED = "proceed"
 
+#: Not a rung of the ladder -- a lifecycle event recorded on the same surface, because a reader
+#: chasing a degrade run needs to see that the process changed its mind about where the engine is
 #: IN THE SAME TIMELINE as the denials around it. Filed here rather than in a second log for the
+#: reason the rungs are: a fact split across two files is a fact nobody correlates.
 RUNG_ENGINE_ROOT_INVALIDATED = "engine_root_invalidated"
 
 #: WHY `no_backend` NEEDED SPLITTING, and this is the whole P1. On 2026-09-01 a forwarder denied
+#: for ~38 minutes against a live, healthy listener, and its own dial file could not say why: the
+#: `no_backend` arm collapses ELEVEN distinct return sites -- no routing key, a header naming no
+#: real clone, no engine root resolvable, `coordinator_core` unimportable, a root that fails
+#: `is_engine_root`, no discovery record, a malformed record, a bad port, an unresolvable bind
+#: host -- into a single integer. Those have different owners and different first moves, and no
+#: arithmetic over the other counters recovers which fired. This is the identical defect
 #: `DENY_ARM_*` was introduced to fix one level up, repeated one level down; the incident could
+#: not diagnose itself for exactly that reason.
+#:
 #: THE ARM IS UNCHANGED AND STAYS COARSE. `denied_by_arm` remains the three-way whose-bug-is-it
+#: axis that existing readers and tests depend on; the cause is a strictly additive second
+#: dimension recorded beside it. A cause is never a verdict and never changes one.
 CAUSE_NO_ROUTING_KEY = "no_routing_key"
 CAUSE_CLONE_UNRESOLVED = "clone_root_unresolvable"
 CAUSE_NO_ENGINE_ROOT = "engine_root_unresolved"
@@ -232,6 +385,7 @@ CAUSE_RECORD_BAD_PORT = "record_port_missing_or_invalid"
 CAUSE_NO_BIND_HOST = "bind_host_unresolvable"
 CAUSE_SKEWED = "record_version_skewed"
 
+#: Env var overriding where the rung records are persisted. Exists for tests, like
 #: `DIAL_COUNT_PATH_ENV`; a deployment never sets it.
 DEGRADE_LOG_PATH_ENV = "COORDINATOR_FORWARDER_DEGRADE_LOG_PATH"
 
@@ -241,7 +395,12 @@ _degrade_log_lock = threading.Lock()
 
 _DIAL_RING_SIZE = 20
 
+#: Bounded ladder for the counter's atomic replace. CPython's ``open()`` does not request
 #: ``FILE_SHARE_DELETE``, so on Windows a replace of a file any reader currently holds open fails
+#: with ``PermissionError`` (WinError 5) rather than blocking. Measured against one polling
+#: reader, 2474 of 4000 single-attempt replaces failed that way; every one was swallowed by
+#: ``persist``'s never-raise contract and lost the arrival it carried. The cap keeps a contended
+#: write shorter than the response it already trails, and POSIX never enters the ladder at all.
 _REPLACE_RETRY_ATTEMPTS = 50
 _REPLACE_RETRY_SLEEP_SECONDS = 0.002
 
@@ -502,9 +661,24 @@ class DialCounter:
                 time.sleep(_REPLACE_RETRY_SLEEP_SECONDS)
 
 
+#: This module now lives INSIDE coordinator_core (`coordinator_core/warm/http_hook_forwarder.py`),
+#: not in a DoE hook script reaching for a sibling checkout, so the "where is the engine"
+#: question that `_engine_root.resolve_claude_klabauter_root_with_provenance` used to answer via a
+#: machine-local registry read collapses to the module's own tree -- exactly the "engine" path
+#: class in docs/plans/2026-09-18-doe-holds-no-scripts.md § Path resolution:
+#: `Path(__file__).parents[2]` **is** the engine root here, the same computation
 #: `coordinator_core.ops.invoke_from_argv._ENGINE_ROOT` uses. Per that section, the
+#: `_engine_root` import is DELETED, not ported.
+#:
 #: THIS IS WHY THE WHOLE RE-RESOLUTION LADDER BELOW IT DISAPPEARS TOO, not merely the import. The
+#: retired `_ensure_engine_on_sys_path` / `invalidate_engine_root` machinery existed because a
 #: REGISTRY-RESOLVED root is per-process state that can be wrong and, per the 2026-09-01 incident
+#: this module's own history records, silently stay wrong for the life of the process. A root
+#: computed from this file's own location cannot go stale that way -- there is nothing upstream of
+#: it (a registry entry, a live-tree override, a moving working tree) that can change what
+#: `Path(__file__).parents[2]` answers without this file itself moving, which is exactly the
+#: `test_no_hardcoded_paths.py`-guarded class of defect the plan's arrival gate already checks
+#: for. A cache with no way to go wrong needs no invalidation path.
 _ENGINE_ROOT: Path = Path(__file__).resolve().parents[2]
 if str(_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_ENGINE_ROOT))

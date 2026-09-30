@@ -1,6 +1,6 @@
 """coordinator_core.ceremony_common.json_payload_flag — resolves a JSON
-payload CLI flag from either an inline argv token or a file, for the eleven
-`--decisions` parse sites across the ceremony CLIs. (`workday_complete.brief`
+payload CLI flag from either an inline argv token or a file, for every
+`--decisions` parse site across the ceremony CLIs. (`workday_complete.brief`
 also names `--decisions`, but it EMITS one into a directive args list that
 `workday_complete.apply` dispatches in-process via importlib -- never a
 command line -- so it has no corrupting transport to avoid and is not wired
@@ -21,7 +21,7 @@ docs/plans/2026-08-18-quote-safe-payloads-through-the-cmd-forw.md, chunk C1
 Negative-spec:
     - Does NOT print, exit, or raise for a user-input error (missing value,
       unreadable file, malformed JSON, or a token that isn't ours). All
-      twelve call sites already have their own error vocabulary and exit
+      call sites already have their own error vocabulary and exit
       codes — one returns `_usage("pickup-assemble")`, another returns
       `int(WorkstreamApplyExitCode.TRANSPORT_FAIL)`, and they do not agree.
       A helper that owns error rendering could not be wired into sites

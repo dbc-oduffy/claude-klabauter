@@ -155,6 +155,7 @@ def test_clean_three_chunk_spec(clean_spec_output):
     assert so_c.count("Out-of-scope — peer work") == 3, "peer-work OOS header in all blocks"
     assert so_c.count("Out-of-scope — plan document") == 3, "plan-doc OOS header in all blocks"
     # C10 (M4b): expected_branch: is the SC-DR-008 commit-authorization token — the fan-out
+    # contract is now brief -> executor edits -> EM-serial-commit, so it must NOT appear.
     assert "expected_branch:" not in so_c, "expected_branch absent from all blocks (M4b de-branch)"
     assert so_c.count("### In-scope") == 3, "in-scope section header in all blocks"
 
@@ -356,6 +357,8 @@ def test_stdin_spec_path(root):
 
 
 # CLAUDE_KLABAUTER_ROOT for these tests is this very checkout — coordinator_core lives
+# at its top level, a sibling of coordinator/bin/ (where this test file and
+# fan-out-dispatch.py both live).
 _REAL_CLAUDE_KLABAUTER_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 

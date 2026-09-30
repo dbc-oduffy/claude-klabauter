@@ -28,11 +28,20 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
 # Every CONFINEMENT_DENY guard, in registration order. Fails-closed hard
+# denies that must never sit behind a guard that can rewrite (`offer-git-c`
+# and friends short-circuit via allow+updatedInput).
 CONFINEMENT_DENY_NAMES = [
     "no-verify",
     "destructive-git-orphan",
     "destructive-rm",
+    # Arrived live with main's 1d033e514f (C2, docs/plans/2026-09-02-a-write-
+    # that-discards-what-you-never-saw.md) and sits here, between
+    # `destructive-rm` and `destructive-git-clean`, because that is its
+    # registration position in `_build_guard_chain` -- this list is ordered,
     # not alphabetical. CONFINEMENT_DENY is the band it registers with: it is
+    # a hard-deny leg that refuses a whole-file write over content the
+    # session never read, which is the same irreversible-loss posture as its
+    # neighbours here, not an advisory.
     "stale-write",
     "destructive-git-clean",
     "destructive-git-revert",
@@ -54,30 +63,57 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-findings-reject",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
     # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
+    # PORT of block_subagent_grant_acquisition.py").
     "block-subagent-guard-grant",
     "guard-repo-setup-claude-home-refusal",
     "guard-host-subagent-bash-ban",
     "guard-host-subagent-bash-spawn-shapes",
     "guard-doctrine-surface-bash-write",
+    # C6 (D6/D7/S4, docs/plans/2026-09-12-perforce-second-class-commit-and-
+    # shelve.md): a fail-closed hard deny on p4 verbs (submit outright,
+    # everything outside cockpit's read/session-CL-write allowlist
+    # default-denied) plus D7's git worktree-rewrite deny and the
+    # attrib/chmod read-only-strip deny, all marker-gated to p4-mirrored
     # repos. Same confinement posture as its CONFINEMENT_DENY neighbors
+    # above -- registered here, not classified by default.
     "p4-verb-fence",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`
+# must precede every "-rewrite"/"-advise"-suffixed entry (its own
+# registration comment: those return allow+rewrite, which would make its
+# search-answering seam unreachable if registered after them).
 ADVISORY_REWRITE_NAMES = [
+    # The advisory floor's
+    # non-hard-deny leg. Registered immediately after `check-raw-pid-
     # liveness` (the last CONFINEMENT_DENY guard) and before `offer-git-c`,
     # so it is the first ADVISORY_REWRITE entry in physical chain order.
     "destructive-git-revert-advisory",
+    # Two-leg split (2026-08-05, mirrors `destructive-git-revert-advisory`
     # immediately above -- same CONFINEMENT_DENY shadowing hazard,
+    # `state/audits/2026-08-05-confinement-deny-band-return-shapes.md`).
+    # Registered immediately after `destructive-git-revert-advisory` and
+    # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
     # PM directive 2026-09-29: per-repo/shared venv creation is advisory,
     # not a hard deny -- see dispatch.py's own registration comment.
     "block-venv-creation",
     # ADVISORY, not CONFINEMENT_DENY, and argued that way per DR-277: `git
+    # stash apply` read as a data-loss check yields a false green, but the
+    # harm is a wrong conclusion rather than lost work, and a deny would also
+    # block the EM inspecting an entry it owns. Incident:
+    # state/audits/2026-08-30-why-the-stash-guards-did-not-fire.md.
     "stash-apply-verification-advisory",
     "offer-git-c",
     "git-no-optional-locks",
+    "background-publish",
+    # Self-heal leg of the same fleet-wide `.git/index.lock` contention
+    # campaign, registered immediately after `git-no-optional-locks` in
+    # `dispatch.py` -- a stat-gated, side-effect-only reap that always
+    # returns `None` (never a rewrite or a deny) but is `fail_closed=False`
     # ADVISORY_REWRITE, same as its `git-no-optional-locks` neighbor, per
+    # guard_reap_stale_git_lock.py's own module docstring and dispatch.py's
+    # registration comment.
     "reap-stale-git-lock",
     "validate-commit",
     "inprocess-search",
@@ -92,23 +128,50 @@ ADVISORY_REWRITE_NAMES = [
     "head-tail-plumbing-rewrite",
     "offer-invoke-params-stdin",
     # `grep-via-bash-guard` moved here from PLATFORM_CONDITIONED_DENY_NAMES
+    # (H11(a), 2026-07-30, docs/plans/2026-07-30-os-aware-guard-advisory-
+    # defaults.md) -- its own substitutable/deny branch was removed the
+    # same day (0 denies on either platform, provably unreachable), so it
+    # no longer has deny vocabulary and both its band AND `fail_closed`
+    # flipped (see its own dispatch.py registration comment). Registered
+    # last in THIS list/band, immediately before the two remaining
     # PLATFORM_CONDITIONED_DENY guards, matching its physical chain
+    # position (band contiguity requires the physical move, not just the
+    # label -- see dispatch.py's own comment at this guard's entry).
     "grep-via-bash-guard",
+    # cross-repo/inbox/ dispatch, "Guard powershell-via-bash mangling"
+    # (2026-08-08) -- registered immediately after `grep-via-bash-guard`
+    # (same physical chain position, dispatch.py). Same "never denies"
     # shape as its neighbor, so this band, not PLATFORM_CONDITIONED_DENY.
     "powershell-via-bash-guard",
+    # docs/plans/2026-08-02-write-confinement-guards.md (coordinator-content-repo), chunk
+    # C4 -- the Bash-surface cross-repo write-confinement speed bump.
     # `ADVISORY_REWRITE`, deliberately NOT `CONFINEMENT_DENY`: the blanket-
     # disarm marker can suppress every band except `CONFINEMENT_DENY`, and
+    # registering a deliberately passable bump there would make it the
+    # LEAST passable guard in the suite -- see dispatch.py's own
+    # registration comment for the full rationale (AC19).
     "bump-foreign-repo-write",
     # Same plan, chunk C5 -- the Bash-surface OUTSIDE-repo sibling of the
+    # entry above (fires when a target resolves under NO git root at all,
     # rather than a DIFFERENT one). Same `ADVISORY_REWRITE` rationale,
+    # registered immediately after C4's entry in `dispatch.py` (AC19).
     "bump-outside-repo-write",
+    # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four guard-
     # class-census band flips (CONFINEMENT_DENY -> ADVISORY_REWRITE),
+    # registered at the tail of this band, ahead of the two remaining
     # PLATFORM_CONDITIONED_DENY guards below -- see dispatch.py's own
+    # registration comment for the flip's full rationale, including why
+    # `block-worktree-creation` (also named in the census) is deliberately
+    # NOT here.
     "block-noncanonical-branch-creation",
     "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
 ]
 
+# The two platform-conditioned guards -- `fail_closed=True` (a crash still
+# fails closed) but registered LAST, after every rewrite, per the empirically
+# -tested-and-reverted ordering recorded on their own guard_chain entries.
+# `grep-via-bash-guard` (formerly a third member here) moved to
 # ADVISORY_REWRITE_NAMES above -- H11(a), 2026-07-30.
 PLATFORM_CONDITIONED_DENY_NAMES = [
     "multiprobe-banner",
@@ -368,7 +431,15 @@ def test_every_crash_trigger_guard_is_a_registered_fail_closed_guard():
     )
 
 
+# ---------------------------------------------------------------------------
+# The six shape/platform combinations named in the guard_chain comment's own
+# "Placed AFTER (here): all six shape/platform combinations correctly
+# auto-rewrite first" passage. The 304-cell confinement corpus
+# (test_confinement_attack_corpus.py) exercises confinement SHAPES and would
 # not, on its own, catch a rewrite-vs-deny PLATFORM regression here -- each
+# of the three platform-conditioned guards paired with its own upstream
+# rewrite, on both host_is_windows=True and host_is_windows=False.
+# ---------------------------------------------------------------------------
 
 _SIX_COMBINATIONS = [
     ("grep-via-bash-guard / grep-via-bash-rewrite", 'grep -rn "TODO" .', False),

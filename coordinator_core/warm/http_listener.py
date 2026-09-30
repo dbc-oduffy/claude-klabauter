@@ -172,6 +172,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if length < 0 or length > MAX_BODY_BYTES:
                 # DRAIN BEFORE REFUSING. Writing a response while the client is still
+            # sending makes the client see a connection reset instead of the 413 --
+            # it surfaces as a transport error rather than the refusal we meant, and
+            # it is timing-dependent, so it reads as a flaky test rather than a bug.
+            # Discard in bounded chunks: the point is a clean refusal, not reading
+            # the oversized body into memory.
                 remaining = max(0, length)
                 while remaining:
                     chunk = self.rfile.read(min(remaining, 65536))

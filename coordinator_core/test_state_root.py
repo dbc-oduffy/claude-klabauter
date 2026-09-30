@@ -74,6 +74,7 @@ def test_rule2_engine_fail_loud_when_claude_klabauter_unresolvable(stub_peers):
 
 
 # --- Published-mirror guard: RESOLUTION_RESOLVED_ENGINE must never become
+# --- a state parent (the defect under test in this dispatch) ---------------
 
 
 def test_rule2_engine_fail_loud_when_resolved_engine_is_published_mirror(stub_peers):
@@ -150,6 +151,7 @@ def test_rule5_meta_repo_fail_loud_when_resolved_engine_is_published_mirror(
 
 def test_rule2_engine_live_working_tree_unchanged(stub_peers):
     # RESOLUTION_LIVE_WORKING_TREE (the default stub_peers class) resolves
+    # exactly as before -- no regression for the common case.
     stub_peers.setattr(
         sr,
         "coordinator_engine_root_with_class",

@@ -97,7 +97,10 @@ def test_discrimination_adds_no_spawn(monkeypatch):
     assert total_run_calls == 6
 
 
+# ---------------------------------------------------------------------------
+# Exception routing: a probe stub that raises IndexParseError must be caught
 # and must classify as RECONCILE-CONFLICT, not propagate out of `main`.
+# ---------------------------------------------------------------------------
 
 
 def test_index_parse_error_inside_real_index_readable_classifies_as_conflict(monkeypatch, tmp_path, capsys):

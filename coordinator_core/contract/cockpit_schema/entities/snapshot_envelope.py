@@ -119,6 +119,8 @@ class SnapshotEnvelope(BaseModel):
 
     # Sourced from CONTRACT_VERSION via the emitted bundle .version (the Staff Engineer
     # F1). Must be a semver string matching the exported CONTRACT_VERSION
+    # constant.
+    # Semver regex prevents silent version drift;
     # ties schema_version to CONTRACT_VERSION shape.
     schema_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     # ISO-8601 UTC wall-clock when the snapshot was assembled.

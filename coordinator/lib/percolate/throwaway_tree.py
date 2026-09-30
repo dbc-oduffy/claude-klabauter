@@ -59,6 +59,7 @@ import stat
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
@@ -83,28 +84,93 @@ def _rmtree_clear_readonly_onerror(func, path, exc_info) -> None:
         pass
 
 
-def _overlay_root(tree: Path, staging_dir: Path) -> None:
+def _files_under(root: Path) -> "set[str]":
+    """Every non-directory entry beneath `root` (symlinks included), as
+    POSIX-relative paths, never descending into `.git`."""
+    found: "set[str]" = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = Path(dirpath)
+        keep = []
+        for d in dirnames:
+            if here == root and d == ".git":
+                continue
+            if (here / d).is_symlink():
+                filenames.append(d)
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for name in filenames:
+            found.add((here / name).relative_to(root).as_posix())
+    return found
+
+
+def _same_bytes(a: Path, b: Path) -> bool:
+    if a.is_symlink() or b.is_symlink():
+        return a.is_symlink() and b.is_symlink() and os.readlink(a) == os.readlink(b)
+    try:
+        return a.stat().st_size == b.stat().st_size and a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
+
+
+def _overlay_root(tree: Path, staging_dir: Path, pristine: "dict[str, Optional[bytes]]") -> None:
     """Mirror `publish.py :: _swap_publish_staging_into_dest_root` onto the
-    throwaway: replace each top-level entry the root row staged (never
-    `.git`), and drop top-level files the row removed. Trap: a root row's
-    staging dir is a full copy of the dest, so a wholesale replace would
-    delete `.git` and revert every sibling row."""
-    staged = {p.name for p in staging_dir.iterdir()}
-    for entry in staging_dir.iterdir():
-        if entry.name == ".git":
+    throwaway: every top-level entry the root row staged (never `.git`) is
+    made to match the staging copy, and top-level files the row removed are
+    dropped.
+
+    Trap: a root row's staging dir is a full copy of the dest, so several
+    root rows sharing one repo each carry a stale copy of every sibling's
+    changes. Applied wholesale, the last one reverts the others. So the
+    overlay is per file, and `pristine` (path -> HEAD bytes, None if HEAD
+    lacked it, recorded on first write) lets a later root row skip a file
+    it only holds a stale HEAD copy of, and keep a file an earlier row
+    added."""
+
+    def _write(rel: str, src: Optional[Path]) -> None:
+        dst = tree / rel
+        if rel not in pristine:
+            pristine[rel] = (
+                None if not (dst.exists() or dst.is_symlink())
+                else (os.readlink(dst).encode() if dst.is_symlink() else dst.read_bytes())
+            )
+        if dst.is_dir() and not dst.is_symlink():
+            shutil.rmtree(dst, onerror=_rmtree_clear_readonly_onerror)
+        elif dst.exists() or dst.is_symlink():
+            dst.unlink()
+        if src is None:
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst, follow_symlinks=False)
+
+    def _is_stale_copy(rel: str, src: Optional[Path]) -> bool:
+        if rel not in pristine:
+            return False
+        head = pristine[rel]
+        if src is None:
+            return head is None
+        if head is None:
+            return False
+        data = os.readlink(src).encode() if src.is_symlink() else src.read_bytes()
+        return data == head
+
+    top_level = {p.name for p in staging_dir.iterdir() if p.name != ".git"}
+    staged_files = _files_under(staging_dir)
+    for rel in sorted(staged_files):
+        src = staging_dir / rel
+        dst = tree / rel
+        if (dst.exists() or dst.is_symlink()) and _same_bytes(src, dst):
             continue
-        target = tree / entry.name
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(target, onerror=_rmtree_clear_readonly_onerror)
-        elif target.exists() or target.is_symlink():
-            target.unlink()
-        if entry.is_dir() and not entry.is_symlink():
-            shutil.copytree(entry, target, symlinks=True)
-        else:
-            shutil.copy2(entry, target, follow_symlinks=False)
-    for existing in tree.iterdir():
-        if existing.name != ".git" and existing.is_file() and existing.name not in staged:
-            existing.unlink()
+        if _is_stale_copy(rel, src):
+            continue
+        _write(rel, src)
+    current = {r for r in _files_under(tree) if r.split("/", 1)[0] in top_level or "/" not in r}
+    for rel in sorted(current - staged_files):
+        if "/" not in rel and rel in top_level:
+            continue
+        if _is_stale_copy(rel, None):
+            continue
+        _write(rel, None)
 
 
 def build_throwaway_tree(
@@ -186,10 +252,11 @@ def build_throwaway_tree(
     # produces, where a subdir row's content wins over the root row's stale
     # full-copy of that subdir.
     ordered = sorted(overlays, key=lambda o: str(o[1]) not in ("", "."))
+    pristine: "dict[str, Optional[bytes]]" = {}
     for staging_dir, dest_relative_path in ordered:
         target = tmp_dir / dest_relative_path
         if str(dest_relative_path) in ("", "."):
-            _overlay_root(tmp_dir, Path(staging_dir))
+            _overlay_root(tmp_dir, Path(staging_dir), pristine)
             continue
         if target.exists():
             if target.is_dir() and not target.is_symlink():

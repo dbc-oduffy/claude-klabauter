@@ -40,7 +40,14 @@ def _reset_shared_machine_local_cache() -> None:
     yield
     clear_machine_local_cache()
 
+# Declared, not excused: `test_resolve_repo_root_git_dir_returns_toplevel` and
+# `test_resolve_data_root_derives_from_cwd_repo_root` spawn a real `git init` because
+# the property under test is `resolve_repo_root`'s real `git rev-parse --show-toplevel`
+# resolution against an actual repo (including a nested-cwd case) -- the exact
+# P1 silent-cwd-fallback bug this file's own docstring names required a genuine git
+# repo to catch, not a mock returning a canned toplevel. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -59,7 +66,11 @@ def _write_stub(
     blocks: Optional[List[str]] = None,
     loe: Optional[str] = None,
 ) -> None:
+    # `kind` defaults to the retired
+    # spelling for byte-parity with every pre-existing caller, but callers
+    # below now also pass `kind="roadmap-baton"` (the canonical D1 spelling)
     # to prove `_ROADMAP_BATON_KIND_WHERE`'s `kind in (...)` term actually
+    # finds already-migrated stubs — the live defect this diff fixed.
     num = number if number is not None else int(stub_id.rsplit("-", 1)[-1])
     lines = [
         "---",
@@ -501,7 +512,16 @@ def test_run_audit_pending_row_without_matching_stub_fails(tmp_path: Path) -> No
     assert any("no stub with that stub_id exists" in line for line in stderr_lines)
 
 
+# ---------------------------------------------------------------------------
+# Canonical `kind: roadmap-baton` spelling — Review: code-reviewer (P1,
+# Finding 1). Every fixture above seeds the RETIRED `kind: spinoff-roadmap`
+# spelling, which already matched the pre-fix hardcoded `kind=spinoff-roadmap`
 # literal — so none of them exercise `_ROADMAP_BATON_KIND_WHERE`'s `kind in
+# (...)` term against the canonical spelling the live defect was about. These
+# tests seed `kind: roadmap-baton` (and one dual-spelling mix) and assert the
+# audit paths find them — the exact regression the live defect would
+# reintroduce if the `where=` fix were ever reverted.
+# ---------------------------------------------------------------------------
 
 
 def test_run_audit_end_to_end_canonical_kind_roadmap_baton(tmp_path: Path) -> None:
@@ -577,7 +597,14 @@ def test_run_audit_dual_spelling_both_legacy_and_canonical_kind_found(
     assert any("Stub-coverage: 2 stubs" in line for line in stdout_lines)
 
 
+# ---------------------------------------------------------------------------
+# resolve_repo_root / _state_root / _claude_klabauter_root / resolve_data_root —
 # The DATA_ROOT/state-root resolution chain had
+# zero direct unit tests despite ~50 lines of module docstring justifying it
+# as a genuine correctness fix over the oracle. A test exercising
+# resolve_repo_root against a non-git tmp_path would have caught the P1
+# silent-cwd-fallback bug this review found and the first pass fixed.
+# ---------------------------------------------------------------------------
 
 
 def test_resolve_repo_root_non_git_dir_fails_loud(tmp_path: Path) -> None:
@@ -632,6 +659,7 @@ def test_state_root_meta_repo_unresolvable_claude_klabauter_root_fails_loud(
     fake_claude_home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(fake_claude_home))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(tmp_path / "does-not-exist.py"))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-settings-home"))
 
@@ -673,6 +701,7 @@ def test_claude_klabauter_root_none_when_fully_unresolvable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-settings-home"))
     monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(tmp_path / "does-not-exist.py"))
 
@@ -735,7 +764,9 @@ def test_main_root_flag_consumed_runs_audit(tmp_path: Path) -> None:
 
 
 def test_main_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A foreseeable config gap (unresolvable
     # CLAUDE_KLABAUTER_ROOT) is a usage/config error, exit 1 — not this module's own
+    # documented exit-3 "unexpected internal error" contract.
     def _boom(root_flag: Optional[str], cwd: Optional[Path] = None) -> Path:
         raise RuntimeError("audit-roadmap: repo_root is the meta-repo but CLAUDE_KLABAUTER_ROOT is unresolvable")
 
@@ -882,8 +913,14 @@ def test_declaration_naming_a_stub_not_on_disk_fails(tmp_path: Path) -> None:
     assert exit_code == 1
     assert any("ghost-99" in line and "not on disk" in line for line in stderr_lines)
 
+# ---------------------------------------------------------------------------
+# Stub-coverage is per-CLUSTER, not a stub count. Step 2.1.6 of the
 # roadmap-planning skill MANDATES folding several clusters into one baton, so
 # `stub_count == keep_count` fails a conforming roadmap BY CONSTRUCTION and
+# fails it harder the larger the roadmap is. The skill says so directly: "Any
+# gate asserting the two counts match is measuring the wrong thing and must
+# read `covers:`." These tests pin the corrected bar and the legacy fallback.
+# ---------------------------------------------------------------------------
 
 _NL = chr(10)
 

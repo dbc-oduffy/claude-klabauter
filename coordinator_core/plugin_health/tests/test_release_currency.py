@@ -301,7 +301,11 @@ def test_highest_tag_picks_numeric_major_minor_patch():
 
 
 def test_highest_tag_prerelease_co_present_with_release_locks_lexical_tiebreak():
+    # the Staff Engineer F4: numeric key ties (2,14,0) for both tags; the bash pipeline's
     # trailing `sort | tail -1` then breaks the tie LEXICALLY on the raw tag
+    # string, and "v2.14.0-rc1" (longer, shares the "v2.14.0" prefix) sorts
+    # after "v2.14.0" — so the prerelease wins the tie. PEP440 would order the
+    # release above its prerelease; this native port must NOT do that.
     result = rc._select_highest_tag(["v2.14.0-rc1", "v2.14.0"])
     assert result == "v2.14.0-rc1"
 

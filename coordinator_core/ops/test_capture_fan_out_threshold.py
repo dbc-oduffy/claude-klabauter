@@ -38,7 +38,11 @@ class _FakeRegistry:
 
     def run(self, argv, **kwargs):
         # The CLI is now RESOLVED to a concrete argv rather than invoked by bare
+        # name — a bare "machine-local" is unrunnable on Windows (extension-less
+        # wrapper -> WinError 193; CreateProcess ignores PATHEXT -> WinError 2).
+        # So the prefix may be ["…/machine-local"], ["…/machine-local.cmd"], or
         # [sys.executable, "…/_machine_local.py"]. Assert the CLI's IDENTITY, not
+        # its spelling, and locate the subcommand rather than fixing its index.
         assert any(
             "machine-local" in os.path.basename(str(a)).lower().replace("_", "-")
             for a in argv
@@ -149,6 +153,13 @@ def test_missing_machine_local_binary_degrades_to_absent(monkeypatch):
         raise FileNotFoundError("machine-local not found")
 
     # The key-presence probe is an IN-PROCESS registry read since the
+    # 2026-08-16 zero-spawn cutover, so patching `subprocess.run` alone leaves
+    # it reading the operator's REAL machine-local registry -- on any box that
+    # has `fan_out.large_wave_threshold` captured, `capture()` short-circuits
+    # as already-present and never reaches the write this test exists to
+    # exercise. Stub the same seam every other test here stubs, so the
+    # "absent" precondition this test's own name asserts is actually the one
+    # under test rather than an accident of the operator's registry.
     _patch_registry(monkeypatch, _FakeRegistry(keys=[]))
     monkeypatch.setattr(mod.subprocess, "run", _raise)
 

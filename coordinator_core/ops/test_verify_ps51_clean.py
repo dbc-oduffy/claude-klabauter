@@ -132,6 +132,7 @@ def test_detect_ps7_floor_major_below_7_not_floored():
 
 def test_detect_ps7_floor_bom_does_not_mask_requires():
     # Regression test: PORTER-BRIEF-ADDENDUM rule 6 — the fixture's edge (a
+    # leading BOM immediately before #requires) is exercised, not glossed over.
     is_floored, version = vps.detect_ps7_floor(BOM_FLOORED_PS1)
     assert is_floored is True
     assert version == "7.0"

@@ -83,7 +83,11 @@ _MSYS_DRIVE_RE = re.compile(r"^/[A-Za-z]/")
 
 def _norm_path(p: str, *, ostype: str = "") -> str:
     if _WINDOWS_DRIVE_RE.match(p):
+        # Windows drive form. Separator normalized AFTER stripping "X:" —
+        # never fold a backslash into a regex bracket expression (bash 3.2 ERE
+        # undefined behavior; code-reviewer F1 — preserved as a design note,
         # not applicable to Python's re, but the STRIP-THEN-NORMALIZE order is
+        # preserved for oracle fidelity).
         drive = p[0].lower()
         rest = p[2:]
         rest = rest.replace("\\", "/")
@@ -97,7 +101,10 @@ def _norm_path(p: str, *, ostype: str = "") -> str:
     return p
 
 
+# ---------------------------------------------------------------------------
+# Registry dir resolution — mirrors the bash oracle's
 # MACHINE_LOCAL_REGISTRY_DIR -> _coordinator_settings_home() precedence.
+# ---------------------------------------------------------------------------
 
 
 def _resolve_registry_dir() -> Path:
@@ -141,7 +148,14 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
     ostype = os.environ.get("OSTYPE", "")
     if scope_repo:
         scope_norm = _norm_path(scope_repo, ostype=ostype)
+        # Deliberately NOT `Path(_resolve_home()) / ".claude"` — on Windows,
+        # pathlib treats a leading "/" as an absolute root and re-anchors it
+        # with a native backslash, silently destroying an MSYS-style HOME
+        # (e.g. "/c/Users/operator") before `_norm_path` ever sees it, so the
         # MSYS-drive-mount fold (_MSYS_DRIVE_RE) never fires and the meta-repo
+        # comparison spuriously fails. Plain string concatenation preserves
+        # HOME's original separator/drive form verbatim, exactly as the bash
+        # oracle's `"${HOME}/.claude"` did.
         meta_norm = _norm_path(_resolve_home().rstrip("/\\") + "/.claude", ostype=ostype)
         if scope_norm != meta_norm:
             scope_mode = "own"

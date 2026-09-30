@@ -112,7 +112,9 @@ def test_non_ceremony_ops_are_untouched_by_the_clamp():
     assert ipc._timeout_for("ping") == ipc._resolve_dispatch_timeout_secs()
 
 
+#: Second independent copy of the implementation-package path, same reasoning as
 #: PINNED_CEILING_SECS: importing `ipc._CEREMONY_PACKAGE_PREFIX` would make this
+#: file agree with whatever the constant says and assert nothing.
 PINNED_CEREMONY_PACKAGE = "coordinator_core.ops.ceremony."
 
 

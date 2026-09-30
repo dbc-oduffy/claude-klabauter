@@ -41,16 +41,32 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
+#: Opens on a POSIX shell parameter-expansion-with-default: `${VAR:-`. Only
+#: the outer opening is matched here; `_balanced_brace_end` walks forward
+#: from the `{` to find the true close, so a nested `${INNER:-...}` default
+#: value does not prematurely terminate the outer expansion (the shape
+#: `resolve-coordinator-bin.md` itself documents:
 #: `${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}`).
 _EXPANSION_OPEN_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-")
 
+#: A forwarder invocation suffix: `/bin/<cli-name>`. Matched in the text
+#: immediately following the expansion's closing brace, within
 #: `_TRAILING_WINDOW` characters -- this is what tells a POSIX-shell default
+#: expansion used for some unrelated purpose apart from a shape that
+#: actually resolves the coordinator settings home down to a CLI forwarder.
 _BIN_CLI_RE = re.compile(r"/bin/([A-Za-z0-9_.-]+)")
 
 _TRAILING_WINDOW = 200
 
+#: A Shape W invocation: the PowerShell call operator (`&`) applied to a
+#: quoted path ending `\bin\<cli>.cmd` -- `resolve-coordinator-bin.md` rung
+#: 0's own documented form, e.g.
 #: `& "$env:COORDINATOR_SETTINGS_HOME\bin\coordinator-doc-new.cmd" ...`.
 #: The path prefix before `\bin\` varies (`$env:COORDINATOR_SETTINGS_HOME`,
+#: `$HOME\.coordinator-claude-settings`, ...) so only the `\bin\<cli>.cmd`
+#: suffix inside the quotes is pinned; `<cli>` is captured so a same-CLI
+#: pairing (see `_has_nearby_shape_w_sibling`) can be checked structurally,
+#: never by matching prose like "PowerShell hosts use Shape W".
 _SHAPE_W_RE = re.compile(r'&\s*"[^"\n]*\\bin\\([A-Za-z0-9_.-]+?)\.cmd"')
 
 _SIBLING_LINE_WINDOW = 8

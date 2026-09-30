@@ -122,7 +122,10 @@ GRANULARITY_PER_ITEM = "per-item"
 GRANULARITY_PER_WAVE = "per-wave"
 _VALID_GRANULARITIES = (GRANULARITY_PER_ITEM, GRANULARITY_PER_WAVE)
 
+#: cli verb selected by granularity — both names are C4's own
 #: `apply.py::_CLI_DISPATCH` entries (mirroring `consolidate_assemble`'s
+#: `delete-only`/`cherry-pick-and-delete`/`merge-and-delete` precedent),
+#: never a call made from this module.
 _CLI_BY_GRANULARITY = {
     GRANULARITY_PER_ITEM: "commit-per-item",
     GRANULARITY_PER_WAVE: "commit-per-wave",
@@ -140,8 +143,12 @@ _TIER_U_GRANT_CLI = "tier-u-grant-cli"
 _SPINOFF_HANDOFF_TEMPLATE_CLI = "spinoff-handoff-template"
 _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI = "executor-dispatch-prompt-template"
 
+#: P071-C7 — bug-blitz's `commands/bug-blitz.md:60` (at DoE 57e11749)
+#: mandates `coordinator-resolve-validation-cmd --full`; this cli names
 #: C7's own `apply.py::_CLI_DISPATCH` entry, which resolves the FULL test
 #: command IN-PROCESS (`coordinator_core.resolve_validation_cmd.
+#: cs_resolve_full_test_cmd`) rather than shelling out to the bin
+#: trampoline — never invoked from this module.
 _RESOLVE_VALIDATION_CMD_CLI = "coordinator-resolve-validation-cmd"
 
 

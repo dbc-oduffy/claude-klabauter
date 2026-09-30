@@ -55,8 +55,7 @@ def test_nt_ignores_a_cmd_twin_that_is_a_directory(as_nt, tmp_path):
     script = tmp_path / "thing.sh"
     script.write_text("#!/usr/bin/env bash\n")
     (tmp_path / "thing.sh.cmd").mkdir()
-    assert resolve_launchable(str(script))[-1] == str(script)
-    assert len(resolve_launchable(str(script))) == 2
+    assert resolve_launchable(str(script)) == [str(script)]
 
 
 @pytest.mark.parametrize("suffix", [".js", ".cjs", ".mjs"])
@@ -68,10 +67,15 @@ def test_nt_js_family_gets_node_prefix(as_nt, suffix):
 
 
 @pytest.mark.parametrize("suffix", [".sh", ".bash"])
-def test_nt_shell_family_gets_bash_prefix(as_nt, suffix):
-    vector = resolve_launchable(f"C:\\x\\verify{suffix}")
-    assert len(vector) == 2
-    assert os.path.basename(vector[0]).lower().startswith("bash")
+def test_nt_shell_family_resolves_bare(as_nt, suffix):
+    script = f"C:\\x\\verify{suffix}"
+    assert resolve_launchable(script) == [script]
+
+
+def test_nt_extensionless_bash_shebang_resolves_bare(as_nt, tmp_path):
+    script = tmp_path / "stub"
+    script.write_text("#!/usr/bin/env bash\n")
+    assert resolve_launchable(str(script)) == [str(script)]
 
 
 def test_nt_py_uses_this_interpreter_not_a_path_probe(as_nt):

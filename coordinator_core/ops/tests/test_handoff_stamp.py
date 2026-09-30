@@ -47,6 +47,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.handoff_stamp import (
     _handler,
     _repair_archived_deployment_state_handler,
+    _repair_archived_shipped_in_handler,
 )
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -1343,3 +1344,148 @@ def test_repair_archived_deployment_state_refuses_second_call_after_repair(tmp_p
     ))
     assert third["exit_code"] == 1, third
     assert "terminal" in third["error"]
+
+
+# ---------------------------------------------------------------------------
+# _repair_archived_shipped_in_handler(clear_advancement=True) — clears the
+# false-cascade advancement claim (advanced_by/advanced_at) on a record whose
+# correct terminal state IS shipped, with no deployment_state transition.
+# ---------------------------------------------------------------------------
+
+_FALSE_CASCADE_FM = """\
+shipped_in: 55ad98ac
+shipped_in_kind: ship-commit
+advanced_by: dlv-some-other-deliverable-000000
+advanced_at: '2026-08-04T23:16:02Z'"""
+
+
+def _seed_shipped(repo: Path, name: str, extra_fm: str) -> Path:
+    """_seed_archived_handoff with a multi-line extra_fm — its dedent only
+    strips a common margin, so continuation lines need the template's indent."""
+    return _seed_archived_handoff(
+        repo, name, deployment_state="shipped",
+        extra_fm=extra_fm.replace("\n", "\n        "),
+    )
+
+
+def _repair_shipped_in(repo: Path, hpath: Path, **params) -> dict:
+    return _run(_repair_archived_shipped_in_handler(
+        {"handoff_path": str(hpath), "reason": "test: false cascade provenance", **params},
+        repo_root=repo / ".git",
+    ))
+
+
+def test_clear_advancement_alone_keeps_shipped_record_valid(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_false-cascade.md",
+        _FALSE_CASCADE_FM,
+    )
+
+    result = _repair_shipped_in(repo, hpath, clear_advancement=True)
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert result["advancement_cleared"] == ["advanced_by", "advanced_at"]
+    assert result["new_value"] == "55ad98ac"
+    text = hpath.read_text(encoding="utf-8")
+    assert "advanced_by" not in text
+    assert "advanced_at" not in text
+    assert "deployment_state: shipped" in text
+    assert "shipped_in: 55ad98ac" in text
+    assert "shipped_in_kind: ship-commit" in text
+
+
+def test_clear_advancement_composes_with_sha_in_one_write(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_false-cascade-sha.md",
+        _FALSE_CASCADE_FM.replace("55ad98ac", "deadbeef"),
+    )
+
+    result = _repair_shipped_in(repo, hpath, sha="55ad98ac0123", clear_advancement=True)
+
+    assert result["exit_code"] == 0, result
+    assert result["prior_value"] == "deadbeef"
+    assert result["new_value"] == "55ad98ac"
+    assert result["advancement_cleared"] == ["advanced_by", "advanced_at"]
+    text = hpath.read_text(encoding="utf-8")
+    assert "shipped_in: 55ad98ac\n" in text
+    assert "advanced_by" not in text and "advanced_at" not in text
+
+
+def test_clear_advancement_clears_only_the_fields_present(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_partial.md",
+        "shipped_in: 55ad98ac\nadvanced_by: dlv-x-000000",
+    )
+
+    result = _repair_shipped_in(repo, hpath, clear_advancement=True)
+
+    assert result["exit_code"] == 0, result
+    assert result["advancement_cleared"] == ["advanced_by"]
+    assert "advanced_by" not in hpath.read_text(encoding="utf-8")
+
+
+def test_clear_advancement_is_a_byte_identical_noop_when_absent(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_clean.md",
+        "shipped_in: 55ad98ac",
+    )
+    before = hpath.read_bytes()
+
+    result = _repair_shipped_in(repo, hpath, clear_advancement=True)
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is False
+    assert result["advancement_cleared"] == []
+    assert hpath.read_bytes() == before
+
+
+def test_clear_advancement_second_call_is_noop(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_twice.md",
+        _FALSE_CASCADE_FM,
+    )
+    assert _repair_shipped_in(repo, hpath, clear_advancement=True)["applied"] is True
+    second = _repair_shipped_in(repo, hpath, clear_advancement=True)
+    assert second["exit_code"] == 0 and second["applied"] is False
+
+
+def test_without_clear_advancement_advancement_fields_are_untouched(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_untouched.md",
+        _FALSE_CASCADE_FM.replace("55ad98ac", "deadbeef"),
+    )
+
+    result = _repair_shipped_in(repo, hpath, sha="55ad98ac")
+
+    assert result["exit_code"] == 0, result
+    assert result["advancement_cleared"] == []
+    text = hpath.read_text(encoding="utf-8")
+    assert "advanced_by: dlv-some-other-deliverable-000000" in text
+    assert "advanced_at:" in text
+
+
+def test_clear_advancement_still_requires_reason_and_archive_path(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_shipped(
+        repo, "2026-07-01_guards.md",
+        _FALSE_CASCADE_FM,
+    )
+    no_reason = _run(_repair_archived_shipped_in_handler(
+        {"handoff_path": str(hpath), "reason": "  ", "clear_advancement": True},
+        repo_root=repo / ".git",
+    ))
+    assert no_reason["exit_code"] == 1
+    assert "advanced_by" in hpath.read_text(encoding="utf-8")
+
+    live = _seed_handoff(repo, "2026-07-01_live.md", extra_fm=_FALSE_CASCADE_FM)
+    outside = _repair_shipped_in(repo, live, clear_advancement=True)
+    assert outside["exit_code"] == 1
+    assert "archive/handoffs/" in outside["error"]
+    assert "advanced_by" in live.read_text(encoding="utf-8")

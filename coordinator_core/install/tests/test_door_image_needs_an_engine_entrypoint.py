@@ -98,8 +98,16 @@ def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
     )
 
     # `is _NO_LAUNCHER_FOR_THIS_NAME`, not `is None`. This assertion read
+    # `is None` until 2026-09-06 and was a FALSE GREEN over the defect the
     # docstring above already forbade: `None` is the caller's DOORLESS-
     # FALLBACK signal ("no door, write the Python pair"), so
+    # `_write_agent_helper_forwarders` answered this branch by writing an
+    # extensionless Python forwarder -- unexecutable on Windows, no PATHEXT
+    # match -- for the same 14 names it had just printed "no launcher
+    # installed" for. The test could not see it because it only checked the
+    # NATIVE image path, which this function indeed never wrote; the bad
+    # file came from the caller, one layer up. Both halves are now pinned:
+    # the identity here, and the end state in the caller-level test below.
     assert result is substrate._NO_LAUNCHER_FOR_THIS_NAME
     assert not door_install.named_forwarder_path(bin_dst, "publish").exists()
     assert not (bin_dst / "publish").exists()

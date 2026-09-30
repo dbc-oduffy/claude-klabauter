@@ -36,7 +36,15 @@ from coordinator_core.session.machinery_paths import kill_ledger_path
 
 LEDGER = Path(kill_ledger_path(str(Path(__file__).resolve().parents[2])))
 
+# The published mirror ships `coordinator_core/` without claude-klabauter's `state/`
+# corpus — working data is deliberately excluded from every publish set — so
 # the ledger is absent there. The `parametrize` below reads it at COLLECTION
+# time, which turns that absence into a collection ERROR for the whole tree
+# rather than one failing test, and a collection error is what makes the
+# end-of-run assembled-mirror gate refuse: every publish then closes FATAL with
+# "treat this run's published bytes as unverified" (AC15 fail-closed), no
+# matter what it shipped. Skipping at module level costs nothing where the
+# corpus exists, which is the only place this guard's question has a subject.
 if not LEDGER.is_file():  # pragma: no cover - only reachable in a published mirror
     pytest.skip(
         f"{LEDGER} is absent — no corpus here for this guard to check",

@@ -162,7 +162,10 @@ def test_handler_manual_close_reads_closed(tmp_path):
     assert result == {"item_id": item_id, "status": "closed"}
 
 
+# ---------------------------------------------------------------------------
+# (d) five-surface wiring + command-type smoke (C3's own body: registry,
 #     classification, scope, module_map, _EAGER_OP_MODULES)
+# ---------------------------------------------------------------------------
 
 
 def test_registered_in_registry_map():

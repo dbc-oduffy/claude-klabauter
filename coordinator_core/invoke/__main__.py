@@ -629,6 +629,30 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     return response, waited
 
 
+def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> Optional[str]:
+    """Return the stderr line that names a result-level failure, or None.
+
+    A JSON-RPC success whose result carries a nonzero integer `exit_code` exits
+    the process 0 (`_exit_code_for_response`), and the wire envelope has no
+    reason field, so a caller that parses stdout alone sees the failure as an
+    empty result. The op's own reason, when it wrote one, is the last non-empty
+    line already on stderr; it is folded into this line so the failure and its
+    cause arrive together. The envelope and the exit code are not changed.
+    """
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    code = result.get("exit_code")
+    if isinstance(code, bool) or not isinstance(code, int) or code == 0:
+        return None
+    lines = [ln.strip() for ln in prior_stderr.splitlines() if ln.strip()]
+    reason = lines[-1] if lines else "no reason was written to stderr"
+    return (
+        f"[invoke] {method} FAILED in-band: result exit_code={code} with process "
+        f"exit 0; the stdout JSON carries no reason. Reason: {reason}"
+    )
+
+
 def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> int:
     """Select the process exit code for a completed JSON-RPC response.
 
@@ -1215,6 +1239,15 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                         file=sys.stderr,
                     )
                     sys.stderr.flush()
+
+    # 7c. A nonzero in-band exit_code on a success response: name it on stderr,
+    #     folded with the op's own reason (see `_in_band_failure_line`).
+    if isinstance(response, dict):
+        _prior = sys.stderr.getvalue() if isinstance(sys.stderr, io.StringIO) else ""
+        _line = _in_band_failure_line(response, msg.get("method"), _prior)
+        if _line:
+            print(_line, file=sys.stderr)
+            sys.stderr.flush()
 
     # 8. Print result as indented JSON to stdout.
     # An unguarded json.dumps that raises TypeError/ValueError

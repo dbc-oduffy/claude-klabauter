@@ -29,6 +29,7 @@ from coordinator_core.warm import breadcrumb as bc
 _CLAIMED_AT = 1_756_800_000.0
 
 #: A `now` far enough past `_CLAIMED_AT` that the claim has expired, and near
+#: enough that it is not read as a clock that jumped (the window is two-sided).
 _EXPIRED = _CLAIMED_AT + bc.BOOT_CLAIM_MAX_SECS + 0.01
 
 

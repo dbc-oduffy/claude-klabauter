@@ -177,7 +177,9 @@ from coordinator_core.ops.session.guard_settings_integrity import (
 
 GENERATES = []
 
+# ---------------------------------------------------------------------------
 # helpers — CPR (${CLAUDE_PLUGIN_ROOT}) filter/rewrite
+# ---------------------------------------------------------------------------
 
 _CPR = "${CLAUDE_PLUGIN_ROOT}"
 
@@ -288,7 +290,12 @@ def _finalize_command(
     guarded = wrap_hook_command_guarded(
         rewritten, windows=(os.name == "nt"), python_bin_resolved=python_bin_resolved
     )
+    # Belt-and-suspenders: cannot fire given `wrap_hook_command_guarded`'s
+    # current implementation (it only quotes/wraps an already-validated
+    # `rewritten` string, so it cannot reintroduce a residual
     # `${CLAUDE_PLUGIN_ROOT}` token or a drive-letter path) — kept as
+    # defense-in-depth against a future change to that function, not because
+    # this path is reachable today (code-reviewer F3, 2026-07-28).
     _assert_portable_command(guarded, event=event)
     return guarded
 
@@ -737,10 +744,23 @@ def generate(
         return "skipped (disabled by operator marker)"
 
     if check_only:
+        # install.md contract: check-only never resolves or mutates —
+        # matches the retired bash trampoline's own check-only branch,
         # which short-circuited before even checking DOE_CLONE. Also never
+        # touches the positive marker (`ensure_positive_marker` is not
+        # called on this path) — check-only must not create/mutate ANY
+        # marker, per the 2026-07-28 polarity-inversion requirements.
         return "skipped (check-only)"
 
     # Double-fire refusal (see module docstring): only skip on POSITIVE
+    # evidence that plugin-side delivery is already live and fully
+    # resolvable -- never on absence of evidence. Checked ahead of the
+    # marker-gated path below because it is a stronger, orthogonal signal:
+    # if plugin delivery already covers every hook this generator would
+    # emit, generating is wrong regardless of whether this machine has
+    # opted into the (legacy) marker-gated generation path at all. Never
+    # touches settings.json on this branch -- returns before
+    # `_load_current_settings`/`_atomic_write_json` are reached.
     delivery_report = detect_hook_delivery_duplication(
         config_dir=Path(os.path.dirname(resolved_out) or ".")
     )
@@ -879,7 +899,13 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="gen-settings-hooks",
     source_module="coordinator_core.install.gen_settings_hooks",
     clauses=(
+        # Clause 1 — `_merge_hooks`/`generate`: the `hooks` top-level key of
         # an existing settings.json is REPLACED with the merge of preserved
+        # (non-generator-owned) groups plus this run's newly generated
+        # groups. SHAPED: the set of `hooks.<event>` keys touched is
+        # whatever `hooks.json` declares, not enumerable in source — a
+        # structured-file-key merge (every other top-level key untouched),
+        # never a whole-file overwrite.
         ShapedClause(
             discovered_by="_merge_hooks (per-event group merge, keyed by hooks.json's own event names)",
             entry_template=WriteSurfaceEntry(
@@ -890,6 +916,9 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 2 — `_merge_env`: `env[COORDINATOR_CONTENT_ROOT_ENV_KEY]` is
+        # set/overwritten every successful run, the ONE place this
+        # machine's coordinator location is baked (see module docstring's
+        # 2026-07-28 history).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -901,6 +930,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 3 — `_merge_env`: `env[COORDINATOR_PYTHON_BIN_ENV_KEY]` is
+        # written when `resolve_hook_python_bin()` resolves a value this
+        # run, and POPPED (an explicit delete, not left stale) when it does
+        # not — see `_merge_env`'s own docstring (code-reviewer F2,
+        # 2026-08-03).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(

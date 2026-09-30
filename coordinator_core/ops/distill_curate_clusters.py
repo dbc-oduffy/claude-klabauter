@@ -173,9 +173,21 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 
 _PLACEHOLDER_VALUES = {"n/a", "na", "", "tbd", "unknown", "null", "none"}
+# "misc"/"other" were previously
+# included here, which made this denylist their PRIMARY (and only) gating
+# mechanism, contradicting the module's own Negative-spec claim that a
+# denylist is never the primary mechanism, and making the corresponding
 # entries in _BARE_ABSTRACTION_VOCAB dead code (unreachable, since this
+# pre-check consumed those raw strings before the structural test ever ran).
+# Removed so "misc"/"other" fall through to the structural bare-token test
+# below, exactly like every other bare-abstraction word.
 
 # Bounded, closed, purely-grammatical class (pure-abstraction nouns) — SECONDARY
+# signal only. Used exclusively to annotate the "reason" string on an
+# already-structurally-dropped bare tag; removing this set entirely changes
+# NO verdict (see module docstring's discriminator section / the dedicated
+# test asserting this). NOT the gating mechanism — the gating mechanism is
+# the structural bare-vs-compound / family-membership test below.
 _BARE_ABSTRACTION_VOCAB = {
     "meta",
     "decisions",
@@ -273,6 +285,8 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
 
         family_total = sum(slug_counts[s] for s in members_sorted)
         # Deterministic primary: highest family-member count among COMPOUND
+        # members only (a bare member can never be the cluster's canonical
+        # name — see module docstring); ties break alphabetically.
         primary = min(
             compound_members,
             key=lambda s: (-slug_counts[s], s),

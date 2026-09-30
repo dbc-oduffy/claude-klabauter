@@ -92,18 +92,31 @@ TRAMPOLINE = (
     '"$0" "$@" #\'\'\''
 )
 
+# ---------------------------------------------------------------------------
 # EXCLUDED_TRAMPOLINE_DOC_FILES — documented exclusion list, same idiom as
 # verify-cc-root-source-guard-sync.py's EXCLUDED_SUFFIXES. Each entry
 # legitimately CONTAINS the trampoline literal within the header window as
+# prose/docstring describing the invariant, not as a live re-exec line.
+# Path relative to repo root. Does NOT exclude these files from the
+# `#!/bin/sh`-shebang assertion — that assertion reads line 1 in isolation,
+# which neither file trips (both already carry a non-`/bin/sh` shebang).
+# ---------------------------------------------------------------------------
 EXCLUDED_TRAMPOLINE_DOC_FILES = {
     "coordinator/bin/check-bin-sh-polyglot.py",
     "coordinator/bin/check-sh-suffix-polyglot.py",
 }
 
+# ---------------------------------------------------------------------------
 # _SH_SHEBANG_EXEMPT — documented exclusion list for the `#!/bin/sh`-shebang
+# assertion ONLY (test_no_bin_sh_shebang). Distinct from
 # EXCLUDED_TRAMPOLINE_DOC_FILES above: that list exempts files from the
+# polyglot-trampoline-literal assertion (a file merely quoting the literal in
 # a comment/docstring); this list exempts files that DELIBERATELY keep a
 # live `#!/bin/sh` shebang because the invariant they implement REQUIRES
+# POSIX sh — a genuinely different reason, so it gets its own set rather
+# than folding into the trampoline list. Each entry must name the specific
+# reason the file cannot be ported to Python. Path relative to repo root.
+# ---------------------------------------------------------------------------
 _SH_SHEBANG_EXEMPT = {
     "coordinator/scripts/lib/invoking-shell-bash4-probe.sh",
 }

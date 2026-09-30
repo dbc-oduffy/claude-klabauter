@@ -72,7 +72,10 @@ def compute_memo_prune_candidates(
         try:
             mtime = file_path.stat().st_mtime
         except OSError:
+            # Present at glob time, gone or unreadable by the stat. "We could
             # not look" is INDETERMINATE, never a silent drop: the three lists
+            # must account for every file the glob returned, or a caller
+            # reconciling totals finds a gap.
             indeterminate.append(rel)
             continue
 

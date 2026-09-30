@@ -125,6 +125,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 _MANIFEST_REL_PATH = "docs/install/AGENT.md"
 
 # READ_ONLY_FLAG_ALLOWLIST — mirrors _co_phase_zero_should_run's canonical
+# allowlist (dep_check.sh lines 59-66). Kept as a plain tuple, not a comment
+# block, since Python callers grep this module's source directly.
 _READ_ONLY_FLAGS = (
     "HELP_FLAG",
     "VERSION_FLAG",
@@ -425,7 +427,10 @@ def visited_set_init(session_id: str, co_dir: Optional[Path] = None, *, now: Opt
             except OSError:
                 pass
 
+    # This function's own stale-sweep shares clause 1 (delete) with
     # visited_set_crash_cleanup -- see WRITE_SURFACE's discovered_by note.
+    # The directory was always examined (mkdir above ensures it exists),
+    # so an empty `deleted` is still a real "looked, nothing stale" fact.
     resolution_journal.record_resolution(
         "dep-check",
         _VISITED_SET_DELETE_CLAUSE_INDEX,

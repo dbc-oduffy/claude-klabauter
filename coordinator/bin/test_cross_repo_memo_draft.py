@@ -130,7 +130,10 @@ def _resolve_content_root_for_tests() -> str:
 
 
 _CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
+# Pinned into THIS process's environ (not just forwarded per-subprocess) so
+# any in-process import of `coordinator_registry` sees the same override
 # coordinator_registry.py's own rung-1 (`CONTENT_ROOT` env) already honors,
+# rather than raising FileNotFoundError before any subprocess is even
 # spawned. `setdefault` respects an operator's own pre-set CONTENT_ROOT.
 if _CONTENT_ROOT_FOR_TESTS:
     os.environ.setdefault("CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
@@ -375,7 +378,12 @@ def test_draft_creates_outbox_file() -> None:
         if not fm.get("summary"):
             raise AssertionError(f"{name}: " + (f"'summary' field missing. fields: {fm}"))
 
+        # Assert body placeholder present. Wording now comes from claude-klabauter's
         # memo_draft.py _BODY_PLACEHOLDER (engine now owns draft composition,
+        # 2026-07-21 A8 cutover) — "deliver it via memo.send" replaces the old
+        # CLI-local "cross-repo-memo send" literal; check for the durable
+        # substance (a placeholder comment referencing memo.compose/memo.send),
+        # not either implementation's exact wording.
         if "memo.compose" not in content or "memo.send" not in content:
             raise AssertionError(f"{name}: " + (f"body placeholder missing from outbox file. content: {content!r}"))
 
@@ -475,8 +483,30 @@ def _make_mock_machine_local_keys_and_get(tmpdir: str, key_paths: dict) -> str:
     return stub_path
 
 
+# test_draft_unknown_receiver_rejected (asserted exit 2) and
+# test_draft_publish_target_receiver_rejected (asserted exit 1 + owner-named
+# rejection) DELETED 2026-07-21 (A8 strangler cutover, verb #5 `draft`) — both
+# asserted the retired publish-target(1)/unknown-receiver(2)/registry-error(3)
+# exit-code split. memo.draft's engine-side classify_receiver now coarsens ALL
+# classify/setup rejections into a single exit_code:1 setup-error envelope
+# whose reason string is logged daemon-side only (not on the wire) — the 1/2/3
+# split is unreconstructable by design (PM-accepted tradeoff; see _cmd_draft's
 # own "ACCEPTED BEHAVIOR CHANGE" docstring in coordinator/bin/cross-repo-memo.py).
+#
+# test_draft_unresolved_receiver_warns_but_creates DELETED 2026-07-21 (same
+# cutover, additional finding beyond the dispatch brief's named list) — it
+# asserted the OLD DoE-local `_classify_receiver`'s "registered-but-unresolved
+# key -> WARNING, draft still created" fallthrough. That function was DELETED
+# 2026-07-21 (see coordinator/bin/cross-repo-memo.py:966 "_classify_receiver
+# (draft-time receiver classification) DELETED"); its sole caller now passes
+# classify_receiver:True to claude-klabauter's memo.draft, whose engine-side
+# _classify_receiver_for_draft has NO analogous "warn but proceed" branch — a
+# `to` that fails resolve_receiver_inbox (present-with-empty-value or fully
+# absent registry key; read_registry_repos() treats both identically per its
+# own docstring: "an empty string means declared but unset — not a hit") is
 # unconditionally UNKNOWN RECEIVER, hard-refused exit 1. Confirmed via direct
+# probe against the real memo.draft op (declared-empty repos.example-sim-repo key):
+# exit 1, "route_mutation: op='memo.draft' refused", not exit 0 + WARNING.
 
 
 def test_draft_resolved_sibling_receiver_ok() -> None:
@@ -560,9 +590,16 @@ def test_draft_premise_check_advisory_fires_and_does_not_crash() -> None:
             "CLAUDE_HOME": claude_home,
             "COORDINATOR_SETTINGS_HOME": claude_home,
             # C14 closed the CLAUDE_KLABAUTER_ROOT dual-read window, and every test in
+            # this file that spawned the real CLI had been failing on it.
             # CLAUDE_KLABAUTER_ROOT is kept alongside so these runs prove
             # COORDINATOR_ENGINE_ROOT takes PRECEDENCE over a stale CLAUDE_KLABAUTER_ROOT
+            # -- which is what they demonstrate by passing with both set.
+            # It is NOT the retirement advisory under test: measured
+            # 2026-08-26, `_maybe_emit_engine_root_retired` emits nothing once
             # COORDINATOR_ENGINE_ROOT resolves, so no assertion here could see
+            # it. An earlier version of this comment claimed the "refusal path
+            # stays exercised"; there is no refusal (the helper advises and
+            # returns None, never raising) and the advisory does not fire.
             "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
             "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
         }

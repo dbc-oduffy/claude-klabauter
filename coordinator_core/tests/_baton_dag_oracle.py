@@ -160,12 +160,62 @@ def collect_corpus_paths(root: str) -> List[str]:
     return live + archived
 
 
+#: `deployment_state` values that are terminal — a baton that ever reached one of
+#: these was, at some point, disposed of by design, not merely referenced by a
+#: later file's naming convention.
+#:
+#: DERIVED from the SSOT, not hand-listed. This constant previously read
 #: ("shipped", "continued", "closed") — handoff.schema.json's post-DR-084-P4
+#: enum tail — and so answered False for `abandoned`, which
 #: `lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT` has recognized since the
+#: P4 narrow was reverted at 9d00b459 (2026-07-23), five days before this
+#: constant was first written. The schema is the WRITE vocabulary: `abandoned`
+#: can no longer be written. This predicate asks a READ question — was this
+#: record EVER terminally disposed of — over live AND archived corpora,
+#: including the consumer repos whose on-disk frontmatter still carries the old
+#: token, which is exactly the axis the SSOT's dual-vocabulary read tolerance
+#: exists for. Same bug shape, and same fix, as `superseded`'s restoration on
+#: the `status` axis above: without it a legitimate supersede against an
+#: abandoned parent is refused with a message asserting the opposite of the
+#: truth.
+#:
+#: Importing the SSOT does NOT weaken this module's differential independence.
+#: `lifecycle_constants` is a leaf constants module (it imports nothing from
+#: coordinator_core), i.e. shared DATA — not a second copy of the predicate or
+#: parser under test. The independence that matters here, and is preserved, is
+#: that this module derives its own answer with its own frontmatter handling
+#: (see `_frontmatter`'s docstring) rather than delegating to production's.
+#: Retained here (unchanged) even though `claimed_or_shipped` moved out below —
+#: this tuple is SSOT-derived data, not a copy of the predicate, and this
+#: module's own differential-oracle role never depended on it.
 _TERMINAL_DEPLOYMENT_STATES: Tuple[str, ...] = tuple(sorted(HANDOFF_TERMINAL_DEPLOYMENT))
 
 
+# ---------------------------------------------------------------------------
 # DR-242 predicate — RELOCATED (2026-08-06) to coordinator_core.archival
+# ---------------------------------------------------------------------------
+#
+# `claimed_or_shipped` / `claimed_or_shipped_at_path` used to be DEFINED here
+# and imported by six production modules despite living under a `tests`-named
+# package (a bare install-manifest exclusion of `coordinator_core/tests/`
+# would have broken all six at import time). They never participated in this
+# module's actual job — the C6 pointer-resolution differential-oracle
+# comparison against `coordinator_core.dag` (`build_children_index`, exercised
+# by `test_c6_pointer_normalization.py`) — because `claimed_or_shipped` reads
+# only a candidate parent's OWN frontmatter and never a child-referencing
+# field, so it was never compared against a second implementation anywhere.
+# This module's independence claim (see `_frontmatter`'s docstring) is about
+# NOT delegating frontmatter PARSING to production's `split_frontmatter` for
+# that pointer-resolution comparison — a claim this re-export does not touch,
+# since `_frontmatter`/`_field` immediately above stay exactly as they were,
+# still used by `build_children_index` below. `coordinator_core.archival`
+# carries its OWN separate, deliberately-duplicated copy of `_frontmatter`/
+# `_field` for `claimed_or_shipped_at_path`'s use (see that module's DR-242
+# section header) — two independently-maintained copies serving two unrelated
+# consumers, not drift.
+#
+# Re-exported here (not merely deleted) so `test_baton_dag_oracle_claimed_or_
+# shipped.py`'s existing imports keep working unchanged.
 from coordinator_core.archival import (  # noqa: E402  (re-export, not a relocation of use)
     claimed_or_shipped,
     claimed_or_shipped_at_path,

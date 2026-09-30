@@ -131,7 +131,13 @@ def test_fanin_record_verdict_is_internally_consistent_with_its_own_fields():
     _assert_verdict_internally_consistent(_load_record(_FANIN_RECORD_PATH))
 
 
+# --- AC6a / AC6b / AC6c discharge, docs/plans/2026-08-16-a-process-per-predicate.md ---
+#
 # Three records, three DIFFERENT questions. The plan's original AC6 asked one
+# question ("is the shim cheaper?") of two things that need different ones,
+# and demanded a 69% reduction from a backward-compatibility layer -- which
+# nothing correct could ever deliver. These three pin what each record is for,
+# so a later reader cannot silently re-merge them.
 
 
 def test_ac6a_fan_in_is_cheaper_than_n_processes():

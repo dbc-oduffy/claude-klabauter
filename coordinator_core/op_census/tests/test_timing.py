@@ -165,7 +165,10 @@ def test_cleared_ops_raises_on_unrecognised_disposition():
         cleared_ops(process_time, invocation_tax)
 
 
+# ---------------------------------------------------------------------------
+# measure_invocation_tax_ms shape -- the trampoline cold path, never a bare
 # interpreter (2026-08-23 fix, module docstring's CORRECTED block).
+# ---------------------------------------------------------------------------
 
 
 class _FakeCompletedProcess:
@@ -210,7 +213,12 @@ def test_measure_invocation_tax_ms_averages_armed_samples(monkeypatch):
     assert measure_invocation_tax_ms(iterations=3) == pytest.approx(10.0)
 
 
+# ---------------------------------------------------------------------------
+# THE regression: the exact failure the bug row named, now detected rather
 # than silently emitted -- every op OVER_BAR on tax must never again produce
+# a silent, permanently-empty `cleared` set (bug row
+# `state/bug-backlog/2026-08-23-op-census-can-never-clear-an-op-invocation-tax-measured-in-the-wrong-shape.yaml`).
+# ---------------------------------------------------------------------------
 
 
 def test_emit_dispositions_raises_when_tax_uniformly_over_bar_across_every_op():

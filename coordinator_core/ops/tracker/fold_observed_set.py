@@ -111,7 +111,9 @@ def run_fold_observed_set(*, repo_root: Path) -> dict:
     return {"ran": True, "reason": "appended", "marker": marker}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.fold_observed_set")

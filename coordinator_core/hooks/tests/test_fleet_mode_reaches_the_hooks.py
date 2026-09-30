@@ -121,9 +121,22 @@ class TestNudgeEmCodeDispatchHandlerAutonomous:
         assert result["hookSpecificOutput"].get("additionalContext")
 
 
+#: A real sidecar record always carries `context_window_size` alongside
+#: `used_percentage` (see context_usage_sidecar's module docstring) --
+#: `_check_context_pressure_sync` derives its token-runway bands
 #: (`_ORANGE_RUNWAY_TOKENS`/`_RED_RUNWAY_TOKENS`, both back from
 #: `window - _AUTO_COMPACT_RESERVE_TOKENS`) from that figure via
+#: `_model_window_tokens`, and with it absent every reading in this file
+#: resolved to `used_tokens is None` -- silent at every percentage, which is
+#: why all 13 tests below read empty text regardless of the percentage
+#: written. Chosen so `orange_bound_tokens` lands at an exact 30% of the
+#: window (190_000 * 0.70 == 133_000 == reserve + orange runway): the 40/41
+#: fixtures below (orange band) clear it with room, and the resulting
+#: red_bound_tokens (87_000, ~45.79%) sits comfortably below the 47/48/50
+#: fixtures (red band) and above the 40/41 pair -- not the literal legacy
+#: 40%/43% cut (this module no longer computes fixed percentages, see
 #: `_ORANGE_RUNWAY_TOKENS`'s own comment), just a window where this file's
+#: existing percentage fixtures fall on the intended side of both bounds.
 _WINDOW_TOKENS = 190_000
 
 
@@ -170,6 +183,11 @@ class TestContextPressureCompactionWarningsFleetWins:
         self, _isolate_sentinel_and_fleet, monkeypatch
     ):
         # ONE POSITIONAL `env`, matching the real signature: the registry
+        # entry calls this with the caller's env, so a zero-arg stub answered
+        # nothing -- it raised `TypeError` into the resolver's fail-open
+        # `except`, and this test asserted against the STATIC default with the
+        # leg it names never run. A stub whose arity does not match the thing
+        # it stands in for pins the fallback, not the seam.
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
@@ -341,8 +359,11 @@ _FLEET_VALUE_CASES = [
     pytest.param({"value": "informational"}, id="dict"),
 ]
 
+#: Non-string classes (including the out-of-enum string) that must degrade
 #: to the STANDARD variant at the red band -- never silently coerced to
 #: `informational`. `_NO_FLEET_FILE`/"standard" already assert STANDARD via
+#: the baseline tests above and are excluded here to avoid duplicating that
+#: assertion under a different fixture id.
 _DEGRADES_TO_STANDARD_IDS = {
     "out_of_enum_string",
     "bool_true",
@@ -354,6 +375,13 @@ _DEGRADES_TO_STANDARD_IDS = {
 
 
 class TestCompactionWarningsFullCrossProduct:
+    @pytest.fixture(autouse=True)
+    def _standard_environment_default(self, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda env=None: "standard",
+        )
 
     def _resolve(self, fleet_value, session_id, percentage):
         if fleet_value is not _NO_FLEET_FILE:
@@ -363,10 +391,13 @@ class TestCompactionWarningsFullCrossProduct:
             session_id, "/does/not/matter/transcript.jsonl"
         )
 
+    @pytest.mark.parametrize("percentage", [40.0, 43.0])
     @pytest.mark.parametrize("fleet_value", _FLEET_VALUE_CASES)
-    def test_orange_band_never_empty(self, _isolate_sentinel_and_fleet, fleet_value, request):
-        session_id = f"xp-orange-{request.node.callspec.id}"
-        text = self._resolve(fleet_value, session_id, 41.0)
+    def test_orange_band_never_empty(
+        self, _isolate_sentinel_and_fleet, fleet_value, percentage, request
+    ):
+        session_id = f"xp-orange-{percentage}-{request.node.callspec.id}"
+        text = self._resolve(fleet_value, session_id, percentage)
         assert text
 
     @pytest.mark.parametrize("fleet_value", _FLEET_VALUE_CASES)

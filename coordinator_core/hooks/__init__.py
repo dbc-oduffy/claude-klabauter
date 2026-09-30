@@ -135,8 +135,17 @@ import sys as _sys
 import traceback as _traceback
 from typing import Dict
 
+# ---------------------------------------------------------------------------
+# Eager-import table: dotted module path per hook module that used to be a bare
+# `from coordinator_core.hooks import X` statement. Kept as data (mirroring
 # coordinator_core.ops._EAGER_OP_MODULES) so _eager_import_all() is a single
+# loop rather than 20 duplicated import lines, and so it can be re-invoked
+# on demand (C2's registry-miss fallback and guard_roster_ops.py's roster
+# call) without re-running module-level code. Retained deliberately, not
 # apparatus residue — mirroring C6's own note for _EAGER_OP_MODULES: it is
+# the table _eager_import_all() iterates, so retaining the function retains
+# the list.
+# ---------------------------------------------------------------------------
 _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.nudge_foreground_agent_dispatch",
     "coordinator_core.hooks.nudge_named_agent_report_delivery",
@@ -233,7 +242,14 @@ _EAGER_HOOK_MODULES: list[str] = [
 ]
 
 
+# module dotted-path -> the exception raised the last time we tried to import
+# it. Populated by _eager_import_all() on a per-module ImportError/Exception;
+# cleared on a subsequent successful import of that same module (self-healing
+# if the module is fixed mid-process). Mirrors
 # coordinator_core.ops._POISONED_MODULES in name and role — read by
+# coordinator_core.ipc's dispatch path to turn a registry MISS on a poisoned
+# hooks.* module's op into the real cause instead of a generic "Method not
+# found".
 _POISONED_MODULES: Dict[str, BaseException] = {}
 
 
@@ -289,4 +305,11 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
+# Lazy is the only mode: importing this bare package never eagerly registers
 # any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
+# env var / sys._coordinator_core_lazy_ops in-process attribute, reused
+# verbatim from coordinator_core.ops's own now-retired channel) is retired —
+# there is no longer a flag to read or a channel to arm, so no conditional
+# call to _eager_import_all() happens here. Callers reach registration
+# through the targeted per-op import (ipc.py's registry-miss path) or, for
+# the rare full-registration need, by calling _eager_import_all() directly.

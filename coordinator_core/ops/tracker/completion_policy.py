@@ -68,7 +68,9 @@ from coordinator_core.tracker_entities import (
 )
 from coordinator_core.tracker_projection import DEFAULT_CLOSURE_FIDELITY
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.assert_code_complete")
@@ -147,7 +149,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     source_observation_id = params.get("source_observation_id")
 
+    # An item whose closure_fidelity the caller does not declare folds to
     # DEFAULT_CLOSURE_FIDELITY ("verify-with-effort") per
+    # DR-closure-fidelity-tier-axis D4, which is the tier that can never
+    # auto-assert. Defaulting here fails SAFE: the absent-input case degrades
+    # to suggest rather than minting a false auto. Resolving the real value
+    # from projected state stays the caller's job -- this module holds its
+    # negative-spec import boundary and does not read the store to find it.
     closure_fidelity = params.get("closure_fidelity", DEFAULT_CLOSURE_FIDELITY)
     try:
         reject_invalid_closure_fidelity(closure_fidelity, action="assert code_complete for")

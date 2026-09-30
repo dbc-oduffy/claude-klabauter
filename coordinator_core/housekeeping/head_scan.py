@@ -45,6 +45,13 @@ from typing import Any, Dict, Iterable, Optional, Set, Union
 
 from coordinator_core.dag import _read_meta
 
+#: Bounded read for the head-scan's own file open — independent of, and
+#: never a substitute for, `dag._read_meta`'s full `read_bytes()` (which a
+#: declined file still pays in full via `scan_keys`'s fall-through). Sized
+#: generously above a normal handoff's frontmatter block; a block-scalar or
+#: long-frontmatter file that doesn't fit inside this budget simply finds no
+#: closing delimiter and declines (never guesses). Matches the sibling
+#: mechanism's own budget (`_prefilter_scan_disqualifies`'s
 #: `_PREFILTER_READ_BYTES`) so the two stay commensurable.
 _READ_BUDGET_BYTES = 4096
 

@@ -213,7 +213,14 @@ from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.group_em import watch_spool
 from coordinator_core.session.receiver_state import read_receiver_state
 
+#: Keep the watcher's own duty cycle far under the load norm's 200ms-needs-
 #: a-fix line: the poll interval is 1000x the MEASURED `snapshot()` cost
+#: (arm-time, this box), so the watcher spends well under 0.1% of wall time
+#: reading the registry. Floored at 5s so a near-zero measured cost (the
+#: registry read is a handful of small JSON files) never tightens the loop
+#: toward a busy-poll -- 5s is itself well inside the load norm for a
+#: zero-subprocess, in-process read. `main` prints the resulting interval on
+#: `ARMED`, never a chosen round number standing alone.
 _POLL_INTERVAL_FLOOR_SECONDS = 5.0
 _POLL_INTERVAL_MEASURED_MULTIPLIER = 1000.0
 
@@ -279,6 +286,8 @@ _PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json"
 _CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
 
 #: `watch_heartbeat._STAMP_FORMAT`, matched deliberately: a reader comparing a
+#: GONE line's `last_seen` against the heartbeat record's `last_tick_at`
+#: should not have to reconcile two renderings of the same instant.
 _GONE_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
@@ -904,11 +913,21 @@ def tick_once(
 
     prev_parked = load_prev_parked(repo_root)
 
+    # ONE instant for the whole tick, captured before the classify and reused
+    # for the heartbeat stamp below -- `poll_once` would otherwise take its
+    # own. Not threaded into `_prune_spool`: `watch_spool.prune` takes its
+    # own `now_epoch` default and is a lazy, hysteresis-gated housekeeping
+    # call, not a per-tick drain against this instant (`watch_spool` module
     # docstring, "LAZY, WITH HYSTERESIS").
     tick_now = now if now is not None else datetime.now(timezone.utc)
 
     try:
+        # `prev_inbox_open=None`: a single-tick wake carries no memory
+        # across wakes (same posture as `prev_parked` in the module
         # docstring's CONCURRENT WAKES note) and there is no on-disk carry
+        # for this count today, so every `tick_once` wake is a first tick
+        # for the inbox line -- it never fires here, only on `main`'s held
+        # loop, which is the surface a rise is worth a line on.
         cur_parked, declinations, peer_notes, _cur_inbox_open = poll_once(
             repo_root,
             caller_session_id,
@@ -925,8 +944,21 @@ def tick_once(
             pass
         return 1
 
+    # Emit happens
+    # inside `poll_once`, above, strictly BEFORE this persist step, and that
+    # ordering is deliberate, not incidental. Work both failure directions:
+    # if persistence raised AFTER a successful emit, the current order
+    # leaves the departed peer in the OLD prior map, so the next tick reports
     # it again (a DUPLICATE line); the reviewer's suggested reorder
+    # (persist-then-emit) would instead retire the peer from the map before
+    # any line was ever printed, so a persistence failure at that point loses
     # the departure SILENTLY -- the exact "fleet went quiet and nobody said
+    # so" failure this module exists to remove. A duplicate GONE is noise a
+    # reader can discard; a dropped one is not. Kept as emit-then-persist on
+    # that basis (accepted risk: `watch_heartbeat.write_atomic`, the thing
+    # `save_prev_parked`/`stamp` bottom out in, is contractually non-raising
+    # today; see `test_gone_emits_even_when_persistence_raises` below, which
+    # pins that emission does not depend on persistence succeeding).
     save_prev_parked(repo_root, cur_parked, peers=peer_notes)
     watch_heartbeat.stamp(
         repo_root,
@@ -1001,12 +1033,21 @@ def main(
     )
 
     # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
+    # stdout was at IMPORT time, so anything that replaces it afterwards -- a
+    # harness wrapping the stream, a test capturing it -- is written past rather
+    # than to. For a process whose entire product is its stdout lines, a stream
+    # captured before the caller existed is the wrong one by default.
     out = sys.stdout if stream is None else stream
     emit = _emit_for(out)
 
     snapshot_ms, agents = _measure_snapshot_ms(repo_root)
     peer_count = len(agents)
     # SAME EXCLUSION AS `_current_agents`, applied to the enumeration already in
+    # hand -- no second registry read. This is the number the heartbeat's
+    # `subscribed_peers` reports a few lines down (`stamp(subscribed_peers=
+    # len(cur_parked))`); printing it here too means a reader comparing the two
+    # never has to re-derive the caller-inclusion rule to explain an
+    # apparent off-by-one between them.
     excluding_caller = read_pass.enumerate_repo_peers(agents, caller_session_id)
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
         excluding_caller = read_pass.enumerate_repo_peers(
@@ -1018,6 +1059,22 @@ def main(
     resolved_root = os.path.abspath(str(repo_root))
     watched_repo = os.path.basename(resolved_root) or str(repo_root)
     # THE RESOLVED PATH GOES ON THE LINE, not just the derived name -- the
+    # name alone survives a mangled root and reads healthy anyway; full
+    # incident: `repo_root_arg`'s module docstring. `_cli` refuses that root
+    # outright; this is the second line of defence for callers that reach
+    # `main` without passing through it.
+    #
+    # This
+    # comment used to retell the incident (mangled path, publish-mirror
+    # consequence) at full length, the third of four full retellings across
+    # this diff. Reduced to a pointer.
+    # ROSTER NAME AND STRUCK INSTANT, beside the count. `peer_count` includes
+    # this caller (see `_current_agents`'s docstring -- this measurement runs
+    # BEFORE the watcher excludes itself), which is the opposite population
+    # from the heartbeat's `subscribed_peers` (caller excluded). Naming both
+    # here, plus the instant this enumeration was taken, is what lets a reader
+    # tell a real fleet change from a gap inferred between two differently-
+    # defined lines (module's C5 note).
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
     armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
@@ -1052,12 +1109,24 @@ def main(
                 declinations=declinations,
                 interval_seconds=interval,
                 # THE PEERS THIS TICK ACTUALLY LOOKED AT, never the default 1.
+                # A watch subscribed to one peer and a watch covering the whole
+                # repo were indistinguishable from every artifact on disk:
+                # measured 2026-09-01 by the Group-EM of this repo, whose record
+                # read `subscribed_peers: 1` against a live population of 10-18.
+                # A coverage figure nobody writes is a coverage figure nobody
+                # can question.
                 subscribed_peers=len(cur_parked),
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
             if not stamped:
                 # ITEM 1 (the memo's gated ask): DISPLACED-WATCH TEARDOWN.
+                # A same-holder writer or `tick_source` mismatch is the same
+                # crown's other instrument declining and stays a quiet
+                # decline (`displacement_record` returns `None` for both) --
+                # this only fires on a HOLDER mismatch, the E1/E2 shape the
+                # memo reproduces: a successor entered and took the record,
+                # and this watch is no longer the one to keep polling it.
                 displaced_by = watch_heartbeat.displacement_record(
                     repo_root, group_em_session_id or "", caller_session_id
                 )
@@ -1069,8 +1138,21 @@ def main(
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open
         except Exception:
+            # Reporting
+            # an error must never be able to fail worse than the error itself.
+            # A broken stream at the moment a poll raises would otherwise
+            # propagate out of `main` uncaught, ending the watch silently --
+            # exactly the "indistinguishable from a quiet repo" failure this
             # module's COVERAGE contract exists to prevent.
+            #
+            # This
+            # catches `stamp`'s `ValueError` on an invalid `tick_source`
+            # identically to a genuine I/O miss, printing both as the same
             # POLL-ERROR line. That collapse is deliberate for now: both call
+            # sites pass a fixed, valid literal (`"cron"`/the loop's own
+            # constant), so the ValueError branch is dead code today, a
+            # caller bug rather than an environmental failure. Revisit if
+            # `tick_source` ever becomes caller-controlled.
             try:
                 emit(_poll_error_line())
             except Exception:
@@ -1193,7 +1275,14 @@ def _cli(argv: "list[str] | None" = None) -> int:
         liveness = watch_heartbeat.read_liveness(args.repo_root)
         print(watch_heartbeat.human_verdict(liveness))
         if liveness["verdict"] == watch_heartbeat.VERDICT_ARMED:
+            # ITEM 2 (`--status` false-alive with no process check). A fresh
             # deadline is STALENESS evidence only -- it says the record's
+            # writer kept its own promise, never that the process behind it
+            # is still there. `process_confirmed_alive` is the single-machine
+            # PID witness (never used for item 1's cross-machine holder
+            # question -- see that function's own docstring); anything short
+            # of a confirmed-alive answer must not report ALIVE on
+            # arithmetic alone.
             if watch_heartbeat.process_confirmed_alive(liveness) is not True:
                 print(
                     "  (the record is fresh, but the process that wrote it "
@@ -1223,6 +1312,8 @@ def _cli(argv: "list[str] | None" = None) -> int:
         return 0
     except WatchAlreadyHeldError as exc:
         # NON-ZERO AND NAMED, never a silent no-op: an arm that quietly does
+        # nothing is indistinguishable from an arm that worked, the exact
+        # defect class this refusal exists to remove.
         print(f"group-em-watch: {exc}", file=sys.stderr)
         return 1
     return 0

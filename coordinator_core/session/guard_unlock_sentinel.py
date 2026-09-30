@@ -119,7 +119,19 @@ from typing import Any, Dict, Optional
 _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
 #: REMOVED 2026-09-03: ``_SETTINGS_ROOT_WIKI_POINTER``, the settings-root
+#: wiki-directory pointer this module used to render. It went unread when
+#: item 9 stopped rendering any doc pointer here, and it can never come
+#: back: ``message_register._rules`` B8 leg (d) grades a pointer into the
+#: override-key/unlock doc surface a gate-referent, which is what item 9
+#: measured. Item 11's render carries the guard NAME instead, and no path.
+#:
+#: DR-290 form 2 (the literal, never-expanded settings-root pointer) is NOT
 #: lost with it -- ``bash_guards._override_doc.OVERRIDE_KEYS_DOC_DISPLAY``
+#: is that exact string plus the page filename, is live, and is the pointer
+#: readers actually receive. Cite THAT constant as the canonical form; the
+#: three comments here and in ``_override_doc`` that used to cite this one
+#: as the shape that "already ships" were describing an exemplar that had
+#: stopped shipping.
 
 _UNSAFE_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
@@ -490,7 +502,12 @@ def annotate_deny(
     augmentation that crashed would turn that settled deny into an engine
     crash.
     """
+    # Item 11 (2026-09-03): render the firing guard's NAME, nothing else.
+    # Not a reversal of items 3/4/7/9 -- those removed the bypass RECIPE and
+    # the pointer at the unlock doc surface, and both stay removed. A guard
     # name is IDENTITY, not an affordance: nothing can be written with it,
+    # no button is named by it, and B8 grades it clean (measured, see the
+    # docstring's item 11) precisely because it is not a gate-referent.
     del doc_display, agent_id, git_root, session_id
     if not guard_name:
         return out

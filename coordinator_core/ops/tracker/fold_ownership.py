@@ -150,7 +150,9 @@ def fold_ownership(item_id: str, *, repo_root: Path) -> dict:
     return {"item_id": item_id, "owners": owners}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.fold_ownership")

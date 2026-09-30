@@ -83,6 +83,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_row,
 )
 
+#: Bands whose guards can emit advisory/deny text an agent reads --
 #: CONFINEMENT_DENY is deliberately excluded -- see module docstring.
 _ADVISORY_BANDS = (GuardBand.ADVISORY_REWRITE, GuardBand.PLATFORM_CONDITIONED_DENY)
 
@@ -92,9 +93,27 @@ _SUBAGENT_IDENTITY: Dict[str, str] = {
 }
 
 #: What counts as "names an unlock" in RENDERED prose -- the categories
+#: the dispatch brief names explicitly: an override key, a sentinel/
+#: marker dotfile path, a touch/export/rm recipe, a CLI invocation naming
+#: an override/bypass, a doc pointer, or a bare "an unlock exists"
+#: statement. Not an allowlist of guards -- a fixed vocabulary of what a
+#: leak LOOKS like, checked against every guard's rendered text
+#: uniformly.
+#:
+#: Deliberately NOT a bare "any backticked span" scan for "CLI
 #: invocation": live-measured against every ADVISORY_REWRITE/
 #: PLATFORM_CONDITIONED_DENY guard's actual rendered text (this file's
+#: own first draft), that pattern false-positived on every guard's
 #: legitimate REWRITE SUGGESTION -- `git stash push ...`, `git checkout
+#: -b work/...`, a Python rewrite snippet -- which is the guard's whole
+#: PURPOSE, not a leak. "CLI invocation" here is scoped to the one shape
+#: an override/bypass CLI invocation actually takes: naming a bypass/
+#: override/disarm subcommand explicitly.
+#:
+#: `.coordinator-local/subagent-share/` is exempt from the dotfile pattern:
+#: it is the sanctioned subagent write surface a deny routes TO, not a grant
+#: that lifts the deny. Hiding it would leave a blocked subagent with no
+#: named place to write.
 _LEAK_PATTERNS: Dict[str, Pattern[str]] = {
     "override-key(s) phrase": re.compile(r"override key", re.IGNORECASE),
     "guard-override-keys.md doc pointer": re.compile(r"guard-override-keys\.md"),

@@ -86,7 +86,11 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from coordinator_core import coverage
 from coordinator_core.review_trail import reviewed_set as _store
 
+#: Bounded fan-out for the "special" (plan-kind / foreign-scoped) per-range
+#: `git rev-list` resolution below — mirrors `coverage.py`'s own
 #: `_REVLIST_MAX_WORKERS` bound (distinct ranges are independent read-only
+#: shell-outs; unbounded fan-out is the "365-spawn fan-out... wearing a
+#: migration's clothes" shape this chunk's brief explicitly refuses).
 _REVLIST_MAX_WORKERS = 16
 
 

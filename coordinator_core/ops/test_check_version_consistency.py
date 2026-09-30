@@ -18,7 +18,13 @@ import pytest
 from coordinator_core.ops.check_version_consistency import main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns real git because the bash-oracle parity
+# contract (test-check-version-consistency.sh) it ports depends on real git-tree
+# state (tracked-file layout) that `check_version_consistency.main` reads via git
+# plumbing -- no mock stands in for that. Each test builds its own throwaway repo
+# via `_make_bundle`, so there is no shared state to hoist. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

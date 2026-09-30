@@ -1848,7 +1848,9 @@ def test_room_owned_routes_serve_the_single_entry_row():
         served_ids = [e["id"] for e in result["served"]]
         assert "d-lobby-lane" in served_ids, route_name
         entry = next(e for e in result["served"] if e["id"] == "d-lobby-lane")
-        assert entry["arm"] == chain["rows"][0], route_name
+        assert len(chain["rows"]) == 1 and chain["terminal"] is None, route_name
+        assert entry["arm"].startswith(chain["rows"][0]), route_name
+        assert chain["owned_by"] in entry["arm"], route_name
 
     # A room-owned lane is size-invariant by design: the served arm is
     # byte-identical across an XS/S band and an M+ band. The recompute test
@@ -1867,8 +1869,10 @@ def test_dispositions_recompute_with_no_flag_or_reset():
     first_arm = next(e for e in first["served"] if e["id"] == "d-lobby-lane")["arm"]
     second_arm = next(e for e in second["served"] if e["id"] == "d-lobby-lane")["arm"]
     assert first_arm != second_arm
-    assert first_arm == " / ".join(sa.stages("plan", "S")["rows"])
-    assert second_arm == " / ".join(sa.stages("plan", "XL")["rows"])
+    for arm, tshirt in ((first_arm, "S"), (second_arm, "XL")):
+        chain = sa.stages("plan", tshirt)
+        assert all(row in arm for row in chain["rows"])
+        assert chain["terminal"] in arm
 
 
 def test_express_lane_return_carries_dispositions():

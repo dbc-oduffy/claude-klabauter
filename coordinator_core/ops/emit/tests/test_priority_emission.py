@@ -76,7 +76,9 @@ def _collect(
     return handoffs_section.collect(ctx)
 
 
+# ---------------------------------------------------------------------------
 # CONTRACT_VERSION — PART 3.
+# ---------------------------------------------------------------------------
 
 
 def test_contract_version_carries_the_priority_ledger_bump() -> None:
@@ -185,7 +187,11 @@ def test_suggested_priority_passthrough_and_resolver_fallback(mock_qr, mock_ll, 
     assert r["pm_priority_source_id"] is None
 
 
+# ---------------------------------------------------------------------------
+# Dangling ledger target — an entry whose target_id matches no emitted
 # handoff is REPORTED via the malformed bucket, never silently carried and
+# never turned into a record (PART 2, dangling-target contract).
+# ---------------------------------------------------------------------------
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")

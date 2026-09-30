@@ -338,6 +338,8 @@ def test_shim_skew_advisory_kill_switch_falsey_value_does_not_suppress(
     _skew_fixture, monkeypatch, capsys
 ):
     # CLAUDE_KLABAUTER_ROOT_SKEW_QUIET=0/"false" must NOT be
+    # treated as a truthy kill-switch (a bare `.get(...)` truthy check would
+    # suppress on any non-empty string, including these).
     _skew_fixture.write_registry(claude_klabauter=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "0")
     shim = _load_shim_for_test()
@@ -483,6 +485,8 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
             lines.append(f'claude_klabauter = "{session_dir.as_posix()}"')
         else:
             # A CONFIRMED not-the-source-tree session (literally False, not
+            # the undeterminable None): the claude-klabauter root resolves to a real
+            # tree that is NOT this session's.
             lines.append(f'claude_klabauter = "{live_dir.as_posix()}"')
         lines.append("")
         lines.append("[engine]")

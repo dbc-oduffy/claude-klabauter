@@ -103,7 +103,9 @@ _OP_KEY_SCOPE_FILE = "coordinator_core/op_scopes.py"
 _OP_MODULE_MAP_FILE = "coordinator_core/ops/_registry_map.py"
 _EAGER_OP_MODULES_FILE = "coordinator_core/ops/__init__.py"
 
+# Surface name -> target file path, in canonical quad-check order. "Quad" now
 # undercounts (five surfaces as of _EAGER_OP_MODULES coverage) but the name and
+# public symbol are load-bearing for existing callers — see module docstring.
 _SURFACE_FILES: Mapping[str, str] = {
     "OP_CLASSIFICATION": _CLASSIFICATION_FILE,
     "_OP_KEY_SCOPE": _OP_KEY_SCOPE_FILE,
@@ -250,7 +252,12 @@ def check_registration_quad(
     op) — that is a different failure shape, owned by
     `coordinator_core/ops/tests/test_registry_map_sync.py`, not this quad check.
     """
+    # Only `registry` depends on the ops-tree
     # discovery walk (op modules self-register into `_REGISTRY` via import-time side
+    # effect). `classification`/`scope`/`module_map` are plain dict literals that
+    # populate on their own defining module's import and never need the walk; gating
+    # them on `needs_discovery` made a caller supplying three of four params still
+    # pay the full walk to resolve the fourth.
     if registry is None:
         _discover_all_ops()
 
@@ -294,11 +301,33 @@ def check_registration_quad(
     return violations
 
 
+# ---------------------------------------------------------------------------
 # Known-incomplete-registrations allowlist — DEBT LEDGER, NOT AN EXEMPTION POLICY.
+#
+# Frozen 2026-08-11, measured by calling check_registration_quad() directly on
+# HEAD (70 live QuadViolation entries at the time). Owning bug-backlog entry:
+# state/bug-backlog/2026-08-11-check-registration-quad-is-red-on-70-ops-0c14fa26f522.yaml
+#
+# This exists ONLY to restore the gate's signal (a check red-by-default on 70
+# pre-existing ops enforces nothing) — it forgives exactly the recorded gap per
+# op, nothing more: an op on this list that is ALSO missing a surface NOT
+# recorded here still trips the gate (see `_prune_known_incomplete` below,
+# which subtracts only the recorded surfaces from `surfaces_missing`). This is
 # distinct from `_KNOWN_UNCLASSIFIED_OPS_DEBT` above (a narrower,
+# classification-only ledger from a separate, earlier debt-backlog entry with
+# its own never-grows guard) — this ledger additionally covers ops missing
 # `_OP_KEY_SCOPE` and/or `OP_MODULE_MAP`, which that older ledger has no shape
+# for.
+#
+# Nothing should ever be ADDED to this mapping. An entry comes OFF it only by
+# landing the real registration surface(s) it names (with, for
 # OP_CLASSIFICATION specifically, the five-question affirmation
+# `classification.py`'s own convention requires) and deleting the entry — never
+# by an executor's local judgment call. The remaining 70 ops (67 missing only
 # OP_CLASSIFICATION, tracked by `_KNOWN_UNCLASSIFIED_OPS_DEBT` above; the 6
+# below needing a fuller registration) still need that real work; this ledger
+# buys back the gate's legibility, it does not do the work.
+# ---------------------------------------------------------------------------
 _KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {
     "distill.curate_clusters": ("OP_MODULE_MAP",),
     "memo.fate_backfill": ("OP_MODULE_MAP",),
@@ -383,64 +412,5 @@ def filter_known_violations(
     return result
 
 
-# Known-debt baseline — the 65 op-keys registered but missing an OP_CLASSIFICATION
-_KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
-    {
-        "baton.resolve_path_and_repo",
-        "baton.resolve_swept_in_archive",
-        "branch.merge_into_workstream",
-        "bug_sweep.verify_fix_files_changed",
-        "cartography.count_references",
-        "cartography.stack",
-        "ceremony.init_anchor_injection_state",
-        "ci.run_pip_audit",
-        "ci.run_semgrep_scan",
-        "ci.run_shellcheck_sweep",
-        "cli.parse_date_flags",
-        "cli.parse_flag",
-        "commit.exec_bit_change",
-        "completion.flip_to_released",
-        "coverage.halt_on_uncovered",
-        "dependency.detect_changed_manifests",
-        "detect.plugin_layout",
-        "detect.primary_languages",
-        "doctrine.assert_cross_reference_counts",
-        "fanout.poll_scratch_dir",
-        "findings.self_persist_fallback",
-        "fleet.archive_paper_trail",
-        "fleet.archive_queue_entry",
-        "fleet.archive_release_accumulator",
-        "fleet.migrate_handoff_vocabulary",
-        "git_branch.compute_descendant_tip",
-        "git_branch.detect_unpushed_commits",
-        "git_branch.list_unmerged_work",
-        "git_branch.verify_commit_in_review_window",
-        "install.detect_python3_appx_stub",
-        "install.write_identity_file",
-        "lessons.filter_undated_universal",
-        "lessons.reject_orphan_strip_entries",
-        "machine.hibernate",
-        "mcp.resolve_server_cli_path",
-        "merge.quiet_activity_gate",
-        "percolate.check_inverse_drift",
-        "percolate.list_files_newer_than_marker",
-        "percolate.run_pre_ci_hooks",
-        "percolate.scan_content_leakage_tiers",
-        "plan.list_stale_executing",
-        "release.cut_tag",
-        "release.cut_tag_and_publish",
-        "repo.clone_and_register",
-        "repo.create_and_push_remote",
-        "repo_setup.copy_console_subprocess_tripwire",
-        "repo_setup.validate_target_root",
-        "research.archive_workdir",
-        "research.restructure_for_repeat_topic",
-        "research.verify_scout_inventory_completeness",
-        "review.snapshot_diff_and_head",
-        "session.resolve_chain_terminal_disposition",
-        "session.rotate_orphan_sweep_log",
-        "update_docs.probe_fresh_repo_noop",
-        "workday.stitch_sidecar_into_summary",
-        "workday.surface_auto_push_failure_stats",
-    }
-)
+# Known-debt baseline — empty: every registered op carries an OP_CLASSIFICATION entry.
+_KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset()

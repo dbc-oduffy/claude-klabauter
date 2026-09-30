@@ -50,10 +50,52 @@ from typing import List, Optional, Sequence
 
 from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 
+# D1 keep-set — prefix-matched against slug (strip repos. prefix first).
+# 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
+# 'deep_research_claude'; 'project_rag' matches 'example_retrieval_repo_ue_addon'.
+# 'content_root' kept: OSS resolve-coordinator-clone.sh reads repos.content_root
+# at runtime (PM-ratified 2026-07-10).
+# 'example_doctrine_repo' kept: a SECOND machine-local registry alias for the
+# same coordinator-content-repo clone (`machine-local get repos.example_doctrine_repo` ==
+# `machine-local get repos.content_root`, both resolving to this machine's
+# coordinator-content-repo clone path, verified 2026-08-13) -- it was this machine's
+# anonymizing scrub placeholder
+# for `content_root` before the 2026-08-13 PM ruling (571a4d78f535) stopped
+# scrubbing the DoE family. Removing that `content_root -> example_doctrine_repo`
+# depersonalize mapping collaterally removed the ONLY thing that had been
+# excluding this alias's own text from the no-residual-pattern leak-check --
+# `example_doctrine_repo` was never itself KEEPSET, only ever exempted as
+# "this row's own placeholder output". Once nothing produces it as placeholder
+# output anymore, the guard correctly starts treating it as a bare registered
+# `repos.*` slug and flags every source-comment citation of the incident it
+# documents (e.g. coordinator_core/ops/percolate_run.py's own docstring,
+# coordinator_core/ops/coordinator_content_root.py). Same sibling, same ruling,
+# same disclosure -- KEEPSET is the narrow, named fix; not a pattern loosen.
+# 'fleet_root' kept: `repos.fleet_root` is not a private repo codename -- it
 # names the CONTAINER directory the fleet's repos live under.
 # `git_hook_install.py`'s own `_CONTAINER_REGISTRY_KEYS` comment says these
+# "are not unclassifiable repos; they are not repos at all, and never reach a
+# verdict." Same generic/public-slug class as 'game_dev', 'web_dev',
+# 'data_science', 'coordinator', 'experiments' above.
 # 'claude_klabauter' kept: this is THIS MIRROR'S OWN PUBLIC IDENTITY -- the
+# name every other slug in the store scrubs TO, not a private codename that
+# leaks. Same class as 'content_root' above (the sibling mirror's public
+# identity), and the two were jointly renamed onto each mirror's public
+# identity by the 2026-08-05 cross-mirror audit
+# (cross-repo/inbox/2026-08-05-coordinator-content-repo-em-joint-rename-agreed-our-outlier-
+# is-worse.md); 'content_root' was added to KEEPSET then and this one was not.
+# Scrubbing it is incoherent by construction: `base.depersonalize` maps
+# claude_klabauter -> claude_klabauter, so a rule satisfying the leak oracle
+# for this slug would have to rewrite the placeholder the sweep itself
+# just produced, corrupting every published byte that names the mirror.
+# Registered as `repos.claude_klabauter` and classified by
 # `consumer_corpus_preflight` (NON_FLEET_EXCLUDED_KEYS, not FLEET_REPO_KEYS),
+# which is how it entered the leak oracle's slug universe with no KEEPSET
+# entry and left `test_registry_slug_scrub_coverage` red across 9 targets --
+# so the pin that exists to catch a missing scrub rule before a live publish
+# was itself failing, and caught nothing. Found 2026-09-18 when
+# `example_orchestration_hub_repo` reached a live publish refusal behind
+# that silence. KEEPSET is the narrow, named fix; not a pattern loosen.
 KEEPSET: Sequence[str] = (
     "project_rag",
     "deep_research",
@@ -256,6 +298,9 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
                 all_hits.extend(hits)
 
     # BEHAVIOUR CHANGE (2026-07-22, break-class fix): restores this guard's
+    # own documented fail-closed contract — an incomplete scan (any file we
+    # couldn't read) is treated as non-clean rather than silently reported
+    # as "clean" alongside a narrowed scanned set.
     if unreadable_files:
         uniq_unreadable = sorted(set(unreadable_files))
         print(

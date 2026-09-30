@@ -11,6 +11,7 @@
       {"kind": "literal", "line": "predecessor: none"},
       {"kind": "literal", "line": "kind: session-handoff"},
       {"kind": "literal", "line": "handoff_phase: continuation"},
+      {"kind": "literal", "line": "baton_role: work"},
       {"kind": "literal", "line": "deployment_state: ready_to_fire"},
       {"kind": "literal", "line": "category: infra"},
       {"kind": "value", "key": "summary", "field": "placeholder_summary", "quote": true},
@@ -36,10 +37,17 @@
       "",
       "<!-- Replace with what the next session should do first. -->",
       "",
+      "## What I Learned",
+      "",
+      "<!-- What did you learn that you'd resent re-deriving? -->",
+      "",
       "## Session Ledger",
       "",
-      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line per closing ceremony. -->",
       "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      "<!-- N is an integer COUNT of dispatches, NOT a duration: Nd = agent dispatches, -->",
+      "<!-- No = opus dispatches. e.g. `3d / 1o`. A row written as days (`0.3d`) does not -->",
+      "<!-- parse, and a chain whose rows do not parse silently renders as ZERO effort. -->",
       ""
     ]}
   ]

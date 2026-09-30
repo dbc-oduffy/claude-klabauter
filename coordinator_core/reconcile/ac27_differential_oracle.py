@@ -110,9 +110,27 @@ PRE_C4_SHA = "578c47d3"
 
 POST_C7_SHA = "7e69ecc1"
 
+#: 2026-08-05 provenance note: DR-266 (docs/plans/2026-07-26-gate-resolution-widen-
+#: and-migrate.md's follow-on, coordinator-content-repo) adds a `contradiction` key to
+#: `evaluate_gate`'s prose-dominance return dict when `staleness_evidence` is not
+#: None, and re-routes `evaluate_gate_triage`'s review-due path -- both landing
 #: strictly AFTER POST_C7_SHA. This oracle's evaluator axis loads `gate_eval.py`
 #: ONLY at PRE_C4_SHA and POST_C7_SHA (never HEAD, per the module docstring's
+#: negative-spec), so a `run()` pass over the current tree cannot see the
+#: DR-266 delta at all -- zero flips here is NOT evidence DR-266 introduced no
+#: verdict change; it is the oracle's pinned window ending before DR-266 begins.
 #: Do not repin POST_C7_SHA (or add a third pinned sha) to chase this: whether
+#: this window should widen again is a scoping decision for whoever next reasons
+#: about AC27's coverage, not a side effect of landing DR-266 itself. Also note
+#: this oracle's `run()`/`_evaluate` never calls `evaluate_gate_triage` at any
+#: sha -- it differentials `evaluate_gate` against itself across the two pinned
+#: snapshots, so the triage-side half of DR-266 is outside this oracle's
+#: comparison shape entirely, independent of which shas are pinned.
+#:
+#: The evaluator the corpus axis pins for BOTH corpus states it compares. Reuses
+#: the evaluator-axis's own post-widening snapshot rather than importing
+#: `gate_eval` live -- see the module docstring's negative-spec on why HEAD is
+#: unsafe to import here while sibling chunks are mid-edit on it.
 CORPUS_AXIS_EVALUATOR_SHA = POST_C7_SHA
 
 _CORPUS_TREE_ROOTS: Tuple[str, ...] = ("state/handoffs", "archive/handoffs", "archive/completed")
@@ -141,7 +159,13 @@ def _load_gate_eval_at(claude_klabauter_root: Path, sha: str, module_name: str) 
     return module
 
 
+#: Review: coordinator:code-reviewer -- modules `gate_eval.py` imports beyond
+#: stdlib/typing. Only `gate_eval.py`'s OWN source is time-travelled by
+#: `_load_gate_eval_at` (see that function's docstring); anything it imports
+#: resolves through the process's live `sys.modules`, i.e. the CURRENT
 #: working-tree version, not the version pinned at PRE_C4_SHA/POST_C7_SHA.
+#: This tuple is the cheap divergence guard's coverage list, not full
+#: transitive-import isolation -- see `_check_transitive_import_isolation`.
 _GATE_EVAL_TRANSITIVE_IMPORT_PATHS: Tuple[str, ...] = (
     "coordinator_core/lifecycle_constants.py",
 )

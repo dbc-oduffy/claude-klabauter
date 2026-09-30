@@ -110,7 +110,7 @@ def _iter_source_files(package_dir: Path) -> Iterable[Path]:
 
 
 def _parse(path: Path) -> ast.Module:
-    return ast.parse(path.read_text(), filename=str(path))
+    return ast.parse(path.read_bytes(), filename=str(path))
 
 
 def _reaches_symbol(tree: ast.Module, reach: SymbolReach) -> bool:

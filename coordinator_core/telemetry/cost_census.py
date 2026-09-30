@@ -118,7 +118,12 @@ HOT_PATH_OPS: tuple = (
     "review_trail.write",
 )
 
+#: Ratchet, not a target: this module must never read an unbounded number
 #: of lines even if `LOOKBACK_SECS` and rotation both fail to bound it
+#: (e.g. a corrupted/unrotated sink). 2,000,000 is ~9x the 222,572-row
+#: single-sink scale the 2026-08-15 fleet-degradation audit reconstructed
+#: from — comfortably above any one day's traffic, comfortably below
+#: "unbounded."
 MAX_ROWS_SCANNED = 2_000_000
 
 LOOKBACK_SECS_DEFAULT = 24 * 60 * 60

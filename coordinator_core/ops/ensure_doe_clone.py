@@ -115,6 +115,8 @@ def main(argv: List[str]) -> int:
 
     if has_git and not has_coordinator:
         # A git clone of SOMETHING, but not coordinator-claude -- not the
+        # clone path and not a silent failure. Do not fall through to
+        # `git clone` over an existing non-empty directory.
         msg = (
             f"doe_clone: failed ({doe_clone} is a git clone but has no coordinator/ "
             f"-- not coordinator-claude; repoint repos.content_root at the correct clone "
@@ -152,6 +154,7 @@ def main(argv: List[str]) -> int:
         print(f"doe_clone: failed (git clone exited {rc})")
         return 1
 
+    # DR-276: declared AFTER the clone lands, never before — the contract is
     # a report of what was ACTUALLY written, not of an intended surface.
     declare_write(doe_clone)
 

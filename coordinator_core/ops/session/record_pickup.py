@@ -126,7 +126,12 @@ from coordinator_core.session import core
 
 _LOG = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# mkdir-lock protocol constants — MUST mirror coordinator-session.sh exactly
 # (_cs_shape_lock_live default _CS_SHAPE_LOCK_STALE_SEC=30; cs_session_shape_set
+# max_attempts=20, sleep 0.1s) so a Python holder and a bash holder agree on
+# staleness/retry behaviour when racing on the same lock dir.
+# ---------------------------------------------------------------------------
 
 _SHAPE_LOCK_STALE_SECONDS: float = 30.0
 _LOCK_MAX_ATTEMPTS: int = 20

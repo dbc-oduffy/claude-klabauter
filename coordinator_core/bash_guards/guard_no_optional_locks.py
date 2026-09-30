@@ -97,10 +97,33 @@ _DIFF_STAGED_FLAGS = frozenset({"--cached", "--staged"})
 
 #: `git diff` spellings that must NOT be rewritten for the OPPOSITE reason
 #: to `_DIFF_STAGED_FLAGS`: not because the flag would be inert, but because
+#: `--no-optional-locks` actively breaks what the caller is doing.
+#:
+#: `--quiet` is the phantom-clearing probe. An ordinary `git diff` refreshes
+#: the index stat-cache and WRITES IT BACK, which is how a stat-cache
+#: phantom (a file git believes is dirty because its mtime moved while its
+#: content did not) heals itself. `--no-optional-locks` suppresses exactly
+#: that write-back. Rewrite a `--quiet` probe and the phantom it is probing
+#: for can never clear: every subsequent probe re-reads dirty, forever.
+#: `commit_gates`' own EOL-phantom probe path runs straight through here.
+#:
+#: Reported as item 1 of coordinator-content-repo's 2026-08-12 six-defect bundle and
+#: re-verified 2026-08-31 (`state/audits/2026-08-31-the-six-defect-bundle-
+#: reverified.md`) -- the one item of that bundle's five that reproduced.
+#: DoE fixed the same mechanism on their own side by excluding
+#: `git_native.diff_quiet`, pinned by their
+#: `test_phantom_clearing_readers_keep_the_optional_lock`.
+#:
 #: Kept as its own set rather than folded into `_DIFF_STAGED_FLAGS`: the two
+#: answer different questions ("would the flag do nothing?" vs "would the
+#: flag do harm?"), and a future reader widening one must not silently
+#: inherit the other's rationale.
 _DIFF_PHANTOM_CLEARING_FLAGS = frozenset({"--quiet"})
 
+#: Token characters that make a shlex punctuation token a command separator
 #: -- identical set to `guard_offer_git_c._OFFER_SEP_TOKEN_CHARS`, not
+#: imported from there because that name is that module's own private
+#: implementation detail, not a shared export.
 _SEP_TOKEN_CHARS = frozenset(";&|")
 
 
@@ -374,7 +397,18 @@ def check_git_no_optional_locks(
         return None
 
     # Shape precedence: a command whose PRIMARY shape is MULTI_PROBE_BANNER
+    # is already owned by the `multiprobe-banner`/`multiprobe-banner-
+    # rewrite` guards (dispatch.py), whose remedy (collapsing every probe,
+    # including any bare `git status`, into one process) strictly subsumes
+    # this guard's own single-flag insertion -- rewriting just the `git
+    # status` segment here would offer a weaker fix AND short-circuit the
+    # dispatch chain before the banner guards (registered in a later band,
+    # see dispatch.py's `GuardBand` ordering) ever run. Mirrors the same
+    # shape-precedence deferral `guard_multiprobe_banner.check` itself
     # already honors against `Shape.GREP_VIA_BASH` (AC-7). Dialect-aware
+    # (payload's `tool_name`) so this also defers correctly under
+    # PowerShell, where `dialect_from_tool_name` resolves a dialect this
+    # guard's own bash-only tokenizer above cannot classify shapes for.
     dialect = dialect_from_tool_name(
         (payload or {}).get("tool_name") if isinstance(payload, dict) else None
     )

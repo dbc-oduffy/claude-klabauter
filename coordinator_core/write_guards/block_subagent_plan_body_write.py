@@ -197,14 +197,9 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
-from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.session import machinery_paths
-from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.write_guards._repo_root import resolve_repo_root
-from coordinator_core.bash_guards._override_log_path import (
-    NO_SESSION_BUCKET,
-    session_audit_log_dir,
-)
+from coordinator_core.bash_guards._override_log_path import session_audit_log_dir
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
@@ -252,8 +247,7 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 40
 
 #: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
-#: This module's only writes are _write_block_log()'s and _write_hook_emit_log()'s
-#: best-effort appends under <git_root>/.git/coordinator-sessions/<session_id>/ --
+#: This module's only write is _write_block_log()'s best-effort append under <git_root>/.git/coordinator-sessions/<session_id>/ --
 #: inside .git/, never a tracked repo artifact.
 GENERATES = []
 
@@ -360,39 +354,6 @@ def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
     return result
 
 
-def _resolve_git_dir(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --git-dir``; best-effort.
-
-    Same fail-open contract as ``_resolve_git_root`` above -- only feeds
-    ``_write_hook_emit_log``'s diagnostic log path, never the guard's own
-    ALLOW/DENY decision.
-
-    D4 (docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md):
-    delegates to the shared, non-spawning
-    ``coordinator_core.git.git_dir.resolve_git_dir`` seam instead of
-    hand-rolling its own ``git rev-parse --git-dir`` spawn. That resolver
-    takes a REPO ROOT (not an arbitrary cwd) and builds its result via
-    join/normpath with no ``.resolve()`` -- its output is absolute only when
-    the ``repo_root`` argument already is. ``resolve_repo_root`` (the
-    peer-landed shared seam) always returns an already-``Path.resolve()``d
-    absolute string or ``None``, so that trap does not materialize here.
-
-    Byte-shape note (best-effort log path only, never the verdict): the
-    prior subprocess emitted whatever form ``git rev-parse --git-dir``
-    itself chose, typically a path RELATIVE to ``cwd`` (e.g. ``.git``) when
-    ``cwd`` was already the toplevel -- which ``_write_hook_emit_log`` then
-    joined against the log-writing PROCESS's own cwd, not necessarily the
-    hook's ``cwd``. This resolver always returns an ABSOLUTE path anchored
-    at the real repo. Since this value never feeds the ALLOW/DENY decision
-    (only where the best-effort diagnostic log line lands), the change is
-    accepted as a side effect of the migration rather than reproduced.
-    """
-    repo_root = resolve_repo_root(cwd)
-    if not repo_root:
-        return None
-    return str(resolve_git_dir(Path(repo_root)))
-
-
 def _write_block_log(
     git_root: Optional[str], session_id: str, agent_id: str, file_path: str
 ) -> None:
@@ -422,54 +383,6 @@ def _write_block_log(
             fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
     except OSError as exc:
         print(f"block_subagent_plan_body_write: deny-log write failed "
-              f"(decision unaffected): {exc}", file=sys.stderr)
-
-
-def _write_hook_emit_log(cwd: Optional[str], emit: str) -> None:
-    """Best-effort diagnostic emit log.
-
-    Logs the exact bytes emitted so a "hookSpecificOutput missing
-    hookEventName" schema-validation error can be compared against what was
-    actually sent. Wrapped so any failure can NEVER flip the decision.
-    """
-    try:
-        git_dir = _resolve_git_dir(cwd)
-        if not git_dir:
-            return
-        session_id = next(
-            (
-                value
-                for value in (
-                    os.environ.get(name, "").strip() for name in SESSION_ENV_PRECEDENCE
-                )
-                if value
-            ),
-            NO_SESSION_BUCKET,
-        )
-        # The full canonical ladder, NOT `CLAUDE_SESSION_ID` alone. Reading one
-        # spelling is the break-class defect `SESSION_ENV_PRECEDENCE`'s own
-        # docstring records (slice D, F1): a guard that walks a subset of the
-        # chain the op it routes to walks disagrees with that op, and a real
-        # session carrying only `CLAUDE_CODE_SESSION_ID` was told "Not your
-        # claim." Cloud sessions set exactly that spelling and leave
-        # `CLAUDE_SESSION_ID` unset, so the single-spelling read sent every
-        # cloud emit to the `no-session` bucket -- losing the attribution this
-        # log exists to carry, on the one platform that cannot be re-run.
-        # Same rule as `_write_block_log` above: a diagnostic emit log never
-        # mints `<hub>/<sid>` -- `ensure_session` is the one constructor, and a
-        # record-less child of that hub reads as a phantom SESSION to
-        # `liveness.live_session_ids`. An unknown session's line lands in the
-        # denylisted `no-session` bucket rather than being dropped.
-        sessions_root = Path(git_dir) / "coordinator-sessions"
-        if session_id != NO_SESSION_BUCKET and not (sessions_root / session_id).is_dir():
-            session_id = NO_SESSION_BUCKET
-        log_dir = sessions_root / session_id / "hook-emits"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        with open(log_dir / "emits.tsv", "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(f"{ts}\tblock-subagent-plan-body-write\t{emit}\n")
-    except OSError as exc:
-        print(f"block_subagent_plan_body_write: hook-emit-log write failed "
               f"(decision unaffected): {exc}", file=sys.stderr)
 
 
@@ -772,7 +685,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "permissionDecisionReason": reason,
             }
         }
-        _write_hook_emit_log(cwd, str(result))
         return result
 
     # Invented kind: hard-denies unconditionally, across the WHOLE
@@ -791,7 +703,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "permissionDecisionReason": reason,
             }
         }
-        _write_hook_emit_log(cwd, str(result))
         return result
 
     # C16 narrowing: a resolved coordinator:executor only hard-denies the
@@ -820,9 +731,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "permissionDecisionReason": reason,
         }
     }
-
-    # Diagnostic emit log — best-effort, wrapped so
-    # it can never flip the decision already computed above.
-    _write_hook_emit_log(cwd, str(result))
 
     return result

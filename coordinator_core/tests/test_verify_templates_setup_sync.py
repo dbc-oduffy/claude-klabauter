@@ -33,7 +33,15 @@ _TRACKED = [
     "percolate-hooks/README.md",
 ]
 
+# A publish_sync.py body that satisfies would_refuse() against every
 # PUBLISH_MODES entry point (sync_mirror, sync_flat_mirror, sync_repo_cut)
+# plus load_ignore — the "would not be refused" baseline every test below
+# starts from and mutates one entry point at a time. Deliberately NO
+# **kwargs catch-all on the entry points whose bind_kwargs the regression
+# below removes a name from: would_refuse()/accepted_keywords() treats a
+# real **kwargs as "absorbs anything" (mirrors bind_partial's own
+# leniency), so a catch-all would mask exactly the drop this fixture
+# exists to exercise.
 _CONTRACT_SATISFYING_PUBLISH_SYNC = textwrap.dedent(
     """
     def sync_mirror(copy_file, renamed_dir_names, sweep_top_level_orphans, renamed_file_names):

@@ -108,7 +108,9 @@ async def advisory_text(
     if not (is_handoff or is_spinoff):
         return ""
 
+    # TODO(pcore-04 D6): needs session_id for the handoff-nudge-off sentinel.
     # COORDINATOR_HANDOFF_NUDGE_OFF env-hatch is re-plumbed to a session-scoped sentinel;
+    # session_id is not yet in pinned inputs — skip the silence check until D6 lands.
 
     if content:
         leading = "\n".join(content.splitlines()[:20])
@@ -118,6 +120,7 @@ async def advisory_text(
         if _KIND_SPINOFF_RE.search(leading) and _INSTALL_CHAIN_ORDER_RE.search(leading):
             return ""
 
+    # Best-effort: suppress when an authoring skill is active (bash:153-182).
     # NOISE-REDUCER only — fail-open (a missed suppress → one extra nudge, harmless).
     if transcript_path:
         active = await asyncio.to_thread(_authoring_skill_active_sync, transcript_path)

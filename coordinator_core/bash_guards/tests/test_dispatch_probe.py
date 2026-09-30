@@ -61,6 +61,9 @@ def _probe(cmd: str, tool_name: str, session_id: str = "probe", env: Optional[Di
         "session_id": session_id,
         "cwd": _REPO_ROOT,
         # `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*` opt-out straight out
+        # of `payload["env"]`, and an un-pinned probe would silently pass
+        # under whatever override happens to be set in THIS process's own
+        # ambient environment.
         "env": {} if env is None else env,
     }
     return evaluate_payload_json(json.dumps(payload))
@@ -111,7 +114,10 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
     assert _is_deny(_probe("find / -name foo", "Bash"))
 
 
+# ---------------------------------------------------------------------------
+# AC3 -- head-tail-plumbing-rewrite is now stale (widened by a peer chunk);
 # grep-via-bash-rewrite replaces it as the ADVISORY_REWRITE-band oracle.
+# ---------------------------------------------------------------------------
 def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
     """AC3: a corroborating ADVISORY oracle proves the normalization reaches
     matcher selection for the `ADVISORY_REWRITE` band too, not only

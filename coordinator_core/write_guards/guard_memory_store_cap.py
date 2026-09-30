@@ -29,8 +29,8 @@ Home resolution: copied from
 ``coordinator_core.write_guards.block_home_dir_memo_delivery`` (fidelity
 rule 8 / the C12 body's explicit instruction to reuse that guard's idiom
 rather than inventing one) — union of ``USERPROFILE``, ``HOME``,
-``Path.home()``, plus ``CLAUDE_HOME`` treated as a direct ``.claude`` root,
-never a first-wins chain (a Git-Bash ``HOME``/``USERPROFILE`` divergence on
+``Path.home()``, plus ``claude_config_dir()`` (CLAUDE_HOME names the parent
+of ``.claude``), never a first-wins chain (a Git-Bash ``HOME``/``USERPROFILE`` divergence on
 Windows must never open a hole). Also copies that guard's case-fold fix:
 ``os.path.normcase`` is a no-op on POSIX (macOS included), so the roots and
 candidate are additionally casefolded via the shared
@@ -154,6 +154,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.write_guards._case_fold_path import (
     casefold_path,
@@ -170,6 +171,7 @@ MAX_ROW_CHARS = 100
 MAX_BODY_FILE_BYTES = 1500
 
 #: DR-345 — 1:1 with MAX_MEMORY_MD_ROWS so index and store cannot disagree
+#: about how many memories exist. Fires only on NEW body-file creation.
 MAX_MEMORY_FILES = 20
 
 _CLAUDE_DIRNAME = ".claude"
@@ -184,8 +186,8 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit"}
 
 def _guarded_project_roots() -> "List[Path]":
     """``<home>/.claude/projects`` roots to guard, union of USERPROFILE /
-    HOME / Path.home(), plus CLAUDE_HOME treated as a direct ``.claude``
-    root. Idiom copied verbatim in shape from
+    HOME / Path.home(), plus ``claude_config_dir() / "projects"``
+    (CLAUDE_CONFIG_DIR, else ``<CLAUDE_HOME or home>/.claude``). Idiom copied verbatim in shape from
     ``block_home_dir_memo_delivery._guarded_roots`` -- only the trailing
     path segment differs (``projects``, not ``cross-repo``).
 
@@ -214,12 +216,11 @@ def _guarded_project_roots() -> "List[Path]":
         except Exception:
             continue
 
-    claude_home = os.environ.get("CLAUDE_HOME", "")
-    if claude_home and claude_home.strip():
-        try:
-            roots.append(Path(claude_home.strip()) / _PROJECTS_DIRNAME)
-        except Exception:
-            pass
+    try:
+        roots.append(claude_config_dir() / _PROJECTS_DIRNAME)
+    except Exception:
+        # a bad CLAUDE_HOME/CLAUDE_CONFIG_DIR cannot become a Path; other roots still apply
+        pass
 
     seen: "set[Path]" = set()
     out: "List[Path]" = []

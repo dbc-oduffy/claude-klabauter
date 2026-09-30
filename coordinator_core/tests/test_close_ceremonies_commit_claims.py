@@ -119,8 +119,8 @@ def _qw_no_real_git(monkeypatch):
 def test_quick_wrap_calls_auto_commit_in_process(qw_repo, monkeypatch):
     calls: list[tuple[Any, ...]] = []
 
-    async def _fake(session_id, cwd=None, groups=None, invoker=None):
-        calls.append((session_id, cwd, groups, invoker))
+    async def _fake(session_id, cwd=None, groups=None):
+        calls.append((session_id, cwd, groups))
         return _empty_outcome_report(session_id)
 
     _stub_facts_all_computed(monkeypatch, qw_repo)
@@ -130,12 +130,11 @@ def test_quick_wrap_calls_auto_commit_in_process(qw_repo, monkeypatch):
 
     assert calls, "quick_wrap_assemble.brief(commit=True) must call commit_session_offer_async in-process"
     assert calls[0][0] == _SID
-    assert calls[0][3] == "attended"
     assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
 
 
 def test_quick_wrap_auto_commit_failure_does_not_block_completion(qw_repo, monkeypatch):
-    async def _boom(session_id, cwd=None, groups=None, invoker=None):
+    async def _boom(session_id, cwd=None, groups=None):
         raise RuntimeError("boom")
 
     _stub_facts_all_computed(monkeypatch, qw_repo)
@@ -150,7 +149,7 @@ def test_quick_wrap_auto_commit_failure_does_not_block_completion(qw_repo, monke
 def test_quick_wrap_renders_outcome_and_residue(qw_repo, monkeypatch):
     residue = {"state/leftover": ["state/leftover/file.md"]}
 
-    async def _fake(session_id, cwd=None, groups=None, invoker=None):
+    async def _fake(session_id, cwd=None, groups=None):
         return _committed_outcome_report(session_id, residue)
 
     _stub_facts_all_computed(monkeypatch, qw_repo)

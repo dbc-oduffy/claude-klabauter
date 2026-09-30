@@ -75,8 +75,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core._settings_home import home_dir, resolve_machine_local_cli, settings_home
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core._settings_home import resolve_machine_local_cli
+from coordinator_core.win_portability import no_console_creationflags
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -117,20 +117,19 @@ def _run_machine_local(binary: str, key: str) -> Optional[str]:
 
 
 def _resolve_publish_repo_root() -> Optional[str]:
-    """Resolve PUBLISH_REPO_ROOT: env var -> machine-local (PATH) ->
-    machine-local (settings-home, then legacy ~/.claude/bin) -> None (caller fails loud).
+    """Resolve PUBLISH_REPO_ROOT: env var -> machine-local (the shared
+    `resolve_machine_local_cli` ladder) -> None (caller fails loud).
 
-    Mirrors coordinator/bin/verify-dist-publish-repo-sync.sh's three-rung
-    resolution ladder exactly, including which remediation text accompanies
-    which failure rung.
+    The (b) remediation names the binary that ladder resolved, never a
+    hardcoded path.
     """
     env_val = os.environ.get("COORDINATOR_CLAUDE_PUBLISH_REPO")
     if env_val:
         return env_val
 
-    path_binary = resolve_machine_local_cli()
-    if path_binary:
-        value = _run_machine_local(path_binary, _MACHINE_LOCAL_KEY)
+    ml_binary = resolve_machine_local_cli()
+    if ml_binary:
+        value = _run_machine_local(ml_binary, _MACHINE_LOCAL_KEY)
         if value:
             return value
         print(
@@ -143,34 +142,7 @@ def _resolve_publish_repo_root() -> Optional[str]:
             file=sys.stderr,
         )
         print(
-            f"         (b) machine-local set {_MACHINE_LOCAL_KEY} /path/to/coordinator-claude",
-            file=sys.stderr,
-        )
-        return None
-
-    settings_binary = os.path.join(str(settings_home()), "bin", "machine-local")
-    # home_dir() (CLAUDE_HOME, else Path.home()) rather than os.path.expanduser("~")
-    # — both resolve to the same Windows-safe (USERPROFILE-aware) value here.
-    home_binary = os.path.join(str(home_dir()), ".claude", "bin", "machine-local")
-    fallback_binary = next(
-        (candidate for candidate in (settings_binary, home_binary) if is_executable(candidate)),
-        None,
-    )
-    if fallback_binary:
-        value = _run_machine_local(fallback_binary, _MACHINE_LOCAL_KEY)
-        if value:
-            return value
-        print(
-            f"ERROR  cannot resolve publish repo root: machine-local key '{_MACHINE_LOCAL_KEY}' is unset",
-            file=sys.stderr,
-        )
-        print("       Fix one of:", file=sys.stderr)
-        print(
-            "         (a) export COORDINATOR_CLAUDE_PUBLISH_REPO=/path/to/coordinator-claude",
-            file=sys.stderr,
-        )
-        print(
-            f"         (b) {fallback_binary} set {_MACHINE_LOCAL_KEY} /path/to/coordinator-claude",
+            f"         (b) {ml_binary} set {_MACHINE_LOCAL_KEY} /path/to/coordinator-claude",
             file=sys.stderr,
         )
         return None

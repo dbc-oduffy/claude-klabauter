@@ -66,7 +66,10 @@ class TestBashVerdictParityOnUnparseableInput:
     routing is in front of the tokenizer."""
 
     def test_unterminated_quote_with_bypass_flag_still_denies(self) -> None:
+        # Unterminated double quote defeats `tokenize_full_command`
+        # (`resolve_segments_for_dialect` returns None for the BASH leg),
         # so this must fall through to the raw-text `_BYPASS_RE` scan and
+        # still deny -- fail CLOSED, unchanged from pre-migration behavior.
         cmd = 'git commit -m "unterminated --no-verify'
         assert _denied(cmd)
 
@@ -105,7 +108,10 @@ class TestPowerShellUnparseableStaysSilentNotBashFailClosed:
     def test_powershell_well_formed_bypass_still_reaches_a_verdict_or_silence(
         self,
     ) -> None:
+        # Well-formed PowerShell carrying the same bypass vocabulary is not
         # this chunk's job to newly detect (MATCHERS is unchanged -- see
+        # module docstring), but it must not raise, and must not produce a
+        # bash-shaped fail-closed deny via the wrong branch.
         cmd = "git commit -m wip --no-verify"
         result = guard.check_no_verify(cmd, hook_payload=self._powershell_payload(cmd))
         assert result is None or isinstance(result, dict)

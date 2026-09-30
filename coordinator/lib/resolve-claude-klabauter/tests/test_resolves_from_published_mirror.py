@@ -178,11 +178,26 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         not_the_working_repo = scratch / "not-the-working-repo"
         not_the_working_repo.mkdir()
         registered_other_working_repo = scratch / "some-other-registered-working-repo"
+        # TOML single-quoted strings are LITERAL -- wrap the raw path in
+        # single quotes directly, never Python's `!r` repr. `!r` on a
+        # backslash-separated Windows path escapes each backslash a SECOND
+        # time before it lands in the TOML literal string, which the TOML
+        # parser then reads back with doubled backslashes -- this bug
+        # pre-dates C4 and is unrelated to the gate mechanism below;
         # RESOLVED_CLASS parsed correctly either way, only RESOLVED_ROOT's
+        # string comparison broke.
         (ml_dir / "registry.local.toml").write_text(
             f'"repos.claude_klabauter" = \'{_mirror_root()}\'\n'
             f'"engine.working_repos.other" = \'{registered_other_working_repo}\'\n'
+            # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C5
+            # (AC20): the published-engine divert requires `engine.target` to be
             # READABLE — presence-only, its value never inspected. Omitting it
+            # here (as every fixture built before C5 did) means step 1 of the
+            # ladder never fires regardless of the stamp/gate above, falling
+            # through to the live-tree rung and resolving `live-working-tree`
+            # instead of `resolved-engine`. Same one-line fixture fix as
+            # `_make_published_engine_fixture` in
+            # test_working_repos_is_locator_only.py.
             '"engine.target" = \'main\'\n',
             encoding="utf-8",
         )
@@ -195,7 +210,12 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         env = dict(os.environ)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
+        # Set (not cleared) to a directory that is NOT the registered
+        # working repo above — this is what lets `_is_engine_working_repo`
         # return the CONFIRMED `False` this module's gate requires, rather
+        # than the `None` ("undeterminable") a missing/absent session root
+        # would produce, which would fall through to the live-tree ladder
+        # instead of proving the published rung answered.
         env["CLAUDE_PROJECT_DIR"] = str(not_the_working_repo)
         env["MACHINE_LOCAL_REGISTRY_DIR"] = str(ml_dir)
 
@@ -230,6 +250,9 @@ def test_real_op_executes_from_mirror_under_unreachable_live_tree():
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
         env.pop("CLAUDE_PROJECT_DIR", None)
         # Deliberately no MACHINE_LOCAL_REGISTRY_DIR override here — the op
+        # is exec'd directly (not via exec_cli's own resolution ladder), so
+        # this leg proves the mirror's CODE runs standalone once resolved,
+        # not a second resolution pass.
 
         result = subprocess.run(
             [sys.executable, str(target), "--help"],

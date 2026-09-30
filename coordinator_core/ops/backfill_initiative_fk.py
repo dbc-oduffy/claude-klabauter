@@ -125,14 +125,32 @@ from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 
+# Generator-provenance declaration (generator_provenance.py). This module
 # writes only a PID lockfile at tempfile.gettempdir()/_LOCK_BASENAME --
+# process-runtime lock in the OS temp dir, never a tracked artifact. The
+# actual FK attach work is delegated via subprocess to the sibling
+# coordinator-initiative CLI, not written by this module.
 GENERATES = []
 
 _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "backfill-initiative-fk"
 _LOCK_BASENAME = "backfill-initiative-fk.lock"
+# Bounded wait for THE single `coordinator-initiative attach --pairs-file` subprocess
+# call this module makes. Derived from the engine's own end-to-end guard rather than
+# typed here, per DR-349: a site does not carry a timeout, it derives its bound from
+# the budget, and a bound wider than the budget the caller is held to is unreachable
+# anyway.
+#
 # NEGATIVE SPEC (DR-349 § "Dials that raise themselves", 2026-08-21): this bound is
+# FLAT and must stay flat. It was previously multiplied by `len(pairs)` at the call
+# site, which granted a 200-pair batch a 3.3-hour blocking wait on a box carrying
+# 50-70 concurrent sessions. The multiplier was cargo cult: `_attach_batch` writes
+# every pair to one temp TSV and makes ONE spawn for the whole batch (the
+# amplification-gate fix that retired this module's `_process_pairs::run` exemption),
+# so there is no N anywhere in the cost model for a per-item factor to scale against.
+# Do not reintroduce a per-item factor here; a batch that cannot finish inside this
+# bound is a defect in the attach CLI, not a request for more time.
 _ATTACH_TIMEOUT_SECS = DISPATCH_TIMEOUT_SECS
 
 

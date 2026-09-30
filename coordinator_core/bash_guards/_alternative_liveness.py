@@ -216,13 +216,24 @@ def classify_band(guard: str) -> GuardBand:
         return GuardBand.OURS
     return GuardBand.PEER
 
+#: Portable (Windows-safe, no-op elsewhere) suppression of the console-popup
+#: AllocConsole() every bare subprocess.run of a console app triggers under
+#: the headless Bash-tool parent on Windows -- getattr resolves to
 #: CREATE_NO_WINDOW on Windows and 0 on macOS/Linux, where the attribute
+#: does not exist.  # popup-safe-env-suppressed
 _NO_WINDOW: Dict[str, Any] = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 #: Git's own no-op help-browser triple, injected per-probe via `GIT_CONFIG_*`
+#: rather than read from `~/.gitconfig`. Env injection is the only form that
+#: survives this suite's own home quarantine: `coordinator_core/conftest.py`'s
 #: autouse `_quarantine_real_home` repoints HOME/USERPROFILE at a tmpdir and
 #: deletes HOMEDRIVE/HOMEPATH, so the operator's global mitigation is INVISIBLE
+#: to every git subprocess spawned under pytest -- measured directly: with the
+#: quarantine applied, `git config --get web.browser` answers empty/rc=1 on a
+#: box where the global triple is set. `browser.noop.cmd` is `eval`-ed by
+#: `git-web--browse`, so the value stays free of shell metacharacters (a
+#: parenthesis is a hard syntax error there).
 _BROWSER_SUPPRESSION_CONFIG: Tuple[Tuple[str, str], ...] = (
     ("help.format", "web"),
     ("web.browser", "noop"),
@@ -498,7 +509,24 @@ def _trigger_plan_body_bash_write() -> Optional[Dict[str, Any]]:
         return block_subagent_plan_body_bash_write.check(payload)
 
 
+#: C1 (docs/plans/2026-08-01-branch-creation-seam-guards.md) is
+#: hazard-repo-scoped (`_is_hazard_repo(resolve_git_root(cwd))` gates it
+#: before its own name predicate runs) -- unlike every guard above this
+#: comment, it does not fire from a bare synthetic payload. `_is_hazard_
+#: repo` is swapped on the guard's OWN module attribute for the duration of
+#: one trigger call, then restored -- never a persistent patch to shipped
+#: guard behavior, and never dependent on this MACHINE's real fleet
+#: registry: `coordinator_core/conftest.py`'s suite-wide `HOME`/
 #: `USERPROFILE` quarantine (autouse) makes the real registry-lookup half of
+#: `_is_hazard_repo` unreachable under pytest regardless of which real repo
+#: `cwd` names, so pointing `cwd` at this package's own working tree (a
+#: hazard repo OUTSIDE pytest, on this dev machine's fleet registry) is
+#: insufficient on its own -- confirmed by this row initially firing under a
+#: bare `python3 -c` probe and then failing under `pytest` with an identical
+#: `cwd`. Mirrors this package's own test suite's injection convention
+#: (`monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)`),
+#: just without the `monkeypatch` fixture (this module is a library, not a
+#: test) -- manual save/restore in a `try/finally` instead.
 _ALTLIVE_HAZARD_CWD = os.path.dirname(_pkg.__file__)
 
 
@@ -665,7 +693,11 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_illegal_filename": lambda: block_illegal_filename.check(
         _payload("echo x > bad:name.txt", agent_id=None)
     ),
+    # The three rows below closed a registry gap this gate caught on
+    # 2026-08-30: each module has a top-level `check()` and was in neither
     # `LIVE_TRIGGERS` nor `UNTRIGGERED`, so its alternatives were never
+    # probed for liveness at all. Every trigger was measured against its own
+    # guard before being written here.
     "block_fleet_delegation_creation": lambda: block_fleet_delegation_creation.check(
         _payload("touch fleet-delegation.json", agent_id=None)
     ),
@@ -679,10 +711,15 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     # `governed_surfaces` is a REQUIRED positional the live caller
     "guard_doctrine_surface_bash_write": _trigger_doctrine_surface_bash_write,
     # named untriggerable: the gate's UNTRIGGERED pin is a SUPPRESSION
+    # ceiling, and a guard that can actually be exercised belongs above it.
     "guard_host_subagent_bash_ban": lambda: _trigger_host_subagent_policy_guard(
         guard_host_subagent_bash_ban, "subagent_bash_policy", "rg TODO"
     ),
     # A LOOP shape, not a bare search: this guard DECLINES (returns None) on
+    # anything `guard_inprocess_search` can answer in-process, so `rg TODO`
+    # and friends probe nothing here even with the policy on -- measured
+    # 2026-08-30 against this same fixture. A per-item loop is the shape its
+    # deny actually exists for.
     "guard_host_subagent_bash_spawn_shapes": lambda: _trigger_host_subagent_policy_guard(
         guard_host_subagent_bash_spawn_shapes,
         "subagent_bash_spawn_shapes",
@@ -700,7 +737,12 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         host_is_windows=True,
     ),
     "guard_grep_via_bash": lambda: guard_grep_via_bash.check(
+        # `grep -rn` (H11-narrowed, 2026-07-30) is substitutable residue --
+        # `grep-via-bash-rewrite` already claims it, so this guard now
+        # returns None for it. `-P` is a genuinely GNU-only construct
+        # (`_has_gnu_only_construct`) this guard still advises on; single
         # segment, so it is not shadowed by the CHAINED-only partial-pipe
+        # path either.
         _payload('grep -Pn "TODO" src/', agent_id=None), host_is_windows=True
     ),
     "guard_multiprobe_banner": lambda: guard_multiprobe_banner.check(
@@ -725,7 +767,14 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
             'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
         )
     ),
+    # `agent_id` present (the default `_payload()` value) is sufficient to
+    # fire this identity-gated hard-deny -- see `block_subagent_guard_grant.
     # check`'s own "IDENTITY-GATE POSTURE" docstring section: it denies on
+    # the raw presence of `agent_id` alone, never on further resolution.
+    # `-m coordinator_core.session.em_guard_grant grant` mirrors this
+    # guard's sibling row above (`block_subagent_grant_acquisition`, the
+    # near-identical `claude_md_grant` guard this module was ported from),
+    # substituting the gated module path and dropping the `pm` positional
     # (this guard's `_GATED_SUBCOMMANDS` check reads only the first token
     "block_subagent_findings_reject": lambda: block_subagent_findings_reject.check(
         _payload("python3 -m coordinator_core.ops.review_findings_ledger reject x")
@@ -745,16 +794,47 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
 }
 
 
+#: Per-``(guard_name, override_env_var)`` triggers for the rare case where a
+#: guard advertises TWO (or more) independently-gated override keys that are
 #: only REACHABLE via different input shapes -- ``LIVE_TRIGGERS`` holds
+#: exactly one trigger per guard NAME (see that dict's own comment and every
+#: pinned test resting on that shape: ``test_every_module_guard_is_
 #: registered``, the ``EXPECTED_UNTRIGGERED``/``EXPECTED_UNVERIFIABLE_COUNTS``/
 #: ``EXPECTED_LIVE_FLOORS`` pins), so a guard whose second key needs a
+#: differently-shaped command to reach its own gate cannot be proven live by
+#: re-firing the ONE registered trigger with that key's var set -- the
+#: alternate code path is never entered, and the key scores DEAD regardless
+#: of whether it is genuinely reachable.
+#:
+#: Root cause this closes: ``check_git_commit_safe_commit_advise`` gates a
 #: bare non-amend commit behind ``COORDINATOR_ALLOW_GIT_COMMIT_BARE`` and a
+#: ``git commit --amend`` whose HEAD is not provably this session's behind
 #: ``COORDINATOR_ALLOW_GIT_COMMIT_AMEND`` -- disjoint input shapes. The
 #: guard's ``LIVE_TRIGGERS`` entry is bare-shaped (``'git commit -m "fix the
 #: thing"'``); re-firing it with ``COORDINATOR_ALLOW_GIT_COMMIT_AMEND=1`` set
+#: can never change anything (the amend branch is never entered), so
+#: ``probe_override`` scored a genuinely live key DEAD. This registry adds an
+#: amend-shaped trigger for exactly that ``(guard, env_var)`` pair -- see
+#: ``_trigger_check_git_commit_safe_commit_advise_amend``.
+#:
 #: NEGATIVE-SPEC -- this is NOT a widening of ``LIVE_TRIGGERS`` and must
+#: never become one:
 #: - Scoped to keys on DISJOINT INPUT SHAPES only. A guard whose single
+#:   registered trigger already reaches every override key it advertises has
+#:   no business here; adding a row for such a key would only ever turn a
+#:   correct DEAD into a false LIVE by construction (a second, redundant
+#:   trigger cannot disprove liveness, only fail to prove it) -- see
+#:   ``TestMetaGateProvenToFail``'s dedicated meta-test for a trigger that
+#:   does NOT read its own var and must still score DEAD even when
+#:   registered here.
+#: - Never a substitute for fixing a genuinely dead override. A key with no
+#:   reachable code path at all stays DEAD under a correctly-written
+#:   key-specific trigger -- this registry only supplies the INPUT SHAPE a
+#:   key needs to be exercised; it asserts nothing about the OUTCOME.
 #: - `LIVE_TRIGGERS` itself, `fire_guard`, the baseline fire in
+#:   `evaluate_guard`, and every registration/ratchet test enumerated above
+#:   are untouched by this dict's existence -- `probe_override` is the ONLY
+#:   consumer, and only when a `(guard, env_var)` pair has a row here.
 KEY_SPECIFIC_TRIGGERS: Dict[Tuple[str, str], Callable[[], Optional[Dict[str, Any]]]] = {
     (
         "check_git_commit_safe_commit_advise",
@@ -763,6 +843,9 @@ KEY_SPECIFIC_TRIGGERS: Dict[Tuple[str, str], Callable[[], Optional[Dict[str, Any
 }
 
 
+#: Guards this pass could NOT drive to emit within its bounded time, each
+#: with the specific reason -- visible and countable, per this module's own
+#: charter, never a silent gap. A future session closing one of these should
 #: DELETE the row here and add it to ``LIVE_TRIGGERS`` above, not leave both.
 UNTRIGGERED: Dict[str, str] = {
     "check_destructive_git_orphan": (
@@ -790,7 +873,18 @@ UNTRIGGERED: Dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# write_guards/ discovery extension (chunk C9, agent-facing-messages-not-
+# apology plan) -- this module previously enumerated ONLY bash_guards/ (via
+# discover_dispatch_check_names/discover_module_guard_names above), so
+# nothing gate-verified that a write_guards/ guard's named alternative
+# stayed reachable. `discover_write_guard_names` reuses
+# `write_guards.engine`'s own `pkgutil.iter_modules([_PKG_DIR])` +
+# `importlib.import_module` walk (via its public `discover_guard_names()`)
+# rather than re-implementing it -- same walk this module's docstring
+# points at, one copy, not a parallel reimplementation that could drift
 # from the engine's own CLASS/MATCHERS/check filtering.
+# ---------------------------------------------------------------------------
 
 
 def discover_write_guard_names() -> List[str]:
@@ -843,16 +937,35 @@ def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
 
 #: write_guards/ analogue of `LIVE_TRIGGERS` above -- kept as a SEPARATE
 #: dict (not merged into `LIVE_TRIGGERS`) so this extension never touches
+#: the bash_guards-scoped registry-integrity tests
+#: (`test_every_dispatch_check_is_registered`/`test_every_module_guard_is_
 #: registered`) or their pinned `EXPECTED_UNTRIGGERED`/`_UNTRIGGERED_PINNED_
+#: MAX` ratchets, per this dispatch's explicit "never relax an existing
+#: pin" instruction. `fire_guard`/`evaluate_guard` still work unmodified
 #: against these keys: `fire_guard` looks a name up in `LIVE_TRIGGERS`
+#: directly, so the gate test below calls the trigger through this dict
+#: itself rather than routing through `fire_guard`.
 WRITE_GUARD_LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "validate_frontmatter_schema_advisory": _trigger_validate_frontmatter_schema_advisory,
 }
 
 #: write_guards/ analogue of `UNTRIGGERED` above. This chunk's own copy
+#: change touched exactly one write_guards module
 #: (`validate_frontmatter_schema_advisory`, wired into `WRITE_GUARD_LIVE_
 #: TRIGGERS` above); constructing a hermetic, non-mutating, hazard-repo-
+#: independent live trigger for each of the other 41 write_guards modules
+#: (each with its own path-shape/frontmatter-shape/repo-state
+#: precondition -- see e.g. `block_cutover_phase_hand_edit`'s STRICT-mode
+#: phase-flip precondition, `guard_settings_json_write`'s settings-repo
+#: precondition) is out of THIS chunk's measured, narrowly-scoped remit
 #: (see this dispatch's own "MEASURED REALITY" framing -- do not go
+#: hunting for a large sweep the measurement did not ask for). Discovery
+#: itself is NOT narrowed: `discover_write_guard_names()` still walks the
+#: whole package, so a FUTURE write_guards module or alternative-signal
+#: change is still counted here, not silently invisible -- only its
+#: trigger construction is deferred, and deferred LOUDLY (this dict, not
+#: a bare `discovered - registered` no-op) rather than never gate-tracked
+#: at all.
 _WRITE_GUARD_UNTRIGGERED_REASON = (
     "Hermetic live trigger not yet constructed for this write_guards module "
     "(chunk C9, agent-facing-messages-not-apology plan, 2026-08-12) -- "
@@ -876,6 +989,11 @@ class GuardFireResult:
 
 
 #: The one env var, per SC-DR-009, any session-scoped guard latch may key off
+#: of (``guard_inprocess_search``'s AC5 footer latch is the first and, as of
+#: this writing, only one -- see that module's own "Session latch on the
+#: explanatory paragraph" docstring section). Named here, not re-derived from
+#: that module, so this harness stays correct for ANY future guard that reads
+#: the same var, not just the one that motivated it.
 _SESSION_SCOPED_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
 
 
@@ -993,28 +1111,81 @@ class UnclassifiableAlternative(Exception):
 class Alternative:
     kind: AlternativeKind
     raw: str
+    #: kind-specific normalized payload -- an argv list for COMMAND/
     #: EXECUTABLE, a ``(cli_name_or_None, flag)`` tuple for FLAG, the
     #: matched marker phrase for HARNESS_CAPABILITY, the bare env-var name
     #: for OVERRIDE.
     detail: Any = None
 
 
+#: 2026-08-11 (guard-messages-point-to-docs-never-name plan, chunk C1):
+#: `operator_override_note`'s own 2026-08-11 C2 reshape stopped
+#: interpolating the env-var name into its rendered output at all (see that
+#: function's own docstring), so this regex now finds ZERO matches in the
+#: overwhelming majority of real guard messages -- a guard whose ONLY
+#: offered alternative is its override key would silently drop out of
 #: `extract_alternatives`'s OVERRIDE detection with no gate turning red
+#: (the exact "vacuous, not red" failure this module's own charter treats
+#: as worse than a test failing). Kept, unmodified, as a belt for any
 #: HAND-WRITTEN mention of a bare env var that still slips into rendered
+#: text outside the builder (the class `test_no_handwritten_override_
 #: clauses.py` polices separately) -- but the OVERRIDE alternative this
+#: module actually verifies liveness for is now primarily sourced from the
 #: guard's own call-site ARGUMENT, never the render alone. See
+#: `_source_override_alternatives` below, and `evaluate_guard`'s merge of
+#: the two sources.
 _OVERRIDE_RE = re.compile(r"\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+\b")
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _READ_CALL_RE = re.compile(r"\bRead\([^)]*\)")
 _INDENTED_CMD_RE = re.compile(r"^[ \t]{2,}(\S.*)$", re.MULTILINE)
+#: A colon (optionally preceded by a closing paren, e.g. "...resolve it):")
+#: immediately followed by one or more blank-line-tolerant indented lines --
+#: this package's own convention for "the following lines are the offer",
+#: independent of any specific cue WORD. Structural/positional, same spirit
 #: as `_CUE_WINDOW_RE` but anchored on punctuation+indentation rather than
+#: prose vocabulary, for messages whose introducing sentence uses neither
+#: "Use instead:" nor "Did you mean" (see `extract_alternatives`' last-
+#: resort fallback for the concrete case this closes).
 _LABELED_INDENT_BLOCK_RE = re.compile(r"[:)]\s*\n\s*\n?((?:[ \t]{2,}\S[^\n]*\n?)+)")
+#: Deliberately narrow to the structural markers this package's own guard
 #: messages use to introduce a CONCRETE substitute (always followed by a
+#: backtick/indented command in every message surveyed while building this
+#: module) -- a bare "instead"/"Instead:" is excluded because several
+#: guards (e.g. block_worktree_sentinel_creation) use it to introduce pure
+#: prose guidance ("dispatch into the SAME working tree...") with no
+#: concrete command at all, which must NOT be treated as an unclassifiable
+#: gate failure. Used ONLY to decide "did this message promise something
+#: extraction failed to find" (the fail-loud trigger) -- NOT to bound where
 #: extraction looks (see ``_CUE_WINDOW_RE``/``_cue_windows`` below, a
+#: separate, deliberately broader regex with a different job).
 _ALT_CUE_RE = re.compile(r"(Use instead:|Did you mean|Run this instead|Example:)", re.IGNORECASE)
 
+#: the Director of Engineering's review (2026-07-29, coordinatoreng-director-1d83280e, finding 4):
+#: scanning EVERY backtick span in a message's full text is how a guard's
+#: own shape-name self-reference and a Python API reference mentioned in
+#: unrelated prose became "candidate alternatives" -- extraction must be
 #: anchored to POSITION, not merely to backtick markup. This regex is
 #: deliberately BROADER than ``_ALT_CUE_RE`` above (it also matches a bare
+#: mid-sentence "instead", e.g. check_raw_pid_liveness's "Use the canonical
+#: liveness primitives instead (...)"") because a false-positive window
+#: here only WIDENS where backtick spans get a chance to classify -- the
+#: per-span filters in ``_classify_backtick_span`` (shape-name/dotted-path/
+#: snake_case exclusions) still apply inside the window and do the real
+#: precision work. A false-positive cue is harmless; a false-negative cue
+#: silently drops a real alternative, so broad-and-filtered beats
+#: narrow-and-exact for THIS regex's specific job.
+#: DEFINED IN ``_advisory_dedupe``, re-exported here, and the direction of
+#: that dependency is load-bearing rather than stylistic. This module runs
+#: ``discover_write_guard_names()`` at import time (the module-level
+#: comprehension below), which imports ``write_guards.engine`` and through it
+#: the whole ``coordinator_core.ops`` registry -- measured at 480-710ms of
+#: process time. ``_advisory_dedupe.terse_alternative_text`` needs ONLY these
+#: two values, and it runs on the PreToolUse hot path every time an advisory
+#: repeat-fires, so importing this module to reach them charged the entire
+#: registry import to DR-344's budget on the fleet's most-fired guard. Homing
+#: them in the leaf module lets the hot path read them without ever loading
+#: this one. Do not move them back, and do not add a module-scope import of
+#: anything heavy to ``_advisory_dedupe`` to compensate.
 from coordinator_core.bash_guards._advisory_dedupe import (  # noqa: E402
     _CUE_WINDOW_MAX_CHARS,
     _CUE_WINDOW_RE,
@@ -1049,6 +1220,8 @@ _HARNESS_CAPABILITY_MARKERS = (
 )
 
 #: Bare shape-identifier tokens guards use to NAME THEMSELVES in prose
+#: (e.g. "the `grep-via-bash` shell fan-out is denied") -- never an
+#: alternative, so excluded from backtick classification outright.
 _SHAPE_NAME_TOKENS = frozenset(
     {"grep-via-bash", "multi-probe-banner", "multiprobe-banner", "head-tail-plumbing", "for-loop", "find-exec-xargs"}
 )
@@ -1057,7 +1230,9 @@ _BARE_METACHAR_TOKENS = frozenset({"|", ">", ">>", "<", "&", ";", "&&", "||", "`
 
 _DOTTED_PYTHON_PATH_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)+$")
 
+#: First-token verbs (or, for git, subcommands) this module treats as
 #: mutating -- a COMMAND/EXECUTABLE alternative carrying one of these is
+#: proven live via `--help`/syntax-check only, per module negative-spec.
 _MUTATING_VERBS = frozenset(
     {
         "rm", "mv", "cp", "dd", "tee",
@@ -1117,9 +1292,16 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
     if len(argv) == 1 and argv[0].endswith("/"):
         return None
     if argv[0].startswith("-"):
+        # A bare flag with no CLI name in the same span to check --help
         # against -- UNVERIFIABLE by construction (probe_flag), never
+        # guessed at. The threaded-cli_name form (`<cli> <flag>`, two
+        # tokens, below) is the shape that actually proves anything.
         return Alternative(AlternativeKind.FLAG, span, (None, argv[0]))
     if len(argv) == 2 and argv[1].startswith("-"):
+        # `<cli> <flag>` -- a flag asserted to exist on a named CLI. Thread
+        # BOTH through as the detail tuple (the Director of Engineering's review, finding 5:
+        # probe_flag was never reachable with a cli_name before this) so
+        # probe_flag can check the CLI's own --help output rather than
         # reporting UNVERIFIABLE by construction.
         return Alternative(AlternativeKind.FLAG, span, (argv[0], argv[1]))
     if len(argv) == 1:
@@ -1202,12 +1384,20 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
             alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, marker, marker))
 
     if not alts and override_route_known:
+        # See this function's own docstring, "WHY THIS EXISTS" -- a known
         # OVERRIDE route (sourced from the call site, not this render)
         # stands in for the render-derived OVERRIDE match that used to keep
+        # `alts` non-empty fleet-wide, suppressing the fallback below for
+        # the SAME reason it was suppressed before C2, not a new exemption.
         return alts
 
     if not alts:
+        # No alternative-shaped signal at all -- legitimate for a
+        # bare-policy deny (see negative-spec). Only escalate to
+        # UnclassifiableAlternative when a cue phrase promised one (the
         # NARROW _ALT_CUE_RE, not the broad _CUE_WINDOW_RE -- a bare
+        # mid-sentence "instead" must not manufacture a failure on a
+        # message that never actually promised a concrete substitute).
         if _ALT_CUE_RE.search(text):
             for window in _cue_windows(text):
                 for m in _INDENTED_CMD_RE.finditer(window):
@@ -1224,7 +1414,17 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
                             alts.append(Alternative(AlternativeKind.COMMAND, candidate, argv))
             if not alts:
                 # Last resort, still POSITION-anchored (never a bare
+                # backtick/prose scan): a colon immediately introducing an
+                # indented block is this package's own convention for "the
+                # following lines are the offer" even when the introducing
+                # sentence uses neither "Use instead:" nor "Did you mean"
+                # (e.g. block_reviewer_bash_outside_allowlist's "...
+                # scaffolding their own findings sidecar:\n\n  coordinator-
+                # doc-new --type review-findings ..."). Only engaged when a
                 # cue phrase was already found SOMEWHERE in the message
+                # (so a pure policy statement with an incidental colon
+                # elsewhere never triggers this) and ordinary windowed
+                # scanning still found nothing.
                 for m in _LABELED_INDENT_BLOCK_RE.finditer(text):
                     for line in m.group(1).splitlines():
                         candidate = line.strip()
@@ -1240,8 +1440,26 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
                         if argv:
                             alts.append(Alternative(AlternativeKind.COMMAND, candidate, argv))
             if not alts:
+                # Final resort, still cue-gated and still position-anchored
+                # (never a bare whole-message backtick scan): every ordinary
+                # avenue above found nothing because the ONLY backtick
+                # span(s) in the cue window(s) carry an angle-bracket
+                # placeholder (e.g. block_noncanonical_branch_creation's own
+                # "Use instead: ... e.g. `work/<machine>/2026-08-01`") --
+                # `_classify_backtick_span` correctly treats `<`/`>` as an
+                # unprobable shell metacharacter for its OWN (unconditional,
+                # every-span) main-loop job, so widening that check there
+                # would silently reclassify spans in OTHER, already-passing
+                # guards' messages (confirmed: check_raw_pid_liveness's own
+                # `<sid>`/`<claim_dir>` placeholder spans, which co-occur
+                # with a REAL alternative elsewhere in its message and must
+                # stay excluded). Scoped here instead, to the narrow case
+                # where a cue phrase promised something and literally
+                # nothing else in the message classifies -- a templated
                 # NAME example is graded HARNESS_CAPABILITY (the same
                 # honest, UNVERIFIABLE-by-default probe path already used
+                # for `<claude-klabauter-live-root>`-style templates elsewhere), never a
+                # false DEAD (an unresolvable basename) or a hard failure.
                 for window in _cue_windows(text):
                     for m in _BACKTICK_RE.finditer(window):
                         candidate = m.group(1).strip()
@@ -1422,14 +1640,28 @@ def probe_command(alt: Alternative) -> Verdict:
     if _is_mutating_argv(argv):
         if head_basename != "git":
             # `_MUTATING_VERBS` is a small, hand-curated set of standard POSIX
+            # utilities (rm/mv/cp/dd/tee) -- resolution on PATH already proves
+            # the alternative is real, unlike a `git <subcommand>` where the
+            # subcommand itself could be a hallucinated typo. A `--help` round
+            # trip adds nothing here and actively misfires on BSD userlands:
+            # BSD `rm`/`mv`/`cp` reject the GNU-only `--help` flag with a
             # sysexits.h EX_USAGE (64) exit, which is proof the binary is
+            # real and responding, not that it is dead. Trust the resolution
+            # step alone for this fixed, non-git verb set.
             return Verdict(
                 VerdictStatus.LIVE,
                 "mutating verb %r resolved to %r -- proven live via PATH resolution only "
                 "(never executed for real, --help skipped: not all POSIX utilities support "
                 "it consistently, e.g. BSD rm/mv/cp)" % (argv, resolved),
             )
+        # `-h`, never `--help`. Git for Windows ships no `man.exe`, so
+        # `git <verb> --help` resolves `help.format` to `web` and hands off to
+        # `git-web--browse`, which launches the operator's default browser at a
+        # local `git-<verb>.html`. That browser is a detached GUI process, so
         # neither `capture_output=True` nor `_NO_WINDOW` contains it, and this
+        # branch fires on every guard advisory naming a mutating git
+        # alternative -- observed as dozens of tabs a minute during a suite run.
+        # `-h` prints usage to the terminal and never reaches `git-web--browse`.
         help_argv = [resolved, argv[1], "-h"]
         try:
             proc = subprocess.run(
@@ -1442,8 +1674,13 @@ def probe_command(alt: Alternative) -> Verdict:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return Verdict(VerdictStatus.DEAD, "-h invocation failed: %s" % exc)
+        # Measured on Git for Windows 2.x: every subcommand in
         # `_MUTATING_GIT_SUBCOMMANDS` exits 129 under `-h` with its usage block
+        # on STDOUT, while an unrecognized subcommand exits 1 with "is not a
+        # git command" on stderr. Accepting {0, 129} rather than the previous
         # {0, 1} is therefore a STRICTER gate, not a looser one: a hallucinated
+        # subcommand used to grade LIVE on its rc=1 and now correctly grades
+        # DEAD, which is the discrimination this probe exists to provide.
         if proc.returncode not in (0, 129):
             return Verdict(
                 VerdictStatus.DEAD,
@@ -1511,7 +1748,12 @@ def probe_flag(alt: Alternative) -> Verdict:
     if not resolved:
         return Verdict(VerdictStatus.DEAD, "CLI %r (owner of flag %r) does not resolve" % (cli_name, flag))
     try:
+        # `--help` is correct here -- this probe must read the CLI's own help
+        # TEXT to assert the flag appears in it, which `-h` does not reliably
+        # render for every CLI. The browser hazard is closed by `_probe_env()`
+        # instead: `cli_name` is agent-supplied, so this is the one probe that
         # can invoke an ARBITRARY binary's `--help`, and the no-op browser
+        # triple is what keeps a browser-launching one from opening a window.
         proc = subprocess.run(
             [resolved, "--help"],
             capture_output=True,
@@ -1901,6 +2143,9 @@ def evaluate_guard(guard: str) -> GuardEvaluation:
         ev.extraction_error = str(exc)
         return ev
     # C1 merge: OVERRIDE alternatives sourced from the guard's own call-site
+    # argument (never vacuous now that the render carries no key name at
+    # all), deduped against anything `extract_alternatives` already found
+    # in the rendered text (belt for a hand-written mention outside the
     # builder -- see `_OVERRIDE_RE`'s own comment).
     already = {a.detail for a in ev.alternatives if a.kind is AlternativeKind.OVERRIDE}
     for alt in source_overrides:

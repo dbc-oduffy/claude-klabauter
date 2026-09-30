@@ -23,6 +23,8 @@ import coordinator_core.ops.ensure_doe_clone as edc
 from coordinator_core.ops.ensure_doe_clone import main
 
 # SPAWN-RATCHET Rule 2/4: main() below is a real-spawn wrapper (`subprocess.call
+# (["git", "clone", ...])`) reached by nearly every test in this file. See
+# coordinator_core/tests/test_no_new_spawning_tests.py.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 

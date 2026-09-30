@@ -187,7 +187,9 @@ def test_new_fields_round_trip_validates(tmp_path: Path) -> None:
     validate_array([emitted], _ENTITY)
 
 
+# ---------------------------------------------------------------------------
 # (b) version-neutrality: old record with none of the new OPTIONAL keys still validates
+# ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("requires_vendor_pin")
 def test_old_record_without_new_optional_keys_still_validates(tmp_path: Path) -> None:
@@ -247,7 +249,9 @@ class TestParentGoalIdAlwaysPresent:
             validate_array([bad_record], _ENTITY)
 
 
+# ---------------------------------------------------------------------------
 # Provenance names the SURVIVING record's OWN shard, not the glob pattern
+# ---------------------------------------------------------------------------
 
 def test_provenance_path_names_each_records_own_shard_across_two_machines(
     tmp_path: Path,

@@ -73,6 +73,12 @@ DENY_CASES = [
 ]
 
 #: EXACTLY ONE of these is regression cover; the other three are CONTROLS that
+#: were already allowed before the narrowing. Measured against a reconstruction
+#: of the old predicate, not assumed -- the claim this corpus arrived with was
+#: that all four flipped, which was a generalization from the two
+#: assignment-bearing shapes and was wrong. The controls still earn their place:
+#: they pin that the narrowing did not disturb the shapes point 4 never engaged
+#: on. But do not read four green ticks as four regressions caught.
 ALLOW_CASES = [
     ("read through a variable, write to scratch", f"p={GOV} ; cat $p ; echo x > /tmp/probe.txt"),
     ("read directly, write to scratch", f"cat {GOV} ; echo x > /tmp/probe.txt"),

@@ -61,6 +61,8 @@ def repo(tmp_path):
         "Want me to dispatch a reviewer for this?",
         "Should I delegate the verification to a subagent?",
         "Would you like me to fan-out this across parallel agents?",
+        # F2: a message that cites the suppressor-adjacent doctrine (DR-108)
+        # AND trips a real tell (asking permission) must still trip — DR-108
         # was deliberately dropped from _META_DISCUSSION for exactly this case.
         "Per DR-108 dispatch is encouraged, but this feels borderline — "
         "should I dispatch the executor anyway?",
@@ -136,6 +138,7 @@ def test_tell_c_widened_patterns_trip(text):
         "This session was started with a standing goal to ship the release "
         "by Friday.",
         # Control: agentless-passive + dispatch term in DIFFERENT sentences
+        # must not bleed across the sentence boundary.
         "This session was started with a standing instruction to keep PRs "
         "small. Also dispatched a reviewer for the diff.",
     ],
@@ -289,6 +292,9 @@ def test_worktree_style_git_file_resolves_sentinel_root(tmp_path):
     sentinel = m._sentinel_path(payload)
     assert sentinel is not None
     # The inner `.git` FILE wins over the ancestor `.git` DIRECTORY (the
+    # root-resolution half of F5), and the gitdir: pointer is then followed to
+    # a real directory so the sentinel can actually be written — without that
+    # second half, fire-once silently degraded to fire-every-time here.
     assert sentinel.startswith(str(real_git))
     assert m.op(payload) is not None
     assert m.op(payload) is None

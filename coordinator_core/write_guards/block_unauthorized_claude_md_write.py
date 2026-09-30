@@ -151,23 +151,81 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 45
 
+#: RESHAPE (guard-class census, docs/plans/2026-08-06-apply-guard-class-
 #: census.md, chunk C18): the deny leg below is now DIRECTIONAL. The
+#: original shape denied every dispatched-subagent write to a CLAUDE.md-
+#: class surface unconditionally -- including a write that SHRINKS the
+#: file, which is backwards: the +27% growth DR-104 exists to stop cannot
+#: happen from a shrinking edit, and denying the shrink case blocked
+#: exactly the remediation (trim content) the deny text itself offers as
 #: the discharge hierarchy's first rung. CLASS/PRIORITY are unchanged --
+#: this module keeps its hard-deny leg for the case that genuinely
+#: warrants it (net growth), and advises (does not block) on the
+#: over-fire case (net shrink or size-neutral).
+#:
+#: Direction is measured the same way ``check_claude_md_size._simulate``
+#: already measures the post-edit byte size for its own (advisory) budget
+#: check -- reconstruct the full post-edit content and compare its UTF-8
+#: byte length against the CURRENT on-disk byte length. A file that does
+#: not yet exist has a baseline of 0 bytes, so a brand-new CLAUDE.md-class
+#: file is always "growth" (deny) -- there is no shrink case for content
+#: that does not yet exist.
+#:
+#: Simulation failure (unreadable existing file, decode error, or a
+#: NotebookEdit -- whose ``new_source``/``cell_id`` shape this module does
 #: not reconstruct, matching ``check_claude_md_size``'s own MATCHERS
+#: negative-spec excluding NotebookEdit from its byte simulation) is NOT
+#: treated as ALLOW here (unlike that advisory module's own fail-open
+#: choice on ITS leg) -- this leg still gates a hard deny, so an
+#: undeterminable direction defaults to the safer, pre-existing behavior
+#: (deny) rather than silently downgrading to advisory on a case this
+#: module cannot actually evaluate.
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE"
 
+#: Fallback form of the grant-CLI invocation the advisory (shrink/size-
+#: neutral) text names as the legitimate, PM-ratified override path (C5's
+#: grant CLI) -- the deny leg no longer renders this invocation at all
+#: (C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
+#: keys.md). Used only when this host's claude-klabauter root cannot be resolved
+#: in-process — see ``_grant_cli_invocation()``, which is what
+#: ``_advisory_reason`` calls.
+#:
+#: Two preconditions are stated inline because omitting them made the
 #: remediation fail SILENTLY: the grant module is claude-klabauter-resident but the
+#: grant file is written into a session dir resolved from CWD, so running
+#: this from claude-klabauter (the obvious place, since that is where the module
+#: lives) files the grant against claude-klabauter's session dir while the guard
+#: checking a write in the consumer repo looks up that repo's — a mismatch
+#: that reads as "no grant" with no error. Hence: cwd is the repo being
 #: unblocked, and claude-klabauter reaches the interpreter via PYTHONPATH rather than
+#: cwd.
+#:
+#: This env-ladder form was ALSO a silent-failure shape, in a third way, and
+#: that is why it is now only the fallback: it asks the reader's shell to
+#: resolve the root, and on a host where neither variable is exported and the
+#: repo does not sit at ``$HOME/claude-klabauter`` every rung misses. The reader
+#: then runs a command that cannot work, against a guard whose whole contract
+#: is to name a remediation that does. Resolving the root here instead — this
+#: code runs inside claude-klabauter — is what keeps the deny from dead-ending.
 _GRANT_CLI_INVOCATION_FALLBACK = (
     'PYTHONPATH="${REPO_CLAUDE_KLABAUTER:-${CLAUDE_KLABAUTER_ROOT:-$HOME/claude-klabauter}}" '
     'python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"'
 )
 
 
+#: Characters that would break out of, or be interpreted inside, the double-quoted
 #: ``PYTHONPATH="…"`` the resolved root is interpolated into. The rendered command is
+#: meant to be pasted verbatim into a shell, so a root carrying any of these would
+#: produce a remediation that silently does the wrong thing — the same class of defect
+#: as the dead-end deny this resolution exists to fix, one layer down.
+#:
+#: Rejected rather than escaped on purpose: ``shlex.quote`` is POSIX-specific and would
+#: render wrongly for a reader on cmd/PowerShell, and this text reaches both. Falling
+#: back to the env-ladder form is the honest answer for a path we cannot quote correctly
+#: for every shell the reader might be in.
 _ROOT_SHELL_UNSAFE = set('"\'`$\\\n\r')
 
 
@@ -283,6 +341,7 @@ def _simulate_new_content(
                 buf = buf.replace(old_s, new_s, 1)
         return buf
 
+    # NotebookEdit -- not reconstructed here, matches
     # check_claude_md_size's own MATCHERS scope.
     return None
 

@@ -177,6 +177,8 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
 
     claude_klabauter_root = _resolve_claude_klabauter_root()
     # `sys.path`, not the child-env PYTHONPATH the spawn form used: this call
+    # is in-process now, so coordinator_core must resolve from claude_klabauter_root
+    # for the interpreter already running this file, not a future child's.
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     os.environ["CLAUDE_KLABAUTER_ROOT"] = claude_klabauter_root

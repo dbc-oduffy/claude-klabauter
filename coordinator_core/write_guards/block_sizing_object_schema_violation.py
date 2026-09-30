@@ -46,6 +46,8 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 # Runs ahead of the generic schema-validation pair (advisory PRIORITY 100,
 # deny PRIORITY 5) so this narrower, sizing-specific block wins the "first
+# non-None advisory/deny wins" race before the generic warn fires for the
+# same violation.
 PRIORITY = 4
 
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SIZING_SCHEMA_BLOCK"

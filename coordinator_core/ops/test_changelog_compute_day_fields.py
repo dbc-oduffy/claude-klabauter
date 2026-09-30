@@ -38,7 +38,15 @@ from coordinator_core.ops.changelog_ops import (
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns a real git process because
+# `_collect_commits`/`_commit_range` under test read real commit-window
+# history (date-window and commit-span paths, self-commit exclusion) that no
+# mock stands in for. Tests each build their own commit sequence via
+# `_commit`, so `_init_repo` is not hoisted to module scope -- per-test
+# isolation across distinct commit-history scenarios. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -233,7 +241,13 @@ def test_extract_field_falls_back_when_primary_raises(tmp_path: Path, monkeypatc
     assert result == "use approach Z"
 
 
+# ---------------------------------------------------------------------------
+# Regression: canonical handoff headings never matched (break-class, 2026-08-06).
+# `## Decisions` / `## Blockers` are not headings any handoff template writes —
+# the canonical census on disk is `## Key Decisions Made` / `## Blockers or
+# Issues`, so the bare-name-only markdown leg returned "none" in 100% of real
 # handoffs. See `_HEADING_ALIASES`.
+# ---------------------------------------------------------------------------
 
 
 def test_extract_field_primary_matches_key_decisions_made_heading(tmp_path: Path) -> None:
@@ -312,8 +326,15 @@ def test_extract_field_neither_heading_nor_frontmatter_is_none(tmp_path: Path) -
     assert extract_field_from_handoffs("Blockers", [f]) == "none"
 
 
+# ---------------------------------------------------------------------------
+# Regression: present-but-empty `field:` must not harvest the NEXT line
 # (break-class, 2026-07-28). `_FM_FIELD_RE_TMPL` padded the value with `\s*`,
 # and `\s` matches a newline, so the fallback's whole-file MULTILINE search
+# walked past the line break of a bare `Decisions:` and `(.+)` took the
+# following `Blockers:` line into the changelog. Parametrized over BOTH line
+# endings: an LF-only test passes against the unfixed code for the CRLF half
+# and would prove nothing about Windows-authored handoffs.
+# ---------------------------------------------------------------------------
 
 _EOLS = pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 

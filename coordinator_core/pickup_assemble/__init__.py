@@ -7190,6 +7190,26 @@ def _reassemble_bullet_lines(artifact_arg: str) -> str:
     return " AND ".join(paths)
 
 
+#: Ceiling on the artifact paths one `brief`/`apply`/`drop` argument may fan
+#: out to. N brace groups of k alternatives expand to k^N paths, each of which
+#: `brief_multi` runs through its own claim/resolution machinery, so an
+#: uncapped malformed multi-brace argument is an amplification the direct
+#: ` AND ` form lacks. Well above any hand-typed batch.
+MAX_EXPANDED_ARTIFACTS = 64
+
+
+class ArtifactFanOutError(ValueError):
+    """An artifact argument expands to more than `MAX_EXPANDED_ARTIFACTS` paths."""
+
+
+def _fan_out_error(count_floor: int) -> ArtifactFanOutError:
+    return ArtifactFanOutError(
+        f"artifact argument expands to more than {MAX_EXPANDED_ARTIFACTS} paths "
+        f"(reached {count_floor}) -- split it into smaller batches or trim the "
+        "brace groups"
+    )
+
+
 def _expand_braces(artifact_arg: str) -> list[str]:
     """Expand ONE `PREFIX{a,b,c}SUFFIX` brace group into N literal paths.
 
@@ -7252,6 +7272,8 @@ def _expand_braces(artifact_arg: str) -> list[str]:
     for alt in alternatives:
         combined = prefix + alt.strip() + suffix
         expanded.extend(_expand_braces(combined))
+        if len(expanded) > MAX_EXPANDED_ARTIFACTS:
+            raise _fan_out_error(len(expanded))
     return expanded
 
 
@@ -7273,6 +7295,10 @@ def split_artifact_args(artifact_arg: str) -> list[str]:
     newline-separated bullet list is then reassembled into the ` AND `-joined
     form (`_reassemble_bullet_lines`) before the split below runs, so
     bullets, `AND`, and brace groups all compose freely.
+
+    Raises `ArtifactFanOutError` when the total expansion exceeds
+    `MAX_EXPANDED_ARTIFACTS`; `_expand_braces` aborts as soon as a partial
+    result crosses the cap, so k^N groups never materialise.
     """
     working = _reassemble_bullet_lines(_strip_aside(artifact_arg))
     parts = [p.strip() for p in _ARTIFACT_JOIN_RE.split(working)]
@@ -7282,6 +7308,8 @@ def split_artifact_args(artifact_arg: str) -> list[str]:
     expanded: list[str] = []
     for path in paths:
         expanded.extend(_expand_braces(path))
+        if len(expanded) > MAX_EXPANDED_ARTIFACTS:
+            raise _fan_out_error(len(expanded))
     return expanded
 
 

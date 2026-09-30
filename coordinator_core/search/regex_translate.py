@@ -269,6 +269,9 @@ def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[st
     return "[" + ("^" if negate else "") + "".join(body) + "]", j
 
 
+#: `\{n,m\}` (BRE) / `{n,m}` (ERE, unescaped) interval-bound validator --
+#: `{n}`, `{n,}`, `{n,m}`, all digit bounds. Python `re`'s own `{...}`
+#: syntax accepts the identical three forms, so a validated interval
 #: passes through UNCHANGED (no digit-by-digit re-emission needed).
 _INTERVAL_RE = re.compile(r"^\{[0-9]+(,[0-9]*)?\}$")
 
@@ -310,6 +313,8 @@ _BRE_ESCAPED_OPERATORS = {
 }
 
 #: Bare characters that are ORDINARY LITERALS in BRE but OPERATORS in
+#: Python `re` -- must be escaped on output. `{`/`}` are handled
+#: separately (interval detection), not through this table.
 _BRE_BARE_LITERALS = frozenset("+?()|")
 
 
@@ -320,6 +325,10 @@ def _translate_basic(pattern: str) -> Optional[str]:
     paren_depth = 0
     groups_opened = 0
     #: `group_unbounded_stack[-1]` is `True` once the CURRENTLY OPEN
+    #: group's own top-level content has emitted an unbounded quantifier
+    #: (bare `*`-as-operator, `\+`, or an open-ended `\{n,\}`). Consulted
+    #: when that group closes, to detect `\(a\+\)\+`-shaped ReDoS
+    #: constructs (module docstring negative-spec).
     group_unbounded_stack: List[bool] = []
     pending_group_unbounded = False
     last_was_quantifier = False
@@ -371,7 +380,10 @@ def _translate_basic(pattern: str) -> Optional[str]:
                     last_was_quantifier = True
                     i += 2
                     continue
+                # nc == "?" -- bounded (0-or-1) quantifier; Finding 1 does
                 # not apply (only an UNBOUNDED outer quantifier is a
+                # ReDoS risk), but it still consumes the "preceding atom"
+                # slot and counts as a quantifier for stacking purposes.
                 out.append(_BRE_ESCAPED_OPERATORS[nc])
                 at_expr_start = False
                 pending_group_unbounded = False
@@ -589,9 +601,21 @@ def _translate_extended(pattern: str) -> Optional[str]:
             continue
         if c in "+?":
             if at_expr_start or last_was_quantifier:
+                # No preceding atom to quantify (pattern start, or right
+                # after '(' / '|'), OR stacked directly on another
+                # quantifier (e.g. `a++`, which Python 3.11+ parses as
                 # the POSSESSIVE quantifier -- a silent reinterpretation,
+                # not a compile error). Observed live on a real corpus
+                # pattern, `state/subagent-share/(?!93c086f0)`: the local
+                # `grep -E` (BSD/macOS) rejects it ("repetition-operator
+                # operand invalid") rather than treating it as literal.
+                # Translating it unchanged would hand Python `re` the
                 # substring `(?!...)`, which Python parses as a NEGATIVE
                 # LOOKAHEAD -- valid syntax with a completely different
+                # meaning than the operator ever had. That reinterpretation
+                # risk, not just the one observed grep disagreement, is
+                # why this refuses unconditionally rather than trying to
+                # special-case just the lookahead spelling.
                 return None
             if c == "+" and pending_group_unbounded:
                 return None
@@ -635,7 +659,12 @@ def _translate_extended(pattern: str) -> Optional[str]:
             close = pattern.find("}", i + 1)
             valid = close != -1 and _valid_interval(pattern[i : close + 1])
             if not valid:
+                # Not a well-formed interval -- POSIX/GNU ERE treats a
+                # bare '{' that doesn't open a valid interval as a
                 # literal '{' REGARDLESS of position (Finding 5: this
+                # must be checked before any at-expr-start refusal, since
+                # a `{` that can never be an interval was never a
+                # quantifier candidate in the first place).
                 out.append("\\{")
                 at_expr_start = False
                 pending_group_unbounded = False

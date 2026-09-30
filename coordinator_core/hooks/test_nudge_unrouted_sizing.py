@@ -675,7 +675,15 @@ def test_dispatch_rows_never_raises_on_malformed_lines(repo):
     assert m._dispatch_rows(session_id, str(repo)) == []
 
 
+# ---------------------------------------------------------------------------
+# Corrected in-flight determination — `dispatched-agents.txt` is append-only and
+# carries no completion record, so a suppressor keyed on its mere non-emptiness
+# would go permanently silent after an EM's first dispatch of the session. The
+# three-tier resolution (arrived / running / unknown) below is what avoids that:
+# "arrived" never suppresses regardless of elapsed time; "running" suppresses
 # until the hard RUNTIME_TRIPWIRE_MAX_TRACK_MIN cap; "unknown" suppresses only
+# within the row's own per-model runtime-threshold window.
+# ---------------------------------------------------------------------------
 
 
 def test_unknown_state_within_model_window_suppresses(repo):
@@ -786,9 +794,24 @@ def test_runtime_threshold_minutes_env_overridable(monkeypatch):
     assert m._runtime_threshold_minutes("sonnet") == 3
 
 
+# ---------------------------------------------------------------------------
+# F8 — `execute-plan` must never become a member of the SIZING LOBBY's own
+# routable set. Pin the boundary with a test: a red test is a boundary, a
+# docstring is a request. (Review: eng-director/the Director of Engineering F8.)
+#
+# Both of the following are true simultaneously, and this test asserts the
+# one that must never regress: the plan->execute-plan seam IS live (see the
 # "seam: plan->execute-plan" test section below) as its own SEPARATE
+# evaluator (`_find_plan_candidate` / `_plan_execution_authorized_and_active`
+# / `_execute_plan_invoked`), with its own state-read, its own criteria
+# function, and its own room-invocation-evidence function — it was never
 # folded into `_ROUTABLE_ROUTES`, and doing so would be a structural
 # regression: `_ROUTABLE_ROUTES` is the sizing-lobby's route allow-list read
+# off a `state/sizings/*.yaml` object's own `route` field, and `execute-plan`
+# is not, and never will be, a value that field can hold. The two facts
+# coexist because they describe different objects: a sizing-object's `route`
+# vs. a plan's `execution_authorized_by`/`status` frontmatter.
+# ---------------------------------------------------------------------------
 
 
 def test_execute_plan_is_never_a_routable_route():
@@ -796,10 +819,16 @@ def test_execute_plan_is_never_a_routable_route():
 
 
 def test_goal_setting_is_never_a_routable_route():
+    # AC8 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan,
+    # C3/C5): `goal-setting` is the sixth notch's terminal room, and it is
     # deliberately excluded from `_ROUTABLE_ROUTES` -- `coordinator:goal-
     # setting` is PM-GATED (coordinator-content-repo coordinator/skills/goal-setting/
     # SKILL.md frontmatter `description: "PM-GATED. ..."`), so nudging an EM
+    # to invoke it unilaterally would nudge them toward something they
+    # cannot do without the PM -- the same reason `pm-decision` and `shape`
+    # are excluded. A bare assertion without this reason would read as
     # arbitrary and invite a later "fix" widening `_ROUTABLE_ROUTES` to
+    # include it.
     assert "goal-setting" not in m._ROUTABLE_ROUTES
 
 
@@ -846,7 +875,14 @@ def test_route_agnostic_forward_intent_does_not_fire_end_to_end(repo):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# seam: plan->execute-plan — an EM narrating resuming/continuing an
+# already-authorized plan's execution, then stopping without invoking
 # `coordinator:execute-plan`. THE CRITICAL BOUNDARY: never fires when
+# `execution_authorized_by` is absent, regardless of `status` -- that is the
+# pre-execute PM authorization gate doing its job. Boundary tests written
+# first, per the dispatch brief.
+# ---------------------------------------------------------------------------
 
 _PLAN_SLUG = "2026-01-01-a-test-plan"
 _PLAN_REL = f"docs/plans/{_PLAN_SLUG}.md"
@@ -876,6 +912,7 @@ def _transcript_with_execute_plan_skill(tmp_path, filename="transcript.jsonl"):
 
 
 # 1a/1b. THE PM-GATE BOUNDARY -- no execution_authorized_by -> never fire,
+# whatever the status.
 
 
 def test_plan_no_execution_authorized_by_status_reviewed_does_not_fire(repo):
@@ -978,7 +1015,15 @@ def test_plan_absent_file_does_not_raise_and_does_not_fire(repo):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# Verb-prefixed line — Review: code-reviewer (Finding 2), repointed 2026-09-05
+# onto the live dialect. The concern is unchanged and still live: the reader
+# re-renders each jsonl event as `T <ts> <path>` and `_session_touched_lines`
+# strips the verb/timestamp back off (via `parse_touch_event`) so the anchored
 # `_SIZING_PATH_RE`/`_PLAN_PATH_RE` match the path field alone. What changed is
+# only where the event comes from — `touched.txt` is no longer read at all, so
+# a fixture writing one asserted nothing.
+# ---------------------------------------------------------------------------
 
 
 def _write_touched_event_lines(repo, session_id, *rel_paths):

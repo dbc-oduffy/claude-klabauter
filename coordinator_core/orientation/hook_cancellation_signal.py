@@ -67,7 +67,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from coordinator_core._settings_home import home_dir
+from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.win_portability import same_path
 
 _TARGET_HOOK_NAME = "PreToolUse:Bash"
@@ -107,7 +107,7 @@ def _encode_project_dir_name(repo_root: Path) -> str:
 
 
 def _project_transcripts_dir(repo_root: Path) -> Optional[Path]:
-    projects_root = home_dir() / ".claude" / "projects"
+    projects_root = claude_config_dir() / "projects"
     candidate = projects_root / _encode_project_dir_name(repo_root)
     if candidate.is_dir():
         return candidate

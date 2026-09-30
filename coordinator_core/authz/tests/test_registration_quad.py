@@ -48,8 +48,10 @@ class TestGateDetectsPlantedViolation:
         assert len(violations) == 1
         violation = violations[0]
         assert violation.op_key == "planted.op"
+        # Pin the exact surfaces_missing shape, not just
         # membership, so a regression that also spuriously reports _OP_KEY_SCOPE or
         # OP_MODULE_MAP missing for planted.op (both of which the fixture supplies)
+        # would fail this test instead of passing it.
         assert violation.surfaces_missing == ("OP_CLASSIFICATION",)
         assert dict(violation.missing_surface_files)["OP_CLASSIFICATION"] == (
             "coordinator_core/authz/classification.py"
@@ -158,13 +160,20 @@ class TestEagerOpModulesSurface:
 class TestUnclassifiedBaselineNeverGrows:
 
     def test_unclassified_baseline_never_grows(self) -> None:
-        assert len(_KNOWN_UNCLASSIFIED_OPS_DEBT) <= 65
+        assert _KNOWN_UNCLASSIFIED_OPS_DEBT == frozenset()
 
         violations = check_registration_quad()
         # Ops already tracked by the fuller `_KNOWN_INCOMPLETE_REGISTRATIONS` ledger
+        # (registration_quad.py, 2026-08-11) are excluded here — that ledger records
         # their exact missing-surface set (which may include OP_CLASSIFICATION
         # alongside _OP_KEY_SCOPE/OP_MODULE_MAP) with its own never-grows discipline
         # (`_KNOWN_INCOMPLETE_REGISTRATIONS` is a plain literal frozen at measurement
+        # time, never appended to locally). Double-counting them here against a
+        # narrower single-surface baseline that has no shape for their other missing
+        # surfaces would either force growing THIS baseline (forbidden) or force
+        # mis-tracking them as classification-only debt (inaccurate). See
+        # `TestKnownIncompleteRegistrationsLedger` below for that ledger's own
+        # never-grows coverage.
         live_unclassified = {
             violation.op_key
             for violation in violations
@@ -180,10 +189,16 @@ class TestUnclassifiedBaselineNeverGrows:
         )
 
 
+# A separate test function, deliberately NOT
+# folded into TestUnclassifiedBaselineNeverGrows.test_unclassified_baseline_never_grows
+# above (which is currently RED on HEAD for an unrelated, pre-existing reason: three
 # ops missing OP_CLASSIFICATION and absent from the frozen baseline). This assertion
 # must be independent of that pre-existing failure so a live `_EAGER_OP_MODULES`
+# regression of the `roadmap.link_stubs` shape (op fully complete on
 # OP_CLASSIFICATION/_OP_KEY_SCOPE/OP_MODULE_MAP but absent from _EAGER_OP_MODULES) is
+# caught even while the unrelated baseline test stays red. There is no frozen-baseline
 # carve-out for this surface -- any live _EAGER_OP_MODULES-only violation is a bug,
+# never tolerated debt.
 class TestLiveTreeEagerModulesSurfaceNeverViolated:
     """`TestEagerOpModulesSurface` above only exercises the fifth surface against
     explicit `eager_modules=` fixtures -- never against the live tree. This closes
@@ -235,6 +250,7 @@ class TestKnownIncompleteRegistrationsLedger:
             ),
         )
         # The ledger only records OP_MODULE_MAP for this op -- _EAGER_OP_MODULES is a
+        # NEW, unrecorded gap and must survive pruning.
         pruned = prune_known_incomplete(v)
         assert pruned is not None
         assert pruned.surfaces_missing == ("_EAGER_OP_MODULES",)

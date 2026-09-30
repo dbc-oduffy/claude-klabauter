@@ -148,6 +148,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
+    ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
     ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),
     ("coordinator_core.ops.handoff_correct_body", 'registers "handoff.correct_body"'),
@@ -235,6 +236,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "plan already owns, docs/plans/2026-09-23-cascade-write-provenance.md C2)",
     ),
     (
+        "coordinator_core.ops.audit_two_repo_rate",
+        'registers "goal.kr2_two_repo_rate" (read-only KR2 engine-tool commit count, '
+        "pairing leg unmeasured, docs/plans/2026-07-20-kr-baselining-package.md C1)",
+    ),
+    (
         "coordinator_core.ops.cascade_retract",
         'registers "deliverable.cascade_retract" (C6d retraction/revision, AC6f)',
     ),
@@ -251,7 +257,19 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     (
         "coordinator_core.ops.record_history",
+        # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
+        # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
+        # the refusal. Nothing this module declares dispatches.
+        # overengineering-reviewer (finding #1, major) asked this row
+        # struck entirely rather than re-annotated. Left in place: the module
+        # still declares `@register_op("records.history")`
+        # (coordinator_core/ops/record_history.py:657), and
+        # test_eager_op_modules_covers_every_register_op.py requires every
         # such module to be _EAGER_OP_MODULES-reachable or it ships
+        # present-but-dead (registry MISS at dispatch). That test is the
+        # arbiter per this dispatch's brief — striking this row is correct
+        # only once the module's `@register_op` decorator (or the module
+        # itself) is also removed, which is outside this integration pass.
         "no reachable op; `records.history` was killed under the budget",
     ),
     (
@@ -645,6 +663,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
 ]
 
+# module dotted-path -> the exception raised the last time we tried to import
+# it. Populated by _eager_import_all() on a per-module ImportError/Exception;
+# cleared on a subsequent successful import of that same module (self-healing
+# if the module is fixed mid-process, e.g. under pytest --looponfail). Read by
+# coordinator_core.ipc's dispatch_message to turn a registry MISS on a
+# poisoned module's op into the real cause instead of a generic "Method not
 # found" (see ipc.py's METHOD_NOT_FOUND branch).
 _POISONED_MODULES: Dict[str, BaseException] = {}
 
@@ -686,6 +710,13 @@ def _eager_import_all() -> None:
             # ERROR-severity logging call (§ FUNCTION gate C4C brief "make the
             # silent swallow observable") ALONGSIDE the pre-existing stderr
             # print below — control flow is UNCHANGED (still resilient: no
+            # raise, every other module still gets its own import attempt).
+            # This is purely about making a per-module import failure land
+            # in anything that watches Python's logging machinery (e.g. a
+            # log-aggregation handler attached to the root logger), which a
+            # bare stderr print to an unread hermetic subprocess (§
+            # `coordinator_core/percolate/engine.py` `run_function_gate`,
+            # which only inspects stdout for "GATE_OK"/stderr for a
             # "GATE_FAIL:" marker it never emits here) does not reach.
             _logger.error(
                 "coordinator_core.ops: FAILED to import %r (%s: %s) — its "
@@ -708,4 +739,10 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
+# Lazy is the only mode: importing this bare package never eagerly registers
 # any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
+# env var / sys._coordinator_core_lazy_ops in-process attribute) is retired —
+# there is no longer a flag to read or a channel to arm, so no conditional
+# call to _eager_import_all() happens here. Callers reach registration
+# through the targeted per-op import (ipc.py's registry-miss path) or, for the
+# rare full-registration need, by calling _eager_import_all() directly.

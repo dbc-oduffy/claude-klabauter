@@ -404,7 +404,11 @@ def enforce_tier_u_gate(
             )
 
     if tier_f_matches and not tier_u_matches:
+        # Tier-F leg -- branched explicitly (never shares the Tier-U leg's
         # fall-through) so the R6 declaration exit is UNREACHABLE here. Per
+        # PM ruling 2026-08-04, the grant ask is the only Tier-F escape
+        # hatch; a stale fast_tier_unscoped_reason declaration must not
+        # discharge a Tier-F command for free.
         granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
         if granted:
             return TierUGateResult(proceed=True)

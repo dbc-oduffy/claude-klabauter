@@ -33,6 +33,11 @@ def real_atlas() -> RecordedAtlas:
         ("tasks/x.py", False),
         ("dist/x.py", False),
         ("pip/x.py", False),
+        ("docs/research/x.py", False),
+        ("docs/plans/2026-08-30-x.falsifier.py", False),
+        ("docs/problems/2026-08-27-x-repro.py", False),
+        ("setup/dist/publish-repo-setup/install.py", False),
+        (".github/scripts/publish_cockpit_contract.py", True),
         ("coordinator_core/conftest.py", False),
         ("coordinator_core/test_foo.py", False),
         ("coordinator_core/foo_test.py", False),
@@ -146,3 +151,32 @@ def test_expand_recorded_mapping_small_list(real_atlas: RecordedAtlas) -> None:
     for paths in expansion.by_system.values():
         assert "archive/should_be_excluded.py" not in paths
     assert expansion.considered_count == 2
+
+
+def test_rule13_github_scripts_contract_schemas(real_atlas: RecordedAtlas) -> None:
+    assert (
+        recorded_system_for_path(".github/scripts/publish_cockpit_contract.py", real_atlas)
+        == "contract-schemas"
+    )
+
+
+@pytest.mark.parametrize(
+    "relpath,system",
+    [
+        ("coordinator_core/attribution/detector.py", "source-hygiene"),
+        ("coordinator_core/commenting/detector.py", "source-hygiene"),
+        ("coordinator_core/comment_strip/engine.py", "source-hygiene"),
+        ("coordinator_core/source_edit_gate/gate.py", "source-hygiene"),
+        ("coordinator_core/p4/register.py", "perforce-vcs"),
+        ("coordinator_core/workflow_watch/tail.py", "workflow-watch"),
+        ("coordinator_core/conservatism/verify.py", "support-libraries"),
+        ("coordinator_core/docindex/spec.py", "support-libraries"),
+        ("coordinator_core/updatedocs/directory_md.py", "support-libraries"),
+        ("coordinator_core/environment_story/story.py", "guards"),
+        ("coordinator_core/learn_lessons_pipeline/apply.py", "assemblers"),
+    ],
+)
+def test_rule10_second_wave_packages(
+    real_atlas: RecordedAtlas, relpath: str, system: str
+) -> None:
+    assert recorded_system_for_path(relpath, real_atlas) == system

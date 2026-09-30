@@ -720,8 +720,17 @@ def status_porcelain(
     *,
     untracked_files: Optional[str] = None,
     quotepath_false: bool = False,
+    untracked_all: bool = False,
 ) -> GitResult:
     """`git status --porcelain` — dirty-tree gate classification (C3).
+
+    `untracked_all` (keyword-only, default `False`): listing mode. Adds
+    `-c core.quotepath=false` before `status` and `--untracked-files=all
+    --no-renames` after `--porcelain`. Output stays newline-separated porcelain
+    v1, so `dirty_tree_gate.parse_porcelain_paths` reads it unchanged;
+    `--no-renames` reports a staged rename's source as its own `D` line
+    instead of collapsing it to the destination. `False` keeps argv
+    byte-identical for every existing caller.
 
     `--no-optional-locks` (pre-subcommand, per `git`'s placement rule)
     suppresses the opportunistic stat-cache write-back a bare `git status`
@@ -771,9 +780,11 @@ def status_porcelain(
     circuits and is returned as-is, so the caller sees an unsuccessful
     `GitResult` rather than a partial dirty set that looks complete."""
     base = ["--no-optional-locks", "status", "--porcelain"]
-    if quotepath_false:
+    if quotepath_false or untracked_all:
         base = ["-c", "core.quotepath=false", *base]
-    if untracked_files is not None:
+    if untracked_all:
+        base = [*base, "--untracked-files=all", "--no-renames"]
+    elif untracked_files is not None:
         base = [*base, f"--untracked-files={untracked_files}"]
     if paths is None:
         return _git(base, cwd=cwd)

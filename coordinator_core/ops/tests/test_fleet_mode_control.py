@@ -218,7 +218,10 @@ class TestShowReportsTheVariantThatActuallyFires:
         from coordinator_core.ops.fleet import mode_control as MC
 
         monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
+        # `ModeKey` is a frozen dataclass, so the entry's callable cannot be
         # patched. It does not need to be: the registry stores a LATE-BOUND
+        # lambda that resolves this name through module globals at call time,
+        # which is what keeps the seam testable at all.
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",

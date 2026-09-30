@@ -49,7 +49,9 @@ def test_commit_pathspec_dedupes_overlapping_declared_writes():
 
 
 def test_commit_pathspec_falls_back_to_concrete_surface():
+    # A wave where at least one row declares writes: is not refused; a
     # sibling row with UNDECLARED writes and a concrete surface still
+    # contributes via the surface fallback.
     wave = [
         _wave_row("C1", ["a.py"]),
         _wave_row("C2", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/pathspec.py"),
@@ -90,6 +92,15 @@ def test_commit_pathspec_does_not_refuse_when_at_least_one_row_declares_writes()
 
 def test_commit_pathspec_warns_and_refuses_when_every_row_declares_empty_writes_naming_rows(caplog):
     # writes: [] is an explicit declaration, distinct from UNDECLARED -- the
+    # AC4 "no row declares writes:" check does not fire (every row DID
+    # declare). But every row is also zero-contributing, so the union is
+    # empty -- an empty pathspec is never a legal return regardless of
+    # which spelling produced it (module docstring's negative spec: "name
+    # the rows, never emit an empty result"). This is refusal 2 in
+    # commit_pathspec's docstring, distinct from the per-row warn-and-
+    # continue case (staff review finding P0-1) which only applies when a
+    # real-contributing sibling is present to carry the wave. Both the
+    # warning AND the raise fire here.
     wave = [_wave_row("C1", []), _wave_row("C2", [])]
     with caplog.at_level("WARNING"):
         with pytest.raises(NoWritesDeclaredError) as excinfo:
@@ -133,12 +144,18 @@ def test_commit_pathspec_normal_file_writes_are_unaffected():
 
 def test_declared_paths_surface_fallback_still_behaves_as_before():
     # The surface:-fallback path (UNDECLARED writes) is untouched by the
+    # new writes:-primary-path check -- is_concrete_surface's own
+    # trailing-slash check already governed this path before this fix and
+    # continues to.
     wave = [_wave_row("C1", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/")]
     with pytest.raises(NoWritesDeclaredError, match="C1"):
         commit_pathspec(wave)
 
 
 def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_all():
+    # Guard against over-correction: downgrading the per-row zero-
+    # contribution case to a warning must not have touched the wave-level
+    # AC4 refusal, which fires when NOT ONE row in the wave declares
     # writes: at all (every row UNDECLARED, no concrete surface fallback).
     wave = [_wave_row("C1", UNDECLARED), _wave_row("C2", UNDECLARED, surface="dispatch_emit")]
     with pytest.raises(NoWritesDeclaredError) as excinfo:
@@ -188,7 +205,18 @@ def test_terminal_test_scope_refuses_whole_spine_no_writes_declared_naming_rows(
 
 
 def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
+    # Declares writes: (passes AC10's literal wording) but every path is a
+    # doc, so no test target exists -- must refuse (AC16), not report an
+    # empty scope as green.
+    #
     # This fixture previously paired CONTRACT.md with coordinator/bin/
+    # coordinator-doc-new.py. That script is NOT uncovered -- coordinator/
+    # tests/test_coordinator_doc_new.py is named for it -- and it only sat in
+    # a doc-only fixture because the mapper probed the immediate parent alone
+    # and could not reach this repo's own flat test directory. The fixture
+    # encoded a limitation of the derivation rather than a property of the
+    # paths; once the ancestor walk landed, it asserted a refusal that had
+    # stopped being correct. Both paths named here are genuinely uncovered.
     waves = [
         [_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])],
         [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
@@ -434,7 +462,9 @@ def test_terminal_test_scope_does_not_derive_an_unconfigured_suffix(tmp_path):
 
 
 def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(tmp_path):
+    # `_locator_source_suffix` reads a pattern's own trailing suffix
     # (`*.test.ts` -> `.ts`), so a path with a DIFFERENT suffix never matches
+    # even though the pattern's literal string starts with `*.test`.
     _write_local_md(tmp_path, ["*.test.ts"])
     waves = [[_wave_row("C1", ["src/widgets/foo.test.js"])]]
     assert terminal_test_scope(waves, repo_root=tmp_path) == []

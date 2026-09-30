@@ -39,7 +39,16 @@ def test_suite_conftest_quarantines_real_home_by_default():
     assert resolved.name.startswith("home-quarantine"), resolved
 
 
+# ---------------------------------------------------------------------------
+# `real_home` must not smuggle machine-mutation permission along with it
+#
+# The marker means "resolve the real home", scoped by its own docstring to
+# read-only oracles. It used to be read BEFORE the fixture set
 # COORDINATOR_DISABLE_MACHINE_MUTATION, so a marked test got the real home AND
+# no kill switch — the pairing behind the live `.coordinator-content-root` pollution
+# (state/bug-backlog/2026-08-26-a-test-writes-the-live-claude-machine-lo-
+# 6cdf6bc87771.yaml). These three pin the three states apart.
+# ---------------------------------------------------------------------------
 
 _MUTATION_SWITCH = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 

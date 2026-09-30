@@ -51,7 +51,13 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ops.fleet._memo_compose import _compose_memo, _render_extra_field
 
+#: The SAME two-member enum as the vendored plan-tasks.schema.json 1.10.0's
+#: `external_gate[].closure_key.kind` (and cross-repo-memo.schema.json
+#: 1.7.0's `discharges.closure_key.kind`, coordinator_core.contract.
 #: emit_memo_schema._DISCHARGES_PROPERTY). Not re-derived from either
+#: schema module at import time (no schema-module dependency belongs in a
+#: plain composer) — kept as a literal tuple here, deliberately identical,
+#: with this comment as the drift tripwire for a human reader.
 CLOSURE_KEY_KINDS = ("deliverable", "memo-thread")
 
 _DATE_RE_SOURCE = r"^\d{4}-\d{2}-\d{2}$"

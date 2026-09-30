@@ -154,6 +154,8 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 _BG_CAPABLE_MARKER_NAME = ".harness-bg-capable"
 _FOREGROUND_OK_MARKER_NAME = ".foreground-ok"
 
+#: Repo-relative literal, resolved for the reader by `resolve_wiki_citation()`
+#: at render time (below) rather than emitted verbatim -- same mechanism
 #: `message_envelope`-routed hooks use for their `_WIKI_ANCHOR` sites.
 _UNLOCK_DOC_CITATION = "coordinator/docs/wiki/guard-unlock-channel.md"
 

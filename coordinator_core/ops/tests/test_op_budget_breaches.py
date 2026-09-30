@@ -336,6 +336,8 @@ def _current_generation_noise_rows():
         _method_not_found(
             # Caller does NOT start with TEST_CALLER_PREFIX, so this row is
             # excluded by the count threshold (1 < DEAD_DIAL_MIN_ATTEMPTS),
+            # not by caller-class filtering — the synthetic-looking op name
+            # is not what protects it here.
             "test.this_op_does_not_exist_anywhere",
             caller="coordinator_core.ipc.dispatch_from_hook",
             t_start=BASE_T,

@@ -235,7 +235,20 @@ def test_the_gate_stays_json_serialisable_with_provenance_on_it(
     assert json.loads(json.dumps(gate._asdict()))["sid_source"]["source"] == "CLAUDE_SESSION_ID"
 
 
+# ---------------------------------------------------------------------------
+# Split-copy degrade — this bin script and the engine it calls are two copies
+# ---------------------------------------------------------------------------
+#
+# Found the hard way: the FIRST real `/workstream-complete` after the instrument
+# landed died with `module 'coordinator_core.session.core' has no attribute
+# 'attributable_session_id_with_source'`, inside `brief`'s structural backstop.
+# Both doors resolve the ENGINE from the published klabauter mirror while running
+# the CLI from the repo tree, so an accessor that lands here does not exist there
+# until a publish round — and an unguarded call takes the whole close ceremony
+# down for every session on the box, not just the one that changed it.
+#
 # The provenance is a nicety; the RESOLUTION is not. These pin that a copy skew
+# in either direction costs the provenance and never the close.
 
 
 def test_an_engine_without_provenance_still_resolves_the_session(

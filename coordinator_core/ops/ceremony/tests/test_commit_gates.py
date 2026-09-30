@@ -517,6 +517,7 @@ def _seed_registry_map(repo: Path, op_names, *, valid: bool = True) -> None:
         )
     else:
         # A dict spelled via a name that isn't OP_MODULE_MAP, so the target
+        # binding is genuinely absent -- simulates a rename/restructure.
         p.write_text("SOME_OTHER_NAME = {}\n", encoding="utf-8")
 
 

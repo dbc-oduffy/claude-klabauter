@@ -68,6 +68,8 @@ from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
 
 #: Mirrors `http_hook_forwarder.FIXED_PORT` by value, not by import -- this
+#: module must not import the forwarder module itself (it only launches it as
+#: a detached child process).
 _FIXED_PORT = 47623
 
 _ADDR_IN_USE_ERRNOS = frozenset(
@@ -253,6 +255,7 @@ def _spawn_forwarder_detached(forwarder_path: Path) -> bool:
     try:
         # popup-safe-env-suppressed -- CREATE_NO_WINDOW is already ORed into
         # creationflags above (Windows leg); DETACHED_PROCESS additionally
+        # detaches from this session's own console entirely.
         subprocess.Popen([sys.executable, str(forwarder_path)], **kwargs)
         return True
     except Exception:

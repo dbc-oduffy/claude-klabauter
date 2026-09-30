@@ -1525,6 +1525,19 @@ def _cf_supersedes_spinoff_only(fm: dict) -> ErrorDict | None:
     return None
 
 
+def _cf_recovers_session_recovery_only(fm: dict) -> ErrorDict | None:
+    recovers = fm.get('recovers_session')
+    if recovers is None or str(recovers).strip() == '':
+        return None
+    if fm.get('kind') != 'recovery':
+        return {
+            'field': 'recovers_session',
+            'error': f'permitted only when kind=recovery (current kind: {fm.get("kind") or "unset"})',
+            'hint': 'recovers_session names the crashed session a kind: recovery handoff reconstructs.',
+        }
+    return None
+
+
 def _cf_claimed_by_required(fm: dict) -> ErrorDict | None:
     """Rule A3a-1 (DR-084): status=claimed + claimed_at present → claimed_by required.
 
@@ -4305,6 +4318,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
     _cf_summary_required_post_cutoff,
     _cf_summary_length_cap,
     _cf_supersedes_spinoff_only,
+    _cf_recovers_session_recovery_only,
     _cf_claimed_by_required,
     _cf_closed_reason_required,
     _cf_continued_into_required,

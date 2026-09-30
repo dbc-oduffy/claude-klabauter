@@ -108,15 +108,14 @@ def is_under_basetemp(path_str: Optional[str], basetemp_parts: Sequence[str]) ->
 
 
 def collect_ancestor_pids(pid: int) -> set:
+    """Every ancestor pid of `pid`. Fails closed: a `psutil.Error` propagates,
+    because a partial set could let `find_orphans` target the shell or CI runner
+    that launched pytest; `pytest_sessionfinish` then skips the whole reap."""
     ancestors: set = set()
     if psutil is None:
         return ancestors
-    try:
-        proc = psutil.Process(pid)
-        for anc in proc.parents():
-            ancestors.add(anc.pid)
-    except Exception:
-        pass
+    for anc in psutil.Process(pid).parents():
+        ancestors.add(anc.pid)
     return ancestors
 
 
@@ -140,7 +139,7 @@ def find_orphans(
                 continue
             if proc.create_time() < session_start_time:
                 continue
-        except (psutil.AccessDenied, psutil.NoSuchProcess, Exception):
+        except (psutil.Error, OSError):
             continue
         survivors.append(proc)
 
@@ -148,11 +147,11 @@ def find_orphans(
     for proc in survivors:
         try:
             cwd = proc.cwd()
-        except (psutil.AccessDenied, psutil.NoSuchProcess, Exception):
+        except (psutil.Error, OSError):
             cwd = None
         try:
             cmdline = proc.cmdline()
-        except (psutil.AccessDenied, psutil.NoSuchProcess, Exception):
+        except (psutil.Error, OSError):
             cmdline = []
         matched = is_under_basetemp(cwd, basetemp_parts) or any(
             is_under_basetemp(tok, basetemp_parts) for tok in cmdline
@@ -163,27 +162,34 @@ def find_orphans(
 
 
 def reap_processes(procs: Sequence["psutil.Process"]) -> List[Tuple[int, List[str]]]:
+    """Terminate-then-kill `procs`; return only those confirmed gone.
+
+    A process whose terminate/kill was refused (AccessDenied) and that is still
+    alive after the kill wait is omitted, so the caller never reports a reap
+    that did not happen."""
     if psutil is None:
         return []
-    reaped: List[Tuple[int, List[str]]] = []
     procs = list(procs)
+    argvs: dict = {}
     for proc in procs:
         try:
-            argv = proc.cmdline()
-        except Exception:
-            argv = []
-        reaped.append((proc.pid, argv))
+            argvs[proc.pid] = proc.cmdline()
+        except psutil.Error:
+            argvs[proc.pid] = []
         try:
             proc.terminate()
-        except Exception:
+        except psutil.Error:
             pass
-    _gone, alive = psutil.wait_procs(procs, timeout=1)
-    for proc in alive:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-    return reaped
+    gone, alive = psutil.wait_procs(procs, timeout=1)
+    if alive:
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.Error:
+                pass
+        killed, _survivors = psutil.wait_procs(alive, timeout=1)
+        gone = list(gone) + list(killed)
+    return [(proc.pid, argvs[proc.pid]) for proc in gone]
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001 - exitstatus never touched

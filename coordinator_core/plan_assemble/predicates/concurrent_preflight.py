@@ -70,7 +70,9 @@ from coordinator_core.plan_assemble.predicates import PredicateContext, undeterm
 
 _SOURCE_MEMO_RE = re.compile(r"^source_memo:\s*(.+?)\s*$", re.MULTILINE)
 
+#: Frontmatter block delimiter — `---` alone on its own line, opening and
 #: closing the YAML block. Used to scope `_SOURCE_MEMO_RE` to genuine
+#: frontmatter rather than the whole file body.
 _FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*(?:\n|\Z)", re.DOTALL)
 
 

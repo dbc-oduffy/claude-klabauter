@@ -184,6 +184,12 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
 
     if record is None or record_session_id is None:
         # A registry that holds files but parses to nothing is a DIFFERENT
+        # condition from one that parses fine and simply has no row for this
+        # sid -- the first is a parser/shape defect (see `harness_registry`'s
+        # `procStart` note: an integer-only parser read every POSIX record as
+        # unparseable and left this gate silently inert fleet-wide), the
+        # second is the ordinary miss this arm was written for. Reporting
+        # both as "0 parsed" would restate the defect's own camouflage.
         detail = "no registry record for this session"
         try:
             registry_dir = _harness_registry.registry_dir()
@@ -201,6 +207,8 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
             pass  # detail enrichment is best-effort; UNRESOLVED verdict stands regardless
         return _verdict(_REPO_IDENTITY_UNRESOLVED, None, detail)
 
+    # --- 2. trust check (AC10) -- sessionId equality (tautological on the
+    # snapshot() fallback leg, live on the pid-keyed leg) AND
     # stable_pid_alive. Either failing is UNRESOLVED, never MATCH.
     if record_session_id != sid:
         return _verdict(_REPO_IDENTITY_UNRESOLVED, None, "registry record sessionId does not match sid")
@@ -224,5 +232,6 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
             "anchor cwd is a real, plausible directory outside repo_root",
         )
 
+    # cwd absent or failed the plausibility band: absence of positive
     # evidence of a different real repo is UNRESOLVED, never MISMATCH.
     return _verdict(_REPO_IDENTITY_UNRESOLVED, session_root_display, "anchor cwd failed the plausibility band")

@@ -58,6 +58,7 @@ def _init_mismatched_upstream_repo(tmp_path: Path) -> Path:
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["remote", "add", "origin", str(origin)], repo)
     # Publish once under the DIFFERENT remote name and set it as upstream --
+    # exactly what a cloud harness's own bootstrap does.
     _git(
         ["push", "-q", "-u", "origin", f"{_LOCAL_BRANCH}:refs/heads/{_REMOTE_BRANCH}"],
         repo,

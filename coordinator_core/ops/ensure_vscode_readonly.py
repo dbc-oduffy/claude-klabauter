@@ -164,6 +164,7 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
     try:
         tmp.write_text(out_str, encoding="utf-8", newline="\n")
         tmp.replace(settings_path)
+        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended surface.
         declare_write(settings_path)
     except OSError as exc:

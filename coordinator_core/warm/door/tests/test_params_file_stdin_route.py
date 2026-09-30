@@ -63,6 +63,11 @@ def test_the_flag_spelling_lives_only_in_shared_core():
         assert match.group(1) == value
 
     # DOOR_PARAMS_FILE_STDIN_JOINED is
+    # composed from the two macros above (string-literal concatenation),
+    # not a third hand-typed literal, so drift between it and the pair it
+    # must match is no longer representable. This row confirms the
+    # composition rather than re-asserting a value that can no longer
+    # diverge.
     joined_match = re.search(
         r"^#define\s+DOOR_PARAMS_FILE_STDIN_JOINED\s+"
         r"DOOR_PARAMS_FILE_FLAG\s+\"=\"\s+DOOR_PARAMS_FILE_STDIN_VALUE\s*$",

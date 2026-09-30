@@ -182,6 +182,8 @@ _LOG = logging.getLogger(__name__)
 _PROPAGATED_SECTION_HEADING = "## Propagated"
 
 # Reuses coordinator/skills/plan/SKILL.md's EXISTING amendment-note token
+# family — no new schema, no new marker vocabulary. Only these two kinds are
+# accepted; anything else is refused rather than silently coerced.
 _ALLOWED_KINDS = ("Amended", "Superseded")
 
 _NET_GROWTH_CAP = 8192
@@ -190,7 +192,11 @@ _HEADING_LINE_RE = re.compile(r"^#{1,6} ", re.MULTILINE)
 _DELIM_LINE_RE = re.compile(r"^---[ \t]*$", re.MULTILINE)
 
 
+# ---------------------------------------------------------------------------
+# B2 (AC8) — per-verb target spec. Same op, two guard-safe target roots (see
 # module docstring "B2 EXTENSION" above for the full rationale). The two
+# verbs differ only in target root and in whether a status gate applies.
+# ---------------------------------------------------------------------------
 class _TargetSpec(NamedTuple):
     path_param: str
     allowed_root_parts: Tuple[str, ...]
@@ -332,6 +338,7 @@ def _git_operation_in_progress(worktree: Path) -> Optional[str]:
     return None
 
 
+#: git's canonical empty tree — what `git write-tree` emits for an index of
 #: zero entries, which is what a MISSING `GIT_INDEX_FILE` silently produces.
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 

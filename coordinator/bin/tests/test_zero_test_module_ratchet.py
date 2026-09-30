@@ -157,7 +157,17 @@ _PYTEST_NORECURSEDIRS_DEFAULT = (
     "{arch}",
 )
 
+# ---------------------------------------------------------------------------
 # _ZERO_NODE_EXEMPT — files that legitimately contribute zero collected test
+# nodes. Every entry is ONE repo-root-relative file path plus the specific
+# reason THAT file holds no tests. Globs, directory prefixes, and
+# "known offenders" buckets are forbidden: this set exists for structural
+# impossibilities, not for a backlog. It is currently EMPTY — as of
+# 2026-07-28 all 1070 on-disk test modules under `testpaths` contribute at
+# least one node, so the invariant holds with no carve-outs at all. If
+# clearing a failure here needs more than a couple of entries, stop: that
+# means the invariant is mis-stated and the mis-statement is the finding.
+# ---------------------------------------------------------------------------
 _ZERO_NODE_EXEMPT: dict[str, str] = {}
 
 

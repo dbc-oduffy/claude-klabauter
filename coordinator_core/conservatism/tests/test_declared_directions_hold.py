@@ -303,7 +303,13 @@ def test_block_worktree_sentinel_write_raises_as_declared():
     )
 
 
+# The per-site tests above assert each site's
+# CURRENT `declaration.direction`, whatever it is; they do not pin what that
+# direction should be. A decorator edit flipping e.g. `default_usable_ram_gb`
 # from RAISE to FALL_BACK would leave its per-site test green under a now-
+# lying name. `test_both_directions_are_expressible` below is the only place
+# that independently derives "both directions are still represented" from
+# the live declarations, decoupled from any one site's test.
 _ASSERTED_SITES = {
     "coordinator_core.benchmarks.concurrency_probe.default_usable_ram_gb",
     "coordinator_core.benchmarks.concurrency_probe.default_physical_cores",
@@ -338,6 +344,8 @@ def test_nudge_peer_notice_unread_falls_back_as_declared():
         if state["raise"]:
             raise OSError("notice channel unreadable")
         # The intact path must return something DISTINGUISHABLE from the
+        # anchor, or the fall-back leg proves nothing -- verify.py rejects a
+        # control run that already sits on the declared anchor.
         return [
             {
                 "from_session_id": "peer-1",

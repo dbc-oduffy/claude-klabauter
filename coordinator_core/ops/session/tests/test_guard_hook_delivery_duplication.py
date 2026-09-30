@@ -107,7 +107,19 @@ def test_plugin_only_is_quiet(tmp_path, monkeypatch):
     assert gsi.evaluate_hook_delivery_duplication(config_dir) == ""
 
 
+# ---------------------------------------------------------------------------
+# Indeterminate (NOT quiet): settings-only content, but the content root is
+# genuinely unresolvable. Root-cause dispatch state/subagent-share/
+# fc858a76-71c8-4e09-9358-3dec6bdff50d/coordinatorexecutor-1acf4e72.md — the
+# original "settings-only is quiet" contract this test encoded was itself
+# the false-negative half of the confirmed incident: an unresolvable content
+# root makes plugin-side hooks.json unlocatable, so "no overlap found" here
+# is a resolution FAILURE, not evidence the two surfaces are disjoint. A
+# silent (or false "nothing is firing twice") verdict in this exact shape
+# hid a real double-fire on the reporting machine. This machine's content
+# root genuinely does not resolve, so the correct verdict is an explicit
 # INDETERMINATE banner naming the unresolved error, never silence.
+# ---------------------------------------------------------------------------
 
 
 def test_settings_only_with_unresolvable_root_is_indeterminate(tmp_path, monkeypatch):
@@ -200,7 +212,17 @@ def test_full_overlap_is_double_fire(tmp_path, monkeypatch):
     assert str(bar_baked.resolve()) in banner
 
 
+# ---------------------------------------------------------------------------
+# Basename/tail overlap: the confirmed incident this dispatch root-caused
+# (state/subagent-share/fc858a76-71c8-4e09-9358-3dec6bdff50d/
+# coordinatorexecutor-1acf4e72.md) — plugin-side and settings-side resolve
 # under two DIFFERENT, each individually-valid, content roots (e.g. a
+# SessionStart call vs. an interactive re-run landing on two distinct rungs
+# of `resolve_content_root`'s ladder). Exact-absolute-path comparison alone
+# reports zero overlap here even though the same scripts are declared on
+# both surfaces; overlap must still be detected via the root-independent
+# `hooks/scripts/<name>` tail key.
+# ---------------------------------------------------------------------------
 
 
 def test_overlap_detected_across_two_distinct_resolvable_roots(tmp_path, monkeypatch):
@@ -242,7 +264,10 @@ def test_overlap_detected_across_two_distinct_resolvable_roots(tmp_path, monkeyp
     assert "nothing is firing twice today" not in banner
 
 
+# ---------------------------------------------------------------------------
 # Partial overlap: both live, but with DIFFERING entry sets — report the
+# actual overlap, never assume full duplication from mere presence.
+# ---------------------------------------------------------------------------
 
 
 def test_partial_overlap_reports_honestly(tmp_path, monkeypatch):
@@ -662,7 +687,20 @@ def test_degraded_banner_renders_when_no_manifest_and_no_other_finding(
 
 
 def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path, monkeypatch):
+    # This test previously
+    # asserted the standalone-degraded state was "not achievable without
+    # settings entries" and unit-tested `format_hook_delivery_banner`
+    # against a hand-built `HookDeliveryReport` on that premise. That claim
+    # was false: `settings_present` only requires `hooks_block` to be a
+    # non-empty dict (`isinstance(hooks_block, dict) and hooks_block`),
     # while `settings_entry_count`/`settings_commands` come from a SEPARATE
+    # recursive `command`-key walk (`_iter_hook_commands`) that legitimately
+    # returns `[]` for a non-empty block with no `type: command` hooks --
+    # e.g. `{"SessionStart": []}`. Kept as a direct-construction unit test
+    # (still earns its place as a fast, isolated check of the banner
+    # renderer alone), but see the end-to-end sibling test just below for
+    # the real reachability proof through `detect_hook_delivery_duplication`
+    # itself.
     report = gsi.HookDeliveryReport(
         plugin_present=True,
         plugin_resolvable=True,
@@ -947,7 +985,15 @@ def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path, monkeyp
     assert "cause double-fire" not in line
 
 
+# ---------------------------------------------------------------------------
+# C4, item 3 (EM decision): a resurrected-decision finding must render
 # ADDITIVELY when it co-occurs with `double_fire` -- not suppressed behind
+# it. Resurrected decisions are worse than an ordinary duplicate (a config
+# frozen before a retirement ruling silently outranks the ruling), so
+# hiding the more severe finding behind the less severe one defeats the
+# point. Every existing rendering's text stays byte-intact; this asserts
+# BOTH the double-fire body and the resurrected block are present.
+# ---------------------------------------------------------------------------
 
 
 def test_resurrected_decision_renders_additively_alongside_double_fire(

@@ -73,7 +73,12 @@ class CoherentArmsStillEmitPickupReadyTrueTest(unittest.TestCase):
         self.assertIn("pickup_ready: true", content)
 
     def test_spinoff_still_emits_pickup_ready_true(self):
+        # Ambient-env-independent (2026-08-21): `_scaffold_spinoff`'s
+        # authoring_session gate exits fail-loud when no session id resolves
         # (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID
+        # all unset) -- this test asserts pickup_ready coherence, not session
+        # resolution, so it pins the resolver rather than depending on
+        # whichever of those vars happens to be set in the invoking shell.
         with mock.patch.object(_cli, "_resolve_session_id", return_value="sess-fixture"):
             content = _cli._scaffold_spinoff(title="t", branch="b")
         self.assertIn("pickup_ready: true", content)

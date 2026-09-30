@@ -89,6 +89,8 @@ MUTABLE_STATE_COMMANDS = (
 )
 
 #: The four verbs the DR-344 plan AC enrolled, pinned POSITIVELY so a later
+#: re-narrowing is as visible as the widening was invisible. Membership here is
+#: the reconciliation in the module docstring, expressed where a test will say it.
 RATIFIED_ANSWERABLE_READS = (
     "cat coordinator_core/search/engine.py",
     "head -50 coordinator_core/search/engine.py",

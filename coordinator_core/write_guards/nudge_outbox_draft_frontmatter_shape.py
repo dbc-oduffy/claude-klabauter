@@ -195,6 +195,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
             if allowed_roots:
                 # INTERFACE.md rule 8: reuse contained_path rather than trust
+                # the regex alone — a substring match on an absolute path
+                # outside the repo (e.g. /tmp/anywhere/state/memo-outbox/x.md)
+                # must not be treated as a real outbox draft.
                 if contained_path(Path(resolved), allowed_roots) is None:
                     continue
 

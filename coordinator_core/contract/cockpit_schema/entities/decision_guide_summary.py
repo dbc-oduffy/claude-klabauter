@@ -50,6 +50,7 @@ class DecisionGuideSummary(BaseModel):
     )
     coordinator_root_path: str
     # Relative path within the repo (e.g. "docs/decisions/DECISIONS.md").
+    # Composite key with repo + coordinator_root_path.
     path: str
     title: str
     # ISO calendar date (YYYY-MM-DD) from decision-guide frontmatter.

@@ -38,6 +38,7 @@ from typing import Callable, List, Optional, Sequence
 
 from dataclasses import dataclass, field
 
+from coordinator_core._settings_home import doubled_claude_home_parent
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops import configure_git
 from coordinator_core.install import junction
@@ -1896,14 +1897,11 @@ def uninstall_set_plugin_endstate(
     prior_env = dict(os.environ)
     try:
         os.environ.pop("CLAUDE_HOME", None)
-        # Folded to "/" first: claude_home may arrive backslash-spelled on
-        # native Windows shells (`C:\Users\me\.claude`) — an unfolded
-        # endswith would silently skip the strip and leave HOME pointed at
-        # the .claude dir itself rather than its parent.
-        _folded_claude_home = claude_home.replace("\\", "/")
-        os.environ["HOME"] = (
-            claude_home[: -len("/.claude")] if _folded_claude_home.endswith("/.claude") else claude_home
-        )
+        # claude_home may arrive backslash-spelled on native Windows shells
+        # (`C:\Users\me\.claude`); a literal "/.claude" strip would leave HOME
+        # pointed at the .claude dir itself rather than its parent.
+        _parent = doubled_claude_home_parent(claude_home)
+        os.environ["HOME"] = claude_home if _parent is None else _parent
         localize_rc = platform_localize.main([])
     finally:
         os.environ.clear()

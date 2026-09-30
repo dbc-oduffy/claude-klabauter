@@ -146,8 +146,36 @@ def test_resolve_relative_untranslatable_base_returns_none(_windows_ntpath):
     assert shapes.resolve_relative("/tmp/wherever", "scratch/t.txt") is None
 
 
+# ─── P046-C1 -- mixed-separator write-sink deny: reproduction + diagnosis ───
+#
 # DIAGNOSIS (this row's Exit criterion (a)(ii) branch -- the reproduction
+# below shows the mechanism the Problem section hypothesized is NOT what
+# happens, so no fix lands here; see `_write_bump_sink_shapes.nearest_
+# existing_ancestor`, unedited).
+#
+# `resolve_relative` genuinely CAN construct a mixed-`\`/`/` string: when
+# `target` is a plain relative token (`"scratch/t.txt"`, untouched by
+# `translate_msys_path`'s "Windows, no leading `/`: unchanged" branch) and
+# `base` is already native-backslash form, `_native_path().join` (`ntpath.
+# join` under the `_windows_ntpath` fixture, which drives BOTH `os.path`
+# and `_native_path()` to `ntpath` per F6/AC2) concatenates a backslash
+# separator between them while leaving the target's own forward slashes
+# untouched -- `"C:\\claude-klabauter\\scratch/t.txt"` below.
+#
+# But that mixed string is this guard's OWN write-sink TARGET, and the one
+# and only consumer of a not-yet-existing target is `nearest_existing_
+# ancestor` -- and its FIRST statement is `os.path.normpath(path)`, called
+# ONCE, before the directory-existence walk or any downstream gitdir/
+# common-dir comparison ever sees the string. `ntpath.normpath` folds `/`
+# to `\` (its `altsep` handling) exactly as readily as a pure-backslash
+# input, so the mixed and pure-backslash spellings of the identical target
 # normalize to the IDENTICAL string and walk to the IDENTICAL nearest
+# existing ancestor -- proven directly below, not inferred. On a real
+# Windows host (where `os.path` IS `ntpath`), the mixing this test
+# reproduces is therefore invisible by the time any comparison this guard's
+# own-repo escape depends on ever runs; separator mixing at this join site
+# is not the mechanism behind the write-sink deny the source handoff
+# suspected.
 def test_resolve_relative_can_construct_mixed_separator_target(_windows_ntpath):
     result = shapes.resolve_relative("/x/claude-klabauter", "scratch/t.txt")
     assert result == "C:\\claude-klabauter\\scratch/t.txt"
@@ -180,3 +208,29 @@ def test_nearest_existing_ancestor_normalizes_mixed_separator_target_before_any_
     mixed_ancestor = shapes.nearest_existing_ancestor(mixed)
     pure_ancestor = shapes.nearest_existing_ancestor(pure)
     assert mixed_ancestor == pure_ancestor == "C:\\claude-klabauter"
+
+
+def test_mixed_separator_seams_both_ntpath_and_spellings_compare_equal(
+    _windows_ntpath, monkeypatch
+):
+    """Both seams are on `ntpath` (`_native_path()` via `_host_is_windows`,
+    `os.path` via the fixture), so the mixed spelling is a real Windows-shape
+    input, not a seam-split artifact. A not-yet-existing multi-level target
+    resolves to the same normalized, case-folded string and the same nearest
+    existing ancestor as its all-backslash spelling -- the own-repo
+    comparison downstream never sees the mixing."""
+    assert shapes._native_path() is ntpath and os.path is ntpath
+    existing = {"C:\\claude-klabauter"}
+    monkeypatch.setattr(os.path, "isdir", lambda p: p in existing)
+
+    mixed = shapes.resolve_relative("/x/claude-klabauter", "new/deeper\\t.txt")
+    pure = shapes.resolve_relative("/x/claude-klabauter", "new\\deeper\\t.txt")
+    assert mixed != pure
+    assert ntpath.normcase(ntpath.normpath(mixed)) == ntpath.normcase(
+        ntpath.normpath(pure)
+    )
+    assert (
+        shapes.nearest_existing_ancestor(mixed)
+        == shapes.nearest_existing_ancestor(pure)
+        == "C:\\claude-klabauter"
+    )

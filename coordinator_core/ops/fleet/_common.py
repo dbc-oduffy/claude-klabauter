@@ -1268,6 +1268,84 @@ def _cleanup_created_dirs(created: List[Path]) -> None:
 # existing caller is unchanged — only a test passes a fake.
 
 
+_RESYNC_FAILURE_TITLE_PREFIX = "index-resync-failed: "
+
+
+def _bump_open_resync_failure_row(
+    *,
+    worktree_root: Path,
+    candidate_id: str,
+    reason: str,
+) -> bool:
+    """Increment `occurrences` on an open row for this (candidate_id, reason); True if one existed.
+
+    Bounds the sink by construction: a recurring failure re-reads the row it
+    already filed instead of appending another. The row carries no dedicated
+    key field (`append_queue_entry` drops fields the bug-backlog schema does
+    not declare), so identity is recovered from what it does write — `surface`,
+    a title of `index-resync-failed: <op_label> <candidate_id>`, and
+    `evidence == reason`. The directory is resolved through `_output_path`, the
+    same routing the append uses, so a scope/override redirect cannot split the
+    scan from the write. `occurrences` is a top-level key the schema tolerates
+    as an unknown field; absent means one, and is written on the first repeat.
+    """
+    import os
+    import re
+    import tempfile
+
+    import yaml
+
+    from coordinator_core.ops.queue_append import _output_path
+
+    out_dir = os.path.dirname(_output_path("bug-backlog", "x", worktree_root, None, "x"))
+    if not os.path.isdir(out_dir):
+        return False
+    suffix = f" {candidate_id}"
+    for name in sorted(os.listdir(out_dir)):
+        if not name.endswith(".yaml") or "index-resync-failed" not in name:
+            continue
+        path = os.path.join(out_dir, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            doc = yaml.safe_load(text)
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        title = doc.get("title")
+        if not (
+            doc.get("status") == "open"
+            and doc.get("surface") == "main-index-resync"
+            and isinstance(title, str)
+            and title.startswith(_RESYNC_FAILURE_TITLE_PREFIX)
+            and title.endswith(suffix)
+            and doc.get("evidence") == reason
+        ):
+            continue
+        count = doc.get("occurrences")
+        count = count if isinstance(count, int) and count >= 1 else 1
+        line = f"occurrences: {count + 1}\n"
+        if re.search(r"^occurrences:.*$", text, flags=re.M):
+            text = re.sub(r"^occurrences:.*\n?", line, text, count=1, flags=re.M)
+        else:
+            text = text if text.endswith("\n") else text + "\n"
+            text += line
+        fd, tmp = tempfile.mkstemp(prefix=name + ".", suffix=".tmp", dir=out_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+    return False
+
+
 def _persist_index_resync_failure(
     *,
     worktree_root: Path,
@@ -1341,6 +1419,10 @@ def _persist_index_resync_failure(
     engine-authored bug-backlog record is an already-sanctioned shape, not a
     misuse of a human-curated queue.
 
+    Volume is bounded per (candidate_id, reason): while a matching row is
+    open, a repeat increments its `occurrences` count instead of filing a new
+    file (`_bump_open_resync_failure_row`). Closing the row restarts the series.
+
     Constraint 6 (a sink-write failure must never fail the archival op, which
     already committed and is authoritative): every exception this raises is
     caught here and degraded to a single `_LOG.error` — this function never
@@ -1352,9 +1434,16 @@ def _persist_index_resync_failure(
     try:
         from coordinator_core.ops.queue_append import append_queue_entry
 
+        if _bump_open_resync_failure_row(
+            worktree_root=worktree_root,
+            candidate_id=candidate_id,
+            reason=reason,
+        ):
+            return
+
         append_queue_entry(
             "bug-backlog",
-            title=f"index-resync-failed: {op_label} {candidate_id}",
+            title=f"{_RESYNC_FAILURE_TITLE_PREFIX}{op_label} {candidate_id}",
             body=(
                 f"session.boot_sweep / fleet.* main-index resync exhausted its "
                 f"retry budget for candidate_id={candidate_id!r} during "

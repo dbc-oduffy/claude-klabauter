@@ -67,7 +67,12 @@ def _percentile(sorted_vals: List[float], pct: float) -> Optional[float]:
     return sorted_vals[idx]
 
 
+# Note: `cost_census._percentile` is a verbatim sibling copy of this
+# function, not a call-through — `engine_report.py` imports
 # `MAX_ROWS_SCANNED` from `cost_census`, so `cost_census` delegating back
+# here would create an import cycle. Deliberate duplication; if you change
+# percentile logic in one copy, check the other.
+# (Review: coordinator:code-reviewer 388b423a — deferred, comment only.)
 
 
 def iter_sink_entries(
@@ -102,7 +107,12 @@ def iter_sink_entries(
         sink_paths = sink_generations(repo_root)
 
     rows_read = 0
+    # Hazard: max_rows is a global cap applied while reading OLDEST-first,
+    # so if it is ever hit mid-scan, the newest (live) generation could go
+    # entirely unread — a bounded reader should protect recency, not
     # truncate away from it. Unreachable today at MAX_ROWS_SCANNED =
+    # 2_000_000; revisit this ordering if that constant is ever tightened.
+    # (Review: coordinator:code-reviewer 388b423a — deferred, not re-ordered.)
     for path in reversed(list(sink_paths)):
         if rows_read >= max_rows:
             break

@@ -11,7 +11,7 @@ load time so @register_op("handoff.has_live_children") fires and populates
 _REGISTRY.
 
 Coverage:
-  (a) registry assertion — op name present in _REGISTRY after import
+  (a) registry assertion — op name absent from _REGISTRY after import (killed op)
   (b) traversal-path candidate rejected — exit_code=2 (indeterminate/fail-closed)
   (c) out-of-tree absolute-path candidate rejected — exit_code=2
   (d) in-tree candidate (state/handoffs/) resolves and proceeds past the guard
@@ -39,6 +39,11 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _OP_NAME = "handoff.has_live_children"
 # INVERTED 2026-08-27 (kill ledger K-113). The op was deleted under the 200ms
 # sweep; `_handoff_has_live_children` survives UNDECORATED because
+# handoff_close_origin_stub._try_close resolves it in-process and needs the
+# `children` payload `has_live_children_many` does not return. The tests below
+# exercise that compute and stay valuable — what must no longer be true is the
+# registration. Asserting the negative keeps this file a guard against the
+# decorator being restored rather than a stale import check.
 assert _OP_NAME not in _REGISTRY, (
     f"{_OP_NAME!r} is in _REGISTRY — it was killed under the 200ms bar and must "
     "not re-register. Restoring @register_op on handoff_children puts a deleted "
@@ -77,9 +82,10 @@ def _seed_handoff(repo: Path, subdir: str, name: str) -> Path:
     return path
 
 
-def test_op_registered():
-    """handoff.has_live_children must appear in _REGISTRY (import guard validates)."""
-    assert _OP_NAME in _REGISTRY
+def test_op_not_registered():
+    """The killed op stays out of _REGISTRY; the undecorated function remains callable."""
+    assert _OP_NAME not in _REGISTRY
+    assert callable(_handoff_has_live_children)
 
 
 def test_candidate_traversal_rejected(tmp_path):

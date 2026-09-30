@@ -90,6 +90,7 @@ def test_load_setup_template_manifest_missing_attr_raises(tmp_path):
     )
     claude_klabauter_root = _write_manifest(tmp_path, body=body)
     files, exec_files, hook_files = _load_setup_template_manifest(claude_klabauter_root)
+    # Missing attribute degrades to an empty list, not a crash — only
     # SETUP_TEMPLATE_FILES is a hard precondition (see docstring).
     assert files == ["publish.sh"]
     assert hook_files == []

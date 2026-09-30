@@ -85,6 +85,10 @@ _PROG = "gen-claude-author-shim.sh"
 SENTINEL_BEGIN = "# --- coordinator claude-author shim [generated] ---"
 SENTINEL_END = "# --- end coordinator claude-author shim ---"
 LEGACY_MARKER = "# --- coordinator maximalist launch ---"
+# The invariant lead-in shared by every observed hand-written variant of the
+# marker line above -- real-world instances append a trailing comment/padding
+# suffix (e.g. "... (DoE-resident plugin source) ----------------") after
+# "launch", so detection matches this as a line PREFIX (after strip), never
 # the full LEGACY_MARKER string as a whole-line equality check.
 LEGACY_MARKER_PREFIX = "# --- coordinator maximalist launch"
 
@@ -94,6 +98,9 @@ EXPECTED_SOURCE_LINE = (
 )
 
 # PowerShell counterpart of EXPECTED_SOURCE_LINE, selected by --shell powershell.
+# Multi-line is fine: _extract_sentinel_body/_nonblank_join both operate over the
+# whole sentinel body, not a single line. Mirrors the bash guard's semantics (only
+# dot-source when the shim file exists, so a missing file never errors the
 # profile) using $env:CLAUDE_HOME, falling back to $HOME exactly like the bash
 # oracle's ${CLAUDE_HOME:-$HOME}.
 EXPECTED_SOURCE_LINE_POWERSHELL = (
@@ -105,6 +112,9 @@ EXPECTED_SOURCE_LINE_POWERSHELL = (
 SHELL_FAMILIES = ("bash", "powershell")
 
 # Generator-provenance: writes the rendered shim under <CLAUDE_HOME|HOME>/
+# .claude/shell/claude-author-shim.sh and wires a sentinel block into the
+# operator's interactive rc (~/.bashrc or ~/.zshrc) -- entirely outside
+# claude-klabauter's own tracked tree.
 GENERATES = []
 
 
@@ -431,6 +441,7 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
 
+    # ---- resolve target rc, first hit wins: the --rc flag, then the
     # COORDINATOR_SHIM_RC env var, then SHELL-based detection ----
     if rc_override:
         target_rc = rc_override
@@ -514,6 +525,10 @@ def main(argv: List[str]) -> int:
                 disabled = _commented_out_source_lines(rc_text, expected_source_line)
                 if disabled:
                     # A DISABLED block is a live misconfiguration, not a
+                    # pending install: this box is running every session
+                    # without coordinator right now. check-only exists to
+                    # report exactly that, so it fails rather than reporting
+                    # the same "would add source block" as a clean machine.
                     for line in _disabled_block_report(target_rc, disabled):
                         print(f"[check-only] {line}", file=sys.stderr)
                     print("claude_shim: check failed: shim block is disabled (see stderr)")

@@ -16,7 +16,7 @@ recorded prose/tables, not recomputed from a live tree walk — `last_mapped`
 freezes the reference point a consumer compares against
 (coordinator_core.cartography.churn.compare_against_recorded_atlas).
 
-Rules 2, 3, 4-9, 11, 12 are hardcoded here from the recorded table's literal
+Rules 2, 3, 4-9, 11, 12, 13 are hardcoded here from the recorded table's literal
 text (docs/architecture/file-index.md:23-37) — they do not vary run to run
 without a doc edit, and parsing free-form English glob prose out of a
 markdown table cell for those rows would add fragility with no benefit. Only
@@ -85,7 +85,19 @@ _EXCLUDED_BASENAME_PATTERNS = (
 )
 
 #: Path-prefix directories the recorded input filter excludes outright.
-_EXCLUDED_DIR_PREFIXES = ("archive/", "tasks/", "dist/", "pip/", "docs/research/")
+#: `docs/plans/` and `docs/problems/` hold session-authored falsifiers, repros
+#: and one-shot migration scripts (same class as `docs/research/`); `setup/dist/`
+#: is the OSS publish payload (same class as `dist/`, `pip/`).
+_EXCLUDED_DIR_PREFIXES = (
+    "archive/",
+    "tasks/",
+    "dist/",
+    "pip/",
+    "docs/research/",
+    "docs/plans/",
+    "docs/problems/",
+    "setup/dist/",
+)
 
 #: Rules 2-9, 11, 12 — literal, hardcoded from file-index.md:26-36. Rule 1
 #: (state/**, not a system) and rule 10 (<pkg> table) are handled specially
@@ -99,6 +111,12 @@ _HARDCODED_RULE_SPECS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("coordinator_core/ops/session/",), "session-ops"),
     (("coordinator_core/ops/docgen/",), "docgen"),
     (("coordinator_core/ops/",), "ops-flat"),
+)
+
+#: Rule 13 — CI glue that gates the cockpit-contract release tag; appended
+#: after rule 12 so it never shadows a lower-ordinal rule.
+_TRAILING_RULE_SPECS: tuple[tuple[tuple[str, ...], str], ...] = (
+    ((".github/scripts/",), "contract-schemas"),
 )
 
 _ASSEMBLER_SUFFIXES = ("_assemble", "_complete")
@@ -248,6 +266,10 @@ def _build_rules(package_systems: dict[str, str]) -> tuple[MappingRule, ...]:
     ordinal += 1
     # Rule 12 — flat top-level *.py.
     rules.append(MappingRule(ordinal=ordinal, patterns=("coordinator_core/*.py",), system="engine-runtime"))
+    ordinal += 1
+    for patterns, system in _TRAILING_RULE_SPECS:
+        rules.append(MappingRule(ordinal=ordinal, patterns=patterns, system=system))
+        ordinal += 1
     return tuple(rules)
 
 
@@ -311,7 +333,8 @@ def is_source_candidate(relpath: str) -> bool:
     """The recorded input filter (file-index.md:19-21), applied to one path.
 
     `.py`/`.js` only, excluding ``archive/``, ``tasks/``, ``dist/``,
-    ``pip/``, and excluding any file whose basename is ``test_*``,
+    ``pip/``, ``docs/research/``, ``docs/plans/``, ``docs/problems/``,
+    ``setup/dist/``, and excluding any file whose basename is ``test_*``,
     ``*_test.py``, ``conftest.py``, ``*.test.js``, or whose path contains
     ``/tests/``.
     """

@@ -238,7 +238,16 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
         return 0
 
     # CATASTROPHE GUARD (defence-in-depth, mirrors the oracle's own re-check comment):
+    # `m = len(safe)` makes `m == 0` and `not safe` the same condition on the same
+    # unmutated list today, so this re-check is unreachable by construction as written.
+    # It is kept anyway as a second guard immediately adjacent to the `git add` call --
+    # an empty pathspec to `git add --pathspec-from-file=-` means "add everything" (≈
+    # `git add .`), absorbing the entire concurrent tree, so this guards against a
+    # *future* edit inserting code between the `m == 0` check above and the pipe below
+    # that could repopulate/mutate `safe`.
+    # Flagged as dead code; annotated with the
     # defense-in-depth rationale rather than dropped, per the oracle's own CATASTROPHE
+    # GUARD comment at coordinator-renormalize-index:175-179.
     if not safe:
         print(
             "coordinator-renormalize-index: internal — SAFE empty at staging step "

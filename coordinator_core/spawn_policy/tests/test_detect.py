@@ -119,7 +119,10 @@ def test_shell_true_via_variable():
 
 
 def test_shell_true_via_kwargs_spread():
+    # Defect 2: opaque **kwargs forwarding with no explicit `shell=` at the
     # call site is SHELL_UNKNOWN, not SHELL_TRUE — a `shell=` value could be
+    # present but is not statically visible. See test_kwargs_forwarding_*
+    # below for the full fixture set this EM ruling covers.
     sites = sites_in_source(
         _src(
             """
@@ -1035,7 +1038,11 @@ def test_function_parameter_argv0_stays_dynamic():
     assert sites[0].kind == SpawnKind.PLAIN_SPAWN
 
 
+# --- Documented gaps: _resolve_argv0 has no case for these node shapes.
 # Safe-direction (falls to <dynamic> -> never misclassified as PLAIN_SPAWN's
+# opposite), but a class-attribute-held shell binary, subscript lookup, or
+# ternary is currently invisible under-detection. Fixtures pin the CURRENT
+# (accepted-gap) behavior so a future change is a deliberate, visible diff.
 
 
 def test_attribute_argv0_falls_to_dynamic():
@@ -1089,7 +1096,12 @@ def test_ternary_argv0_falls_to_dynamic():
     assert sites[0].kind == SpawnKind.PLAIN_SPAWN
 
 
+# --- Documented over-detection: a helper's own `shell=` param echoing its
+# default (`def _run(a, shell=False): subprocess.run(a, shell=shell)`) is a
+# Name, not a Constant, so _shell_signal_from_call returns "true"
 # unconditionally — every caller through the helper is marked SHELL_TRUE
+# even when no caller overrides the default. Over-detection, safe direction;
+# fixture confirms the false-positive stays bounded to one hop.
 
 
 def test_helper_shell_kwarg_echoing_own_default_is_over_detected_as_shell_true():
@@ -1244,6 +1256,7 @@ def test_os_execlp_and_execvpe_are_detected():
 
 
 def test_binop_string_concat_argv0_resolves_correctly():
+    # Prior bug: "ba" + "sh" resolved argv0 to "ba" (a confidently WRONG
     # concrete value), misclassifying a real shell binary as PLAIN_SPAWN.
     sites = sites_in_source(
         _src(
@@ -1317,6 +1330,8 @@ def test_dist_no_longer_in_default_exclude():
 
 def test_walk_repo_no_longer_excludes_dist_directory(tmp_path: pathlib.Path):
     # 84cec279 finding: `dist` in DEFAULT_EXCLUDE hid this repo's own
+    # git-tracked percolate publish-mirror source. `dist` must be walked
+    # like any other production directory now.
     dist_dir = tmp_path / "dist" / "mirror-native"
     dist_dir.mkdir(parents=True)
     (dist_dir / "real.py").write_text(

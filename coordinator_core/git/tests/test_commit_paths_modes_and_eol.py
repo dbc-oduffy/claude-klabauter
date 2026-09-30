@@ -118,7 +118,9 @@ def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path):
     assert _ls_files_mode(repo, "run.cmd") == "100755"
 
 
+# ---------------------------------------------------------------------------
 # EOL FALLBACK -- only CR bytes under a text/eol attribute pin reach the
+# fallback; `-text` and CR-free text/eol content cost zero.
 
 
 def _attrs_repo(tmp_path):
@@ -197,8 +199,27 @@ def test_binary_pin_never_calls_fallback_even_with_cr_bytes(tmp_path):
     assert committed == expected
 
 
+# ---------------------------------------------------------------------------
 # UNSET-ATTRIBUTE `core.autocrlf` SURFACE -- `767079e6e` deleted ~10 lines of
+# code that had been unconditionally shadowed by an earlier, unconditional
+# `return write_object(...)` in `_worktree_blob`'s pre-image. Both call sites
+# of `_autocrlf_checkin_normalize` sat beneath that dead return, so neither
+# had ever executed in production: every CR-bearing, unattributed path was
+# refused to the spawning fallback regardless of `core.autocrlf`. Removing
+# the shadow made the `_repo_autocrlf_true` branch live, and
+# `core.autocrlf=true` -- the majority Windows shape on this box -- is
+# exactly the path whose behaviour flipped from REFUSE to
 # NORMALIZE-IN-PROCESS. Nothing before this group asserted that flip, or
+# proved the normalizer's output against real git for the shapes most likely
+# to defeat a hand-rolled CRLF->LF pass: a lone CR that is not part of a line
+# ending, a CR sitting at EOF with nothing after it, and a CRLF pair living
+# inside otherwise-binary (NUL-bearing) content.
+#
+# The oracle is `git hash-object -w --path <p> -- <p>` itself -- the exact
+# invocation `git add` uses to decide a blob's checkin-converted sha. An
+# expected-sha constant would only re-encode this module's own assumption
+# about what git does; asking real git is the only differential check that
+# can catch this module disagreeing with it.
 
 
 def _autocrlf_repo(tmp_path, value):
@@ -272,11 +293,38 @@ def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_pat
         gcommit.commit_paths(repo, [rel], "no fallback")
 
 
+# TODO (do not implement here): `core.autocrlf=input`'s CHECKIN conversion
+# is byte-identical to `true`'s -- the peer's corpus measured both producing
+# the same blob sha (`814f4a422927...`) over the same content set. The two
 # settings differ only on CHECKOUT (whether the working tree gets CRLF back),
+# which `_worktree_blob` never performs. That means the `input` refusal above
+# pays a `blob_fallback` spawn for a conversion this module could already
+# compute for free by routing `input` through the same
+# `_autocrlf_checkin_normalize` branch as `true`. Left unimplemented here:
+# this dispatch is scoped to test coverage only, and `commit.py` is
+# explicitly out of scope for this change.
 
 
+# ---------------------------------------------------------------------------
 # POST-REF SPLICE FAILURE -- the commit LANDED and must not be retried.
+#
+# `commit_paths` splices the index AFTER the ref swap by design (invariant 3:
+# "an index that matches a commit which never landed is the same lie in the
+# other direction"). A peer holding `.git/index.lock` for the width of that
+# splice therefore lands with real work in history -- routine at the
+# ~50-session load norm, not exotic.
+#
+# It escaped as a bare `IndexWriteLockBusy`, whose own docstring promises the
 # OPPOSITE of what is true at that line: "raised BEFORE any bytes reach
+# `.git/index` and before the ref moves, so retrying is correct there". Every
+# `commit_paths` caller in the tree catches `(CommitRefused, FilterUnsupported)`
+# and nothing else, so it surfaced as an internal error for a landed commit --
+# and the honest response to an internal error is a retry, which commits the
+# same work twice.
+#
+# `IndexStaleAfterCommit` was written for this outcome and had no raise site.
+# Source: cross-repo/inbox/2026-09-01-example-retrieval-repo-em-ceremony-engine-defects-
+# second-repo-confirmation.md (the memo.send face of it).
 
 
 def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):

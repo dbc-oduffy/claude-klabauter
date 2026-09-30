@@ -268,8 +268,15 @@ class TestDenyReasonRoutes:
         assert "_successor-of-" not in reason
 
 
+# ---------------------------------------------------------------------------
+# 2b. Session-identity resolution (AC7, chain-review slice D F1/F2/F3/F4).
+#
+# `is_holder` must resolve the calling session's id through the SAME
+# three-variable precedence `handoff_correct_body` walks
 # (`COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID` > `CLAUDE_CODE_SESSION_ID`)
 # -- not `COORDINATOR_SESSION_ID` alone, which is documented as the
+# "explicit test override" tier and is unset in every real session.
+# ---------------------------------------------------------------------------
 
 
 class TestSessionIdentityResolution:
@@ -280,7 +287,10 @@ class TestSessionIdentityResolution:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
     def test_holder_via_claude_code_session_id(self, tmp_path, monkeypatch):
+        # The load-bearing case: a real session carries ONLY
         # CLAUDE_CODE_SESSION_ID (tier 3). Before the C18a reshape this was
+        # classified a non-holder unconditionally (and, before that fix,
+        # denied even when correctly classified a holder).
         repo_root, handoff_path = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "some-prior-session")
@@ -563,7 +573,16 @@ def test_terminal_states_are_the_ssot_enum():
     assert guard._TERMINAL_DEPLOYMENT_STATES is HANDOFF_TERMINAL_DEPLOYMENT
 
 
+# ---------------------------------------------------------------------------
+# 6. AC8 citation-liveness pin, scoped to this repo's docs/wiki/ only.
+#
+# The deny text also cites `skills/pickup/SKILL.md` -- that lives in the
+# coordinator-claude plane (this repo has no `skills/` tree) and is
 # deliberately EXCLUDED from this assertion; it is not owned by this repo
+# and this test must not be widened to cover it (per the plan's C5 body and
+# C4's chunk report, which verifies that citation by hand against the
+# coordinator-claude tree instead).
+# ---------------------------------------------------------------------------
 
 _DOCS_WIKI_CITATION_RE = re.compile(r"docs/wiki/[A-Za-z0-9_\-./]+\.md")
 

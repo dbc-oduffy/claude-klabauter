@@ -1987,9 +1987,7 @@ def _stamp_plan_owner_back_edge(repo_root: Path) -> None:
     """R5 reverse edge (2026-08-21, rebuild-the-three-ceremony-assemblers plan
     C6): the PLAN records which baton currently owns it, stamped at the
     baton-claims-plan moment -- this module's own `session_claims.claim_plan`
-    call site (the only place `apply.py` itself claims a plan; the initial
-    mint-time claim lives in `coordinator-doc-new.py`, out of this chunk's
-    `writes:` scope).
+    call site (the only place `apply.py` itself claims a plan).
 
     Reuses `_resolve_held_handoff_for_session` (the SAME resolver
     `commit_ledger/resolve_owner.py` reuses for exactly this "which baton

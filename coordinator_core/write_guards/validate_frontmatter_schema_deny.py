@@ -1664,6 +1664,25 @@ def _evaluate_plan_status_enum(
     return _plan_status_off_enum_message(status, enum_values)
 
 
+_FIXTURE_HANDOFF_ROOT_RE = re.compile(
+    r"^(?P<root>(?:.*/)?tests/fixtures/.*?)/(?:state|archive)/handoffs/"
+)
+
+
+def _lineage_root_for(repo_rel: str, repo_root: str) -> str:
+    """Root that a handoff's predecessor-style fields resolve against.
+
+    A handoff nested under ``tests/fixtures/<...>/{state,archive}/handoffs/``
+    is a self-contained fixture tree whose lineage lives inside that tree, so
+    it resolves against the fixture root; every other path resolves against
+    the repo root.
+    """
+    match = _FIXTURE_HANDOFF_ROOT_RE.match(repo_rel.replace("\\", "/"))
+    if match is None:
+        return repo_root
+    return os.path.join(repo_root, *match.group("root").split("/"))
+
+
 def _reachability_and_schema_step(
     schema_name: str,
     schema: dict,
@@ -1683,13 +1702,14 @@ def _reachability_and_schema_step(
     )
 
     if schema_name in ("handoff", "handoff-archived") and frontmatter:
+        lineage_root = _lineage_root_for(repo_rel, repo_root)
         handoff_dir = (
             os.path.dirname(abs_file_path)
             if schema_name == "handoff-archived"
-            else os.path.join(repo_root, "state", "handoffs")
+            else os.path.join(lineage_root, "state", "handoffs")
         )
         try:
-            violations = _check_lineage_reachability(frontmatter, repo_root, handoff_dir)
+            violations = _check_lineage_reachability(frontmatter, lineage_root, handoff_dir)
         except Exception:  # noqa: BLE001 — fail-open, never block on infra
             violations = []
         if violations:

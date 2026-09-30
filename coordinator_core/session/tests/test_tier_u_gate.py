@@ -26,7 +26,15 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core, grant, tier_u_gate
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# real git (init/config/add/commit) because the production code under test --
+# `core.git_root()`, consulted by the gate's own repo-root resolution --
+# reads real git state that no mock stands in for. `tmp_path` is
+# function-scoped and tests write grant/session state under reused session
+# ids, so the repo fixture stays per-test rather than hoisted to module
 # scope. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -552,13 +560,8 @@ class TestGateCallSitesPinned:
 
     @staticmethod
     def _load_module(name, path):
-        """Load a `coordinator/bin` CLI by file path, binding its bare
-        `import lib` to this checkout's `coordinator/bin/lib` first (the
-        repo-root `conftest.py` does not load when `coordinator_core/`
-        resolves as rootdir)."""
-        from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
-
-        ensure_bin_lib_bound(str(Path(TestGateCallSitesPinned._REPO_ROOT) / "coordinator" / "bin"))
+        """Load a `coordinator/bin` CLI by file path; the root `conftest.py`
+        has already bound its bare `import lib`."""
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(name, path)

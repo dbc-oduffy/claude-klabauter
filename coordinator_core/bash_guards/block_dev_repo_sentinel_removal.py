@@ -92,10 +92,19 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # `_evaluate()` never returns VERDICT_ALLOW alongside content, so anything
 # other than VERDICT_ALLOW is advisory-worthy on the now-single (advisory)
+# leg -- see this module's own updated "TWO-LEG SPLIT" docstring section.
 _ADVISORY_VERDICTS = (VERDICT_ADVISORY, VERDICT_DENY)
 
 CLASS = "advisory"
+#: Widened 2026-08-07 (C4f, `docs/plans/2026-08-07-guards-reach-a-verdict-
+#: on-powershell-or-stay-silent.md`) -- this guard's own dialect-carry
+#: (`dialect_from_tool_name(payload["tool_name"])` in `check`/
+#: `check_advisory` below) now handles a PowerShell command correctly for
+#: its converted legs and declines to rule (records SILENT) rather than
+#: guessing where it cannot -- see `_sentinel_removal_guard.evaluate`'s own
+#: docstring. Same precedent as `block_reviewer_bash_outside_allowlist.py`'s
 #: own MATCHERS widening (C6). A direct reference to the shared universe
+#: (C2 declaration-form conversion) -- never a copy or re-wrap.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
@@ -105,7 +114,12 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 
 _detector = SentinelRemovalDetector(_TARGET_BASENAME)
 
+#: Guard identity threaded into `_verdict.record_silent` for the
+#: absent/unrecognized-dialect leg below -- matches this guard's own
+#: registered name (`check_advisory`'s dispatch entry) and
 #: `_sentinel_removal_guard._GUARD_NAME`, so a SILENT declaration recorded
+#: from either this module or the shared engine reads as the same guard to
+#: a caller collecting declarations (`_verdict.collecting`).
 _GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
 

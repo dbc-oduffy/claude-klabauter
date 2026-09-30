@@ -617,11 +617,12 @@ def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
 # (2026-08-29-a-zero-is-under-one-tick-not-unmeasured)
 
 
-def test_process_time_row_carries_a_discovered_clock_resolution(tmp_path, monkeypatch):
-    """`clock_resolution_ms` is a real discovered figure, never absent and
-    never a hard-coded platform constant -- see
-    `op_latency.process_clock_resolution_ms`'s own docstring for why the
-    reported `time.get_clock_info` value cannot be trusted on Windows."""
+def test_process_time_row_carries_no_per_row_clock_resolution_but_feeds_the_process_tick(
+    tmp_path, monkeypatch
+):
+    """Nothing reads a per-row `clock_resolution_ms`, so none is written; the
+    row's `process_ms` still feeds the process-wide observed tick that
+    `op_budget_breaches` reports (see `process_clock_resolution_ms`)."""
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     from coordinator_core.telemetry import op_latency
@@ -638,13 +639,10 @@ def test_process_time_row_carries_a_discovered_clock_resolution(tmp_path, monkey
     )
 
     entries = _read_entries(_sink(common_dir))
-    resolution = entries[0]["clock_resolution_ms"]
-    # Pinned exactly, not `is None or > 0`: that weaker form passes identically
-    # against a permanently-None stub, so it could not tell a working observer
-    # from a broken one -- which is the only thing this test exists to check.
-    # 1.0 is this row's own process_ms and the first non-zero this process has
-    # seen, so it IS the observed tick; the row labels itself.
-    assert resolution == 1.0
+    assert "clock_resolution_ms" not in entries[0]
+    # Pinned exactly: 1.0 is the first non-zero this process has seen, so it IS
+    # the observed tick. `is None or > 0` would pass against a dead feed.
+    assert op_latency.process_clock_resolution_ms() == 1.0
 
 
 def test_spawns_key_present_when_spawns_passed(tmp_path, monkeypatch):
@@ -729,18 +727,6 @@ def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch)
 
     monkeypatch.setattr(op_latency.time, "process_time", _boom)
     assert op_latency.process_clock_resolution_ms() is None
-
-
-def test_clock_resolution_ms_or_none_never_raises(monkeypatch):
-    """`ipc._clock_resolution_ms_or_none` degrades to None on any failure --
-    same fail-open discipline as `_spawn_count_or_none`/`_telemetry_sid`."""
-    import coordinator_core.telemetry.op_latency as op_latency
-
-    def _boom():
-        raise RuntimeError("discovery exploded")
-
-    monkeypatch.setattr(op_latency, "process_clock_resolution_ms", _boom)
-    assert ipc._clock_resolution_ms_or_none() is None
 
 
 def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():

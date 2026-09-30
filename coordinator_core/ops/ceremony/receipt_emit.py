@@ -71,6 +71,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+# Generator-provenance declaration: emit_receipt() creates a NEW tracked
+# JSON shard per (ceremony, sid, emitted_at) under
+# state/ceremony/<ceremony>/<sid-short>-<emitted_at>.json -- an unbounded,
+# session-keyed, data-dependent output set with no fixed artifact path (see
+# default_receipt_path/resolve_latest_receipt_path above), the case
 # generator_provenance.py reserves for MUTATES rather than GENERATES.
 MUTATES = ["state/ceremony/**/*.json"]
 

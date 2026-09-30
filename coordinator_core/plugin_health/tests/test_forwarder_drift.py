@@ -40,6 +40,8 @@ def test_resolve_compat_bin_uses_userprofile_when_home_absent(tmp_path: Path, mo
     userprofile_home = tmp_path / "winhome"
     monkeypatch.setenv("USERPROFILE", str(userprofile_home))
     # Path.home() only consults USERPROFILE on a real Windows interpreter;
+    # simulate that resolution here so the test proves the delegation shape
+    # (not stdlib platform behavior this test host can't exercise directly).
     monkeypatch.setattr(_Path, "home", lambda: userprofile_home)
 
     assert fd._resolve_compat_bin() == userprofile_home / ".claude" / "bin"
@@ -181,6 +183,7 @@ def test_missing_and_uncited_stays_the_plain_arm(tmp_path: Path, two_bin_dirs):
     for b in (settings_bin, compat_bin):
         _write_forwarder(b, "foo")
     # A citation for a DIFFERENT name only — proves the split discriminates
+    # by name, not by "any citation exists on this machine".
     _write_doe_citation(
         content_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
     )

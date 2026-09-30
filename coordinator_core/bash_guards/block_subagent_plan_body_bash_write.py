@@ -102,6 +102,17 @@ from coordinator_core.bash_guards._override_log_path import (
 )
 
 # DEFERRED, NOT a module-level import (2026-08-13 hot-path import-budget fix,
+# latent-infra-blocker sibling of coordinator_core/bash_guards/_helpers.py's
+# `_resolve_roster_accessor`): a module-level `from coordinator_core.hooks.
+# block_unenumerated_agent_type import resolve_roster` drags in the
+# `coordinator_core.hooks` package `__init__`'s full eager registration into
+# every `coordinator_core.bash_guards.dispatch` import, against
+# `coordinator_core/benchmarks/import-budget-manifest.json`'s hot-path budget.
+# Cached on this module's OWN attribute (mirrors `_helpers._resolve_roster_
+# accessor` and `coordinator_core.session.core._psutil()`) so the existing
+# `monkeypatch.setattr(guard, "resolve_roster", ...)` surface (see this
+# package's `tests/test_block_subagent_plan_body_bash_write.py`) keeps
+# working unmodified. DO NOT re-flatten to a module-level import.
 _UNRESOLVED = object()
 resolve_roster = _UNRESOLVED  # type: ignore[assignment]
 
@@ -119,12 +130,16 @@ def _resolve_roster_accessor():
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): `check()` already branches
 # on `Dialect.POWERSHELL` internally (`dialect_from_tool_name`) -- this
+# guard was pre-built dialect-aware, just never reachable under the
+# PowerShell tool until now.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
 GENERATES = []
 
+#: Escape-hatch env var -- checked BEFORE identity resolution (reference hook
 #: line 65), so it also bypasses the AMBIGUOUS unconditional-deny branch.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY"
 
@@ -253,17 +268,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     contract for the target-detection axis, and the identity axis's own
     fail-CLOSED-on-AMBIGUOUS/coordinator:executor-only semantics.
     """
+    # Honor escape hatch first (reference hook 64-67) -- bypasses everything
     # below, including the AMBIGUOUS unconditional-deny branch.
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
+    # Tool-name guard -- this hook fires on Bash (reference hook 85-94) and,
+    # per C5's PowerShell conversion, on the dialect-neutral residue reached
     # via PowerShell -- see the TARGET-DETECTION axis below for what that
+    # residue is and where it records SILENT instead of a guess. Any other
+    # tool_name (including unrecognised) is out of this guard's remit
+    # entirely, same as before this conversion.
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect not in (Dialect.BASH, Dialect.POWERSHELL):
         return None
 
+    # ------------------------------------------------------------------
     # IDENTITY AXIS -- verbatim mirror of block-subagent-plan-body-write.sh
+    # (reference hook 96-167).
+    # ------------------------------------------------------------------
     cwd = payload.get("cwd")
 
     raw_agent_id = payload.get("agent_id") or ""
@@ -291,6 +315,21 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     kind_unresolved = not is_ambiguous and not subagent_type
 
     # Block when SUBAGENT_TYPE is coordinator:executor OR AMBIGUOUS
+    # (fail-closed, no carve-out -- reference hook 160-167). All other
+    # types -- including empty/lookup-failure -- allow. AC6/C3 (mirrors the
+    # write-guard sibling above, deliberate twins): "all other types" is
+    # narrowed to enumerated-roster types only -- a lookup FAILURE
+    # (kind_unresolved) still allows through this same exit, unchanged from
+    # the 2026-06-09/2026-07-30 ruling above, but a type that resolves
+    # CLEANLY to something absent from the roster (C1's own union-of-three
+    # roster, coordinator_core.hooks.block_unenumerated_agent_type.
+    # resolve_roster) falls through to the SAME target-detection axis below
+    # rather than exiting here -- an invented type gets no more trust than
+    # coordinator:executor for this guard's purposes. A roster-load error is
+    # a peer-repo hiccup, not this guard's problem to newly deny on: C1's
+    # PreToolUse(Agent) deny is the primary fix, so this stays defence in
+    # depth and falls back to today's allow rather than denying on an
+    # unresolvable roster.
     if not is_ambiguous and subagent_type != _EXECUTOR_TYPE:
         if kind_unresolved:
             emit_kind_resolution_failure_signal(
@@ -301,13 +340,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if roster is None or subagent_type in roster:
             return None
 
+    # ------------------------------------------------------------------
     # TARGET-DETECTION AXIS -- independent of identity. AMBIGUOUS denies
+    # unconditionally regardless of target (reference hook 169-247).
+    # ------------------------------------------------------------------
     if is_ambiguous:
         unambiguous_write = True
     else:
         cmd_norm = cmd.replace("\r", "")
         if dialect is Dialect.POWERSHELL:
+            # Only idiom (1) is dialect-neutral: `>`/`>>` are the SAME
+            # operator characters in PowerShell as in POSIX, so
             # `_REDIRECT_RE` needs no PowerShell-specific edit and keeps
+            # ruling correctly. Idioms (2)-(4) (`sed -i`, `tee`, `cp`/`mv`/
+            # `dd`) are POSIX verbs with no recognized PowerShell cmdlet
+            # equivalent here (`New-Item`, `Set-Content`, `Add-Content`,
+            # `Copy-Item`, `Move-Item`) -- a PowerShell command that misses
+            # idiom (1) is NOT a confirmed clean verdict, it is unparsed
+            # residue, so it is recorded SILENT (per AC1/AC3) rather than
+            # silently returned as a clean "no write detected" the way the
+            # bash leg's own doubt->allow default would otherwise read.
             unambiguous_write = bool(_REDIRECT_RE.search(cmd_norm))
             if not unambiguous_write:
                 record_silent(
@@ -323,7 +375,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not unambiguous_write:
         return None
 
+    # Match confirmed. Per-session log (best-effort) (reference hook 252-262).
+    # Retained under its historical name -- this is now an advisory-fire log,
     # not a deny log (ADVISORY_REWRITE band, C13 registration); the on-disk
+    # audit trail semantics (best-effort, never flips the verdict) are
+    # unchanged.
     _write_block_log(git_root, session_id, agent_id or raw_agent_id)
 
     cmd_safe = _sanitize_cmd_for_reason(cmd)
@@ -336,7 +392,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
 
     # ADVISORY_REWRITE (C14c) -- allow the command through and surface the
+    # advisory in `additionalContext` rather than denying via
+    # `permissionDecisionReason`. The message text itself is unchanged: it
+    # already names a concrete, applicable alternative (the
+    # `state/subagent-share/<path>.md` sidecar surface) or, for the
     # AMBIGUOUS branch, reports collision state the agent could not already
+    # know -- both satisfy the Axis-A firing-shape gate as advisory prose,
+    # not just as a deny reason.
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

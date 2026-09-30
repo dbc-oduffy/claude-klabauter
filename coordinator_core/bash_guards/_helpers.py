@@ -131,7 +131,32 @@ from coordinator_core.subagent_sandbox.engine import (  # noqa: F401
 )
 from coordinator_core.session.identity import resolves_em_audience
 
+# AC5 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md, C2):
+# a plain re-use of C1's dispatch-seam roster resolver, NOT a second roster
+# implementation. `resolve_roster()` is the one function that already unions
+# the three legitimate-dispatch sources (DoE policy map keys, coordinator
+# agents, harness built-ins + plugin agents) and fails CLOSED on an
+# unreadable roster -- see that module's own docstring. This bash-guard
+# package borrows it for the SAME reason it borrows `resolve_effective_types`
+# above: one resolver, not a parallel one.
+#
 # DEFERRED, NOT re-exported at module level (2026-08-13 hot-path import-budget
+# fix): a module-level `from coordinator_core.hooks.block_unenumerated_agent_type
+# import resolve_roster` drags in `coordinator_core.hooks`'s package `__init__`
+# and its full eager registration (18 submodules) on EVERY `write_guards.engine`
+# / `bash_guards.dispatch` import -- the exact regression commit `670cf7878`
+# (2026-08-10) introduced, doubling `write_guards.engine`'s import cost against
+# `coordinator_core/benchmarks/import-budget-manifest.json`'s hot-path budget.
+# `_resolve_roster()` below imports lazily, ONLY when
+# `is_confined_by_roster_absence` actually needs the roster (the same
+# already-documented "walks real disk I/O" fallback path). Mirrors
+# `coordinator_core.session.core._psutil()`'s cache-on-the-module-attribute-
+# itself shape byte-for-byte, for the SAME reason: it is what keeps
+# `monkeypatch.setattr(_helpers, "resolve_roster", ...)` working unmodified
+# (see this package's `tests/test_block_reviewer_bash_outside_allowlist_
+# roster_absence.py`) -- a private `_resolve_roster_mod` cache would silently
+# break that patch point. DO NOT re-flatten this back to a module-level
+# import; it will re-open the exact regression this fix closes.
 _UNRESOLVED = object()
 resolve_roster = _UNRESOLVED  # type: ignore[assignment]
 
@@ -165,8 +190,42 @@ __all__ = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# (0) Kind-resolution-failure instrumentation -- measurement only, and the
+#     TEXT must report what the CALLING GUARD actually did, never assert a
+#     package-wide default OR a hand-passed claim about the outcome. The
+#     hard-deny identity family (block_subagent_commit,
+#     block_subagent_destructive_action) confine an unresolvable-kind
+#     subagent (fail-closed default, 2026-07-30 fix for a fail-open bypass
+#     where an unreadable backpointer chain collapsed to "no identity" and
+#     was silently allowed through a CLASS = "hard-deny" guard). The two
+#     plan-body guards (block_subagent_plan_body_bash_write,
+#     write_guards.block_subagent_plan_body_write) do NOT confine on this
+#     path -- they are per-kind policy (enricher/review-integrator are
+#     legitimate plan-body editors), and their shared 2026-06-09 PM ruling
+#     keeps lookup-fail-is-allow deliberately.
+#
+#     THIS WAS FIRST BUILT with a hand-passed ``disposition`` string
+#     argument (2026-07-30, same day) -- and it drifted from the actual
 #     verdict on the very next revert (a call site kept asserting CONFINED
+#     after its own guard was reverted to allow). A disposition stated IN
 #     PARALLEL with the verdict, instead of DERIVED from it, is two sources
+#     of truth that can silently disagree -- exactly the guard-message-
+#     asserts-an-untrue-thing defect class this whole workstream exists to
+#     close, reproduced a third time inside this instrumentation itself.
+#     Fixed by removing the parallel channel: the caller passes the ACTUAL
+#     return value it is about to emit (the verdict -- ``None`` for allow,
+#     the deny envelope dict for deny), and this function reads the
+#     disposition off that value. There is nothing left for a future call
+#     site to get wrong, because there is no second, independently-typed
+#     claim to keep in sync.
+#
+#     We do not yet know how OFTEN the backpointer read actually fails in
+#     practice, so this one-line, non-fatal stderr signal exists purely to
+#     measure that before any future decision about the per-kind policy
+#     paths -- it changes no ALLOW/DENY outcome itself. Named legs only, no
+#     payload contents (no agent_id, no cwd, no command text).
+# ---------------------------------------------------------------------------
 
 
 def emit_kind_resolution_failure_signal(
@@ -201,6 +260,17 @@ def emit_kind_resolution_failure_signal(
     )
 
     # An allow taken because the kind could not be resolved is a DECLINED
+    # RULING, not a clean -- the guard evaluated nothing and let the call
+    # through. `_verdict.record_silent` is the channel that distinguishes the
+    # two, and it is a no-op outside a collection, so this costs production
+    # nothing while making the fail-open observable to
+    # `tests/test_no_false_clean_on_unparsed_dialect.py`'s never-bare-clean
+    # property. A deny needs no record: it already IS the verdict.
+    # WRAPPED for the same reason the census import below is, and stated in the
+    # same terms: this runs on the `scoped-git-commit` hot path, and an
+    # observability write that can raise here turns every ceremony on this box
+    # into an outage. `record_silent` itself promises never to raise; the
+    # `from ... import` statement carries no such promise.
     if verdict is None:
         try:
             from coordinator_core.bash_guards._verdict import record_silent
@@ -214,11 +284,34 @@ def emit_kind_resolution_failure_signal(
             pass
 
 
+#: The literal label a guard's advisory prose uses to introduce the raw
+#: offending command it is echoing back (e.g. ``"  Command:  %s\n\n"`` in
+#: ``guard_plumbing_and_loops._generic_advisory``). Shared so the label is
+#: triplicated in ONE place rather than three: the builder format strings
 #: (``guard_plumbing_and_loops.py``), ``_advisory_dedupe._COMMAND_LINE_RE``
+#: (strips this labeled line before hashing, so dedupe keys on SHAPE, not
 #: command instance), and ``_message_size._DIAGNOSTIC_LINE_PREFIXES`` (never
+#: treats a line carrying this label as an offered alternative). A relabel
+#: (e.g. to ``"Cmd:"``) that only touches one of those three sites silently
+#: reverts the others' behavior with no import-time signal; importing this
+#: constant everywhere makes a partial rename a one-line diff instead of a
+#: silent three-way drift.
 COMMAND_LINE_LABEL = "Command:"
 
+#: Both re-exported from the leaf ``_override_doc`` module (2026-08-25, "the
+#: commit gate stops importing a subsystem") rather than defined here --
+#: originally split so ``coordinator_core.ops.detect_staged_rollback`` (on
+#: the commit pre-commit hook path) could import these two names FROM THE
+#: LEAF directly without pulling in this module's much wider import graph
+#: (``subagent_sandbox.engine``, ``session.identity``, etc.). That caller is
+#: gone (deleted 2026-08-25, "the staged rollback gate dies without blocking
+#: a commit" -- claude-klabauter ends with no pre-commit hook), but the leaf split
+#: still stands: every existing importer of
 #: ``_helpers.OVERRIDE_KEYS_DOC``/``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``
+#: keeps working unmodified via this re-export. See ``_override_doc.py``'s
+#: own module docstring and each constant's own docstring there for the full
+#: history (including the 2026-08-05 break-class absolute-path-leak fix) --
+#: not restated here.
 from coordinator_core.bash_guards._override_doc import (  # noqa: F401
     OVERRIDE_KEYS_DOC,
     OVERRIDE_KEYS_DOC_DISPLAY,
@@ -499,10 +592,39 @@ def operator_override_note(
 
 
 #: CONFINED SET -- originally mirrored coordinator-session.sh's
+#: _cs_is_confined_findings_agent byte-for-byte as of the 2026-07-01
+#: findings-agents-self-persist change (a single member; review personas
+#: were removed from this set on 2026-07-01 -- see the bash lib's own
+#: comment block for why). ``coordinator:executor`` was added 2026-08-01
+#: (docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md, Amendment 1)
+#: to close the ``python3 -c "...dispatch_message..."`` commit-bypass
+#: incident, then REMOVED again 2026-08-03 on the PM ruling recorded at
+#: DR-125 (docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md,
+#: chunk C2): Bash-allowlist confinement is the wrong control for a
+#: commit-shaped bypass once ``block_subagent_commit`` independently denies
+#: the commit/push/stash/reset shape regardless of how it is invoked (C1
+#: closed the remaining ``python3 -c``/interpreter-path text-matching hole
+#: that motivated the original addition) -- narrowing this set back to
+#: ``coordinator:code-reviewer`` removes duplicate, narrower-than-needed
+#: confinement of the executor's general Bash surface without reopening the
+#: commit bypass. REVISIT TRIGGER: re-adding ``coordinator:executor`` here is
+#: warranted only by a NEW harm class reachable from bash that is neither
+#: machine-degrading (already governed by the wider bash-allowlist ruleset
+#: policy tests) nor commit-shaped (already governed by
+#: ``block_subagent_commit`` independently of this set) -- e.g. a
+#: qualitatively new bypass vector, not a re-litigation of the commit case
+#: this ruling already settled. The SOLE consumer of this set,
+#: ``block_reviewer_bash_outside_allowlist``, resolves its ruleset per member
 #: type via ``_DEFAULT_RULESET_TYPE_OVERRIDES``. ``coordinator:executor`` is
+#: not a member of this set (unconfined outright since the 2026-08-02
+#: narrowing; see that module's own docstring Divergence 9) and carries no
+#: ruleset of its own. Adding a member
 #: here is still the single edit point for CONFINEMENT membership itself,
+#: matching the bash lib's "single source of truth" intent; it is a
 #: SEPARATE, independent hardcoded set from
 #: ``coordinator_core.session.core._CONFINED_FINDINGS_AGENTS`` (that
+#: module's own SSOT for its own, unrelated consumer -- not re-exported from
+#: here, and not affected by this edit).
 _CONFINED_FINDINGS_AGENTS = frozenset({"coordinator:code-reviewer"})
 
 
@@ -599,15 +721,47 @@ def csn_check(comp: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# (2c) is_trivial_reason -- shared non-triviality bar for a human-authored
+# reason/justification string.
+#
+# Consolidated here (2026-07-30 triviality-bar tightening, PM-authorised)
+# from two byte-for-byte duplicate copies that had drifted into
+# ``write_guards/nudge_improvement_queue_write.py`` and
+# ``write_guards/nudge_baton_body_bar.py`` -- tightening the rule in one
+# copy and not the other is exactly the drift this module's own docstring
+# (see item 2, ``csn_check``) already warns about for a different pair of
+# call sites. Follows the SAME precedent as ``csn_check``: a predicate
+# shared across the bash_guards / write_guards package split lives HERE, not
+# in a parallel ``write_guards/_helpers.py`` (which would fork the
+# shared-helper story into two homes rather than consolidating it), even
+# though neither of this predicate's two call sites is itself a bash guard --
+# ``csn_check`` sets that precedent for exactly this "module name is a poor
+# fit, but the alternative is worse" tradeoff (see ``block_illegal_filename``,
+# its Write/Edit-side importer).
+#
+# Both call sites (``nudge_improvement_queue_write._is_trivial_reason``,
+# ``nudge_baton_body_bar._is_trivial_reason``) now bind their local name to
+# THIS function via a plain import -- no re-export shim, no second
 # definition. Their own module-level ``_TRIVIAL_REASONS``/
 # ``_TRIVIAL_REASON_MIN_LEN`` constants are retired along with the local
+# copies of the function; a caller needing the length floor imports
 # ``TRIVIAL_REASON_MIN_LEN`` from here.
+# ---------------------------------------------------------------------------
 
 _TRIVIAL_REASONS = frozenset({"1", "true", "yes", "y", "ok", "okay", "sure", "fine", "", "-", "x"})
 
 TRIVIAL_REASON_MIN_LEN = 12
 
 #: Character-variety floor (2026-07-30 tightening): the number of DISTINCT
+#: alphabetic characters (case-folded) a reason must contain. A string with
+#: fewer than this many distinct letters is degenerate regardless of length
+#: -- ``"aaaaaaaaaaaa"`` has 1, ``"abababababab"`` has 2, an all-digit string
+#: like ``"123456789012"`` has 0. Set to 3 because every TERSE-but-genuine
+#: reason considered while picking this threshold (see the test table this
+#: dispatch added) clears it comfortably -- a real short phrase draws from
+#: more than two distinct letters as a simple consequence of being English
+#: prose, not padding.
 _TRIVIAL_REASON_MIN_DISTINCT_LETTERS = 3
 
 

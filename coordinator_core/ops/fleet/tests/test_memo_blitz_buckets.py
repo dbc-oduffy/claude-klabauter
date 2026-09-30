@@ -367,7 +367,11 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-20-a-em-old.md"
 
     def test_prose_never_retargets_a_memo_that_declared_supersedes(self, tmp_path):
+        # Regression, coordinator-content-repo 2026-08-30: a memo declaring `supersedes: A`
+        # whose prose also trips the phrase pattern used to be paired against
         # a DIFFERENT memo B by the self-declared pass, which ran first and
+        # claimed the pair at the top-ranked basis. The declared target is the
+        # only one that may be emitted for such a memo.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -792,7 +796,14 @@ class TestSupersessionCandidates:
         assert [c["shared_loci"] for c in cands] == [["memo_blitz_buckets.py"]]
 
     def test_pairs_per_locus_bound_caps_fanout_at_boundary_cutoff(self, tmp_path):
+        # state/audits/2026-08-12-supersession-candidate-pair-blowup.md — a
+        # locus sitting exactly at `_discriminating_locus_cutoff` still
         # contributes up to C(cutoff, 2) pairs; `_MAX_PAIRS_PER_LOCUS` (3)
+        # must cap that fanout regardless. Corpus sized to 61 open memos so
+        # the SHARE-scaled cutoff (ceil(0.05 * 61) == 4) governs, and the
+        # shared locus is cited by exactly 4 same-sender memos — the
+        # boundary case (a locus AT the cutoff, not comfortably under it).
+        # Uncapped this would emit C(4, 2) == 6 pairs; capped it must emit
         # at most `_MAX_PAIRS_PER_LOCUS` == 3.
         inbox = tmp_path / "inbox"
         inbox.mkdir()

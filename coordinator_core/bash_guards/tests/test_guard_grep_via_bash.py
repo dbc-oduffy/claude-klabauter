@@ -245,6 +245,7 @@ class TestNoActionableAlternativeIsSilent:
 class TestGnuOnlyConstructStillAdvises:
     def test_dash_capital_p_on_single_segment_advises(self):
         # -P is not in `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is
+        # untranslatable-reason, and -P is genuinely GNU-only.
         out = _envelope("grep -Pn TODO src/", host_is_windows=True)
         assert out["permissionDecision"] == "allow"
         assert "GNU-only" in out["additionalContext"]
@@ -254,7 +255,9 @@ class TestGnuOnlyConstructStillAdvises:
         assert "GNU-only" in out["additionalContext"]
 
     def test_long_option_on_the_denylist_advises(self):
+        # `--group-separator` is on the C2 denylist (absent on BSD grep) --
         # unlike the deleted allowlist shape, this asserts a DENYLISTED
+        # long option fires, not merely "not on a two-entry allowlist".
         out = _envelope("grep --group-separator=== TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
@@ -274,7 +277,10 @@ class TestGnuOnlyConstructStillAdvises:
         assert _result("grep --color TODO src/", host_is_windows=True) is None
 
     def test_dash_o_and_dash_r_do_not_count_as_gnu_only(self):
+        # `-o`/`-r` exist on BSD grep too -- semantic divergence, not a
+        # portability hazard this guard should flag. `-o` alone is outside
         # `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is untranslatable-
+        # reason (not chained), same gate as the rest of this class.
         assert _result("grep -ro TODO src/", host_is_windows=True) is None
 
     def test_dash_capital_z_advises(self):
@@ -311,7 +317,11 @@ class TestGnuOnlyConstructStillAdvises:
         assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
 
+# ---------------------------------------------------------------------------
 # (e) Precedence: GREP_VIA_BASH outranks every other shape, so this guard's
+# classification (and, when it fires, its message) names grep, not banner
+# or plumbing.
+# ---------------------------------------------------------------------------
 
 
 class TestPrecedence:
@@ -335,7 +345,13 @@ class TestPrecedence:
         assert "grep -P error" in ctx
 
 
+# ---------------------------------------------------------------------------
+# (d.1) Denylist membership rationale -- C2, 2026-08-01. Mechanical check
 # that every DENYLISTED short flag and long option carries its own
+# one-line rationale comment, not merely a bare literal in the frozenset.
+# A future addition to either denylist with no accompanying rationale
+# fails this gate rather than silently landing undocumented.
+# ---------------------------------------------------------------------------
 
 
 class TestGnuOnlyDenylistRationaleDocumented:

@@ -289,6 +289,8 @@ class TestAnnotateDenyDisclaimer:
         assert "before any command runs" not in reason
         assert "single combined" not in reason
         # REVERTED (C3, Task 1): the two bare identifiers were re-inlined by
+        # a later regression (2026-08-12) and taken back out (2026-08-13) --
+        # see this test's own docstring.
         assert "sess-disclaimer-test" not in reason, (
             "annotate_deny() must not name the bare session_id -- "
             "got: %r" % reason

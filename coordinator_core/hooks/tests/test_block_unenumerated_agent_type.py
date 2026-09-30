@@ -241,7 +241,16 @@ def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
     assert "MISSING ENTIRELY" in reason
 
 
+# ---------------------------------------------------------------------------
+# Mirror-clone layout — content at the root, not nested under `coordinator/`.
+#
+# A dev clone nests plugin content under `coordinator/`; a marketplace/OSS-
+# mirror clone holds it directly at the root. Both roster sources probed only
+# the first shape and fail CLOSED, so on a mirror install the guard reported
 # "roster source MISSING ENTIRELY (path/install defect)" and refused every
+# `coordinator:*` dispatch — including `coordinator:executor`. Reproduced on
+# the 2026-09-05 Linux cloud dogfood.
+# ---------------------------------------------------------------------------
 
 
 def _write_mirror_tree(root: Path, extra_type: str = "coordinator:executor") -> None:

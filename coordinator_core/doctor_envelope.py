@@ -48,11 +48,13 @@ An all-INFO result is not a health confirmation; the overall verdict is INFO, no
 PASS: str = "PASS"
 """Healthy — the probe confirmed the condition is correct."""
 
+#: Tuple of the four closed-enum verdict values, exported in the envelope ``status_vocab``.
 #: This is the authoritative set; do not extend it without bumping ``ENVELOPE_SCHEMA_VERSION``.
 STATUS_VOCAB: tuple[str, ...] = (BROKEN, DEGRADED, INFO, PASS)
 
 ENVELOPE_SCHEMA_VERSION: int = 1
 
+# Synthetic sentinel written into probes[] for a skipped probe in the output.
 # NOT in STATUS_VOCAB — it carries no health verdict and is never a worst-of contributor.
 _SKIP_SENTINEL: str = "SKIP"
 
@@ -206,6 +208,7 @@ def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
         if r.skipped:
             if r.required:
                 # Required probe skipped → elevate to DEGRADED in the output row so the
+                # displayed status matches what reduce_overall counted it as.
                 probe_rows.append(
                     {
                         "probe": r.probe,
@@ -217,6 +220,7 @@ def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
                 )
             else:
                 # Optional probe skipped → advisory surface; use _SKIP_SENTINEL in
+                # the row so readers can distinguish an advisory skip from a real PASS.
                 missing_optional.append(r.probe)
                 warnings.append(
                     f"optional probe skipped (coordinator-dependent or prerequisite absent):"

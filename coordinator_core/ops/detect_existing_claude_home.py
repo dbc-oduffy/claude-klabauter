@@ -228,7 +228,11 @@ def classify(target: str) -> Tuple[str, str, str]:
                 f"{target}/{marker} present (coordinator/opinionated infrastructure)",
             )
 
+    # ===========================================================================
     # Tier 2 — USED-VANILLA (Track A): Claude Code has run here, but nothing
+    # opinionated was set up. Install proceeds from effectively zero; the
+    # message acknowledges prior casual use without a clobber warning.
+    # ===========================================================================
 
     if os.path.isfile(os.path.join(target, "CLAUDE.md")):
         return (
@@ -252,7 +256,9 @@ def classify(target: str) -> Tuple[str, str, str]:
             f"{target}/plugins/ holds Claude-Code-managed scaffolding only",
         )
 
+    # ===========================================================================
     # Tier 3 — PRISTINE (Track A): no Claude Code artifacts at all. Never used.
+    # ===========================================================================
     return ("pristine", "A", f"{target} has no Claude Code artifacts — never used")
 
 

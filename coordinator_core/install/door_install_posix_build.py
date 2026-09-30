@@ -76,7 +76,27 @@ def build_or_advise(
         )
 
     if not has_posix_compiler(compiler):
+        # The remediation names the MODULE route, never the file path.
+        # `build_posix.py` does `from .build import write_sidecar`, so
+        # `python3 <abs path to build_posix.py> <root>` -- what this advisory
+        # used to emit -- dies on `ImportError: attempted relative import with
+        # no known parent package` before it reaches its own argparse. The
+        # module's own usage string already declares `python3 -m
+        # coordinator_core.warm.door.build_posix`; the advisory now agrees with
+        # it. A cold-path remediation that does not run is the failure mode the
+        # runnable-remediation rule exists to prevent (CLAUDE.md § Runtime
+        # conventions), and it is worse than naming nothing, because the
+        # operator burns a cycle on a command that cannot work.
         # `PYTHONPATH=<engine root>` is load-bearing, not decoration. The
+        # module route fixed the relative-import death above, but a bare
+        # `python3 -m coordinator_core.warm.door.build_posix` still dies one
+        # step earlier with `ModuleNotFoundError: No module named
+        # 'coordinator_core'` unless the engine root is importable -- and an
+        # operator reading this advisory is by definition not running from
+        # inside the engine tree. Naming the root twice (once to import the
+        # package, once as the build's argument) is redundant-looking and
+        # correct: they answer different questions, and dropping either one
+        # breaks the command.
         engine_root_str = str(Path(engine_root).resolve())
         advisory = (
             "[door-install] no C compiler found on PATH (checked clang, cc, gcc) -- "

@@ -136,6 +136,7 @@ def _append_log(reap_log: Path, message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with open(reap_log, "a", encoding="utf-8", newline="\n") as f:
         f.write(f"[{ts}] {message}\n")
+    # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(reap_log)
 

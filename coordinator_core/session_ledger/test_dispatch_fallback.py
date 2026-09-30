@@ -8,7 +8,14 @@ import pytest
 from coordinator_core.session_ledger import aggregate_chain_loe as agg
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Real-git spawn is load-bearing: the fixture mirrors
+# test_aggregate_chain_loe.py's own git-repo helper, and `aggregate()` reads
+# real git-common-dir/session-hub state via monkeypatched `sessions_dir` --
+# a mock repo would not exercise the fallback-file discovery path itself.
+# Per-test isolation via tmp_path fixtures, not hoisted. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

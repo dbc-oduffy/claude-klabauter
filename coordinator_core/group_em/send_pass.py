@@ -163,7 +163,13 @@ from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import machinery_paths
 from coordinator_core.session.claimed_write import append_claimed_line
 
+#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
+#: `record_offers` and `decline` append to `state/subagent-share/<session-
+#: id>/group-em-send-log.jsonl` -- only the HOLDER's log, written by the
+#: holder or on the holder's behalf under the holder's key (DR-408), one
 #: file per session id -- a data-dependent set GENERATES cannot name. Same
+#: extension-scoped glob convention as the sibling counters in this tree
+#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 DECLINE_GATES = frozenset({"gate1", "gate2"})
@@ -174,8 +180,20 @@ NEVER_SEND_REASONS = frozenset({"away"})
 
 DEFAULT_COOLDOWN_SECONDS = 3600
 
+#: Rate ceiling: the most entries one digest may carry, whatever the roster
+#: size. A digest at the ceiling is reported truncated rather than silently
+#: cut, so the Group EM knows the population exceeded it.
+#:
 #: `truncated` IS REDUNDANT AND STAYS. Overengineering review (Kira, finding 6,
+#: 2026-08-30) is correct that it is derivable -- it is exactly
+#: `eligible_before_ceiling > len(entries)`, and the per-peer `rate-ceiling`
+#: rows in `suppressed` carry strictly more information than either scalar.
 #: EM ruling: keep all three. These payload keys are a NEGOTIATED CROSS-REPO
+#: SURFACE, frozen with coordinator-content-repo-em at sha 7b0b827f; the DoE-side consumer
+#: reads them, so trimming one here is a contract break, not a cleanup. The
+#: finding's own suggested_fix says so and defers the call to the EM against
+#: the contract memo. Revisit only by renegotiating the contract with that
+#: consumer, never by a local tidy-up.
 DEFAULT_MAX_ENTRIES = 5
 
 
@@ -510,12 +528,24 @@ def resolve_addressee(
     roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
     try:
         # MATERIALIZED, not merely fetched. Two loops below walk `rows`: the
+        # dict-shape wiring guard, then the actual match. A one-shot iterator
+        # would be exhausted by the first, leaving the second to see nothing
+        # and return `None` -- the same answer a genuine absence produces, so
+        # a generator-shaped seam would degrade into a silent refusal instead
+        # of the loud failure the guard below exists to raise.
         rows = list(roster_fn(repo_root=repo_root))
     except Exception:
         return None
     for row in rows:
         if isinstance(row, dict):
             # THE TWO `build_roster`s ARE NOT INTERCHANGEABLE, and nothing in
+            # the seam's type hint enforces that. `session.peer_roster.
+            # build_roster` yields `PeerRow` objects; `group_em.read_pass.
+            # build_roster` -- same name, same package -- yields dicts. Inject
+            # the second here and every `getattr` below returns `None`, so the
+            # function reports "no live name" for every peer while raising
+            # nothing: an unaddressable fleet that reads as a clean refusal.
+            # Loud is the correct behaviour for a wiring error.
             raise TypeError(
                 "resolve_addressee needs session.peer_roster.build_roster "
                 "(PeerRow rows); got dict rows, which is group_em.read_pass."
@@ -532,6 +562,11 @@ def resolve_addressee(
         return None
 
     # REFUSE AN AMBIGUOUS ADDRESS. Returning the name of the session asked
+    # about is not enough: `SendMessage` addresses BY NAME, so handing back a
+    # name two live sessions answer to gives the caller an address that can
+    # land on the wrong one. Stable key in, volatile address out -- but only
+    # when the address is unambiguous. `None` here is the same hard refusal
+    # every other branch returns, never a fallback to the session id.
     holders = {
         getattr(row, "session_id", None)
         for row in rows
@@ -717,6 +752,12 @@ def build_send_digest(
     ]
 
     # OPEN OBLIGATIONS -- see module docstring. Every session id this tick
+    # observed with a known, safe id (emitted this tick, or held under
+    # cooldown from an earlier one) is checked against the log AS IT STOOD
+    # before this tick's own offer writes above: an entry just emitted is
+    # open by construction (it cannot yet have a declination), and a
+    # cooldown-suppressed peer is open exactly when its last log event is an
+    # offer with no later declination -- the belt to C2's suspenders.
     open_obligations = [entry["session_id"] for entry in entries]
     for row in suppressed:
         session_id = row["session_id"]

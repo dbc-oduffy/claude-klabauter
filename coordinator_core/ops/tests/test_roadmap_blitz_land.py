@@ -120,3 +120,37 @@ def test_every_documented_wire_parameter_is_read_by_the_handler():
     read = {c for c in handler_source if isinstance(c, str)}
     missing = {name for name in documented if name not in read}
     assert not missing, f"documented but never read from params: {sorted(missing)}"
+
+
+def _xs_baton(root, name, deployment_state, shipped_in=None):
+    lines = [
+        "kind: roadmap-baton", f"title: {name}", f"stub_id: {name}", "status: open",
+        f"deployment_state: {deployment_state}", "pickup_ready: true", "baton_role: work",
+    ]
+    if shipped_in:
+        lines.append(f"shipped_in: {shipped_in}")
+    path = root / "state" / "handoffs" / f"{name}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\n" + "\n".join(lines) + "\n---\n\nbody\n", encoding="utf-8")
+    return f"state/handoffs/{name}.md"
+
+
+def test_a_closed_row_names_the_terminal_state_the_driver_hands_to_the_ship_transition(repo):
+    """`close_dispatched` writes `deployment_state` and leaves `pickup_ready` to the ship
+    transition, so the row it returns must say which state the baton now holds — the driver
+    ships exactly the rows reading `shipped` and never overwrites another terminal decision."""
+    from coordinator_core.roadmap.blitz_land import close_dispatched
+
+    fresh = close_dispatched(repo, _xs_baton(repo, "xs-fresh", "ready_to_fire"), "abc1234")
+    assert fresh["closed"] is True
+    assert fresh["deployment_state"] == "shipped"
+
+    already = close_dispatched(
+        repo, _xs_baton(repo, "xs-cited", "shipped", shipped_in="def5678"), "abc1234"
+    )
+    assert already["closed"] is False
+    assert already["deployment_state"] == "shipped"
+
+    other = close_dispatched(repo, _xs_baton(repo, "xs-dead", "closed"), "abc1234")
+    assert other["closed"] is False
+    assert other["deployment_state"] == "closed"

@@ -44,7 +44,13 @@ def _fires(cmd: str) -> bool:
     return dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c1a") is not None
 
 
+#: (command, fires, existing_coverage, note, fix_group)
+#: ``existing_coverage`` names the near-variant already pinned in
 #: `test_deny_message_accuracy.py`'s SCOPED_FORMS/UNSCOPED_FORMS, or ``None``
+#: for a shape genuinely new to this chunk. ``fix_group`` tags which fix (or
+#: pre-existing baseline shape) the row belongs to, so
+#: `test_table_is_bidirectional_where_applicable` can verify pairing
+#: PER GROUP rather than just "some row somewhere fires."
 FIRING_SHAPE_TABLE = [
     (
         'git commit -m "x" -- one/file.md',
@@ -187,7 +193,10 @@ FIRING_SHAPE_TABLE = [
         "only-flag-scope",
     ),
     # --- SC-DR-020: the separator disambiguates, it does not scope ---
+    # Every row above that establishes scope does it with `-- <paths>`, which
+    # is exactly why the mirror-image gap in _bt_git_add_own_pathspec went
     # uncovered until a live sweep found it. These rows pin the UNSEPARATED
+    # spelling so the same blind spot cannot re-form in this predicate.
     (
         "git commit one/file.md -m 'x'",
         False,
@@ -291,8 +300,11 @@ FIRING_SHAPE_TABLE = [
         "wrapper-word-prefixed AND scoped stays silent",
         "fix3-env-wrapper",
     ),
+    # --- Review finding 1 (P0): -S/--gpg-sign standalone must not
     # unconditionally consume the next token (they are OPTIONAL-argument
     # flags whose value must be ATTACHED) -- a standalone occurrence must
+    # render the parse ambiguous and fire, never fabricate a pathspec out
+    # of the next unrelated token and suppress. ---
     (
         'git commit -S -m "x"',
         True,

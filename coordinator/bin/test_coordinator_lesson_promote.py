@@ -380,8 +380,19 @@ def test_multiline_body_roundtrip() -> None:
                 f"(trailing newline indicates | clip chomping instead of |- strip chomping)"))
 
 
+# `_force_doe_unresolvable_env()` used to live here — DELETED 2026-08-25, and
+# deliberately not replaced. It claimed to make content_root() raise
 # _DoeUnresolvable by unsetting CONTENT_ROOT/REPO_CONTENT_ROOT and pointing
 # MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
+# rung spawned the `machine-local` CLI; it reads the registry in-process now,
+# and five codename-free rungs have since been added below it. The helper
+# therefore returned an env in which content_root() still resolved, and its only
+# caller was asserting exit 3 against a box where the CLI exited 2.
+#
+# Do not rebuild it by adding more env keys: the same ladder carries
+# coordinator_registry's import-time manifest bootstrap, so an env with every
+# rung dead fails at IMPORT with an install-integrity error, never reaching the
+# branch under test. Patch `content_root` in-process instead — see Test 13/14.
 
 
 def _force_legacy_route_env(tmpdir: str) -> dict[str, str]:

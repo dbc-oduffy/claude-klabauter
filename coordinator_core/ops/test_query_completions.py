@@ -188,7 +188,14 @@ def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatc
     assert result == tmp_path
 
 
+# ---------------------------------------------------------------------------
+# `commits` display coercion -- cross-repo/archive/2026-08-16-example-retrieval-repo-em-
+# ceremony-cli-defects-found-running-workweek-complete.md § 1. An all-digit
+# short SHA is an int after YAML parse, and `", ".join` raised on it inside
 # `/workstream-complete`'s MANDATORY LoE gate: a display concern took down a
+# gate. These pin the formatter, not the producers -- the sender's own point
+# is that quoting at the source would not make the formatter safe.
+# ---------------------------------------------------------------------------
 
 
 def test_all_digit_short_sha_renders_instead_of_raising():

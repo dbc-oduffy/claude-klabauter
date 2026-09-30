@@ -18,8 +18,31 @@ LIVE_CORPUS_KEYS: Tuple[str, ...] = (
     "consumed_by",
 )
 
+#: Leg budget for this step, asserted independently per the plan's budget
 #: table. RESTATED from the table's 20 ms with the measurement that refutes
+#: it, per that table's own rule ("If a budget turns out to be wrong, restate
+#: it out loud with the measurement and take the consequence -- never absorb
+#: it into the total quietly").
+#:
+#: The 20 ms row cited "measured 15.6 ms at 248 files". That number is below
+#: this leg's own I/O floor and is not reproducible: reading 4096 bytes from
+#: each of 249 files, with no parsing at all, costs ~18 ms on this box. 20 ms
+#: therefore left ~2 ms for the head-scan of every record, which the leg
+#: cannot do. Both 15.6 ms and an earlier 17.97 ms reading of this leg were
+#: first-trial warm-cache artifacts -- in a 12-trial run the first trial
+#: reports 19.5 ms and the remaining eleven land at 35.5-40.6 ms.
+#:
+#: Measured steady state, 12 trials x 5 samples x K=40, median of trial
+#: medians: 36.7 ms, max 40.6 ms, min 19.5 ms (that lone first trial). The
+#: 2.1x spread is box load -- ~50 concurrent sessions contending for the same
+#: disk -- not variance in the code, so the budget is set above the observed
+#: max rather than at the median.
+#:
 #: CONSEQUENCE, recorded rather than absorbed: the plan's budget table sums
+#: the legs to 195 ms against a 200 ms cycle criterion with 5 ms slack.
+#: Restating this leg from 20 ms to 50 ms puts the nominal sum at 225 ms,
+#: over that criterion. C7 measures the assembled cycle and is the binding
+#: test; this arithmetic is a projection, not a verdict.
 LEG_BUDGET_MS = 50.0
 
 PathLike = Union[str, Path]

@@ -85,6 +85,23 @@ _EXEMPT_PRODUCERS = {
         "harnesses a realistic git history to measure against; not a "
         "production commit path."
     ),
+    "benchmarks/handoff_supersede_baseline.py": (
+        "benchmark fixture builder (`build_fixture`) -- seeds a disposable "
+        "temp repo so the handoff-supersede baseline has a git history to "
+        "measure; same shape as `benchmarks/op_fixtures.py`, not a "
+        "production commit path."
+    ),
+    "git/commit.py": (
+        "the `commit-tree -S` signing seam (`_sign_commit_tree`) inside "
+        "`commit_paths`, the single commit path that replaced the killed "
+        "`scoped_git_commit`. Not wired here: the ledger write belongs to "
+        "the op handler, and `ops/ceremony/commit_v2.py` (the "
+        "`ceremony.commit` handler) calls `apply_base.record_ledger_entry` "
+        "after `commit_paths` lands -- same split as `git_native.py`. "
+        "Direct `commit_paths` callers outside that handler "
+        "(e.g. `ops/review_freeze_diff.py`) are not ledger-covered by this "
+        "scan, which is argv-literal only."
+    ),
     "ops/ceremony/commit_exec_bit.py": (
         "pre-existing raw-commit producer, NOT one of the three sweep "
         "targets this chunk's brief named (backlog_grind_assemble/apply.py, "

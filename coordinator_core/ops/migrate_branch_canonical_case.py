@@ -99,7 +99,11 @@ _USAGE_TEXT = """\
 """
 
 
+# Sibling precedent: coordinator/bin/check-install-divergence.py's
 # _GIT_TIMEOUT_SECS = 60. Local ref/plumbing calls (rev-parse, symbolic-ref,
+# show-ref, for-each-ref, branch -m) get that same local bound; the three
+# network calls under --push-cleanup (ls-remote, push --delete, push -u) get
+# a larger bound since they wait on the remote, not just local disk/plumbing.
 _GIT_TIMEOUT_SECS = 60.0
 _GIT_NETWORK_TIMEOUT_SECS = 120.0
 
@@ -175,6 +179,8 @@ def main(argv: list[str]) -> int:
     elif len(argv) == 1 and argv[0] == "--push-cleanup":
         push_cleanup = True
     elif len(argv) == 1 and argv[0] in ("-h", "--help"):
+        # bash oracle: `sed -n '2,/^$/p' "$0"` includes the trailing blank
+        # line that terminates the header-comment block -- one extra `\n`
         # beyond _USAGE_TEXT's own trailing newline reproduces it exactly.
         sys.stdout.write(_USAGE_TEXT + "\n")
         return 0
@@ -210,6 +216,23 @@ def _migrate(push_cleanup: bool) -> int:
     mixed_case_refs = [ref for ref in local_refs if ref != ref.lower()]
 
     # Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    # evidence): the per-ref `show-ref --verify` sibling-existence check is
+    # collapsed into ONE `show-ref --verify` call over every candidate's
+    # lowercase refname, rather than one call per mixed-case ref.
+    #
+    # NOT a plain membership check against `local_refs`: on a case-insensitive
+    # filesystem (default macOS/Windows), a mixed-case ref's lowercase
+    # sibling resolves via `show-ref --verify`'s FS-level lookup even when
+    # `for-each-ref`'s listing enumerates only the ONE on-disk (mixed-case)
+    # entry — `show-ref`'s own ref-name pattern matching does NOT reproduce
+    # that FS-level case-fold. `show-ref --verify <ref1> <ref2> ...` accepts
+    # N refnames in one call, exits non-zero if ANY is unresolvable, but
+    # still prints one stdout line per refname that DOES resolve and keeps
+    # checking the rest — empirically verified (git 2.55, this port's own
+    # sandbox) against the exact multi-ref-with-one-missing shape used here.
+    # So parsing stdout, not the exit code, recovers the same per-candidate
+    # "does this canonical sibling already exist" answer the old per-ref
+    # `--verify --quiet` loop gave, in one spawn instead of N.
     existing_siblings: set = set()
     if mixed_case_refs:
         verify_argv = [f"refs/heads/{ref.lower()}" for ref in mixed_case_refs]

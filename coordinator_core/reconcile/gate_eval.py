@@ -581,6 +581,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
+#: deployment_state values that stop re-evaluation of a blocker edge (mirrors the
+#: live `deployment_state` enum's terminal subset). `abandoned`/`continued`/`closed`
+#: are terminal but do NOT clear a gate — see CLEAR predicate (rule 1).
 #: SSOT: coordinator_core.lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT.
 _TERMINAL_STATES: frozenset = HANDOFF_TERMINAL_DEPLOYMENT
 
@@ -781,13 +784,63 @@ def _index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
         if basename:
             by_path_basename[basename] = h
     # One `stub_id` names a whole CONTINUATION CHAIN, not one record, so the slot
+    # is resolved from the collapsed head set (`collapse_to_chain_heads`) rather
+    # than by whichever record the caller's walker appended last. That ordering
+    # was never a decision: `_collect_all_handoffs_for_gate_index` appends the
+    # archived half AFTER the live half, so a superseded record beat the live head
+    # on every chain — `_has_asymmetry` then read the head's real `blocks:` list
+    # off a record that had been authored `blocks: []`, and reported a symmetric
+    # graph as a data defect. `[-1]` preserves the documented last-write-wins
+    # posture for whatever survives the collapse: a group with more than one head
+    # is a genuine cross-family `stub_id` collision (this function's docstring
+    # below), unchanged by this and still not detected here.
     for hid, candidates in stub_candidates.items():
         by_stub_id[hid] = collapse_to_chain_heads(candidates)[-1]
     return _TypedHandoffIndex(by_handoff_id, by_stub_id, by_path_basename)
 
 
+#: C13 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md § C13):
+#: `_index_by_id(live_and_archived_handoffs)` was being rebuilt from scratch on
+#: EVERY `evaluate_gate`/`evaluate_gate_triage` call over the SAME corpus list
+#: within one sweep (measured: 7 rebuilds over 21 `awaiting_gate` handoffs in one
+#: warm sweep, 29 ms cumulative) — the walk producing `live_and_archived_handoffs`
+#: itself was already built once per sweep by the caller; only the INDEX over
+#: that walk was not. `handoff_reconcile.py`'s sweep loop (the caller driving this
+#: redundancy) is outside this chunk's writes: scope — see the module docstring's
+#: writes-scope note — so this memo lives here, INSIDE gate_eval.py, keyed on the
+#: caller-supplied list's OWN object identity rather than requiring every caller
+#: to thread an extra parameter through. An explicit passed-in index (the
+#: dispatch brief's stated preference) would need every call site across
+#: `handoff_reconcile.py`/`handoff_gate_aging.py`/`ac27_differential_oracle.py` to
+#: change; this module-level memo achieves the identical "build once per sweep"
+#: outcome without widening this chunk's writes: scope, at the cost the brief
+#: itself calls out for a module-level cache: proving a second sweep's corpus can
+#: never be served the first sweep's stale index.
+#:
+#: SCOPING (never-leak-across-sweeps). Keyed on `id(handoffs)`, but — unlike a
+#: naive `id()`-keyed dict — each entry ALSO holds a STRONG reference to the
+#: `handoffs` list object itself (`Tuple[handoffs, index]`, never just the
+#: index). A plain `list` is not weak-referenceable in CPython (`weakref.ref`/
+#: `weakref.finalize` on a bare `list` raises `TypeError`), so the usual
+#: weakref-eviction idiom is unavailable here; holding the strong reference
+#: instead is what makes `id()` reuse safe: CPython can only reuse an id after
+#: an object's refcount reaches zero, and this cache's own strong reference
+#: means that can never happen while the entry is still present under that
 #: key. The eviction path (`_GATE_INDEX_MEMO_MAXSIZE`, LRU via `OrderedDict`)
+#: is therefore the ONLY way an entry's strong reference is ever dropped — and
+#: dropping the reference and dropping the key happen in the exact same
+#: `popitem` call, so the id can never be "free to be reused" while a stale
+#: key for it still lives in the dict. `handoff_reconcile.py`'s `_handler`
+#: constructs a brand-new `all_handoffs` list via `_collect_all_handoffs_for_
+#: gate_index` on every sweep invocation, so a second sweep's corpus is a
 #: DIFFERENT object with a DIFFERENT `id()` in the overwhelmingly common case
+#: regardless of this cache's eviction policy; the strong-reference-plus-LRU
+#: design is the defense for the narrower id-reuse edge case, not the primary
+#: mechanism keeping sweeps apart. The `entry[0] is handoffs` identity check
+#: in `_memoized_index_by_id` is belt-and-braces on top of that: even if some
+#: future caller's id() collision logic changed, a look-up that hits a
+#: differently-identified object at the same key rebuilds rather than trusting
+#: the key alone.
 _GATE_INDEX_MEMO_MAXSIZE = 8
 _index_by_id_memo: "OrderedDict[int, Tuple[Sequence[Dict[str, Any]], _TypedHandoffIndex]]" = (
     OrderedDict()
@@ -856,7 +909,15 @@ def _has_asymmetry(
         if blocker is None:
             continue
         if canonical_kind(blocker.get("kind")) != "roadmap-baton":
+            # C4 widened-eligibility guard: the blocks:/blocked_by symmetry
             # check is a ROADMAP-kind authoring convention (a roadmap blocker
+            # is expected to list every handoff it blocks). A blocker of any
+            # OTHER kind was never expected to maintain that back-reference
+            # at all — widening `evaluate_gate`'s eligibility to ANY kind
+            # would otherwise fire a false-positive asymmetry on every such
+            # edge (a blocker simply not authoring `blocks:` reads
+            # identically to one that authored it wrong). Only a
+            # roadmap-kind blocker is held to the convention.
             continue
         blocker_blocks = blocker.get("blocks") or []
         if not isinstance(blocker_blocks, list):
@@ -1353,7 +1414,14 @@ def _evaluate_structured_gate(
             "remaining_blockers": remaining_blockers,
             "cleared_blocker_ids": list(shipped_ids),
             "evidence": evidence,
+            # 2026-07-20 claude-central-em false-positive memo, Defect 1
+            # recommendation: parity with the abandoned-id composite above — a
+            # narrow verdict whose remaining_blockers includes a dangling
+            # (unresolvable) ref must not silently rot un-surfaced either.
+            # C6: same parity for a co-blocker that shipped with no
             # shipped_in — the MIXED-CASE RESIDUAL named in the chunk spec:
+            # this narrow verdict applies (narrowing on the with-sha
+            # blocker) but must not leave the no-sha id rotting un-surfaced.
             "also_surface": bool(unresolved_ids or unstamped_shipped_ids),
         }
 
@@ -1596,6 +1664,10 @@ def evaluate_gate(
         }
 
     if has_prose and covers_prose:
+        # Rule 0 (C6): mirrors evaluate_gate_triage's own D2 precedence,
+        # checked first and before structured classification, exactly as
+        # that function checks it — a second, independently-drifting
+        # precedence decision is the sibling-evaluator shape this module
         # exists to avoid (module docstring "C4 RECONCILIATION").
         status, evidence, _leg_results = reduce_gate_evidence(gate_evidence)
         verdict = _gate_evidence_status_to_verdict(status)
@@ -1616,8 +1688,18 @@ def evaluate_gate(
 
     if has_prose and structured_eligible:
         # PROSE-DOMINANCE (C4): reconciled with evaluate_gate_triage's own
+        # precedence rule. Widening eligibility to ANY kind drags the
+        # both-fields population into this mutating evaluator — without this
+        # guard it would silently `clear` a handoff whose real precondition
         # is the untested prose clause. Keys on gate_dependency here — UNTOUCHED
+        # by the C4 (gate-dependency-template-emission-spec) blocking_notes
+        # demotion above: `gate_dependency` dominance still fires unconditionally
+        # whenever `blocked_by` is non-empty, regardless of shipped-state
         # (module docstring "BLOCKING_NOTES DOMINANCE" — only `blocking_notes`
+        # was demoted, never this branch). The verdict itself is STILL always
+        # `surface` here, unconditionally — what C1 (below) adds is that the
+        # all-shipped case now names its own contradiction instead of only
+        # narrating it in prose evidence.
         evidence_lines = [
             f"prose gate_dependency={handoff.get('gate_dependency')!r} present "
             f"alongside blocked_by={list(blocked_by)} — prose gate dominates per "
@@ -1747,8 +1829,12 @@ def _has_blocking_notes(handoff: Dict[str, Any]) -> bool:
     return False
 
 
+#: C2 — `coordinator-doc-new`'s unfilled scaffold default (module docstring
 #: "C2 SCAFFOLD SENTINEL"). The prefix tuple covers the C1 scaffold's own
 #: authored continuation (`PLACEHOLDER — name the condition...`) plus a bare
+#: space separator, without matching a real sentence that merely contains
+#: the word "placeholder" (AC2.3 — see `_is_scaffold_sentinel`, a PREFIX
+#: test, never a substring search).
 _SCAFFOLD_SENTINEL = "PLACEHOLDER"
 _SCAFFOLD_SENTINEL_PREFIXES = ("PLACEHOLDER ", "PLACEHOLDER—", "PLACEHOLDER —")
 
@@ -2008,8 +2094,24 @@ def _resolve_blocker_via_completion_log(
 
 _EVIDENCE_EQUALITY_KINDS = frozenset({"file-exists", "frontmatter-field"})
 
+#: Boolean-observed I/O kinds: the caller's re-verification already reduces
+#: to pass/fail (no `expected` value to compare against — there is nothing to
+#: author an "expected" for a re-run pytest node or a re-checked commit SHA),
+#: so `observed is True` alone is the predicate. `commit-ancestor` (C3) is the
+#: original member; the C6 four (`test-node-id`, `probe-op-key`, `commit-sha`,
+#: `sibling-commitment-ref`) join it unchanged from
+#: `coordinator/schemas/cutover.schema.json`'s already-ratified
+#: `confirmed_consumers[].verified_by.kind` discriminated union (coordinator-content-repo,
+#: docs/plans/2026-07-25-cutover-state-machine.md) — this module adopts the
+#: SAME four names rather than inventing a parallel vocabulary for the same
+#: "re-verifiable evidence, not free prose" concept. Resolution (running the
+#: pytest node, re-invoking the op, `git show`-ing the SHA, or reading the
+#: `state/cross-repo-commitments/*.yaml` FK — each a `repo:`-qualified leg,
+#: mirroring `sibling_fact.resolve_leg`'s existing required field for the
+#: other three kinds) is caller-side re-verification, exactly like
 #: `cutover_gate.py`'s `_reverify_*` family; this module remains COMPUTE_ONLY
 #: and performs none of it — see GATE_EVIDENCE PROJECTION in the module
+#: docstring.
 _EVIDENCE_BOOLEAN_KINDS = frozenset(
     {"commit-ancestor", "test-node-id", "probe-op-key", "commit-sha", "sibling-commitment-ref"}
 )

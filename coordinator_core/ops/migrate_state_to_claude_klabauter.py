@@ -74,6 +74,7 @@ from coordinator_core.engine_root import coordinator_engine_source_root_env
 from coordinator_core.session.declared_writes import declare_write
 
 # Relative-to-CLAUDE_HOME / engine-root tree pairs mirrored (source, dest) —
+# see Negative-spec above re: archive/ inclusion.
 TREE_PAIRS: List[Tuple[str, str]] = [
     ("state", "state"),
     ("archive", "archive"),
@@ -111,6 +112,7 @@ def copy_tree(src: str, dst: str, out: TextIO) -> None:
         try:
             shutil.copy2(src_file, dst_file)
             file_count += 1
+            # DR-276: declared AFTER the copy lands, never before — the
             # contract is a report of what was ACTUALLY written.
             declare_write(dst_file)
         except OSError:
@@ -179,7 +181,9 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
         print(f"  Delta-synced {delta_count} files from {src}", file=out)
         print("", file=out)
 
+    # --- Step 2: Pre-removal verification guard — verify EVERY source file
     # is confirmed in claude-klabauter before removing ANYTHING. Fail loud on any
+    # missing destination (cleanup-sweep-hazards.md §10).
     print("--- Step 2: Pre-removal verification guard ---", file=out)
 
     missing_count = 0
@@ -210,6 +214,7 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
     print("", file=out)
 
     # --- Step 3: Remove source originals from CLAUDE_HOME. Removes files
+    # first, then cleans up empty directories left behind.
     print("--- Step 3: Remove source originals ---", file=out)
 
     for src_rel, _dst_rel in TREE_PAIRS:
@@ -289,7 +294,10 @@ def main(argv: List[str]) -> int:
         print("Usage: migrate-state-to-claude-klabauter.sh --populate | --finalize", file=sys.stderr)
         return 1
 
+    # Negative-spec: the HOME rung is load-bearing, not redundant with the
+    # expanduser terminal. Drop it and a harness that overrides HOME without
     # also setting USERPROFILE falls through to the real machine home, with
+    # no error -- the isolated-env test shape this repo uses everywhere.
     claude_home = os.environ.get("CLAUDE_HOME") or os.path.join(
         os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~"),
         ".claude",
@@ -299,6 +307,7 @@ def main(argv: List[str]) -> int:
         return 1
 
     # C11: this override names the SOURCE CHECKOUT being migrated into (locator
+    # axis), not which engine dispatches — routed through the C18 locator
     # accessor rather than a bare CLAUDE_KLABAUTER_ROOT read.
     claude_klabauter_root = coordinator_engine_source_root_env("migrate_state_to_claude_klabauter") or _default_claude_klabauter_root()
     claude_klabauter_root = claude_klabauter_root.rstrip("/")

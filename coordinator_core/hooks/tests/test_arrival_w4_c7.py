@@ -292,12 +292,15 @@ def test_fanin_carried_guards_raises_on_unenrolled_name():
 
 def test_fanin_carried_guards_raises_on_undeclared_carrier():
     # preuse_write_dispatch is enrolled but declares no CARRIED_GUARDS
+    # today -- AttributeError, never a fabricated empty list.
     with pytest.raises(AttributeError, match="CARRIED_GUARDS"):
         fanin_registries.carried_guards("preuse_write_dispatch")
 
 
 def test_fanin_all_carried_guards_skips_undeclared_carriers():
     # None of the three landed carriers declare CARRIED_GUARDS today, so
+    # the union is empty -- not an error, per all_carried_guards()'s own
+    # docstring contract.
     assert fanin_registries.all_carried_guards() == {}
 
 

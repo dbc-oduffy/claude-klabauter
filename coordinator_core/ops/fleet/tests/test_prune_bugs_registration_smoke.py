@@ -45,6 +45,8 @@ def _make_bug(worktree: Path, name: str, body: str) -> Path:
 
 def test_op_registers_at_eager_import_and_round_trips_dry_run_then_act(tmp_path: Path) -> None:
     # Force full registration exactly like the SAFE FALLBACK / warm-server
+    # preload do — proves discoverability at start_server()-equivalent time,
+    # not merely that the module is importable in isolation.
     from coordinator_core.ops import _eager_import_all
     from coordinator_core.ipc import _REGISTRY
 

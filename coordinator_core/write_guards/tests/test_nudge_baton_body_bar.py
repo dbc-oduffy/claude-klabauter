@@ -58,7 +58,9 @@ _AUTHORED_BODY = (
     "Next step: land C9 and hand off.\n"
 )
 
+# A narrative-bullet-only body (every
 # line syntactically matches _BULLET_RE, but each bullet is a full sentence
+# with real reasoning) must NOT be classified as a bare row-list.
 _NARRATIVE_BULLETS_BODY = (
     "- Decided to defer the migration because the schema change would break "
     "the existing readers until the new format lands.\n"

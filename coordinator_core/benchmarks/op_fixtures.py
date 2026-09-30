@@ -90,7 +90,14 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
     _run_git(dest, ["add", "-A"])
     _run_git(dest, ["commit", "-q", "-m", "bench-fixture: seed synthetic repo state"])
 
+    # coverage.gate's default range is `git merge-base origin/main HEAD..HEAD` — it
     # needs a real origin/main ref to resolve non-INDETERMINATE, and a second commit
+    # gives git rev-list an actual chain to walk (representative of real invocation
+    # cost, not a degenerate single-commit no-op). A local bare "origin" remote is
+    # sufficient; no network access required.
+    # Nested INSIDE dest (not a dest.parent
+    # sibling) so harness.run()'s single `shutil.rmtree(worktree_root)` cleans this up
+    # too; a sibling path previously escaped that cleanup and leaked one bare repo per run.
     origin_dir = dest / ".bench-origin.git"
     _run_git(dest, ["clone", "-q", "--bare", str(dest), str(origin_dir)])
     _run_git(dest, ["remote", "add", "origin", str(origin_dir)])
@@ -196,6 +203,9 @@ COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
     },
     "handoff.has_live_children": {
         # __WORKTREE__ is substituted by params_json_for() with the materialized fixture
+        # repo's absolute worktree root — a bare relative candidate resolves against the
+        # *invoking process's cwd* (contained_path's Path.resolve() semantics), not the
+        # fixture worktree, and would spuriously fail the containment check.
         "params_json": (
             '{"candidate": "__WORKTREE__/state/handoffs/' + _HANDOFF_ID + '.md"}'
         ),

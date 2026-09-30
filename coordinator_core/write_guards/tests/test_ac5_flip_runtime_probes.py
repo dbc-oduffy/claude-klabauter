@@ -117,7 +117,16 @@ class TestBlockDevRepoSentinelWrite:
 class TestBlockPriorityLedgerEdit:
     def test_former_deny_now_advises_through_engine(self, monkeypatch):
         monkeypatch.delenv(block_priority_ledger_edit._OVERRIDE_ENV_VAR, raising=False)
+        # A bare "priority: urgent\n" body -- the real trigger shape, no
         # padding. `validate_frontmatter_schema_advisory` (PRIORITY 100, an
+        # EARLIER advisory slot) also matches this path, wins the "first
+        # non-None advisory wins" race, and swallows this guard's own
+        # envelope entirely -- so a real priority-ledger write gets a schema
+        # warning instead of the "hand-editing disk truth" advisory that
+        # exists for it. The fix belongs in the swallowing guard (stand down
+        # for `state/priority-ledger/*`), whose module is held by another
+        # live session; this probe stays un-padded so it goes green the
+        # moment that lands.
         payload = {
             "tool_name": "Write",
             "tool_input": {

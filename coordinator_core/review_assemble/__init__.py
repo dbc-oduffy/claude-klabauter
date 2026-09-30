@@ -87,7 +87,11 @@ class _ReviewAssembleExitCode:
     TRANSPORT = 3
 
 
+#: The printed usage string's `--surface` value set, derived from
 #: `residue.EXPLICIT_SURFACES` (the caller-facing surface vocabulary) rather
+#: than a fourth hand-spelled copy -- three hand-synced literals is how the
+#: help text went stale after C2 added `roadmap` (Review: code-reviewer --
+#: C2 residual).
 _SURFACE_USAGE = "|".join(residue.EXPLICIT_SURFACES)
 
 
@@ -252,7 +256,9 @@ def _dispatch_brief(rest: list[str]) -> int:
     return _ReviewAssembleExitCode.SUCCESS
 
 
+#: Known subcommand tokens -> handler. `brief` is also reachable via
 #: FALLTHROUGH (see `main`) so it does not strictly need to appear here,
+#: but registering it keeps this the one place a new subcommand is added.
 _SUBCOMMANDS = {
     "brief": _dispatch_brief,
 }

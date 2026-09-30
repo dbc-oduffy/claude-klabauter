@@ -114,7 +114,7 @@ shipped_in resolution or the deployment_state flip:
   4. Commit (C2, 2026-08-14): every candidate this run itself advanced (both the handoff and
      sizing per-target writes) is a `locked_rmw` write to the worktree ONLY — steps 1-3 above
      never touch git. `_handler` accumulates the resolved paths of every `advanced` entry and
-     commits exactly that set, once, via `git_native.commit_scoped` (`_commit_mutated_paths`),
+     commits exactly that set, once, via `git.commit.commit_paths` (`_commit_mutated_paths`),
      before returning. This is the substitute committer the negative-spec below never named:
      an uncommitted terminal write here is simultaneously too-terminal for the closers
      (`promote_shipped_in_flight_stubs`/`handoff.close_origin_stub`, both of which exclude a
@@ -167,7 +167,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import os
-import tempfile
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
@@ -184,6 +184,14 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
+from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.frontmatter.schema_validate import (
     format_validation_errors,
     validate_frontmatter,
@@ -194,7 +202,6 @@ from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.ceremony.git_native import commit_scoped
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 # Vendored handoff schema path — same file every other handoff-mutating op in this
@@ -1003,46 +1010,44 @@ def _compose_cascade_commit_message(deliverable_id: str, mutated_paths: List[str
 def _commit_mutated_paths(
     mutated_paths: List[str], worktree_root: Path, deliverable_id: str
 ) -> "tuple[Optional[str], Optional[str]]":
-    """Commit exactly `mutated_paths` via `git_native.commit_scoped` -- the
+    """Commit exactly `mutated_paths` via `git.commit.commit_paths` -- the
     substitute committer this op's own negative-spec never named (see module
     docstring "Negative-spec" and
     archive/specs/2026-08/2026-08-14-cascade-ship-evidence-and-write-durability.md
     at 89e588c7e5^ § C2).
 
-    Never `git add -A`/`.`/`-a` -- `commit_scoped` is the computed-mechanism
-    selector every other scoped follow-up commit in this package already
-    routes through (`post_commit_tail._commit_and_push_origin_stub_close`,
-    `consumed_handoff_stamp`), and it fails loud on an empty or
-    directory-shaped pathspec rather than silently widening it.
+    Never `git add -A`/`.`/`-a` -- `commit_paths` commits exactly the named
+    paths, splices the shared index to agree with the new HEAD, and refuses an
+    empty or directory-shaped pathspec rather than silently widening it.
+    `prefer_deliberate_stage=True` keeps a peer's deliberately staged bytes on a
+    committed path.
 
     Returns `(commit_error, commit_notice)`. `commit_error` is None on a
-    landed commit, or a human-readable error string on a commit failure --
-    the caller folds a non-None `commit_error` into the result's
-    `commit_error` field (AC8: a commit failure must surface, never be
-    swallowed) without touching `exit_code`, which stays keyed off `advanced`
-    alone per this chunk's own hard constraint. `commit_notice` carries a
-    landed commit's own non-empty `stderr` (e.g. `commit_scoped`'s
-    private-index-branch exclusion notice) -- present only when the commit
-    landed ok AND that stderr is non-empty; None otherwise, including on a
-    commit failure (that case's text lives in `commit_error` instead).
+    landed commit (including one whose only fault is a stale index after the
+    ref moved), or a human-readable error string on a commit failure -- the
+    caller folds a non-None `commit_error` into the result's `commit_error`
+    field (AC8: a commit failure must surface, never be swallowed) without
+    touching `exit_code`, which stays keyed off `advanced` alone.
+    `commit_paths` reports no stderr, so `commit_notice` is always None.
     """
-    message = _compose_cascade_commit_message(deliverable_id, mutated_paths)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
+    message = apply_missing_trailers(
+        _compose_cascade_commit_message(deliverable_id, mutated_paths),
+        worktree_root,
+        mutated_paths,
+    )
     try:
-        commit_result = commit_scoped(mutated_paths, msg_path, worktree_root)
-    finally:
-        try:
-            Path(msg_path).unlink()
-        except OSError:
-            # temp commit-message file already gone; nothing left to clean up
-            pass
-    if not commit_result.ok:
-        return f"deliverable.cascade_terminal: commit failed: {commit_result.stderr}", None
-    return None, (commit_result.stderr or None)
+        commit_paths(
+            worktree_root,
+            mutated_paths,
+            message,
+            prefer_deliberate_stage=True,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
+        )
+    except IndexStaleAfterCommit:
+        return None, None
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+        return f"deliverable.cascade_terminal: commit failed: {exc}", None
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -1120,8 +1125,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                            swallowed, but does not override the advanced-artifact
                            success signal).>,
           "commit_notice": <str, present iff the follow-up commit landed ok AND
-                            carried non-empty stderr (C3) -- e.g. commit_scoped's
-                            private-index-branch exclusion notice. Never present
+                            carried non-empty stderr (C3); `commit_paths` reports
+                            none, so this is never set today. Never present
                             alongside commit_error (mutually exclusive: a failed
                             commit's text lives in commit_error, a landed commit's
                             non-empty stderr lives here).>,

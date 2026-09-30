@@ -191,14 +191,24 @@ import sys
 
 import logging
 import re
-import tempfile
 from time import perf_counter
+from functools import partial
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.git.commit_trailers import _read_deliverable_id_from_frontmatter
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
+from coordinator_core.git.commit_trailers import (
+    _read_deliverable_id_from_frontmatter,
+    apply_missing_trailers,
+)
+from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -224,9 +234,22 @@ _LOG = logging.getLogger(__name__)
 
 _FUTURE_DATE_SKEW = timedelta(minutes=5)
 
+#: R3 plausibility-guard timezone-ambiguity allowance — filename date/time
+#: prefixes are producer-dependent and the guard cannot know, from the
+#: filename alone, which producer wrote a given one: coordinator-content-repo's
+#: `/handoff` and `/spinoff` skills (`coordinator/skills/handoff/SKILL.md`,
+#: ~line 146) stamp LOCAL wall-clock time (`$(date +%Y-%m-%d)_$(date
+#: +%H%M%S)`), while this repo's own `handoff_author_fork.py`
+#: `_fork_handoff_filename` (~line 315) stamps UTC. Real UTC offsets span
+#: -12h..+14h, so a legitimately local-time filename from a machine up to
+#: UTC+14 can read as up to 14h "future" relative to a naive-UTC now() even
+#: though it is not future-dated at all — this allowance absorbs that full
 #: span on top of `_FUTURE_DATE_SKEW`'s clock-skew slack. Confirmed
+#: real-world case (BST, UTC+1, still tripped the un-widened 5-minute bound):
+#: `cross-repo/inbox/2026-07-23-claude-central-em-wsc-tail-stamp-ship-silent-skip.md`.
 _FILENAME_TZ_AMBIGUITY = timedelta(hours=14)
 
+#: Matches the two live handoff filename shapes seen on disk:
 #:   YYYY-MM-DD_HHMMSS_<rest>.md   (full datetime prefix)
 #:   YYYY-MM-DD-<rest>.md          (date-only prefix, implicit midnight)
 _FULL_TS_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})_")
@@ -512,11 +535,29 @@ class StampOutcome:
     errors: list[dict[str, str]] = field(default_factory=list)
     empty_consumed_set: bool = False
     follow_up_committed_sha: Optional[str] = None
+    #: Every follow-up commit this leg landed, in the order it landed them.
     #: SUPERSEDED 2026-08 (DR-406 retired `deliverable_id` as a commit-scoping
+    #: key; C10 of `2026-08-19-commit-scoping-keys-on-the-baton.md` retired
+    #: the per-deliverable partition on this path accordingly): this is no
+    #: longer one commit per distinct `deliverable_id`. There is now ONE
+    #: follow-up commit for the whole stamped set, however many
+    #: `deliverable_id`s it spans -- a pathspec spanning several omits the
+    #: `Deliverable-Id:` trailer instead of being split or refused.
+    #: `group_stamped_by_deliverable_id` is retained but has no production
+    #: call site on this path. `follow_up_committed_sha` is the LAST of
+    #: these (the branch tip); under the current single-commit behaviour the
+    #: two agree and this list holds exactly one entry. Non-empty even when
+    #: `follow_up_error` is set, when an earlier group's commit landed
+    #: before a later one failed (a residual multi-commit shape from before
+    #: the retirement).
     follow_up_committed_shas: list[str] = field(default_factory=list)
     follow_up_pushed: Optional[bool] = None
+    #: Canonical `push_status` vocabulary from `commit_pipeline.py`
     #: (`PUSH_STATUS_PUSHED`/`_FAILED`/`_DECLINED`/`_NOT_ATTEMPTED`) --
+    #: C6e's distinct declined-signal channel. A branch-policy decline
     #: (`PUSH_STATUS_DECLINED`) is deliberately NEVER routed through
+    #: `follow_up_error` -- it is not a failure, it is exactly-correct
+    #: policy behaviour (see `_commit_and_push_follow_up`'s docstring).
     follow_up_push_status: str = PUSH_STATUS_NOT_ATTEMPTED
     follow_up_error: Optional[str] = None
 
@@ -604,6 +645,10 @@ async def post_commit_stamp_and_ship(
 
         # R4(b)+(c), stamp-BEFORE-ship (see module docstring "DEVIATION" /
         # Negative-spec "Stamp-before-ship ordering is LOAD-BEARING"):
+        # shipped_in must already be on disk before deployment_state flips to
+        # shipped, or schema_validate.py's _cf_shipped_in_required (Rule
+        # A3a-2) hard-fails the ship transition for any handoff created on or
+        # after 2026-05-29.
         stamp_attempt = await _stamp_locked(
             relpath, handoff_abs, committed_sha, repo_root=repo_root
         )
@@ -670,7 +715,7 @@ def _commit_and_push_follow_up(
     push_mode: str = PUSH_MODE_SYNC,
     session_id: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
-    """Computed-mechanism commit (`git_native.commit_scoped`) of ONLY the
+    """In-process commit (`git.commit.commit_paths`) of ONLY the
     stamped paths (AC17) — the commit leg is unconditional (anti-scope: never
     weakened).
 
@@ -680,7 +725,7 @@ def _commit_and_push_follow_up(
     reintroduce a call site that passes the ungrouped set" — that negative-
     spec is superseded: after C10, the ungrouped set IS this call site's
     contract. A pathspec spanning two `deliverable_id` values is now
-    expected and handled by `commit_scoped`'s trailer resolution (tier 0 no
+    expected and handled by `apply_missing_trailers` (tier 0 no
     longer raises `DivergentDeliverableIdError` on a divergent
     multi-deliverable pathspec, per C2/C4 and DR-406, the PM's 2026-08-19
     scaling ruling) rather than being an ask this function's caller had to
@@ -743,35 +788,51 @@ def _commit_and_push_follow_up(
     `error=None`.
     """
     _pre_push_elapsed = perf_counter()
-    message = _compose_follow_up_message(stamped_paths, committed_sha)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
-
+    message = apply_missing_trailers(
+        _compose_follow_up_message(stamped_paths, committed_sha),
+        worktree_root,
+        stamped_paths,
+    )
     try:
-        # content from the worktree on the DIVERGED branch, closing the same
-        commit_result = git_native.commit_scoped(
-            stamped_paths,
-            msg_path,
+        outcome = commit_paths(
             worktree_root,
-            suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
+            stamped_paths,
+            message,
+            prefer_deliberate_stage=True,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
-    finally:
-        try:
-            Path(msg_path).unlink()
-        except OSError:
-            print(f"skip: _commit_and_push_follow_up: Path(msg_path).unlink() failed: {sys.exc_info()[1]}", file=sys.stderr)
-            pass
+        follow_up_sha: Optional[str] = outcome.sha
+    except IndexStaleAfterCommit as exc:
+        follow_up_sha = exc.outcome.sha
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {exc}"
 
-    if not commit_result.ok:
-        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {commit_result.stderr}"
-
-    rev_result = git_native.rev_parse_head(worktree_root)
-    follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
-
+    # Post-commit claim release (C3d, docs/plans/2026-08-11-claim-release-
+    # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
+    # `stamped_paths` is already repo-relative (from `redrive_consumed_set`
+    # -> `find_all_consumed_handoffs`, wire-id relpaths -- see
+    # `_already_terminal_no_op`'s docstring for the same "always
+    # forward-slash" convention), and `session_id` is `post_commit_stamp_
+    # and_ship`'s own required caller-supplied param: the SAME id
+    # `redrive_consumed_set(worktree_root, session_id)` above just used to
+    # derive this closing session's OWN consumed-handoff set -- i.e. this
+    # is genuinely the committing session's own sid, not a guess
+    # (`git_native.commit_scoped`'s own comment names exactly this
+    # ambiguity as the reason it does not wire release in itself). Run
+    # synchronously here -- this function already executes off the event
+    # loop via the caller's `asyncio.to_thread(_commit_and_push_follow_up,
+    # ...)`, so a second `to_thread` hop would only add a needless
+    # thread-pool round trip. Failure direction mirrors every other C3
+    # site: a release failure must never fail a commit that already
+    # landed -- the commit above is the durable outcome; a retained stale
+    # claim is the safe residue.
+    # `session_id` is Optional on this signature, and an unattributable
+    # release is not a release: releasing under an unknown sid would be a
+    # guess at authorship, which is the one thing this whole seam refuses to
+    # do. Skipping is the same fail-safe RETAIN direction every other C3 site
     # takes -- and skipping EXPLICITLY, rather than letting a None fall into
+    # the `except` below, keeps a genuine failure distinguishable from a
+    # caller that simply had no sid to give.
     try:
         if session_id:
             session_scope.release_committed_claims(
@@ -785,6 +846,8 @@ def _commit_and_push_follow_up(
         )
 
     # Use the canonical PUSH_MODE_SYNC
+    # constant (commit_pipeline.py's own enum) instead of a bare string
+    # literal so this stays in sync if the canonical value ever changes.
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
@@ -795,11 +858,33 @@ def _commit_and_push_follow_up(
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:
+        # `push_with_retry` can
+        # fetch+`git rebase --onto` this follow-up commit on a rejected
         # push before re-pushing, which REWRITES its SHA. The pre-push
+        # `follow_up_sha` captured above is therefore stale in exactly the
+        # retry case this ladder exists to handle. Re-resolve HEAD now,
+        # after the push actually landed, so the SHA persisted as
+        # `shipped_in:` (durable audit data) names the commit that is
+        # really on the remote. Only the landed path pays this second
+        # `rev-parse` — decline/no-remote/not-attempted/failure paths below
+        # never rewrite anything, so they keep the pre-push value untouched.
+        # If the re-read itself fails, fall back to the pre-push SHA rather
+        # than downgrading a known-good value to None — it is correct
+        # unless a rebase-retry actually fired, and a stale-but-real SHA is
+        # a better audit trail than a hole. state/bug-backlog/2026-08-11-
+        # run-commit-pipeline-reports-a-concurrent-0a91ea7dc77b.yaml (P1):
+        # that bare re-read fired on every landed push, not just a
+        # rebase-retry, and could silently adopt a peer's push landing in
+        # this window. `resolve_post_push_sha` re-reads HEAD exactly as
+        # before but only adopts it once its tree matches `follow_up_sha`'s
+        # (see that helper's own docstring); a mismatch keeps `follow_up_sha`.
         landed_sha = resolve_post_push_sha(worktree_root, follow_up_sha)
         return landed_sha, True, push_status, None
     if push_status == PUSH_STATUS_FAILED:
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
         return follow_up_sha, False, push_status, f"git push failed: {reason}"
     # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE -- no push landed, but
+    # this is NOT an error and NOT `pushed=False` (see docstring above): a
+    # policy decline or a missing remote is `push_with_retry`'s own honest
+    # "did not push, on purpose/by environment" outcome.
     return follow_up_sha, None, push_status, None

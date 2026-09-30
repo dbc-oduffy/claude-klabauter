@@ -19,6 +19,9 @@ from coordinator_core.bash_guards import multiprobe_banner_rewrite
 from coordinator_core.bash_guards._shape_classifier import _SESSION_FACT_PROBE_BINARIES
 
 #: One minimal recognized invocation per `_SESSION_FACT_PROBE_BINARIES`
+#: member, chosen to satisfy `_bt_probe_segment_kind`'s own recognized-form
+#: requirements (`git` needs a recognized subcommand form; the rest are
+#: bare, no-argument invocations).
 _MINIMAL_INVOCATION = {
     "git": ["git", "status"],
     "pwd": ["pwd"],

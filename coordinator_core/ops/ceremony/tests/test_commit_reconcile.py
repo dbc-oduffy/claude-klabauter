@@ -162,7 +162,26 @@ def test_reconcile_fallback_resolves_a_real_bounded_base_when_history_exceeds_th
     assert found.range_spec.endswith("..HEAD")
 
 
+# `test_reconcile_finds_a_commit_that_predates_its_own_pre_sha` (deleted): it
+# pinned a WIDENED second `git log` pass on the `pre_sha`-present path,
+# reached only when the bounded `pre_sha..HEAD` pass found nothing -- which
+# includes the ordinary already-committed no-op, the commonest failure-path
+# outcome there is, making that pass a near-full-history walk on the cheap
+# common case (measured: a filtered `git log -n --grep` does not bound the
 # walk, only the output -- see `_RECONCILE_FALLBACK_WINDOW_COMMITS`'s own
+# comment). The shape it modelled -- this call's own commit landing OUTSIDE
+# its own `pre_sha..HEAD` range -- was never an ordering fault inside
+# `commit()`: `rev_parse_head()` genuinely always runs before
+# `commit_scoped()`. The real cause was the warm-engine client re-executing
+# an already-delivered mutation, so a SECOND execution read `pre_sha` AFTER a
+# FIRST execution had already committed -- fixed at the root this session in
+# `coordinator_core/warm/client.py`. With one execution per invocation,
+# `pre_sha` is an ancestor of this call's own commit by construction, so the
+# shape this test modelled can no longer occur, and the pass that defended
+# against it is gone -- see `_reconcile_landed_despite_failure`'s own
+# docstring for the full reasoning. See
+# `test_reconcile_regression_pre_sha_path_issues_exactly_one_git_log` below
+# for its replacement guard.
 
 
 def test_reconcile_fallback_ignores_a_token_merely_quoted_in_a_message_body(tmp_path):

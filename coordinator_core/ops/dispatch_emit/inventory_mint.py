@@ -275,6 +275,18 @@ class InventoryMintError(ValueError):
     """Base class for every refusal this module raises."""
 
 
+#: Rows one inventory emission may carry. Compose cost is superlinear in row
+#: count (measured: 100 rows 0.19s process, 485 rows 4.1s on bare fixture rows,
+#: ~33s on real ones); 100 keeps compose inside the brightline and the script far
+#: under the runner byte cap. Callers split larger inventories into parts.
+DEFAULT_MAX_INVENTORY_ROWS = 100
+
+
+class InventoryTooLargeError(InventoryMintError):
+    """The inventory mints more live rows than one emission may carry --
+    refused before the spine is written or any script is composed."""
+
+
 class ChunkTableAbsentError(InventoryMintError):
     """Raised when the inventory record carries no `## Chunk table` section,
     or the table has no parseable header/rows."""
@@ -911,7 +923,14 @@ def mint_rows(
                     "title": r.title or summary,
                     "change_kind": r.change_kind or _infer_change_kind(r_writes),
                     "surface": (r_writes[0] if r_writes else r.surface) or summary,
-                    "body": r.body or _row_body(minted_id, spec_path, r.title or summary, verification, complexity),
+                    # The leading `Spec: <plan> (<id>)` line is what emit's
+                    # `_row_source_plan` keys `_rowPlan` on; without it a
+                    # plan-scoped stop rule halts every plan in the run.
+                    "body": (
+                        f"Spec: {spec_path} ({minted_id})\n{r.body}"
+                        if r.body
+                        else _row_body(minted_id, spec_path, r.title or summary, verification, complexity)
+                    ),
                     "writes": r_writes,
                 }
                 if depends_on:
@@ -1015,7 +1034,7 @@ def spine_path_for(inventory_path: Path, run_id: str) -> Path:
     return inventory_path.parent / f"{run_id}.spine.md"
 
 
-def mint_spine(inventory_path: str) -> Tuple[str, Path]:
+def mint_spine(inventory_path: str, max_rows: Optional[int] = None) -> Tuple[str, Path]:
     """The `--inventory` mint leg's one entry point.
 
     Reads `inventory_path` (a mise-inventory record), derives a
@@ -1037,6 +1056,12 @@ def mint_spine(inventory_path: str) -> Tuple[str, Path]:
 
     chunk_rows = parse_chunk_table(text)
     rows = mint_rows(chunk_rows, inventory_path=path)
+    if max_rows is not None and len(rows) > max_rows:
+        raise InventoryTooLargeError(
+            f"inventory {path.name} mints {len(rows)} live rows, over max_rows "
+            f"{max_rows} -- split its chunk table into parts of <= {max_rows} "
+            "rows and emit each, or raise --max-rows"
+        )
 
     frontmatter_lines = [f"run_id: {run_id}", "derived_from: mise inventory record"]
     if deliverable_id:

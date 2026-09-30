@@ -194,8 +194,11 @@ FLEET_REPO_KEYS: Dict[str, str] = {
     "example-market-data-repo": "example_market_data_repo",
 }
 
+# Every OTHER currently-known registered `repos.*` key that is NOT an EM
+# working tree, with a one-line reason. A registered key present in neither
 # this set nor FLEET_REPO_KEYS lands in the `unclassified` bucket and trips a
 # non-zero exit (see run_preflight) — extend this set (or FLEET_REPO_KEYS) the
+# moment that happens, rather than silently ignoring the new key.
 NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-smoke-test-fixture": "per-machine smoke-test fixture (registered path is /tmp scratch), not a repo",
     "repos.example-game-repo-python-audit": "UE consumer-project Saved/ scratch dir (python audit recall log), not a git working tree",
@@ -207,8 +210,11 @@ NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-sim-repo": "standalone product repo (example-sim-repo), not part of the coordinator EM fleet",
     "repos.example-voice-system": "standalone product repo (example-voice-system), not part of the coordinator EM fleet",
     "repos.example_store_repo": "standalone product repo (Example Store), not part of the coordinator EM fleet",
+    # 2026-09-06: five keys that had been sitting unclassified, blocking the
     # handoff 8.10.0 -> 10.0.0 major re-vendor. Each verified by RESOLVED PATH,
     # not by name — the two aliases below resolve to a tree FLEET_REPO_KEYS
+    # already scans under a different key, so promoting either would double-count
+    # that repo's corpus and silently inflate every count this oracle reports.
     "repos.claude_klabauter": "published engine mirror (percolate publish target), not an authoring EM working tree — its handoff corpus, if any, is a transformed copy of claude-klabauter's",
     "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.content_root, already scanned as coordinator-content-repo — classifying it fleet would double-count that corpus",
     "repos.example-game-repo": "ALIAS: resolves to the same tree as repos.example_game_workbench_repo, already scanned as example-game-workbench-repo — classifying it fleet would double-count that corpus",
@@ -407,7 +413,9 @@ def run_preflight() -> Dict[str, object]:
         exit_code is 1 iff ANY of unresolvable/unclassified/off_enum_live is
         non-empty. off_enum_archived NEVER contributes to exit_code.
     """
+    # Looked up via the module global (not a bound default) so a test/caller can
     # monkeypatch `_HANDOFF_SCHEMA_PATH`/`_ARCHIVED_HANDOFF_SCHEMA_PATH` and have
+    # this pick them up at call time.
     live_kind_enum = set(load_live_kind_enum(_HANDOFF_SCHEMA_PATH))
     archived_kind_enum = set(load_archived_kind_enum(_ARCHIVED_HANDOFF_SCHEMA_PATH))
 

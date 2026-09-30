@@ -111,6 +111,7 @@ def test_windows_unreadable_capture_falls_back_to_argv(monkeypatch, tmp_path):
 
 
 def test_classify_shape_e_outer_quoted_unquoted_exe_is_sound():
+    # cmd.exe /c "<exe> --r e9^..e9" — outer-quoted, exe path unquoted.
     # Single quote after /c; caret SURVIVES. Must not be a false refusal.
     raw = 'cmd.exe /c "scoped-git-commit.cmd --r e9^..e9"'
     assert _classify_raw_cmdline_transport(raw) == (

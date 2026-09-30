@@ -250,6 +250,7 @@ def test_withdrawn_is_its_own_population_and_the_op_must_survive() -> None:
     kli.classify(live, live_ops=frozenset({"records.example_history"}), suspended_ops=frozenset())
     assert live[0].population == "WITHDRAWN"
 
+    # The invariant runs the opposite way to REBUILT's: a withdrawn nomination
     # asserts the op SURVIVED, so an absent op means something cut it anyway.
     absent = kli.parse_ledger(text)
     kli.classify(absent, live_ops=frozenset(), suspended_ops=frozenset())
@@ -414,7 +415,12 @@ def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch, capsys) ->
     assert "CROSS-REPO-EVIDENCE K-901" in err
 
 
+# --- Disposition-first status entries (handoff 2026-08-29, Next Steps 5) ------
+#
+# An entry that opens with its disposition in bold instead of labelling it read
 # as an EMPTY status, matched no rule, and rendered CONTESTED -- a defect report
+# about the ledger for a disposition the ledger states plainly. K-066 was this
+# shape and was fixed at the entry; these pin the reading rather than the entry.
 
 
 def _entry_body(text):

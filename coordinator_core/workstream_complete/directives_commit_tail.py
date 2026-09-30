@@ -27,7 +27,10 @@ release_all_committed_claims`, hard constraint 4 — not merely this commit's
 own `stage_paths`; see `_release_committed_path_claims`'s own docstring)
 and the governing-plan artifact claim (`ops/ceremony/tail_ops.py ::
 cs_release_artifact`, AC5) unconditionally, on both the success and failure
-exit of the wrapped commit call.
+exit of the wrapped commit call. The one non-terminal caller,
+`workweek_complete.apply`, calls `run_close_commit` directly and releases only
+the committed paths: workweek-complete is not a session's terminal commit, and
+the wrapper would release a live session's whole claim surface.
 
 This module is one of seven siblings (directives_lessons_plan.py,
 directives_completion.py, directives_memo_lifecycle.py,
@@ -1228,9 +1231,13 @@ def run_close_commit(
     call-shape compatibility with every existing caller but are no longer
     threaded anywhere: `commit_paths` has no tolerant pre-stage step to scope
     (`caller_paths` gated `explicit_stage`'s swept-path tolerance, which does
-    not exist on this path — a `stage_paths` entry absent from disk and not
-    also listed in `deleted_paths` is a genuine caller error now, surfaced as
-    `CommitRefused` rather than silently skipped), no `on_committed` hook
+    not exist on this path). A `stage_paths` entry absent from disk and not
+    also listed in `deleted_paths` is named in `diagnostics` as "stage path
+    vanished before commit: <path>", one entry per path, on every return. The
+    commit lands for the remaining paths with `commit_failed=False`; when the
+    pathspec is non-empty and every entry vanished (and `deleted_paths` is
+    empty) it returns `commit_failed=True`, `committed_sha=None`. An empty
+    pathspec is a benign no-op. No `on_committed` hook
     fires mid-call, and `commit_paths` carries no `Session-Id:` trailer
     concept to attribute.
 
@@ -1261,15 +1268,30 @@ def run_close_commit(
         kept_entries=kept_entries,
         trailers=trailers,
     )
-    # `commit_paths` cannot read a path it cannot find; a `stage_paths` entry
-    # already absent on disk and not also declared via `deleted_paths` is
-    # what `explicit_stage`'s swept-path tolerance used to paper over --
-    # dropped here rather than silently included, since a missing path in
-    # `paths` raises `CommitRefused` (an OSError on read), not a no-op skip.
+    # `commit_paths` cannot read a path it cannot find. A `stage_paths` entry
+    # absent on disk and not declared via `deleted_paths` is dropped from the
+    # pathspec and named in `diagnostics` (one entry per path), on every
+    # return; a wholly-vanished non-empty pathspec fails the commit.
     deleted_set = set(deleted_paths)
     present_paths = [
         p for p in stage_paths if p in deleted_set or (root / p).exists()
     ]
+    vanished_diagnostics = [
+        f"stage path vanished before commit: {p} (likely moved by a concurrent "
+        "archive or peer; declare an intended removal via deleted_paths)"
+        for p in stage_paths
+        if p not in deleted_set and not (root / p).exists()
+    ]
+    if not present_paths and not deleted_paths and vanished_diagnostics:
+        return CommitTailOutcome(
+            committed_sha=None,
+            pushed=None,
+            push_status=PUSH_STATUS_NOT_ATTEMPTED,
+            commit_failed=True,
+            integrity_breach=False,
+            sha_unverified=False,
+            diagnostics=vanished_diagnostics,
+        )
     if not present_paths and not deleted_paths:
         # Mirrors `run_commit_pipeline`'s own empty-`commit_paths` short-
         # circuit (step 2 of its docstring sequence): nothing to stage is a
@@ -1314,7 +1336,7 @@ def run_close_commit(
             commit_failed=True,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=[str(exc)],
+            diagnostics=[*vanished_diagnostics, str(exc)],
         )
     if on_committed is not None:
         on_committed(outcome.sha)
@@ -1325,7 +1347,7 @@ def run_close_commit(
         commit_failed=False,
         integrity_breach=False,
         sha_unverified=False,
-        diagnostics=[],
+        diagnostics=vanished_diagnostics,
     )
 
 

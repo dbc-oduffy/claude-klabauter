@@ -42,6 +42,8 @@ class BacklogHistory(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ISO-8601 UTC timestamp when this block was generated; present-as-null (D9).
+    # Full timestamp (better staleness signal; matches provenance.observed_at);
+    # cockpit truncates to date for display.
     generated_at: IsoDateTime | None
     series: list[RepoSeries]
     provenance: ProvenanceEnvelope

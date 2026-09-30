@@ -84,6 +84,9 @@ def _isolated_state(tmp_path, monkeypatch):
     (tmp_path / "tmp").mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     # This container runs with CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 live in
+    # its own process environment (the PM's own fleet-wide setting) -- clear
+    # it so every threshold derivation in this file is deterministic against
+    # the 1,000,000-token `context_window_size` the fixtures below assume.
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
     sidecar_module._last_written.clear()
     yield

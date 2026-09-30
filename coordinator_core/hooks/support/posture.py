@@ -48,6 +48,8 @@ import os
 from coordinator_core.ops._git_root_util import git_root_zero_spawn
 
 _VALID_POSTURES = frozenset({"precision", "default", "substrate-free"})
+# Named for what it SELECTS, not for the failure mode that reaches it: resolution
+# fails open (never blocks), and the value it falls back to is the most cautious
 # posture in the enum. A `_FAIL_OPEN_` prefix would read as the opposite.
 _MOST_CAUTIOUS_POSTURE = "precision"
 
@@ -116,6 +118,8 @@ def _resolve_posture_from(repo_root: str | None) -> str:
                 return value
 
         # WS-2 home-resolution shape: CLAUDE_HOME first, `Path.home()` as the terminal
+        # rung. A bare `expanduser("~")` yields the literal "~" when every home rung is
+        # unset, which silently reads a posture file that is not the operator's.
         from pathlib import Path
         claude_home = os.environ.get("CLAUDE_HOME") or Path.home()
         identity_path = os.path.join(claude_home, ".claude", "coordinator-identity.yaml")

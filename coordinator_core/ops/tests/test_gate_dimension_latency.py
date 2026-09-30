@@ -331,8 +331,28 @@ def test_unclassified_op_is_unavailable_not_gated(monkeypatch):
     assert "classification" in result.detail
 
 
+# ---------------------------------------------------------------------------
+# End-to-end (C6): a record produced through the real record.py path,
+# persisted via the real baseline_store.append() code path to an isolated
+# per-test store partition, read back through gate_validate_invocable's
+# dimension seam (real gate.evaluate + real budget-manifest min_gating_sample
+# resolution) — proving the gate actually goes red, not merely that a
+# monkeypatched _latest_record_for can be asserted FAIL in isolation.
+#
 # STORE-PATH ISOLATION (staff-eng second-pass review, R6): `_latest_record_for`
+# calls `baseline_store.query(op=...)` with no explicit path, so it always
 # reads `baseline_store.DEFAULT_STORE_PATH` — the real, tracked, in-repo
+# partition. Every test below monkeypatches that module attribute to a
+# tmp_path partition (the real *code path*, never the real *file*) and
+# asserts the tracked partition's bytes are unchanged by the run.
+#
+# Non-vacuity: a plain over-budget record going FAIL is not itself a C4
+# guard (C4 only makes FAIL harder under band skew, never easier — that
+# case still fails with C4 reverted). The non-vacuous case is the
+# complement: a record whose own ambient band is unknown or high-load must
+# NOT go red — that fails with C4 reverted. Both are asserted below,
+# end-to-end.
+# ---------------------------------------------------------------------------
 
 
 def _hash_file(path):

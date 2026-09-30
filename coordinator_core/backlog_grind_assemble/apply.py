@@ -180,7 +180,12 @@ from coordinator_core.session.grant_directive import (
     run_grant_directive,
 )
 
+# ---------------------------------------------------------------------------
+# Exit-code contract — composed from apply_base, shared by every apply/
+# dispatch half. NOT inherited from `brief`'s 0/2/3 (this module's own
 # `EXIT_OK`/`EXIT_USAGE`/`EXIT_TRANSPORT_FAIL`) — the two halves define
+# their own contracts per `computed-skills.md` § Exit-code contract.
+# ---------------------------------------------------------------------------
 APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
 APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
 APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
@@ -470,7 +475,17 @@ def _dispatch_commit_per_wave(args: list[str], repo_root: Path) -> dict[str, Any
     return {"cli": _COMMIT_PER_WAVE_CLI, "paths": all_paths, "message": message, "commit_sha": sha}
 
 
+# ---------------------------------------------------------------------------
+# tier-u-grant-cli — the ONE cli in this table whose handler reaches
 # outside `coordinator_core.backlog_grind_assemble` (into the EXISTING,
+# already-live `coordinator_core.session.grant_directive.run_grant_directive`
+# — the same argv path `merge_assemble`'s `_dispatch_tier_u_grant` dispatches
+# through (C3): one parser for `grant`/`revoke`/`check`, never a second one
+# re-built here). Consumed by direct in-process import — same "call the
+# existing primitive, never shell out to a bin trampoline for something
+# with a real Python entrypoint" convention `pickup_assemble.apply`'s
+# `_dispatch_archive_stamp_cli` already sets.
+# ---------------------------------------------------------------------------
 
 _TIER_U_GRANT_CLI = bga_directives._TIER_U_GRANT_CLI
 
@@ -566,8 +581,15 @@ def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# coordinator-resolve-validation-cmd (P071-C7) — resolves bug-blitz's
 # `commands/bug-blitz.md:60` FULL test-command citation IN-PROCESS, never
+# via subprocess: `coordinator_core.resolve_validation_cmd` is already the
 # NATIVE-FIRST path `bash_guards/check_test_suite_invocation.py` resolves
+# through before falling back to the bin trampoline by path, and spawning
+# an interpreter here to read a frontmatter key would not meet the
+# brightline's per-use process justification.
+# ---------------------------------------------------------------------------
 
 _RESOLVE_VALIDATION_CMD_CLI = bga_directives._RESOLVE_VALIDATION_CMD_CLI
 
@@ -618,9 +640,33 @@ def _dispatch_resolve_validation_cmd(args: list[str], repo_root: Path) -> dict[s
     )
 
 
+#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk: NONE of this table's nine verbs (`commit-per-item`,
+#: `commit-per-wave`, `checkout-and-backlog-note`, `tier-u-grant-cli`,
+#: `spinoff-handoff-template`, `executor-dispatch-prompt-template`,
+#: `dispatch-haiku-verifier`, `unify-batons`,
+#: `coordinator-resolve-validation-cmd`) resolve to a registered op, so
+#: ALL NINE stay `cli`-named — none migrate to `op`. No new op is minted
+#: to force a migration (out of scope by name). Every one is either raw
+#: `git` plumbing, an in-process call into an existing non-op Python
+#: primitive (`write_tier_u_grant`, `unify_run_batons`,
+#: `cs_resolve_full_test_cmd`), or a pass-through report builder
+#: (`dispatch-haiku-verifier` never executes anything itself) — never
+#: `bash`/`sh`, so `docs/reference/shell-out-carve-outs.md` (scoped to
+#: interpreter/shell spawns) does not apply, and none is a
 #: `CONSUMES_MANIFEST`-driven script module in the completion-family sense,
 #: so no `CONSUMES_MANIFEST` entry applies either. Consequently
 #: `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/dispatchable.py) gains
+#: NO `"backlog_grind_assemble"` entry from this chunk (C1's "ship it EMPTY
+#: except for entries actually migrated" — zero migrated here).
+#:
+#: THE closed dispatch table (AC3). Every key is a literal string written
+#: here by hand — this dict is never mutated at runtime and never
+#: consulted via anything but a plain `dict.get`/`in` on a
+#: `directives[].cli` value (`apply_base.resolve_cli`). No
+#: `coordinator-safe-commit` entry, by design (D-3).
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     _COMMIT_PER_ITEM_CLI: _dispatch_commit_per_item,
     _COMMIT_PER_WAVE_CLI: _dispatch_commit_per_wave,
@@ -798,6 +844,8 @@ def _build_wave_path_directives(
     for raw in wave_paths:
         _assert_in_repo_root(Path(raw), repo_root)
 
+    # This was a cross-module reach into a
+    # module-private (underscore-prefixed) constant with no __all__/export;
     # readers_blitz.py now exports COMMIT_READINESS_JP_ID publicly.
     depends_on = readers_bug_blitz.COMMIT_READINESS_JP_ID if cadence == "bug-blitz" else None
     branch = _current_branch(repo_root)
@@ -949,6 +997,18 @@ def main_apply(argv: list[str]) -> int:
 
     if not wave_paths and cadence == "bug-blitz":
         # THE GATE IS NOT UNOPENABLE; NOTHING ASKED IT TO OPEN. bug-blitz's
+        # standing commit-readiness judgment point ships with a single
+        # disposition whose `resolves` is empty, and
+        # `_wire_single_disposition_resolves` fills it from the directives that
+        # `depends_on` it — which only exist when `--wave-path` was supplied.
+        # Without one, the run halts reporting the JP id and nothing else, and
+        # that report is indistinguishable from the pre-`adb36b820d` defect
+        # where no `--decisions` value could ever clear the gate. A 2026-08-31
+        # live run was read that way and filed as a regression against a tree
+        # and a mirror that both carry the fix
+        # (cross-repo/inbox/2026-08-31-coordinator-content-repo-em-blitz-apply-verb-emits-no-
+        # commit-directive.md). Naming the omission at the surface the operator
+        # used is the whole fix; the wiring needs nothing.
         print(
             "backlog-grind-assemble apply: no --wave-path given, so no commit "
             "directive is built and bug-blitz's commit-readiness gate has "
@@ -983,7 +1043,20 @@ def main_apply(argv: list[str]) -> int:
     return exit_code
 
 
+# ---------------------------------------------------------------------------
+# `drop` — the AC4 inverse subcommand. Composed with `pickup_assemble`/
+# `baton_assemble`'s own `drop()` in mind, but backlog-grind-assemble is
+# NOT a claimed-artifact lifecycle the way those two are: `cadence` names
+# WHICH mirror surface is asking, it is never itself claimed, parked, or
+# handed off (there is no `claim_artifact`/`release_artifact` call
+# anywhere in this package — `directives.py` never builds a
+# `session-claim-cli` directive). `drop()` is therefore a deliberately
 # honest, documented no-op — it returns `APPLY_EXIT_OK` and says so,
+# rather than either fabricating a claim-release this assembler has no
+# claim state to release, or omitting the subcommand and failing AC4's
+# "exists and is callable" bar (the C1 contract test's own scope for this
+# AC).
+# ---------------------------------------------------------------------------
 
 
 def drop(

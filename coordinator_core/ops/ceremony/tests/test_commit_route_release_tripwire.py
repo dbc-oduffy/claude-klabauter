@@ -119,7 +119,19 @@ _ALL_TRACKED_CALLEE_NAMES = (
     | _NATIVE_COMMITTER_API_NAMES
 )
 
+# One row per mechanism: (callee-names, required-string-constant-or-None,
+# mechanism-name). A call matches the first row whose names it falls in and
+# whose required constant (if any) is reachable from its own argument tree
+# -- order matters for the commit/commit-tree pair sharing a name-group: a
+# call carrying both must keep the earlier, more specific tag.
+#
+# `commit_tree_plumbing` is the FIFTH mechanism (2026-08-26): DR-211's
+# rewrite moved fleet archival off `git commit` onto `git write-tree` +
+# `git commit-tree` + `git update-ref`. Those sites still call
+# `create_subprocess_exec`, so only the `"commit-tree"` constant separates
+# them from the asyncio row above. Whether that plumbing shape needs release
 # coverage is still open -- see the DELIBERATELY RETAINED note in the
+# allowlist below; this row only lets the enumerator SEE the sites.
 _MECHANISM_ROWS = (
     (_ASYNCIO_EXEC_NAMES, "commit", "asyncio_create_subprocess_exec"),
     (_RUN_GIT_HELPER_NAMES, "commit", "_run_git_helper"),
@@ -243,6 +255,29 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     # DELIBERATELY RETAINED WHILE STALE (2026-08-25; re-measured 2026-09-06).
+    # `test_no_stale_allowlist_entry` fails on FOUR rows now, not the two this
+    # note first named -- `git_native.py::_commit_scoped_private_index`,
+    # `fleet/_common.py::archive_and_commit`, `fleet/_common.py::
+    # rm_and_commit` and `fleet/memo_send.py::_memo_send`. Every one names a
+    # function that is alive and still lands a commit; each stopped matching
+    # only because its landing moved onto a primitive this enumerator does not
+    # match at enclosing-function granularity (a deeper `cas_ref`, a
+    # `create_subprocess_exec` carrying no literal `"commit"`). Removing them
+    # to get green would launder a coverage regression into a pass. Both functions are alive and still commit --
+    # they stopped being `git commit` argv sites when the DR-211 plumbing rewrite
+    # moved them to `git commit-tree` + `git update-ref`, a fifth mechanism this
+    # enumerator does not track. So two live commit paths now sit outside the
+    # tripwire entirely. The fix is a fifth tracked mechanism plus a release-
+    # coverage decision for the plumbing shape, which is the plumbing rewrite's
+    # premise to answer, not this allowlist's. Delete these rows only alongside
+    # that decision.
+    # Surfaced 2026-08-26 by the fifth tracked mechanism, not newly written:
+    # both are `commit-tree`/`update-ref` landings that the exact-`"commit"`
+    # constant match never saw, so they sat outside the tripwire exactly as
+    # the two `_common.py` rows below did. Listed with the SAME disposition as
+    # those, and for the same reason: the site is now accounted for, while
+    # whether a plumbing landing needs release coverage stays the DR-211
+    # rewrite's question to answer. `confirmed: False` is that open state.
     "ops/ceremony/git_native.py::_commit_scoped_private_index": {
         "reason": "release",
         "confirmed": False,
@@ -256,6 +291,8 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": False,
     },
     # VERIFIED INELIGIBLE, not asserted: `release_committed_claims(sid, paths)`
+    # cannot be called without a session id, and neither function below has
+    # one anywhere in its body (checked by AST, not by eye).
     "benchmarks/probe_commit_pipeline.py::one": {
         "reason": "ineligible: a benchmark fixture commit in a throwaway "
         "repo -- no session holds a claim over these paths, and the "
@@ -284,7 +321,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     # VERIFIED INELIGIBLE, and a correction to this row's first draft, which
+    # read "release" on a measurement that counted the word "session_id" in
     # the DOCSTRING (`ast.unparse` emits docstrings; the sweep did not strip
+    # them). The body has no session identity of any kind, and the docstring
+    # explains why that is deliberate: `--by` is rejected by `main()` before
+    # this path runs, precisely so an unauthenticated override cannot disarm
+    # `_refuse_if_live_foreign_holder`. There is no id here to release under.
     "ops/plan_status_transition.py::_commit_plan_flip": {
         "reason": "ineligible: has no caller-supplied session identity by "
         "design (an unauthenticated --by override is refused upstream), so "
@@ -327,7 +369,32 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # REMOVED 2026-09-06, both rows naming a site that no longer exists in
     # any form -- distinct from the DELIBERATELY-RETAINED-WHILE-STALE rows
+    # above, which name LIVE functions that merely stopped matching this
+    # enumerator's mechanisms. Deleting one of those would launder a coverage
+    # regression; deleting these two cannot, because there is no code left to
+    # cover:
+    #   - `ops/ceremony/commit_pipeline.py::commit` -- the whole module was
+    #     killed (C4, docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+    #     then-the-pipeline-can-go.md); the file is not on disk.
+    #   - `ops/session/boot_backstop.py::_commit_relocations` -- the module
+    #     was gravestoned (K-059) and the producer went with it; the sibling
+    #     roster in `commit_ledger/tests/test_producer_coverage.py` removed
+    #     its own row for the same reason on 2026-08-27, and this one was
+    #     missed in that pass.
+    # Found by the enumerator 2026-09-06, not in the brief's seed list: the
+    # completion-entry commit-ledger fold (AC5, state/handoffs/2026-08-29-
+    # rebuild-completion-reconcile-commits-under-the-bar.md) lands its
+    # one-file `commits:` rewrite through `commit_scoped` into the CALLING
+    # session's own worktree -- structurally the sibling of
+    # `_commit_and_push_origin_stub_close` two rows above, which lives in
+    # this same module and carries "release". Listed with that disposition
+    # rather than a new one. `confirmed: False`: unlike its sibling, this
+    # leg threads no session id (see the function's own signature --
+    # `worktree_root`, `entry_path`, `committed_sha`, `push_mode`), so
+    # `release_committed_claims` is not wired here and the row states the
+    # gap instead of implying coverage.
     "ops/ceremony/post_commit_tail.py::_run_completion_entry_fold": {
         "reason": "release",
         "confirmed": False,
@@ -358,12 +425,23 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # Found by the enumerator, not in the brief's seed list. `_memo_send`'s
+    # own commit_scoped call here is the SENDER-side receipt commit into the
+    # calling session's own worktree (sent/ + ledger row) -- distinct from
     # `_commit_delivered_memo`'s RECEIVER-repo commit discussed in this
+    # module's header docstring correction note. A same-tree commit against
+    # this session's own claims, so "release" pending confirmation like the
+    # other unconfirmed commit_scoped sites above.
     "ops/fleet/memo_send.py::_memo_send": {
         "reason": "release",
         "confirmed": False,
     },
+    # Found by the enumerator, not in the brief's seed list. `percolate`'s
+    # smack-round commit lands into `context.dest_repo_root` -- a mirrored
     # DESTINATION repo the percolate tool writes into, not the calling
+    # session's own worktree, so no session claims exist there to release
+    # (same shape as `benchmarks/op_fixtures.py::materialize_fixture_repo`
+    # above).
     "percolate/round.py::step_commit": {
         "reason": "ineligible: commits into percolate's mirrored destination "
         "repo (context.dest_repo_root), not the calling session's own "
@@ -374,7 +452,16 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # Newly visible via the SIXTH mechanism. The DR-211 plumbing rewrite's
+    # own in-process spine committer -- the function `cas_ref` is actually
+    # called FROM, shared by `ops/fleet/_common.py::archive_and_commit` /
+    # `::rm_and_commit` (already listed above, both "release"/unconfirmed,
     # both flagged DELIBERATELY RETAINED WHILE STALE for the same DR-211
+    # plumbing-shape release-coverage question) and by
+    # `ops/ceremony/git_native.py::_commit_scoped_private_index` /
+    # `::commit_authored_content` (also already listed above). Same open
+    # question, same disposition, now visible at the primitive itself rather
+    # than only at its `"commit-tree"`-string-bearing callers.
     "ops/ceremony/git_native.py::_commit_via_head_spine": {
         "reason": "release",
         "confirmed": False,
@@ -384,6 +471,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": False,
     },
     # VERIFIED INELIGIBLE by reading the body: writes a content-addressed
+    # blob and swaps a `refs/coordinator/inbox/<filename>/<commit-sha>`
+    # anchor ref via `cas_ref` (the sixth mechanism) -- not a commit at all,
+    # no worktree pathspec, no branch ref, and so no session claim over any
+    # path for `release_committed_claims` to act on.
     "ops/fleet/_memo_anchor.py::write_anchor": {
         "reason": "ineligible: a `cas_ref` anchor-ref write (blob + ref CAS "
         "under refs/coordinator/inbox/), not a commit -- no worktree paths "
@@ -391,6 +482,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     # VERIFIED INELIGIBLE by reading the body: no session id anywhere in
+    # `_restore_one` -- it restores a PEER's lost memo (found via the
+    # anchor's own recovery ledger, not this session's own claimed work)
+    # back into this repo's inbox. Same disposition as `ops/
+    # handoff_archive_transition.py::_commit_retained_supersede_flip` above.
     "ops/fleet/memo_heal.py::_restore_one": {
         "reason": "ineligible: threads no session id -- it restores a lost "
         "peer memo into this repo's inbox, not work this session itself "
@@ -414,6 +509,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "delivery, same shape as memo_send's `to:`/`cc:` legs), never the "
         "sending session's own worktree -- no session claims exist there "
         "to release",
+        "confirmed": True,
+    },
+    "hooks/session_start_cloud_focus.py::write_anchor_commit": {
+        "reason": "ineligible: lands an empty anchor commit reusing HEAD's "
+        "own tree at session start -- zero pathspec, and the session id is "
+        "only a message trailer, so no path claim exists to release",
         "confirmed": True,
     },
 }
@@ -445,12 +546,23 @@ def test_enumerator_catches_all_four_mechanisms():
     for rel, func_name, mechanism in _iter_tracked_calls():
         by_mechanism.setdefault(mechanism, []).append(f"{rel}::{func_name}")
 
+    # `asyncio_create_subprocess_exec` is deliberately NOT in this set as of
+    # 2026-08-26: DR-211's plumbing rewrite moved every asyncio site off plain
+    # `git commit` onto `commit-tree`/`update-ref`, so that bucket is
+    # legitimately empty and asserting it non-empty pins a shape the tree no
+    # longer has. `commit_tree_plumbing` is where those sites went, and is
+    # asserted in its place -- the count stays four and the enumerator now
+    # covers strictly more than it did, not less.
+    # `cas_ref_landing` (chunk C2, 2026-08-30) is the SIXTH mechanism and the
     # first that is OUTCOME-keyed rather than string-keyed -- see the module
+    # docstring's tradeoff note. Added to this non-empty set for the same
+    # false-green reason as every other bucket here: a change that silently
+    # stopped the walk from tracking `cas_ref` calls would otherwise pass
+    # green while losing coverage of every native (zero-spawn) committer.
     expected_mechanisms = {
         "commit_tree_plumbing",
         "_run_git_helper",
         "git_native._git",
-        "commit_scoped",
         "cas_ref_landing",
     }
     missing = expected_mechanisms - set(by_mechanism)

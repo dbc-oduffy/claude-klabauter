@@ -517,8 +517,10 @@ def evaluate(
 
 
 if __name__ == "__main__":  # pragma: no cover
+    # Re-runs the A/A noise-floor calibration this module's own
     # `CHEAPER_THAN_MARGIN` is derived from -- see module docstring
     # 'Cheaper-than margin' / 'MEASURED RESULT'. `--calibrate` is the only
+    # supported flag; anything else is a usage error.
     if len(sys.argv) != 2 or sys.argv[1] != "--calibrate":
         print(
             f"usage: python -m {__name__} --calibrate", file=sys.stderr

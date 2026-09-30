@@ -13,7 +13,13 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real-git spawn is load-bearing: this suite drives
+# `_delete_tracked_and_append_log` against a real git repo and reads the
+# claim back through `claim_index.lookup()`, the same surface the commit
+# gate reads -- a mock would not prove the claim-release-then-delete
 # ordering. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

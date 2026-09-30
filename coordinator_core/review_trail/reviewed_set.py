@@ -181,7 +181,9 @@ def read_folded_record_ids(repo_root: str) -> FrozenSet[str]:
     return _read_resident(_folded_ids_path(repo_root), _FOLDED_IDS_CACHE, _parse_id_lines)
 
 
+# ---------------------------------------------------------------------------
 # Durable append — fixed-width records, single O_APPEND write per batch.
+# ---------------------------------------------------------------------------
 
 
 def _append_lines(path: Path, lines: List[str]) -> None:
@@ -213,6 +215,17 @@ def _append_shas(repo_root: str, shas: Set[str]) -> None:
     )
     # Cross-process serialization (finding 9): Windows' O_APPEND is NOT a
     # kernel-atomic append the way POSIX below-PIPE_BUF appends are — two
+    # concurrent writers can compute the same end-of-file offset and one
+    # clobbers the other's fully-written record, a genuine LOST write, not
+    # merely a torn line the reader's line-shape filter can catch. The
+    # reader's discard-malformed-line defence protects against a torn
+    # write; it cannot recover a write that never reached disk. `held_lock`
+    # (coordinator_core.locked_write) is the repo's existing cross-process
+    # exclusive-advisory-lock primitive (flock/msvcrt.locking, kernel-
+    # enforced, auto-released on process death) — anchored at `repo_root`
+    # itself, same pattern as the `touched.txt` writers in
+    # `session/claims.py`/`session/scope.py`, since this store's target
+    # lives inside the CALLER's own repo, not a foreign one.
     with held_lock(_shas_path(repo_root), anchor_root=Path(repo_root)):
         _append_lines(_shas_path(repo_root), lines)
 
@@ -347,7 +360,21 @@ def fold_in(repo_root: str, records: List[Tuple[str, str]]) -> FoldResult:
         eligible.append((record_id, sha_range))
 
     # ONE `git rev-list` SPAWN PER RANGE, DELIBERATELY — do not "batch it into a single
+    # call", which is what the amplification gate's generic advice says here and what a
+    # first attempt at this actually did (2026-08-27) before a live-corpus check caught
+    # it. `git rev-list A..B C..D` does NOT emit the union of two ranges: ranges desugar
     # to `B D ^A ^C`, and every exclusion applies GLOBALLY, so `^A` also strips A's
+    # ancestors out of C..D. Measured on this repo: two ranges yielded 3 SHAs batched
+    # against 5 per-range, rc=0 both ways. Batching here silently DROPS reviewed SHAs —
+    # a wrong verdict in the review-attribution path, produced with no error to notice.
+    #
+    # The flat-cost property this module depends on is per-RECORD, not per-repo: token
+    # count per record is fixed at 2 regardless of a range's commit span, and endpoint
+    # resolution for every record is already collapsed to ONE `git cat-file
+    # --batch-check` spawn in `_resolve_endpoints_batch` above. What remains is one
+    # spawn per record that actually has a resolvable, reachable range — a correctness
+    # floor for this primitive, in the same class as `explicit_stage`'s retained
+    # `git check-ignore`.
     for record_id, sha_range in eligible:
         rc, out, _err = _run(["rev-list", sha_range], cwd=repo_root)
         if rc != 0:

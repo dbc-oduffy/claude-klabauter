@@ -53,9 +53,21 @@ pytestmark = [
     pytest.mark.skipif(os.name != "nt", reason="door.exe is a Windows binary"),
 ]
 
+#: C1b (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md)
+#: retired the bare envelope-level `_session_id` string in favour of ONE
+#: `_caller` object whose fields are `warm.caller_context.CallerContext`
+#: serialised -- with NO deprecated alias, `_serve_line` reading `_caller`
+#: only (door.c's own C1b note). This module kept asserting the retired key
+#: and went red the moment the rename landed; two of its assertions
 #: (`_session_id not in ...`) went FALSE-GREEN instead, which is the worse
+#: half. Asserted here through the object, one accessor, so a future rename
+#: breaks in one place.
+#: C2 folded the legacy `_caller.session_id` field into the envelope-level
 #: `_env` object, keyed by whichever `SESSION_ENV_PRECEDENCE` name resolved
+#: (see `test_door_stamps_declared_env_set.py`'s negative-spec block). The
+#: subject this file pins -- the door stamps the session id its caller is,
 #: first-non-empty-wins over `SESSION_ENV_PRECEDENCE` -- is unchanged; only
+#: the field it looks in moves.
 _CALLER_FIELD = "_caller"
 _SESSION_ID_KEY = "session_id"
 _ENV_FIELD = "_env"

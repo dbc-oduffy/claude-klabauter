@@ -136,7 +136,9 @@ def test_parse_fate_ending_in_run_shaped_substring_pins_documented_edge_case():
     assert rows[0].run_id == "r-001"
 
 
+# ---------------------------------------------------------------------------
 # SIDECAR_SUFFIXES / is_sidecar_filename
+# ---------------------------------------------------------------------------
 
 def test_sidecar_full_suffix_anchored_match():
     assert is_sidecar_filename("2026-07-12-some-plan.review.md") is True
@@ -156,6 +158,7 @@ def test_sidecar_timestamped_variant_matches():
     # Covered by the plain SIDECAR_SUFFIXES endswith check alone — a former
     # dedicated TIMESTAMPED_SIDECAR_RE regex was confirmed dead code (every
     # string it matched already satisfied endswith(SIDECAR_SUFFIXES)) and
+    # removed; see workflow-review P4 finding 2026-07-12.
     assert is_sidecar_filename("2026-07-12_143022-slug.review.md") is True
     assert is_sidecar_filename("2026-07-12T14-slug.c0-findings.md") is True
 
@@ -170,7 +173,12 @@ def test_sidecar_bare_dash_check_suffix_matches():
 
 
 def test_sidecar_bare_dash_review_suffix_matches():
+    # C1 — confirmed real, on-disk class: reviewer-named dash-separated review
+    # sidecars (the Staff Engineer-review.md, sonnet-review.md, eng-director-review.md,
     # OVERVIEW.the Director of Engineering-review.md) live under docs/plans/ and state/review-trail/,
+    # matched via the closed, named per-reviewer dotted entries (narrowed from
+    # an open-ended bare "-review.md" trailing-segment match, 2026-07-23 code
+    # review) rather than the generic dotted ".review.md" entry.
     assert is_sidecar_filename("2026-07-19-coverage-gate-single-graph-walk.patrik-review.md") is True
     assert is_sidecar_filename("2026-07-19-coverage-gate-single-graph-walk.sonnet-review.md") is True
     assert is_sidecar_filename("2026-07-06-claude-klabauter-native-op-central-subject-delegation.eng-director-review.md") is True
@@ -302,7 +310,16 @@ def test_active_reference_guard_fallback_skips_vcs_and_build_dirs(monkeypatch, t
     assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is False
 
 
+# ---------------------------------------------------------------------------
+# active_reference_guard — provenance-marker-block exclusion
+#
+# 2026-07-23 cross-repo proposal (claude-central-em ->
+# cross-repo/inbox/2026-07-23-claude-central-em-distill-active-reference-provenance-exclusion.md):
 # a harvest-provenance block (PROVENANCE_MARKER_KEYS) records a harvested artifact's own
+# repo-relative path as a tombstone, which previously tripped this guard against itself and
+# made the artifact permanently undeletable. Marker key set per
+# coordinator/docs/wiki/provenance-markers.md § "The marker key set (the contract)".
+# ---------------------------------------------------------------------------
 
 @_requires_rg
 def test_active_reference_guard_excludes_provenance_only_citation(tmp_path):
@@ -321,7 +338,11 @@ def test_active_reference_guard_excludes_provenance_only_citation(tmp_path):
 
 @_requires_rg
 def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
+    # The memo half of the same contract: a harvested commitment memo whose ONLY citation is
+    # its own `cross_repo_memo:` tombstone is deletable. Pinned separately from the
+    # `archived_handoff:` case because the two keys arrive from different harvest paths — a
     # regression that dropped either one from PROVENANCE_MARKER_KEYS would leave that whole
+    # artifact class permanently undeletable while the other class kept passing.
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "harvested.md").write_text(
@@ -385,7 +406,10 @@ def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_proven
 
 @_requires_rg
 def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path):
+    # A citation inside a frontmatter block under a key that is NOT in
     # PROVENANCE_MARKER_KEYS is not recognized as a tombstone -> blocks, exactly like a
+    # plain prose citation. Ambiguity blocks; only the named, DoE-ratified key set is
+    # excluded — a lookalike key must not be inferred as a marker.
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "custom-provenance.md").write_text(

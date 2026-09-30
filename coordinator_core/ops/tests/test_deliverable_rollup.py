@@ -287,7 +287,9 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     _rollup_mod._reset_central_root_cache()
 
     # COORDINATOR_ENGINE_ROOT is the live var name (the CLAUDE_KLABAUTER_ROOT -> COORDINATOR_ENGINE_ROOT
+    # dual-read window is closed; coordinator_engine_root_env() answers from the new name only).
     # Both are cleared so a process-level COORDINATOR_ENGINE_ROOT (e.g. set by this host's own
+    # install/session environment) cannot leak into a test expecting worktree-local fallback.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: None)
@@ -501,7 +503,9 @@ def test_malformed_deliverable_id_safe_empty(
     assert result["advances_initiatives"] == []
 
 
+# ---------------------------------------------------------------------------
 # (vi) COMPUTE_ONLY no-write assertion
+# ---------------------------------------------------------------------------
 
 
 def test_compute_only_no_write(rollup_repo: RollupRepo) -> None:
@@ -632,7 +636,9 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
     assert result["advances_initiatives"] == []
 
 
+# ---------------------------------------------------------------------------
 # (x) AC1 — central resolution via CLAUDE_KLABAUTER_ROOT env
+# ---------------------------------------------------------------------------
 
 
 def test_ac1_central_resolve_via_claude_klabauter_root_env(
@@ -660,6 +666,7 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
         deliverable_id="dlv-doe-central-ac1",
         initiative="fleet-deliverable-spine",
     )
+    # Intentionally do NOT call rollup_repo.write_initiative(...) —
     # the initiative entity lives only in the central (CLAUDE_KLABAUTER_ROOT) tree.
 
     result = _handler(
@@ -676,7 +683,9 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
     assert entry["status"] == "active"
 
 
+# ---------------------------------------------------------------------------
 # (xi) AC2 — dual-gate fallback: CLAUDE_KLABAUTER_ROOT unset AND registry returns None
+# ---------------------------------------------------------------------------
 
 
 def test_ac2_fallback_to_worktree_local_dual_gate(
@@ -692,6 +701,7 @@ def test_ac2_fallback_to_worktree_local_dual_gate(
     the correct seam; patching queue_append's copy is a no-op for this op.
     """
     # autouse fixture already: unsets CLAUDE_KLABAUTER_ROOT, patches _machine_local_get → None.
+    # Explicitly patch again to assert the exact target and make the test self-documenting.
     with patch("coordinator_core.ops.deliverable_rollup._machine_local_get", return_value=None):
         rollup_repo.write_plan(
             "2026-07-06-local-fallback.md",
@@ -715,7 +725,9 @@ def test_ac2_fallback_to_worktree_local_dual_gate(
     assert result["advances_initiatives"][0]["id"] == "local-fallback-init"
 
 
+# ---------------------------------------------------------------------------
 # (xii) AC3 — coincident-dir case: CLAUDE_KLABAUTER_ROOT == scan worktree root
+# ---------------------------------------------------------------------------
 
 
 def test_ac3_coincident_dir_realpath_equivalence(
@@ -1331,6 +1343,8 @@ def test_ac10_resolvable_root_sets_are_equal() -> None:
     assert _resolver_mod.SIZINGS_ONLY_ROOT == _rollup_mod.SIZINGS_ONLY_ROOT
 
     # SIZINGS_ONLY_ROOT must occur exactly once in the shared tuple — a
+    # duplicate (the double-scan bug) would inflate this count to 2 without
+    # `frozenset` masking it away.
     assert _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS.count(_rollup_mod.SIZINGS_ONLY_ROOT) == 1
 
     rollup_roots = frozenset(_rollup_mod.RESOLVABLE_ARTIFACT_ROOTS)

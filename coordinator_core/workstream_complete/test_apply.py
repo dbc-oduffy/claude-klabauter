@@ -2598,6 +2598,129 @@ def test_completion_entry_fold_is_a_no_op_without_a_path_or_a_sha() -> None:
     assert ws_apply._run_completion_entry_fold("C:/nonexistent", _ENTRY_REL, None) is None
 
 
+def _apply_with_entry_and_stubbed_tail(
+    monkeypatch: pytest.MonkeyPatch, root: Path, entry_stdout: str, decisions: dict[str, Any]
+) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
+    """`apply()` against `root`, the entry CLI printing `entry_stdout`, and the
+    commit call stubbed to record its kwargs. Returns `(exit, report, kwargs)`."""
+    from coordinator_core.ops.ceremony import post_commit_tail
+
+    seen: list[dict[str, Any]] = []
+
+    def fake_commit(worktree_root: Any, **kwargs: Any) -> _FakeCommitTailResult:
+        seen.append(kwargs)
+        return _FakeCommitTailResult()
+
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail, "run_close_commit_and_release_claims", fake_commit
+    )
+    monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda decisions, root: None)
+    monkeypatch.setattr(
+        post_commit_tail, "fold_completion_entry_commit", lambda *a, **k: {"acted": []}
+    )
+    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda r: {})
+
+    def entry_main(argv: list[str]) -> int:
+        print(entry_stdout)
+        return 0
+
+    modules = {"coordinator-complete-entry": _fake_module(entry_main, "fake_entry")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    monkeypatch.setattr(
+        ws_apply,
+        "brief",
+        lambda decisions=None: {
+            "artifact": {"path": str(root)},
+            "directives": [_directive("d-complete-entry", "coordinator-complete-entry")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "preflight": {"session_shape": {"sid": "sess-1"}},
+        },
+    )
+    exit_code, report = ws_apply.apply(decisions=decisions)
+    return exit_code, report, seen
+
+
+def test_close_commit_stages_the_completion_entry_the_pass_wrote(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The entry is authored by a sibling directive, so no caller names it in
+    `stage_paths`; the tail must stage it anyway (absolute path in, repo-
+    relative out) and must not duplicate a caller-named copy."""
+    entry = tmp_path / _ENTRY_REL
+    entry.parent.mkdir(parents=True)
+    entry.write_text("entry\n", encoding="utf-8")
+
+    _, _, seen = _apply_with_entry_and_stubbed_tail(
+        monkeypatch, tmp_path, str(entry), {"subject": "s", "stage_paths": ["other.md"]}
+    )
+    assert seen[0]["stage_paths"] == ["other.md", _ENTRY_REL]
+
+    _, _, seen = _apply_with_entry_and_stubbed_tail(
+        monkeypatch, tmp_path, str(entry), {"subject": "s", "stage_paths": [_ENTRY_REL]}
+    )
+    assert seen[0]["stage_paths"] == [_ENTRY_REL]
+
+
+def test_completion_entry_outside_the_repo_is_never_staged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _, _, seen = _apply_with_entry_and_stubbed_tail(
+        monkeypatch, root, str(tmp_path / "elsewhere.md"), {"subject": "s"}
+    )
+    assert list(seen[0]["stage_paths"]) == []
+
+
+def test_apply_does_not_exit_zero_when_the_completion_entry_is_left_untracked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The original defect: commit "succeeds", entry stays an untracked
+    worktree file, exit 0. The commit here is a stub that stages nothing, as
+    the pre-fix tail effectively did for the entry."""
+    _init_repo(tmp_path)
+    (tmp_path / "seed.txt").write_text("x", encoding="utf-8")
+    _git(["add", "seed.txt"], tmp_path)
+    _git(["commit", "-q", "-m", "seed"], tmp_path)
+    entry = tmp_path / _ENTRY_REL
+    entry.parent.mkdir(parents=True)
+    entry.write_text("entry\n", encoding="utf-8")
+
+    exit_code, report, _ = _apply_with_entry_and_stubbed_tail(
+        monkeypatch, tmp_path, _ENTRY_REL, {"subject": "s"}
+    )
+
+    assert report["completion_entry_landing"] == {"path": _ENTRY_REL, "state": "untracked"}
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+
+def test_completion_entry_landing_states_against_real_git(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    entry = tmp_path / _ENTRY_REL
+    entry.parent.mkdir(parents=True)
+    entry.write_text("entry\n", encoding="utf-8")
+    check = ws_apply._check_completion_entry_landed
+
+    assert check(tmp_path, None) is None
+    assert check(tmp_path, _ENTRY_REL)["state"] == "untracked"
+
+    _git(["add", _ENTRY_REL], tmp_path)
+    assert check(tmp_path, _ENTRY_REL)["state"] == "uncommitted"
+
+    _git(["commit", "-q", "-m", "entry"], tmp_path)
+    assert check(tmp_path, _ENTRY_REL)["state"] == "landed"
+
+    entry.write_text("entry edited after the commit\n", encoding="utf-8")
+    assert check(tmp_path, _ENTRY_REL)["state"] == "dirty"
+
+
+def test_completion_entry_landing_is_unverified_not_failed_when_unreadable() -> None:
+    """A check that cannot answer must not turn a landed close red."""
+    result = ws_apply._check_completion_entry_landed("C:/nonexistent-worktree", _ENTRY_REL)
+    assert result == {"path": _ENTRY_REL, "state": "unverified"}
+
+
 # ---------------------------------------------------------------------------
 # Plugin-local CLI dispatch (docs/plans/2026-09-07-directive-resolution-
 # reaches-a-plugin-local-cli.md, T5). Everything below is either deterministic

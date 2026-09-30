@@ -172,6 +172,8 @@ def test_shape_plain_crlf(checkin_repo_factory):
     _assert_status_clean(repo)
     _assert_fsck_clean(repo)
     # The point of this shape: unpinned CRLF content is NORMALIZED to LF on
+    # checkin under core.autocrlf=true, so the committed blob must differ
+    # from a raw hash of the CRLF bytes as written.
     committed = _committed_blob_sha(repo, "src/plain_crlf.txt")
     raw_header = f"blob {len(CRLF_CONTENT)}\0".encode("ascii")
     import hashlib

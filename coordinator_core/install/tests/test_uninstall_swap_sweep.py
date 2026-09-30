@@ -53,6 +53,7 @@ def test_uninstall_sweeps_both_tree_targets_with_ensure_venv_unimportable(
 
     # CLAUDE_HOME names the PARENT of `.claude`; the legacy venv tree target is
     # `<install_base>/.claude/.coordinator-venv` (substrate's own WRITE_SURFACE
+    # declares that path), so the fixture builds it where substrate put it.
     dot_claude_dir = tmp_path / ".claude"
     dot_claude_dir.mkdir()
     settings_home = tmp_path / ".coordinator-claude-settings"

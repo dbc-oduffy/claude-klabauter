@@ -54,7 +54,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             ),
         }
 
+        # weekly_perceptible and key_results_status are `.optional()` (absent-when-absent),
         # NOT `.nullable()` (present-as-null) — this is a DELIBERATE EXCEPTION to the D9
+        # present-as-null default, specified by the source memo for these two fields only.
+        # Do NOT "correct" them toward present-as-null on a future re-vendor; the exception
+        # is not derivable from D9 generally, it is schema-pinned per-field.
         if "weekly_perceptible" in record:
             emitted["weekly_perceptible"] = record["weekly_perceptible"]
 

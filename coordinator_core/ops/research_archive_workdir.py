@@ -208,7 +208,27 @@ def _archive_workdir_sync(
                 "dest": str(dest), "resumed_cleanup": False,
                 "dry_run": True, "would_action": "archive"}
 
+    # Claim restatement — ONE call, ahead of leg selection below, per
+    # restate_touched_tree's own contract: it is a pure touched.txt string
+    # operation independent of which physical leg actually runs (same-device
+    # os.rename vs the EXDEV copytree/rename/rmtree fallback), so one call
+    # covers both. An unresolvable session_id means no claim could be held
+    # in the first place — skip, still do the move.
+    #
+    # Worktree-relative, NOT absolute: restate_touched_tree routes both
+    # src_rel/dst_rel through normalize_touch_path, whose absolute-path arm
+    # unconditionally returns None for a directory-shaped input (pinned by
+    # test_clause_not_a_directory_pinned /
+    # test_directory_shaped_absolute_input_does_not_record_sibling_file in
+    # coordinator_core/session/tests/test_scope.py — normalize_touch_path
+    # does not support directories at all, by design). src/dest here name
     # the workdir DIRECTORY being relocated, so passing them absolute made
+    # restate_touched_tree's own directory-tree call silently no-op (src_norm
+    # resolved to None) every time src still existed on disk at call time —
+    # i.e. every normal-archive invocation. A relative path never enters the
+    # absolute arm at all (see normalize_touch_path's relative-arm dialect
+    # fold), which is the calling convention every other caller of
+    # restate_touched_tree/relocate_touched_path already uses.
     if session_id:
         restate_touched_tree(
             session_id,

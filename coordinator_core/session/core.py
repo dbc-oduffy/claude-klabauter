@@ -1893,10 +1893,20 @@ def init(
           general-purpose relocation knob. A caller that has not resolved them
           passes neither and gets the resolving path.
 
+    Ambient resolution is refused: a call naming neither ``cwd`` nor
+    ``sessions_base`` raises ``ValueError``. ``sessions_dir(None)`` resolves
+    against the PROCESS cwd, so a caller that assumed a different repo (a test
+    under pytest, whose process cwd is the real repo root) would mint a session
+    dir in the live hub with no signal.
+
     Returns True on success, False on failure (not in a git repo, etc.).
     """
     if not session_id:
         raise ValueError("session_id required")
+    if not sessions_base and not cwd:
+        raise ValueError(
+            "init requires cwd or sessions_base; the process cwd is never a hub"
+        )
 
     base = sessions_base if sessions_base else sessions_dir(cwd)
     if not base:

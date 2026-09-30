@@ -61,7 +61,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
 from coordinator_core.tracker_projection import render_status
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.render_status")

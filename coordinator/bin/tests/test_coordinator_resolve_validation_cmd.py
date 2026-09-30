@@ -385,7 +385,14 @@ def test_normalize_bare_python():
 
 
 def test_bare_python3_also_normalized():
+    # Unlike the core `normalize_python_token` sibling (which deliberately
+    # leaves `python3` untouched), this bin-shape function ALSO normalizes a
+    # bare `python3` token so venv-first resolution applies to it too — see
+    # `_normalize_python_token`'s own docstring. On POSIX this is easy to
+    # miss: the ambient PATH fallback resolves to the literal string
+    # "python3", so a stale "untouched" assertion passes there by
     # coincidence rather than by actually exercising this behaviour. `_EXP_INTERP`
+    # forces the real resolved value (an absolute path on this Windows box).
     out = rvc._normalize_python_token("python3 -m pytest x")
     assert out == f"{_EXP_INTERP} -m pytest x"
 
@@ -406,7 +413,25 @@ def test_missing_interpreter_fails_loud(monkeypatch):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Tests 14-18: _resolve_python_interp — independent pin on its documented
+# contract (docstring: venv-first, then Windows consults the shared ladder
+# `_shared_console_python()` (`python_interp.resolve_console_python`) rather
+# than trusting raw `sys.executable`, POSIX prefers python3 on PATH, else
 # python, else None). _EXP_INTERP above is a tautology w.r.t. this function
+# — these tests pin the literal expected OUTPUT for each leg via monkeypatch,
+# not by recomputation, so a regression in the resolver itself is caught
+# rather than mirrored. Both platform legs are pinned regardless of host OS
+# (monkeypatch os.name), per the resolver's own documented cross-platform
+# contract.
+#
+# Negative spec pinned by both Windows tests below: raw `sys.executable` is
+# NEVER returned. Under an installed forwarder, `sys.executable` names the
+# forwarder exe (see `_resolve_python_interp`'s own docstring) — each test
+# sets `sys.executable` to an opaque forwarder-shaped path and asserts the
+# function's return value is never that path, only what
+# `_shared_console_python` (mocked) or the PATH fallback produced.
+# ---------------------------------------------------------------------------
 
 def test_resolve_python_interp_windows_prefers_shared_ladder(monkeypatch):
     monkeypatch.setattr(rvc.os, "name", "nt")

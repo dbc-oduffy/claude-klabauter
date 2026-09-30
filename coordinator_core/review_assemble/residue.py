@@ -124,7 +124,13 @@ from coordinator_core.win_portability import no_console_creationflags
 
 SEGMENT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap", "shared")
 
+#: The three legal values of an explicit `--surface` argument — deliberately
 #: narrower than `SEGMENT_SURFACES` (no `shared`; a caller resolves to a
+#: concrete surface, never to the segment-authoring category). `roadmap` is
+#: reachable ONLY via an explicit `--surface roadmap` — there is no
+#: inference rule for it (no artifact-shape or diff-based heuristic infers
+#: `roadmap`); a caller that has already resolved a roadmap surface passes
+#: it explicitly, same as `plan`/`diff`.
 EXPLICIT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap")
 
 _NO_CONSOLE = no_console_creationflags()

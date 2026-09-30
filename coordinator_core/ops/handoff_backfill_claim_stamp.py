@@ -319,6 +319,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             fm = insert_fm_field(fm, "claimed_by", attested_by, "claimed_at")
 
         # status_reason — an EXISTING schema field (AC3/Anti-scope: no new
+        # key). Insert if absent (anchored after claimed_by); if already
+        # present, append this attestation rather than clobbering whatever
+        # prior text it carried.
         existing_status_reason = read_fm_field_unquoted(fm, "status_reason")
         if existing_status_reason:
             new_value = f"{existing_status_reason}; {evidence_note}"

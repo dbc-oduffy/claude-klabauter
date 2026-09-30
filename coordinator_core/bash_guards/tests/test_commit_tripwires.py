@@ -1038,9 +1038,34 @@ class TestCheckStagedPathspecDivergence:
         assert result.startswith("OFFER:")
         assert "tracked.txt" in result
         assert "INDEX-ONLY removal" in result
-        assert "git reset -q -- tracked.txt" in result
-        # SC-DR-015: the advisory must never tell the agent a bare commit is
-        # the fix.
+        # Pure untrack: the working form is the bare commit, verified by
+        # `ls-files --error-unmatch` (exit code alone cannot tell the two
+        # outcomes apart).
+        assert "with no pathspec" in result
+        assert "git ls-files --error-unmatch -- tracked.txt" in result
+        assert "A bare no-pathspec commit is NOT the fix" not in result
+
+    def test_index_only_removal_mixed_with_divergence_keeps_generic_offer(self, tmp_path):
+        """A genuine staged-vs-worktree divergence alongside the untrack keeps
+        the generic text (bare commit is NOT the fix on a shared index, plus
+        the `git reset` remedy)."""
+        root = _init_repo(tmp_path)
+        for name in ("tracked.txt", "shared.txt"):
+            (tmp_path / name).write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "tracked.txt", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed")
+
+        _git(root, "rm", "--cached", "-q", "tracked.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
+
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- tracked.txt shared.txt', root
+        )
+        assert result is not None
+        assert "INDEX-ONLY removal" in result
+        assert "git reset -q -- " in result
         assert "A bare no-pathspec commit is NOT the fix" in result
 
     def test_index_only_removal_of_deleted_file_not_flagged(self, tmp_path):

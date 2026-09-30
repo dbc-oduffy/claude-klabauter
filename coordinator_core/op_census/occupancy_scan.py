@@ -330,13 +330,17 @@ class Shape(str, enum.Enum):
     BROAD = "BROAD"
 
 
+#: Non-`ok` share of an op's total box-seconds above which it is
 #: CEILING-DOMINATED, checked before any tail statistic (module docstring).
 CEILING_DOMINATED_NON_OK_SHARE_BAR: float = 0.40
 
+#: Share of an op's summed `ok` box-seconds the top 1% of its `ok` samples
 #: must exceed for TAIL-DRIVEN (module docstring).
 TAIL_DRIVEN_TOP1PCT_SHARE_BAR: float = 0.20
 
 #: `mean_ok_ms / p50_ok_ms` at or above which TAIL-DRIVEN fires even if the
+#: top-1%-share test does not — the docstring's stated "equivalently mean/p50
+#: >~ 2" reading of the same signal.
 TAIL_DRIVEN_MEAN_OVER_P50_BAR: float = 2.0
 
 SEVEN_DAYS_SECS: float = 7 * 24 * 60 * 60.0
@@ -425,6 +429,9 @@ class _Accumulator:
     ok_elapsed: List[float] = dataclasses.field(default_factory=list)
     max_observed_ms: Optional[float] = None
     max_completed_ms: Optional[float] = None
+    #: Full-history side channel (§ Windowing) — updated from EVERY complete
+    #: row physically read for this scan's generation set, regardless of any
+    #: `since` cutoff. Mirrors the windowed fields exactly when no cutoff is
     #: applied (`Window.CURRENT_GENERATION` / `Window.FULL_HISTORY`).
     max_observed_ms_full_history: Optional[float] = None
     max_completed_ms_full_history: Optional[float] = None
@@ -530,7 +537,10 @@ class OccupancyStamp:
     read_time_secs: float
     liveness_poisoned_modules: Dict[str, str]
 
+    #: The resolved wall-clock cutoff (§ Windowing, AC4b) — `None` unless
     #: `window is Window.WALL_CLOCK_CUTOFF`, in which case both are always
+    #: populated together. A figure whose window is not stated is not
+    #: reportable: these two fields ARE that statement for a cutoff scan.
     since_epoch: Optional[float] = None
     since_iso: Optional[str] = None
 
@@ -551,6 +561,9 @@ def _generations_for_window(repo_root: Path, window: Window) -> List[Path]:
     if window is Window.CURRENT_GENERATION:
         return generations[:1]
     # FULL_HISTORY and WALL_CLOCK_CUTOFF both read every generation -- a
+    # wall-clock cutoff cannot be resolved without reading every row of
+    # every generation to find the ones inside it (module docstring
+    # § Windowing).
     return generations
 
 

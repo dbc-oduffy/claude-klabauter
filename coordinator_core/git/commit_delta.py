@@ -31,6 +31,8 @@ from coordinator_core.git.run import run_git
 _SCAN_DEPTH = 200
 
 #: Returned when no matching commit is found within ``_SCAN_DEPTH``. Not a new sentinel:
+#: the bash oracle already returned 99 for "no such commit anywhere", and both readings
+#: land in the same "stale / overdue" band, which is the only thing downstream reads.
 _VERY_STALE = 99
 
 

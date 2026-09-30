@@ -70,6 +70,8 @@ __all__ = [
 SETTINGS_HOME_ENV = "COORDINATOR_SETTINGS_HOME"
 
 #: The JSON-RPC envelope field carrying the caller's resolved settings home,
+#: underscore-prefixed like `_session_id` and `_engine_token` to mark it
+#: transport metadata rather than an op param.
 SETTINGS_HOME_FIELD = "_settings_home"
 
 

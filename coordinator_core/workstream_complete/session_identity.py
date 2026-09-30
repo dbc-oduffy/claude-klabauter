@@ -64,10 +64,17 @@ from typing import FrozenSet, Tuple, Union
 
 from coordinator_core.win_portability import no_console_creationflags
 
+#: Record/field separators for the batched `git log` call below -- ASCII
+#: unit/record-separator bytes, matching `coverage.py`'s own
 #: `_COMMIT_HEADER_SENTINEL` idiom (a byte that cannot occur in a commit sha,
+#: trailer value, or ordinary prose, so a record boundary is never confused
+#: with content).
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
 
+#: Body-line fallback for a `Deliverable-Id:` value git's own trailer parser
+#: demoted to prose (see module docstring). Line-anchored, mirrored verbatim
+#: (same pattern) from `coordinator_core.execute_plan_assemble
 #: .close_out_and_stamp._DELIVERABLE_ID_BODY_LINE_RE`.
 _DELIVERABLE_ID_BODY_LINE_RE = re.compile(
     r"^Deliverable-Id:[ \t]*(\S[^\r\n]*?)[ \t]*$", re.MULTILINE

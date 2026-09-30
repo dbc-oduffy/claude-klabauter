@@ -76,9 +76,14 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+#: `_decision`'s three-way return (`"deny"`/`"advisory"`/`"allow"`) is
+#: what this module's own `test_confinement_attack_corpus` asserts against
+#: below (`== "deny"`). A prior, buggier `_decision` collapsed advisory
+#: into "deny", which is why `block-subagent-plan-body-bash-write` and
 #: `check-raw-pid-liveness` could be flipped CONFINEMENT_DENY ->
 #: ADVISORY_REWRITE (C13/C14) without this corpus noticing -- see those two
 #: guards' own `ADVISORY_GUARDS` bank below. Review: coordinator:
+#: code-reviewer sidecar coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
 
 
 SHAPES: List[Tuple[str, Callable[[str], str]]] = [
@@ -249,12 +254,26 @@ def _setup_check_raw_pid_liveness(tmp_path, monkeypatch):
     return _decision, "kill -0 1234"
 
 
+# ---------------------------------------------------------------------------
 # CONFINEMENT_GUARDS -- every hard-deny (`fail_closed=True`) entry in
 # `dispatch.py`'s `guard_chain` EXCLUDING the three machine-load guards
+# (`grep-via-bash-guard`, `multiprobe-banner`, `plumbing-and-loops`) that
 # `test_hard_denies_precede_rewrites.py`'s own `CONFINEMENT_HARD_DENIES` set
+# and `dispatch.py`'s own inline comment both explicitly exclude ("no
+# adversarial-evasion shape"). Read directly off the `guard_chain` literal,
+# not copied from any reviewer enumeration.
+#
+# `block-subagent-plan-body-bash-write` and `check-raw-pid-liveness` were
+# ALSO undercounted by the original staff-eng brief, but C13/C14 (2026-08-06
 # guard-class census) have since flipped both CONFINEMENT_DENY ->
 # ADVISORY_REWRITE -- they now live in `ADVISORY_GUARDS` below, not here.
+# Moving the rows (not deleting them) is load-bearing: a hard-deny -> allow
+# flip with no envelope at all is exactly the silent-regression shape this
 # corpus exists to catch, and `ADVISORY_GUARDS`'s own cross-product proves
+# the advisory envelope still fires across every evasion shape. Review:
+# coordinator:code-reviewer sidecar coordinatorcode-reviewer-caf5fbe1.md,
+# P1 finding.
+# ---------------------------------------------------------------------------
 
 CONFINEMENT_GUARDS: List[Tuple[str, Callable]] = [
     ("no-verify", _setup_no_verify),
@@ -275,8 +294,17 @@ CONFINEMENT_GUARDS: List[Tuple[str, Callable]] = [
 GUARD_NAMES: List[str] = [name for name, _ in CONFINEMENT_GUARDS]
 
 
+# ---------------------------------------------------------------------------
 # ADVISORY_GUARDS -- guards C13/C14 flipped CONFINEMENT_DENY ->
 # ADVISORY_REWRITE. Same SHAPES cross-product, but the expected outcome is
+# `"advisory"` (a real `permissionDecision: allow` + `additionalContext`
+# envelope), not `"deny"` -- these guards no longer hard-deny anything, so
+# asserting deny here would be a permanent, deliberate failure rather than
+# a bypass signal. A silent revert to plain `"allow"` (no envelope at all)
+# on some evasion shape is exactly the regression this bank exists to
+# catch. Review: coordinator:code-reviewer sidecar
+# coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
+# ---------------------------------------------------------------------------
 
 ADVISORY_GUARDS: List[Tuple[str, Callable]] = [
     ("block-subagent-plan-body-bash-write", _setup_block_subagent_plan_body_bash_write),
@@ -285,9 +313,14 @@ ADVISORY_GUARDS: List[Tuple[str, Callable]] = [
 ADVISORY_GUARD_NAMES: List[str] = [name for name, _ in ADVISORY_GUARDS]
 _ADVISORY_GUARD_SETUP: Dict[str, Callable] = dict(ADVISORY_GUARDS)
 
+#: Superset of both bands, keyed by guard name -- `guard_message_corpus.py`
+#: imports this directly (`_from_factory`) and needs both
+#: `check-raw-pid-liveness` and `block-subagent-plan-body-bash-write`
 #: resolvable here even though they no longer appear in `GUARD_NAMES`
 #: (`CONFINEMENT_GUARDS`-only). `GUARD_NAMES`/`ADVISORY_GUARD_NAMES` gate
 #: which parametrized test each guard runs under; `_GUARD_SETUP` itself
+#: stays a superset so no importer needs to know which band a guard is in
+#: just to look up its setup callable.
 _GUARD_SETUP: Dict[str, Callable] = dict(CONFINEMENT_GUARDS + ADVISORY_GUARDS)
 
 
@@ -300,6 +333,8 @@ XFAIL_BYPASSES: Dict[Tuple[str, str], str] = {
         "LIVE BYPASS: check_no_verify does not recognize `busybox` as a "
         "passthrough wrapper -- the Staff Engineer staff-eng review 2026-07-29 Finding 0"
     ),
+    # check_destructive_rm -- brace/bundled-c fixed same pass as no-verify;
+    # setsid/busybox remain open, matching `_brace_and_bundled_c_shapes`'s own
     # docstring ("setsid is a SEPARATE, still-open gap for these six").
     ("destructive-rm", "setsid_wrapper"): (
         "LIVE BYPASS: check_destructive_rm does not recognize `setsid` as a "
@@ -331,7 +366,9 @@ XFAIL_BYPASSES: Dict[Tuple[str, str], str] = {
         "`busybox` as a passthrough wrapper -- found empirically by this "
         "corpus 2026-07-29, same class as the Staff Engineer staff-eng review Finding 0/2"
     ),
+    # check_blanket_git_add -- open on setsid/busybox (brace/bundled-c/paren
     # were fixed -- paren via the shared `_BYPASS_PREFIX` this guard's own
+    # matcher anchors on, same fix as check_no_verify above).
     ("blanket-git-add", "setsid_wrapper"): (
         "LIVE BYPASS: check_blanket_git_add does not recognize `setsid` as a "
         "passthrough wrapper -- found empirically by this corpus 2026-07-29, "
@@ -342,7 +379,12 @@ XFAIL_BYPASSES: Dict[Tuple[str, str], str] = {
         "a passthrough wrapper -- found empirically by this corpus "
         "2026-07-29, same class as the Staff Engineer staff-eng review Finding 0/2"
     ),
+    # check_runaway_find -- open on setsid/busybox only now; nice-bare-numeric
+    # and paren_grouping were fixed (the highest-value cell in the corpus per
+    # the Staff Engineer's Finding 3 -- this is the guard that should have caught the
     # 879-process incident and did not). `_FIND_WRAPPER_WORDS` (9 words:
+    # sudo/command/time/env/nice/nohup/exec/timeout/stdbuf) still has neither
+    # `setsid` nor `busybox` in it.
     ("runaway-find", "setsid_wrapper"): (
         "LIVE BYPASS: check_runaway_find's `_FIND_WRAPPER_WORDS` does not "
         "include `setsid` -- the Staff Engineer staff-eng review 2026-07-29 Finding 3, "
@@ -357,6 +399,8 @@ XFAIL_BYPASSES: Dict[Tuple[str, str], str] = {
 
 
 #: Same discipline as `XFAIL_BYPASSES` above, scoped to `ADVISORY_GUARDS`.
+#: Empty at introduction (2026-08-06) -- neither
+#: `block-subagent-plan-body-bash-write` nor `check-raw-pid-liveness` had a
 #: known-bypass entry in `XFAIL_BYPASSES` while still CONFINEMENT_DENY, so
 #: there is no known gap to carry forward into ADVISORY_REWRITE.
 XFAIL_ADVISORY_BYPASSES: Dict[Tuple[str, str], str] = {}

@@ -9,7 +9,28 @@ from typing import Callable, Dict, List, Optional, Tuple
 from coordinator_core.ops.review_mint.roster import Stage
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+# AC5's exact abort-object field names -- also the structured-output schema
+# field names stamped on every gated agent call, so a `gate_policy` closure
+# can read them straight off the captured result (`result.verdict`,
+# `result.reason`, `result.sidecar_path`) with no renaming step.
+#
+# AC12: `run_nonce` joins the schema (and `required`, alongside `verdict`) so
+# a gated agent's structured output must echo the value injected into its own
 # prompt -- see `_GATE_SCHEMA_LITERAL`'s pairing with `compose()`'s
+# `run_nonce` param below. The field name is fixed by the cross-repo charter
+# contract (coordinator-claude's `sidecar-emission-contract.md` /
+# `sidecar-frontmatter-contract.md`) -- do not rename it.
+#
+# NOT caller-symmetric, deliberately: `required` applies to every `schema:
+# true` gate-stage call this schema literal is stamped on, including
+# `dispatch.emit`'s (C4) -- which never injects a `run_nonce` into the
+# prompt (`compose()` is called there with `run_nonce=None`) and whose own
+# `gate_policy` never reads `.run_nonce` off the captured result (disarmed,
+# see `op.py`'s `_make_gate_policy` docstring). An uninstructed agent still
+# has to supply SOME string for the required field, but nothing ever
+# compares it against anything, so this is inert by construction for that
+# caller -- not a bug, and not a claim that the schema and the injection are
+# symmetric across both `compose()` callers.
 _GATE_SCHEMA_LITERAL = (
     "{ type: 'object', properties: { "
     "verdict: { type: 'string' }, "

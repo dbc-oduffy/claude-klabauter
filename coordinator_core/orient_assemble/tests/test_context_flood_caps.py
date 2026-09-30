@@ -214,8 +214,8 @@ def test_brief_session_stays_under_byte_budget():
     session-cadence readers this test does not monkeypatch (addon-health
     line count, worktree count, RAG staleness detail) while still catching
     the two regression shapes this budget exists to defend against —
-    someone widening a count cap (`_MEMO_JUDGMENT_POINT_CAP`,
-    `_AUTO_RECONCILE_JUDGMENT_POINT_CAP`) back toward the original flood, or
+    someone widening a count cap (`_MEMO_JUDGMENT_POINT_CAP`) back toward
+    the original flood, or
     a reader starting to embed materially more text per judgment point than
     `reader_result.truncate_external_text` currently allows. If this test
     ever fails, the fix is almost never to raise this number — re-derive the

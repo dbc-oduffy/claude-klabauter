@@ -104,6 +104,8 @@ from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks import agent_completion_log, track_dispatched_agents
 
 
+#: Generator-provenance declaration: this op writes nothing itself. Its legs
+#: write only inside <git_common_dir>/coordinator-sessions/ — see their own
 #: GENERATES declarations.
 GENERATES: list = []
 

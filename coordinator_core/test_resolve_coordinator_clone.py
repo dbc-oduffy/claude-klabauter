@@ -289,6 +289,14 @@ def test_pointer_empty_when_neither_present(isolated_home):
     assert rcc._read_content_root_pointer() == ""
 
 
+# --- _registry_live_path: no-subprocess common path (2026-07-28 fix) ---------
+#
+# Spec backlink: hot-path-spawn defect — `_registry_live_path` was CLI-only
+# (`machine-local get plugin.mirrors.coordinator-claude.live_path`), so every
+# `resolve_content_root()` call on a machine with `machine-local` on PATH
+# spawned a subprocess (~80ms warm) on this rung even though it sits on the
+# COMMON path (rung 3 of 7 in `resolve_content_root`), not a last resort. See
+# `_registry_live_path`'s own docstring for the narrative; these tests assert
 # the fix by BEHAVIOUR (spawn count), not timing, since timing is flaky.
 
 

@@ -62,7 +62,30 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from coordinator_core.search.regex_translate import translate as _translate_pattern
 
+#: Hot-path caps. This module runs inside the PreToolUse hook, which gates EVERY Bash
+#: call -- unbounded work here does not merely slow one command, it wedges the session.
+#: These are correctness-relevant, not defensive garnish: exceeding one is what flips an
+#: answer into a refusal when a downstream stage cannot tolerate truncation.
+#:
 #: MAX_PROCESS_SECONDS is measured against `time.process_time()` (this process's own
+#: user+system CPU time), never wall clock. `time.perf_counter()` -- what this constant
+#: was checked against before -- is wall clock, the instrument CLAUDE.md forbids for
+#: exactly this reason ("process time and spawn count, never wall clock -- wall clock
+#: measures peer load"): under the box's normal 50-70 concurrent sessions, a wall-clock
+#: cap fires EARLIER the busier the box is, truncating answers that would have completed
+#: and charging this search for load it did not cause. Observed live on this box: an
+#: ordinary two-term grep returned "2500ms ... truncated at the time-cap" under load that
+#: never touched the CPU this search itself consumed.
+#:
+#: `benchmarks.process_time.batched_process_time_ms` is NOT reused here -- that module
+#: measures a SPAWNED subprocess tree's rusage from the parent (job object / kevent
+#: reap), a different question from this call's own in-process CPU consumption.
+#: `time.process_time()` answers this call's question directly, with no subprocess to
+#: attach to.
+#:
+#: 500ms is DR-344's brightline (`docs/decisions/DR-344-the-brightline-process-budget-
+#: for-claude-klabauter.md` -- "process its entire job in 500ms end-to-end, including under an
+#: [everyday] load"), not a preserved fraction of the old 2.5s wall-clock number.
 MAX_PROCESS_SECONDS = 0.5
 MAX_FILES_SCANNED = 20000
 MAX_MATCH_LINES = 2000
@@ -455,7 +478,14 @@ def _stage_grep_filter(args: Sequence[str]) -> Stage:
     def apply(lines: List[str]) -> List[str]:
         return [ln for ln in lines if bool(rx.search(ln)) != invert]
 
+    # coordinator-content-repo#85 row 10: `needs_complete_input=True`, not False. A downstream
     # filter grep is order/selection-sensitive over the UPSTREAM search's raw
+    # match set -- if the upstream truncated at a cap (match-cap/file-cap) before
+    # this filter ran, matches that would have passed the filter may already be
+    # gone, and the caller has no way to tell a genuinely-filtered result from a
+    # truncated-then-filtered one. That is exactly the class `needs_complete_input`
+    # exists to force a refusal for (see `Stage`'s own docstring); `False` here let
+    # a truncated upstream search render as a confidently complete filtered answer.
     return Stage("grep", apply, True)
 
 
@@ -537,6 +567,9 @@ class SearchResult:
     elapsed_ms: float
 
 
+#: How often (in scanned lines) the render-mode hit-collection loop re-checks the wall
+#: clock. Checking every line would add measurable per-line overhead; checking only
+#: between files (the pre-F8 behaviour) lets one pathological file blow the whole
 #: MAX_WALL_SECONDS budget before any cap engages. This is the compromise.
 _WALL_CHECK_STRIDE = 4096
 
@@ -560,7 +593,10 @@ def _expand_targets(targets: Sequence[str], cwd: str) -> List[str]:
     return resolved
 
 
+#: Metacharacters that make a read-source operand something other than a plain,
 #: literal filename. Brace is included here (unlike `_GLOB_METACHARS` above) because
+#: a read source declines on a glob/brace operand outright rather than expanding it
+#: -- see `resolve_plain_path_operand`.
 _GLOB_OR_BRACE_METACHARS = ("*", "?", "[", "{")
 
 
@@ -602,7 +638,15 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
     files_scanned = 0
     truncated = False
     cap_hit: Optional[str] = None
+    # coordinator-content-repo#85 row 16: whether the DEFAULT prune set (not the caller's own
+    # `--exclude-dir`) actually removed a directory this walk would otherwise have
+    # descended into. Pruning is a deliberate, accepted divergence from real grep
     # when the answer still has real content (see `DEFAULT_PRUNE_DIRS`'s own
+    # docstring) -- but an EMPTY result under a pruned walk is unverifiable: real
+    # grep may have matched only inside a pruned directory (a huge `.venv`/
+    # `node_modules`/`dist` tree is exactly where a common word is likeliest to
+    # hit), and rendering a confident "(no matches)" for that case is the module's
+    # own documented worst failure mode. See the decline below.
     user_exclude_dirs = set(spec.exclude_dir)
     default_prune_hit = False
     last_group: Optional[Tuple[str, int]] = None
@@ -715,6 +759,12 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                     shown = (os.path.join(target, filename) if relative == "."
                              else os.path.join(target, relative, filename))
                     # The DISPLAYED path is grep's output, not a filesystem path,
+                    # and grep prints `/` on every host including Git-for-Windows.
+                    # Emitting `.\pkg\mod.py` here makes the substituted answer
+                    # differ textually from the command it replaced, on the one
+                    # field callers most often paste, split, or re-grep. No-op
+                    # where `os.sep` is already `/`; the path actually opened
+                    # below is unchanged.
                     shown = shown.replace(os.sep, "/")
                     if not scan(os.path.join(root, filename), shown):
                         stop = True

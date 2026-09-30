@@ -137,7 +137,23 @@ def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
     )
     return [*new_paths, *legacy_paths]
 
+# Placeholder body written into a fresh draft — guides the human/agent toward
+# memo.compose (fill in body) then memo.send (deliver). Mirrors DoE's
+# _cmd_draft placeholder comment.
+#
+# The summary-cap sentence below (2026-07-26 draft-time-discoverability fix,
+# cross-repo/inbox/2026-07-26-coordinator-content-repo-em-memo-send-summary-cap-
 # discoverable-at-draft-time.md) surfaces `_SUMMARY_MAX_CHARS` in the body the
+# author is actually editing. A trailing YAML comment on the `summary:` line
+# itself (the memo's first-suggested shape) was tried and rejected: both
+# `coordinator_core.frontmatter.primitives.read_fm_field` and DoE's
+# `cross-repo-memo` CLI `_parse_outbox_file` are line-oriented, no-comment-
+# aware parsers — a trailing `# ...` on the summary line reads back as part
+# of the field's VALUE (verified: `read_fm_field` returns
+# '""  # one line, <= 120 chars' for a `summary: ""  # one line, <= 120
+# chars` line), corrupting every downstream reader (memo.compose's summary
+# re-derivation, the CLI's outbox validator). The body placeholder has no
+# such parsing contract, so the notice lives here instead.
 _BODY_PLACEHOLDER = (
     "<!-- Compose your memo body here (memo.compose), then deliver it via "
     "memo.send. -->\n"
@@ -164,9 +180,24 @@ _BODY_PLACEHOLDER = (
 )
 
 
+# ---------------------------------------------------------------------------
+# scoped_to validation — mirrors memo_send._validate_scoped_to (2026-07-21 fix,
+# routed via the memo.draft "silently drops scoped_to" break-class finding —
+# same defect class as memo.send's C9/A11 unknown-frontmatter-key drop). The
 # _SCOPED_TO_KNOWN_SUBKEYS frozenset is IMPORTED from memo_send (single source
 # of truth for the sub-key shape); the error MESSAGES here are deliberately
+# memo.draft-namespaced rather than reusing memo_send._validate_scoped_to
+# directly — that function's error text is hardcoded "memo.send: ..." and
+# would misattribute a draft-time failure to the send op. The validation
+# LOGIC (presence-triggered completeness: scoped_to absent entirely passes;
 # scoped_to present must be the COMPLETE triple — artifact + exactly one of
+# version|sha + seam — or the draft fails loud) is a byte-for-byte mirror.
+#
+# Negative-spec: does NOT accept a partial triple as "good enough" (same
+# rejection as memo.send) — a draft carrying an incomplete pin is exactly the
+# shape this gate exists to reject, never coerced into "treat as absent" or
+# "treat as complete".
+# ---------------------------------------------------------------------------
 
 def _validate_scoped_to(dry_run: bool, value: Any):
     if value is None:
@@ -410,12 +441,26 @@ def _validate_draft_params(params: dict):
         )
 
     summary: Optional[str] = params.get("summary") or None
+    # 2026-08-07 warn-at-draft split (docs/plans/2026-08-07-memo-summary-cap-
     # warn-at-draft.md § C2): an over-cap EXPLICITLY authored summary no
+    # longer fails the draft loud — memo.compose/memo.send still hard-refuse
+    # (unchanged, Anti-scope), but memo.draft is a staging step the author
+    # can still edit before delivery, so it advises instead. The advisory
+    # message (None when summary is absent or in-cap) is carried through to
     # the handler via this tuple's last element; the ORIGINAL summary text
+    # is also returned unchanged here — the handler, not this function,
+    # decides how to keep it out of `summary:` while still writing it
+    # somewhere recoverable (AC1, AC2).
     summary_cap_advisory = validate_explicit_summary("draft", summary)
 
     # `kind` is REQUIRED here, matching memo.send's own gate on the same
+    # field. Drafting without it mints an artifact this op's own send verb
+    # will refuse — nine such drafts had to be backfilled by hand
+    # (state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-
+    # after-a-send.yaml). Defaulting to `ask` is the wrong half to give: the
     # reader-side `ask` default exists for RECEIVED memos that predate the
+    # field, and ask/proposal are premise-bearing, so a silently-mislabelled
+    # fyi buys a real sender-side premise check it never needed.
     kind: Optional[str] = params.get("kind") or None
     if kind is None:
         return build_setup_error_result(
@@ -454,7 +499,15 @@ def _validate_draft_params(params: dict):
             )
         in_reply_to = _normalize_in_reply_to(in_reply_to_raw)
 
+    # space / supersedes (2026-07-28) — the two sender-declared fields the
+    # inbox-blitz proposal asked for, offered here so a drafting EM is prompted
+    # for them at authoring time rather than having to hand-add them after
+    # memo.send. Both are deliberately un-vocabulary-checked: `space` is a
+    # grouping hint the receiver may override, and a supersession reference is
+    # a memo basename this op cannot resolve (the sender's draft may name a
     # memo in the RECEIVER's tree). Shape checks only — validation shared with
+    # memo.send (Review: code-reviewer Finding 2, slice 1) via
+    # memo_send._validate_space_param / _validate_supersedes_param.
     supersedes, supersedes_error = _validate_supersedes_param(
         _MODE, params.get("supersedes"), dry_run,
     )
@@ -733,7 +786,12 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         if isinstance(classification, dict):
             return classification
         if isinstance(classification, str):
+            # Unique did-you-mean auto-accept (2026-07-24 papercut fix) —
+            # substitute the resolved id so the draft's `to:` frontmatter and
             # the acted-envelope `to` field both carry the RESOLVED receiver,
+            # never the caller's unresolved literal. The CLI diffs the acted
+            # envelope's `to` against the raw `--to` it sent to print the
+            # "resolved 'X' -> 'Y'" stderr note — see _cmd_draft.
             to = classification
 
     if repo_root is None:

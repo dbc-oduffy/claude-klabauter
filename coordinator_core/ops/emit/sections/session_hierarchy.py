@@ -24,6 +24,13 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
     state_dir = str(ctx.central_state_root)
     # Bash guards `[[ -d "$_SES_HIER_DIR" ]]`; an absent dir yields no glob matches, so the
+    # loop below simply produces empty arrays — same graceful-absent outcome.
+    #
+    # NOTE: probes state_dir via os.scandir before trusting glob.glob() — glob's selector
+    # silently swallows PermissionError while walking (an unreadable dir yields an empty
+    # match list, no exception), which would otherwise be indistinguishable from "no
+    # session-hierarchy files exist here" and wrongly return the graceful-absent ([], [])
+    # shape for what is actually a scan failure.
     if os.path.isdir(state_dir):
         try:
             with os.scandir(state_dir) as it:

@@ -314,6 +314,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     tool_input = params.get("tool_input")
     if isinstance(tool_input, dict) and tool_input and tool_input.get("prompt"):
         # updatedInput REPLACES the argument object — carry every original key forward and
+        # override only run_in_background (D8).
         updated = dict(tool_input)
         updated["run_in_background"] = True
         context = _REROUTE_NOTICE
@@ -321,6 +322,8 @@ def _handler(params: dict, repo_root=None) -> dict:
             context = context + " " + override_note
         return rewrite_input("PreToolUse", updated, context)
 
+    # No forwardable tool_input → no correct rewrite exists; fall back to the historical
+    # bounce-back rather than letting a foreground dispatch through unremarked (D8).
     # UNDOCUMENTED-DENY: see module docstring and _envelope.deny() docstring.
     deny_message = _DENY_MSG_TEMPLATE
     if override_note:

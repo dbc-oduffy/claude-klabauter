@@ -192,8 +192,13 @@ class TestExactlyOneLadder:
         assert seen, "git_index.scoped_status bypassed the shared ladder"
 
     def test_neither_reader_module_calls_time_sleep_directly(self):
+        # A name-grep
         # for "RETRY_DELAY" is evaded by a resurrected ladder under any other
         # name (`_BACKOFF_S`, `_READ_PAUSE_S`, a local var `vars(module)`
+        # never sees), so it was never "the tell" its own comment claimed. A
+        # per-site ladder must itself pause, and only `time.sleep` can do
+        # that -- scanning the module's source for the literal call is not
+        # evadable by renaming a delay tuple or hiding it as a local.
         for module in (git_state, git_index):
             source = inspect.getsource(module)
             assert "time.sleep(" not in source, (

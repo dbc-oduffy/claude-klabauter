@@ -189,7 +189,42 @@ _LOC_RE = re.compile(r"(\d+) insertion|(\d+) deletion")
 _TEST_DIR_RE = re.compile(r"(^|/)tests?/")
 
 
+# chain_oracle (C3) defensive file-granularity noise exclusion — a commit is
+# noise IFF every file it touches matches one of these path rules; a MIXED
+# commit keeps its code-path LOC and drops only the noise-path LOC. Two
+# categories per the C1 contract: generated/vendored artifacts, and
+# lifecycle/memo bookkeeping (handoffs, outboxes, lessons, trackers, pure
+# archive/ moves, review-trail JSON, subagent-share sidecars, ceremony
+# records, cross-repo inbox/archive memo files). Deliberately file-
+# granularity, not commit-message-prefix matching — see the module
+# docstring's chain_oracle negative-spec.
+#
+# state/review-trail/, state/subagent-share/, and state/ceremony/ were added
+# 2026-08-04 after field evidence showed `chain_oracle` inflating on
+# ceremony-emitted bookkeeping: one real chain range measured loc=15911
+# across 286 files, of which 227 files / 31043 insertions were pure
+# review-trail JSON, subagent-share sidecars, memo files, and handoff
+# frontmatter (59 files / ~9100 insertions were substantive code/tests/
+# docs) — reviewers_suggested=32 against plan_oracle=4, an inflated headline
+# easy to dismiss. `cross-repo/(inbox|archive)/` (the memo channel; see
+# `cross-repo/README.md`) is scoped to those two subdirs only, NOT the bare
+# `cross-repo/` prefix, so a hand-edit to `cross-repo/README.md` itself
+# stays reviewable. `state/[^/]+-outbox/` already covers
+# `state/memo-outbox/` via the existing `-outbox` alternation — verified,
+# not re-added. `state/sizings/` and `state/audits/` were measured and
 # EXCLUDED from this list: both carry human/EM-authored routing rationale
+# and analysis prose (scout_evidence, intent, audit findings), not
+# mechanical bookkeeping — see the memo backlink below for the full
+# before/after measurement on this repo.
+# Spec backlink: cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-does-not-halt.md
+#   § "Two smaller observations" — `chain_oracle` counts ceremony bookkeeping as reviewable LOC.
+#
+# The two memo schemas are matched by EXACT basename: both are pure output of
+# `emit_memo_schema.emit_schemas` (their headers declare `x-generated-by`), and
+# the authored change lives in the `.py` SSOT, already counted. Every other
+# `*.schema.json` here is hand-authored and must stay reviewable, so no
+# `.schema.json` suffix rule and no fixtures-directory rule: either would
+# silently suppress review of hand-authored content.
 _NOISE_BASENAMES = frozenset({
     "package-lock.json", "poetry.lock", "pnpm-lock.yaml", "bun.lockb",
     "cross-repo-memo.schema.json", "archived-memo.schema.json",
@@ -214,13 +249,40 @@ _NOISE_LIFECYCLE_RE = re.compile(
 )
 _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 
+# chain_oracle planning-artifact de-weight (C7, AC8) — a plan/research/
+# problem-framing document or its own sidecar is real review obligation
+# (unlike `_is_noise_path`, which drops LOC entirely), but it is NOT the
+# same review cost per line as code: a 2799-line plan drove the un-patched
+# chain_oracle to `1 + 2799//500 = 6`, a code-reviewer-count recommendation
+# against a plan whose own `plan_oracle` (which excludes doc-edit rows by
 # design — see `_CODE_BEARING_KINDS`) was 2. De-weight, not exclude:
+# `chain_loc` sums code-path LOC at full weight plus planning-artifact LOC
 # scaled by `_PLANNING_LOC_WEIGHT`, so a large plan still nudges the
+# recommendation upward without being read as if it were code.
+#
 # `_PLANNING_ARTIFACT_PATH_PREFIXES` and `_is_planning_artifact_path` are
+# imported from `coordinator_core.coverage` (both C2 and this module's own
+# chain_oracle now on disk) — a single source for the prefix list so the
+# brightline gate's reviewer-count heuristic and the coverage gate's
+# crediting classifier cannot disagree about which paths are planning
 # artifacts. `_PLANNING_LOC_WEIGHT` below stays LOCAL: it is brightline's
+# own de-weighting heuristic, not part of the shared classification.
+#
+# Do NOT wire the shared predicate into `_is_noise_path` — a planning-artifact
+# commit is not noise (AC9: the gate stays non-vacuous; a planning artifact
+# still owes a review), it is merely cheaper-per-line than code.
+# Spec backlink: pln-planning-artifacts-are-a-third-77111f § C7, AC8
+#
 # SUPERSEDED IN PART (C1a, 2026-08-12): `_is_prose_bearing_path` now runs
+# BEFORE this weight is ever applied (see the `countable` filter in
+# `_compute_chain_oracle`/`_compute_session_oracle_single`/the session-scoped
+# range path) and fully excludes `.md`/`.yaml`/`.yml` — every planning-
 # artifact path in practice, since all four `_PLANNING_ARTIFACT_PATH_PREFIXES`
+# hold only `.md` files today. This weight now only still applies to a
+# hypothetical non-prose-bearing file under a planning prefix (e.g. a binary
+# or `.json` sidecar) — a narrower but not dead case, and left as-is per this
 # module's Anti-scope ("leave `_PLANNING_LOC_WEIGHT`/`_is_planning_artifact_path`
+# exactly as they are").
 _PLANNING_LOC_WEIGHT = 0.2
 
 
@@ -228,9 +290,23 @@ _CHAIN_SHOW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CHAIN_NUMSTAT_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
 _CHAIN_RAW_STATUS_RE = re.compile(r"^:\d+ \d+ \S+ \S+ (\w)\d*\t")
 
+# AC2/AC3 (C2, 2026-08-12): change-substance weighting for the three
+# accumulation loops factored into `_accumulate_countable_rows` — a row's
+# raw added+deleted LOC is scaled by whether it is a content-identical
+# rename/move (AC2's explicit "breadth without burden" example) or genuine
+# authored content (create/modify/delete/renamed-with-edits), rather than
 # counted uniformly. MEASURED, not invented (AC3): over this branch's own
+# history (`origin/main..HEAD`, 362 commits, 1054 changed-file rows — 522
+# created, 502 modified, 1 deleted, 29 renamed), a three-way created/
 # modified/deleted split produced IDENTICAL totals to this two-way rename/
+# everything-else split (34553 either way): every renamed row in that
+# corpus was itself prose-bearing (`.md`/`.yaml`) and already excluded by
+# `_is_prose_bearing_path` before substance weighting runs, and the single
+# deletion was prose-bearing too. See the C2 dispatch report's AC3 table.
+# TWO constants, not three, per AC3's "do not force three to exist if two
+# suffice." Deletions are NOT exempted by this: a deleted file lands in
 # `_SUBSTANCE_WEIGHT_CONTENT` at full weight, same as a creation or a
+# modification — never zeroed.
 _SUBSTANCE_WEIGHT_RENAME = 0.0
 _SUBSTANCE_WEIGHT_CONTENT = 1.0
 
@@ -340,8 +416,14 @@ def _is_prose_bearing_path(path: str) -> bool:
     return path.endswith(_PROSE_BEARING_EXTS)
 
 
+#: Ceremony-exhaust directories: substrate the CLOSE ITSELF writes, whose
+#: contents are an output of the ceremony rather than an input to review.
 #: DELIBERATELY NARROW — a directory earns a row here only if a close
+#: writes it as bookkeeping every time and a reviewer has nothing to read
+#: in it. `state/audits/` and `state/dispatch-briefs/` are NOT here and
 #: must not be added: those are session-AUTHORED content, and excluding
+#: them would suppress genuine review obligation, which is the one
+#: direction this predicate must never fail in.
 _CEREMONY_EXHAUST_RE = re.compile(
     r"^("
     r"state/tasks/"
@@ -819,6 +901,17 @@ def _session_scoped(range_: str, session_id: str) -> int:
     verdict = _verdict(loc, commits, surfaces)
 
     # ATTRIBUTION COVERAGE (2026-08-30). A session-scoped verdict is only as
+    # sound as the trailer it filters on, and this gate had no way to tell an
+    # honest zero from a blind one. `filtered_to > 0` does not establish that
+    # the filter SAW the session: it establishes that something matched.
+    #
+    # Two live routes write no usable attribution, so this is not hypothetical:
+    # `ceremony.commit_v2` appends no `Session-Id` trailer at all, and the
+    # generated git-hook ladder that runs `coordinator-prepare-commit-msg` is
+    # `.exe`-blind under MinGit's sh (state/bug-backlog/2026-08-29-git-hook-
+    # script-ladder-is-exe-blind-so-au-2b59782d53ef.yaml — fixed in the
+    # generator, but no hook already on disk is ever regenerated, so it is
+    # still live in any repo that has not reinstalled). A session whose commits
     # were written through either one is INVISIBLE to `--grep`, while some
     # SCOPED TO THE PERMISSIVE DIRECTION ONLY. Incomplete attribution can only
     # into a spurious one — a PARTITION-MANDATORY verdict is already the

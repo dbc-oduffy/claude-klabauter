@@ -86,7 +86,12 @@ try:
 except ImportError:
     psutil = None  # type: ignore[assignment]
 
+# Windows "Display" device-setup class GUID — stable across Windows versions,
+# documented by Microsoft (docs.microsoft.com/windows-hardware/drivers/install/
 # system-defined-device-setup-classes-available-to-vendors, GUID_DEVCLASS_DISPLAY).
+# Reading DriverDesc / HardwareInformation.{qwMemorySize,MemorySize} under each
+# numbered adapter subkey is the standard non-WMI way native tools (e.g.
+# GPU-Z-class utilities) resolve GPU name + VRAM without shelling out.
 _DISPLAY_CLASS_GUID = (
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
 )

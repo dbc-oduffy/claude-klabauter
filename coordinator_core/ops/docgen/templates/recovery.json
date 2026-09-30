@@ -39,8 +39,11 @@
       "",
       "## Session Ledger",
       "",
-      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line per closing ceremony. -->",
       "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      "<!-- N is an integer COUNT of dispatches, NOT a duration: Nd = agent dispatches, -->",
+      "<!-- No = opus dispatches. e.g. `3d / 1o`. A row written as days (`0.3d`) does not -->",
+      "<!-- parse, and a chain whose rows do not parse silently renders as ZERO effort. -->",
       ""
     ]}
   ]

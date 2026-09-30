@@ -126,10 +126,13 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+# PARSE-only, never a serializer — the F2 pin (below, § YAML serialization
+# helpers) forbids yaml.dump/safe_dump on the write path; yaml.safe_load is
 # used exclusively by the C2 round-trip gate in _build_yaml to VALIDATE the
+# already-hand-composed document, never to construct it.
 import yaml
 
-from coordinator_core._claude_klabauter_root import _machine_local_get
+from coordinator_core._claude_klabauter_root import _claude_home, _machine_local_get
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -147,7 +150,6 @@ _SLUG_MAX_CHARS = 40
 _SUBPROCESS_TIMEOUT_SECS = 15
 
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
-_CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
 
 def _output_root_override() -> "str | None":
@@ -446,6 +448,9 @@ def _emit_yaml_field(key: str, value) -> str:
             return f"{key}: []"
         items = "\n".join(f"  - {_yaml_quote_string(str(item))}" for item in value)
         return f"{key}:\n{items}"
+    if isinstance(value, bool):
+        # str(True) is "True": not a YAML 1.2 boolean, so a strict parser reads a string.
+        return f"{key}: {'true' if value else 'false'}"
     if isinstance(value, str) and "\n" in value:
         return f"{key}: {_yaml_block_scalar(value)}"
     if isinstance(value, str):
@@ -559,7 +564,9 @@ def _today_iso() -> str:
     return datetime.date.today().isoformat()
 
 
+# Conservative allowlist charset — mirrors coordinator-queue-append's
 # _WORKSTREAM_IDENTIFIER_RE exactly. No path separators, no leading dot/hyphen,
+# non-empty.
 _WORKSTREAM_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 _WORKSTREAM_CREATED_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
@@ -606,14 +613,6 @@ def _validate_workstream_identifier(param_name: str, value: str) -> None:
             f"queue.append: {param_name} must match {_WORKSTREAM_IDENTIFIER_RE.pattern} "
             f"(no path separators, no leading dot, non-empty), got {value!r}"
         )
-
-
-def _claude_home() -> str:
-    """Return the ~/.claude root, honouring CLAUDE_HOME env var for test isolation."""
-    override = os.environ.get(_CLAUDE_HOME_ENV)
-    if override:
-        return override
-    return os.path.join(os.path.expanduser("~"), ".claude")
 
 
 def _claude_klabauter_root() -> Optional[str]:
@@ -778,6 +777,7 @@ def _output_path(
             base = os.path.join(str(caller_worktree), output_dir)
     else:
         # caller_worktree is None — _OP_KEY_SCOPE entry may be missing; fallback
+        # to claude-klabauter root (daemon context has no meaningful cwd anchor).
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
@@ -834,7 +834,9 @@ def _validate(schema_name: str, fields: dict) -> None:
         raise ValueError(f"queue.append: {field}: {error_text}")
 
 
+# Bounded retry attempts before _write_out_path_excl fails loud. Mirrors
 # coordinator/bin/lib/cli_shared.COLLISION_RETRY_CAP verbatim (not imported —
+# this module has no dependency on the coordinator/bin/lib CLI-shared package).
 _COLLISION_RETRY_CAP = 1000
 
 
@@ -1068,6 +1070,10 @@ def append_queue_entry(
             )
 
     # workstream.schema.json's deliverables is a BLOCK-MAP (object-with-text
+    # items), not a plain string list — mirror coordinator-queue-append's
+    # workstream branch conversion so schema_validate and _build_yaml's
+    # block-map emission see the same {"text": ...} shape regardless of
+    # whether the caller already supplied block-map dicts or plain strings.
     if fields.get("deliverables"):
         fields["deliverables"] = [
             item if isinstance(item, dict) else {"text": item}
@@ -1083,7 +1089,19 @@ def append_queue_entry(
         _validate_workstream_created(str(created))
 
     # coordinator_root_path — THE LANDMINE (2026-07-22 fold-correctness outage).
+    # VALUE is the repo-root-relative form the cockpit contract declares: the
+    # literal "." for the auto-resolve case, byte-identical to what
     # coordinator-queue-append's _WORKSTREAM_STORE_SCHEMAS branch stamps (see
+    # that CLI's `coordinator_root_path = (...)` assignment comment). Only
+    # defaulted when the contract declares this field for `schema` (workstream /
+    # workstream-event today); a no-op for schemas that don't. NEVER derived
+    # from caller_worktree (that yields a basename — see from_repo's fallback
+    # above) and NEVER an absolute path (an absolute value minted a
+    # machine-specific coordinator_root_path -> a distinct repo_fk per
+    # machine/checkout for one logical repo -- the outage this must not
+    # re-arm). caller_worktree remains the filesystem anchor for the OUTPUT
+    # PATH (_output_path), never the source of this field's value. No
+    # `git rev-parse` shell-out here, ever.
     if "coordinator_root_path" in contract_field_names and not fields.get(
         "coordinator_root_path"
     ):
@@ -1108,7 +1126,13 @@ def append_queue_entry(
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+    # Write-primitive selection (C4). `workstream-event` is append-only-by-design
+    # (two events sharing a base path must BOTH survive) -> exclusive-create +
+    # retry-with-suffix (_write_out_path_excl). Every other schema — `workstream`
     # definitions (single-file-per-id, a second write REWRITES the canonical file)
+    # AND the five pre-existing content-keyed schemas (AC8, unchanged behavior) —
+    # keeps the write-temp + atomic-rename overwrite shape this module already used
+    # unconditionally before C4 (_write_out_path_overwrite).
     if schema == "workstream-event":
         final_path = _write_out_path_excl(out_path, yaml_content)
     else:
@@ -1118,7 +1142,9 @@ def append_queue_entry(
     return {"out_path": final_path, "schema": schema, "slug": slug, "title": title}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("queue.append")

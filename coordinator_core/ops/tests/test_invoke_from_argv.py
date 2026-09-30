@@ -93,6 +93,17 @@ def _run_cli(*args: str, cwd: str) -> subprocess.CompletedProcess:
     )
 
 
+_KNOWN_CLI_STDERR_NOTICES = (
+    "[warm-settings] warmth is disabled",
+    "coordinator_core.ipc: _origin_worktree absent on remote envelope",
+)
+
+
+def _assert_only_known_cli_notices(stderr: str) -> None:
+    unexpected = [ln for ln in stderr.splitlines() if ln and not ln.startswith(_KNOWN_CLI_STDERR_NOTICES)]
+    assert not unexpected, f"stderr carries more than the known notices: {unexpected!r}"
+
+
 def test_argv_must_be_a_list_of_strings():
     with pytest.raises(ValueError, match="params.argv"):
         _invoke_from_argv({"argv": "ping", "cwd": _PROJECT_ROOT})
@@ -127,10 +138,11 @@ def test_dump_op_timeouts_byte_identical_to_cli():
 
 def test_ping_matches_cli_structurally():
     served = _invoke_from_argv({"argv": ["ping", "{}"], "cwd": _PROJECT_ROOT})
-    cli = _run_cli("ping", "{}", cwd=_PROJECT_ROOT)
+    cli = _run_cli("--allow-unstamped-dispatch", "ping", "{}", cwd=_PROJECT_ROOT)
 
     assert served["exit_code"] == cli.returncode == 0
-    assert served["stderr"] == cli.stderr == ""
+    _assert_only_known_cli_notices(served["stderr"])
+    _assert_only_known_cli_notices(cli.stderr)
 
     served_parsed = json.loads(served["stdout"])
     cli_parsed = json.loads(cli.stdout)
@@ -141,10 +153,11 @@ def test_ping_matches_cli_structurally():
 
 def test_bare_ping_matches_cli_structurally():
     served = _invoke_from_argv({"argv": ["--bare", "ping", "{}"], "cwd": _PROJECT_ROOT})
-    cli = _run_cli("--bare", "ping", "{}", cwd=_PROJECT_ROOT)
+    cli = _run_cli("--allow-unstamped-dispatch", "--bare", "ping", "{}", cwd=_PROJECT_ROOT)
 
     assert served["exit_code"] == cli.returncode == 0
-    assert served["stderr"] == cli.stderr == ""
+    _assert_only_known_cli_notices(served["stderr"])
+    _assert_only_known_cli_notices(cli.stderr)
     served_parsed = json.loads(served["stdout"])
     cli_parsed = json.loads(cli.stdout)
     assert set(served_parsed.keys()) == set(cli_parsed.keys())
@@ -368,7 +381,30 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         del builtins._ENTRYPOINT_CWD_RACE_RECORD
 
 
+# ---------------------------------------------------------------------------
+# (g) `params.entrypoint` set: the served CLI reads the CALLER's session
+#     identity out of `os.environ`, never the warm server owner's.
+#
+#     The defect (cross-repo/inbox/2026-08-30-example-retrieval-repo-em-prepare-commit-
+#     msg-stamps-warm-engine-owner-session-id.md, reproduced in this repo
+#     2026-08-30): every `coordinator/bin/*.py` CLI resolves its session id by
 #     reading `SESSION_ENV_PRECEDENCE` out of `os.environ` — the
+#     `prepare-commit-msg` hook does so in a deliberately hand-mirrored copy of
+#     that ladder. Served in-process here, that environment is the server
+#     owner's, so the door's `_session_id` reached `resolve_session_id()` and
+#     stopped there: same hook, correct cold, a stranger's id warm, on EVERY
+#     hook-path commit on a box carrying the forwarder.
+#
+#     C4: the point fix (`_borrowed_session_identity`, formerly local to this
+#     module) is deleted — `coordinator_core.warm.entry_seam.per_request_state`
+#     (`_environ_identity_borrow`, C3) now makes the caller's identity true in
+#     `os.environ` for the whole isolated dispatch this op runs inside, so
+#     these tests open the SEAM's own scope (`isolated=True`) around
+#     `_run_entrypoint`, instead of binding `session_identity_override`/
+#     `warm_served_request` directly and relying on a borrow local to this
+#     module. They still pin the property (caller's id wins, absent-when-
+#     uncarried, server env restored), not the mechanism.
+# ---------------------------------------------------------------------------
 
 _CALLER_SID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 _SERVER_OWNER_SID = "b68689fb-a9a5-4f3d-9ca9-f688530ed7c1"
@@ -434,6 +470,7 @@ def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monke
     )
 
     assert seen["COORDINATOR_SESSION_ID"] == _CALLER_SID
+    # The lower-tier names are popped, not merely outranked: a CLI reading only
     # `CLAUDE_CODE_SESSION_ID` would otherwise still resurface the owner's id.
     assert seen["CLAUDE_SESSION_ID"] is None
     assert seen["CLAUDE_CODE_SESSION_ID"] is None
@@ -457,9 +494,37 @@ def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypa
     }
 
 
+# ---------------------------------------------------------------------------
+# (h) `params.entrypoint` set: `--help`/`-h` renders a target's REAL usage on
+#     the warm door — the third door
+#     (docs/plans/2026-09-02-the-loader-fires-the-assembly-not-the-em.md,
+#     chunk C1 follow-up), corrected after a first pass synthesized a stub
+#     line for EVERY entrypoint and silently replaced 11 targets' real usage
+#     with `usage: <name> [--help]` on the warm door only (never reproduced
+#     cold), hiding a live, published flag (`baton-assemble
+#     --expect-discovery-tier`).
+#
+#     Fixtures rather than the real `coordinator/bin/baton-assemble.py` /
+#     `plan-assemble.py`: those two route through `entry_point_shim`'s
+#     engine-mapped entries, which resolve the claude-klabauter root via a
+#     machine-local registry read this suite's own root `conftest.py`
+#     deliberately quarantines the real HOME directory from — calling their
+#     real `--help` inside THIS test process silently hits that
+#     resolution failure and (correctly, per `_render_usage_text`'s own
+#     fallback chain) falls back to a synthesized line, which would make
+#     these tests pass on a false basis. The fixtures below exercise the
+#     exact same `_run_entrypoint` code path (real `_load_entrypoint_main` +
+#     real `main_fn(["--help"])` call under the real lock/chdir span) against
+#     a target whose own module body has no such external dependency —
 #     `workday-start-inbox-blitz-assemble` (the real ARGV_SHAPE_NONE member)
+#     is used directly below since its short-circuit never loads a module at
+#     all and so carries no such fragility.
+#
+#     `main_fn` IS entered with `["--help"]` standing in for the caller's
 #     real argv for ARGV_SHAPE_FULL/TAIL targets, exactly as the cold door's
+#     `entry_point_shim.run_target` does; it is NEVER entered for
 #     ARGV_SHAPE_NONE, which cannot receive a flag at all.
+# ---------------------------------------------------------------------------
 
 
 def _write_delegating_entrypoint(bin_dir: Path, name: str, *, real_help_branch: bool) -> None:
@@ -664,7 +729,7 @@ def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
     result = _run_entrypoint(name, ["--help"], _PROJECT_ROOT)
 
     assert result["exit_code"] == 0
-    assert "{chain,supersede}" in result["stdout"]
+    assert "{chain,supersede,abandon}" in result["stdout"]
     assert result["stdout"] != f"usage: {name} [--help]\n"
 
 

@@ -69,20 +69,56 @@ import pytest
 from coordinator_core.bash_guards import check_test_suite_invocation as _ctsi
 from coordinator_core.bash_guards._helpers import operator_override_note
 
+#: The actual fingerprint of a hand-written "set this to 1" instruction --
+#: same regex `test_no_handwritten_override_clauses.py` uses, applied here to
 #: a RENDERED string rather than a folded AST constant.
+#:
+#: Review: coordinator:code-reviewer -- extended to also match the
+#: REASON-shaped assignment (`NAME="<reason>"`) `operator_override_note`'s
+#: `reason_placeholder` param now emits for the PUNT-family vars
 #: (`COORDINATOR_QUEUE_PUNT`, `COORDINATOR_BATON_BODY_PUNT`), whose own
+#: `_is_trivial_reason` guard denylists the literal `"1"`. The original
+#: flag-shaped `NAME=1` alternative stays untouched; both shapes are scanned
+#: by the SAME regex so neither can silently drift out of this gate's view,
+#: and both are still required to carry the reachability marker below.
 _VIOLATION_RE = re.compile(
     r'\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+=1\b'
     r'|\bCOORDINATOR_[A-Z0-9_]+="[^"\n]*"'
 )
 
+#: The one fact `operator_override_note` used to attach to every such
+#: mention. A `NAME=1` instruction with this phrase NOT within a short
+#: lookahead window is the dead-end shape this gate exists to catch: the
+#: env var is named, but the reader has no way to know it cannot be set
+#: from inside the session.
+#:
+#: 2026-08-11 reshape #1: `operator_override_note` stopped rendering a
+#: `NAME=1`/`NAME="..."` assignment at all (see that function's own
 #: docstring, NEGATIVE SPEC 4, and
+#: `test_operator_override_note_no_assignment_form.py`), so this marker/
 #: lookahead machinery already only mattered for a HAND-WRITTEN `NAME=1`
+#: site that bypasses the builder entirely (e.g. `_deny_reason_mutex`'s own
 #: known, out-of-scope `%s=1`, see `_KNOWN_UNFIXED_SITES` below).
+#:
+#: 2026-08-11 reshape #2, SAME DAY (docs/plans/2026-08-11-guard-messages-
+#: point-to-docs-never-name.md) -- `operator_override_note` stopped naming
+#: the env var at all (any form, assigned or bare) and this phrase is no
+#: longer present in ITS output either; the pre-launch-only fact it names
+#: moved wholly into the reference doc
+#: (`test_operator_override_note_retains_affordances.py`'s
+#: `test_reference_doc_states_the_env_var_is_not_reachable_in_session`
 #: pins it there now). This marker/lookahead machinery is UNCHANGED in
 #: purpose by reshape #2 -- it still exists solely to catch a HAND-WRITTEN
 #: `NAME=1` site outside the builder (`_KNOWN_UNFIXED_SITES`) -- and is kept
+#: verbatim rather than retired, since that class of violation is
+#: independent of what the builder itself renders. `TestDetectorSelfTest.
+#: test_negative_note_produced_by_the_real_builder_is_not_caught` below is
+#: the one control this reshape DOES change: it is updated to assert
 #: `_VIOLATION_RE` finds no match in the builder's output directly (AC-5:
+#: non-vacuous), rather than relying on `assert_render_carries_
+#: reachability_constraint`'s own zero-iteration loop to "pass" the same
+#: way whether or not the builder still carried anything this gate cares
+#: about.
 _REACHABILITY_MARKER = "unsettable from inside this session"
 
 _LOOKAHEAD_CHARS = 60

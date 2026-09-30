@@ -180,7 +180,24 @@ from coordinator_core.machine_resolver import load_flat_registry_file, registry_
 
 _EVENT_NAME = "PreToolUse"
 
+#: Operator-declarable escape hatch (PM ruling, 2026-08-05) for a host that
+#: misdetects under runtime sniffing -- e.g. Python running under Git-for-
+#: Windows' bundled MSYS2/Git-Bash environment, which can report
+#: ``os.name == "posix"`` despite the underlying host being Windows. Lives
+#: in the machine-local registry under
 #: ``${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}`` --
+#: always untracked, always local to the one machine it describes, so a
+#: declared value can never travel to (and misclassify) a machine it does
+#: not describe.
+#:
+#: Accepted values (case-insensitive): "true"/"1"/"yes" -> Windows;
+#: "false"/"0"/"no" -> not-Windows. Any other value, or an ABSENT key,
+#: falls through to runtime sniffing below -- absence never means
+#: "not Windows".
+#:
+#: Operator command to declare it (fixes a misdetecting box with no code
+#: change and no round trip through the EM):
+#:   machine-local set coordinator.host_is_windows true
 _REGISTRY_KEY = "coordinator.host_is_windows"
 _TRUE_VALUES = {"true", "1", "yes"}
 _FALSE_VALUES = {"false", "0", "no"}

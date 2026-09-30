@@ -202,7 +202,12 @@ def test_post_tool_use_suppresses_on_agent_id() -> None:
     assert _handler({"payload": payload}) == {}
 
 
+# The sizing-route resolution
+# path (`_newest_touched_sizing_path` / `_sizing_route_and_exemption` /
+# `_extract_scalar` / `_extract_detents`, exercised from `_handle_post_tool_use`'s
+# coordinator:sizing/coordinator:plan branch) had zero coverage; add one test
 # per `_ROUTE_TERMINAL` entry, one for the appetite/post-size-prompt exemption,
+# and the negative "spec-dispatch does not open plan->review" case.
 
 
 def _write_touch_record(repo_root: str, session_id: str, rel_sizing_path: str) -> None:
@@ -312,6 +317,7 @@ def test_sizing_route_exemption_suppresses_the_obligation(tmp_path) -> None:
 
 
 def test_plan_skill_spec_dispatch_route_does_not_open_plan_review(tmp_path) -> None:
+    # Only the FULL "plan" terminal opens plan->review; "spec-dispatch" must
     # not, even though it is a valid _ROUTE_TERMINAL entry for coordinator:sizing.
     records = _sizing_open_ledger_action(tmp_path, "spec-dispatch", "coordinator:plan")
     assert records is None

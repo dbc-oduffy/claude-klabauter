@@ -104,12 +104,26 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
+#: Zero-spawn upward-walk bound (mirrors ``guard_reap_stale_git_lock.py``'s
 #: own ``_MAX_UPWARD_WALK`` -- a plain filesystem bound, not a git-tree
+#: depth guess).
 _MAX_UPWARD_WALK = 50
 
 _P4_BASENAMES = frozenset({"p4", "p4.exe"})
 
+#: Review: coordinator-code-reviewer F1 (P1, confirmed) -- `cmd /c`/`cmd -c`
+#: was special-cased to recurse into the inner command, but `bash -c`,
+#: `sh -c`, `pwsh -Command`/`-c`, and `powershell -Command`/`-c` were not,
+#: so `bash -c "p4 submit"` tokenized cleanly, fell through every branch in
+#: `_classify_segment`, and was ALLOWED -- a fail-open bypass of a
+#: fail-closed fence. Conservative arm taken (not the recursion arm the
+#: reviewer also offered): the inner string handed to a `-c`/`-Command`
+#: interpreter is not reliably argv-shaped the way this fence's own
+#: tokenizer expects, so recursing into it risks a second bypass through
+#: quoting the outer tokenizer normalizes differently. Treated as an
+#: immediate unparseable-invocation deny instead, matching this module's
 #: own "anything unparseable ... denied" posture (see `_GOVERNED_MENTION_RE`
+#: and D6's `-x` handling above).
 _SHELL_DASH_C_BASENAMES = frozenset({"bash", "sh", "pwsh", "powershell"})
 _SHELL_DASH_C_FLAGS = frozenset({"-c", "-command"})
 
@@ -123,10 +137,20 @@ _P4_SIMPLE_READ_VERBS = frozenset(
 
 _P4_ADD_LIKE_VERBS = frozenset({"edit", "add", "delete", "move"})
 
+#: D4b -- the fence's own gain: ``reopen -c <CL>`` with at least one path,
+#: constrained like every other write verb here (form only, same as
 #: ``_P4_ADD_LIKE_VERBS`` -- neither this fence nor those verbs validate the
+#: CL NUMBER against the session's own, only that ``-c`` carries a value).
+#: Without this the fence would deny the D4b floor's own remedy.
 _P4_REOPEN_VERB = "reopen"
 
+#: p4 global options that consume the following token as a value, so the
+#: verb resolver must skip both (D6: "skips the binary ... and every global
+#: flag with its value ... and takes the first non-flag token as the verb").
 #: ``-x`` is deliberately EXCLUDED here -- it does not merely take a value,
+#: it makes the real verb unrecoverable from argv (D6's own "anything
+#: unparseable (-x, ...)"), so it is handled as an immediate unparseable
+#: verdict, never skipped-past.
 _P4_GLOBAL_FLAGS_WITH_VALUE = frozenset(
     {"-p", "-u", "-c", "-d", "-H", "-C", "-I", "-Q", "-L", "-z", "-Z", "-s", "-F"}
 )
@@ -141,11 +165,23 @@ _GIT_DENY_VERBS = frozenset(
 
 _GIT_RESET_DENY_FLAGS = ("--hard", "--keep", "--merge")
 
+#: Cheap top-level pre-filter for the "unparseable" verdict on a command the
+#: shared/dialect tokenizer cannot segment at all -- only denies an
 #: UNPARSEABLE command when it plausibly names a surface this fence governs
+#: (a p4 invocation, a git invocation subject to D7, or attrib/chmod),
+#: never an unrelated command this guard has nothing to say about. Covers
 #: D6's own "-x, P4ALIASES, p4vc, git p4" unparseable examples AND the
+#: PowerShell-dialect case where a perfectly ordinary `git checkout --
+#: <path>` fails `resolve_segments_for_dialect` outright (the PowerShell
+#: tokenizer's own `--` handling) -- that failure must still deny under D7,
+#: not silently allow because it happens not to mention p4.
 _GOVERNED_MENTION_RE = re.compile(r"(?i)\bp4(\.exe)?\b|p4vc|P4ALIASES|\bgit\b|\battrib\b|\bchmod\b")
 
 #: D6: "P4ALIASES anywhere in the command text" denies outright -- a caller
+#: setting this env var redefines what a p4 verb even means, which the fence
+#: cannot classify against a fixed allowlist. Checked globally (not scoped to
+#: a resolved p4 command head) because the whole point is that it can arrive
+#: as a leading env assignment ahead of the p4 invocation.
 _P4ALIASES_RE = re.compile(r"P4ALIASES")
 
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -311,7 +347,16 @@ def _classify_segment(tokens: List[str]) -> Optional[str]:
             return _classify_git_segment(inner[1:])
         return None
 
+    # A `-c`/`-Command`/
+    # `-EncodedCommand` interpreter head is treated as an unparseable
+    # invocation (conservative arm) ONLY when the inner string plausibly
+    # names a surface this fence governs -- same "governed mention" gate
     # `_GOVERNED_MENTION_RE` already applies to the top-level unparseable
+    # fallback, so `bash -c "ls"` stays allowed and this cannot become a
+    # blanket nested-shell deny. Never recursed into and never classified
+    # through `_classify_p4_segment`/`_classify_git_segment` -- the inner
+    # string is not reliably argv-shaped the way this fence's tokenizer
+    # expects.
     if head_base in _SHELL_DASH_C_BASENAMES:
         for idx, tok in enumerate(rest):
             flag = tok.lower()

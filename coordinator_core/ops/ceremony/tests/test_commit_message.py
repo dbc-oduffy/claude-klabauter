@@ -15,6 +15,8 @@ from coordinator_core.ops.ceremony.commit_message import (
 
 
 #: Recovered verbatim from the deleted parity test's GOLDEN_MESSAGE heredoc.
+#: The em-dash below is a literal U+2014 character (three UTF-8 bytes:
+#: 0xE2 0x80 0x94), matching the bash fixture's $'\342\200\224' escape.
 _GOLDEN_MESSAGE = (
     "workstream-complete: my-feature\n"
     "\n"

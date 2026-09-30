@@ -86,6 +86,9 @@ REAL_CANONICAL_AGENT_ID = "rev-counter-tests@session-0bba1169"
 REAL_RESOLVED_TYPE = "coordinator:code-reviewer"
 
 #: A genuine coordinator type, NOT `REAL_RESOLVED_TYPE`, deliberately never
+#: added to any policy fixture's `report_sidecar` list below -- the
+#: "genuinely off the roster" case the C3 body distinguishes from the
+#: key-form bug's "looks off-roster because the lookup missed" case.
 OFF_ROSTER_TYPE = "coordinator:git-commit-agent"
 
 
@@ -309,7 +312,11 @@ def test_named_dispatch_unresolved_type_gets_the_miss_marker(git_repo: Path) -> 
 
 
 def _bookkeeping_params(cwd: str) -> dict:
+    # `track_dispatched_agents._valid_agent_id` only accepts the bare-hex or
+    # already-canonical `<name>@session-<short>` teammate form (its own
     # `_TEAMMATE_AGENT_RE`) -- NOT the raw subagent-side `a<name>-<16hex>`
+    # form `cater_subagent_start` receives on `payload["agent_id"]`. The
+    # bookkeeping op's caller resolves the canonical id before this leg
     # (DoE's shim), so this fixture mirrors that: the CANONICAL id, not
     # `REAL_RAW_AGENT_ID`.
     return {

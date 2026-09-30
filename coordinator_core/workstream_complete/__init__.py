@@ -2669,6 +2669,7 @@ def _compute_review_receipt_gate(
     from coordinator_core.review_trail.receipt_credit import (
         _compute_session_summary,
         _has_own_completion,
+        _matching_reviewer_receipt,
         _receipt_counts,
     )
 
@@ -2757,25 +2758,13 @@ def _compute_review_receipt_gate(
         # block is the only field on this sidecar whose presence means "a
         # review was dispatched", so it is the only field the floor may rest
         # on.
-        receipt = frontmatter.get("review_receipt")
-        if not isinstance(receipt, dict):
-            continue
-        if receipt.get("session_id") != sid:
-            continue
-        receipt_agent_type = receipt.get("agent_type")
-        if not isinstance(receipt_agent_type, str):
+        receipt = _matching_reviewer_receipt(frontmatter, sid, CLOSE_RECEIPT_REVIEWERS)
+        if receipt is None:
             continue
 
         # C4 replaces the bare body-blank check with C3's completion/content
         # predicate (AC5 is no longer "non-blank body", it is "authored
         # content the completion writer, if live, actually produced").
-        bare = (
-            receipt_agent_type.rpartition(":")[2]
-            if ":" in receipt_agent_type
-            else receipt_agent_type
-        )
-        if bare not in CLOSE_RECEIPT_REVIEWERS:
-            continue
         if not _receipt_counts(frontmatter, text, sid, summary):
             if (
                 dispatched_never_completed_path is None

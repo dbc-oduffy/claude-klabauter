@@ -238,6 +238,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     refused: List[Dict[str, Any]] = []
 
     # Sizing candidates — leg (b) is EXEMPT for _SIZING_KIND (no successor-edge
+    # vocabulary reaches a sizing-object), so corpus_metas is None here: the
+    # handoff-corpus index above is never threaded into a sizing candidate's
+    # predicate call.
     for candidate in sizing_candidates:
         sizing_path = candidate["sizing_path"]
         fm = candidate["fm"]

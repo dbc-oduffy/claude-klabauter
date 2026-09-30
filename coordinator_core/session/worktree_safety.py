@@ -53,6 +53,16 @@ from coordinator_core.session import core
 from coordinator_core.session import liveness as _liveness
 
 # _SENTINEL_REL (".git", "coordinator-sessions", ".current-session-id") REMOVED
+# (KS-3, 2026-08-07): the sentinel tier it fed was unsound under concurrency
+# (documented last-writer-wins across concurrent sessions sharing one
+# worktree — coordinator_core/bash_guards/guard_inprocess_search.py ~L84)
+# AND its sole writer (session-init.py, the coordinator-content-repo SessionStart hook)
+# was deleted by PM directive 2026-07-15 — no production writer survives.
+# A stale sid used to subtract nothing from the live peer set here (over-
+# refusal, noisy but fail-closed-safe); removal makes resolve_self_session_id
+# honestly return "" instead, which still routes to the "unknown" (fail
+# closed) branch below whenever the live set is non-empty — no refuse->allow
+# flip.
 
 
 class RewriteVerdict(NamedTuple):
@@ -62,14 +72,32 @@ class RewriteVerdict(NamedTuple):
     peer_session_ids: Tuple[str, ...]
 
 
+# --- Branch-mutation operation kinds (C1) -------------------------------
+#
+# ``branch_mutation_verdict`` answers ONE question -- "do live peers share
+# this worktree?" -- but the ANSWER it should give depends on which mutation
+# the caller is about to perform. Before C1 the predicate answered one
+# question for three structurally different mutations and refused all of
 # them identically. The axis below is REQUIRED and KEYWORD-ONLY so no caller
+# can inherit a permissive default by omission.
+#
 # Only FRESH_CUT_AT_HEAD is narrowed. Every other kind takes the unchanged
+# refuse-under-peers path.
 
 FRESH_CUT_AT_HEAD = "FRESH_CUT_AT_HEAD"
 #: Checking out a DIFFERENT existing commit. Moves HEAD under every peer.
 CHECKOUT_EXISTING = "CHECKOUT_EXISTING"
 RENAME_WITH_REMOTE_DELETE = "RENAME_WITH_REMOTE_DELETE"
+#: Catch-all for a branch mutation whose content-neutrality this predicate
+#: cannot establish from its own inputs -- a cut bundled with a reset, or a
 #: cut merely PRESCRIBED to a caller that controls how it is performed. Not
+#: named in the originating plan; added because the two pre-existing
+#: non-ceremony call sites (`coordinator/bin/merge-recovery-and-tag-cut.py`
+#: cuts a recovery branch AND hard-resets main; `pickup_assemble`'s
+#: `compute_branch_gate` prescribes an unqualified cut) are neither of the
+#: three hazardous kinds by name, and mapping them onto one of those would
+#: have been a lie in the argument. Behaviour is identical to the hazardous
+#: kinds: refuse under peers.
 UNQUALIFIED_BRANCH_CUT = "UNQUALIFIED_BRANCH_CUT"
 
 _BRANCH_MUTATION_KINDS = frozenset(

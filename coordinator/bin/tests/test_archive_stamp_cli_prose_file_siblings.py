@@ -74,7 +74,9 @@ class _RecordingMod:
 
     def __init__(self):
         self.correct_calls: list[tuple] = []
+        self.correct_note_calls: list[tuple] = []
         self.repair_shipped_calls: list[tuple] = []
+        self.repair_shipped_clear_calls: list[bool] = []
         self.repair_state_calls: list[tuple] = []
         self.unclaim_calls: list[tuple] = []
 
@@ -82,8 +84,15 @@ class _RecordingMod:
         self.correct_calls.append((path, old, new))
         return 0
 
-    def cs_repair_archived_shipped_in(self, path, reason, *, sha=None, unset=False):
+    def cs_correct_memo_note(self, path, note):
+        self.correct_note_calls.append((path, note))
+        return 0
+
+    def cs_repair_archived_shipped_in(
+        self, path, reason, *, sha=None, unset=False, clear_advancement=False
+    ):
         self.repair_shipped_calls.append((path, reason, sha, unset))
+        self.repair_shipped_clear_calls.append(clear_advancement)
         return 0
 
     def cs_repair_archived_deployment_state(self, path, reason, state, **kwargs):
@@ -207,6 +216,51 @@ class CorrectHandoffBodyTest(_ProseFlagTestBase):
         self.assertEqual(self.stub.correct_calls, [])
 
 
+class CorrectMemoNoteTest(_ProseFlagTestBase):
+    def test_inline_single_line_reaches_the_wrapper(self):
+        rc = _cli.main(
+            ["correct-memo-note", "state/cross-repo/archive/m.md",
+             "--decision-note", "raised with the PM"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            self.stub.correct_note_calls[-1],
+            ("state/cross-repo/archive/m.md", "raised with the PM"),
+        )
+
+    def test_file_sibling_carries_the_note(self):
+        rc = _cli.main(
+            ["correct-memo-note", "m.md", "--decision-note-file", self._write("from a file")]
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.stub.correct_note_calls[-1], ("m.md", "from a file"))
+
+    def test_multiline_inline_is_refused_not_truncated(self):
+        rc = _cli.main(["correct-memo-note", "m.md", "--decision-note", _MULTILINE])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.correct_note_calls, [])
+
+    def test_inline_and_file_together_are_a_usage_error(self):
+        rc = _cli.main(
+            ["correct-memo-note", "m.md", "--decision-note", "a",
+             "--decision-note-file", self._write("b")]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.correct_note_calls, [])
+
+    def test_missing_note_is_a_usage_error(self):
+        rc = _cli.main(["correct-memo-note", "m.md"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.correct_note_calls, [])
+
+    def test_immutable_fields_are_not_flags_of_this_verb(self):
+        rc = _cli.main(
+            ["correct-memo-note", "m.md", "--decision-note", "x", "--realized-by", "sha"]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.correct_note_calls, [])
+
+
 class RepairReasonTest(_ProseFlagTestBase):
     def test_shipped_in_reason_file_sibling(self):
         rc = _cli.main(
@@ -267,6 +321,65 @@ class RepairReasonTest(_ProseFlagTestBase):
             self.stub.repair_shipped_calls[-1],
             ("archive/handoffs/h.md", "a one-line reason", None, True),
         )
+
+
+class RepairShippedInClearAdvancementTest(_ProseFlagTestBase):
+    """`--clear-advancement` is the operator door for a false cascade on a
+    correctly-shipped record; it must reach the wrapper and stand alone."""
+
+    _H = "archive/handoffs/h.md"
+
+    def test_clear_advancement_alone_reaches_the_wrapper(self):
+        rc = _cli.main(
+            ["repair-archived-shipped-in", self._H, "--reason", "false cascade",
+             "--clear-advancement"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            self.stub.repair_shipped_calls, [(self._H, "false cascade", None, False)]
+        )
+        self.assertEqual(self.stub.repair_shipped_clear_calls, [True])
+
+    def test_clear_advancement_composes_with_sha(self):
+        rc = _cli.main(
+            ["repair-archived-shipped-in", self._H, "--reason", "r",
+             "--sha", "55ad98ac", "--clear-advancement"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.stub.repair_shipped_calls, [(self._H, "r", "55ad98ac", False)])
+        self.assertEqual(self.stub.repair_shipped_clear_calls, [True])
+
+    def test_clear_advancement_composes_with_unset(self):
+        rc = _cli.main(
+            ["repair-archived-shipped-in", self._H, "--reason", "r",
+             "--unset", "--clear-advancement"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.stub.repair_shipped_calls, [(self._H, "r", None, True)])
+        self.assertEqual(self.stub.repair_shipped_clear_calls, [True])
+
+    def test_flag_absent_defaults_to_false(self):
+        rc = _cli.main(["repair-archived-shipped-in", self._H, "--reason", "r", "--unset"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.stub.repair_shipped_clear_calls, [False])
+
+    def test_no_action_flag_is_a_usage_error(self):
+        rc = _cli.main(["repair-archived-shipped-in", self._H, "--reason", "r"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.repair_shipped_calls, [])
+
+    def test_sha_and_unset_together_are_a_usage_error(self):
+        rc = _cli.main(
+            ["repair-archived-shipped-in", self._H, "--reason", "r",
+             "--sha", "55ad98ac", "--unset", "--clear-advancement"]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.repair_shipped_calls, [])
+
+    def test_clear_advancement_still_requires_a_reason(self):
+        rc = _cli.main(["repair-archived-shipped-in", self._H, "--clear-advancement"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.repair_shipped_calls, [])
 
 
 class UnclaimNoteFileTest(_ProseFlagTestBase):
@@ -342,6 +455,7 @@ class UsageDeclaresEveryFileSiblingTest(unittest.TestCase):
 
     CASES = [
         ("correct-handoff-body", ("--old-string-file", "--new-string-file")),
+        ("correct-memo-note", ("--decision-note-file",)),
         ("repair-archived-shipped-in", ("--reason-file",)),
         ("repair-archived-deployment-state", ("--reason-file",)),
         ("unclaim-handoff", ("--note-file",)),
@@ -501,7 +615,13 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(rc, 2)
         self.assertEqual(self.stub.action_calls, [])
 
+    # Before
+    # the fix, the positional walk tracked "consumed as a value" only for the
+    # three prose flags, so a non-prose 2-token flag's value (or missing-value
+    # slot) landing on a prose flag's name got misread as a fresh pair and the
+    # tail was silently rewritten. These pin the walk against the engine's full
     # `_DISPOSITION_FLAGS`/`_DISPOSITION_BOOL_FLAGS` vocabulary, not just the
+    # three prose ones.
 
     def test_a_non_prose_flags_value_that_looks_like_a_prose_flag_is_untouched(self):
         rc = _cli.main(

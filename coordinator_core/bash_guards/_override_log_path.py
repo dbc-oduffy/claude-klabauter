@@ -37,6 +37,11 @@ import os
 from typing import Optional
 
 #: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module
+#: needs. Deliberately NOT an import: these guards run in a PreToolUse hook
+#: on the commit hot path, where pulling in the session package for one
+#: string is cost the hook cannot justify. If the name ever changes,
+#: `test_override_log_bucket_is_denylisted` fails — it imports the real set
+#: and compares.
 NO_SESSION_BUCKET = "no-session"
 
 

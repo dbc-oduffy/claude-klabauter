@@ -184,7 +184,10 @@ def test_directive_stays_blocked_when_judgment_point_resolves_to_skip():
     assert wc_apply._directive_gate_open(directive, jp_by_id, decisions) is False
 
 
+# ---------------------------------------------------------------------------
 # AC10 — workday-complete-apply resolves goal-close-day through _CLI_DISPATCH
+# without raising UnrecognizedDirective.
+# ---------------------------------------------------------------------------
 
 
 def test_goal_close_day_is_a_consumes_manifest_member():

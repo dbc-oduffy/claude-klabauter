@@ -72,8 +72,13 @@ from coordinator_core.session.liveness import session_live
 
 SCHEMA_VERSION = 1
 
+#: Generator-provenance declaration (generator_provenance.py). `_write_json_
+#: atomic` writes under `settings_home() / "state" / "group-em"` --
 #: `settings_home()` resolves to `${CLAUDE_HOME:-$HOME}/.coordinator-claude-
 #: settings` (or `COORDINATOR_SETTINGS_HOME` when set), never a path inside
+#: this repo's own tracked tree. Same disposition as `async_hook_status.py`'s
+#: `claude_config_dir()`-rooted marker: an operator-home cache, not a repo
+#: artifact.
 GENERATES = []
 
 
@@ -285,6 +290,10 @@ def claim(
 
     if liveness.live_reason == "pid_not_running":
         # AUTO-REPLACE: positive evidence of death (a registry row exists for the
+        # incumbent's session_id and its pid is not running). Claim it -- but loudly:
+        # the replaced holder is named in its own field, never folded into
+        # `superseded_incumbent`, so a caller cannot mistake this for the silent
+        # clean-pass-under-a-dead-Group-EM failure this whole guard exists to prevent.
         replaced_holder = {
             "session_id": incumbent_sid,
             "peer_name": existing.get("peer_name"),

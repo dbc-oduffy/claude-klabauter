@@ -171,7 +171,12 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
 
     import os
 
+    # A REAL class, taken from the writer's own ratified allow-list rather
+    # than invented here. `write_fleet_delegation` gained a positive
     # `DELEGABLE` check (`fleet_delegation.DELEGABLE`), so the invented
+    # `"review-schedule"` this used to pass is now rejected at write time and
+    # the test measured the rejection, not the grant. Reading the list back
+    # off the module keeps this test tracking the list instead of restating
     # it -- the same convention every other consumer of `DELEGABLE` follows.
     delegable_class = sorted(fd.DELEGABLE)[0]
 
@@ -269,6 +274,9 @@ def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkey
     this_proc = psutil.Process(os.getpid())
     now = datetime.now(timezone.utc)
     # Two REAL classes off the writer's own `DELEGABLE` allow-list (invented
+    # names are rejected at write time now), ordered so the probed
+    # `classes[0]` is NOT the one checked second -- which is the whole point
+    # of this test.
     first_class, second_class = sorted(fd.DELEGABLE)[:2]
     assert first_class != second_class, (
         "this test needs two distinct delegable classes to prove the "
@@ -348,7 +356,9 @@ def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_pa
     )
 
     now = datetime.now(timezone.utc)
+    # A real class off the writer's own allow-list — an invented one is
     # rejected at write time by `fleet_delegation.DELEGABLE`, which would
+    # leave this test revoking a grant that was never written.
     delegable_class = sorted(fd.DELEGABLE)[0]
     ok, reason = fd.write_fleet_delegation(
         designated_pid=1234,

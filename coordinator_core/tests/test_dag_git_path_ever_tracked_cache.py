@@ -263,7 +263,15 @@ class TestBuildGitHistoryCacheWidening:
         )
 
 
+# ---------------------------------------------------------------------------
+# (5) Cache-miss-is-authoritative (2026-07-29 follow-up to the widening above).
 #     A miss against a COMPLETE GitHistoryCache resolves False with ZERO
+#     subprocess spawns — this is the ~308-per-run fallback-spawn elimination.
+#     Every fallback-preserving case named in the dispatch brief is pinned
+#     here: an absent (None) cache, a shallow clone, and a bare object with
+#     no `.complete` attribute at all (any pre-existing caller/test fixture
+#     that built a cache by hand rather than via build_git_history_cache).
+# ---------------------------------------------------------------------------
 
 class TestCacheMissIsAuthoritativeWhenComplete:
     def test_fresh_repo_cache_reports_complete(self, tmp_path):

@@ -67,7 +67,9 @@ def _append_audit_entry(log_file: str, entry: dict) -> None:
         print(f"agent_completion_log: cannot create log dir {log_dir}: {exc}", file=sys.stderr)
         return
     try:
+        # separators=(",", ":") produces compact (no-whitespace) JSON — mirrors jq -c.
         # REQUIRED: downstream consumers grep for `"agentId":"<id>"` on a
+        # single line; pretty-printing would break that consumer.
         line = json.dumps(entry, separators=(",", ":")) + "\n"
         with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)

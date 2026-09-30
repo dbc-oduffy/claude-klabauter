@@ -224,8 +224,14 @@ _REFUSAL_CLASS_MALFORMED = "malformed"
 _REFUSAL_CLASS_UNAUTHORIZED = "unauthorized"
 _REFUSAL_CLASS_SCHEMA_STALE = "schema_stale"
 _REFUSAL_CLASS_DUPLICATE_DELIVERY = "duplicate_delivery"
+#: P144-C4 (idempotency-key binding, spike verdict § 3) — the fifth
 #: refusal class: `idempotency_key` reuse under a DIFFERENT logical
+#: payload, own-shard/own-history only (`tracker_store.
 #: TrackerStoreKeyMisuseError`). The OPPOSITE message from
+#: `duplicate_delivery` — that class is success-on-retry evidence; this one
+#: is a refusal an cockpit-side caller must NOT retry as-is, so it cannot
+#: be folded into `duplicate_delivery` without corrupting the very
+#: distinction `refusal_class=` exists to let a caller parse.
 _REFUSAL_CLASS_KEY_MISUSE = "key_misuse"
 
 
@@ -489,6 +495,8 @@ def _delivery_commit_message(rel_path: str) -> str:
     """
     lines = [
         # Prose, not `EVENT_KIND_FRONTMATTER_LABEL`: that constant is the
+        # hyphenated `kind:` value (line 435's use), and substituting it here
+        # renders the subject "deliver sovereign-tracker-event <path>".
         f"cross-repo: deliver sovereign-tracker event {rel_path}",
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
@@ -711,7 +719,9 @@ def _push_suggestion_sync(
     return _deliver_envelope(target_root, owning_repo, event)
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.push_suggestion")

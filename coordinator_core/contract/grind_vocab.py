@@ -59,7 +59,12 @@ UNIVERSAL_HANDBACK_TYPES: frozenset[str] = frozenset(
 )
 
 # STAGE_OUTCOMES: a closed-vocabulary publish, one map from stage kind to its
+# own closed outcome set (EM-authored, DoE request). `triage`'s single member
+# is the profile's own verdict vocabulary, checked against the profile, not
 # fixed here. `fix`'s engine-mapped outcomes (`NEEDS_PLAN` -> `baton`, a
+# non-empty tradeoff -> `needs-judgment`) are represented by their mapped
+# names -- this describes what a stage's edge can carry forward, not its raw
+# agent-return vocabulary.
 STAGE_OUTCOMES: dict[str, frozenset[str]] = {
     "triage": frozenset({"profile-declared"}),
     "refute-close": frozenset({"confirmed", "refuted"}),

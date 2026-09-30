@@ -87,13 +87,107 @@ _REAL_RMDIR = os.rmdir
 _REAL_WALK = os.walk
 _REAL_JOIN = os.path.join
 
+# ---------------------------------------------------------------------------
+# Package-conftest visibility patch (2026-07-28 — bare-file-arg Package-cache
+# clobber)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS. A multi-file `pytest` invocation that mixes a bare file
+# path (no `::test_name` suffix) sitting directly under a Package directory
+# with OTHER args that revisit one of that Package's own subpackages can make
+# a whole subpackage's conftest fixtures (e.g. `handoff_repo` in
+# coordinator_core/ops/tests/conftest.py) invisible to some — not all — of the
+# tests in that subpackage, with pytest reporting "fixture 'X' not found" even
+# though the conftest imported cleanly and the fixture is defined. Minimal
+# repro (confirmed on pytest 9.1.1, no repo-side conftest or testpaths change
+# involved — reproduces identically under `--confcutdir=coordinator_core`,
+# which excludes the repo-root conftest entirely):
+#
+#     python3 -m pytest \
+#         coordinator_core/ops/tests/test_handoff_reconcile_report.py \
+#         coordinator_core/test_baton_assemble.py \
+#         coordinator_core/ops/tests/test_handoff_archive_transition.py -q
+#
 # MECHANISM (verified via a diagnostic pytest plugin patching
+# `_pytest.main.Session.collect`/`pytest_collectstart`, not guessed):
+# `Session.collect()` walks each cmdline arg's path components against a
+# `self._collection_cache` keyed by the PARENT collector object, so revisiting
+# an already-collected Package normally reuses its cached children — EXCEPT
+# for one case: `handle_dupes = not (len(matchparts) == 1 and
+# matchparts[0].is_file())`, a narrow carve-out (pytest's own comment: "files
+# given directly multiple times on the command line should not be
+# deduplicated") that fires whenever the CURRENT hop's remaining match is a
+# single bare file. `coordinator_core/test_baton_assemble.py` above is such a
+# bare file, and it sits directly under Package(coordinator_core) — so
+# collecting IT invalidates the cache entry for Package(coordinator_core)
+# itself (the cache dict is unconditionally overwritten even when
+# handle_dupes=False), silently minting a FRESH duplicate
+# Package(coordinator_core/ops) -> Package(coordinator_core/ops/tests) chain.
+# A later arg that redescends into that subpackage (here,
+# test_handoff_archive_transition.py) attaches to the NEW duplicate Package
+# instance, but `coordinator_core/ops/tests/conftest.py` was already parsed
 # under the ORIGINAL (now-orphaned) Package instance, so its FixtureDefs carry
+# `.node` pointing at the orphan. `_pytest.fixtures.FixtureManager
 # ._matchfactories` (fixtures.py) matches primarily by NODE IDENTITY
+# (`fixturedef.node in parent_nodes`) and — this is the actual gap — only
+# falls back to matching by the `baseid` STRING (e.g. `'ops/tests'`) when
+# `fixturedef.node is None`. When `.node` is set but simply belongs to an
+# orphaned duplicate, neither branch matches and the fixture is dropped from
+# that item's closure with no error at collection time, surfacing later as a
+# "fixture not found" at test setup.
+#
 # THE FIX. Restore `baseid` string matching as an unconditional FALLBACK —
+# never a replacement — for node-identity matching, exactly per pytest's own
+# comment on the string branch ("legacy/plugins"). `baseid` is derived from
+# the same node's nodeid at FixtureDef-construction time and does not go
+# stale when a duplicate Package is minted, so it is strictly safe as a
+# second check: every fixturedef `_matchfactories` used to yield still gets
+# yielded (node-identity match still tried first); this only ADDS fixturedefs
+# whose `.node` is a stale/orphaned duplicate of a node still on the current
+# item's `baseid`-prefix chain.
+#
 # NEGATIVE SPEC
 #   - Does NOT touch fixture SELECTION when multiple same-name fixturedefs
+#     legitimately override each other (module overrides conftest, etc.) —
+#     the override-resolution index math in `_get_active_fixturedef` is
+#     untouched; this only affects which candidates make it into the
+#     `fixturedefs` list `_matchfactories` filters, adding candidates that
+#     `baseid` alone already says belong on this item's ancestor chain.
+#   - Does NOT change pytest's collection/caching behavior itself — the
+#     duplicate-Package minting still happens; this patches only the
+#     downstream fixture-visibility symptom, because the alternative (forcing
+#     pytest to never mint a duplicate Package) means monkeypatching
+#     `Session.collect()`'s cache-invalidation logic, a far larger surface
+#     with far more ways to silently change unrelated collection behavior.
+#   - Applied defensively at BOTH levels, method and attribute.
+#     `_matchfactories` is patched by NAME (`hasattr`), not assumed present.
+#     `FixtureDef.node` is likewise read via `getattr(..., None)`, NOT
+#     attribute access — it does not exist on every supported pytest. On
+#     pytest 9.0.3 upstream `_matchfactories` matches on `baseid` ALONE and
+#     `FixtureDef` carries no `.node` at all; the duplicate-Package gap this
+#     block works around simply does not exist there. A bare `fixturedef.node`
+#     therefore raised `AttributeError: 'FixtureDef' object has no attribute
+#     'node'` inside the fixture closure of EVERY collected item — 4800
+#     collection errors, the entire suite unrunnable, on a machine whose only
+#     sin was a slightly older pytest (observed on a clean Windows install,
+#     2026-07-28). With the `getattr`, 9.0.3 falls through to the `baseid`
+#     branch and reproduces upstream 9.0.3 behavior exactly, while 9.1.x still
+#     gets node-identity-first matching — one expression, correct on both, no
+#     version sniffing.
+#     Do NOT "simplify" this into a version check around the patch site: on
 #     9.1.x `.node` is an INSTANCE attribute, so a class-level
+#     `hasattr(FixtureDef, "node")` reads False there too and would silently
+#     disable the fix on the very versions that need it.
+#     Worst case in all cases reverts to the status quo (the bug this note
+#     describes), never a new failure mode. This block itself pins no pytest
+#     version; the repo declares a `>=9.1` floor in pyproject.toml's
+#     [project.optional-dependencies].test as a verified-against statement —
+#     below 9.1 the duplicate-Package gap does not exist, so this patch is a
+#     no-op there and its regression pin proves nothing.
+#
+# Spec backlink: none (found and fixed in the same session; no antecedent
+# plan). Regression pin: coordinator_core/tests/test_package_conftest_bare_
+# file_arg_visibility.py, which reproduces the exact 3-arg repro above.
 try:
     import _pytest.fixtures as _fx
 
@@ -112,7 +206,16 @@ try:
 except ImportError:  # pragma: no cover - defensive, see NEGATIVE SPEC above
     pass
 
+# Captured at collection time, under the REAL (un-quarantined) HOME — before any
 # per-test fixture below has a chance to monkeypatch HOME/USERPROFILE. A test
+# process that spawns a subprocess later (many do, via `subprocess.run([sys.executable,
+# ...], env=dict(os.environ))`) inherits whatever HOME the PARENT test process had at
+# spawn time; that subprocess then computes ITS OWN user-site path fresh, based on the
+# (quarantined) HOME it inherited — so a package installed only in the real user-site
+# (e.g. jsonschema, pydantic on this machine) silently vanishes for the child, even
+# though the parent test process still sees it fine. See the fixture docstring below
+# for the concrete failure this fixes (`ModuleNotFoundError` in a HOME-quarantined
+# subprocess) and why the fix belongs here rather than in the package under test.
 _REAL_USER_SITE = site.getusersitepackages()
 
 
@@ -332,11 +435,29 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.delenv("HOMEDRIVE", raising=False)
     monkeypatch.delenv("HOMEPATH", raising=False)
     # COORDINATOR_SETTINGS_HOME is checked by `_settings_home.settings_home()`
+    # AHEAD of every home var, so leaving it set defeats this whole fixture on
+    # any box that exports it: the durable `.coordinator-content-root` rung, the machine-local
+    # registry rung, and the engine-build path all keep reading the operator's
+    # LIVE settings tree no matter what home a test then sets. Measured
+    # 2026-09-06 across eleven test files: 58 failures with it set, 1 with it
+    # unset -- and every one of those 57 was a test silently measuring a
+    # different branch than its own name claimed, which is worse than a red.
+    # This is not a new policy, it is the gap the fixture already assumes shut:
+    # it seeds a stub pointer at
+    # `<quarantine>/.coordinator-claude-settings/machine-local/.coordinator-content-root`,
+    # which only anything reads if settings-home resolves INTO the quarantine.
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
+    # Preserve subprocess access to real user-site packages (2026-07-21 cluster-A fix).
     # Quarantining HOME/USERPROFILE also, as an unintended side effect, hides whatever
+    # is installed ONLY in the real user-site directory from any subprocess a test
+    # spawns — a dependency-resolution failure, not anything about the code under test
     # (see module-level `_REAL_USER_SITE` comment above for the exact mechanism). Fold
     # the real user-site path into PYTHONPATH so a spawned child's `sys.path` still
+    # resolves it even though its HOME points at the throwaway quarantine dir. This is
+    # read-only import-path plumbing — it does NOT restore real-HOME file access, so it
+    # does not reopen the live-machine-config-corruption hole this fixture exists to
+    # close (see module docstring above).
     if _REAL_USER_SITE:
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
         pythonpath_entries = existing_pythonpath.split(os.pathsep) if existing_pythonpath else []
@@ -351,9 +472,20 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("GIT_COMMITTER_NAME", "coordinator-test")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "coordinator-test@invalid")
 
+    # Second consequence of hiding ~/.gitconfig, same shape as the identity one
+    # above but with a GUI blast radius. Git for Windows ships no `man.exe`, so
+    # `git <verb> --help` resolves `help.format` to `web` and hands off to
     # `git-web--browse`, which LAUNCHES THE OPERATOR'S DEFAULT BROWSER at a local
+    # `git-<verb>.html`. The operator's global mitigation for that (the
+    # help.format/web.browser/browser.noop.cmd triple) lives in ~/.gitconfig --
+    # which this fixture has just made invisible. Measured on 2026-08-07: with
+    # the quarantine applied, `git config --get web.browser` answers empty/rc=1
     # on a box where the global triple is set, so the suite runs UNPROTECTED and
+    # any test shelling out to `git <verb> --help` sprays browser tabs (observed:
+    # dozens a minute from the bash-guard alternative-liveness gate).
     # `GIT_CONFIG_*` is the injection form that survives a quarantined HOME.
+    # `browser.noop.cmd` is `eval`-ed by `git-web--browse`, so its value must
+    # stay free of shell metacharacters -- a parenthesis is a hard syntax error.
     monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "help.format")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "web")
@@ -364,12 +496,51 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
     # Belt-and-braces companion to the HOME/USERPROFILE quarantine above: this
     # fixture redirects the FILESYSTEM a test writes into, but a 2026-07-28
+    # incident showed at least one production call site mutates real MACHINE
+    # STATE (Windows `HKCU\Environment` PATH, via `[Environment]::
+    # SetEnvironmentVariable`) keyed on a caller-supplied path rather than on
+    # HOME — a sandboxed home does not, by itself, stop that write. Disable
+    # the whole class suite-wide rather than relying on every such call site
+    # independently deriving the same temp-path heuristic correctly. See
+    # `coordinator_core.install.substrate._refuse_machine_mutation`.
+    # SET ABOVE the `real_home` opt-out, not here -- see the comment at the top
+    # of this fixture for why the two must not be granted together.
 
+    # Same shape, second surface: the warm engine's runtime base is
     # `%LOCALAPPDATA%`, which the HOME/USERPROFILE quarantine above does not
+    # touch. Warm tests pass a `tmp_path` as `engine_root` believing that
+    # isolates them; it varies only `svc_dir`'s clone-hash component, so each
+    # run minted a fresh REAL directory under
     # `%LOCALAPPDATA%/coordinator/warm/` and populated it with breadcrumb and
+    # telemetry fixtures nothing ever removed (measured 2026-08-20 on the
+    # authoring box: 1027 clone-key directories, 244 holding synthetic fixture
+    # content). Redirect the base itself -- per-test, so two tests still get
+    # distinct trees, and suite-wide rather than in a warm-local conftest so a
+    # future writer anywhere under `coordinator_core/` inherits the isolation
+    # instead of rediscovering the defect.
+    #
     # SHORT ON POSIX, AND THAT IS NOT A TIDINESS PREFERENCE -- it is the whole
+    # `sun_path` budget. A unix socket address is capped at 104 bytes on macOS
     # (`election.SUN_PATH_MAX_BYTES` holds the line at 100), and the quarantine
+    # above is ~90 bytes deep before `warm-runtime-base/coordinator/warm/
+    # <16-hex-clone-hash>/<token>.sock` is appended: measured 160-175 bytes.
+    # `election.socket_path` then raises `SocketPathTooLongError` -- correctly,
+    # by its own docstring, "rather than left to bind(), which reports it as an
     # unexplained OSError" -- during the warm client's PREAMBLE, before any test
+    # body's monkeypatched seam is reached. 31 tests across six files failed
+    # that way on every POSIX box, each reporting some downstream puzzle (a
+    # `None` result, an IndexError on an empty list) rather than the cause.
+    #
+    # Fixed HERE rather than in each file, because here is where the length
+    # comes from. Six files had grown their own copy of the same short-base
+    # fixture before this landed; they are deleted with it. A future warm test
+    # written anywhere under `coordinator_core/` inherits a usable base instead
+    # of rediscovering the defect -- the same argument this fixture's own
+    # comment above already makes for putting the isolation suite-wide.
+    #
+    # Windows keeps the quarantine path unchanged: named pipes have no
+    # `sun_path` equivalent, `%TEMP%` is not `/tmp`, and there is no defect to
+    # fix there.
     from coordinator_core.warm import breadcrumb as _warm_breadcrumb
 
     if os.name == "nt":
@@ -402,11 +573,34 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv(_warm_breadcrumb.RUNTIME_BASE_ENV, str(_warm_base))
 
     # Make the throwaway home a FAITHFUL home rather than an empty one for the
+    # one read the quarantine would otherwise break outright: the `.coordinator-content-root`
+    # pointer that `coordinator_registry`'s import-time manifest bootstrap
+    # resolves through (see `_capture_real_content_root` above for the mechanism).
     # Seeded as a FILE inside the quarantine, not as a `REPO_CONTENT_ROOT` env
+    # override: the env route outranks the machine-local registry in the
+    # ratified DR-071 precedence and would silently mask the rung a test is
+    # exercising, whereas the pointer file sits at the same rung a real install
+    # populates and leaves that precedence intact. Read-only plumbing — it
+    # restores no write access to the real home, so it does not reopen the
+    # live-machine-config-corruption hole this fixture exists to close.
+    #
     # The pointer value itself is a THROWAWAY STUB (`_build_stub_content_root`),
     # never `_REAL_CONTENT_ROOT`. Seeding the real path here made the manifest
+    # read succeed but ALSO made `content_root()` — the documented join-anchor
+    # other call sites use for WRITE targets (`state/lessons-outbox`,
+    # `state/improvement-queue`) — resolve to the live sibling checkout, so a
+    # quarantined test reaching a `content_root()`-anchored write path without its
+    # own override could corrupt the real repo: exactly the class of bug this
+    # fixture exists to prevent. The stub carries only a copy of the one file
+    # a manifest read needs, so reads still succeed and every write instead
+    # lands inside this test's own throwaway quarantine directory.
+    #
+    # Both locations are written because a real install carries both and the
+    # reader (`coordinator/lib/read_content_root_pointer.py`) tries them in this
+    # order: `${settings-home}/machine-local/.coordinator-content-root` (durable, DR-072) then
     # `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` (legacy fallback). Seeding only
     # the first would leave any test that redirects COORDINATOR_SETTINGS_HOME
+    # on its own back at an unresolvable pointer.
     stub_content_root = _build_stub_content_root(str(quarantine))
     if stub_content_root:
         for pointer in (
@@ -508,9 +702,27 @@ def _reset_engine_root_process_state():
     _cold()
 
 
+# ---------------------------------------------------------------------------
+# os.environ leak guard (2026-07-21 interpreter-global-state sweep)
+# ---------------------------------------------------------------------------
+#
+# Several production modules in this package are faithful ports of bash scripts where a
 # bare `export` was correct because the process was about to exit. As an IMPORTED Python
+# module the same write persists for the life of the interpreter — one shared interpreter
+# across thousands of tests, plus inheritance into every `subprocess.run` child's env.
+# Cluster fixed in 048d8acc; this fixture is the backstop that keeps it from recurring.
+#
+# The per-module cache-reset fixtures (test_coordinator_content_root.py::_clean_env,
+# test_deliverable_rollup.py::_reset_central_root_memo) own the deliberate
+# interpreter-lifetime MEMOS we kept; queue_append's cache is path-keyed so it needs no
+# reset. Those live beside their tests on purpose — this conftest guard is only the
+# catch-all for env WRITES no reset seam can anticipate.
 
+# Env vars the pytest harness itself owns and rewrites between phases. Excluded from the
+# comparison rather than from the snapshot, so a test that sets one for real still cannot
+# hide behind the exclusion.
 #   PYTEST_CURRENT_TEST — pytest rewrites this on every setup/call/teardown transition,
+#   so it differs between the pre-test and post-test snapshot of EVERY test.
 _HARNESS_OWNED_ENV_KEYS = frozenset({"PYTEST_CURRENT_TEST"})
 
 
@@ -586,7 +798,23 @@ def _fail_on_environ_leak(request):
     )
 
 
+# ---------------------------------------------------------------------------
+# Dispatch-axis stamp gate opt-in (state/handoffs/2026-08-21_103635_reaching-
+# the-warm-engine.md) — this suite imports and dispatches against the LIVE,
+# unstamped tree by design (that is the entire point of a test suite), so it
+# is one of the two sanctioned callers of `ipc.allow_unstamped_dispatch` named
+# in that function's own docstring. NOT an environment variable — see
+# `_fail_on_environ_leak` above for why this suite treats an env-var-shaped
+# opt-in as a defect class in its own right: it would be inherited by every
+# subprocess a test spawns, silently disarming the gate in processes nobody
+# intended. `pytest_configure` runs exactly once per session, before any test
+# collects, so this is a single, visible, in-process declaration — not
+# something a test can accidentally trigger or a later test can accidentally
 # inherit from a DIFFERENT source. A test that wants to assert the REFUSAL
+# itself flips `coordinator_core.ipc._unstamped_dispatch_allowed` off via
+# `monkeypatch.setattr`, which reverts automatically at that test's own
+# teardown — see `ipc.allow_unstamped_dispatch`'s own docstring.
+# ---------------------------------------------------------------------------
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -603,8 +831,75 @@ def exercise_suspended_op(monkeypatch):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Live session-hub litter guard
+# ---------------------------------------------------------------------------
+#
+# Closes the class of defect commit c08e942e9 named ("two test-isolation
+# defects that wrote outside the sandbox, and the seams that let them"), on the
+# surface it did not cover: the real repo's own
+# `.git/coordinator-sessions/`. Measured 2026-08-26 — three directories in the
+# LIVE hub carrying test-fixture names, minted by tests that resolved a repo
+# root from the process cwd (the live repo) while taking their session id from
+# a monkeypatched env var: `sess-1` and `sess-abc` (born 08-13, holding one
+# `repo-identity-gate.log` each) and `altlive-probe` (born 08-17, holding one
+# `overrides.log`). Both writers have since been taught not to MINT a session
+# dir — `write_guards/guard_doctrine_surface_edits.py` returns unless the dir
+# already exists, and `bash_guards/_override_log_path.py` routes to the
+# `no-session` bucket instead — so those three kept receiving appends only
+# because they already existed. This fixture closes the SYMPTOM for any future
+# cause, which the two named fixes cannot: a guard that has to be remembered
+# for each new writer is the guard that gets forgotten.
+#
+# Cost, measured on this box 2026-08-26 against the live 374-entry hub
+# (`time.process_time`, k=1000): 0.26ms per `os.listdir`, so 0.52ms per test
+# for the before/after pair — a non-recursive listing, no walk and no spawn.
+# Same shape and same justification as
+# `coordinator_core/install/conftest.py`'s repo-root litter guard, whose
+# function-scoped-over-session-scoped reasoning applies here verbatim (a
+# session-scoped snapshot would attribute litter to "somewhere in this run"
+# and force a re-run under `-k` to localize it).
+#
+# NOT flaky under concurrent peers, which is the one thing this guard has to
+# get right on a box running 50-70 sessions against this same tree: a peer
+# session legitimately creates a directory here at any moment, so a new entry
+# alone is never the assertion. A new entry is flagged only when it is BOTH
+# absent from the harness session registry AND not UUID-shaped — a live peer's
+# id is always a harness UUID, and every fixture name observed in the wild
+# (`sess-1`, `sess-abc`, `altlive-probe`, `test-session-abc123`, `sess-msys-*`)
+# is neither.
+#
+# Negative-spec:
+#   - Does NOT detect an APPEND into a directory that already existed. That
+#     needs a per-file stat of ~380 directories per test, which this repo's
+#     brightline will not pay for; the two producer fixes above are what close
+#     that half, and a dir that is never minted is never appended into.
+#   - Does NOT clean up what it flags. A test that leaks into the live hub is
+#     broken and must fail loudly, not have its symptom swept.
 #   - Considers DIRECTORIES ONLY. The hub also carries plain files that no
+#     session owns -- `archive-terminal-handoffs.lock` was observed failing
+#     this guard mid-run on 2026-08-26, attributed to whichever test happened
+#     to straddle a peer's lock acquisition. A lock file is not a session
+#     directory and can never be the leak this guard names.
 #   - DOES now attribute a new DIRECTORY by recorded owner, closing the
+#     wrong-owner half this spec previously deferred (`altlive-isolation-
+#     fixture-session`, and `c7-cold-fwd-probe` observed 2026-08-26 21:40:54Z
+#     mid-run and blamed on whichever test straddled it). The deferral said
+#     "rather than solved with an mtime/pid heuristic", and that still holds:
+#     what is read below is not a heuristic but the owning session's own
+#     `meta.json` stamp. See `_dir_is_ours`.
+#   - Still does NOT attribute a dir carrying NO `meta.json`. That is the
+#     fail-closed arm and it is the historically-correct one: all three
+#     original leaks (`sess-1`, `sess-abc`, `altlive-probe`) held a single log
+#     file and no `meta.json`, because a fixture leak is minted by a log-
+#     appending guard rather than by session init. No stamp means no owner
+#     means flag it.
+#   - Lives HERE rather than in the repo-root `conftest.py` because
+#     `coordinator_core/pytest.ini` wins as configfile for any invocation
+#     whose path argument sits under `coordinator_core/`, which makes that
+#     the rootdir and the root conftest unreachable — and this package is
+#     where the leaking tests are. The root conftest re-exports the fixture
+#     by name so the `coordinator/` testpaths are covered too.
 
 import json
 import uuid as _uuid
@@ -671,6 +966,12 @@ def _resolve_live_doe_lessons_outbox():
     root = (os.environ.get("CONTENT_ROOT") or os.environ.get("REPO_CONTENT_ROOT") or "").strip()
     if not root:
         # Load coordinator_registry BY LOCATION, and do not leave
+        # `coordinator/bin/lib` on `sys.path`. An earlier version inserted it at
+        # position 0 and left it there: this runs at conftest IMPORT time, before
+        # every test module in the repo is imported, so that directory would
+        # shadow same-named modules for the whole session — the exact
+        # import-precedence hazard this repo's root conftest exists to close,
+        # reintroduced by a guard. The path entry is removed in a `finally`.
         try:
             import importlib.util as _ilu  # noqa: PLC0415
             import sys as _sys  # noqa: PLC0415
@@ -767,7 +1068,22 @@ def _no_new_live_session_hub_entries():
     )
 
 
+# ---------------------------------------------------------------------------
+# Live cross-repo-inbox write guard — P128-C2,
+# docs/plans/2026-09-12-stop-engine-memo-fixtures-reaching-a-liv.md
+# ---------------------------------------------------------------------------
+#
+# Eighteen synthetic fixture memos landed in example-retrieval-repo's REAL
+# `state/cross-repo/inbox/` on 2026-09-04, because the memo fixtures set only
 # `CLAUDE_HOME` while `COORDINATOR_SETTINGS_HOME` — consulted first by
+# `_settings_home.settings_home()` — stayed pointed at the real machine-local
+# registry until `0f0cd2b180` closed that vector two days later. Same
+# eager-at-import-time discipline as `_resolve_live_doe_lessons_outbox`
+# above and for the identical reason: resolving lazily inside a test risks a
+# cold-env test running first and poisoning the ambient environment this
+# reads, which would silently disarm the guard for the whole session. The
+# root set is resolved here, before `_quarantine_real_home` (or any other
+# fixture) applies, against the AMBIENT pre-quarantine environment.
 
 
 def _resolve_live_inbox_roots() -> "tuple[str, ...]":
@@ -822,8 +1138,32 @@ def _no_live_inbox_writes_from_suite():
             )
 
 
+# ---------------------------------------------------------------------------
+# Environment-answered mode defaults — suite-wide quarantine, same class as the
+# real-home quarantine above.
+#
 # `MODE_KEYS` entries may declare an `environment_default` (see
+# `coordinator_core.session.mode_resolution`). `compaction_warnings` does: it
+# answers `informational` on a box that is not the developer's own, because the
+# `standard` variant recommends `/handoff` and that ceremony does not exist
+# there. Correct behaviour, and it makes an AMBIENT MACHINE FACT load-bearing
+# for every test asserting anything downstream of that key.
+#
+# Left unpinned, such a test passes on an attended box and fails in a cloud
+# session while naming neither — the same shape as the `HOME` leak this file
+# was written for, and just as invisible. Measured 2026-09-05: eleven
+# `coordinator_core/hooks` tests, none of which mentioned locality.
+#
+# Pinned to ABSTAIN, so the static default governs and tests reproduce
+# attended-box behaviour by default. A test exercising the environment leg
+# re-patches this itself and says so in its own name.
+#
 # SCOPE LIMIT, LOAD-BEARING: a `monkeypatch` does not cross a process
+# boundary. A test that spawns the real hook (see
+# `coordinator_core/tests/test_fleet_mode_process_boundary.py`) is NOT covered
+# here and must state the value it wants in the subprocess's own inputs —
+# never rely on "no fleet file" meaning `standard`.
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -838,7 +1178,27 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Auto-compact window — suite-wide quarantine, same class as the two above.
+#
 # `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the window Claude Code compacts
+# against, and the context-pressure bands are runway distances back from
+# `window - 33,000`. An operator who sets it fleet-wide (this PM does, to
+# 500,000) therefore moves every band in every test that asserts anything
+# downstream of a reading — a fixture chosen against a 1,000,000-token window
+# lands in a different band, and the test names neither the window nor the
+# variable it moved with.
+#
+# Pinned to ABSENT, so the model window governs and tests reproduce
+# unoverridden behaviour by default. A test exercising the override leg sets
+# it itself and says so in its own name — see
+# `coordinator_core/hooks/tests/test_postuse_context_pressure.py ::
+# test_threshold_matches_the_established_cloud_cut_under_the_env_override`.
+#
+# SCOPE LIMIT, same as above: a `monkeypatch` does not cross a process
+# boundary. A test that spawns the real hook must state the window it wants in
+# the subprocess's own environment.
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -846,7 +1206,21 @@ def _pin_auto_compact_window_absent(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
 
 
+# ---------------------------------------------------------------------------
+# Foreign-process kill tripwire
+# ---------------------------------------------------------------------------
+#
+# The suite runs on a box carrying dozens of live sessions; it must be unable
+# to signal any process it did not spawn. Installed at import, so it covers
+# every xdist worker. A test's own monkeypatch of `os.kill` still wins (it
+# replaces this wrapper for that test only), which is fine: a patched kill
+# reaches nothing.
+#
+# Traps: on Windows `os.kill(pid, 0)` is NOT a liveness probe -- signal 0 is
 # CTRL_C_EVENT, sent via GenerateConsoleCtrlEvent to every process in the
+# group, and pid 0 means the whole console, i.e. the session hosting pytest.
+# Only Python-level kills are caught; a raw ctypes TerminateProcess or a
+# `-c` child that never imports this conftest is outside the wrapper's reach.
 
 
 class ForeignProcessKill(RuntimeError):

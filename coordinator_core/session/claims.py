@@ -1708,6 +1708,87 @@ def _read_scope_mode(plan_file: Path) -> str:
     return ""
 
 
+def _concurrent_executing_plan_overlaps(
+    slug: str, root: str, cwd: Optional[str]
+) -> List[Tuple[str, str, List[str]]]:
+    """``(other_slug, holder_sid, overlapping_scope_entries)`` for every OTHER
+    plan that is ``status: executing``, held by a LIVE session other than the
+    caller, and whose ``scope:`` overlaps this plan's.
+
+    Plan claims are per-slug, so two plans over one op each hold an
+    uncontested claim, and the path-touch plane is silent until an executor
+    has edited something. This is the one place both plans are visible before
+    that. ``scope:`` overlap is the discriminator because a sizing's problem
+    key (deliverable_id, slug) differs between two sizings of one op while
+    the files the plans touch do not. One pass over ``plan-claims/`` (the
+    live-claim corpus), one frontmatter read per live executing peer; never a
+    ``docs/plans/`` walk. Degrades to ``[]`` on any read failure — advisory.
+    """
+    mine = claim_neighbours._read_frontmatter_dict(Path(root) / "docs" / "plans" / f"{slug}.md")
+    scope_value = mine.get("scope") if mine else None
+    if not isinstance(scope_value, list):
+        return []
+    my_scope = claim_neighbours._local_paths_from_scope(scope_value)
+    if not my_scope:
+        return []
+    base = core.sessions_dir(cwd)
+    if not base:
+        return []
+    my_sid = core.resolve_session_id(cwd)
+    found: List[Tuple[str, str, List[str]]] = []
+    try:
+        entries = sorted(os.scandir(Path(base) / "plan-claims"), key=lambda e: e.name)
+    except OSError:
+        return []
+    for entry in entries:
+        if entry.name == slug or not entry.is_dir():
+            continue
+        holder = _read_claim_field(Path(entry.path), "session_id")
+        if not holder or holder == my_sid:
+            continue
+        try:
+            if not liveness.session_live(holder, cwd):
+                continue
+        except Exception:  # noqa: BLE001 -- advisory: an unreadable holder is skipped
+            continue
+        peer = claim_neighbours._read_frontmatter_dict(
+            Path(root) / "docs" / "plans" / f"{entry.name}.md"
+        )
+        if not peer or peer.get("status") != "executing":
+            continue
+        peer_scope_value = peer.get("scope")
+        if not isinstance(peer_scope_value, list):
+            continue
+        peer_scope = claim_neighbours._local_paths_from_scope(peer_scope_value)
+        shared = sorted(
+            {
+                a
+                for a in my_scope
+                for b in peer_scope
+                if a == b or a.startswith(b + "/") or b.startswith(a + "/")
+            }
+        )
+        if shared:
+            found.append((entry.name, holder, shared))
+    return found
+
+
+def _report_concurrent_executing_plans(slug: str, root: str, cwd: Optional[str]) -> None:
+    """Advisory stderr line per live executing plan sharing scope with
+    ``slug``. Never raises, never gates: overlapping scope is a proxy for
+    "same op", and legitimately parallel plans share files."""
+    try:
+        for other, holder, shared in _concurrent_executing_plan_overlaps(slug, root, cwd):
+            print(
+                f"cs_claim_plan: {slug} shares scope with executing plan {other} "
+                f"(session {holder}) on {', '.join(shared)} — one op planned twice "
+                "runs both; reconcile or supersede one before dispatching waves",
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: BLE001 -- advisory-only, must never fail the claim
+        return
+
+
 def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = False) -> bool:
     """Port of ``cs_claim_plan <basename>`` (980-1011).
 
@@ -1732,10 +1813,9 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
     transition's own contract (AC2-AC6). Set ONLY by ``session-claim-cli
     claim-plan --for-execution``, which ``/execute-plan`` Step 0 alone
     passes (a DoE ``SKILL.md`` line-edit, tracked cross-repo, not a claude-klabauter
-    change) — the plan's OTHER two production ``claim_plan`` callers
-    (``coordinator-doc-new.py`` at plan-authorship time,
-    ``wsc-coverage-gate-runner.py cmd_claim_plan`` at workstream-complete)
-    stay at the default and never flip status. Anchored on the claim
+    change) — the plan's OTHER production ``claim_plan`` caller
+    (``wsc-coverage-gate-runner.py cmd_claim_plan`` at workstream-complete)
+    stays at the default and never flips status. Anchored on the claim
     SUCCEEDING (never on the best-effort ``append-plan-session``/shape-write
     below) because a flip that "must not be best-effort" needs a load-
     bearing anchor, not an advisory one.
@@ -1881,6 +1961,8 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
         from coordinator_core.baton_assemble.apply import _stamp_plan_owner_back_edge
 
         _stamp_plan_owner_back_edge(Path(root))
+
+        _report_concurrent_executing_plans(slug, root, cwd)
 
     # C3 — best-effort session-shape instrumentation (non-fatal).
     # AC10 verdict: acquire-side (the read feeds `claim_plan`'s own claim

@@ -49,6 +49,19 @@ import datetime
 import json
 import os
 
+#: Ledger path under the user-local runtime base. Must resolve byte-identically
+#: to `cc_invoke._route_unreachable_ledger_path()` — writer and reader are in
+#: different planes (a `coordinator/bin/lib` CLI transport and an engine
+#: orientation module) with no shared constant to import without giving the
+#: transport a `coordinator_core` dependency it deliberately does not carry.
+#:
+#: NOT repo-relative, and the first version's being so is the reason this
+#: comment is long. A relative tuple both halves agreed on still resolved to two
+#: different files, because the publish transform rewrites the registry key that
+#: anchored it (`repos.claude_klabauter` -> `repos.claude_klabauter` in the
+#: mirror), and this box runs its hooks from the mirror. Most events landed in
+#: the published twin while the reader watched the source and rendered nothing.
+#: A per-box base has no source/mirror to disagree about, and the pin test now
 #: compares FULL RESOLVED PATHS rather than the relpath that hid this.
 LEDGER_RELPATH = ("coordinator", "sanctioned-route-unreachable.jsonl")
 
@@ -57,9 +70,25 @@ RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
 
 WINDOW_HOURS = 24
 
+#: Bytes of the ledger's TAIL the reader will scan. The file is append-only,
+#: shared by every session on the box, and never pruned — so it grows without
 #: bound while only `WINDOW_HOURS` of it is ever renderable. Reading it whole
+#: would make a cold start-up path cost more every day it is not pruned, which
+#: is the opposite of what a start-up surface can afford (DR-344). Scanning a
+#: fixed tail bounds that cost forever: rows are appended in time order, so the
+#: recent window is always at the end. Generous against a bad day — one row is
+#: ~120 bytes, so this holds ~2000 of them, well past any 24h a healthy box
+#: produces (which is zero).
+#:
+#: This bounds the READ, not the file. Pruning the ledger itself is housekeeping's
+#: job, not this reader's: truncating a file ~50 sessions append to concurrently
+#: is a torn-write hazard, and doing it from a start-up path would be doing it at
+#: the worst moment. Tracked as its own concern rather than hand-rolled here.
 _TAIL_SCAN_BYTES = 256 * 1024
 
+#: At most this many op names are named in the line. The aggregate an operator
+#: needs is "which routes, how many sessions"; a full enumeration on a bad day
+#: would be a wall of text in a start-up surface. Matches
 #: `abandoned_claim_signal`'s `_MAX_NAMED` posture.
 _MAX_NAMED = 4
 

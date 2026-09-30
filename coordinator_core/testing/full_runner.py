@@ -122,8 +122,22 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
 
+    # DR-088 layer 6 (R10, 2026-07-28). The mutex shipped and the guard's
+    # deny leg consumed it correctly, but nothing ever CALLED acquire(), so
+    # holder() always returned None and no suite run was ever serialized
+    # against any other -- the module was live, the wiring was not. This is
+    # the take side: full_runner is the one path in this repo that runs whole
+    # suites concurrently against a shared tree, which is the exact harm
     # DR-088 was raised over (concurrent runs producing CORRUPTED results,
+    # not merely slow ones).
+    #
+    # Waiting, not failing, is deliberate: a second runner blocked here is a
+    # queued run, and aborting it would turn a resource control into a
     # correctness-irrelevant failure. ``suite_mutex.MUTEX_WAIT_SECS`` bounds
+    # the wait so a stale-but-not-yet-reclaimable holder cannot wedge a run
+    # forever; a timed-out acquire proceeds unserialized rather than
+    # refusing, matching the fail-OPEN posture the guard's own mutex leg
+    # takes.
     owner = suite_mutex.mutex_owner("full_runner")
     start = time.monotonic()
     with suite_mutex.held(owner, "full_runner", timeout=suite_mutex.MUTEX_WAIT_SECS) as acquired:

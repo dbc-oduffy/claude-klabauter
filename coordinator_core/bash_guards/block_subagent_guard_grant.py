@@ -117,6 +117,10 @@ from coordinator_core.bash_guards._verdict import record_silent
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): `_classify_dash_m/c_
+# invocation` fail OPEN (return None) when `_tokenize_full_command` cannot
+# parse `cmd`, so unparseable PowerShell input is a missed detection, never
+# a spurious deny -- not the held stash/worktree fail-closed risk class.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
@@ -126,9 +130,13 @@ _GATED_SUBCOMMANDS = frozenset({"grant"})
 
 _WRITE_FUNC_NAME = "write_em_guard_grant"
 
+#: Read/check-shaped function names -- referenced here only so a `-c`
 #: payload calling one of these (and not `_WRITE_FUNC_NAME`) is documented
+#: as the deliberate non-match, not an oversight. Not consulted as a
 #: positive test anywhere below: absence of `_WRITE_FUNC_NAME` is already
 #: sufficient to not-classify, per the HEURISTIC-NOT-EXHAUSTIVE posture --
+#: this guard does not need to prove a payload is read/check-shaped, only
+#: that it is not grant-shaped.
 _READ_CHECK_FUNC_NAMES = frozenset(
     {"read_em_guard_grant", "check_em_guard_grant"}
 )
@@ -167,7 +175,15 @@ def _classify_dash_m_invocation(working: List[str]) -> Optional[str]:
 
 
 #: Word-boundary match for `_WRITE_FUNC_NAME` inside a `-c` payload --
+#: plain substring containment would also classify an unrelated identifier
 #: that merely CONTAINS the function name as a substring (e.g. a
+#: hypothetical `_write_em_guard_grant_helper`) as grant-shaped, which is
+#: wider than this module's own "references the grant-writing function
+#: name" claim. `(?<![A-Za-z0-9_])` / `(?![A-Za-z0-9_])` are
+#: identifier-boundary lookarounds, not `\b` -- `\b` alone would still
+#: treat a leading digit boundary inconsistently with Python identifier
+#: rules; the explicit character classes match exactly the set of
+#: characters Python identifiers are made of.
 _WRITE_FUNC_NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_])" + re.escape(_WRITE_FUNC_NAME) + r"(?![A-Za-z0-9_])"
 )
@@ -286,6 +302,9 @@ def check(payload: dict) -> Optional[dict]:
         return None
     cmd = cmd.replace("\r", "")
 
+    # EM/subagent discriminator -- raw presence of `agent_id` alone, not
+    # whether it resolves further. A present-but-unresolvable `agent_id`
+    # is still, unambiguously, "not the EM" -- see module docstring
     # "IDENTITY-GATE POSTURE".
     raw_agent_id = payload.get("agent_id")
     if not raw_agent_id:

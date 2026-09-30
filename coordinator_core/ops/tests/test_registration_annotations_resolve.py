@@ -75,8 +75,34 @@ def test_advertised_op_resolves(module_path, op_name):
     )
 
 
+# ---------------------------------------------------------------------------
+# The HEAD leg: an annotation cannot be committed ahead of the op it names
+# ---------------------------------------------------------------------------
+#
+# The worktree leg above is green on a tree whose HEAD is red, and that is not
+# a corner case -- it is how the fourth recurrence happened, hours after the
+# guard shipped. On 2026-08-26 commit `1e1f9f50d` added
+# `registers "session.audit_unreapable"` to the eager-import table and
+# published it, while that op's implementation (`ops/session/reap.py`,
+# `_registry_map.py`, `op_scopes.py`) sat uncommitted in a peer's working tree.
+# `get_op_handler` resolved the name -- from the worktree -- so every assertion
+# above passed. The published engine, built from HEAD, returned
 # METHOD_NOT_FOUND, and `reap.py` there contained zero occurrences of the op
+# its own annotation advertised.
+#
+# On a branch ~50 concurrent sessions share, "the worktree has it" says nothing
+# about whether HEAD does. What the fleet dispatches into is built from HEAD,
+# so HEAD is the tree this claim has to be true of.
+#
+# Content check, not an import: HEAD's code is not importable in-process, and
 # an op may register through `_REGISTRY_MAP` or through a decorator in its own
+# module. Requiring the quoted name to appear in HEAD's copy of EITHER is
+# robust to both registration styles and still catches the exact signature
+# above -- zero occurrences anywhere.
+#
+# Two git spawns total (`ls-tree`, then one batched `cat-file --batch`), never
+# one per advertised op: a per-item spawn here is what
+# `coordinator_core.tests.test_no_unbatched_per_item_git_spawn` is watching.
 
 _REGISTRY_MAP_PATH = "coordinator_core/ops/_registry_map.py"
 

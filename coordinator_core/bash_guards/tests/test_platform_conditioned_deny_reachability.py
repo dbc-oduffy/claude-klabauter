@@ -65,6 +65,9 @@ _MULTIPROBE_UNRECOGNIZED_CMD = (
 _PLUMBING_CONFIRMED_CMD = "find . -type f | head -n 5"
 
 #: `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped, but
+#: `docker` is not a recognized upstream generator for
+#: `check_head_tail_plumbing_rewrite`, so that seam returns a bare
+#: advisory (no `updatedInput`) -- exercises the "unrecognized shape" case.
 _PLUMBING_UNRECOGNIZED_CMD = "docker ps | head -n 20"
 
 
@@ -91,7 +94,10 @@ def _decision(out):
 class TestMultiprobeBannerChainReachability:
     def test_fully_recognized_shape_windows_auto_rewrite_wins(self):
         # The rewrite entry (`multiprobe-banner-rewrite`, ADVISORY_REWRITE)
+        # is registered ahead of `multiprobe-banner`
         # (PLATFORM_CONDITIONED_DENY) in `_build_guard_chain`. On Windows,
+        # with no override, the auto-rewrite wins: allow + updatedInput,
+        # and the platform-conditioned deny leg is never reached.
         out = evaluate_payload_json(
             _payload(_MULTIPROBE_CONFIRMED_CMD), host_is_windows=True
         )
@@ -100,6 +106,11 @@ class TestMultiprobeBannerChainReachability:
 
     def test_fully_recognized_shape_override_set_no_deny(self):
         # With the seam's own COORDINATOR_ALLOW_MULTIPROBE_BANNER override
+        # set, the published bypass key must keep meaning bypass -- this is
+        # the case that would have caught the abandoned repair (repairing
+        # the deny leg by reaching it through this exact override would
+        # have inverted "operator switched this guard off" into "operator
+        # gets a hard deny on Windows").
         out = evaluate_payload_json(
             _payload(_MULTIPROBE_CONFIRMED_CMD), host_is_windows=True
         )
@@ -121,6 +132,9 @@ class TestMultiprobeBannerChainReachability:
         assert out is None or _decision(out) != "deny"
 
     def test_unrecognized_shape_stays_silent(self):
+        # Neither the rewrite entry nor the platform-conditioned guard's
+        # own gate confirms an outlet -- both allow silently. Locks in the
+        # deliberate 2026-08-06 behaviour (guard_multiprobe_banner module
         # docstring, "SUBAGENT-AWARE OUTLET ... DROPPING THE UNDISCHARGEABLE
         # GENERIC ADVISORY").
         out = evaluate_payload_json(

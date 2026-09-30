@@ -713,7 +713,15 @@ def test_git_log_double_dash_output_pathspec_allows(monkeypatch):
     _allow("git log -- --output=weird-filename", monkeypatch)
 
 
+# ---------------------------------------------------------------------------
+# C3 gap audit (2026-07-27, docs/plans/2026-07-27-structural-policy-enforcement.md
+# chunk C3): AC5 oracle audit against the CURRENT hardcoded enforcement
 # surface -- ADDITIVE ONLY, no existing assertion touched. Each block below
+# closes one genuinely-missing case found by cross-referencing the module's
+# enforcement surface against the pre-existing 99-test suite above; see the
+# executor's return message for the full audit table (surface item ->
+# covered-by-test-name, or GAP -> test added here).
+# ---------------------------------------------------------------------------
 
 
 def test_git_status_bare_allows(monkeypatch):
@@ -736,7 +744,9 @@ def test_git_describe_allows(monkeypatch):
     _allow("git describe --tags", monkeypatch)
 
 
+# ---- Gap: --work-tree global option (only -C/--git-dir/--no-pager had
 # direct allow coverage; --work-tree, also in _GIT_VALUE_TAKING_OPTIONS,
+# had none). ----
 
 
 def test_git_work_tree_equals_allows(monkeypatch):
@@ -771,6 +781,9 @@ def test_stat_file_allows(monkeypatch):
 
 
 # ---- Gap: 4 of the 9 metacharacters had no UNQUOTED-deny test at all
+# (`;`, `&&`, `|`, `>` were covered; `||`, bare unquoted backtick, bare
+# unquoted `$(`, `<`, and bare `&` were not -- command substitution was
+# only exercised INSIDE double quotes, not standalone). ----
 
 
 def test_double_pipe_unquoted_denies(monkeypatch):
@@ -804,7 +817,10 @@ def test_bare_unquoted_ampersand_denies(monkeypatch):
 
 
 # ---- Gap: the OR-resolver's SECONDARY leg (subagent_type via the
+# back-pointer chain) had no test where it alone -- not the payload's
 # top-level agent_type -- carries the confined _CONFINED_FINDINGS_AGENTS
+# literal. Every existing confined-case test set both agent_type AND the
+# monkeypatched back-pointer to the confined type together. ----
 
 
 def test_secondary_leg_backpointer_confinement_denies(monkeypatch):
@@ -815,7 +831,19 @@ def test_secondary_leg_backpointer_confinement_denies(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+# ---------------------------------------------------------------------------
+# Divergence 8 (2026-07-28): quote-aware pipe-vs-data was already correct
+# (see the "Quote-aware metacharacter gate" section above); the real false
+# positives reported by two independent code-reviewer dispatches were (a) a
 # top-level UNQUOTED pipe was an unconditional deny even when every segment
+# was independently allowlisted (`git show <rev> | wc -c`), and (b) a plain
+# `2>/dev/null` redirect was an unconditional deny. Both are narrow
+# carve-outs: a pipeline allows only when EVERY segment is independently
+# Tier-A-allowlisted; a redirect allows only when it targets exactly
+# /dev/null. Everything else -- command substitution, `;`/`&&`/`||`
+# chaining into a non-allowlisted command, redirection to any other path,
+# backgrounding -- is unchanged and still denies.
+# ---------------------------------------------------------------------------
 
 
 def test_git_show_piped_to_wc_allows(monkeypatch):
@@ -917,7 +945,10 @@ def test_redirect_to_real_file_still_denies(monkeypatch):
 
 
 def test_general_ampersand_digit_not_exact_fd_dup_token_still_denies(monkeypatch):
+    # `3>&1` is NOT the exact stderr-to-stdout (`2>&1`) or stdout-to-stderr
+    # (`1>&2`) token this carve-out exempts -- the leading digit is neither
     # complement in `_FD_DUP_COMPLEMENT`, so this must still fall through to
+    # the unconditional `>` deny.
     result = _deny("git diff 3>&1", monkeypatch)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "shell-chaining metacharacter" in reason
@@ -1016,12 +1047,25 @@ def test_windows_plain_backslash_git_no_space_allows(monkeypatch):
 
 
 def test_windows_evil_lookalike_directory_still_denies(monkeypatch):
+    # Negative control: the Windows normalization must not widen the
+    # path-separator boundary -- a directory component that merely
     # CONTAINS "git" as a substring, with no separator immediately before
+    # the literal binary name, must still deny.
     cmd = r"C:\Users\evilgit\tool.exe show HEAD"
     _deny(cmd, monkeypatch)
 
 
+# ---------------------------------------------------------------------------
+# Amendment 2 (2026-08-03, PM ruling): "bash confinement should only be for
+# destructive actions that would degrade a machine." coordinator:code-
+# reviewer gains the SAME python3 -m pytest module allowance
+# coordinator:executor already held (Divergence 9) -- both confined types
+# hold an unconfined Edit tool, so denying pytest to one and not the other
+# bought no containment (see the guard module's own Amendment 2 docstring
+# entry). This is the regression this dispatch fixes: pinned here to fail
 # against the pre-Amendment-2 module, per _CONFINED_TYPE ==
+# "coordinator:code-reviewer" (defined at the top of this file).
+# ---------------------------------------------------------------------------
 
 
 def test_confined_python3_dash_m_pytest_now_allows(monkeypatch):
@@ -1033,7 +1077,10 @@ def test_confined_python3_dash_m_pytest_with_stderr_redirect_allows(monkeypatch)
 
 
 def test_confined_python3_dash_c_inline_code_still_denies(monkeypatch):
+    # The pytest module allowance must not be mistaken for a general
+    # interpreter passthrough -- -c/-e stay unconditionally denied
     # (_PY_INLINE_CODE_FLAGS is a bare module constant, not a ruleset
+    # lookup, so no per-type override can re-admit it).
     result = _deny('python3 -c "import os; os.system(\'rm -rf /\')"', monkeypatch)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "-c" in reason
@@ -1093,8 +1140,27 @@ def test_tokenizer_extracts_python3_as_raw_first_token(monkeypatch):
     assert backslash_separator[0] == "python3"
 
 
+# ---------------------------------------------------------------------------
+# C6 (docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
+# silent.md): PowerShell Tier A allowlist -- the total-lockout fix.
+#
 # The eight probe commands below are copied VERBATIM from the verdict record
+# this chunk cites (docs/research/spike-verdicts/2026-08-07-powershell-
+# guard-detection-and-tokenizer-mechanism.md, CLAIM 2 table), run under BOTH
+# dialects (AC8): tool_name="Bash" (AC4 -- POSIX behaviour must be provably
+# unchanged, so every PowerShell-shaped command here still denies under the
+# Bash dialect exactly as it did before this chunk) and
+# tool_name="PowerShell" (the fix under test -- the read-only cmdlets now
+# allow, the genuinely non-allowlisted ones still deny).
+#
+# Every payload here uses a valid bare-hex agent_id (_confine's
+# "deadbeef0123", 12 chars) and agent_type "coordinator:code-reviewer" (the
 # sole _CONFINED_FINDINGS_AGENTS member) via the existing _confine/_payload
+# helpers -- the exact trap this chunk's dispatch brief warns about
+# (_resolve_subagent_identity fail-closes to "" on any OTHER agent_id shape,
+# exiting check() before detection ever runs, so a test built on an invalid
+# identity would pass vacuously regardless of whether the fix is present).
+# ---------------------------------------------------------------------------
 
 
 def _allow_dialect(cmd: str, tool_name: str, monkeypatch) -> None:
@@ -1180,7 +1246,10 @@ def test_probe_pipeline_where_object_allows_powershell(monkeypatch):
     )
 
 
+# --- Negative controls: a bare Where-Object with no upstream data source
+# must still deny under PowerShell -- the filter-cmdlet carve-out is only
 # valid as a NON-FIRST pipeline segment (see
+# _segment_is_powershell_tier_a_allowlisted's own docstring).
 
 def test_bare_where_object_denies_powershell(monkeypatch):
     _deny_dialect("Where-Object { $_.Length -gt 100 }", "PowerShell", monkeypatch)
@@ -1196,7 +1265,15 @@ def test_unrecognised_tool_name_allows(monkeypatch):
     assert guard.check(payload) is None
 
 
+# ---------------------------------------------------------------------------
+# Divergence 18 (2026-08-11): python-family misspelling remedy. Still
+# denies -- these are message-only pins. `coordinator:code-reviewer` (this
 # file's `_CONFINED_TYPE`) already holds `interpreter_allowed_modules:
+# ("pytest",)` since Amendment 2, so a `python3 -m pytest` remedy allows for
+# this type too, exercising the branch end-to-end without needing the
+# a second confined type's own stanza overrides (this guard no longer has
+# any -- see _deny_reason's own docstring, this plan's C1).
+# ---------------------------------------------------------------------------
 
 
 def test_bare_python_dash_m_pytest_gets_specific_remedy(monkeypatch):
@@ -1213,7 +1290,10 @@ def test_bare_python_dash_m_pytest_no_dont_retry_clause(monkeypatch):
 
 
 def test_out_of_scope_command_keeps_generic_message_and_dont_retry_advice():
+    # Direct unit check on _deny_reason: the default closing stanza is empty
+    # today (the executor-only "report the blocker" clause was deleted along
     # with _DENY_MESSAGE_STANZA_OVERRIDES, this plan's C1), so an
+    # out-of-scope command's reason carries no closing stanza at all.
     reason = guard._deny_reason(
         "coordinator:code-reviewer",
         "curl https://evil.example/x",
@@ -1254,8 +1334,12 @@ def test_python_versioned_alias_gets_remedy(monkeypatch):
 
 
 def test_deny_reason_suppress_retry_advice_is_a_no_op_on_the_empty_default_closing_stanza():
+    # Direct unit pin on _deny_reason: suppress_retry_advice forces the
+    # closing stanza empty regardless of effective_type, but
     # _DEFAULT_CLOSING_STANZA is already empty today (the only non-empty
+    # closing stanza, executor's, was deleted along with
     # _DENY_MESSAGE_STANZA_OVERRIDES, this plan's C1) -- so both calls below
+    # render identically, and this pins that the flag never ADDS text.
     args = (
         "coordinator:code-reviewer",
         "python -m pytest -q",
@@ -1270,13 +1354,33 @@ def test_deny_reason_suppress_retry_advice_is_a_no_op_on_the_empty_default_closi
     assert base == without_suppress
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-11-pytest-grant-and-working-interpreter-disjoint.md):
+# route the interpreter identity check through the existing normalizer, so a
+# path-prefixed or .exe-suffixed python3 spelling reaches the SAME granted
+# `-m pytest` decision the bare `python3` spelling already reaches.
+#
 # SUBSTRATE NOTE (found during this dispatch, not assumed): the dispatch
 # brief for this chunk asked for coverage "for both _REVIEWER_TYPE and
 # _EXECUTOR_TYPE". As of DR-125 (docs/plans/2026-08-03-narrow-subagent-
+# commit-confinement-two-classes.md, chunk C2), `coordinator:executor` was
 # REMOVED from `_helpers._CONFINED_FINDINGS_AGENTS` and is confined by
+# NEITHER of `_is_confined_type`'s other two legs (no `bash_policy:` YAML key
+# in a bare test env; leg 3, `is_confined_by_roster_absence`, explicitly
+# excludes a genuinely enumerated type) -- see
+# `test_executor_bash_confinement.py`'s own module docstring, which pins this
 # exact history. `_EXECUTOR_TYPE`'s `_DEFAULT_RULESET_TYPE_OVERRIDES` entry
+# is therefore currently dead data from this guard's own confinement gate:
+# `guard.check()` returns allow (None) unconditionally for
+# `agent_type="coordinator:executor"` regardless of command, BEFORE any
+# Tier A/B/interpreter logic (including this chunk's fix) is ever reached --
+# confirmed empirically, not assumed (a `-c`/inline-code payload allows
 # vacuously). Parametrizing this chunk's AC1-AC3 tests over `_EXECUTOR_TYPE`
+# would therefore assert nothing about the fix under test. Coverage below is
 # scoped to `_REVIEWER_TYPE` (`coordinator:code-reviewer`), the one type this
+# guard actually confines and that holds the `interpreter_allowed_modules`
+# grant F1 is about.
+# ---------------------------------------------------------------------------
 
 _C1_PYTHON3_SPELLINGS = (
     ".venv/Scripts/python3.exe",
@@ -1315,7 +1419,16 @@ def test_c1_normalized_python3_spelling_denies_unallowlisted_module(spelling, mo
     assert "http.server" in reason
 
 
+# ---------------------------------------------------------------------------
+# C1b (same plan): C1 only routed the EXACT-`python3` identity through the
+# normalizer -- `.venv/Scripts/python.exe` (no `3`) still denied, which is
+# the plan's own F1 worked example and the sender's actual spelling, because
+# a Windows venv has no `python3.exe` sibling to retype to. C1b admits a
 # PATH-PREFIXED python-family basename (raw token contains `/` or `\` before
+# the basename) into the SAME interpreter decision the exact `python3`
+# spelling already enters -- a BARE python-family token (no path separator)
+# stays on the unchanged "retype as python3" remedy tier.
+# ---------------------------------------------------------------------------
 
 _C1B_PATH_PREFIXED_PYTHON_SPELLINGS = (
     ".venv/Scripts/python.exe",
@@ -1350,7 +1463,11 @@ def test_c1b_path_prefixed_python_spelling_denies_unallowlisted_module(spelling,
 
 
 def test_c1b_bare_python_still_denies_with_unchanged_remedy(monkeypatch):
+    # CONTROL, not optional: a BARE python-family token (no path separator)
     # is a NAME the caller got wrong, not a LOCATION -- it must stay on the
+    # existing "retype as python3" remedy tier, byte-identical to pre-C1b.
+    # This is what separates C1b's path-prefixed admission from a blanket
+    # widening of the python-family alias tier.
     result = _c1_check("python -m pytest -q", monkeypatch)
     assert result is not None, "expected deny for bare `python -m pytest -q`"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -1360,7 +1477,12 @@ def test_c1b_bare_python_still_denies_with_unchanged_remedy(monkeypatch):
 
 
 def test_c1b_trailing_separator_no_directory_still_denies_as_bare(monkeypatch):
+    # (P3 fix, 2026-08-11) A bare trailing separator with no real directory
+    # component (e.g. `python/`) is a degenerate spelling, not a caller-
     # chosen LOCATION -- it must NOT take the path-prefixed leg. Same
+    # basename, same downstream checks as bare `python`, so this stays on
+    # the unchanged "retype as python3" remedy tier exactly like the bare
+    # spelling above.
     result = _c1_check("python/ -m pytest -q", monkeypatch)
     assert result is not None, "expected deny for degenerate `python/ -m pytest -q`"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -1374,8 +1496,12 @@ def test_c1b_trailing_separator_no_directory_still_denies_as_bare(monkeypatch):
     ("py", "python2", "python3.11"),
 )
 def test_c1b_bare_python_family_alias_still_denies_with_unchanged_remedy(bare_spelling, monkeypatch):
+    # (P3 fix, 2026-08-11) The bare-still-denies control above covers bare
     # `python` only; `_PYTHON_FAMILY_ALIAS_RE` also matches `py`,
+    # `python2(.N)?`, and `python3.N`. All feed through the SAME
     # `_PYTHON_FAMILY_ALIAS_RE.match(basename)` gate, so this is expected to
+    # pass immediately -- the value is that a future edit to the alias regex
+    # trips a red test here instead of silently widening an untested alias.
     result = _c1_check(f"{bare_spelling} -m pytest -q", monkeypatch)
     assert result is not None, f"expected deny for bare `{bare_spelling} -m pytest -q`"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

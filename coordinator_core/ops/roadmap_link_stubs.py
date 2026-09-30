@@ -171,12 +171,18 @@ from coordinator_core.ops.handoff_transition import (
 
 _LOG = logging.getLogger(__name__)
 
+# Same vendored schema every other state/handoffs/ writer in this package
 # validates against (handoff_transition.py's own _SCHEMA_PATH) — a roadmap
+# baton IS a handoff record, not a separate schema family.
 _SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "handoff.schema.json"
 )
 
 # Mirrors number_stubs.py's own _ROADMAP_BATON_KIND_WHERE derivation —
+# `kind in (...)` covering the canonical `roadmap-baton` value plus any
+# still-live retired pre-rename spelling(s), derived at import time rather
+# than hand-authored. See coordinator_core/frontmatter/baton_class.py and
+# coordinator_core/tests/test_baton_class_is_the_only_membership_set.py.
 _ROADMAP_BATON_KIND_WHERE = "kind in ({})".format(
     ",".join(kind_values_for_canonical("roadmap-baton"))
 )
@@ -313,6 +319,11 @@ def _write_edge_field(
             fm = _replace_fm_array_field(fm, field, new_list)
         else:
             # staff-eng F7: _replace_fm_array_field is REPLACE-ONLY and
+            # silently no-ops when the key line is absent. A roadmap baton
+            # always carries blocked_by/blocks per schema
+            # (_cf_spinoff_roadmap_requires_graph requires both), so this
+            # branch should not fire in practice, but this op's spec must
+            # not rely on that unstated invariant holding.
             anchor = "blocks" if field == "blocked_by" else "roadmap_id"
             fm = _insert_fm_array_field(fm, field, new_list, anchor)
 
@@ -605,7 +616,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree = main_worktree_root(repo_root)
 
+    # asyncio.to_thread for DR-212 D3 async-loop mandate (Finding 1):
+    # _run_link_stubs reads the whole corpus synchronously and, via
+    # _write_edge_field -> locked_rmw, polls a cross-process flock with
     # time.sleep for up to LOCK_TIMEOUT_SECS -- none of that may run
+    # directly in this async body's await-free execution.
     return await asyncio.to_thread(
         _run_link_stubs,
         roadmap_id=roadmap_id,

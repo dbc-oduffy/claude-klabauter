@@ -211,7 +211,17 @@ class TestRedirectionDisplacement:
         _reason(guard.check(_payload("git stash < /dev/null", agent_id="a1")))
 
     def test_input_redirect_does_not_change_a_scoped_push_verdict(self):
+        # Boundary case for the `<`-family strip: stripping a leading
+        # redirection run must not alter how a scoped push classifies.
+        #
+        # Corrected 2026-08-23, replacing an assertion that this allows.
         # It does not, and it never did: THIS guard refuses stash CREATION
+        # by a subagent whether or not a pathspec scopes it, so there is no
+        # allow to preserve here. The `-- <path>` exemption belongs to the
+        # sibling destructive-action guard, and the original assertion had
+        # borrowed it across. The real property is invariance -- redirection
+        # is not a classification input -- so pin the verdict AGAINST the
+        # un-redirected form rather than against a hardcoded expectation.
         scoped = "git stash push -- state/subagent-share/my-file.md"
         plain = guard.check(_payload(scoped, agent_id="a1"))
         redirected = guard.check(_payload(f"{scoped} </dev/null", agent_id="a1"))

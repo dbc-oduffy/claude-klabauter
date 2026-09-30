@@ -276,7 +276,8 @@ def test_run_claude_klabauter_setup_argv_names_coordinator_root(monkeypatch, tmp
     assert "--coordinator-root" in argv
     idx = argv.index("--coordinator-root")
     assert argv[idx + 1] == scratch_clones["coordinator-claude"]["dest"]
-    assert "--with-test-deps" in argv
+    # A cloud boot stays light: the test extra is flagged by setup.py, not installed.
+    assert "--with-test-deps" not in argv
     assert "--with-fleet-env" not in argv
     assert report.container_optin_requested is True
     assert report.setup_exit_code == 0
@@ -547,7 +548,10 @@ def test_plugin_record_rel_names_installed_plugins_json(cloud_mod):
     `plugins/installed_plugins.json` relative to the Claude home, the file the
     platform actually writes an installed-plugin record into. A drifted value
     here makes every read of it a silent, permanent miss."""
-    assert cloud_mod.PLUGIN_RECORD_REL == ("plugins", "installed_plugins.json")
+    assert cloud_mod._hook_plane_module().PLUGIN_RECORD_REL == (
+        "plugins",
+        "installed_plugins.json",
+    )
 
 
 def test_reclaim_uv_cache_skips_when_retrieval_install_did_not_run(cloud_mod):
@@ -610,3 +614,13 @@ def test_reclaim_uv_cache_skips_when_uv_not_on_path(cloud_mod, monkeypatch, tmp_
     cloud_mod.reclaim_uv_cache(report)
 
     assert report.uv_cache_reclaim["skipped"] == "uv not on PATH"
+
+
+@pytest.mark.parametrize("argv, code", [(["--help"], 0), (["-h"], 0), (["--bogus"], 2)])
+def test_any_argument_short_circuits_before_provisioning(monkeypatch, capsys, cloud_mod, argv, code):
+    def _boom():
+        raise AssertionError("provisioning started on an argument-carrying invocation")
+
+    monkeypatch.setattr(cloud_mod, "host_precondition_met", _boom)
+    assert cloud_mod.main(argv) == code
+    assert capsys.readouterr().out.strip()

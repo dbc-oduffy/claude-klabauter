@@ -35,7 +35,11 @@ def test_op_registers_and_resolves_through_op_for_path() -> None:
 
 
 def test_op_is_classified_compute_only() -> None:
+    # Explicit assertion of the classify() call/result — routing alone (a
+    # `hooks.` prefix match) never reaches `_is_compute_only`, so an absent
+    # classification would pass every routing test and still be a dispatch-
     # time authz gap. Assert the call succeeds and answers COMPUTE_ONLY,
+    # rather than merely checking the op's absence from a deny list.
     result = classify("hooks.nudge_autonomous_askuserquestion")
     assert result is OpClass.COMPUTE_ONLY
 

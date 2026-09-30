@@ -267,7 +267,11 @@ def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch, capsys):
     assert out.startswith("/usr/bin/python3\t")
 
 
+# ---------------------------------------------------------------------------
 # _console_sibling / _WINDOWLESS_BASENAMES -- shared lift, coverage for both
+# callers' shape (coordinator_core.install.substrate._resolve_baked_python_bin,
+# coordinator_core.ops.ensure_python3_exe_shim._resolve_python_bin).
+# ---------------------------------------------------------------------------
 
 
 def test_windowless_basenames_contains_both_known_forms():

@@ -76,6 +76,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
+# Vendored sizing-object schema path — own local copy per this package's
 # established per-module convention (see sizing_ship._SIZING_SCHEMA_PATH,
 # sizing_decline._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (

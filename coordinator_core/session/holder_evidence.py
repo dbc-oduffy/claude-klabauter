@@ -35,7 +35,7 @@ transcript tail. Two call shapes, chosen by whichever of `scope`/
 `artifact_path` the caller supplies (see `holder_evidence()`'s docstring):
 a bare `scope` list is looked up directly via `claim_index.lookup()`; an
 `artifact_path` routes through `claim_neighbours.find_neighbours()` for
-its full two-tier file-set resolution (the `deliverable_id` bridge a
+its full two-tier file-set resolution (the `governing_plan` bridge a
 handoff needs, AC2) plus its own live-peer filtering. The three-valued
 `True`/`False`/`None` contract is preserved exactly — `None` still means
 genuinely unresolvable, never merely empty, and this module's own
@@ -217,7 +217,7 @@ def _claim_scope_overlap(
     `artifact_path` given (preferred — this is "C1's join" in full):
     delegates to `claim_neighbours.find_neighbours()`, which resolves
     `artifact_path`'s own file set through its two-tier resolution (a
-    `scope:` if present, else the `deliverable_id` bridge to a plan's
+    `scope:` if present, else the `governing_plan` stamp bridge to a plan's
     `scope:` — the handoff case, AC2) and returns only LIVE peer
     claimants. `holder_sid` membership in that neighbour set is the
     answer. `UNRESOLVABLE` (file set could not be determined) maps to
@@ -415,7 +415,7 @@ def holder_evidence(
                                  resolved from `artifact_path` (preferred,
                                  routes through `claim_neighbours.
                                  find_neighbours()` for the full
-                                 `deliverable_id` handoff bridge) or, absent
+                                 `governing_plan` handoff bridge) or, absent
                                  that, `scope` directly. `None` means
                                  genuinely unresolvable — no `scope` AND no
                                  `artifact_path`, or `artifact_path`
@@ -460,7 +460,7 @@ def holder_evidence(
 
     `artifact_path` (Optional) is the CALLER's own claimed artifact (a
     plan, sizing, or handoff) — pass it to get `scope_overlap`'s full C1
-    join, including a handoff's `deliverable_id` bridge (AC2). `caller_sid`
+    join, including a handoff's `governing_plan` bridge (AC2). `caller_sid`
     is an optional pass-through to `claim_neighbours.find_neighbours()` (the
     calling session's own id, excluded from its neighbour set) — same
     default-resolves-if-omitted contract that function documents. When
@@ -497,6 +497,14 @@ def holder_evidence(
         if not want_activity:
             return result
 
+        result["scope_overlap"] = _claim_scope_overlap(
+            holder_sid,
+            repo_root,
+            scope=scope,
+            artifact_path=artifact_path,
+            caller_sid=caller_sid,
+        )
+
         from coordinator_core.ops.check_em_environment import _resolve_transcript
 
         home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
@@ -505,17 +513,8 @@ def holder_evidence(
         if not transcript:
             return result
 
-        recent_paths = _recent_paths_from_transcript(transcript, repo_root)
-        result["recent_paths"] = recent_paths
+        result["recent_paths"] = _recent_paths_from_transcript(transcript, repo_root)
         result["recent_paths_source"] = "transcript"
-
-        result["scope_overlap"] = _claim_scope_overlap(
-            holder_sid,
-            repo_root,
-            scope=scope,
-            artifact_path=artifact_path,
-            caller_sid=caller_sid,
-        )
         return result
     except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
         result["evidence_error"] = f"{type(exc).__name__}: {exc}"

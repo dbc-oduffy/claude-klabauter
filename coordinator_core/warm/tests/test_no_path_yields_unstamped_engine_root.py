@@ -124,7 +124,12 @@ def test_registry_key_rung_allows_a_stamped_published_root(tmp_path, registry, s
     assert shim._resolve_published_engine(registry.ml_dir) == published_root.as_posix()
 
 
+# ---------------------------------------------------------------------------
 # Rung: env var (`CLAUDE_KLABAUTER_ROOT`) — cc_invoke Rung 1 and the shared gate's own
+# Rung 1. Ambient by construction: every fired session inherits its parent's
+# environment. C6 closed this by no longer letting cc_invoke answer the
+# candidate verbatim — every candidate is delegated through the single gate.
+# ---------------------------------------------------------------------------
 
 
 def test_env_var_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
@@ -139,7 +144,12 @@ def test_env_var_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
     assert "_delegate_to_gate(existing" in source
 
 
+# ---------------------------------------------------------------------------
+# Rung: self-location (`__file__`) — cc_invoke's terminal Rung 3. Preserved
+# on the LOCATOR axis (Hard constraint 2: a script run by name must still
 # find its own tree) but banned from answering the DISPATCH question
+# directly — its candidate must also be delegated through the gate.
+# ---------------------------------------------------------------------------
 
 
 def test_self_location_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
@@ -190,6 +200,9 @@ def test_locator_axis_keeps_self_location_deliberately():
 
 
 # candidate for "which engine executes" -- it only feeds the STRUCTURAL
+# discriminant (`_is_claude_klabauter_source_tree`) that decides whether to prefer the
+# published engine, never returned as a resolved root in its own right.
+# ---------------------------------------------------------------------------
 
 
 def test_cwd_rung_never_feeds_the_dispatch_answer_directly(shim):

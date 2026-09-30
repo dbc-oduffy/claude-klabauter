@@ -79,6 +79,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
+# DR-054 console-flash guard: suppress the transient console window subprocess
 # spawns on Windows. 0 (no-op) on POSIX where CREATE_NO_WINDOW doesn't exist.
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -90,27 +91,108 @@ EDGE_KIND_META: Dict[str, Dict[str, Any]] = {
     'origin_handoff':          {'field': 'origin_handoff',          'multi': False},
 }
 
+# ---------------------------------------------------------------------------
+# Archival vs. continuation edge-kind SSOT (723aadac4b1d follow-up).
+#
 # Two default edge sets answer two DIFFERENT questions, and conflating them is
+# the defect 723aadac4b1d fixed at five call sites:
+#
 #   ARCHIVAL_EDGE_KINDS asks "WHAT POINTS AT this node?" — all three lineage
 #   kinds, INCLUDING `forked_from`. This is `referenced_by`'s own default
+#   (below) and the set `archival.reverse_membership`'s callers depend on.
+#
+#   **The rationale printed here until 2026-08-28 was false, and it is worth
+#   knowing why rather than just that.** It read: "archiving a node a live
+#   spinoff `forked_from` would strand that spinoff's own origin pointer."
+#   That claim was cited elsewhere to "DR-224, AC4" — a citation that does not
+#   resolve (DR-224 contains no AC4, and its actual contract makes
 #   has-children mean SUPERSEDE, stating outright that an archived successor
+#   still counts because succession is a historical fact). It existed as three
+#   restatements of each other — this comment, a code comment in
+#   handoff_archive_transition, and a test docstring — which reads as
+#   corroboration and is not: n=1 wearing n=3.
+#
+#   It is also measurably false. `resolve_target` resolves a `forked_from`
+#   pointer to its origin whether the origin sits in state/handoffs/ or
+#   archive/handoffs/; pinned in
+#   coordinator_core/tests/test_coverage_dag_archived_repo_root.py
+#   (TestSpinoffOriginSurvivesArchivalOfItsOrigin), which also pins the one
+#   real limit — a caller that self-infers repo_root from an archived node's
+#   directory resolves nothing.
+#
 #   The SET IS UNCHANGED and the name is kept: it is a vocabulary primitive
+#   answering what-points-here, and every member genuinely does point here.
+#   What changed is that it no longer BLOCKS archival anywhere — the PM ruling
+#   of 2026-08-28 ("has a child means nothing to whether it should be archived
+#   ... either a baton is used up or it's not") removed the children ground
+#   from all four archival sites. Do not read this set's name as a policy that
+#   a `forked_from` edge should stop a move; it does not, and nothing here
+#   enforces that any more.
+#
 #   CONTINUATION_EDGE_KINDS asks "MAY THIS WORKSTREAM CONCLUDE?" / "does a
+#   review obligation propagate to this node?" — `forked_from` is deliberately
+#   ABSENT. A spinoff is a niece, not a descendant: it was forked OUT of its
+#   parent precisely so the parent could finish without waiting on it, and
+#   schema rule A3a-3 (`frontmatter/schema_validate.py::_cf_spinoff_
+#   predecessor_none`) forces every spinoff kind's `predecessor` to `none`,
+#   so a spinoff can never walk back to what it forked from — the edge is
+#   structurally one-way. Blocking a conclusion question on a live spinoff
+#   re-couples the two at the exact moment the deliberate decoupling is
+#   supposed to pay off.
+#
+# Every representation of these two sets elsewhere in the tree (CSV strings
+# for wire params, other frozensets) MUST derive from these two constants,
+# not restate the literal — see
+# coordinator_core/tests/test_dag_edge_kind_ssot.py, the single test that
+# pins every representation to these two constants so a future drift is a
+# failing test, not a comment nobody reads.
+#
+# Origin: commit 723aadac4b1d "conclusion gates: a spinoff is a niece, not a
+# live child (five call sites)"; example-cockpit-repo-em, 2026-08-05,
+# cross-repo/inbox/2026-08-05-example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-
+# as-live-children.md.
+# ---------------------------------------------------------------------------
 
 #: The ARCHIVAL default — "what points at this node?" All three lineage edge
+#: kinds. NOT a policy that a `forked_from` edge blocks a move: since
+#: 2026-08-28 no archival site gates on children at all. See the module
+#: comment block above for the false rationale this line used to carry.
 ARCHIVAL_EDGE_KINDS: FrozenSet[str] = frozenset(
     {'predecessor', 'additional_predecessors', 'forked_from'}
 )
 
 #: The CONTINUATION default — "may this workstream conclude?" / "does a
+#: review obligation propagate here?" `forked_from` is deliberately absent —
+#: see module comment block above.
 CONTINUATION_EDGE_KINDS: FrozenSet[str] = frozenset(
     {'predecessor', 'additional_predecessors'}
 )
 
+# ---------------------------------------------------------------------------
+# Id-suffixed pointer-field aliases (C6 pointer-normalization seam, 2026-07-26).
+#
+# DoE's on-disk baton corpus also carries `predecessor_id` (73 occurrences) and
+# `origin_handoff_id` (25) — frontmatter fields that name the SAME edge kind as
+# `predecessor` / `origin_handoff` but by handoff_id rather than by path/filename.
 # Deliberately NOT folded into EDGE_KIND_META itself. NOTE: test_dag_edge_kinds.py
+# only asserts four per-key equalities (predecessor / additional_predecessors /
+# forked_from / origin_handoff) — there is no length or set assertion, so it would
+# NOT catch a new key being added here. The real reasons a stub-id-valued edge kind
 # such as `blocked_by` must not be added to EDGE_KIND_META:
+#   1. It is stub-id-valued, where every existing entry in this constant is
+#      path-valued (the frontmatter field names a file, not a stub id).
+#   2. The JS twin walk-handoff-dag.js (see module docstring) would drift out of
+#      sync with this dual-homed SSOT.
 # This sits *beside* EDGE_KIND_META as a pure addition, so neither the default
 # sets in handoff_children.py / archival.py nor EDGE_KIND_META's own shape change.
+#
+# handoff_edges() reads both the primary field and its alias(es) for a kind;
+# resolve_target() resolves an id-shaped ref (no '.md' suffix) via an
+# `id_index` (handoff_id -> absolute path) built by build_handoff_id_index().
+# No other edge kind has an id-suffixed alias today — additional_predecessors
+# and forked_from are absent from this map on purpose (grep confirms zero
+# additional_predecessors_id / forked_from_id occurrences in either corpus).
+# ---------------------------------------------------------------------------
 EDGE_KIND_FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
     'predecessor':    ('predecessor_id',),
     'origin_handoff': ('origin_handoff_id',),
@@ -134,14 +216,31 @@ __all__ = [
     "scan_repo_handoff_corpus",
 ]
 
+# ---------------------------------------------------------------------------
+# Frontmatter parse cache: (abs_path, content_hash) → dict
+# Re-keyed from mtime_float → sha256 content-hash (C3, R5 same-second mtime fix).
 # Bounded at _MAX_FRONTMATTER_CACHE entries; oldest half evicted on overflow.
+# Rationale: docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md
+# (successor to docs/decisions/2026-07-03-tri-plane-ownership-boundary.md § DD#1)
 # Separation from cache._REVALIDATED_CACHE is intentional.
 # _FRONTMATTER_CACHE is dag-local for independent clearability in tests and dedicated
 # eviction footprint. pcore-06/10/11 consumers use cache._REVALIDATED_CACHE; the two
+# caches coexist — the same file can be cached in both if both paths are exercised.
+# ---------------------------------------------------------------------------
 
 _FRONTMATTER_CACHE: Dict[Tuple[str, str], dict] = {}
 
 # NEGATIVE SPEC: this cap must stay comfortably ABOVE the largest handoff corpus
+# the engine scans, or corpus-wide consumers fall off a capacity cliff.
+# `referenced_by` rescans the caller's whole path list on every call, so a loop
+# over N live batons touches N x M paths in sequential order. Once M exceeds the
+# cap, oldest-half eviction drops each entry before the next pass revisits it —
+# a ~100% miss rate that silently turns O(N + M) parses into O(N x M).
+# Measured on the 2026-08-18 corpora (coordinator-content-repo M=676/N=231, claude-klabauter M=567/N=147):
+# at cap 512 the differential-oracle sweeps cost ~110s each and stalled the fast
+# tier at 98-99%; sizing the cap above M cut ~64% of that. Raise this, never
+# lower it, when a corpus grows — and do not tune it down for memory without
+# re-measuring those sweeps.
 _MAX_FRONTMATTER_CACHE: int = 4096
 
 
@@ -224,6 +323,8 @@ def _parse_inline_list(text: str) -> List[Any]:
     return items
 
 
+#: Matches a YAML block-scalar indicator (`|` literal or `>` folded), optionally
+#: followed by a chomping/indentation modifier and a trailing comment.
 #: Mirrors schema.js BLOCK_SCALAR_RE (schema.js:42).
 _BLOCK_SCALAR_RE = re.compile(r'^([|>])([+-]?[0-9]?|[0-9]?[+-]?)\s*(#.*)?$')
 
@@ -516,8 +617,35 @@ def read_handoff_meta(file_path: str) -> dict:
     return _read_meta(file_path)
 
 
+# ---------------------------------------------------------------------------
+# _git_path_ever_tracked memoization (2026-07-23 boot_sweep 10s-timeout perf fix).
+#
+# Measured against a 72-handoff/497-plan/37-memo corpus: a boot_sweep run spawned
+# 1053 `git log --all -- <path>` subprocesses (~13.9ms each, ~14.6s total —
+# effectively the entire op's wall-clock) to resolve only 20 UNIQUE
+# (repo_root, repo_rel_path) values — the same ~20 questions asked ~50x each.
+# 14 of those 20 unique paths are never-tracked (return False); negative
+# results are the expensive majority, so caching MUST cover both outcomes.
+#
 # Process-lifetime cache, same bounded-eviction idiom as _FRONTMATTER_CACHE
+# above (evict oldest half on overflow) — deliberately duplicated rather than
+# shared, for the same independent-clearability rationale as that cache.
+#
 # CORRECTNESS HAZARD — git history is not immutable mid-sweep: boot_sweep's
+# archival helpers (archive_and_commit / rm_and_commit in ops/fleet/_common.py)
+# create commits PARTWAY THROUGH a sweep. A path cached as False before such a
+# commit could become git-tracked after it — a naive whole-process cache would
+# then serve a stale negative for the remainder of the run. Fixed via a
+# module-level generation counter: every cache entry is keyed on the
+# generation it was computed under, and invalidate_git_history_cache() (called
+# by archive_and_commit / rm_and_commit after every successful commit) bumps
+# the generation AND drops the now-unreachable prior-generation entries, so a
+# post-commit lookup is guaranteed to re-query git rather than read a stale
+# cached False. Invalidation contract: any code path that mutates this repo's
+# git history (creates/amends a commit) between _git_path_ever_tracked calls
+# in the same process MUST call invalidate_git_history_cache() immediately
+# after the commit succeeds, or subsequent lookups may read stale results.
+# ---------------------------------------------------------------------------
 
 _EVER_TRACKED_CACHE: Dict[Tuple[int, str, str], bool] = {}
 _MAX_EVER_TRACKED_CACHE: int = 2048
@@ -581,6 +709,7 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
         result = False
 
     if len(_EVER_TRACKED_CACHE) >= _MAX_EVER_TRACKED_CACHE:
+        # Evict the oldest half when full to keep memory bounded — mirrors
         # _FRONTMATTER_CACHE's eviction idiom above.
         evict_keys = list(_EVER_TRACKED_CACHE.keys())[: _MAX_EVER_TRACKED_CACHE // 2]
         for k in evict_keys:
@@ -589,15 +718,139 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Batch-sweep git-history memoization (C6 GAP1 perf, code-reviewer F5).
+#
+# resolve_target's tier-3 fallback spawns a `git log --all` subprocess per
+# unresolved field per record — over a large corpus this multiplies into
+# hundreds-to-thousands of full history-walk subprocess spawns for a nightly
+# sweep. build_git_history_cache primes a SINGLE `git log --all --name-only
+# --no-renames` pass once per validate_all_records-shaped invocation, building
+# an in-memory set of every repo-relative path that ever appeared on either
+# side of any commit's diff (add, modify, delete, or either side of a rename)
+# anywhere in history. Threaded into resolve_target/check_lineage_reachability
 # as an OPTIONAL param — absent (None), both fall back to the original
+# per-call subprocess path unchanged, so the write-time single-record hook
+# path (which never primes a cache) keeps its current behaviour byte-for-byte.
+#
+# Widened 2026-07-29. Two changes from the original ADD-only pass:
+#   - --diff-filter=A dropped entirely, so modify/delete paths are captured
+#     too — a path that was deleted still WAS tracked, which is exactly what
+#     _git_path_ever_tracked answers.
+#   - --no-renames forces git to decompose a rename into a plain delete-of-
+#     old-name + add-of-new-name pair rather than a single combined "R"
+#     diff-status entry, so --name-only surfaces BOTH the old and new path as
+#     separate lines instead of collapsing them into one the filter would
+#     drop. (This is a behavioural widening, not just a filter change: with
+#     rename detection left on, a renamed path's target name never appears in
+#     --name-only output as an "A" line at all, regardless of --diff-filter.)
+#
 # MEASURED numbers (coordinator-content-repo corpus, one full envelope.emit() run, fresh
+# process each time — see the fresh-process warning below):
+#   - Landing the ADD-only cache (commit 9667177c) reduced fresh-process
+#     TOTAL subprocess spawns 466 -> 448 for the run. Of that ~448-452,
+#     ~309-314 are _git_path_ever_tracked's per-path `git log --all
+#     --max-count=1 -- <path>` fallback — i.e. the ADD-only cache barely
+#     touched the fallback it exists to short-circuit; it was nearly inert
+#     in practice despite landing correctly. (~108 of the remainder are a
 #     SEPARATE, unrelated `git merge-base --is-ancestor` hot spot, tracked
+#     and dispatched separately — not this cache's concern. ~35 are genuine
+#     one-off spawns.)
+#   - This widening (isolated before/after trees, only dag.py differing,
 #     PYTHONHASHSEED pinned) measured fallback spawns 313 -> 308 (-5) on
 #     coordinator-content-repo and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
+#     (measured against claude-klabauter's own corpus only — the coordinator-content-repo
+#     figures above are left as historical record, not re-verified here):
+#     the prior text characterized the residual spawns on THIS corpus as
+#     "orphaned / malformed predecessor references" hitting a correct
+#     fail-open contract. That was wrong on both halves for
+#     ops/emit/priority_resolve.py::_build_parent_map's call path — ~210 of
+#     ~239 spawns there were well-formed `predecessor_id` handoff-ids (e.g.
+#     "hnd-consolidate-the-resolver-seam--13b7fa") reaching this tier-3 PATH
+#     oracle only because that call site omitted `id_index`, not because the
+#     refs were malformed; an id can never resolve as a path, so every one
+#     was a guaranteed miss, and all 42 distinct ids also carried a sibling
+#     `predecessor:` path that already resolved on disk. Fixed at the call
+#     site via `resolve_target(..., include_history_tier=False)` rather than
+#     by passing `id_index` there (which would have changed which parents
+#     that call site finds — a deliberately preserved behaviour, see
 #     priority_resolve.py's NEGATIVE-SPEC block). Verified independently: the
+#     widened cache is a strict superset of the ADD-only one (12064 -> 14473
+#     raw entries on coordinator-content-repo, zero entries lost) and none of the remaining
+#     fallback candidates are in it.
 #   - FRESH PROCESS ONLY: _EVER_TRACKED_CACHE (below) is process-lifetime, so
+#     a second emit() in the SAME process serves most lookups from that cache
+#     and under-reports the true per-run spawn count by roughly 3x. This is
+#     exactly how a bad "450 -> 137" figure got into an earlier commit
+#     message — it was two emit() calls in one process, not two fresh runs.
+#     Always launch a new interpreter (or at minimum clear
 #     _EVER_TRACKED_CACHE and bump the generation) between "before" and
+#     "after" measurements.
+#
+# Cache correctness note: even widened, this is a single-pass heuristic over
+# `git log --all` diffs — a cache miss is deliberately treated as "unknown,
+# fall through", never "definitely absent". The cache is a fast-path accept,
+# never a fast-path reject; the per-call `git log --all -- <path>` fallback in
+# _git_path_ever_tracked remains the authority on a miss.
+#
+# 2026-07-29 — cache-miss-is-authoritative (309-spawn elimination). The prior
+# paragraph's "miss = unknown" rule was correct when the cache was ADD-only
+# and genuinely incomplete (see the widening note above). Once the priming
+# pass is a full add/modify/delete/rename sweep over EVERY ref (`--all`), a
 # miss against a COMPLETE cache stops being "unknown" and becomes "provably
+# never tracked" — the per-path `git log --all -- <path>` fallback spawn is
+# then pure waste (this is the ~308-per-run fallback spawns the module
+# comment above measured: every one resolves False either way, cache-miss or
+# subprocess). GitHistoryCache below carries a `complete` flag alongside the
+# path set so a miss can be answered authoritatively ONLY when the priming
+# pass is known to have seen the repo's FULL history — never merely because a
+# cache object happened to be supplied.
+#
+# `complete` is False (never trust a miss) unless BOTH of the following are
+# affirmatively confirmed by _git_history_is_complete() at cache-build time:
+#   1. NOT a shallow clone (`git rev-parse --is-shallow-repository` == false).
+#      A shallow clone truncates history by construction — a miss there means
+#      nothing about whether the path was EVER tracked, only that it wasn't
+#      tracked within the fetched depth. Answering authoritatively would
+#      manufacture confident false negatives, exactly the fail-closed
+#      regression this change must avoid.
+#   2. NOT a partial/filtered clone (`remote.origin.promisor` != true). A
+#      promisor remote means blob/tree objects (and the commits that touch
+#      them) may be fetched lazily on demand rather than present up front —
+#      `git log --all --name-only` over a partial clone can silently omit
+#      paths whose objects were never materialized locally, which is the
+#      same "the priming pass didn't actually see everything" hazard as a
+#      shallow clone, just triggered by object-filtering instead of
+#      depth-limiting.
+# Any git failure (missing binary, timeout, not a repo, non-zero exit) during
+# either check resolves to `complete=False` — fail-closed, same best-effort
+# posture as every other git call in this module. `complete` is computed ONCE
+# per build_git_history_cache() call, not re-probed per lookup: a per-lookup
+# `rev-parse`/`config` spawn would trade the 308 per-path fallback spawns for
+# a different per-path spawn and net nothing.
+#
+# Deliberately OUT OF SCOPE — grafts, replace refs, and other ref-rewriting
+# mechanisms:
+#   - `git log --all` already walks every ref (branches, tags, and — per git's
+#     own docs — the refs under `refs/replace/` are applied transparently to
+#     ALL git history-reading plumbing, including `git log`, with no opt-out
+#     needed) so a replace-ref does not create a blind spot for this cache's
+#     `--name-only` pass — it sees the replaced content, same as any other
+#     `git log --all` consumer already relied upon elsewhere in this module.
+#   - Grafts (`.git/info/grafts` / the deprecated `--grafts` mechanism) rewrite
+#     a commit's PARENT list, not its own diff — they can make history look
+#     shorter/differently-shaped when walked, but they do not remove a path
+#     from the diff of any commit `git log --all` still visits, so they do not
+#     create an unseen-path hazard the way a shallow/partial clone does. Grafts
+#     are also long-deprecated in favour of replace refs (already covered
+#     above) and no fleet repo this module runs against uses them.
+#   - Neither is cheaply detectable in the general case (no single git query
+#     answers "are grafts or exotic replace-ref rewrites in play") — named
+#     here as a considered, not silently skipped, scope boundary rather than
+#     added to the two checks above.
+#
+# Spec backlink: coordinator-content-repo:pln-handoff-spinoff-machinery-robu-0d0f15 § C2 (F5)
+# ---------------------------------------------------------------------------
 
 class GitHistoryCache(set):
 
@@ -737,7 +990,10 @@ def _ref_names_foreign_family(ref: str) -> bool:
     )
 
 
+#: A ref whose whole stripped value is a bare git commit SHA (7-40 lowercase
+#: hex chars) — see resolve_target's SHA-shaped short-circuit (C9 #1).
 #: Anchored full-string match so a ref that merely CONTAINS hex (a filename
+#: fragment, say) is unaffected.
 _SHA_SHAPED_REF_RE = re.compile(r'^[0-9a-f]{7,40}$')
 
 
@@ -756,7 +1012,15 @@ def resolve_target(
     if not target or target in ('none', 'null'):
         return None
 
+    # SHA-shaped ref short-circuit (C9 #1). A ref whose WHOLE stripped value
+    # looks like a git commit SHA (7-40 lowercase hex chars) is not a path
+    # and not a handoff_id — it is the `kind: recovery` baton convention of
+    # carrying a crash-commit SHA in `predecessor:` (schema comment: "NOT a
+    # predecessor handoff path"). Must sit BEFORE the id_index lookup below —
+    # id_index's `__contains__` is what triggers _LazyHandoffIdIndex's
+    # corpus-wide scan, so checking after it would only save the tier-3 git
     # spawns, not the scan. A ref that merely CONTAINS hex (e.g. a filename)
+    # does not match `fullmatch`-anchored ^...$ and is unaffected.
     if _SHA_SHAPED_REF_RE.match(target):
         return None
 
@@ -785,6 +1049,14 @@ def resolve_target(
         os.path.normpath(os.path.join(repo_root, target)),
     ]
     # Basename recovery (the tiers below) is STALE-PATH recovery within the baton
+    # families — it must not re-home a pointer that explicitly names a different
+    # family. `predecessor: cross-repo/inbox/<name>.md` on a handoff itself named
+    # `<name>.md` (the cross-repo memo-pickup convention: the handoff inherits the
+    # memo's slug) otherwise resolves onto the handoff itself once the memo moves
+    # to `cross-repo/archive/`, and `referenced_by` then reports the baton as its
+    # own referencer — a self-edge that blocks its archival forever. Same rule, and
+    # same reasoning, as `tests/_baton_dag_oracle.build_children_index`'s
+    # non-baton-family skip; the two implementations reach it independently.
     if not _ref_names_foreign_family(target):
         candidates.extend([
             os.path.normpath(os.path.join(repo_root, 'state', 'handoffs', basename)),
@@ -863,6 +1135,7 @@ def build_handoff_id_index(
 
 _RAW_SCAN_FALLBACK = object()
 
+#: Matches the closing YAML frontmatter terminator line, anchored at the
 #: start of a line (MULTILINE) — mirrors `_parse_frontmatter`'s own
 #: `re.search(r'^---\s*$', ..., re.MULTILINE)` closing-terminator match.
 _RAW_SCAN_TERMINATOR_RE = re.compile(r'^---\s*$', re.MULTILINE)
@@ -906,8 +1179,14 @@ def _raw_scan_handoff_id(file_path: str) -> Any:
         text = raw.decode('utf-8', errors='replace')
     except Exception:
         return _RAW_SCAN_FALLBACK
+    # Normalize CRLF -> LF before any regex work. Without this, a CRLF file
     # (common in this corpus) leaves a trailing '\r' inside the MULTILINE
+    # '$' anchor's captured span for both the terminator and the handoff_id
     # value regexes -- '\r' is not in `[ \t]`, so `_RAW_SCAN_HANDOFF_ID_RE`'s
+    # `(\S.*?)[ \t]*$` is forced to swallow it into the captured group,
+    # producing e.g. "hnd-foo-123\r" instead of "hnd-foo-123". Caught by
+    # test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus
+    # (Latent-bug fix, C9 #2 review addendum).
     text = text.replace('\r\n', '\n')
 
     cursor = 0
@@ -1070,7 +1349,11 @@ def walk_forward(
     if repo_root is None:
         repo_root = _repo_root_from_handoff_dir(handoff_dir)
 
+    # C6 pointer-normalization seam: only pay for a repo-wide handoff_id scan
+    # when an edge kind actually being followed has an id-suffixed alias
     # (EDGE_KIND_FIELD_ALIASES) — the common walk_forward({'predecessor'})
+    # call always qualifies (predecessor_id is aliased), but a caller
+    # restricted to e.g. {'forked_from'} alone skips the scan entirely.
     id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None
     if repo_root and any(EDGE_KIND_FIELD_ALIASES.get(k) for k in edge_kinds):
         id_index = _LazyHandoffIdIndex(repo_root)
@@ -1189,7 +1472,15 @@ def build_reverse_edge_index(
             )
     repo_root = _repo_root_from_handoff_dir(handoff_dir)
     # COVERAGE, not a default to be overridden lightly. Whatever is indexed
+    # here is the complete set `referenced_by_indexed` can ever answer for --
+    # it filters this index in memory and cannot consult disk -- so a kind
+    # missing from here yields an EMPTY answer, which is indistinguishable
+    # from "nothing references this target". That is why the index records
+    # its own coverage below and the reader refuses anything outside it.
+    #
     # Found 2026-09-01: `origin_handoff` is not in ARCHIVAL_EDGE_KINDS, so a
+    # caller following this function's own "safe to swap in" equivalence
+    # argument from `referenced_by` got silent empties for that kind.
     all_kinds = set(ARCHIVAL_EDGE_KINDS) if edge_kinds is None else set(edge_kinds)
 
     id_index: Optional[Dict[str, str]] = None
@@ -1203,6 +1494,13 @@ def build_reverse_edge_index(
     by_basename: Dict[str, List[Tuple[str, str]]] = {}
 
     # NEGATIVE SPEC — do not "parallelise the reads". Tried and reverted
+    # 2026-08-23: an 8-worker ThreadPoolExecutor prefetching `_read_meta`
+    # across this scan moved p50 from 546.9ms to 562.5ms over n=12, i.e.
+    # nothing outside noise. `_read_meta` is not I/O-bound in the way the
+    # shape suggests — its cost is the sha256 stamp and the frontmatter parse,
+    # both CPU-bound and GIL-serialised, so threads add a pool and buy no
+    # latency. Reach for a different lever (fewer nodes, cheaper per-node
+    # work), not a wider one.
     for node_abs_path in live_set:
         meta = None if metas is None else metas.get(node_abs_path)
         if meta is None:
@@ -1244,6 +1542,14 @@ def referenced_by_indexed(
     if edge_kinds is None:
         edge_kinds = set(ARCHIVAL_EDGE_KINDS)
 
+    # FAIL LOUD on a kind this index does not carry. Filtering it away would
+    # return `{'referenced': False, 'referencedBy': []}` -- a well-formed
+    # answer that is indistinguishable from a genuine no-referencer result,
+    # for a question this index structurally cannot answer. The whole point
+    # of swapping `referenced_by` for this function is that the answers agree;
+    # an unindexed kind is precisely where they silently would not.
+    #
+    # `edge_kinds` is absent on an index built before it was recorded, and
     # such an index carries exactly ARCHIVAL_EDGE_KINDS by construction.
     covered = index.get('edge_kinds')
     if covered is None:
@@ -1353,6 +1659,14 @@ def referenced_by(
 
         for raw_ref in raw_edges:
             # NEGATIVE SPEC — tier 3 is off here by construction, not by oversight.
+            # This loop's next branch collapses `None` and `'git-history'` onto one
+            # handling path, and tier 3 can only ever return the sentinel (never a
+            # disk path), so asking it changes no outcome this function can observe
+            # while costing one `git log --all` spawn per (node, edge) pair over the
+            # caller's whole scan set. Do NOT re-enable it to "resolve more refs": a
+            # live-membership test needs a disk path on both sides, which tier 3 by
+            # definition cannot supply. Same grounds as `emit/priority_resolve.py ::
+            # _build_parent_map` and `pickup_assemble :: _resolve_lineage_artifact_path`.
             resolved_ref = resolve_target(
                 raw_ref,
                 node_handoff_dir,
@@ -1375,8 +1689,30 @@ def referenced_by(
     }
 
 
+# ---------------------------------------------------------------------------
+# Waived pre-reclaim-boundary dangling predecessors (C6 GAP2, 2026-07-08).
+#
+# All five entries below were introduced to this repo by a SINGLE commit,
+# `50e2847 reclaim(archive): DoE pre-July archive history from claude-klabauter`, which
+# squash-reclaimed inert pre-July archive records that had been stranded in
 # claude-klabauter by the 2026-07-03 relocation. That reclaim brought in each SUCCESSOR
+# handoff (the record listed as a key below) but NOT its own predecessor,
+# which lived and died entirely inside claude-klabauter's original (pre-split) repo
+# history — never independently reclaimed because it was already
+# consumed/superseded before the reclaim boundary. This is mechanically
+# distinct from a git-history-tier-resolvable archive-relocation-stranded
+# case: those targets ARE resolvable within this repo; these are provably
+# absent from this repo's entire history because they were never part of it.
+#
+# Waiver shape: keyed by the RECORD's own repo-relative path (not the
+# unresolvable target — a record can carry at most one waived edge in this
+# narrow class), so a future edit to a waived record that introduces a NEW
+# unrelated dangling edge is NOT silently covered by this list.
+#
 # Mirrors JS WAIVED_DANGLING_PREDECESSORS verbatim (same keys/values).
+#
+# Spec backlink: coordinator-content-repo:pln-handoff-spinoff-machinery-robu-0d0f15 § C6 (GAP2)
+# ---------------------------------------------------------------------------
 WAIVED_DANGLING_PREDECESSORS: Dict[str, str] = {
     'archive/handoffs/2026-06-28_081122_d5714a02-8a54-4897-babf-457e5833ed9c.md':
         'state/handoffs/2026-06-27_224629_roadmap-stub-numbering-dependency-order.md',
@@ -1391,8 +1727,50 @@ WAIVED_DANGLING_PREDECESSORS: Dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Exported: check_lineage_reachability — shared reachability rule kernel
+#
+# Promoted (C6 GAP1 backfill, 2026-07-08) so a write-time PreToolUse hook and a
 # batch corpus sweep apply the IDENTICAL reachability rule — not just the same
+# resolve_target, but the same per-field rule set (which fields are checked,
+# the kind:recovery same-repo-only carve-out, the "resolved is git-history
+# sentinel → OK" logic).
+#
+# Checks predecessor / forked_from / additional_predecessors[] / origin_handoff
+# (origin_handoff is a real state/handoffs/ path edge, walked the same way as
+# the other three) via resolve_target (live ∪ archive-on-disk ∪ git-history,
+# C2 F1). A target unresolvable in all three tiers is a hard violation —
+# provably never-existed, not merely relocated.
+#
+# kind:recovery predecessor is a SHA, not a handoff path — SUBJECT TO THE
 # SAME-REPO-ONLY FOREIGN-BATON CARVE-OUT: there is no per-record repo-identity
+# discriminator, so an unreachable recovery SHA is NEVER rejected here — it
+# may be a legitimate sibling-repo crash SHA per the deliberately-deferred
+# foreign-baton boundary. This function does NOT check kind:recovery
+# predecessor at all; the field is simply skipped.
+#
+# forked_from / additional_predecessors ARE checked unconditionally (no
+# kind:recovery exemption) — the recovery convention is SHA-shaped ONLY on
+# predecessor; a recovery handoff never carries a fan-in SHA in
+# additional_predecessors[] or a branch-point SHA in forked_from.
+#
+# Negative-spec: does NOT walk transitively — each of the four fields is
+# checked as a single direct edge, not a chain (unlike walk_forward's
+# accumulation). Reachability is a per-field existence predicate here, not a
+# graph traversal.
+#
+# Returns [] when frontmatter is None/absent, or when the fields are all
+# absent/none/null — the common case, silent. Returns a list of
+# {field, value, reason} violation dicts otherwise.
+#
+# Fail-open on any resolver error: an individual field's resolution raising
+# is treated as "cannot prove unresolvable" (not a violation) — never crash
+# or spuriously deny/reject on an infra hiccup.
+#
+# Mirrors JS checkLineageReachability verbatim.
+#
+# Spec backlink: coordinator-content-repo:pln-handoff-spinoff-machinery-robu-0d0f15 § C2, § C6 (GAP1/GAP2), F5
+# ---------------------------------------------------------------------------
 
 def check_lineage_reachability(
     frontmatter: Optional[dict],

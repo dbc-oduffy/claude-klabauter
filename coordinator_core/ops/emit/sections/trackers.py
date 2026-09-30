@@ -84,6 +84,10 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
             }
             # Human axis (C9), activation-gated: `human_owner` is an OPTIONAL nullable
+            # TrackerSummary field (entities/tracker_summary.py). See handoffs.py's
+            # matching block for the full rationale — same switch, same omission
+            # discipline, no post-dump pop needed here because this section builds
+            # plain dicts directly rather than routing through a pydantic model.
             if _human_axis_on:
                 record["human_owner"] = _jq_alternative(fm.get("human_owner"))
             records.append(record)

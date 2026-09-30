@@ -139,7 +139,11 @@ def test_huge_n_emits_plain_decimal_no_overflow() -> None:
     assert result.stderr == ""
 
 
+# Review: code-reviewer (Finding 3, 4) — unit-level tier importing the module directly (via
 # `_load_module`, defined above alongside `_FAILGLOB_LINE`, since the filename has a hyphen)
+# to test _resolve_ulimit_line in isolation and to prove the main() inner fail-open
+# except-Exception branch actually works, which the subprocess-only suite above cannot
+# exercise.
 @pytest.fixture(scope="module")
 def _guard_module():
     return _load_module()

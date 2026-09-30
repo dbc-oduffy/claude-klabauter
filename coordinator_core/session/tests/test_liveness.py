@@ -1540,6 +1540,24 @@ class TestActiveSessions:
         assert "Live (last activity" in lines[0]
         assert "s ago)" in lines[0]
 
+    def test_line_second_field_is_the_live_or_stale_marker(self, tmp_path):
+        """percolate-liveops-preflight derives live ids from this listing in
+        one pass (`sid`, whitespace, then a field starting `Live (`) rather
+        than also calling `live_session_ids`; the format is its contract."""
+        repo = _make_repo(tmp_path)
+        _write_session(repo, "sid-live", {"pid": "1", "last_activity": core.now_iso()})
+        _write_session(
+            repo, "sid-stale", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
+        )
+        fields = dict(
+            ln.split(None, 1) for ln in liveness.active_sessions(cwd=str(repo))
+        )
+        assert fields["sid-live"].startswith("Live (")
+        assert fields["sid-stale"].startswith("Stale (")
+        assert {s for s, f in fields.items() if f.startswith("Live (")} == set(
+            liveness.live_session_ids(cwd=str(repo))
+        )
+
     def test_stale_line_format_and_reap_threshold_text(self, tmp_path):
         repo = _make_repo(tmp_path)
         _write_session(

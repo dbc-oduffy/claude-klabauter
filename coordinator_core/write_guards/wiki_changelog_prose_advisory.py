@@ -162,7 +162,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not repo_root:
             return None
 
+        # BOTH sides through `casefold_path`, never one: a hand-rolled
         # separator swap left this comparison case-SENSITIVE, so on the
+        # case-insensitive filesystems where Windows and macOS are
+        # first-class, a write to `Docs/Wiki/...` resolved outside the scope
+        # root and skipped the advisory entirely. The helper also strips a
+        # Windows extended-length prefix, which the swap did not.
         scope_root = casefold_path(repo_root).rstrip("/") + "/docs/wiki/"
         file_path_norm = casefold_path(file_path)
         if not file_path_norm.startswith(scope_root):

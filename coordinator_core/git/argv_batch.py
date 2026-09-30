@@ -3,7 +3,23 @@ from __future__ import annotations
 
 from typing import List, Sequence
 
+#: Character budget for the pathspec batch handed to a single `diverging_
+#: paths()` `git diff` subprocess call from `commit_scoped()`'s own
+#: divergence check, sized well under the Windows `CreateProcess` command-
+#: line cap (32767 UTF-16 code units) with generous headroom for the
+#: `git.exe` path itself, the fixed `diff --cached --name-only --` argv
+#: prefix, per-argument quoting overhead around any path containing a
+#: space, and the second, unfiltered `git diff --name-only --` call
+#: `diverging_paths()` also issues against the same pathspec. Same value
 #: and reasoning as `commit_pipeline._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`
+#: (a percolate-publish batch, ~2000-2700 paths, blows the raw 32767 cap
+#: outright on one argv -- `rc=127`, "divergence indeterminate") --
+#: promoted here (2026-08-15) as the shared home for `_chunk_paths()`
+#: itself, so `commit_pipeline.py` imports both rather than growing a
+#: second, independently-drifting copy. See `_chunk_paths()`'s own
+#: docstring for why this module, not `commit_pipeline.py`, is the shared
+#: home: `commit_pipeline.py` already imports `git_native` (this module),
+#: so the reverse import direction would be circular.
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = 6000
 
 

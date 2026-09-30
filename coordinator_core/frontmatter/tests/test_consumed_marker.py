@@ -7,7 +7,14 @@ from coordinator_core.frontmatter.consumed_marker import (
 )
 
 
+# DR-084 dual-read, intentionally permanent: these constants re-export the
+# widened lifecycle_constants SSOT, so they admit old ∪ new vocabulary and now
 # diverge DELIBERATELY from the JS original (DoE lib/consumed-marker.js),
+# which stays old-vocabulary-only until the fleet cutover. The divergence is
+# the point -- claude-klabauter must treat a `claimed` / `continued` / `closed` record
+# as terminal today. Narrowing is gated on the consumer-corpus exit condition
+# in lifecycle_constants.py's module docstring (9d00b459 incident of record),
+# not on a claude-klabauter-scoped signal.
 
 
 def test_terminal_status_values():

@@ -153,7 +153,11 @@ def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
     synthetic_offenders = _offending_nodes(synthetic.value)
     assert synthetic_offenders, "positive control failed to trip its own detector"
 
+    # The Compare node itself (the membership test) must be exactly the
     # `in` comparison against COMMAND_TOOL_NAMES -- not an equality against
+    # a bare string literal (which would also trip
+    # test_no_hardcoded_tool_name_literal_survives_in_a_comparison in
+    # test_tool_name_membership.py).
     test_node = assign_node.value.test
     assert isinstance(test_node, ast.Compare), ast.dump(test_node)
     assert len(test_node.ops) == 1 and isinstance(test_node.ops[0], ast.In), ast.dump(test_node)

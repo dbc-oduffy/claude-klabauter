@@ -92,6 +92,9 @@ def test_workweek_complete_tail_directives():
 
 def test_workday_brief_envelope_contains_tail(monkeypatch):
     # Suite-root autouse fixture quarantines HOME/USERPROFILE per test (see
+    # coordinator_core/conftest.py); resolve_operator_config() legitimately
+    # fails against that quarantine. Stub it so brief() proceeds — mirrors
+    # test_baton_assemble.py's own resolve_operator_config spy pattern.
     monkeypatch.setattr(workday_brief, "resolve_operator_config", lambda **_: {})
     exit_code, envelope = workday_brief.brief()
     assert exit_code == int(workday_brief.WorkdayExitCode.SUCCESS)

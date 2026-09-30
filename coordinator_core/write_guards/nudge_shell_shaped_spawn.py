@@ -89,6 +89,7 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 190
+# -- 180 is free (bump_out_of_repo_tool_write.py moved to the hard-deny
 # band's PRIORITY 135 when its CLASS flipped; see that module's own
 # PRIORITY comment).
 
@@ -153,12 +154,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         # This guard is scoped to SHELL-SHAPED spawns only (module name and
         # docstring) — a PLAIN_SPAWN site (any other subprocess/exec call)
+        # is not the shape this offer addresses; C3's test gate covers the
+        # full site inventory, this advisory targets the shell-shaped subset.
         shell_shaped = [
             s for s in sites if s.kind in (SpawnKind.SHELL_BINARY, SpawnKind.SHELL_TRUE)
         ]
         if not shell_shaped:
             return None
 
+        # Lead with the alternative for the FIRST (lowest-ordinal) site's
         # kind — one advisory envelope per PreToolUse response (INTERFACE.md).
         primary_kind = shell_shaped[0].kind
         reason = _reason_for(primary_kind, file_path, len(shell_shaped))

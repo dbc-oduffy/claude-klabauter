@@ -126,6 +126,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
+        # Advisory envelope (DR-277) — additionalContext only, NEVER
         # permissionDecision:"deny". See INTERFACE.md § Envelope — advisory.
         return {
             "hookSpecificOutput": {

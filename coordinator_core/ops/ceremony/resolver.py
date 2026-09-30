@@ -14,7 +14,7 @@ reach this module exists to close.
 from here (aliased back to its historical ``_resolve_in_repo`` /
 ``_find_all_consumed_handoffs`` names so every one of its existing internal
 call sites is unchanged) instead of defining them locally.
-``get_handoff_consumed_by`` re-exports ``coverage._get_handoff_consumed_by``
+``get_handoff_consumed_by`` re-exports ``coverage._get_handoff_claimed_by``
 unchanged under a public name — that function's implementation stays in
 ``coverage.py`` (it is used broadly outside this rebuild's scope, e.g.
 ``coordinator_core/ops/fleet/archive_handoffs.py``; relocating its body is
@@ -27,7 +27,7 @@ tail import from — reuse via public contract, not private-import reach
 across a module boundary").
 
 Negative-spec (hard-won):
-  - Does NOT duplicate ``_get_handoff_consumed_by``'s frontmatter-scan logic
+  - Does NOT duplicate ``_get_handoff_claimed_by``'s frontmatter-scan logic
     — re-exports the single canonical implementation from ``coverage.py`` so
     the resolver and the C2 idempotency guard never disagree on what
     "consumed_by" means (branch_resolution.py's own docstring already
@@ -58,7 +58,7 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core.claim_state import resolve_claim_state
-from coordinator_core.coverage import _get_handoff_consumed_by as get_handoff_consumed_by
+from coordinator_core.coverage import _get_handoff_claimed_by as get_handoff_consumed_by
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS
 from coordinator_core.ops.fleet._common import rel_id
 from coordinator_core.win_portability import no_console_creationflags
@@ -145,7 +145,7 @@ def find_all_consumed_handoffs(
 
     THE MATCH IS NOT A RAW ``consumed_by`` FRONTMATTER READ, despite the
     accessor's legacy name. ``get_handoff_consumed_by`` is
-    ``coverage._get_handoff_consumed_by``, which is LEDGER-FIRST
+    ``coverage._get_handoff_claimed_by``, which is LEDGER-FIRST
     (``claim_state.resolve_claim_state``) with a frontmatter-mirror fallback
     that is dual-tolerant across ``claimed_by`` (canonical) and ``consumed_by``
     (retired by DR-084 P4, still ingested per C7), ``claimed_by`` winning when

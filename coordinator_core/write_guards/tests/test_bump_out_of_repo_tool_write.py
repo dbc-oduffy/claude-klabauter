@@ -109,7 +109,12 @@ def test_ac2_cross_repo_write_bumps(tmp_path, tool_name):
 
 
 def test_unwritable_marker_gitdir_fails_open(tmp_path, monkeypatch):
+    # Mirrors `bump_foreign_repo_write._evaluate_foreign_repo_candidate`'s
+    # `marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir)`
     # guard (STAFF-ENG F0/AC5, "never an unclearable deny") -- a marker
+    # location that resolves but is not writable/readable must fail open
+    # exactly like an unresolvable one, not advertise a `touch` that can
+    # never succeed.
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-unwritable-marker"
@@ -312,12 +317,17 @@ def test_narrowing_adds_no_expiry_identity_gating_or_fail_closed(tmp_path):
     gitdir = marker.resolve_gitdir(str(foreign))
     assert gitdir is not None
     marker_file = gitdir / marker.marker_basename(session_id)
+    # A bare `touch` of an ordinary, zero-byte file -- no body, no identity,
     # no signature -- still clears, exactly as XREPO_MARKER_IS_ORDINARY_FILE
+    # requires. The clear is not gated on who created it or when.
     marker_file.touch()
     assert marker_file.stat().st_size == 0
     os.utime(marker_file, (0, 0))
     assert guard.check(payload) is None
 
+    # Band/posture unchanged by the narrowing: still the `write_guards`
+    # hard-deny CLASS it already had, with no `fail_closed` promotion and no
+    # `GuardBand` membership of its own (this surface is registered by
     # `write_guards/engine.py`, which has no CONFINEMENT_DENY band).
     assert guard.CLASS == "hard-deny"
     assert getattr(guard, "fail_closed", False) is False
@@ -374,7 +384,10 @@ def test_ac1_ordinary_foreign_repo_write_keeps_foreign_class_copy(tmp_path, monk
 
 
 def test_outside_any_repo_anchor_unregistered_target_never_bumps(tmp_path, monkeypatch):
+    # No git repo to write C0's session-start record against (sessions_dir()
+    # itself requires a git root) -- the anchor here can only resolve via the
     # CLAUDE_PROJECT_DIR fallback, exactly like _write_bump_applicability's
+    # own AC11 tests for this same anchor-outside-any-repo shape.
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
     scaffold = tmp_path / "Documents" / "new-project"
     scaffold.mkdir(parents=True)
@@ -405,8 +418,18 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
     assert result is not None
 
 
+# ---------------------------------------------------------------------------
+# coordinator-claude#42 B2 -- CLOUD REPRO: a top-level, PM-facing session
+# whose anchor resolves to no git repo at all (a launcher-less container's
+# workspace PARENT, one level above the repo it actually cloned) must still
+# be recognized as writing its OWN repo when the payload's own `cwd` sits
+# squarely inside it -- even though that same repo is ALSO a registered
+# sibling (every fleet repo is). Before the fix, `own_repo_write_gitdir` did
 # not exist and this fell straight into the 2026-08-10 "a REGISTERED target
+# still bumps unconditionally" rule, denying a session's own repo the
+# identical write `test_outside_any_repo_anchor_registered_target_still_
 # bumps` above correctly denies for a GENUINELY foreign registered target.
+# ---------------------------------------------------------------------------
 
 
 def test_cloud_top_level_session_own_registered_repo_allows(tmp_path, monkeypatch):
@@ -484,7 +507,10 @@ def test_genuine_subagent_in_cloud_layout_still_bumped_for_a_foreign_target(
         str(foreign_target / "f.txt"),
         session_id,
         str(subagent_cwd),
+        # Bare-hex form -- `_canonical_agent_id`'s leg (a) -- so this
+        # canonicalizes to a non-empty `agent_id` and `resolve_agent_class`
         # actually resolves SUBAGENT rather than degrading to UNKNOWN on an
+        # unrecognized id shape.
         agent_id="abcdef123456789012",
     )
 
@@ -535,7 +561,19 @@ def test_unknown_agent_identity_never_gets_sandbox_routing_or_subagent_copy(
                     record_path.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------
 # ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
+# 2026-08-15). `resolve_gitdir(anchor)` returning `None` is ambiguous
+# between "the anchor genuinely sits in no git repo" and "the `git rev-parse
+# --git-dir` SPAWN failed" (timeout, missing binary, transient error --
+# expected under this box's documented load norm, `docs/wiki/machine-load-
+# norm.md`). `check()` now disambiguates via `path_has_git_ancestor`
+# (`_write_bump_marker.py`, filesystem-only, no subprocess) before ever
+# reaching `_verdict_bumps`. These tests reproduce the spawn failure
+# directly by patching `guard.resolve_gitdir` to return `None` ONLY for the
+# anchor's own cwd, leaving every other call (the target's own resolution)
+# untouched -- exactly the shape a real transient `git` failure has.
+# ---------------------------------------------------------------------------
 
 
 def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
@@ -612,8 +650,27 @@ def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(
     assert result is not None
 
 
+# ---------------------------------------------------------------------------
 # PINS THE EXACT PAYLOAD SHAPE FROM THE EM's VERIFICATION TRANSCRIPT
+# (2026-08-10, bug 2026-08-10-cross-repo-write-boundary-denies-on-bash-
+# b6fd16ed9ab9 follow-up). The EM's manual repro used a hand-typed
+# `session_id` ("verify-boundary-probe") that was never passed through a
+# SessionStart hook, so it has no session-start anchor record and no
 # `CLAUDE_PROJECT_DIR` -- `resolve_launch_anchor` returns `None`,
+# `bump_applies` is `False`, and the guard fails open BY DESIGN (see
+# `_write_bump_applicability.resolve_launch_anchor`'s own docstring, and
+# this module's negative-spec: an unresolvable anchor never bumps, on
+# EITHER surface -- confirmed by parity below). This is not a defect this
+# fix introduced or should have caught: EVERY real session gets its anchor
+# record written automatically by `session-start-write-bump-anchor.py`
+# (coordinator-content-repo repo) at SessionStart, before any Write/Edit tool call can
+# happen -- a hand-constructed payload that skips that step is testing a
+# state a live session can never actually be in. Both tests below use the
+# EM's own literal payload (same tool_input, same session_id, same cwd);
+# the first proves the fail-open is real and matches the Bash sibling
+# exactly (parity, not a hole); the second proves the SAME payload denies
+# once the session has the anchor record every live session gets for free.
+# ---------------------------------------------------------------------------
 
 
 def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(tmp_path):
@@ -784,14 +841,30 @@ def test_parity_same_repo_no_bump_matches_manual_composition(tmp_path):
     assert expected_bump is False
 
 
+# ---------------------------------------------------------------------------
+# System-temp scratch is not a foreign repo -- the harness designates a
+# per-session scratchpad under the system temp root for ALL temporary files,
+# and a bare temp path is in NO repo, so the cross-repo advice this guard
+# renders is a category error there. See the guard's own docstring,
 # "SYSTEM-TEMP SCRATCH IS NOT A FOREIGN REPO".
+#
+# The temp root is PINNED in these tests rather than read live: pytest's own
+# `tmp_path` already sits under the real `tempfile.gettempdir()` on macOS and
+# Linux, so "outside the temp root" is not expressible against the live value.
+# Pinning makes both sides of the conjunctive condition reachable on every
+# platform, Windows included.
+# ---------------------------------------------------------------------------
 
 
 def _pin_temp_root(monkeypatch, root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(root))
     monkeypatch.setattr(applicability, "_posix_tmp_literal", lambda: str(root))
+    # The shared classifier ALSO consults `TMPDIR`/`TEMP`/`TMP` directly
+    # (not merely via `gettempdir()`) -- clear them so this process's own
     # real `TMPDIR` (which, on this host, is an ANCESTOR of pytest's own
+    # `tmp_path`) cannot leak a second, unpinned recognized-temp-root
+    # candidate into these isolation-sensitive tests.
     for var in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.delenv(var, raising=False)
 
@@ -1005,7 +1078,16 @@ def test_live_temp_root_is_resolvable_and_non_trivial():
     assert os.path.realpath(root).rstrip("/") != ""
 
 
+# ---------------------------------------------------------------------------
 # REGRESSION -- the confirmed live false positive: the harness-designated
+# per-session scratchpad is NOT covered by `tempfile.gettempdir()` alone on
+# macOS (`TMPDIR` resolves under `/var/folders/...`; the scratchpad lives
+# under `/private/tmp`). Uses a REAL session-start record so applicability is
+# genuinely True -- a test that passes only because applicability failed open
+# proves nothing. MUST fail against the pre-fix module (the old
+# `_target_is_bare_temp_scratch`, keyed on `tempfile.gettempdir()` alone, no
+# `/tmp` realpath candidate).
+# ---------------------------------------------------------------------------
 
 
 def test_regression_real_harness_scratchpad_shape_never_bumps(tmp_path, monkeypatch):
@@ -1138,9 +1220,16 @@ def test_settings_home_exemption_parity_with_bash_surface(tmp_path, monkeypatch)
     assert tool_verdict is False
 
 
+# ---------------------------------------------------------------------------
 # LESSONS-OUTBOX IS NOT A MISWRITE -- `coordinator-lesson-promote` writes a
+# universal lesson's durable home to `<content_root>/state/lessons-outbox/*.yaml`
+# BY DESIGN; a foreign-repo write there is not the "used the wrong repo"
+# mistake this guard exists to flag. See the guard's own module docstring,
 # "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN THOUGH IT IS A FOREIGN REPO", and
 # the dispatch brief's CRITICAL CONSTRAINT -- this must NOT widen to
+# `cross-repo/inbox/`/`cross-repo/outbox/`, which stay forbidden and must
+# keep bumping.
+# ---------------------------------------------------------------------------
 
 
 def test_foreign_repo_lessons_outbox_write_never_bumps(tmp_path):
@@ -1337,7 +1426,12 @@ def test_agent_memory_store_case_insensitive_directory_still_exempted(tmp_path, 
     assert guard.check(payload) is None
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
 # -- `~/.claude` is exempt from the write boundary WHOLESALE, from any
+# session anchor, even though `~/.claude` is itself a real git checkout.
+# AC1/AC3/AC4.
+# ---------------------------------------------------------------------------
 
 
 def test_ac1_settings_json_write_allowed_from_any_repo_anchor(tmp_path, monkeypatch):
@@ -1719,8 +1813,19 @@ def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_pat
     assert guard._same_gitdir(Path("gitdir-a"), Path("gitdir-b")) is True
 
 
+# ---------------------------------------------------------------------------
+# C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the exemption
+# predicates (`_target_is_bare_temp_scratch`, `_target_is_under_settings_
+# home`, `_target_is_lessons_outbox_write`, `is_agent_memory_store_path`)
+# never got the translated `file_path` C4/C4b already thread to the VERDICT
 # resolution -- see review finding [P3] on commit fc1419657. THE HEADLINE
 # REGRESSION: an MSYS-spelled write to the harness scratchpad on Windows
+# matched no recognized native temp root (raw POSIX-spelled string, compared
+# against native temp roots), so the temp-scratch exemption never fired and
+# the write fell through to `_verdict_bumps`, which bumped it -- fails
+# CLOSED, the one branch in this module the docstring says must never do
+# that.
+# ---------------------------------------------------------------------------
 
 
 def test_c4c_headline_regression_msys_scratchpad_write_never_bumps(tmp_path, monkeypatch):

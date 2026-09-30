@@ -1671,6 +1671,54 @@ edits in a running session.
 """
 
 
+def _tier1d_registry_manifest_integrity(r: Reporter, coordinator_root: str) -> None:
+    """Registry manifest present / parsable / required-keys-complete.
+
+    Loads ``coordinator_registry`` by file path and lets its own
+    ``_load_manifest()`` (or, on a module that still loads eagerly, its import)
+    raise the diagnosis; those three raises are reported verbatim as FAIL. An
+    unreachable module is UNEVALUABLE, never a pass-equivalent SKIP."""
+    import importlib.util
+
+    r.section("=== Tier 1d: Registry manifest install integrity ===")
+    lib_dir = os.path.join(coordinator_root, "bin", "lib") if coordinator_root else ""
+    mod_path = os.path.join(lib_dir, "coordinator_registry.py") if lib_dir else ""
+    if not mod_path or not os.path.isfile(mod_path):
+        r.unevaluable(
+            f"registry manifest integrity: coordinator_registry.py not reachable "
+            f"(looked at {mod_path or '<no coordinator root resolved>'})"
+        )
+        return
+
+    saved_path = list(sys.path)
+    name = "_sandbox_check_coordinator_registry"
+    try:
+        sys.path.insert(0, lib_dir)
+        spec = importlib.util.spec_from_file_location(name, mod_path)
+        if spec is None or spec.loader is None:
+            r.unevaluable(f"registry manifest integrity: no import spec for {mod_path}")
+            return
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+            loader = getattr(module, "_load_manifest", None)
+            if callable(loader):
+                loader()
+        except (FileNotFoundError, ValueError) as exc:
+            r.bad(f"registry manifest integrity: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001 — not one of the three manifest diagnoses
+            r.unevaluable(
+                f"registry manifest integrity: could not evaluate — "
+                f"{type(exc).__name__} loading {mod_path}: {exc}"
+            )
+            return
+        r.ok(f"registry manifest present, parsable, required keys complete ({mod_path})")
+    finally:
+        sys.path[:] = saved_path
+        sys.modules.pop(name, None)
+
+
 class SandboxCheckTransportError(RuntimeError):
     """Raised when the harness itself could not run (sandbox creation
     failure, unhandled exception mid-tier) — distinct from a business
@@ -1720,6 +1768,7 @@ def run_all(
             r, sandbox, doe_clone, doe_clone_resolved, shim_ran, live_content_root_bak, live_shim_bak
         )
         _tier1c_publish_repo_parity(r, sandbox, doe_clone, doe_clone_resolved)
+        _tier1d_registry_manifest_integrity(r, coordinator_root)
     finally:
         if not keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)

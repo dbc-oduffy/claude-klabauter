@@ -142,9 +142,12 @@ REQUIRES_LANDED = "landed-work"
 REQUIRES_VALUES = (REQUIRES_LANDED, REQUIRES_COMMIT)
 
 #: Fleet repo shortnames, the vocabulary ``external_gate[].owner_repo`` accepts.
-#: A closed list rather than a probe: these are fleet constants, not machine
-#: facts, and resolving them would mean spawning `machine-local` on a box already
-#: carrying many concurrent sessions.
+#: This literal is the SOURCE-TREE vocabulary only. The publish depersonalize
+#: scrub rewrites these names in the shipped mirror (duplicates and placeholders
+#: such as ``coordinator-content-repo``), so the shipped constant cannot name the
+#: operator's real siblings. ``fleet_siblings`` therefore unions it with the
+#: basenames of the machine-local registry's ``repos.*`` paths, read straight
+#: from the TOML files — never by spawning ``machine-local``.
 #:
 #: EVERY FLEET NAME, INCLUDING THE DOCTRINE REPO'S, and the read-side twin's
 #: ``SIBLING_REPOS`` carries the same eight. Neither half hard-omits a name:
@@ -218,7 +221,47 @@ def fleet_siblings(repo_root: Path) -> tuple:
     them as a cross-repo dependency.
     """
     own = repo_root.name.casefold()
-    return tuple(name for name in FLEET_REPOS if name.casefold() != own)
+    seen = set()
+    out = []
+    for name in (*FLEET_REPOS, *registry_repo_names()):
+        folded = name.casefold()
+        if folded == own or folded in seen:
+            continue
+        seen.add(folded)
+        out.append(name)
+    return tuple(out)
+
+
+def registry_repo_names() -> tuple:
+    """Directory basenames of every ``repos.*`` path in the machine-local registry.
+
+    The operator's real sibling names, which survive publish where the
+    ``FLEET_REPOS`` literal does not. File read only (no process spawn); an
+    absent, unreadable, or unresolvable registry yields ``()`` so the gate
+    degrades to the literal rather than failing.
+    """
+    try:
+        import tomllib
+
+        from coordinator_core._settings_home import machine_local_dir
+
+        reg_dir = machine_local_dir()
+    except Exception:
+        return ()
+    names = []
+    for fname in ("registry.toml", "registry.local.toml"):
+        path = reg_dir / fname
+        try:
+            with open(path, "rb") as fh:
+                data = tomllib.load(fh)
+        except (OSError, ValueError):
+            continue
+        for key, val in data.items():
+            if key.startswith("repos.") and isinstance(val, str) and val.strip():
+                leaf = Path(val.strip().replace("\\", "/").rstrip("/")).name
+                if leaf:
+                    names.append(leaf)
+    return tuple(names)
 
 
 def repo_root_names(repo_root: Path) -> frozenset:

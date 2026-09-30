@@ -112,6 +112,9 @@ _MAX_WHOLE_FILE_BYTES = 1024 * 1024
 
 #: Reason-shaped punt, following the COORDINATOR_QUEUE_PUNT /
 #: COORDINATOR_BATON_BODY_PUNT convention for advisory/deny-offer guards in
+#: this package -- a non-trivial reason (>= 12 chars) set BEFORE launch
+#: suppresses this advisory on future writes; this guard never blocks
+#: regardless of what this var holds.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_PROSE_QUEUE_APPEND_PUNT"
 
 _TRANSFORMER_PATH = "coordinator_core/ops/fleet/migrate_prose_queue.py"
@@ -229,6 +232,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # --- existence gate: only an ALREADY-EXISTING legacy queue is an
+        #     append target; a nonexistent target is the creation-deny
+        #     sibling's concern, never this one's ---
         resolved = file_path
         if not os.path.isabs(resolved):
             cwd = payload.get("cwd")

@@ -416,6 +416,32 @@ def test_model_default_handles_nested_parens_in_args():
     assert findings[0].code == "agent-model-default"
 
 
+def test_model_default_flags_model_nested_in_helper_call_arg():
+    src = "await agent(helper({model: 'x'}), {phase: 'p'});"
+    findings = check_model_default(scrub(src))
+    assert [f.code for f in findings] == ["agent-model-default"]
+
+
+def test_model_default_flags_model_nested_in_inner_object():
+    src = "await agent('p', {schema: {model: 'x'}});"
+    findings = check_model_default(scrub(src))
+    assert [f.code for f in findings] == ["agent-model-default"]
+
+
+def test_model_default_credits_sole_object_argument():
+    assert check_model_default(scrub("await agent({prompt: 'x', model: 'sonnet'});")) == []
+
+
+def test_model_default_credits_model_after_helper_call_value():
+    src = "await agent('p', {label: f(a, b), model: 'sonnet'});"
+    assert check_model_default(scrub(src)) == []
+
+
+def test_model_default_credits_model_after_spread():
+    src = "await agent('p', {...base, model: 'sonnet'});"
+    assert check_model_default(scrub(src)) == []
+
+
 def test_run_checks_conformant_script_has_no_error_findings():
     src = (
         "export const meta = { name: 'x', description: 'y', phases: ['Scout'] };\n"

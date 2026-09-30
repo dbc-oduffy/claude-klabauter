@@ -80,9 +80,9 @@ from coordinator_core.engine_root import (
     is_published_engine_mirror as _is_published_engine_mirror,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.telemetry import op_latency
+from coordinator_core.yaml_flat import simple_yaml_load
 
 logger = logging.getLogger(__name__)
 
@@ -541,7 +541,7 @@ def _resolve_initiative(
 
     try:
         content = yaml_path.read_text(encoding="utf-8")
-        fm = _simple_yaml_load(content)
+        fm = simple_yaml_load(content)
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             "deliverable.rollup: could not read/parse initiative file %s: %s",

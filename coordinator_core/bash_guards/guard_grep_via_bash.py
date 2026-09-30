@@ -232,12 +232,27 @@ from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
+#: Review: code-reviewer -- Finding 5 (nit): these attributes are
+#: vestigial in `bash_guards` -- `dispatch.py` imports `check` explicitly
+#: and hardcodes ordering + `fail_closed` in its `guard_chain` literal
+#: rather than doing attribute-based discovery (only `write_guards/tests/`,
+#: a different guard family, reads `CLASS`). Pre-existing convention
+#: copied from that family, not new to this module; kept for readability,
 #: but `PRIORITY` in particular governs nothing here and duplicate values
+#: across modules (e.g. this file's own `42` vs another module's `41`) do
+#: not indicate real ordering -- see `dispatch.py`'s `guard_chain` list for
+#: the actual order. `CLASS` itself was deleted (C14f, 2026-08-06): this
 #: guard moved to ADVISORY_REWRITE on 2026-07-30 (H11(a)) and nothing in
+#: the repo ever read the `"hard-deny"` string, which had gone stale and
+#: actively contradicted this module's own "Does NOT deny" negative-spec.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
+#: This guard's OWN escape hatch -- distinct from BX-16's
 #: ``COORDINATOR_ALLOW_GREP_VIA_BASH`` (which suppresses the auto-rewrite
+#: check, not this guard). Read inline at call time, never hoisted (this
+#: package's established ``_override`` convention -- see
+#: ``dispatch_checks._override``'s own docstring for why).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD"
 
 _SHAPE_NAME = "grep-via-bash"
@@ -256,6 +271,10 @@ def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
 
 
 #: Why a command classified as GREP_VIA_BASH failed to qualify as
+#: substitutable residue -- kept distinct so the composed-advisory message
+#: never misdescribes WHICH test failed (AC-7: a message must not claim a
+#: command is chained/piped when the real reason is an untranslatable flag,
+#: or vice versa).
 _REASON_CHAINED = "chained"
 _REASON_UNTRANSLATABLE = "untranslatable"
 
@@ -279,6 +298,10 @@ def _substitutable_rewrite(tokens: list) -> Tuple[Optional[str], str]:
     if pipe_before or not seg_tokens:
         return None, _REASON_CHAINED
     # `classify_command` only matches GREP_VIA_BASH by finding a grep-family
+    # binary in SOME segment; with exactly one segment here, that segment's
+    # first token is necessarily the grep-family binary the classifier
+    # found -- this is not re-derived, just asserted, to keep the reason
+    # taxonomy exhaustive without a third, practically-unreachable branch.
     assert any(_token_matches_binary(seg_tokens[0], b) for b in _GREP_FAMILY_BINARIES)
     parsed = _grep_flags_and_operands(seg_tokens)
     if parsed is None:
@@ -354,6 +377,25 @@ def _has_gnu_only_construct(tokens: list) -> bool:
 
 
 #: ALLOWLIST, not a blocklist, for a downstream token `_partial_pipe_rewrite`
+#: is willing to re-quote via `shlex.quote`. This is the second round of
+#: additions to what used to be a blocklist here (glob/variable/backtick/
+#: tilde characters); a blocklist reproduces the same failure every time a
+#: new construct is found (worklist Row G2 review, 2026-07-30 -- a bare
+#: redirection operator like `>` and brace expansion like `out.{txt,bak}`
+#: both slipped the prior blocklist, since neither contains `$*?`[` and
+#: neither starts with `~`). An allowlist inverts the burden: a token is
+#: only safe to re-quote if it is the kind of ordinary argv word
+#: `shlex.quote` leaves syntactically inert -- word characters, and the
+#: small set of punctuation (`@%+=:,./-`) that is common in flag values
+#: and paths and carries no shell meaning of its own. Anything else --
+#: `>`/`>>`/`<`/`<<`/`<<<` and their numbered/duplicating forms
+#: (`2>`, `&>`, `>&`, `N>`, `N>>`), `|&`, brace expansion (`{`/`}`), glob
+#: characters (`*`/`?`/`[`), variable/command substitution (`$`, `` ` ``),
+#: a leading `~`, or anything else not on the allowlist -- declines rather
+#: than risk re-quoting a token whose shell meaning `shlex.quote` would
+#: change. Declining is always the safe outcome (see `_partial_pipe_rewrite`
+#: docstring): a token this predicate does not recognize is treated as
+#: unsafe, not as "probably fine."
 _DOWNSTREAM_SAFE_TOKEN_RE = re.compile(r"^[\w@%+=:,./-]+$")
 
 
@@ -492,10 +534,28 @@ def _composed_advisory(
     this guard (or any future one) from silently regressing again.
     """
     if partial_rewrite:
+        # A real, runnable alternative -- see `_partial_pipe_rewrite`'s own
+        # "KNOWN LIMIT" paragraph for the honest caveat on stdout parity
         # this offer does NOT claim to guarantee. Embedded VERBATIM, not
+        # re-indented or re-wrapped: `expected_grep_rewrite in ctx`
+        # (this guard's own test suite) pins the exact bytes
+        # `_grep_python_rewrite` emits, and re-indenting a multi-line
+        # `python3 -c` script by a constant offset breaks its top-level
+        # statements (module-level code must start at column 0) --
+        # unrunnable is worse than over-budget. Not exemptable either:
         # `_BACKTICK_RE` (`` `([^`\n]+)` ``) never matches across a
+        # newline, so this guard's message-size floor is pinned by this
+        # rewrite's own length, not by wrapper prose -- see this guard's
         # C8 execution report for the measured floor. RECONFIRMED (C3,
+        # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
+        # even with every wrapper word stripped (no lede prefix, no
+        # fallback sentence, no override note) the two-segment fixture
+        # `grep -rn TODO src/ | wc -l` still measures ~323 prose bytes
+        # against a 220-byte cap -- the un-exemptable, non-indented first
+        # and last lines of the embedded rewrite alone exceed the cap on
+        # their own. Nothing in this file's remaining wrapper prose is the
         # cost; left over cap for adjudication (GUARD_MESSAGE_EXEMPTIONS is
+        # outside this row's `writes:`).
         lede = "%s one-fewer-fork replacement instead: %s" % (
             _SHAPE_NAME,
             partial_rewrite,
@@ -632,4 +692,19 @@ def check(
     # GREP_VIA_BASH is the highest-precedence shape in
     # `_shape_classifier.SHAPE_PRECEDENCE` -- `has_shape` true here means
     # `classification.primary.shape` is always GREP_VIA_BASH too, so this
+    # guard's message never misdescribes a command whose primary match is
+    # actually some other shape (AC-7).
+    #
+    # Substitutable residue (a full rewrite exists) is claimed by
+    # `grep-via-bash-rewrite` (dispatch_checks.check_grep_via_bash_rewrite),
+    # registered EARLIER in dispatch.py's guard chain -- this guard's own
+    # platform-conditioned deny/advise for that set was provably
+    # unreachable in production (0 denies on either platform across the
+    # full corpus) and was removed 2026-07-30 (H11(a)). Composed residue
+    # (a chained/piped command, or a genuine GNU-only construct) has
+    # nothing upstream to claim it -- `_evaluate_grep_via_bash_match`
+    # (shared with the PowerShell leg, C3) renders that advisory, or stays
+    # silent per design-as-offers when neither a real partial rewrite nor a
+    # genuine GNU/BSD divergence exists to name (H11(c) evidence: 99.67% of
+    # this guard's prior firing set was exactly that silent case).
     return _evaluate_grep_via_bash_match(classification, payload)

@@ -115,8 +115,15 @@ def test_stranded_when_only_terminal_successor_references_it(tmp_path: Path) -> 
     assert result["never_started"] == 0
 
 
+# ---------------------------------------------------------------------------
 # C1 (AC1) — STRANDED via an ARCHIVED successor, not a terminal-status one.
+# docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md § Anti-scope:
+# the existing test_stranded_when_only_terminal_successor_references_it uses a
+# successor terminal by `status:` alone, still resident under state/handoffs/.
 # This fixture's successor is terminal by ARCHIVE RESIDENCY alone (no status,
+# no deployment_state on the child) — pinning the shape a "restrict the DAG
+# index to live handoffs" rewrite would silently stop detecting.
+# ---------------------------------------------------------------------------
 
 
 def test_stranded_when_only_successor_is_archived(tmp_path: Path) -> None:
@@ -170,7 +177,17 @@ def test_stranded_when_only_successor_via_predecessor_id_is_terminal(tmp_path: P
     assert result["never_started"] == 0
 
 
+# ---------------------------------------------------------------------------
+# C1 (AC3) — unresolvable-ref basename fallback. dag.referenced_by falls back
+# to `os.path.basename(raw_ref) == target_basename` only when resolve_target
+# exhausts all three tiers (live path, on-disk archive, git-history) and
 # returns None. This is unreachable via baton_drift_sweep's own STRANDED path
+# (its target is always a state/handoffs file, and resolve_target's
+# root-anchored `repo_root/state/handoffs/<basename>` tier resolves any
+# same-basename ref to that file before the None branch is ever reached) —
+# pinned directly against dag.referenced_by, mirroring this file's existing
+# direct-primitive-test idiom (see the dag_index-ordering test above).
+# ---------------------------------------------------------------------------
 
 
 def test_referenced_by_falls_back_to_basename_when_target_unresolvable(
@@ -220,7 +237,14 @@ def test_referenced_by_basename_fallback_does_not_false_match(tmp_path: Path) ->
     assert result["referencedBy"] == []
 
 
+# ---------------------------------------------------------------------------
 # C5 — split STRANDED into drainable (claimed-or-shipped) vs never_started
+# (never claimed, never shipped). docs/plans/2026-08-05-stranded-baton-
+# drainage-make-the-detecto.md § C4 result / § C5. Uses the SAME predicate
+# `handoff.archive_transition` mode=supersede's own DR-242 refusal site
+# imports (`claimed_or_shipped_at_path`) — these fixtures exercise the two
+# outcomes of that boolean, not a re-derivation of it.
+# ---------------------------------------------------------------------------
 
 
 def test_never_started_when_parent_was_never_claimed(tmp_path: Path) -> None:
@@ -490,7 +514,12 @@ def test_post_fix_reaped_tip_with_reaped_from_session_classifies_as_reaped_orpha
     assert result["reaped_orphan_paths"] == [str(lone.resolve())]
 
 
+# ---------------------------------------------------------------------------
 # C4 — precedence between RECONCILED_NO_SUCCESSOR and REAPED_ORPHAN when a
+# baton qualifies for both. docs/plans/2026-08-05-reaper-preserves-closure-
+# evidence.md § AC10: reconciled evidence (a human/session conclusion the
+# work is done) is the stronger signal and wins.
+# ---------------------------------------------------------------------------
 
 
 def test_reconciled_no_successor_takes_precedence_over_reaped_orphan(

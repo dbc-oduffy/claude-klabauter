@@ -147,6 +147,9 @@ def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, p
     bin_dst.mkdir()
 
     # BOTH PAIRS ARE INTERNALLY PERFECT. What separates them is whether the
+    # sources the sidecar records are the sources this tree ships -- the only
+    # currency question POSIX can answer, since it ships no prebuilt to compare
+    # an image against (see the `prebuilt_bytes` fixture).
     _plant_door(bin_dst, prebuilt_bytes)
     assert door_install.verify_installed_provenance(bin_dst).status == "ok"
 

@@ -94,6 +94,13 @@ Negative-spec (repair verb, hard-won):
     otherwise remains a freeze.
   - ``sha`` and ``unset=True`` are mutually exclusive — supplying both fails
     loud (no write) rather than picking one silently.
+  - ``clear_advancement=True`` removes ``advanced_by``/``advanced_at`` (the
+    false-cascade advancement claim) WITHOUT a ``deployment_state``
+    transition — the path for a record whose correct terminal state IS
+    ``shipped``, which ``_repair_archived_deployment_state_handler``'s
+    off-shipped clear cannot reach without writing a falsehood. It composes
+    with ``sha`` (one write) or stands alone; it never touches ``shipped_in``
+    itself, which ``_cf_shipped_in_required`` requires while shipped.
   - Does NOT store the caller-supplied ``sha`` verbatim — it is truncated to
     8 chars before write, matching ``stamp_shipped_in``'s own format
     contract. A repair must not be distinguishable from a correct original
@@ -558,15 +565,29 @@ async def _repair_archived_shipped_in_handler(
                               recoverable correct sha — Position A does not
                               treat "unset" as a failure state.
 
+        clear_advancement (bool) — when True, removes ``advanced_by`` and
+                              ``advanced_at`` (whichever are present) in the
+                              same write as any ``sha``/``unset`` change.
+                              Default False. Satisfies the sha-or-unset
+                              requirement on its own: a call may pass only
+                              ``clear_advancement=True`` (plus ``reason``).
+                              Does not touch ``deployment_state`` or
+                              ``shipped_in``.
+
     Returns a dict with keys:
         exit_code   (int)        — 0 ok / 1 error (bad params, path escape,
                                    file not found, malformed frontmatter, lock
                                    timeout).
         applied     (bool)       — True if the file was written; False on a
                                    byte-identical no-op (unset with nothing to
-                                   clear, or sha repair to the value already
-                                   present) or on error.
+                                   clear, sha repair to the value already
+                                   present, or clear_advancement with neither
+                                   field present) or on error.
         unset       (bool)       — echoes the ``unset`` param.
+        advancement_cleared (list[str]) — the subset of
+                                   ``["advanced_by", "advanced_at"]`` actually
+                                   removed; ``[]`` when ``clear_advancement``
+                                   was not requested or nothing was present.
         prior_value (str|None)   — the ``shipped_in`` value before this call
                                    (None if absent). Makes every repair
                                    auditable — the caller always learns what
@@ -600,6 +621,7 @@ async def _repair_archived_shipped_in_handler(
     sha_raw = params.get("sha")
     sha: str = sha_raw.strip() if isinstance(sha_raw, str) else ""
     unset: bool = bool(params.get("unset", False))
+    clear_advancement: bool = bool(params.get("clear_advancement", False))
 
     if not handoff_path_raw:
         return _repair_err("missing required param: handoff_path")
@@ -610,10 +632,12 @@ async def _repair_archived_shipped_in_handler(
             "rejected: unset=True and a non-empty sha are mutually exclusive — "
             "supply exactly one"
         )
-    if not unset and not sha:
+    if not unset and not sha and not clear_advancement:
         return _repair_err(
             "missing required param: sha (or pass unset=True to clear "
-            "shipped_in instead) — this verb never resolves a sha of its own"
+            "shipped_in, or clear_advancement=True to clear "
+            "advanced_by/advanced_at) — this verb never resolves a sha of "
+            "its own"
         )
     if sha and not _SHA_SHAPE_RE.fullmatch(sha):
         return _repair_err(
@@ -663,6 +687,7 @@ async def _repair_archived_shipped_in_handler(
 
     _applied = [False]
     _prior_value: list[Optional[str]] = [None]
+    _advancement_cleared: list[list[str]] = [[]]
 
     def _mutate(old_text: str) -> str:
         split = split_frontmatter(old_text)
@@ -672,24 +697,30 @@ async def _repair_archived_shipped_in_handler(
             )
         existing = read_fm_field(split.fm_text, "shipped_in")
         _prior_value[0] = existing
+        new_fm = split.fm_text
 
         if unset:
-            if existing is None:
-                # Nothing to clear — byte-identical no-op.
-                return old_text
-            new_fm = remove_fm_field(split.fm_text, "shipped_in")
-            _applied[0] = True
-            return rebuild(split, new_fm)
+            if existing is not None:
+                new_fm = remove_fm_field(new_fm, "shipped_in")
+        elif sha and existing != sha:
+            if existing is not None:
+                new_fm = replace_fm_field(new_fm, "shipped_in", sha, numeric_quoting=True)
+            else:
+                new_fm = insert_fm_field(
+                    new_fm, "shipped_in", sha, after_key="claimed_at", numeric_quoting=True
+                )
 
-        if existing == sha:
-            # Already at the requested value — byte-identical no-op.
+        cleared: list[str] = []
+        if clear_advancement:
+            for _field in ("advanced_by", "advanced_at"):
+                if read_fm_field(new_fm, _field) is not None:
+                    new_fm = remove_fm_field(new_fm, _field)
+                    cleared.append(_field)
+        _advancement_cleared[0] = cleared
+
+        if new_fm == split.fm_text:
+            # Requested state already holds — byte-identical no-op.
             return old_text
-        if existing is not None:
-            new_fm = replace_fm_field(split.fm_text, "shipped_in", sha, numeric_quoting=True)
-        else:
-            new_fm = insert_fm_field(
-                split.fm_text, "shipped_in", sha, after_key="claimed_at", numeric_quoting=True
-            )
         _applied[0] = True
         return rebuild(split, new_fm)
 
@@ -702,22 +733,34 @@ async def _repair_archived_shipped_in_handler(
     except OSError as exc:
         return _repair_err(f"cannot read/write archived handoff file: {exc}")
 
-    new_value = None if unset else sha
+    shipped_in_requested = unset or bool(sha)
+    new_value = (None if unset else sha) if shipped_in_requested else _prior_value[0]
+    cleared_adv = _advancement_cleared[0]
+    parts: list[str] = []
+    if shipped_in_requested:
+        if unset:
+            parts.append(
+                f"cleared shipped_in (was {_prior_value[0]!r})"
+                if _prior_value[0] is not None else "shipped_in already unset"
+            )
+        else:
+            parts.append(
+                f"repaired shipped_in: {_prior_value[0]!r} -> {sha}"
+                if _prior_value[0] != sha else f"shipped_in already {sha!r}"
+            )
+    if clear_advancement:
+        parts.append(
+            f"cleared {', '.join(cleared_adv)}" if cleared_adv
+            else "advanced_by/advanced_at already absent"
+        )
+    message = (
+        f"{'; '.join(parts)} in {handoff_path_raw}"
+        f"{'' if _applied[0] else ' — no-op'} — {reason}"
+    )
     if _applied[0]:
         _LOG.info(
-            "handoff.repair_archived_shipped_in: %s %s (was %r, now %r) — reason: %s",
-            "cleared" if unset else "repaired", p, _prior_value[0], new_value, reason,
-        )
-        message = (
-            f"cleared shipped_in in {handoff_path_raw} (was {_prior_value[0]!r}) — {reason}"
-            if unset else
-            f"repaired shipped_in in {handoff_path_raw}: {_prior_value[0]!r} -> {sha} — {reason}"
-        )
-    else:
-        message = (
-            f"shipped_in already unset in {handoff_path_raw} — no-op — {reason}"
-            if unset else
-            f"shipped_in in {handoff_path_raw} already {sha!r} — no-op — {reason}"
+            "handoff.repair_archived_shipped_in: %s (%s) — reason: %s",
+            p, "; ".join(parts), reason,
         )
 
     return {
@@ -726,6 +769,7 @@ async def _repair_archived_shipped_in_handler(
         "unset": unset,
         "prior_value": _prior_value[0],
         "new_value": new_value,
+        "advancement_cleared": cleared_adv,
         "reason": reason,
         "message": message,
     }

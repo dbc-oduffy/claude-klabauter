@@ -263,7 +263,11 @@ class TestApplyBaseBoundaries:
             {"id": "d2", "cli": "noop", "args": ["two"]},
             {"id": "d3", "cli": "noop", "args": ["three"]},
         ]
+        # Budget with an already-breached elapsed ceiling but
         # skip-and-surface disposition, wired as an ADVISORY-only budget
+        # via a max_invocations ceiling that never trips the pre-mutation
+        # boundary (aggregate_elapsed_budget=None) so we isolate: does a
+        # mid-directive advisory breach abort dispatch? It must not.
         budget = CompositionBudget(
             composition_id="test-composition-3",
             aggregate_elapsed_budget=None,
@@ -321,6 +325,8 @@ class TestApplyHaltBoundaries:
         msg = apply_halt.budget_check_post_mutation(budget)
         assert msg is not None
         assert "unit='post_mutation'" in msg
+        # apply_halt itself never returns an rc here -- a caller invoking
+        # this after its own loop finished successfully keeps whatever rc
         # that loop already computed (never PARTIAL_MUTATION/DIRECTIVE_FAILED).
 
     def test_post_mutation_no_breach_returns_none_and_prints_nothing(

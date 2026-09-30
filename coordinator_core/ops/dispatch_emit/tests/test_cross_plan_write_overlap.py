@@ -163,3 +163,16 @@ def test_repo_root_none_is_a_no_op(tmp_path):
     plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
     rows = read_spine(plan_path)
     check_cross_plan_write_overlap(plan_path, rows, None)
+
+
+def test_own_session_claim_is_not_a_peer(tmp_path, monkeypatch):
+    _init_git_dir(tmp_path)
+    plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/shared.md"])
+    _write_plan(tmp_path, "plan-b", ["docs/reference/shared.md"])
+    _write_claim(tmp_path, "plan-b", sid="own-sid")
+    monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
+    rows = read_spine(plan_path)
+
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="own-sid")
+    with pytest.raises(CrossPlanWriteOverlap):
+        check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="other-sid")

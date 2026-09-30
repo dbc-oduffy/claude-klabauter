@@ -47,8 +47,8 @@ Home resolution: copied verbatim (fidelity rule, C13 body's explicit
 instruction) from
 ``coordinator_core.write_guards.guard_memory_store_cap._guarded_project_roots``,
 itself copied from ``coordinator_core.write_guards.block_home_dir_memo_delivery``
-— union of ``USERPROFILE``, ``HOME``, ``Path.home()``, plus ``CLAUDE_HOME``
-treated as a direct ``.claude`` root, never a first-wins chain (a Git-Bash
+— union of ``USERPROFILE``, ``HOME``, ``Path.home()``, plus
+``claude_config_dir()`` (CLAUDE_HOME names the parent of ``.claude``), never a first-wins chain (a Git-Bash
 ``HOME``/``USERPROFILE`` divergence on Windows must never leave a real
 memory dir unchecked). ALL resolved roots are checked, not just the first
 match — the drain must be complete across every candidate home, not merely
@@ -134,6 +134,7 @@ from __future__ import annotations
 
 import os
 import re
+from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 import sys
@@ -155,8 +156,8 @@ _INDEX_ROW_RE = re.compile(r"^-\s*\[[^\]]*\]\(([^)]+)\)")
 
 def _guarded_project_roots() -> "List[Path]":
     """``<home>/.claude/projects`` roots to check, union of USERPROFILE /
-    HOME / Path.home(), plus CLAUDE_HOME treated as a direct ``.claude``
-    root. Verbatim copy (shape-for-shape) of
+    HOME / Path.home(), plus ``claude_config_dir() / "projects"``
+    (CLAUDE_CONFIG_DIR, else ``<CLAUDE_HOME or home>/.claude``). Verbatim copy (shape-for-shape) of
     ``coordinator_core.write_guards.guard_memory_store_cap._guarded_project_roots``
     — see that module's own docstring for why this cannot be a first-wins
     chain."""
@@ -179,13 +180,11 @@ def _guarded_project_roots() -> "List[Path]":
             # malformed home string cannot become a Path; skip this candidate
             continue
 
-    claude_home = os.environ.get("CLAUDE_HOME", "")
-    if claude_home and claude_home.strip():
-        try:
-            roots.append(Path(claude_home.strip()) / _PROJECTS_DIRNAME)
-        except Exception:
-            # malformed CLAUDE_HOME cannot become a Path; other roots still apply
-            pass
+    try:
+        roots.append(claude_config_dir() / _PROJECTS_DIRNAME)
+    except Exception:
+        # a bad CLAUDE_HOME/CLAUDE_CONFIG_DIR cannot become a Path; other roots still apply
+        pass
 
     seen: "set[str]" = set()
     out: "List[Path]" = []

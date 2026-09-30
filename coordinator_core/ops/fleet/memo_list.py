@@ -239,6 +239,9 @@ def _validate_list_params(params: dict):
                 "memo.list: topic, when supplied, must be a string",
             )
         # Same authority memo.send uses (_TOPIC_SLUG_RE, imported — not a
+        # parallel regex) — a preview must fail loud on exactly the topics
+        # memo.send would reject, including empty/whitespace-only, rather
+        # than silently coercing an invalid-but-present topic to "absent".
         if not topic or not _TOPIC_SLUG_RE.fullmatch(topic):
             return build_setup_error_result(
                 _MODE, dry_run,
@@ -601,6 +604,10 @@ def _resolve_candidate(
 
     if to.strip().lower() in _read_central_receiver_ids():
         # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
+        # unreachability. `memo.list` resolution mode (`to` supplied) is only reached
+        # via a `memo.send --dry-run`/`memo.list --to` preview an operator deliberately
+        # types; unlike `memo.check_addressee`, no `/pickup` code path calls it
+        # ambiently (audit row 26).
         return {
             "id": to,
             "receiver": to,
@@ -721,7 +728,11 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     except AmbiguousReceiverError as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.list: {exc}")
     except ValueError as exc:
+        # Propagated from _memo_filename via resolve_sender_id — a
+        # caller-supplied from_id that sanitizes to an empty sender slug.
+        # Mirrors memo.send's own fail-loud posture for the identical input
         # (see module docstring DEGRADED CASE note) — never a silent
+        # fallback to the engine actor id.
         return build_setup_error_result(_MODE, dry_run, f"memo.list: {exc}")
 
     return build_dry_run_result(_MODE, candidates)

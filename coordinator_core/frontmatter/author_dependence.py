@@ -103,7 +103,13 @@ measure the same thing and are both reported, never merged into one figure.
   structurally invisible to Proxy B's temporal legs (ii)/(iii) — there is no
   earlier revision to diff against. That is not evidence the artifact was
   never corrected; it is a measurement gap, counted and reported, never
-  silently folded into "Proxy B says no". A rename-lineage reconstruction was
+  silently folded into "Proxy B says no". The gap is confined to the two
+  temporal legs: leg (i) reads the body and labels a one-commit artifact
+  fully, so b_blind rows stay in every Proxy B rate denominator with their
+  static-leg label (a negative there may hide a temporal correction; the
+  temporal legs are worth at most 4 of 690 positives). Only the A-vs-B
+  contingency still drops b_blind rows: it compares two proxies, and a blind
+  row's partial B label would read as disagreement. A rename-lineage reconstruction was
   considered and rejected: `git log --name-status -M --diff-filter=R --
   archive/handoffs` returns zero rename rows on this repo, so there is no
   lineage to reconstruct.
@@ -535,8 +541,10 @@ def build_labels(repo_root: Optional[Path] = None) -> dict:
 
         per_artifact[rel_path] = entry
 
-    # Contingency table + per-property variance, computed on the
-    # B-observable subset (excludes b_blind, per the plan's pre-registration).
+    # Contingency table + per-property variance. The contingency uses the
+    # fully B-observable subset (excludes b_blind: a blind row's static-only
+    # B label would masquerade as A-vs-B disagreement). The per-proxy rate
+    # denominators in the measurement golden do NOT exclude b_blind.
     observable = {p: e for p, e in per_artifact.items() if not e["b_blind"]}
 
     a_only = b_only = a_and_b = neither = 0

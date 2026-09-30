@@ -34,7 +34,13 @@ from coordinator_core.engine_root import coordinator_engine_root_with_class
 @pytest.mark.real_home  # live-tree oracle: resolves the real CLAUDE_KLABAUTER_ROOT via the
 def test_wsc_close_forwarder_and_cmd_sibling_stay_deleted() -> None:
     # The CLASS-AWARE resolver, not the class-less sibling: every module under
+    # `coordinator_core/install/` must resolve through it
+    # (`test_install_uses_class_aware_root.py`), and this file was the one
+    # offender. The class itself is not consulted -- the resolution-class gate's
     # value here is that on a checkout-less fleet box this reads the PUBLISHED
+    # mirror's `coordinator/bin/`, which is the tree whose forwarder absence
+    # actually matters there. The class-less form is gate-blind and would read
+    # a live-tree path that box does not have.
     claude_klabauter_root, _resolution_class = coordinator_engine_root_with_class()
     bin_dir = Path(claude_klabauter_root) / "coordinator" / "bin"
     resurrected = [

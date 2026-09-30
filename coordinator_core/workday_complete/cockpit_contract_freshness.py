@@ -104,7 +104,17 @@ from coordinator_core.ops.emit import doe_drift
 
 _LS_REMOTE_TIMEOUT_SECONDS = 5
 
+# Every other subprocess this module runs is a LOCAL git call against the
+# already-resolved DoE clone (peel, log, show, merge-base) — bounded the same
+# way for symmetry, though none of them touch the network.
+#
+# per-call timeouts bound each hop but not
+# the total. Worst case the happy/degraded path chains up to 5 sequential
 # calls (1x _LS_REMOTE_TIMEOUT_SECONDS + up to 4x _LOCAL_GIT_TIMEOUT_SECONDS),
+# ~45s worst case. Not wired to an overall wall-clock budget today — worth
+# revisiting with a budget wrapping `_compute` if this ever becomes a real
+# complaint in practice; per-call timeouts already guarantee it can never
+# hang indefinitely.
 _LOCAL_GIT_TIMEOUT_SECONDS = 10
 
 _RELEASE_REF = "refs/tags/cockpit-contract-release"
@@ -149,7 +159,10 @@ def _entry(
         "candidate": {
             "sha": candidate_sha,
             "contract_version": candidate_version,
+            # Names exactly what the candidate
+            # query was scoped to (see module candidate-scope negative-spec),
             # additive field, agreed FRESH/STALE/DIVERGED/UNKNOWN shape
+            # unchanged.
             "resolved_from_ref": candidate_ref,
         },
     }
@@ -159,7 +172,9 @@ def _unknown(checked_at: str, reason: str) -> dict[str, Any]:
     return _entry("UNKNOWN", checked_at, reason, None)
 
 
+# ---------------------------------------------------------------------------
 # Step 1 — LOCAL-ONLY root resolution (no network, no CLI subprocess).
+# ---------------------------------------------------------------------------
 
 def _resolve_content_root_local() -> Optional[Path]:
     """CONTENT_ROOT env -> REPO_CONTENT_ROOT env -> machine-local `repos.content_root`
@@ -406,7 +421,12 @@ def _compute(checked_at: str) -> dict[str, Any]:
             "zero-network path on a consumer machine with no DoE clone",
         )
 
+    # Gate the whole probe on the DoE clone actually being readable AS the DoE
+    # clone. Without this, an inherited GIT_DIR (or a .git file pointing
+    # elsewhere) lets every call below succeed against the WRONG repository and
     # emit a confident FRESH/STALE/DIVERGED verdict labelled with DoE's path.
+    # Un-answerable is its own outcome — see the module's git-scoping
+    # negative-spec and `coordinator_core/git_scope.py`.
     unusable = _doe_clone_unusable_reason(content_root)
     if unusable is not None:
         return _unknown(

@@ -144,6 +144,7 @@ def emit_queue_script(
     session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
+    commit_trailers: Sequence[str] = (),
 ) -> QueueEmission:
     repo_root = Path(repo_root).resolve()
 
@@ -191,6 +192,8 @@ def emit_queue_script(
         appetite=appetite,
         agent_type_host=agent_type_host,
         preamble=preamble,
+        commit_trailers=commit_trailers,
+        queue_dirs=[Path(os.path.relpath(q, repo_root)).as_posix() for q in guarded_queue_dirs],
     )
 
     profile_digest = hashlib.sha256(loaded_profile.source_path.read_bytes()).hexdigest()

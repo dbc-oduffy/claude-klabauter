@@ -101,7 +101,12 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
+#: Subcommands that take the worktree ``index.lock`` -- git's index-writing
+#: set (decided 2026-08-12 per the P2 backlog entry cited in the module
 #: docstring's SUBCOMMAND COVERAGE section). Deliberately still an explicit
+#: closed list, not derived from git's own subcommand vocabulary: an
+#: unlisted subcommand simply does not fire this guard, fail-closed, rather
+#: than this guard guessing at git's internals.
 _LOCK_TAKING_SUBCOMMANDS = frozenset({
     "add", "commit", "status", "diff", "mv", "stash",
     "checkout", "switch", "restore", "reset", "merge", "rebase",
@@ -109,10 +114,15 @@ _LOCK_TAKING_SUBCOMMANDS = frozenset({
     "submodule", "read-tree", "update-index", "sparse-checkout",
 })
 
+#: Separator characters that split ``cmd`` into candidate git segments --
 #: same vocabulary ``guard_no_optional_locks._SEP_TOKEN_CHARS`` uses, not
+#: imported from there since that name is that module's own private detail.
 _SEP_CHARS = frozenset(";&|")
 
+#: Bound on the upward directory walk used to find an enclosing ``.git``
+#: when no ``-C``/``--git-dir`` override is present (see module docstring's
 #: COST DISCIPLINE section) -- large enough for any real repo nesting depth,
+#: small enough to guarantee termination even on a pathological ``cwd``.
 _MAX_UPWARD_WALK = 64
 
 

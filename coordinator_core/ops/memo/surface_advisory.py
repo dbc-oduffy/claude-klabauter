@@ -84,6 +84,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
+#: Bounded well under memo.transition's op-level budget (mirrors dag.py's
 #: single bounded git-log read, `_EVER_TRACKED_CACHE` leg: timeout=3).
 _GIT_TIMEOUT_S = 3.0
 

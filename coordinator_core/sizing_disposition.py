@@ -36,8 +36,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+#: Tokens that mean "this record carries no id", on BOTH sides of the join.
+#: Same set as `spec_backlink_resolve._real_id`, `deliverable_equivalence.
 #: _YAML_NULL_LITERALS`, and `ops/ceremony/renderers._ID_NULL_SENTINELS` —
+#: defined locally rather than imported because every one of those modules
 #: self-registers a JSON-RPC op on import, and this predicate is read by
+#: `plan`'s admission gate before any op registry exists.
 _NULL_SENTINELS = frozenset({"null", "~"})
 
 

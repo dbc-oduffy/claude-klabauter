@@ -60,7 +60,11 @@ from typing import List, Optional, Set
 
 from coordinator_core.engine_root import coordinator_engine_root
 
+# Extensions (plus the bare/extensionless form) a reserved-family oracle
 # might carry on disk -- mirrors fleet_reachability._KNOWN_ORACLE_EXTENSIONS,
+# duplicated here (not imported) because that tuple is fleet_reachability's
+# own private extension-normalization constant, a distinct concern from this
+# module's disk-existence probe.
 _ORACLE_FILE_EXTENSIONS = ("", ".py", ".js", ".sh", ".cmd")
 
 

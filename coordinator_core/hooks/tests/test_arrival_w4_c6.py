@@ -88,7 +88,9 @@ def test_unrelated_hyphenated_word_does_not_false_positive():
     )
 
 
+# ---------------------------------------------------------------------------
 # SIBLING_REPO_RECORD / SIBLING_REPO_NAMES / IRREDUCIBLE_LITERALS
+# ---------------------------------------------------------------------------
 
 
 def test_pinned_unreachable_names_always_present():

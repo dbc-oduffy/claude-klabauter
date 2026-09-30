@@ -126,16 +126,65 @@ assert (_REPO_ROOT / ".git").exists(), (
 
 
 #: SECURITY PROPERTY -- a denial-of-service bound on the PreToolUse hot path,
+#: NOT a tuning knob. Do not raise it to "let a new guard through": raising it
+#: is how a per-segment re-tokenization ships, and every character over this
+#: bound is charged to every Bash call in every session.
+#:
 #: The quantity bounded is TOKENIZER WORK AMPLIFICATION -- the total number of
+#: characters the whole dispatch chain hands to `shlex` while classifying ONE
+#: command, divided by the length of that command. It is the ratio that
+#: distinguishes the two complexity classes, and it does so without a clock:
+#:
 #:   O(guards x n)   -- amplification is CONSTANT in n. Every well-behaved
+#:                      shape measured (2026-08-05) sits between 3.0 and 41.7
+#:                      and does not move as the command grows 16x.
+#:   O(segments x n) -- amplification GROWS with n, because each of the n/k
+#:                      segments re-tokenizes the whole n-character command.
+#:
+#: 41.7 is the measured worst well-behaved shape (`nested_sh_c`: nested
+#: `sh -c`/`python3 -c` unwrapping, which legitimately re-tokenizes each
+#: unwrapped payload). Realistic commands measure 12.4-27.8. The chain
+#: registers 41 guards today (`dispatch._build_guard_chain`), so a ceiling of
+#: 64 is "each registered guard may tokenize the command about one and a half
+#: times" -- an amount of work proportional to the GUARD COUNT, which is the
+#: only thing this ratio is allowed to be proportional to. It is not a round
+#: number chosen for tidiness: it is 1.5x the worst legitimate shape and the
+#: first power of two above it.
 _MAX_TOKENIZER_WORK_AMPLIFICATION = 64.0
 
+#: The shape half of the same property, and the sharper of the two: a 16x
+#: longer command may not cost more than 1.5x as much tokenizer work PER
 #: CHARACTER. Measured (2026-08-05) across every well-behaved corpus shape at
+#: 512 vs 8192 characters, the observed ratio is 0.94-1.00 -- amplification is
+#: flat to three significant figures, because it is a function of the guard
+#: chain and not of the input. A quadratic re-tokenization scores 10.7x on
+#: this same measurement. The 1.5 allowance is therefore ~10x clear of the
+#: defect class and ~1.5x clear of every legitimate shape.
+#:
+#: This assertion, not the absolute one above, is what catches a NEW quadratic
+#: whose constant happens to be small enough to hide under the ceiling at the
+#: corpus sizes tested.
 _MAX_AMPLIFICATION_GROWTH = 1.5
 
 _MAX_DISPATCH_MS_REALISTIC = 300.0
 
+#: Process-time backstop for adversarial shapes at any size, including past
+#: the tokenizer ceiling -- historically derived on wall clock (figures
+#: below), now measured as process time; the bound is unmoved. Derived: the
+#: worst adversarial shape now measures 342 ms
+#: at 16 KiB (`nested_shell_c`, which legitimately re-tokenizes each unwrapped
+#: payload), and the 98 KiB past-the-ceiling shapes measure 88-144 ms. 1.5 s is
+#: ~4.4x the measured worst.
+#:
+#: RATCHET, NOT A KNOB -- this constant moves DOWN as the chain gets faster and
+#: never up. It was 3.0 s when authored, derived against a 617 ms worst shape;
+#: both of the defects that budget was deliberately left red against are fixed
 #: (`_BYPASS_RE` backtracking, and `check_destructive_git_revert`'s per-segment
+#: re-tokenize), so a 3.0 s ceiling now sits ~9x above anything the corpus can
+#: produce -- wide enough that a NEW 2.9 s defect would ship green against it.
+#: A budget far above the measured worst is not a safety margin; it is a blind
+#: spot with a number attached. Re-derive it downward whenever the worst
+#: measured shape drops materially, and never raise it to accommodate a defect.
 _MAX_DISPATCH_MS_ADVERSARIAL = 1500.0
 
 _SIZE_SMALL = 512
@@ -143,35 +192,89 @@ _SIZE_LARGE = 8192
 
 #: Wall-clock leg sizes. `_SIZE_OVER_CEILING` is past
 #: `_command_tokenizer._MAX_TOKENIZABLE_COMMAND_CHARS` (64 KiB) on purpose:
+#: that ceiling stops `shlex` from seeing the text, and stops nothing else --
+#: whole-command regex scans and per-segment walks still run, so past the
+#: ceiling is a distinct latency regime that must be timed, not assumed safe.
 _WALL_CLOCK_SIZES = (1024, 16384)
 _SIZE_OVER_CEILING = 98304
 
+#: Per-dispatch subprocess-COUNT ceiling. Derived 2026-08-05, post-fix, on
 #: `_REPO_ROOT` (real git repo, cold `resolve_git_root()` cache -- see
+#: `TestDispatchSubprocessSpawnCount`): the worst measured shape across the
 #: whole `_SPAWN_CORPUS` at both `_SIZE_SMALL` and `_SIZE_LARGE` is
+#: `historical_chained_git_reset_hard` at 5 spawns (512 chars); every other
+#: shape/size cell measures 2. 5 x 2 = 10 -- doubled for headroom against
+#: git-version/platform spawn-count variance (e.g. an extra `rev-parse
+#: --path-format=absolute --git-common-dir` probe some git builds run that
+#: this measurement did not need), while staying two orders of magnitude
+#: below what an UNFIXED per-segment defect produces at these same sizes
+#: (714 spawns measured at 8192 chars against `check_destructive_git_orphan`
+#: before its 2026-08-05 memoization fix -- see that function's F0-b
+#: docstring). RATCHET, NOT A KNOB, same policy as the wall-clock budgets
+#: above: moves down as the chain's spawn count improves, never up to
+#: accommodate a new defect.
 _MAX_DISPATCH_SUBPROCESS_SPAWNS = 10
 
 #: Shape half of the same property, mirroring `_MAX_AMPLIFICATION_GROWTH`:
 #: spawn count at `_SIZE_LARGE` must not exceed spawn count at `_SIZE_SMALL`
 #: by more than this ABSOLUTE tolerance (never a ratio -- a ratio bound on a
+#: small integer makes 1 -> 2 spawns a fabricated "2x regression"). Measured
 #: 2026-08-05: every shape in `_SPAWN_CORPUS` is FLAT or DECREASING from
+#: small to large (`historical_chained_git_reset_hard` measures 5 spawns at
+#: 512 chars and 4 at 8192; the other three measure 2 at both sizes) -- a
+#: per-segment defect instead GROWS spawn count with input size without
+#: bound (47 -> 714 measured on the unfixed `check_destructive_git_orphan`,
+#: the exact defect this axis exists to catch), so a tolerance of 2 comfortably
+#: covers measurement noise while still catching that shape at either size
+#: tested.
 _MAX_SPAWN_COUNT_GROWTH_ABSOLUTE = 2
 
+#: `check_destructive_rm`'s per-TARGET defect (F0-b, 2026-08-05, found in the
+#: same session as the reset leg above) scales with TARGET COUNT, not with
+#: command character length -- `rm a.py b.py c.py` is a few dozen characters
+#: regardless of how many targets it names. A char-length corpus (`_SIZE_
 #: SMALL`/`_SIZE_LARGE`) would never see this axis move: it is why
 #: `_RM_SPAWN_CORPUS` below is sized by `_RM_TARGET_COUNT_SMALL`/`_LARGE`
+#: instead and measured through its own fixture/test class.
 _RM_TARGET_COUNT_SMALL = 3
 _RM_TARGET_COUNT_LARGE = 30
 
+#: Per-dispatch ceiling for the rm-target-count leg. Derived 2026-08-05,
 #: post-fix, on real git-tracked files under `_REPO_ROOT` (the false-negative
+#: note in `_rm_existing_files`'s docstring matters here: a non-existent
+#: target measures a flat, unrepresentative 2 spawns regardless of count).
 #: Measured worst cell across `_RM_SPAWN_CORPUS` at both target counts is 4
+#: spawns (`historical_chained_rm_same_dir_targets` at 1-30 same-dir
+#: targets, flat -- the memo collapses every target sharing a parent dir to
+#: one resolution). 4 x 2 = 8 -- doubled for the same git-version/platform
 #: headroom reasoning as `_MAX_DISPATCH_SUBPROCESS_SPAWNS`, while staying an
+#: order of magnitude below the unfixed defect (12 spawns measured at just
+#: 10 same-dir targets, growing linearly with target count with no bound).
+#: RATCHET, NOT A KNOB -- same policy as every other bound in this module.
 _MAX_RM_SPAWN_COUNT = 8
 
 #: Growth tolerance for the rm-target-count leg, mirroring `_MAX_SPAWN_
 #: COUNT_GROWTH_ABSOLUTE`: spawn count at `_RM_TARGET_COUNT_LARGE` must not
 #: exceed the count at `_RM_TARGET_COUNT_SMALL` by more than this ABSOLUTE
+#: amount. Measured 2026-08-05: `historical_chained_rm_same_dir_targets` is
+#: FLAT (same spawn count at 3 and 30 same-dir targets -- the whole point of
+#: the memo); the unfixed defect instead grows roughly 1 spawn per
+#: additional target (4 at 3 targets, 31 at 30 targets measured pre-fix), so
+#: a tolerance of 2 is comfortably below what even a SINGLE reintroduced
+#: per-target spawn would produce across this size span (27).
 _MAX_RM_SPAWN_COUNT_GROWTH_ABSOLUTE = 2
 
+#: Floor for the multi-directory rm row -- the complement to the ceiling/
+#: growth checks above, and the one that actually catches a memo that
+#: silently over-collapses. A ceiling/growth bound alone cannot catch a memo
+#: keyed on target COUNT instead of `(cwd, args)`: such a bug would make the
+#: multi-dir row spawn FEWER processes than it should (one resolution
+#: reused across directories it must not be reused across), which passes
+#: every bound above -- lower always reads as "better" to a ceiling check.
 #: `_RM_MULTI_DIRS` below names >= 3 distinct real directories, so a
+#: correctly-scoped memo must still spawn at least one resolution per
+#: distinct directory actually used; this floor is that count, not a
+#: derived/rounded number.
 _MIN_RM_MULTI_DIR_SPAWNS = 3
 
 
@@ -199,8 +302,26 @@ _CORPUS: Dict[str, Callable[[int], str]] = {
     "command_substitution": lambda n: "echo " + _chain("$(git rev-parse HEAD)", n, " "),
     "backslash_continuations": lambda n: _chain("git status \\\n --short", n, " && \\\n"),
     "pytest_invocation_chain": lambda n: _chain("python3 -m pytest coordinator_core/", n),
+    # EM measurement -- see run notes) -- cause 1 of the 14675ce8e ReDoS
     # fix (the `_WRAPPER_FLAG_GROUP`/`_BYPASS_PREFIX` outer-star overlap
+    # between the `env` branch and the bare-assignment branch) has no
     # named corpus row: `many_segments_git` at `_SIZE_OVER_CEILING`
+    # reproduces the reported timing via cause 2 (the old unbounded `.*`)
+    # only. A repeated bare `FOO=1 ` run measures FLAT regardless of the
+    # fix (the outer star never gets a competing overlapping branch to
+    # partition against); a repeated `env FOO=1 ` run is the shape that
+    # actually goes catastrophic pre-fix, confirmed by hand-measuring both
+    # the un-atomiced pattern in isolation and the un-atomiced pattern
+    # threaded back through `check_no_verify` (see
+    # `TestBypassRegexFallbackReachedAndDenies` and this dispatch's own run
+    # notes): 220 chars pre-fix cost ~1.4 s, 16x per 40 characters, so this
+    # row does not need to be large to be decisive. A bare, unwrapped
+    # `--no-verify` marker plus a `git` token (present so the outer
+    # `re.search(r"\bgit\b", flat)` gate in `check_no_verify` is satisfied,
+    # but positioned so the head regex still exhausts the assignment run's
+    # partitions before giving up) and a trailing unterminated quote (so
+    # the command is unparseable and this path actually reaches
+    # `_BypassRe.search` instead of the tokenized walk) reproduces it.
     "historical_env_assignment_run_redos": lambda n: (
         "env FOO=1 " * max(1, n // len("env FOO=1 ")) + '--no-verify "unterminated git'
     ),
@@ -215,8 +336,17 @@ _REALISTIC: Tuple[str, ...] = (
     "python3 -c 'import json,sys; print(json.load(sys.stdin))'",
 )
 
+#: Corpus for the subprocess-COUNT axis (`TestDispatchSubprocessSpawnCount`),
+#: deliberately separate from `_CORPUS` above -- these are exactly the
 #: "guard SHELL-OUTS" shapes the module NEGATIVE SPEC excludes from the
+#: tokenizer-work corpus, because their cost is real `git` subprocess
+#: spawns, not `shlex` work. Chained `git reset --hard` is the 2026-08-05
+#: pinned defect (`check_destructive_git_orphan` CHECK 1, F0-b in that
+#: function's docstring: `rev-parse --verify`/`rev-list --count` spawned
+#: once per segment instead of once per distinct (target, cwd) pair). The
 #: other three exercise CHECK-1-adjacent legs of the same guard family
+#: (`git checkout .`, `git stash`, `git restore .`) that were already
+#: correctly bounded but had no pinned regression corpus row.
 _SPAWN_CORPUS: Dict[str, Callable[[int], str]] = {
     "historical_chained_git_reset_hard": lambda n: _chain("git reset --hard HEAD", n),
     "many_segments_git_checkout_dot": lambda n: _chain("git checkout .", n),
@@ -225,6 +355,13 @@ _SPAWN_CORPUS: Dict[str, Callable[[int], str]] = {
 }
 
 #: Real, on-disk, git-tracked-shaped `.py` files under `_REPO_ROOT`-relative
+#: directories -- NEVER hardcoded filenames. `check_destructive_rm`'s
+#: per-target defect (F0-b) only reproduces for targets that EXIST on disk
+#: (an early false negative this session: probing with non-existent paths
+#: measured a flat, unrepresentative 2 spawns and looked like "no defect").
+#: Discovering real files at measurement time, rather than naming specific
+#: ones, keeps this corpus robust to a future checkout not containing
+#: whatever file an author happened to reference by name.
 _RM_SAME_DIR = ("coordinator_core/bash_guards",)
 _RM_MULTI_DIRS = (
     "coordinator_core/bash_guards",
@@ -296,6 +433,9 @@ def _rm_multi_dir_count() -> int:
 
 #: rm-shaped rows for the target-COUNT axis (see `_RM_TARGET_COUNT_SMALL`/
 #: `_LARGE`), deliberately separate from `_SPAWN_CORPUS` above (which is
+#: sized by character length -- an axis this defect does not move on).
+#: `historical_*` because this is a pinned 2026-08-05 defect, same
+#: convention as `_CORPUS`'s `historical_*` rows.
 _RM_SPAWN_CORPUS: Dict[str, Callable[[int], str]] = {
     "historical_chained_rm_same_dir_targets": _rm_same_dir_cmd,
     "many_targets_rm_multi_dir": _rm_multi_dir_cmd,
@@ -306,7 +446,12 @@ _BRANCH_TOKEN_COUNT_LARGE = 100
 
 _MAX_BRANCH_SPAWN_COUNT = 8
 
+#: Growth tolerance for the branch-token-count leg, mirroring `_MAX_RM_
 #: SPAWN_COUNT_GROWTH_ABSOLUTE`. Measured 2026-08-05: flat (2 spawns at 5
+#: tokens, 2 at 100) -- the unfixed defect instead grows 1:1 with token
+#: count (6 at 5 tokens, 101 at 100), so a tolerance of 2 is far below what
+#: even a single reintroduced per-token spawn would produce across this
+#: span (95).
 _MAX_BRANCH_SPAWN_COUNT_GROWTH_ABSOLUTE = 2
 
 
@@ -325,7 +470,9 @@ def _branch_delete_tokens_cmd(count: int) -> str:
     return "git branch -D " + " ".join(tokens[:count])
 
 
+#: `git branch -D`-shaped row for the token-count axis (F0-c). Separate
 #: corpus, same reasoning as `_RM_SPAWN_CORPUS`: this defect does not move
+#: on character length.
 _BRANCH_SPAWN_CORPUS: Dict[str, Callable[[int], str]] = {
     "historical_chained_branch_delete_tokens": _branch_delete_tokens_cmd,
 }

@@ -1,50 +1,43 @@
-"""Regression pin for P088-C2 (docs/plans/2026-09-11-session-identity-residue-
-memo-send-sent.md).
-
-VERDICT, not a fix: `memo_send._resolve_sent_by`'s one ambient identity read
-(`coordinator_core.ops.session_context.resolve_current_session_id`) already
-delegates to `session.core.attributable_session_id`, which resolves tier-0
-(`carried_session_id()`) only under a warm dispatch and the full env-tier
-chain (`resolve_session_id(cwd)`) cold — the anti-forgery, warm-scoped policy
-C2's original option (a) proposed adding was already live. This file pins
-that behaviour rather than re-deriving it.
-
-Three cases, per the plan row body:
-  - warm-served with a carried id stamps that id.
-  - warm-served with NO carried id stamps `_SENT_BY_UNRESOLVED`, never the
-    ambient env value (the anti-forgery case).
-  - COLD with only the env var set still stamps the env value — the
-    regression pin for the ~49-memo incident this docstring's own history
-    records; that incident is NOT reopened by this row.
 """
-
+Purpose: pin the P03-C2 verdict — `memo_send._resolve_sent_by` is already
+warm-scoped through `ops.session_context.resolve_current_session_id`, so a
+warm-served send with no carried identity never stamps the server owner's
+env id into `sent_by`.
+"""
 from __future__ import annotations
 
-from coordinator_core.ops.fleet.memo_send import _SENT_BY_UNRESOLVED, _resolve_sent_by
+import pytest
+
+from coordinator_core.ops.fleet import memo_send
 from coordinator_core.session import core as session_core
 
-_CARRIED_SID = "cccccccc-3333-4333-8333-cccccccccccc"
-_SERVER_OWNER_SID = "dddddddd-4444-4444-8444-dddddddddddd"
+_ENV_SID = "11111111-1111-4111-8111-111111111111"
+_CARRIED_SID = "22222222-2222-4222-8222-222222222222"
 
 
-def _ambient_env_holds(monkeypatch, sid: str) -> None:
-    for var in session_core.SESSION_ENV_PRECEDENCE:
-        monkeypatch.setenv(var, sid)
+@pytest.fixture(autouse=True)
+def _env_names_a_stranger(monkeypatch):
+    for name in session_core.SESSION_ENV_PRECEDENCE:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _ENV_SID)
 
 
-def test_warm_with_carried_id_stamps_it(monkeypatch):
-    _ambient_env_holds(monkeypatch, _SERVER_OWNER_SID)
+def test_warm_without_carried_identity_never_reads_env():
     with session_core.warm_served_request():
-        with session_core.session_identity_override(_CARRIED_SID):
-            assert _resolve_sent_by({}) == _CARRIED_SID
+        assert memo_send._resolve_sent_by({}) == memo_send._SENT_BY_UNRESOLVED
 
 
-def test_warm_with_no_carried_id_stamps_unresolved_not_ambient_env(monkeypatch):
-    _ambient_env_holds(monkeypatch, _SERVER_OWNER_SID)
+def test_warm_with_carried_identity_uses_it():
+    with session_core.warm_served_request(), session_core.session_identity_override(
+        _CARRIED_SID
+    ):
+        assert memo_send._resolve_sent_by({}) == _CARRIED_SID
+
+
+def test_cold_resolves_from_env():
+    assert memo_send._resolve_sent_by({}) == _ENV_SID
+
+
+def test_draft_sent_by_is_threaded_through_even_warm():
     with session_core.warm_served_request():
-        assert _resolve_sent_by({}) == _SENT_BY_UNRESOLVED
-
-
-def test_cold_with_only_env_var_set_still_stamps_it(monkeypatch):
-    _ambient_env_holds(monkeypatch, _CARRIED_SID)
-    assert _resolve_sent_by({}) == _CARRIED_SID
+        assert memo_send._resolve_sent_by({"sent_by": "draft-sid"}) == "draft-sid"

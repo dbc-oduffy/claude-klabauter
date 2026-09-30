@@ -184,7 +184,9 @@ _TIER_ARGV = {
     "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
 
+# Was a second literal declaration of
 # `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
+# actual source of truth; this is derived, not restated.
 TIERS = tuple(_TIER_ARGV)
 
 
@@ -367,8 +369,11 @@ def sweep_orphan_packs(
 def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     if (git_dir / "index.lock").exists():
         return "index.lock is held -- a peer is mid-commit"
+    # A clean, in-progress
     # `cherry-pick --no-commit`/`revert --no-commit` leaves CHERRY_PICK_HEAD/
     # REVERT_HEAD present with a clean index and no unmerged entries, which
+    # was invisible to every check here even though it is the same class of
+    # mid-operation state the other markers exist to catch.
     for marker, what in (
         ("REBASE_HEAD", "rebase"),
         ("MERGE_HEAD", "merge"),
@@ -381,6 +386,9 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     unmerged = run_git(["ls-files", "--unmerged"], cwd=str(repo))
     if unmerged.timed_out or unmerged.returncode == 127:
         # This function gates a DESTRUCTIVE tier (gc/prune/repack), so an
+        # unanswered git is an obstruction, not a clearance. Reading a timeout
+        # as "no unmerged entries" would let maintenance run against an index
+        # whose state nobody established.
         return "could not read index state (git did not answer)"
     if unmerged.returncode == 0 and unmerged.stdout.strip():
         return "index has unmerged entries"
@@ -411,7 +419,28 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         return result
 
     # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER. It is no longer
+    # load-bearing against daily -- daily's `loose-objects` task is gone
     # (R9 / P153-C25: docs/research/spike-verdicts/2026-09-22-maintenance-
+    # reaper-after-daily-pack.md), so nothing upstream of weekly packs an
+    # unreachable object out from under `git prune` (LOOSE objects only) any
+    # more. It is kept prune-first anyway, harmlessly, because `git gc` is
+    # still the alternative it is never worth reaching for -- kill-bar item
+    # here (10,068ms/9 procs against prune's 40.6ms/1 proc) -- and because
+    # weekly's own `--task=pack-refs` packs nothing, so this order costs
+    # nothing to keep.
+    #
+    # THE TRAP THIS ORDER USED TO GUARD AGAINST, for the record: on a day
+    # both tiers fired, `loose-objects` packed unreachable loose objects
+    # (including ones young enough that a run last week did not yet catch
+    # them) before a prune sequenced after it could see them loose, so that
+    # prune reaped nothing and exited 0 -- unreachable history accumulating
+    # forever behind a green tier
+    # (state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-
+    # 309a82437447.yaml). The R9 spike also confirmed repacking the pack
+    # afterwards (`--cruft-expiration` on weekly) cannot recover this once an
+    # object is packed -- packing itself resets the age signal a later reap
+    # would need -- so the fix is daily never packing it, not a different
+    # reap strategy downstream.
     if tier == "weekly":
         prune = run_git(["prune", f"--expire={_PRUNE_EXPIRE}"], cwd=str(repo))
         if prune.returncode != 0:

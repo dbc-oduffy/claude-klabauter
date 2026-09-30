@@ -105,6 +105,9 @@ _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
 
+# Env var names the machine-local reader (both coordinator_registry.py's and
+# cli_shared.py's copies) and content_root()/claude_klabauter_root() honour — stripped
+# together everywhere this suite needs a genuinely-unresolved-except-via-stub
 # baseline. See module docstring finding (2) re: REPO_CONTENT_ROOT.
 _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION = (
     "CONTENT_ROOT",
@@ -296,10 +299,23 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
         env.pop("MACHINE_LOCAL_IMPL", None)
         env["QUEUE_APPEND_OUTPUT_ROOT"] = fake_content_root
         outbox_dir = os.path.join(fake_content_root, "state", "lessons-outbox")
+        # Must EXIST before the spawn. coordinator-lesson-promote refuses a
         # LESSON_PROMOTE_OUTBOX_ROOT that resolves under the system temp dir and
+        # is absent — it cannot tell a never-created fixture dir from a swept
+        # tmp_path inherited by a long-lived process, and recreating it would
+        # silently file the entry where nobody looks. Never surfaced before
+        # because the child resolved to the published launcher, which ignored
+        # this var outright and wrote to the live sibling repo instead.
         os.makedirs(outbox_dir, exist_ok=True)
         env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
+        # The BOX's stamped engine, handed over by `stamped_engine_env` — required
+        # so schema.validate/schema.describe (no legacy fallback) can dispatch at
         # all. This previously named `_REPO_ROOT`, which the dispatch-axis stamp
+        # gate refuses ("engine root ... has no build stamp"): the source checkout
+        # carries no build stamp, so every dispatch from the spawned harvest died
+        # before any dedup logic ran. Taking the fixture and then overwriting its
+        # value with the unstamped root is the whole defect — do not reintroduce a
+        # literal here.
         env[_ENGINE_ROOT_VAR] = stamped_engine_env
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]

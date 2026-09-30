@@ -651,11 +651,11 @@ def test_write_stamps_mutable_artifacts_and_skips_immutable(tmp_path: Path):
     plan_one_id = [l for l in plan_one.splitlines() if l.startswith("deliverable_id:")][0]
     assert h1_id == plan_one_id
 
-    # spinoff-roadmap stub_id path: minted id is exactly "dlv-<stub_id>", not a random hex.
+    # spinoff-roadmap stub_id path: minted id is "dlv-<stub_id>-<6hex>" (opaque suffix).
     h2 = (tmp_path / "state/handoffs/h2-spinoff.md").read_text(encoding="utf-8")
-    assert "deliverable_id: dlv-abc123\n" in h2
+    assert re.search(r"^deliverable_id: dlv-abc123-[0-9a-f]{6}$", h2, re.M)
     overview = (tmp_path / "state/roadmap/rm1/OVERVIEW.md").read_text(encoding="utf-8")
-    assert "deliverable_id: dlv-abc123\n" in overview
+    assert re.search(r"^deliverable_id: dlv-abc123-[0-9a-f]{6}$", overview, re.M)
 
     # Immutable artifacts are reported but never written.
     h4 = (tmp_path / "archive/handoffs/h4-archived.md").read_text(encoding="utf-8")
@@ -663,8 +663,8 @@ def test_write_stamps_mutable_artifacts_and_skips_immutable(tmp_path: Path):
     c1 = (tmp_path / "archive/completed/c1.md").read_text(encoding="utf-8")
     assert "deliverable_id:" not in c1
 
-    assert "Stamped:            5" in out.getvalue()
-    assert "Skipped (immutable): 2" in out.getvalue()
+    assert re.search(r"^  Stamped:\s+5$", out.getvalue(), re.M)
+    assert re.search(r"^  Skipped \(immutable\):\s+2$", out.getvalue(), re.M)
 
 
 def test_write_injects_field_immediately_after_opening_fence(tmp_path: Path):
@@ -775,7 +775,7 @@ def test_main_only_kind_scope_label_differs_from_default_mode_line(tmp_path: Pat
     assert rc_b == 0
 
 
-_DLV_ID_RE = re.compile(r"dlv-\S+")
+_DLV_ID_RE = re.compile(r"(?:dlv|pln)-\S+")
 
 
 def _normalize_minted_ids(text: str) -> str:
@@ -959,7 +959,7 @@ def test_main_no_root_and_no_default_fails_loud(tmp_path: Path):
 
 
 def test_main_write_reports_schema_invalid_sizing_as_write_failed_not_stamped(tmp_path: Path, capsys):
-    """A sizing whose post-mutation content fails schema validation must be
+    """A sizing whose post-mutation content fails to parse must be
     reported as a refused write, not a stamp: the file is unchanged on disk,
     the report carries `[skip-write-failed]` and NOT `[stamp]` for it,
     `Stamped:` counts only records that really landed, `Write failures: 1`
@@ -979,11 +979,11 @@ def test_main_write_reports_schema_invalid_sizing_as_write_failed_not_stamped(tm
         "deliverable_id: dlv-citer-000000\n---\nBody\n",
     )
     sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
-    # Schema-invalid: missing the required fields _SCHEMA_VALID_SIZING_BODY
-    # carries (e.g. `estimate`/`route`/`detents`/etc.) — post-mutation
-    # validate_frontmatter must reject this, raising MutateAbort inside
-    # `_stamp_yaml_document`.
-    _write(sizing, "schema: sizing-object\nintent: bare, invalid record\n")
+    # Unparseable YAML: the stamp gate is deliberately narrow (deliverable_id
+    # shape only — legacy sizings missing later-added required fields must
+    # still stamp), so the reachable refusal is a post-mutation YAML parse
+    # failure, raising MutateAbort inside `_stamp_yaml_document`.
+    _write(sizing, "schema: sizing-object\nintent: [unclosed\n")
     sizing_before = sizing.read_text(encoding="utf-8")
 
     out, err = io.StringIO(), io.StringIO()
@@ -995,9 +995,12 @@ def test_main_write_reports_schema_invalid_sizing_as_write_failed_not_stamped(tm
     report = out.getvalue()
     assert "[skip-write-failed]" in report
     assert "state/sizings/2026-01-01-s.yaml" in report
-    assert "[stamp]" not in report
-    assert "Stamped:            0" in report
-    assert "Write failures:     1" in report
+    # The plan_id leg stamps the citing plan in the same run; scope the
+    # deliverable_id assertions to the sections before it.
+    deliverable_leg = report.split("PLAN_ID LEG")[0]
+    assert "[stamp]" not in deliverable_leg
+    assert re.search(r"^  Stamped:\s+0$", deliverable_leg, re.M)
+    assert re.search(r"^  Write failures:\s+1$", deliverable_leg, re.M)
     # `_stamp_yaml_document`'s skip message is printed to the real
     # `sys.stderr` (module-level `print(..., file=sys.stderr)`), not the
     # `err` StringIO passed to `main()` — asserted via `capsys` instead of

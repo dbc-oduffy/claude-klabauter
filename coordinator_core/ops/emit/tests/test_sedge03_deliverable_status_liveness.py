@@ -66,6 +66,7 @@ class TestShapeA:
                 "state/handoffs/2026-07-30_141130_diff-scoped-ceremony-gates-elegant.md",
             ),
             # The live successor carries a DIFFERENT deliverable_id — it does not join
+            # this group at all, so the old id's group is still liveness-empty.
             _live_handoff(
                 "dlv-diff-scoped-ceremony-gates-one-resolver--986c85",
                 "state/handoffs/2026-07-30_141130_diff-scoped-ceremony-gates-elegant.md",

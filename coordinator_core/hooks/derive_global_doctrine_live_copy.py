@@ -1,5 +1,5 @@
 """coordinator_core.hooks.derive_global_doctrine_live_copy — PostToolUse
-(Write|Edit|MultiEdit) AND SessionStart op: re-derive the live global
+(Write|Edit|MultiEdit|Bash|PowerShell) AND SessionStart op: re-derive the live global
 CLAUDE.md copy, the live `~/.claude/rules/*.md` mirror, AND the in-plugin
 published copy under `coordinator/templates/global-doctrine/`, whenever
 their TRACKED sources (in the coordinator-claude doctrine-plane repo) may
@@ -188,8 +188,27 @@ def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]", repo_root: 
     return False
 
 
+_COMMAND_TOOLS = frozenset({"Bash", "PowerShell"})
+_AUTHORING_TREE_MARKER = "global-doctrine"
+
+
+def _is_authoring_tree_shell_command(payload: dict) -> bool:
+    """A Bash/PowerShell command naming the authoring tree: the shell may have
+    written it with no ``file_path`` to key on, so the full derivation runs.
+    Substring test only -- callers filter before any filesystem probe."""
+    if payload.get("tool_name") not in _COMMAND_TOOLS:
+        return False
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return isinstance(command, str) and _AUTHORING_TREE_MARKER in command
+
+
 def evaluate(payload: dict):
     if not isinstance(payload, dict):
+        return None
+
+    shell_write = _is_authoring_tree_shell_command(payload)
+    if payload.get("tool_name") in _COMMAND_TOOLS and not shell_write:
         return None
 
     repo_root = _resolve_doctrine_repo_root()
@@ -208,7 +227,7 @@ def evaluate(payload: dict):
     if not isinstance(file_path, str):
         file_path = ""
 
-    session_start_mode = hook_event_name == "SessionStart"
+    session_start_mode = hook_event_name == "SessionStart" or shell_write
 
     notes: "list[str]" = []
 

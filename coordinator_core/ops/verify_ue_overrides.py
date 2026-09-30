@@ -120,14 +120,38 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     """
 
     # AN UNREGISTERED UE REPO IS NOT DRIFT. These keys used to be REQUIRED --
+    # an unset one printed a remediation and returned 1. That made this check
+    # fail by construction on every machine that does not carry the source
+    # author's UE layout, which is most of the fleet, and this module's own
+    # docstring says as much ("its peer dirs are specific to the source
+    # author's local machine layout"). Wired into doctor probe P-9, that
+    # produced a permanent amber nobody could clear, and a doctor that is
+    # always amber is one operators stop reading.
+    #
     # A second, less obvious caller hits the same wall: the PUBLISHED engine.
+    # Percolate depersonalizes private repo codenames on the way to the mirror
+    # (`coordinator_core/percolate/codename_provenance_seed.py`), so the copy
+    # every box actually resolves asks for `repos.<placeholder>` -- a key no
+    # registry has or should have. Treating an unresolved key as "not
+    # applicable" makes that case a clean skip rather than a false failure,
+    # WITHOUT reaching around the redaction, which is a publish contract this
+    # module has no business subverting.
+    #
+    # `repos.example-sim-repo` was already optional on exactly this reasoning; the
+    # other two now match it. What is NOT optional is the global-settings
+    # assertion below -- that invariant is machine-independent, it is the drift
+    # this check exists to catch, and it runs whether or not any UE repo is
+    # registered here.
     named_dirs: List[str] = []
     for key in _UE_CONTEXT_REPO_KEYS:
         root = _ml_get(key)
         if root:
             named_dirs.append(root)
 
+    # Same Windows landmine as the legacy resolver rung above, second site:
+    # native Windows shells do not set HOME, and os.environ.get("HOME", "")
     # would make the join below a RELATIVE ".claude" resolving against cwd — so
+    # the walk would silently inspect the wrong directory and report a
     # misleading path. home_dir() is USERPROFILE-aware.
     home = str(home_dir())
     # `$HOME/.claude` IS NOT A UE-CONTEXT DIR, and demanding `true` there was

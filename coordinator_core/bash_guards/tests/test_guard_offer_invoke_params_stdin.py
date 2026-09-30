@@ -55,7 +55,15 @@ def test_the_live_failure_shape_is_rewritten_not_denied():
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
+# ---------------------------------------------------------------------------
 # C4b (docs/reference/guard-dialect-coverage.md row 10) -- `_INVOKE_RE` is a
+# literal text-pattern match over the raw command string, independent of
+# shell dialect. No real PowerShell parse is exercised (this guard takes a
+# bare `cmd: str`, never a payload/tool_name at all) -- this proves the
+# SAME regex-over-text detection reaches the identical rewrite on a
+# PowerShell-spelled invocation (call-operator prefix, `;`-chained
+# statement ahead of it) as on the bash-spelled one.
+# ---------------------------------------------------------------------------
 
 
 def test_powershell_call_operator_prefixed_invocation_rewritten_same_as_bash():
@@ -99,8 +107,17 @@ def test_rewrite_keeps_flags_after_the_payload_and_places_heredoc_before_a_pipe(
     assert first_line.index("<<'CCJSON'") < first_line.index("| tail -5")
 
 
+#: The two tests below spawn a REAL `python3 -m coordinator_core.invoke`, so
+#: they need the build-stamp carve-out spelled on the command line. Dispatch
 #: from an unstamped tree has been refused with JSON-RPC `-32005` since
+#: `6f3988bc3` (2026-08-21), and `coordinator_core/conftest.py :: pytest_
+#: configure` opts the suite in via `ipc.allow_unstamped_dispatch()` -- but
 #: IN-PROCESS ONLY, deliberately not through the environment, so that a
+#: subprocess cannot silently inherit it. That is exactly right, and it is
+#: also why these two spawned children never got the opt-in: the refusal
+#: envelope replaced `{"ok": true}`, and the tests died on `KeyError: 'ok'`.
+#: The rewrite under test was never broken -- bash parsed it and the child
+#: started every time. Spell the flag here rather than widening the conftest.
 _UNSTAMPED = " --allow-unstamped-dispatch"
 
 

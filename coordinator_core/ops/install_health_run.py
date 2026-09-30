@@ -155,7 +155,14 @@ class DeclaredLaunch:
         ]
 
 
+# Ordered list of (display_name, entrypoint) for every claude-klabauter-owned
+# install-health leg. `entrypoint` is one of two declared kinds: a callable
+# ``(plugin_root, claude_klabauter_root) -> int`` (in-process, as every leg below is
+# today), or a `DeclaredLaunch` (out-of-process, its complete argv stated
 # rather than inferred). Every leg runs UNCONDITIONALLY in `main()` below —
+# no dependency on any file existing in a drop-in directory, and no
+# dependency on `bin/install-health/` existing at all. `display_name`
+# is used only for log/failure messages — it is NOT looked up anywhere.
 _LegEntrypoint = Union[Callable[[str, str], int], DeclaredLaunch]
 _NATIVE_LEGS: List[Tuple[str, _LegEntrypoint]] = [
     ("ensure-python3-exe-shim", lambda plugin_root, claude_klabauter_root: ensure_python3_exe_shim.main([])),
@@ -179,6 +186,9 @@ _NATIVE_LEGS: List[Tuple[str, _LegEntrypoint]] = [
         lambda plugin_root, claude_klabauter_root: check_door_route(plugin_root, claude_klabauter_root),
     ),
     # LAST, DELIBERATELY. Every leg above can change what this one reads --
+    # the door legs most of all -- so it runs after them and reports on the
+    # settings-home the whole install actually left behind, not an
+    # intermediate state.
     (
         "check-launch-chain-intact",
         lambda plugin_root, claude_klabauter_root: check_launch_chain_intact(plugin_root, claude_klabauter_root),
@@ -381,7 +391,12 @@ def _report_installed_verdict(verdict: "door_install.ProvenanceVerdict") -> int:
 
 _DOOR_ROUTE_OP = "ping"
 
+#: This leg owns its own timeout rather than inheriting
 #: `door_route_signal._DOOR_TIMEOUT_SECS` (30s) -- it sits inside
+#: `maximalist.py`'s required Phase 3 Step 1b, and a hung door must not hold
+#: that phase for half a minute. Chosen so a genuine hang still fails fast
+#: relative to the rest of the install, per C2's own BUDGET AND TIMEOUT
+#: paragraph.
 _DOOR_ROUTE_TIMEOUT_SECS = 5.0
 
 
@@ -648,6 +663,8 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
         return 1
 
     # Scoped, not process-wide: a bare `os.environ["CHECK_ONLY"] = ...` here would
+    # leak past this call for the life of the interpreter (2026-07-21
+    # interpreter-global-state sweep) — every drop-in/native leg below still SEES
     # the identical env-var signal the DoE doc block's own `export CHECK_ONLY=1` /
     # `export CHECK_ONLY=` used to set, just scoped to this run.
     with env_overlay({"CHECK_ONLY": "1" if check_only else ""}):
@@ -658,6 +675,12 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
     failures = 0
 
     # Every leg runs UNCONDITIONALLY here, in declared order, regardless of
+    # whether bin/install-health/ exists under claude_klabauter_root at all. The trust
+    # gate above has already validated plugin_root before this point, which
+    # is what preserves ensure-python3-exe-shim's ordering constraint (its
+    # bash oracle sourced coordinator-trusted-root-guard.sh before doing
+    # anything else; calling the native op after the same gate here keeps
+    # that invariant true without re-sourcing anything).
     declared_scripts: set = set()
     for leg_name, entrypoint in _NATIVE_LEGS:
         if isinstance(entrypoint, DeclaredLaunch):

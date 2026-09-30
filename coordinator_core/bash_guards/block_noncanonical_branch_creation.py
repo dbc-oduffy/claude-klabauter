@@ -189,17 +189,30 @@ from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): this guard is registered
 # ADVISORY_REWRITE/fail_closed=False (see module docstring) and fails OPEN
+# on any name shape it cannot evaluate ("FAIL OPEN ON A NAME THIS GUARD
 # NEVER ACTUALLY SAW" above) -- no spurious-deny risk from unparseable
+# PowerShell input.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
+#: Longlived branch prefixes this guard deliberately does NOT deny -- see
 #: module docstring "THE CANONICAL-SHAPE PREDICATE".
 SANCTIONED_LONGLIVED_PREFIXES = ("migration/", "release/", "feature/")
 
 _PRE_FILTER_RE = re.compile(r"\b(checkout|switch|branch)\b")
 
 #: ALLOWLIST of `git branch` flags that may accompany a genuine CREATION
+#: invocation without changing its classification -- `-f`/`--force`
+#: (overwrite-if-exists) and `-t`/`--track`/`--no-track` (upstream-tracking
+#: mode set at creation time). ANY OTHER flag (rename, delete, copy, list,
+#: or anything this project has not audited) routes to non-create/allow --
+#: see module docstring "WHAT THIS DENIES". Deliberately an allowlist, not
+#: a blocklist of known-non-create flags: a blocklist misses git's
+#: long-form spellings (`--delete`, `--move`, `--copy`) and fails toward
+#: "creation, deny" on any flag it hasn't enumerated, which is the wrong
+#: direction -- Review: coordinator:code-reviewer P1, Finding 2.
 _BRANCH_CREATE_COMPATIBLE_FLAGS = frozenset({"-f", "--force", "-t", "--track", "--no-track"})
 
 _CHECKOUT_CREATE_FLAGS = frozenset({"-b", "-B"})
@@ -357,6 +370,8 @@ def _advisory_reason(cmd: str, name: str) -> str:
     anchor=lambda result: result is None,
 )
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # Deliberately no try/except -- fail-CLOSED-on-exception is the
+    # dispatcher's job for a CLASS = "hard-deny" guard (see module
     # docstring "NEGATIVE SPEC 4").
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -374,8 +389,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _is_hazard_repo(git_root or ""):
         return None
 
+    # Dialect-aware Start-Process expansion (C8,
+    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
     # already declares `COMMAND_TOOL_NAMES` but `resolve_command_positions`
+    # is a Bash-shaped tokenizer with no PowerShell awareness, so a
+    # `Start-Process git -ArgumentList 'checkout','-b','fix-thing'`
+    # invocation resolves to a segment headed by `Start-Process`, never
+    # `git`, and `_classify_segment` below never even reaches the name
+    # predicate -- even though the base `git checkout -b` argv is
+    # byte-identical across dialects. Fails OPEN by construction (see
     # `MATCHERS` comment above), so this is a missed advisory, never a
+    # spurious one. Same narrow fix as the sibling deny-capable entries:
+    # for a PowerShell payload only, tokenize via `_dialect.tokenize_
+    # command` and run the SAME `expand_start_process_invocations` pass,
+    # then rejoin the expanded tokens back into text so `resolve_command_
+    # positions` (unchanged, still exercised byte-for-byte on the BASH leg)
+    # sees the target's real argv in command position. A PowerShell parse
+    # failure leaves `cmd` untouched.
     _bncbc_dialect = dialect_from_tool_name(payload.get("tool_name"))
     if _bncbc_dialect is Dialect.POWERSHELL:
         _bncbc_ps_tokens = tokenize_command(

@@ -46,8 +46,12 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+# ---------------------------------------------------------------------------
+# sys.path bootstrap — ensure <settings-home>/bin is importable without
+# installation. Settings-home is resolved by the same two-rung ladder the
 # module under test uses (DR-072): COORDINATOR_SETTINGS_HOME override, else
 # ${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings.
+# ---------------------------------------------------------------------------
 def _default_settings_home() -> str:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:

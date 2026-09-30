@@ -427,66 +427,23 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "wsc-tail.py",
     }
 
-    #: Frozen baseline, measured 2026-08-11 by C8 against the post-C1..C7
-    #: tree: every `coordinator/bin/*.py` file that (a) is NOT in
-    #: PLAN_CHANGE_SET, (b) is NOT in ALLOWLIST below, and (c) still
-    #: carries a REAL (ast.Call-detected) `rev-parse --show-toplevel`
-    #: call site. None of these were ever this plan's to migrate (out of
-    #: its `scope:` frontmatter) -- pinned exactly so a NEW offender (a
-    #: file entering the tree with the defect, or a regression in an
-    #: already-migrated file) fails the test immediately instead of
-    #: silently blending into an ever-widening "known remainder".
+    #: Exact baseline of every `coordinator/bin/*.py` file outside
+    #: PLAN_CHANGE_SET and ALLOWLIST whose `ast.Call` detector below still
+    #: fires, re-measured against the class-B re-verification
+    #: (state/audits/class-b-repo-root-reverification.md). Pinned exactly so
+    #: a file reintroducing the raw spawn fails here instead of blending in;
+    #: `test_known_remainder_is_live` fails when an entry stops firing, so
+    #: the set only shrinks.
     KNOWN_REMAINDER = {
-        "advance-tracker-status.py",
-        "archive-paper-trail.py",
-        "assert-no-terminal-plans-in-live.py",
-        "cartography.py",
-        "check-no-illegal-paths.py",
-        "check-schema-version-bump.py",
-        "check-sh-suffix-polyglot.py",
-        "debash-scorecard.py",
-        "emit-goal-from-artifact.py",
-        "freeze-review-diff.py",
-        "handoff-has-live-children.py",
-        "list-orphaned-plans.py",
+        # Real spawn, `git -C <cwd> rev-parse --show-toplevel`; read-only
+        # gate decision, explicit `--repo-root` honored first.
         "parallel-review-gate-decision.py",
-        "parallel-review-orthogonality-guard.py",
-        "reap-sessions.py",
-        "reaper-resting-batons.py",
-        "sweep-actioned-memos.py",
-        "sweep-boot.py",
-        "workday-start-inbox-blitz-assemble.py",
+        # Not a spawn: the matched `ast.Call`s are a `print` and an
+        # `add_argument(help=...)` whose prose names the git command. The
+        # real resolution is the bare `show_toplevel()` tracked in
+        # REACHABLE_CWD_FALLBACK / B_SAFE_CWD_FALLBACK below.
         "wsc-session-disposition.py",
-        # Added 2026-08-15 (docs/plans/2026-08-15-turn-coordinator-bin-
-        # tests-green-eleven.md C3), per-file verdict via `git log
-        # -G'"?--show-toplevel"?'` against the 2026-08-11 22:23 freeze
-        # commit (9cae5568f) -- these six are C6 `.py`-extension RENAMES
-        # (2026-08-13, confirmed 1-3-line diffs, pure `git mv` shape): the
-        # call site itself predates the freeze under its pre-`.py`
-        # filename, which the `*.py` glob this test walks could not have
-        # seen until the rename landed. The freeze simply missed them
-        # because they weren't `.py` files yet, not because the guard
-        # failed to catch a real new offender.
-        "coordinator-doc-new.py",
-        "coordinator-harvest-deferrals.py",
-        "coordinator-lesson-add.py",
-        "cross-repo-memo.py",
-        "cruft-sweep.py",
-        "cutover-cli.py",
         "queue-triage.py",
-        # `coordinator/bin/app-session.py` (commit f004929a6, 2026-08-15):
-        # genuinely postdates the freeze and is a real new call site, but
-        # its own docstring/`_resolve_repo_root` explicitly mirror
-        # `advance-tracker-status.py`'s posture (see this set above) --
-        # that file is itself un-migrated and out of this plan's scope, so
-        # a new file deliberately copying its already-accepted-out-of-scope
-        # pattern is the same class, not a fresh bypass to fix. Separately:
-        # `coordinator_core/ops/app_session.py` / `_app_session_runtime.py`
-        # / `_registry_map.py` are another session's IN-FLIGHT work this
-        # plan's Anti-scope forbids touching, and this bin trampoline is
-        # that same feature's CLI surface -- not this chunk's to migrate
-        # even if it were otherwise in scope.
-        "app-session.py",
     }
 
     #: Every `coordinator/bin/*.py` file legitimately still allowed to
@@ -508,6 +465,18 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # Resolves `git -C <its own bin dir>`, never the process cwd --
         # same class-C shape, different neighbourhood.
         "check-bin-sh-polyglot.py",
+        # Class-C per the class-B re-verification: `git -C <plugin_root>`
+        # (script location / COORDINATOR_PLUGIN_ROOT), never the process cwd.
+        "check-schema-version-bump.py",
+        # Class-C: `git -C <script dir>`, never the process cwd.
+        "check-sh-suffix-polyglot.py",
+        # Class-C, path-keyed: `git -C <path argument> rev-parse
+        # --show-toplevel` answers "is this path the root of its repo", for a
+        # publish clone that is deliberately not the process's repo. Both
+        # postdate the baseline; the test could not finish (see
+        # `_has_real_rev_parse_toplevel_call`) so neither was ever checked.
+        "klabauter-reconcile.py",
+        "percolate-gate.py",
         # Class-C, new since the 2026-08-11 KNOWN_REMAINDER baseline was
         # frozen: `git -C dirname(handoff_path) rev-parse --show-toplevel`,
         # own docstring carries the literal phrase "not the process cwd";
@@ -581,14 +550,30 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         `ast.Call` node, so it can never match here -- unlike a whole-file
         regex, which cannot tell prose from an invocation.
         """
+        # Text prefilter plus a one-time line split: `ast.get_source_segment`
+        # re-splits the whole file in a per-character Python loop for every
+        # call node, which is minutes on the 2k-8k-line scripts.
+        if "rev-parse" not in text or "--show-toplevel" not in text:
+            return False
         try:
             tree = ast.parse(text)
         except SyntaxError:
             return False
+        lines = re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", text)
+        encoded = [line.encode("utf-8") for line in lines]
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+            if not isinstance(node, ast.Call) or node.end_lineno is None:
                 continue
-            segment = ast.get_source_segment(text, node) or ""
+            first, last = node.lineno - 1, node.end_lineno - 1
+            if first == last:
+                raw = encoded[first][node.col_offset : node.end_col_offset]
+            else:
+                raw = (
+                    encoded[first][node.col_offset :]
+                    + b"".join(encoded[first + 1 : last])
+                    + encoded[last][: node.end_col_offset]
+                )
+            segment = raw.decode("utf-8", errors="replace")
             if cls._REV_PARSE_TOPLEVEL_RE.search(segment):
                 return True
         return False
@@ -716,6 +701,155 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
             f"the following modules import repo_identity's checked resolver but "
             f"never reference its verdict field: {offenders}",
         )
+
+
+class TestBareShowToplevelInventory(unittest.TestCase):
+    """Pins the class-B re-verification (state/audits/class-b-repo-root-
+    reverification.md) as an executable inventory.
+
+    The rev-parse detector above only sees a spawn; the out-of-scope
+    scripts moved to `coordinator_core.git.repo_root.show_toplevel`, a
+    non-spawning walk, so a script deriving its root from the process cwd
+    is invisible to it. This inventory finds those by the call shape
+    (`show_toplevel()` with no argument, or fed `os.getcwd()`) and requires
+    each one to carry a recorded verdict, so a new cwd-derived script, or a
+    verdict gone stale, fails loud instead of being re-surveyed.
+    """
+
+    #: Never reaches the process cwd. Must not contain a bare call.
+    CLASS_C = {
+        "cartography.py",
+        "check-schema-version-bump.py",
+        "check-sh-suffix-polyglot.py",
+        "debash-scorecard.py",
+        "handoff-has-live-children.py",
+        "cutover-cli.py",
+        "sweep-boot.py",
+    }
+
+    #: cwd fallback exists but is correct by construction or read-only with
+    #: no automated caller omitting the root.
+    B_SAFE_CWD_FALLBACK = {
+        "aggregate-rollup.py",
+        "reap-sessions.py",
+        "check-no-illegal-paths.py",
+        "list-orphaned-plans.py",
+        "wsc-session-disposition.py",
+        "workday-start-inbox-blitz-assemble.py",
+        "reaper-resting-batons.py",
+        "assert-no-terminal-plans-in-live.py",
+        "parallel-review-gate-decision.py",
+    }
+
+    #: The default invocation resolves from cwd, no automated caller threads
+    #: a root, and the script mutates: class-A in effect, the follow-up
+    #: migration set. Shrink-only: remove an entry when its script migrates
+    #: onto lib/repo_identity.py.
+    REACHABLE_CWD_FALLBACK = {
+        "advance-tracker-status.py",
+        "archive-paper-trail.py",
+        "emit-goal-from-artifact.py",
+        "freeze-review-diff.py",
+        "parallel-review-orthogonality-guard.py",
+        "queue-triage.py",
+        "app-session.py",
+        "coordinator-doc-new.py",
+        "coordinator-harvest-deferrals.py",
+        "coordinator-lesson-add.py",
+        "cross-repo-memo.py",
+        "cruft-sweep.py",
+        "discharge-landed.py",
+        "reap-claims-for-repos.py",
+    }
+
+    @staticmethod
+    def _is_bare_show_toplevel(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "show_toplevel":
+            return False
+
+        def _is_getcwd(expr: ast.AST) -> bool:
+            return (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Attribute)
+                and expr.func.attr == "getcwd"
+            )
+
+        args = list(node.args) + [kw.value for kw in node.keywords]
+        return not args or all(_is_getcwd(a) for a in args)
+
+    @classmethod
+    def _bare_callers(cls) -> set:
+        found = set()
+        for path in Path(_BIN_DIR).glob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, SyntaxError):
+                continue
+            if any(cls._is_bare_show_toplevel(n) for n in ast.walk(tree)):
+                found.add(path.name)
+        return found
+
+    def test_verdict_tables_are_disjoint_and_name_real_files(self):
+        tables = [
+            self.CLASS_C,
+            self.B_SAFE_CWD_FALLBACK - {"parallel-review-gate-decision.py"},
+            self.REACHABLE_CWD_FALLBACK,
+        ]
+        seen = set()
+        for table in tables:
+            self.assertEqual(seen & table, set())
+            seen |= table
+        missing = sorted(n for n in seen | self.B_SAFE_CWD_FALLBACK if not (Path(_BIN_DIR) / n).is_file())
+        self.assertEqual(missing, [], f"verdict tables name files that no longer exist: {missing}")
+
+    def test_every_bare_show_toplevel_caller_has_a_verdict(self):
+        known = (
+            self.B_SAFE_CWD_FALLBACK
+            | self.REACHABLE_CWD_FALLBACK
+            | TestNoSubprocessSpawnedByRevParse.ALLOWLIST
+        )
+        unverdicted = sorted(self._bare_callers() - known)
+        self.assertEqual(
+            unverdicted,
+            [],
+            f"coordinator/bin scripts derive their repo root from the process cwd "
+            f"with no recorded verdict: {unverdicted} -- route them through "
+            f"lib/repo_identity.py, or classify them in the verdict tables with "
+            f"the evidence in state/audits/class-b-repo-root-reverification.md",
+        )
+
+    def test_class_c_files_never_call_bare_show_toplevel(self):
+        self.assertEqual(sorted(self.CLASS_C & self._bare_callers()), [])
+
+    def test_cwd_fallback_verdicts_are_live(self):
+        bare = self._bare_callers()
+        spawners = TestNoSubprocessSpawnedByRevParse.KNOWN_REMAINDER
+        stale = sorted(
+            (self.B_SAFE_CWD_FALLBACK | self.REACHABLE_CWD_FALLBACK)
+            - bare
+            - spawners
+        )
+        self.assertEqual(
+            stale,
+            [],
+            f"verdict-table entries no longer derive their root from the process cwd: "
+            f"{stale} -- migrated or rewritten; delete them from the table",
+        )
+
+    def test_known_remainder_is_live(self):
+        """Shrink-only: a KNOWN_REMAINDER entry whose detector no longer
+        fires is dead weight that would hide a later regression."""
+        has_call = TestNoSubprocessSpawnedByRevParse._has_real_rev_parse_toplevel_call
+        dead = sorted(
+            n
+            for n in TestNoSubprocessSpawnedByRevParse.KNOWN_REMAINDER
+            if not has_call((Path(_BIN_DIR) / n).read_text(encoding="utf-8"))
+        )
+        self.assertEqual(dead, [], f"KNOWN_REMAINDER entries no longer match the detector: {dead}")
 
 
 if __name__ == "__main__":

@@ -10,13 +10,6 @@ Six sites read the `work/*` branch shape at runtime:
 `branch.startswith("work/")` or `re.compile(r"^work/")` literal — one site fixed alone
 relocates the gap rather than closing it (docs/plans/2026-09-22-work-branch-predicates-
 read-an-origin-prefixed-name.md).
-
-Withheld exception: `auto_push.py` is NOT required to import `daily_branch` here. Its
-conversion is plan row C2, gated on C0's git-push probe (epistemic-premise). C0's spine
-row is absent from this dispatch, so C2 did not run and `auto_push.py` still carries the
-bare literal at `branch_gate`. Per the plan's Exit criteria § 3, this is the one case
-where the census command may print `1` instead of `0`, and this pin test names
-`auto_push.py` as that one withheld site rather than failing the whole pin on it.
 """
 
 import re
@@ -28,10 +21,6 @@ CORE_ROOT = REPO_ROOT / "coordinator_core"
 _LITERAL_RE = re.compile(r'startswith\("work/"\)|re\.compile\(r"\^work/"\)')
 
 _ORACLE_MODULE = CORE_ROOT / "daily_branch.py"
-
-# The withheld exception, per the plan's Exit criteria § 3 (C0 absent from this
-# dispatch, so C2 -- auto_push.py's conversion -- did not run).
-_WITHHELD_LITERAL_SITES = {CORE_ROOT / "hooks" / "auto_push.py"}
 
 _SIX_SITES = [
     CORE_ROOT / "hooks" / "auto_push.py",
@@ -62,24 +51,15 @@ def test_no_stray_work_slash_literal_outside_the_oracle():
     for path in _non_test_python_files():
         if path == _ORACLE_MODULE:
             continue
-        text = path.read_text(encoding="utf-8")
-        if _LITERAL_RE.search(text):
-            offenders.append(path)
+        if _LITERAL_RE.search(path.read_text(encoding="utf-8")):
+            offenders.append(str(path))
 
-    assert set(offenders) == _WITHHELD_LITERAL_SITES, (
-        "only auto_push.py (C2, withheld per Exit criteria § 3) may still carry the "
-        f"bare work/ literal; found: {sorted(str(p) for p in offenders)}"
-    )
+    assert offenders == [], f"bare work/ literal outside daily_branch.py: {sorted(offenders)}"
 
 
-def test_six_sites_import_the_oracle_except_the_withheld_one():
+def test_six_sites_import_the_oracle():
     for path in _SIX_SITES:
         text = path.read_text(encoding="utf-8")
-        imports_oracle = "from coordinator_core.daily_branch import" in text
-        if path in _WITHHELD_LITERAL_SITES:
-            assert not imports_oracle, (
-                f"{path} is recorded as withheld (C2 did not run) but now imports "
-                "daily_branch -- update this pin's exception list"
-            )
-            continue
-        assert imports_oracle, f"{path} must import from coordinator_core.daily_branch"
+        assert "from coordinator_core.daily_branch import" in text, (
+            f"{path} must import from coordinator_core.daily_branch"
+        )

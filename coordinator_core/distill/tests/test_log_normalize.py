@@ -529,6 +529,97 @@ def test_normalize_log_truly_unknown_action_still_unrecognized(tmp_path):
     assert any("unrecognized action" in r and "RENAMED" in r for r in reasons)
 
 
+# The 11 bulk-glob rows from cockpit's legacy log (2026-07-23 memo), verbatim
+# action/path cells: they reuse per-spec tokens, so path shape is the only class signal.
+COCKPIT_BULK_GLOB_ROWS = [
+    ("deleted", "cross-repo/archive/*.md (107 files)"),
+    ("deleted", "archive/completed/**/*.md (62 files)"),
+    ("deleted", "archive/specs/**/*.{the Staff Engineer,the Front-End Reviewer,the Director of Engineering,...}.md (36 files)"),
+    ("deleted", "archive/specs/2026-07/*.{prior-art-check,...}.md (42 files)"),
+    ("harvested", "archive/handoffs/2026-07/*.md (36 decision-bearing handoffs)"),
+    ("harvested", "cross-repo/archive/*.md (50 boundary/shape ratification memos)"),
+    ("deleted", "archive/specs/2026-*/*.{prior-art-check,...}.md (32 files)"),
+    ("deleted", "cross-repo/archive/*.md (19 actioned memos)"),
+    ("deleted", "archive/handoffs/2026-07/*.md (17 shipped handoffs)"),
+    ("consolidated", "docs/wiki/{29 canonical guides}"),
+    ("deleted", "docs/wiki/*.md (191 over-fragmented micro-guides)"),
+]
+
+
+def _bulk_fixture(rows, extra_rows=()):
+    lines = [
+        "# Distillation Log",
+        "| date | action | path | last_sha | belongs_to_spec | reason |",
+        "|------|--------|------|----------|------------------|--------|",
+    ]
+    lines += [
+        f"| 2026-07-10 | {action} | {path} | abc12345 | | bulk cleanup |"
+        for action, path in rows
+    ]
+    lines += list(extra_rows)
+    return "\n".join(lines) + "\n"
+
+
+def test_normalize_log_cockpit_bulk_glob_rows_skipped_as_bulk_deletion_glob(tmp_path):
+    keeper = "| 2026-07-10 | ARCHIVED | archive/specs/keep-me.md | abc12345 | | per-spec row |"
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(_bulk_fixture(COCKPIT_BULK_GLOB_ROWS, [keeper]), encoding="utf-8")
+
+    result = normalize_log(log_path)
+
+    assert result.rows_migrated == 1
+    assert result.rows_skipped == len(COCKPIT_BULK_GLOB_ROWS)
+    assert {s.reason for s in result.skipped} == {RECOGNIZED_SKIP_ACTIONS["DELETE-GROUP"]}
+    rows = parse_distillation_log(log_path.read_text(encoding="utf-8"))
+    assert [r.path for r in rows] == ["archive/specs/keep-me.md"]
+
+
+def test_normalize_log_bulk_glob_shape_applies_to_bare_glob_with_per_spec_token(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(
+        _bulk_fixture([("DELETED", "archive/specs/2026-*-batch-glob.md")]), encoding="utf-8"
+    )
+
+    result = normalize_log(log_path)
+
+    assert result.rows_migrated == 0
+    assert [s.reason for s in result.skipped] == [RECOGNIZED_SKIP_ACTIONS["DELETE-GROUP"]]
+
+
+def test_normalize_log_unrecognized_action_with_plain_path_still_fails_loud(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(
+        _bulk_fixture(
+            [("harvested", "archive/specs/2026-03-09-plain-path.md")],
+            ["| 2026-07-10 | ARCHIVED | archive/specs/keep-me.md | abc12345 | | per-spec row |"],
+        ),
+        encoding="utf-8",
+    )
+
+    result = normalize_log(log_path)
+
+    reasons = [s.reason for s in result.skipped]
+    assert len(reasons) == 1
+    assert "unrecognized action" in reasons[0] and "harvested" in reasons[0]
+    assert result.rows_migrated == 1
+
+
+def test_normalize_log_bulk_glob_accounting_invariant_holds(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    extra = [
+        "| 2026-07-10 | ARCHIVED | archive/specs/keep-me.md | abc12345 | | per-spec row |",
+        "| 2026-07-10 | RENAMED | archive/specs/plain.md | abc12345 | | unknown token |",
+        "| 2026-07-10 | ARCHIVED | not-enough-columns | abc12345 |",
+    ]
+    log_path.write_text(_bulk_fixture(COCKPIT_BULK_GLOB_ROWS, extra), encoding="utf-8")
+
+    result = normalize_log(log_path)
+
+    total = len(COCKPIT_BULK_GLOB_ROWS) + len(extra)
+    assert result.rows_migrated + result.rows_skipped == total
+    assert result.rows_migrated == 1
+
+
 def test_normalize_log_dr053_accounting_invariant_migrated_plus_skipped_equals_total(tmp_path):
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")

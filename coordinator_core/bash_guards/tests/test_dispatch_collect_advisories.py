@@ -92,14 +92,20 @@ def _deny_envelope(tag: str):
     }
 
 
+# Two distinct soft/content-shaped advisory entries, in registration order --
 # used for (a)/(b)/(d)/(e) below. Deliberately DIFFERENT envelope shapes
+# (soft "allow+additionalContext" vs content "allow+additionalContext" with
+# a distinguishable tag) so (d) can assert each survives the aggregate
+# return without being merged/coerced into the other's shape.
 _TWO_ADVISORY_CHAIN = [
     GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
     GuardEntry("fake-content-second", lambda: _content_envelope("second"), False, GuardBand.ADVISORY_REWRITE),
 ]
 
+# Same two advisories, plus a hard-deny entry registered AFTER both --
 # mirrors the module docstring's own example: "a PLATFORM_CONDITIONED_DENY
 # guard, registered at the tail, denying after an ADVISORY_REWRITE guard
+# upstream already produced an allow+context envelope."
 _ADVISORY_THEN_DENY_CHAIN = list(_TWO_ADVISORY_CHAIN) + [
     GuardEntry(
         "fake-platform-deny",

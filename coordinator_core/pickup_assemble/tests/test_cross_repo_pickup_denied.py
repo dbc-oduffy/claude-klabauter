@@ -109,6 +109,10 @@ class TestInRepoInboxMemoNotDenied:
         this_repo = tmp_path / "this-repo"
         _make_repo(this_repo)
         # A clean run's scoped-commit tail (`APPLY_EXIT_OK` commits) shells a
+        # real `git add`/`git commit` against `repo_root` — irrelevant to
+        # what THIS test asserts (that the cross-repo check does not fire
+        # for an in-repo artifact), so it is stubbed out rather than paying
+        # for a real git init just to exercise unrelated commit plumbing.
         monkeypatch.setattr(pa_apply, "_scoped_commit", lambda *a, **k: None)
         inbox_memo = this_repo / "cross-repo" / "inbox" / "2026-08-19-memo.md"
         inbox_memo.parent.mkdir(parents=True, exist_ok=True)

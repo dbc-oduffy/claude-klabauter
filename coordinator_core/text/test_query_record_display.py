@@ -26,7 +26,9 @@ from coordinator_core.text.query_record_display import (
 )
 
 
+# ---------------------------------------------------------------------------
 # Unit-level — one renderer call per type, transcribed from TYPE_DISPLAY.
+# ---------------------------------------------------------------------------
 
 
 def test_display_handoff_prefers_deployment_state_over_status():

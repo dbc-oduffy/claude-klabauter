@@ -270,9 +270,13 @@ def test_aggregate_stop_dispatch_folds_kira_block(tmp_path) -> None:
 
 
 # --- CONCATENATE-ALL aggregation parity -------------------------------------
+#
 # The source dispatcher's contract is CONCATENATE-ALL, never first-fires-wins
 # (`_stop_family_runner_contract.py`, and this module's own AGGREGATION
 # CONTRACT docstring). A port that returned on the first firing leg would pass
+# every single-leg test above and every no-signal test -- the divergence is
+# only observable when TWO legs fire at once, which is why this asserts on the
+# second leg's text specifically rather than on the first.
 
 
 def _aggregate(payload):

@@ -181,7 +181,12 @@ def _run(projects_dir: str) -> Tuple[List[str], List[str], int]:
     stdout_lines = [line for _, line in sorted(stdout_lines, key=lambda pair: pair[0])]
 
     if not seen:
+        # Reproduces the bash oracle's pre-existing "unbound variable" crash on
+        # `${#seen[@]}` for an empty associative array under `set -u` — see
         # module docstring Negative-spec. The INTENDED WARNING message below
+        # is dead code in the original .sh and is never reached; kept here only
+        # as documentation of intent, not as emitted output.
+        # WARNING — zero candidates decoded from {projects_dir}  (unreachable in oracle)
         return stdout_lines, stderr_lines, 1
 
     count = len(seen)

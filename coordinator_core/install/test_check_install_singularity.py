@@ -72,7 +72,9 @@ def _run():
     return rc, out + err
 
 
+# ===========================================================================
 # T1 — .claude-suffixed CLAUDE_HOME -> FAIL
+# ===========================================================================
 def test_t1_claude_home_suffix_guard_fails(home, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(home["fake_home"] / ".claude"))
     rc, text = _run()
@@ -189,7 +191,9 @@ def test_t7_absent_local_settings_concordant(home):
     assert rc == 0, text
 
 
+# ===========================================================================
 # T8 — single COORDINATOR_CLONE (.git-backed) -> exempt -> exit 0
+# ===========================================================================
 def test_t8_coordinator_clone_exempt(home, tmp_path, monkeypatch):
     clone_dir = tmp_path / "clone" / "coordinator-claude"
     _make_tree(clone_dir)
@@ -200,7 +204,9 @@ def test_t8_coordinator_clone_exempt(home, tmp_path, monkeypatch):
     assert "dev-loop override" in text.lower()
 
 
+# ===========================================================================
 # T9 — single COORDINATOR_ROOT (parent .git-backed) -> exempt -> exit 0
+# ===========================================================================
 def test_t9_coordinator_root_exempt(home, tmp_path, monkeypatch):
     root_plugin = tmp_path / "root_plugin" / "coordinator-claude"
     _make_tree(root_plugin)
@@ -211,7 +217,9 @@ def test_t9_coordinator_root_exempt(home, tmp_path, monkeypatch):
     assert rc == 0, text
 
 
+# ===========================================================================
 # T10 — CLAUDE_PLUGIN_ROOT is NOT exempt (harness-injected)
+# ===========================================================================
 def test_t10_claude_plugin_root_not_exempt(home, tmp_path, monkeypatch):
     cpr_dir = tmp_path / "cpr" / "coordinator-claude"
     _make_tree(cpr_dir)
@@ -220,7 +228,9 @@ def test_t10_claude_plugin_root_not_exempt(home, tmp_path, monkeypatch):
     assert rc != 0, text
 
 
+# ===========================================================================
 # T12 — CLAUDE_HOME already .claude-suffixed (sentinel leakage shape) -> FAIL
+# ===========================================================================
 def test_t12_claude_home_leakage_shape_fails(home, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(home["fake_home"] / ".claude" / ".claude"))
     rc, text = _run()
@@ -305,7 +315,14 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
     assert "remove the extra tree" in text.lower()
 
 
+# ===========================================================================
+# F8 (2026-07-28 machine-a install dogfood) — `_to_plugin_root` itself.
+# Pre-fix it tested for a trailing "/coordinator" using forward slashes
 # only, so a native-Windows `CLAUDE_PLUGIN_ROOT` (`C:\coordinator-content-repo\coordinator`)
+# was never normalized to plugin-root level while the registry's
+# forward-slashed `live_path` for the SAME tree WAS -- making one clone look
+# like two trees and hard-failing a correct install.
+# ===========================================================================
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")

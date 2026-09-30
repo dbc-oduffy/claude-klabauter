@@ -120,14 +120,24 @@ from coordinator_core.hooks.postuse_advisory_dispatch import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
+#: Generator-provenance declaration (generator_provenance.py's AST sweep):
+#: this module's only writes are `_check_push_failures`'s
+#: `push-failures-cursor.txt` and `_check_hooks_json_staleness`'s
+#: `hooks-json-boot-hash.txt`, both under
+#: `resolve_git_common_dir(...)/coordinator-sessions/<session_id>/` -- a
+#: per-session cursor inside the git COMMON dir, never a tracked repo path
+#: (same standing as R5's `git_common_dir(...)` exclusion). No tracked
 #: artifact exists for `GENERATES` to name.
 GENERATES = []
 
+# ---------------------------------------------------------------------------
 # Charset guard — verbatim from the source script (`_ID_CHARSET_RE`).
+# ---------------------------------------------------------------------------
 _ID_CHARSET_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 
 # AUTO-PUSH-MID-SESSION-DETECT — verbatim from the source script
 # (`_PUSH_FAILED_LINE_RE`): matches only a genuine, exhausted-retry failure
+# row, never every new line the log happens to grow by.
 _PUSH_FAILED_LINE_RE = re.compile(r"\]\s*PUSH FAILED\b")
 
 _PUSH_FAILURE_REFERENCE_LINE = (
@@ -170,8 +180,13 @@ def _current_branch_cheap(git_root: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
 # push_failure_verdict — in-process call of the ALREADY-REGISTERED
+# `git.push_failure_verdict` op's own handler (never a subprocess, never a
 # `dispatch_from_hook`/JSON-RPC round-trip: caller and callee already share
+# one process and one import, matching `plan_persistence_check.py`'s own
+# direct-function-call precedent over its analogous op).
+# ---------------------------------------------------------------------------
 def _push_failure_verdict(git_root: str) -> "tuple[Optional[dict], Optional[str]]":
     """Returns `(result, degrade_reason)` — mirrors the source script's own
     contract. `degrade_reason` is `"malformed"` for any response that is not
@@ -404,7 +419,11 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
     ).format(n=n_new, branch=branch, last=last_line) + _PUSH_FAILURE_REFERENCE_LINE
 
 
+# ---------------------------------------------------------------------------
 # PLUGIN-HOOKS-JSON-RESTART-GATED — verbatim port of the source script's
+# `_check_hooks_json_staleness`. No engine op involved: a single sha256 file
+# hash plus a per-session cursor file.
+# ---------------------------------------------------------------------------
 def _hooks_json_path(git_root: str) -> str:
     return os.path.join(git_root, "coordinator", "hooks", "hooks.json")
 

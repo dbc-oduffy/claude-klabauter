@@ -267,6 +267,10 @@ def test_the_age_is_read_off_the_z_stamp_as_utc_not_the_local_clock(tmp_path):
 
 
 # C1 -- PRIOR-HOLDER TRACE AND FRESH-AND-FOREIGN DECLINE. The falsifier's
+# exact leg-2 sequence: two crown instances stamping in sequence against a
+# throwaway repo_root, with a trace of the first holder surviving in the
+# second's record. Distinct holder AND writer ids on each side, per the
+# falsifier's own baseline.
 
 
 def test_the_falsifiers_two_crown_sequence_carries_the_prior_holder(tmp_path):
@@ -400,6 +404,8 @@ def test_a_stale_foreign_record_is_not_declined(tmp_path):
 
 
 # ARMED-BANNER SUPPRESSION -- folded in from retired C2. `human_verdict`'s
+# ARMED branch used to render the reassurance line unconditionally, over a
+# record that could have been clobbered to zero population.
 
 
 def test_armed_with_zero_population_suppresses_the_reassurance_and_names_the_zero(tmp_path):
@@ -655,6 +661,8 @@ def test_a_monitor_tick_still_says_it_checked_the_fleet(tmp_path):
 
 
 # --- C3(b): `next_expected_by` bases the deadline on the MEASURED cadence,
+# never the caller's declared interval alone, and never widens past what the
+# declared interval would have produced.
 
 
 def test_next_expected_by_falls_back_to_declared_on_the_first_tick():
@@ -674,7 +682,10 @@ def test_next_expected_by_uses_the_observed_delta_when_it_is_tighter():
         watch_heartbeat.next_expected_by(1_000_000.0, 18.0, 18.0),
         _READER_TIMESTAMP_FORMAT,
     ))
+    # Declared 18s alone would floor at 60s (three ticks of 18s is 54s, below
     # the floor); the observed delta must not exceed what the DECLARED
+    # interval basis (80s here, i.e. the caller's actual claim) would have
+    # produced.
     assert deadline_observed <= deadline_declared_only
 
 
@@ -719,6 +730,9 @@ def test_read_liveness_carries_pid_fields_forward(tmp_path):
     assert liveness["pid_start_epoch"] is not None
 
 
+# P103-C2 -- the read-decide-write guard. `stamp` never gates (module
+# docstring): the loser of the guard NEVER blocks or retries, it declines the
+# tick and reports the contention, so these tests assert a False return plus
 # a POLL-ERROR line, never a hang.
 
 

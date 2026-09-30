@@ -70,7 +70,9 @@ Negative-spec (faithfully reproduced bash-oracle quirks, NOT bugs to fix here):
 
 from __future__ import annotations
 
+# Generator-provenance declaration: cmd_record()/_seed_file_if_absent()
 # write only to <CLAUDE_HOME>/.claude/coordinator-setup-state.yaml -- the
+# operator's home directory, outside claude-klabauter's own tracked tree entirely.
 GENERATES = []
 
 import contextlib
@@ -247,7 +249,10 @@ def _atomic_write(target: str, content: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, target)
+        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended
+        # surface. This is the one real write site both `_seed_file_if_absent`
+        # and `cmd_record` funnel through.
         declare_write(target)
     except BaseException:
         try:
@@ -397,7 +402,9 @@ def main(argv: List[str]) -> int:
     except ValueError as exc:
         # A doubled CLAUDE_HOME reaches here from _claude_home_base. It is
         # reported on every subcommand INCLUDING auto-record-if-source-is-live,
+        # whose "always exits 0, emits nothing" contract covers the no-op case,
         # not a CLAUDE_HOME the resolver cannot honour: swallowing it is how the
+        # receipt silently splits in the first place.
         sys.stderr.write(f"coordinator-setup-state: {exc}\n")
         return 2
 

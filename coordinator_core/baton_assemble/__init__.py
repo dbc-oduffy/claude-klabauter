@@ -2836,9 +2836,9 @@ def resolve_lineage(
             # The claim rung, and ONLY this rung, is checked for existence
             # before it is trusted. A plan claim records a slug, nothing
             # releases it when the plan file goes away, and
-            # `coordinator-doc-new --type plan` takes a claim at SCAFFOLD
-            # time -- so a scaffold-and-discard leaves a claim that mints a
-            # baton edge to nothing. Example-game-repo-em, 2026-09-01: a baton minted
+            # a claim can outlive its plan file (a pre-change scaffold claim,
+            # or a plan deleted after `/pickup`/execution claimed it) -- and
+            # that claim would mint a baton edge to nothing. Example-game-repo-em, 2026-09-01: a baton minted
             # with `governing_plan: docs/plans/plan-probe.md`, a throwaway
             # written to a scratchpad and deleted, while the real plan sat
             # unnamed in the baton's own `predecessor_handoff`.

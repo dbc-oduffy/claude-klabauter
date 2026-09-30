@@ -185,6 +185,7 @@ def _extract_frontmatter_stamp(text: str, stamp_key: str) -> tuple[Optional[str]
     if isinstance(value, (_datetime.datetime, _datetime.date)):
         # YAML auto-parses an unquoted ISO-8601 scalar into a date/datetime
         # object rather than a string; re-serialize it back to ISO-8601
+        # rather than rejecting a plainly well-formed frontmatter stamp.
         value = value.isoformat()
     if not isinstance(value, str) or not value:
         return None, f"artifact frontmatter has no readable string {stamp_key!r}"

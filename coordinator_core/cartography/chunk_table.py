@@ -75,7 +75,14 @@ __all__ = [
     "compute_chunk_table",
 ]
 
+#: Languages counted as "source" for this reduction — deliberately narrower
 #: than tree.py's full _EXTENSION_LANG map: prose/config/data languages
+#: (markdown, yaml, json, toml, ini, html, css, text) and "unknown" carry no
+#: architectural-survey signal and are excluded. The resulting reduction
+#: ratio is a property of the repo, not a tuning target: this tree reduces
+#: ~12490 -> ~1254, the memo's reduces ~3831 -> ~201. A caller needing a
+#: different source definition should say so rather than have this set
+#: widened toward a particular repo's number.
 SOURCE_LANGS = frozenset(
     {
         "python",
@@ -94,10 +101,18 @@ SOURCE_LANGS = frozenset(
     }
 )
 
+#: Top-level-or-nested directory basenames that mark a path as a test
 #: artifact regardless of language — distinct from SKIP_DIR_NAMES (vendor/
+#: build/VCS noise) because test directories are legitimate tracked source
+#: in many repos; excluding them is a chunk-table-specific reduction choice,
+#: not a general walk-pruning rule (see this module's own docstring negative-
+#: spec, and _skip_dirs.py's negative-spec, for why the two sets stay apart).
 TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__", "spec"})
 
+#: Filename patterns that mark a single file as a test artifact even when it
 #: is not under a TEST_DIR_NAMES directory (e.g. a same-directory
+#: ``test_foo.py`` colocated with its module, or a ``*.test.ts`` sibling
+#: file — both real-world conventions this repo and DoE's own tree use).
 _TEST_FILENAME_RE = re.compile(
     r"^(test_.*\.py|.*_test\.py|conftest\.py|.*\.(test|spec)\.(ts|tsx|js|jsx))$"
 )

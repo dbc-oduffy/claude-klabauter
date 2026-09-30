@@ -36,8 +36,8 @@ NEGATIVE SPEC — what this test deliberately does NOT assert:
     holdout) — that gap is exactly what
     `test_sha_excluded_rows_match_the_recorded_aggregate` covers, not a
     skipped assertion. There is no `pytest.skip` anywhere in this file.
-  - It does not assert `excluded` sub-dicts (`b_blind`, `sha_shaped_predecessor`
-    counts) anywhere — those are diagnostic, not part of the rate/interval/
+  - It does not assert the `excluded` sub-dicts' `sha_shaped_predecessor`
+    counts anywhere — those are diagnostic, not part of the rate/interval/
     lift/contingency fields this test's brief names.
   - It does not assert `corpus_totals`, `unparseable`, `property_variance`, or
     any other `author_dependence_labels.json` top-level field —
@@ -116,11 +116,13 @@ def _in_arm(entry: dict, arm: str) -> bool:
 
 
 def _proxy_b_raw_counts(per_artifact: dict, arm: str) -> dict:
+    """Proxy B over every parseable row. A one-commit (b_blind) artifact stays
+    in: its static body-marker leg sees it fully, and only the two temporal
+    legs are blind (worth at most 4 of 690 positives). Its label is the static
+    leg alone -- a negative here may hide a temporal correction."""
     flagged_negative = flagged_positive = total_negative = total_positive = 0
     for entry in per_artifact.values():
         if entry.get("proxy_b") is None:
-            continue
-        if entry.get("b_blind"):
             continue
         if not _in_arm(entry, arm):
             continue
@@ -232,6 +234,25 @@ def measurement() -> dict:
 
 
 class TestProxyBReproducesInFull:
+    @pytest.mark.parametrize("arm", _ARMS)
+    def test_one_commit_artifacts_stay_in_the_denominators(
+        self, per_artifact, measurement, arm
+    ):
+        """Only the temporal legs are blind on a one-commit artifact; the
+        static leg labels it, so it is not excluded from any Proxy B rate."""
+        expected = measurement["per_proxy"]["proxy_b"][arm]
+        parseable = [
+            e
+            for e in per_artifact.values()
+            if e.get("proxy_b") is not None and _in_arm(e, arm)
+        ]
+        counts = expected["raw_counts"]
+        assert counts["total_positive"] + counts["total_negative"] == len(parseable)
+        assert expected["excluded"]["b_blind"] == 0
+        assert expected["temporal_legs_blind_rows_included"] == sum(
+            1 for e in parseable if e["b_blind"]
+        )
+
     @pytest.mark.parametrize("arm", _ARMS)
     def test_raw_counts(self, per_artifact, measurement, arm):
         actual = _proxy_b_raw_counts(per_artifact, arm)

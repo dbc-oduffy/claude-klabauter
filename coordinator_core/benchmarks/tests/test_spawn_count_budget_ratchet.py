@@ -119,10 +119,41 @@ _SPAWN_COUNT_HIGH_WATER = {
         },
         "n_committed_rows": {"ceiling": 2, "reason": _BASELINE_REASON},
     },
+    # See module-level comment for the `ops.discover_working_repos` context:
+    # `per_call` is a re-baseline (0 -> 1) against newly visible truth, the
+    # `op_total_*` marks are the OP end-to-end (nothing stubbed) and are new
+    # floors first measured 2026-08-19, and
+    # `machine_local_cli_elimination_calls` legitimately keeps `_sort_unique`
+    # stubbed to isolate `_merged_flat_registry`'s CLI elimination.
     # GRAVESTONE -- `ceremony.wsc_tail`'s high-water entry, retired 2026-08-27.
+    # The op was killed 2026-08-23 (state/kill-ledger.md K-046); DR-358 rebuilt
+    # its requirements as in-process calls and explicitly NOT as an op, so no
+    # registered subject has carried this name since. Its pinned ceiling of 34
+    # `op_total_normal_pass` spawns governed something that cannot run, and its
+    # own reason text named the enforcer as
+    # `ops/ceremony/tests/test_wsc_tail_spawn_budget.py` -- a file deleted with
+    # the op.
+    #
     # THIS IS A RETIREMENT, NEVER AN UNBANKED REDUCTION. The ratchet's rule is
+    # that a measured reduction must be banked so the ceiling only tightens;
+    # dropping a row would be ratchet evasion IF a live subject still spawned
+    # under it. Nothing does. The recorded open question this row carried --
+    # the unattributed -3 between C3's 37 and the fixture's 34 -- dies with the
+    # subject rather than being resolved, and must not be inherited by any
+    # successor row: it was measured against a handler that no longer exists.
+    #
     # WHY IT SURVIVED THE KILL, which is the part worth keeping. The orphan
+    # check below, `test_spawn_count_budget_rows_name_a_subject_that_still_
     # exists`, is a SUBSTRING SWEEP of the test tree, and `wsc_tail` still
+    # occurs as prose in guard-message fixtures -- so the sweep found the word,
+    # passed, and the row outlived its subject by four days. That is the SECOND
+    # time this exact false negative has fired: this module's own docstring
+    # already records `ceremony.scoped_git_commit` surviving K-045 the same way,
+    # "found by hand instead." Found by hand again. The durable fix is
+    # resolving a row's subject against the op registry rather than grepping
+    # for its name; surfaced as a design question, deliberately not patched
+    # here, because dropping this row treats the symptom and leaves the sweep
+    # blind to the third occurrence.
     "ops.discover_working_repos": {
         "per_call": {
             "ceiling": 1,
@@ -470,6 +501,8 @@ def test_named_enforcer_check_catches_the_row_that_escaped_it_twice():
     )
 
     # AND THE CONVERSE, so this cannot pass by flagging everything: a row
+    # naming an enforcer that DOES exist stays clean. Uses this module's own
+    # file, which is guaranteed present while the test is running.
     live_row = {
         "spawn_count_budget": {"per_call": 1},
         "_rationale": "enforced by test_spawn_count_budget_ratchet.py",
@@ -550,8 +583,15 @@ def test_spawn_count_high_water_marks_carry_a_stated_reason():
     )
 
 
+#: The marks that carried no per-row rationale when `reason` was introduced
 #: (opro-03 C7, 2026-08-19). ENUMERATIVE AND CLOSED: `_BASELINE_REASON` is a
+#: grandfather clause, and a grandfather clause nothing pins is just an escape
+#: hatch with a polite name -- a future raise could write
 #: `reason: _BASELINE_REASON` and satisfy the reason check while stating
+#: nothing, which is the exact dodge that check exists to refuse. Pinning the
+#: set means a NEW mark cannot reach for it: it must author a real reason or
+#: fail. This list only ever shrinks -- when one of these earns a real
+#: rationale, delete its entry here in the same commit.
 _BASELINE_REASON_GRANDFATHERED = frozenset(
     {
         "changelog.cited_in_range_count.n_tokens",

@@ -531,7 +531,17 @@ def test_stdin_from_already_satisfied_message_distinguishes_from_never_landed(
     assert "already-satisfied" in entry["error"]
 
 
+# ---------------------------------------------------------------------------
+# apply() / main() — `for_date`/`only_mode` plumbing into the brief() recompute
+#
+# Companion to `test_workday_complete_contract.py`'s brief-side
+# `for_date`/`only_mode` tests (f1ced234): that commit date-scoped the
+# COMPUTE half only. `apply()` recomputes the brief itself
+# (`apply.py:brief(decisions=..., for_date=..., only_mode=...)`), so the
 # MUTATING half needed the identical kwargs threaded through independently
+# — these tests stub `wc_apply.brief` so they stay pure argv/kwarg-plumbing
+# checks, never touching a real directive dispatch.
+# ---------------------------------------------------------------------------
 
 
 def _empty_envelope() -> dict[str, Any]:

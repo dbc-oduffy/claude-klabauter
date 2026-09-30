@@ -193,7 +193,14 @@ def test_archive_and_commit_never_reverts_a_peer_commit_landed_mid_race(tmp_path
     log = _git(["log", "--format=%H"], root).stdout.strip().splitlines()
     assert len(log) >= 2, "peer commit must still be reachable from HEAD (or its own ref) — history was not erased"
 
+    # The one unacceptable outcome: the peer's own commit is gone from
+    # history, or its content is missing from HEAD's tree — the silent
+    # revert this fix exists to close. Either refusal (failed[] carries the
     # candidate) or a successful landing that PRESERVES the peer's file is
+    # acceptable.
+    # check=False: a path missing from HEAD exits 128, and letting that raise
+    # would replace this test's own diagnostic assertion with a bare
+    # CalledProcessError — the silent-revert signal reported as plumbing noise.
     show = _git(
         ["show", "HEAD:peer-landed-while-we-were-committing.md"], root, check=False
     )

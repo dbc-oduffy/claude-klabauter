@@ -196,7 +196,12 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
 from coordinator_core.ipc import register_op
 from coordinator_core.session import machinery_paths
 
+#: Corpus-mutator declaration (generator-provenance sweep): `_write_records`
+#: rewrites `state/subagent-share/<session_id>/next-move-ledger.jsonl` and
+#: `_drain_intake` deletes `.../obligations-inbound.jsonl` -- both filenames
+#: come from `machinery_paths.ledger_path`/`intake_path`, a session_id-keyed
 #: target set `GENERATES` cannot express (same corpus, same reasoning as
+#: `guard_advisory_counter.py`'s `MUTATES` sibling declaration).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 
@@ -246,7 +251,11 @@ def _git_dir_for(cwd: Any) -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Ledger storage -- state/subagent-share/<session_id>/{next-move-ledger.jsonl,
+# obligations-inbound.jsonl}, repo-root relative. See module docstring's
 # "LEDGER LOCATION" for why this is NOT under the git dir.
+# ---------------------------------------------------------------------------
 
 _INTAKE_SCHEMA = 1
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")

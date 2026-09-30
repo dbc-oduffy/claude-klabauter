@@ -139,7 +139,14 @@ def test_system_message_and_suppress_output_stay_top_level():
     assert body["suppressOutput"] is True
 
 
+# --- Events the harness refuses a `hookSpecificOutput` wrapper for -----------------------
+#
+# `hookEventName` is validated against a closed enum that does not contain every event the
+# harness DIALS. `SessionEnd` dials, routes, runs the op -- and the response then fails
+# validation on the echoed name, taking the op's `additionalContext` with it. Measured by
+# coordinator-content-repo-cd on harness 2.1.258 (two-arm paired control, one field different). These
 # tests pin the shape, not the enum: see `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT`'s own
+# negative spec for why the set is a list of measurements rather than a copy of the enum.
 
 
 def test_sessionend_responses_omit_the_wrapper_the_harness_rejects():
@@ -191,3 +198,14 @@ def test_a_deny_on_a_normal_blocking_event_is_untouched():
     )
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert body["hookSpecificOutput"]["permissionDecisionReason"] == "nope"
+
+
+def test_unserved_stop_family_never_feeds_context_back_to_the_model():
+    """Stop's additionalContext re-enters as a new turn, whose end fires Stop again: an
+    unserved Stop carrying a notice loops until the harness's block cap trips."""
+    for event in ("Stop", "SubagentStop"):
+        body = hook_http.unserved_response(event)
+        assert _ctx(body) is None
+        assert "additionalContext" not in json.dumps(body)
+        assert "decision" not in body
+        assert body["systemMessage"]

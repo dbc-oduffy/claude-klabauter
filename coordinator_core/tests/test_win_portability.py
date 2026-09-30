@@ -179,7 +179,10 @@ def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypa
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     result = no_console_creationflags()
     assert set(result) == {"creationflags"}
+    # Independently-derived expectation, not a re-assertion of the function's
     # own output: subprocess.CREATE_NO_WINDOW when the real host defines it
+    # (real Windows), else the documented getattr fallback of 0 (a POSIX host
+    # modelling the Windows branch via the monkeypatched seam).
     import subprocess
 
     expected = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -199,6 +202,12 @@ def test_same_path_uses_samefile_when_both_paths_exist(tmp_path):
 
 def test_same_path_samefile_leg_detects_alias_realpath_alone_would_miss(tmp_path):
     # The load-bearing case this primitive exists for: two DIFFERENT path
+    # strings that samefile recognises as the same entry via a symlink alias,
+    # which a naive same-string-after-realpath check would also catch here
+    # (symlink resolves), but demonstrates the samefile leg is actually
+    # exercised (not silently short-circuited to the fallback) for an aliased
+    # pair -- see test_same_path_false_for_distinct_existing_paths for the
+    # negative control proving the function does not just return True always.
     real = tmp_path / "real"
     real.mkdir()
     alias = tmp_path / "alias"
@@ -243,7 +252,22 @@ def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
     assert same_path(missing_upper, missing_lower) is True
 
 
+# ---------------------------------------------------------------------------
+# run_forwarding -- fileno-safe subprocess.run wrapper. Regression coverage
+# for the workday-complete/workday-start assembler defect: `_invoke_cli_main`
+# (coordinator_core/workday_complete/apply.py) redirects sys.stdout/
+# sys.stderr to io.StringIO for every in-process directive dispatch, and a
+# bare `subprocess.run(stdout=sys.stderr, stderr=sys.stderr)` needs a real
+# `fileno()` on whatever it's handed -- it raises before the child is ever
+# spawned, which is exactly what made branch consolidation (`workday-
+# complete-step3-consolidate.py`'s sync-main step) unrunnable through the
+# assembler path.
+#
+# NOTE: the one test in this section that spawns a REAL process --
+# test_bare_subprocess_run_reproduces_the_original_break -- lives in
 # test_win_portability_real_spawn.py (SPAWN-RATCHET Rule 4: cadence-tiered on
+# its own, so the ~100 faked/monkeypatched tests in this file stay fast-tier).
+# ---------------------------------------------------------------------------
 
 
 def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-line\n", returncode=0):

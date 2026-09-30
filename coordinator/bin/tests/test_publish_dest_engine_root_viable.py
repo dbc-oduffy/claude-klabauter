@@ -141,7 +141,14 @@ def test_unregistered_dest_missing_engine_root_proceeds(tmp_path, monkeypatch):
     assert publish.assert_dest_engine_root_viable(target, totals) is True
 
 
+# ---------------------------------------------------------------------------
+# 2. Registered, engine-declaring mirror, genuinely degraded: coordinator_
+# core/ absent, dest already has other content (not a virgin dest), this
+# row's own source does not carry coordinator_core/ either — refused. This
 # is the ORIGINAL defect the guard exists for; it must not regress under the
+# engine-declaring narrowing (see test 7 below for the same shape restated
+# explicitly as the regression pin).
+# ---------------------------------------------------------------------------
 
 
 def test_registered_mirror_degraded_engine_root_refuses(tmp_path, monkeypatch, capsys):
@@ -240,7 +247,14 @@ def test_registered_mirror_detached_head_refuses(tmp_path, monkeypatch, capsys):
     assert "detached" in (captured.out + captured.err)
 
 
+# ---------------------------------------------------------------------------
 # 6. Registered, ENGINE-FREE mirror (coordinator_claude shape): registry
+# entry exists, but no row in the portable topology ever writes
+# coordinator_core into this dest — missing coordinator_core/ is expected,
+# not degraded. Guard PASSES. This pins the live defect this dispatch fixes:
+# before the fix, registration alone put this dest in scope and it refused
+# unconditionally (0/5 rows on the real coordinator_claude mirror).
+# ---------------------------------------------------------------------------
 
 
 def test_registered_engine_free_mirror_missing_engine_root_proceeds(tmp_path, monkeypatch):
@@ -263,7 +277,13 @@ def test_registered_engine_free_mirror_missing_engine_root_proceeds(tmp_path, mo
     assert publish.assert_dest_engine_root_viable(target, totals) is True
 
 
+# ---------------------------------------------------------------------------
 # 7. Registered, ENGINE-DECLARING mirror (klabauter shape) missing
+# coordinator_core/ — still REFUSED. Restates test 2 explicitly as the
+# regression pin for the second narrowing: an engine-declaring mirror going
+# degraded must not be waved through just because SOME registered mirrors
+# are legitimately engine-free.
+# ---------------------------------------------------------------------------
 
 
 def test_registered_engine_declaring_mirror_missing_engine_root_still_refuses(

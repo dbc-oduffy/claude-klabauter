@@ -31,7 +31,15 @@ from coordinator_core.session import claude_md_grant as cmg
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# real git (init/config/add/commit) because the production code under test --
+# `core.git_root()`, consulted when resolving where grant state lives -- reads
+# real git state that no mock stands in for. `tmp_path` is function-scoped
+# and tests write grant/session state under reused session ids, so the repo
+# fixture stays per-test rather than hoisted to module scope. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly
+# not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -285,7 +293,16 @@ class TestReadClaudeMdWriteGrant:
         assert record["note"] == "ask"
 
 
+# ---------------------------------------------------------------------------
 # Subagent resolvability — the LOAD-BEARING requirement this module's
+# docstring names: a grant written via the default env-driven session
+# resolution must be visible to a caller using that SAME default
+# resolution path, because that is the exact path a C4 guard evaluation
+# running inside a dispatched subagent's tool-call turn would use (one
+# harness session, many tool-call turns — env vars are process-wide, not
+# per-turn). If this were false, the escape hatch could not reach the
+# path it exists for.
+# ---------------------------------------------------------------------------
 
 
 class TestSubagentResolvability:

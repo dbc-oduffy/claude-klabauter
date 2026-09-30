@@ -184,7 +184,12 @@ class TestWriterNameBudgetBoundary:
             writer_name=huge_name,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
+        # `_truncate_to_budget` cuts to the budget then appends a 3-byte
+        # ellipsis marker (pre-existing behavior, not this chunk's), so the
+        # precedent check (`test_all_owner_class_renderings_stay_within_
+        # shipped_message_budget`) asserts against the wider
         # MESSAGE_PROSE_CAP_BYTES, not the tighter owner-clause budget --
+        # matched here rather than re-litigated.
         assert len(sentence.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
         assert "confirmed live" in sentence
 
@@ -310,6 +315,9 @@ class TestWriterNameBudgetBoundary:
             writer_name=realistic_long_name,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
+        # `_truncate_to_budget` cuts to the budget then appends a 3-byte
+        # ellipsis marker (pre-existing behavior -- see the precedent test
+        # above), so the boundary check is against the wider
         # MESSAGE_PROSE_CAP_BYTES, not the tighter owner-clause budget.
         assert len(sentence.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
         assert len(sentence.encode("utf-8")) <= budget + len("…".encode("utf-8"))
@@ -490,7 +498,9 @@ class TestOwnerNameProvenanceNote:
         assert "Strict mode would block" in out["additionalContext"]
         assert "provenance" in out["additionalContext"].lower()
 
+        # Contested strict-mode deny: this session ALSO claims the same
         # path, so it lands in the CONTESTED branch instead of the plain
+        # owned-by-another-session one.
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
         _claim(root, sid, "sibling.txt")

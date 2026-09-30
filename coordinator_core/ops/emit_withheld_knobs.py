@@ -64,13 +64,17 @@ from coordinator_core.ops.coordinator_content_root import coordinator_content_ro
 from coordinator_core.session.declared_writes import declare_write
 
 #: Bumped only when an EXISTING field changes meaning or leaves. Adding a field, or adding
+#: an entry, is additive and does not bump — DoE's consumer reads by key.
 SCHEMA_VERSION = 1
 
 #: Output-dir override, mirroring `ARTIFACT_CONTRACT_OUT_DIR`'s role for the sibling op.
+#: Exists so the pin test can emit into a tmp_path without a DoE checkout present.
 OUT_DIR_ENV = "WITHHELD_KNOBS_OUT_DIR"
 
+# Generator-provenance: emits coordinator/withheld-knobs.json under the
 # coordinator-content-repo tree (or OUT_DIR_ENV's override), explicitly NOT claude-klabauter -- see
 # module docstring CROSS-REPO WRITE. Same declaration as the sibling op that
+# runs the same way, `emit_artifact_shape_contract`.
 GENERATES = []
 
 _BASENAME = "withheld-knobs.json"

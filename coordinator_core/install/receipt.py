@@ -491,6 +491,16 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="install-receipt",
     source_module="coordinator_core.install.receipt",
     clauses=(
+        # `persist_receipt` is the sole real-machine write this module
+        # performs — everything else here (`derive_receipt_entries`,
+        # `build_receipt`) is pure in-memory assembly, per the module
+        # docstring's Negative spec. Declared even though the AST-walk
+        # enforcement test (`test_write_reaching_modules_declare.py`)
+        # would not itself flag this module (the write goes through the
+        # `atomic_write_bytes`/`_refuse_machine_mutation` NAME-call seam,
+        # not one of that test's flagged attribute names) — the doctrine
+        # `_shared.py`'s own allowlist entry states applies here too: the
+        # CALLER pointing the generic write mechanic at a real target is
         # where the WRITE_SURFACE clause belongs.
         StaticClause(
             entries=(

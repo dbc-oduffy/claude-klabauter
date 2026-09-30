@@ -1,4 +1,12 @@
+# test_coordinator_gate_dispatcher.py — verifies coordinator-gate.py (the
+# C10 fan-in dispatcher for the check-*/verify-*/assert- family) and its
+# additions to coordinator/bin/lib/entry_point_shim.py.
+#
+# Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C10
 # What this pins: (1) the dispatcher batches MULTIPLE subcommands into ONE
+# process — the whole point of C10 per C7's 7.17x measurement, now applied
+# to the 60-entry-point family the plan's § Problem opening figure names —
+# and (2) no subprocess is ever spawned by the in-process shim path (the
 # REJECTED shape from C7, -0.5123, was exactly a subprocess-spawning
 # forwarder) for the converted (GATE_ENGINE_ENTRIES) subset.
 from __future__ import annotations

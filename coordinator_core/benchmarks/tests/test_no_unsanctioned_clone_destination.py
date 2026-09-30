@@ -122,6 +122,36 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "source volume instead would put this benchmark's churn -- 200 commits per "
         "sample -- on the working tree's disk to buy a constraint it does not have"
     ),
+    ("coordinator_core/bash_guards/tests/guard_message_corpus.py", "mkdtemp"): (
+        "doctrine-surface fixture under `Path.home()` -- a scratch dir the guard "
+        "text must see as home-rooted; not an engine clone"
+    ),
+    ("coordinator_core/bash_guards/tests/test_write_claim_record.py", "mkdtemp"): (
+        "AC-7 timing scratch under the repo-rooted `.pytest_ac7_scratch`; a "
+        "work dir for a synthetic repo, not an engine clone"
+    ),
+    ("coordinator_core/conftest.py", "mkdtemp"): (
+        "suite-wide warm runtime base under /tmp for the AF_UNIX sun_path byte "
+        "budget; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_client_fallback.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_client_posix_transport.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_credential_directory_is_hardened.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_server_starts_http_listener.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_settings_home_mismatch_refusal.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_warm_telemetry.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
 }
 
 

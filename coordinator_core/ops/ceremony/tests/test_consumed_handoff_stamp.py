@@ -479,7 +479,7 @@ def test_post_commit_eleven_batons_land_one_follow_up_commit(repo):
     distinct `deliverable_id` -- lands ONE follow-up commit, not eleven. Real
     git end-to-end (not the mocked `_commit_and_push_follow_up` the tests
     above use): the property under test IS the trailer resolution
-    `git_native.commit_scoped` performs on a pathspec spanning many
+    `apply_missing_trailers` resolves on a pathspec spanning many
     `deliverable_id` values, which a mock would assert nothing about. Uses
     `push_mode=PUSH_MODE_NONE` -- no remote is needed to prove the commit
     count; the push leg is already covered elsewhere."""
@@ -935,7 +935,7 @@ def test_follow_up_commit_survives_rebase_retry_and_lands_the_rewritten_sha(
     concurrent peer push lands on the shared branch first, forcing a genuine
     non-fast-forward reject; the returned sha must be the post-rebase
     commit `resolve_post_push_sha` adopted, never the pre-push sha
-    `commit_scoped` minted before the reject fired."""
+    `commit_paths` minted before the reject fired."""
     repo = init_push_repo(tmp_path, branch="work/rebase-retry")
     origin = tmp_path / "origin.git"
 
@@ -985,7 +985,7 @@ def test_follow_up_commit_survives_rebase_retry_and_lands_the_rewritten_sha(
     assert error is None, error
     assert pushed is True
     assert push_status == PUSH_STATUS_PUSHED
-    # The rebase-retry branch genuinely fired: the sha `commit_scoped` minted
+    # The rebase-retry branch genuinely fired: the sha `commit_paths` minted
     # before the reject differs from the sha that finally landed.
     assert captured_pre_push_sha["sha"] is not None
     assert follow_up_sha != captured_pre_push_sha["sha"]
@@ -1003,7 +1003,7 @@ def test_follow_up_commit_survives_rebase_retry_and_lands_the_rewritten_sha(
 
 
 # ---------------------------------------------------------------------------
-# AC17 follow-up commit routes through commit_scoped -- a peer's
+# AC17 follow-up commit routes through commit_paths -- a peer's
 # deliberately-staged partial-hunk content on a path in the stamped set
 # survives verbatim (the claude-klabauter 506748a0 incident shape, closed).
 # Real git required (fixtures.real_git) -- divergence cannot be exhibited by
@@ -1031,7 +1031,7 @@ def test_follow_up_commit_preserves_peer_staged_divergence(tmp_path):
         **no_console_creationflags(),
     )
     assert result.stdout == "STAGED\n"
-    # Worktree content is untouched -- commit_scoped never re-derives the
+    # Worktree content is untouched -- commit_paths never re-derives the
     # diverged path's content from the worktree.
     assert (repo / "state/handoffs/some-handoff.md").read_text(encoding="utf-8") == "WORKTREE\n"
 
@@ -1052,7 +1052,7 @@ def test_follow_up_push_rebase_retry_returns_rewritten_sha_not_stale_pre_push(
     """A peer's push lands on the shared branch between this call's own
     commit and its own push attempt, forcing `push_with_retry` down its
     reject -> fetch -> rebase --onto -> re-push ladder. That rebase REWRITES
-    the follow-up commit's sha, so the pre-push `rev_parse_head` capture
+    the follow-up commit's sha, so the pre-push `commit_paths` sha
     inside `_commit_and_push_follow_up` is stale the moment the ladder
     retries. Without `resolve_post_push_sha`'s post-push re-read, the
     returned sha would still be that stale value -- one that never actually
@@ -1095,20 +1095,17 @@ def test_follow_up_push_rebase_retry_returns_rewritten_sha_not_stale_pre_push(
         "stub content\n", encoding="utf-8"
     )
 
-    # Records every real `rev_parse_head` read this call chain makes --
-    # `_commit_and_push_follow_up`'s own pre-push capture is always the
-    # first entry, regardless of how many `push_with_retry`/
-    # `resolve_post_push_sha` reads follow it.
+    # `_commit_and_push_follow_up`'s own pre-push sha is the one
+    # `commit_paths` returns; record it before any push-ladder rewrite.
     seen_shas: list[str] = []
-    real_rev_parse_head = m.git_native.rev_parse_head
+    real_commit_paths = m.commit_paths
 
-    def _recording_rev_parse_head(worktree_root):
-        result = real_rev_parse_head(worktree_root)
-        if result.ok:
-            seen_shas.append(result.stdout.strip())
-        return result
+    def _recording_commit_paths(*args, **kwargs):
+        outcome = real_commit_paths(*args, **kwargs)
+        seen_shas.append(outcome.sha)
+        return outcome
 
-    monkeypatch.setattr(m.git_native, "rev_parse_head", _recording_rev_parse_head)
+    monkeypatch.setattr(m, "commit_paths", _recording_commit_paths)
 
     follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
         repo.root, ["state/handoffs/follow-up-stub.md"], "deadbeef",
@@ -1118,7 +1115,7 @@ def test_follow_up_push_rebase_retry_returns_rewritten_sha_not_stale_pre_push(
     assert error is None, error
     assert pushed is True
     assert push_status == m.PUSH_STATUS_PUSHED
-    assert seen_shas, "rev_parse_head was never called -- test is not exercising the read it means to pin"
+    assert seen_shas, "commit_paths was never called -- test is not exercising the commit it means to pin"
 
     pre_push_sha = seen_shas[0]
     assert follow_up_sha is not None
@@ -1258,3 +1255,42 @@ def test_ship_drift_regression_full_pass(repo_with_remote):
     assert "deployment_state: shipped" in on_disk
     assert f"shipped_in: {real_committed_sha}" in on_disk
     assert repo.porcelain_status() == ""
+
+
+# ---------------------------------------------------------------------------
+# The follow-up commit leaves the shared index agreeing with HEAD and carries
+# the Session-Id trailer the retired prepare-commit-msg hook attached.
+# ---------------------------------------------------------------------------
+
+
+def test_follow_up_commit_leaves_index_agreeing_with_head_and_stamps_session_id(
+    tmp_path, monkeypatch
+):
+    from .test_commit_leaves_index_agreeing_with_head import (
+        assert_commit_leaves_index_agreeing_with_head,
+    )
+
+    sid = "66666666-6666-6666-6666-666666666666"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    repo = real_git_repo(tmp_path)
+    paths = ["state/handoffs/a.md", "state/handoffs/b.md"]
+    for p in paths:
+        (repo / p).parent.mkdir(parents=True, exist_ok=True)
+        (repo / p).write_text(f"stamped {p}\n", encoding="utf-8")
+
+    def commit_fn():
+        _sha, _pushed, _status, error = m._commit_and_push_follow_up(
+            repo, paths, "deadbeef", push_mode=PUSH_MODE_NONE
+        )
+        assert error is None, error
+
+    assert_commit_leaves_index_agreeing_with_head(
+        repo, commit_fn, paths, peer_path="peer.txt"
+    )
+    body = subprocess.run(
+        ["git", "log", "-1", "--format=%B", "HEAD~1"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert f"Session-Id: {sid}" in body

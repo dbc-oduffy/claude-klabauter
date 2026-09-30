@@ -97,7 +97,11 @@ class TestCwdFiltering:
 
 class TestRefAddressStabilityUnderFiltering:
     def test_filtered_out_session_still_widens_the_kept_sessions_ref(self, monkeypatch):
+        # AC "Critical": ref/name-collision must be computed over the WHOLE
+        # snapshot, never a filtered subset. Two sessions named identically
         # ("claude-klabauter-89") live in DIFFERENT repos -- filtering must not change
+        # the surviving row's ref/address relative to what an unfiltered
+        # caller would see for that same session id.
         snap = {
             "sid-in": _record("claude-klabauter-89", "/sock/in.sock", cwd="/repo/claude-klabauter"),
             "sid-out": _record("claude-klabauter-89", "/sock/out.sock", cwd="/repo/other"),
@@ -176,7 +180,12 @@ class TestSelfRow:
     def test_self_record_none_falls_back_to_messaging_socket_env_match(
         self, monkeypatch
     ):
+        # The reproduced live defect: `self_record()` declines (e.g. the
+        # pid resolver's `env-miss:name-mismatch` leg) even though
         # `CLAUDE_PID` was correct -- the roster must still find `self` via
+        # the second, independent signal `reachability._socket_env_self_match`
+        # uses, exactly mirroring `reachability.resolve_address`'s own
+        # fallback.
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock", cwd="/repo/claude-klabauter"),
             "peer-sid": _record("claude-klabauter-99", "/sock/peer.sock", cwd="/repo/claude-klabauter"),
@@ -233,6 +242,8 @@ class TestWarmServedSelfRow:
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         # The spawner's own ambient CLAUDE_PID still resolves via
+        # self_record() -- exactly the live defect: it is a real, correctly
+        # pid-keyed match, just for the wrong session.
         monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
 
         with session_core.warm_served_request(True):

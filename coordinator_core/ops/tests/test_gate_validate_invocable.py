@@ -181,6 +181,7 @@ def test_overall_verdict_precedence_error_beats_fail_beats_pass():
     assert _overall_verdict([pass_r, unavailable_r, skipped_r]) is Verdict.PASS
     assert _overall_verdict([pass_r, fail_r, unavailable_r]) is Verdict.FAIL
     assert _overall_verdict([pass_r, fail_r, error_r]) is Verdict.ERROR
+    # nothing PASSed and nothing FAILed/ERRORed but something was
     # UNAVAILABLE/SKIPPED — a vacuous PASS is wrong; UNAVAILABLE is honest.
     assert _overall_verdict([unavailable_r, skipped_r]) is Verdict.UNAVAILABLE
 

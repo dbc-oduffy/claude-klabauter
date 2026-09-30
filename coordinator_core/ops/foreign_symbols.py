@@ -57,12 +57,17 @@ from typing import Any, Dict, List, Optional
 from coordinator_core.cartography._guard import path_guard
 
 # Kinds that map onto the envelope's "classes" bucket (ENVELOPE MAPPING table,
+# plan § C1). Compared against the string value of `Symbol.kind` (a StrEnum) —
+# never against an exact-set assertion of the enum's full member list, whose
+# vocabulary grows additively upstream.
 _CLASS_KIND_VALUES = frozenset({"class", "struct", "interface", "enum", "namespace"})
 
 _FUNCTION_KIND_VALUES = frozenset({"function", "method"})
 
+# Kinds that map onto the envelope's "constants" bucket (chunk C5 fix — the
 # ENVELOPE MAPPING table's "not modeled by symbol_extract" claim for
 # `constants` was factually wrong; `SymbolKind.CONSTANT` is a live, frequent
+# member of their frozen enum).
 _CONSTANT_KIND_VALUES = frozenset({"constant"})
 
 _TYPE_ALIAS_KIND_VALUES = frozenset({"type_alias"})
@@ -115,6 +120,10 @@ def _is_class_kind(kind_value: str) -> bool:
     if kind_value in _CLASS_KIND_VALUES:
         return True
     # "abstract class" / similar compound forms (ENVELOPE MAPPING table:
+    # "class/struct/interface/enum/namespace (and any abstract-class form)").
+    # Speculative forward-compat, not presently reachable: the installed
+    # dependency's frozen `SymbolKind` vocabulary contains no member whose
+    # string value includes "abstract" (review dc659900, Nit).
     return "class" in kind_value and "abstract" in kind_value
 
 

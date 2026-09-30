@@ -148,3 +148,27 @@ def test_root_overlay_keeps_git_and_yields_to_subdir_rows(dest_repo: Path, tmp_p
         assert not (tree / "sub" / "b.txt").exists()
     finally:
         discard_throwaway_tree(tree)
+
+
+def test_second_root_row_does_not_revert_the_first(dest_repo: Path, tmp_path: Path) -> None:
+    """Every root row stages a full copy of the dest; a later one's stale
+    copy must not undo an earlier one's add, edit, or delete."""
+    first = tmp_path / "first"
+    _write(first / "top.txt", "top-new\n")
+    _write(first / "sub" / "a.txt", "a-head\n")
+    _write(first / "sub" / "new.txt", "new\n")
+    second = tmp_path / "second"
+    _write(second / "top.txt", "top-head\n")
+    _write(second / "sub" / "a.txt", "a-2\n")
+    _write(second / "sub" / "b.txt", "b-head\n")
+    _write(second / "other.txt", "other\n")
+
+    tree = build_throwaway_tree(dest_repo, [(first, Path(".")), (second, Path("."))], [])
+    try:
+        assert (tree / "top.txt").read_text() == "top-new\n"
+        assert (tree / "sub" / "new.txt").read_text() == "new\n"
+        assert (tree / "sub" / "a.txt").read_text() == "a-2\n"
+        assert not (tree / "sub" / "b.txt").exists()
+        assert (tree / "other.txt").read_text() == "other\n"
+    finally:
+        discard_throwaway_tree(tree)

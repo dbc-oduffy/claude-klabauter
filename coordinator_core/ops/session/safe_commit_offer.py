@@ -408,7 +408,14 @@ class SafeCommitOffer(TypedDict):
     orphans: List[str]
     indeterminate: bool
     ownership: OwnershipReadout
+    # their-writes plan) — the four-bucket ownership readout (mine / named
+    # peer / unattributed / degraded), extending C3's post-commit `residue`
     # report rather than replacing it. ADDITIVE ONLY: every pre-existing key
+    # on this TypedDict is unchanged in shape and meaning (two live sibling
+    # plans consume this shape verbatim -- see the plan's § Cross-plan
+    # coordination). See `OwnershipReadout`'s own docstring for the bucket
+    # contract and `compute_offer` for how it is derived from the claim
+    # index.
 
 
 class CommitGroup(TypedDict, total=False):
@@ -598,7 +605,17 @@ class Reconciliation(TypedDict):
     claimed_absent: List[str]
     unclaimed: List[str]
     # claims — the adoption CANDIDATE set, enumerated in full here while
+    # `_render_report` samples it. Enumeration is the load-bearing property,
     # not the rendering: coordinator-content-repo-em's SC-DR-022 half 1 permits an operator
+    # to adopt an unclaimed path with `--include-orphans`, and the verified
+    # property that makes that remedy safe is that "the named paths half 1
+    # permits are named by the ENGINE, not assembled by the adopter". An
+    # aggregate count supplies no candidate list, so the remedy has no input.
+    # NAMED, NEVER ADOPTED: nothing here is committed, and nothing here is
+    # attributed to this session. Most entries on a shared worktree belong to
+    # nobody in particular and some belong to peers who have not claimed
+    # them yet — see this module's own DR-258 note on why chasing this bucket
+    # toward zero is not a goal.
 
 
 class CommitOfferReport(TypedDict):
@@ -607,11 +624,33 @@ class CommitOfferReport(TypedDict):
     excluded: List[ExcludedPath]
     failed_groups: List[GroupResult]
     dropped_groups: List[DroppedGroup]
+    # touched-path-bookkeeping) -- one entry per caller-supplied `groups`
+    # entry that lost some or all of its named paths to the `safe_set`
+    # filter, empty when `groups` is `None` (the computed `_default_groups`
     # path can never drop a path it did not itself put there). ADVISORY
+    # ONLY, same as `excluded`/DR-227 -- never a gate, never changes
+    # `main`'s exit code, and never widens `resolved_groups`/the commit
+    # boundary; see `DroppedGroup`'s own docstring for the shape.
     residue: "OrderedDict[str, List[str]]"
     # declare-what-they-write plan) -- REPORT-ONLY, never a gate: every dirty
+    # path still present in `git status --porcelain` AFTER the commit groups
+    # above landed, MINUS whatever this call actually committed and MINUS
+    # any path a live peer session already owns (per a FRESH `compute_offer`
+    # re-read taken immediately before residue is computed, post-commit --
+    # see `_compute_residue`, Review: code-reviewer Finding 2), grouped by
+    # top-level
+    # `state/` class. Purely additive: nothing here feeds back into
+    # `safe_set`/`resolved_groups` in `commit_session_offer_async`, so it
+    # cannot widen the commit boundary (AC4, negative-spec: "do not widen
+    # what any ceremony commits"). Empty is the common case and is not an
+    # error -- an empty `residue` after a healthy commit is exactly what a
+    # correctly-scoped ceremony should leave behind.
     reconciliation: Reconciliation
     # write ledger against, and what it found. REPORT-ONLY, never a gate:
+    # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
+    # widen the commit boundary, exactly like `residue`/`excluded` above.
+    # See `Reconciliation`'s own docstring for why `reconciled` is a
+    # did-the-check-run flag and NOT a health flag.
     outcome: CommitOutcome
 
 
@@ -871,7 +910,17 @@ def full_ownership_map(session_id: str, cwd: Optional[str] = None):
     if not answer.complete:
         return mine, {}
 
+    # The live set is resolved ONCE, here, and every entry below is answered
+    # from it. Measured 2026-08-21, job object, k=20: calling the per-owner
+    # per entry instead cost 23,910ms of process time on this repo's ~405 peer
+    # claims -- 48x the 500ms brightline, in ZERO subprocesses, because
+    # `live_session_ids` is documented as deliberately un-memoised (a cached
+    # live-set reopens the wrong-attribution race) and re-walks every session
+    # dir on each call. That is per-item amplification of exactly the shape
+    # this whole rebuild exists to remove, reintroduced inside the fix for it.
     # NEGATIVE SPEC: do not move a liveness call back inside this loop, and do
+    # not "fix" the cost by memoising `live_session_ids` -- the hoist is free
+    # and correct; the cache is neither.
     try:
         live = live_session_ids(cwd)
     except Exception:  # noqa: BLE001 - a readout must never raise
@@ -1156,6 +1205,14 @@ def _default_groups(
     for p in safe_paths:
         segments = p.split("/")
         # The DIRECTORY prefix only (drop the filename) -- up to two
+        # directory levels deep, e.g. "coordinator/skills" for
+        # "coordinator/skills/handoff/SKILL.md". A bare top-level file (no
+        # directory) never becomes the bucket key itself -- that would put
+        # the exact filename back into the subject line via `key`, the same
+        # unbounded-subject shape this split fixes. Joining a 2-segment path
+        # like "sub/file.py" on segments[:2] would ALSO reproduce the
+        # filename (there IS no directory-only prefix shorter than the
+        # whole path) -- segments[:-1] (directories only) is the fix.
         dir_segments = segments[:-1][:2]
         key = "/".join(dir_segments) if dir_segments else "(repo root)"
         buckets.setdefault(key, []).append(p)
@@ -1177,6 +1234,8 @@ def _default_groups(
     return groups
 
 
+# ---------------------------------------------------------------------------
+# Post-commit residue report (C3, 2026-08-05 engine-ops-declare-what-they-
 # write plan) — REPORT-ONLY, read-only. Never stages, never blocks, never
 
 

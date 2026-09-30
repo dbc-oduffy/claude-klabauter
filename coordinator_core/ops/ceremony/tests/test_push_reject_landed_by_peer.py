@@ -37,6 +37,26 @@ from coordinator_core.ops.ceremony.git_native import GitResult
 pytestmark = [pytest.mark.spawns_process]
 
 
+def _git_replay_supports_ref_action() -> bool:
+    """`git replay --ref-action` landed after git 2.44; an older git answers
+    "'replay' is not a git command" and the push ladder correctly reports the
+    push failure instead of recovering, so the replay tests cannot observe a
+    landing there."""
+    probe = subprocess.run(
+        ["git", "replay", "-h"],
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return "--ref-action" in (probe.stdout + probe.stderr)
+
+
+_REQUIRES_GIT_REPLAY = pytest.mark.skipif(
+    not _git_replay_supports_ref_action(),
+    reason="installed git has no `git replay --ref-action`; replay recovery is unavailable",
+)
+
+
 _NON_FAST_FORWARD_STDERR = (
     "! [rejected] work/x -> work/x (non-fast-forward)\n"
     "error: failed to push some refs to 'origin'\n"
@@ -179,6 +199,7 @@ def _advance_the_remote(tmp_path: Path, repo: Path, filename: str, body: str) ->
     _git(["push", "-q", "origin", "work/x"], other)
 
 
+@_REQUIRES_GIT_REPLAY
 def test_genuine_divergence_on_a_dirty_tree_replays_and_lands(tmp_path):
     """The 2026-08-30 ruling, pinned: our commit is NOT on the remote, the
     remote has moved, and the tree is dirty with a peer's uncommitted file.
@@ -205,6 +226,7 @@ def test_genuine_divergence_on_a_dirty_tree_replays_and_lands(tmp_path):
     assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"
 
 
+@_REQUIRES_GIT_REPLAY
 def test_divergence_over_a_peers_uncommitted_edit_declines_touching_nothing(tmp_path):
     """The counterweight to the ruling: when the replay would have to
     overwrite a path a peer is mid-edit on, it must DECLINE -- reporting the

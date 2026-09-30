@@ -173,17 +173,36 @@ PRIORITY = 41
 
 _WORKTREE_WORD_RE = re.compile(r"(?<![\w-])worktree\b")
 
+#: Second-level `git worktree` subcommand classification -- see module
 #: docstring "DELIBERATE ALLOW-LIST" / "DENY set" sections for the full
+#: rationale on each member.
 _DENY_SUBCOMMANDS = frozenset({"add", "move", "repair", "lock", "unlock"})
 _ALLOW_SUBCOMMANDS = frozenset({"list", "remove", "prune"})
 
 _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 
 #: A bare leading `VAR=value` shell assignment token (`GIT_TRACE=1 git
+#: worktree add ...`) -- `_strip_leading_subshell_and_env` (imported from
+#: the sibling module) only peels a literal `env` word prefix, not a bare
+#: assignment with no `env` keyword, so this guard's own command-position
+#: resolution needs its own skip for the assignment-prefix shape (mirrors
+#: `_sentinel_creation_guard.py`'s `_env_skip_index`).
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+#: Passthrough wrapper binaries that run their remaining argv unchanged
+#: (BX-13 fix, 2026-07-29, confirmed live): `nice git worktree add ...` was
+#: never recognized -- `_strip_leading_subshell_and_env` only peels `env`/
+#: a subshell-open, and this guard's own `_skip_leading_env_assignments`
+#: only peeled a bare `VAR=value` token, so the resolved argv0 landed on
+#: `nice` (not `git`) and the invocation allowed while still creating the
 #: worktree for real. Same set `dispatch_checks.py`'s `_BYPASS_PREFIX`
+#: already tolerates.
+#: Widened (2026-07-29, code-reviewer Finding 3) -- see the sibling copy in
+#: `block_subagent_destructive_action.py` for the full rationale: `setsid`/
+#: `strace`/`doas`/`busybox` were unrecognized passthrough wrappers, so
+#: `setsid git worktree add ../wt-1 x` landed the resolved head on `setsid`
+#: (never `git`) and the worktree was still created for real.
 _PASSTHROUGH_WRAPPERS = frozenset(
     {
         "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -243,15 +262,40 @@ def _evaluate(cmd: str) -> Optional[str]:
         if not seg_tokens:
             continue
 
+        # 2026-07-28): scanning
+        # every token in the segment for the first `git`-basename match
+        # (the pre-fix behavior here) treats a non-command-position
+        # MENTION of "git" (an argument to another command, e.g. `echo git
+        # worktree add x`) as an invocation -- the exact false-positive
         # class `block_subagent_destructive_action.py`'s "COMMAND-POSITION
         # GIT-TOKEN FIX" closes for its own sibling checks, in this same
+        # diff, but that fix was never applied to this guard. Reuse the
+        # SAME command-position discipline (`_strip_leading_subshell_and_
+        # env` peels a leading subshell-open `(` / `env` prefix so the
+        # remaining head token is the true command-position executable)
+        # instead of a position-independent token scan.
         working = _strip_leading_subshell_and_env(seg_tokens)
         working = _skip_leading_env_assignments(working)
         if not working:
             continue
 
+        # BX-13 fix (2026-07-29, confirmed live): `sh -c 'git worktree add
+        # ...'` (or `bash -c`/`zsh -c`/etc.) was never unwrapped -- the
+        # quoted `-c` argument tokenizes as ONE shlex word, so `working[0]`
+        # was the shell interpreter itself, never `git`, and the segment was
+        # silently skipped while the wrapped command still created the
+        # worktree for real. Unwrap and recurse into the SAME `_evaluate` on
+        # the nested payload text.
+        #
         # BUNDLED-`-c`-FLAG FIX (2026-07-29, code-reviewer Finding 2,
+        # confirmed live): the exact-token `"-c" in working[1:]` test missed
+        # a BUNDLED short flag -- `sh -ic 'git worktree add ...'` tokenizes
+        # its second token as the literal string `-ic`, which is never
+        # exactly `"-c"`, so the unwrap never fired and the quoted payload
         # was never re-scanned. `_BUNDLED_C_FLAG_RE` (imported from the
+        # sibling destructive-action guard, which already fixed this exact
+        # gap for its own `-c` detection) matches any bundled-or-standalone
+        # `-c` short flag (`-c`, `-ic`, `-ci`, ...).
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
             c_flag_positions = [
@@ -326,6 +370,10 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         if not working:
             continue
 
+        # `sh -c '...'`/`bash -c '...'` typed from a PowerShell call --
+        # Convention (c): the payload is Bash even under a PowerShell outer
+        # call, so the recursive call below is the Bash-shaped `_evaluate`,
+        # never a PowerShell re-entry. `powershell -Command "..."` is NOT in
         # `_C_FLAG_SHELL_INTERPRETERS` at all, so it never reaches here.
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
@@ -346,6 +394,11 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
         if ambiguous:
             # Built from the QUOTE-NORMALIZED tokens, never `shlex.quote` over
+            # the raw PowerShell spans: `shlex.quote('"worktree"')` yields
+            # `'"worktree"'`, which `strip_powershell_prose_noise` then strips
+            # entirely as a quoted span -- deleting the word the scanner is
+            # looking for and dropping a real deny (slice-B review P1b,
+            # reproduced). `block_stash_destruction` already does it this way.
             seg_text = " ".join(working)
             verdict = _evaluate_powershell_legacy(seg_text)
             if verdict is not None:
@@ -386,7 +439,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     dialect = dialect_from_tool_name(payload.get("tool_name") or "")
 
     if dialect is Dialect.POWERSHELL:
+        # PowerShell has no POSIX heredoc syntax -- the bash leg's
+        # `_strip_heredoc_bodies` does not apply here. A quoted/here-string
+        # `worktree` mention is inherently safe against this cheap
+        # pre-filter too: when the tokenizer parses cleanly, a quoted span
         # is ONE atomic token (`_ATOMIC_ARGUMENT_NODE_TYPES`), never split
+        # into separate `git`/`worktree`/`add` words a segment's head could
+        # resolve to, so the real classification below never misreads
+        # prose as an invocation on the parses-cleanly route.
         if not _WORKTREE_WORD_RE.search(cmd):
             return None
         deny_kind = _evaluate_powershell(cmd)

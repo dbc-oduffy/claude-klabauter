@@ -1691,6 +1691,48 @@ def test_run_body_treats_empty_home_as_unset_and_falls_through(
     assert (stub_env["claude_home"] / ".local" / "bin" / "claude-author").exists()
 
 
+def test_f2_path_prepend_uses_canonical_settings_home_not_claude_home_dir(
+    stub_env, tmp_path, monkeypatch
+):
+    """The F2 PATH prepend must name `settings_home()/bin` -- the directory the
+    substrate and the bareword-PATH health leg resolve -- even when the
+    `claude_home_dir` argument names a different home than the environment does."""
+    env_home = tmp_path / "env-home"
+    settings_bin = env_home / ".coordinator-claude-settings" / "bin"
+    settings_bin.mkdir(parents=True)
+    (settings_bin / "claude-author").write_text("#!/bin/sh\n")
+    (settings_bin / "claude-author").chmod(0o755)
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(env_home))
+    monkeypatch.setenv("USERPROFILE", str(env_home))
+    monkeypatch.setattr(
+        _substrate_module, "run", lambda setup_only=False, check_only=False: 0
+    )
+    seen = {}
+
+    def _capture_health(*args, **kwargs):
+        seen["path"] = os.environ["PATH"].split(os.pathsep)
+        return 0
+
+    monkeypatch.setattr(_health_module, "main", _capture_health)
+
+    maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(stub_env["doe_clone"]),
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+
+    assert str(settings_bin) in seen["path"]
+    assert not any(
+        str(stub_env["claude_home"] / ".coordinator-claude-settings") in part
+        for part in seen["path"]
+    )
+
+
 def test_run_body_prefers_claude_home_over_the_lower_rungs(
     stub_env, tmp_path, monkeypatch
 ):

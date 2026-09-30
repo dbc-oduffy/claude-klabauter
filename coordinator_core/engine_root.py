@@ -83,6 +83,9 @@ _REMEDIATION = (
 )
 
 #: Rung-3 remediation text for the timeout arm — distinguishable from `_REMEDIATION`
+#: (the absent-key text) so a caller can tell "no entry" apart from "the read never
+#: finished." Names the reader timeout, not `machine-local set`: setting a registry
+#: key does nothing for a read that didn't get far enough to see it. Carries
 #: `_REGISTRY_READ_TIMEOUT_TOKEN` (AC3b).
 _TIMEOUT_REMEDIATION = (
     "coordinator_engine_root: cannot resolve CLAUDE_KLABAUTER_ROOT — "
@@ -95,9 +98,20 @@ _TIMEOUT_REMEDIATION = (
 )
 
 
+#: Process-scope memo for `coordinator_engine_root()`'s Rung 1.5/Rung 2 answer
+#: (finding 8, staff-eng review; state/lessons/2026-07-06-tri-plane-read-ops-
+#: must-process-memoize.yaml). Per-call resolution spawns a `machine-local`
+#: subprocess on every dispatch, which blows the sub-10ms SLA of a warm,
+#: repeatedly-dispatched process — the lesson requires resolving once and
 #: memoizing at process scope. Naive SINGLE-SLOT memoization would be the
 #: same missing-key COLLISION class C7 fixes for the two git-config caches:
+#: a warm server can serve dispatches whose registry state changes mid-
+#: process (`machine-local set` landing between two calls), and a bare
+#: last-write-wins slot would silently serve a stale root to every caller
+#: after that write. Keyed on `_registry_mtime_pair`'s cheap staleness tuple
 #: instead, mirroring `_GATE_MEMO`'s shape below — a dict, not a Tuple pair
+#: of module globals, so a registry mtime change invalidates only its own
+#: key rather than colliding with whatever the last caller happened to see.
 _ROOT_MEMO: dict = {}
 
 
@@ -125,10 +139,22 @@ def coordinator_engine_root() -> str:
     `_registry_mtime_pair` (see `_ROOT_MEMO`) — resolved once per distinct
     registry state per process, not once globally and not once per call.
     """
+    # Rung 1: engine root already set in environment (§4b idempotency gate).
+    # Never memoized: this is a direct env read, already as cheap as a memo
+    # lookup, and honoring a caller's env override on every call is the
+    # entire point of the idempotency gate.
+    #
     # READ THROUGH THE C10 ACCESSOR, NEVER THE RAW NAME. A literal
     # "CLAUDE_KLABAUTER_ROOT" here is rewritten by the publish transform, which splits
+    # env-var names as readily as module names — so the mirror's copy of this
     # rung looks for CLAUDE_KLABAUTER_ROOT and can never see the CLAUDE_KLABAUTER_ROOT a
+    # live-tree caller actually exported. That made Rung 1 inert across the
+    # tree boundary, which is precisely the DR-326 case it exists to serve,
+    # and the warm server exporting the mirror's root fleet-wide makes the
+    # crossing the common path on this box rather than the edge one.
     # COORDINATOR_ENGINE_ROOT is transform-stable, so the accessor crosses
+    # intact where the raw name cannot. Surfaced by claude-klabauter-ff,
+    # 2026-08-20, reproduced under a synthetic HOME.
     existing = coordinator_engine_root_env("engine_root.coordinator_engine_root") or ""
     if existing:
         return existing
@@ -173,20 +199,61 @@ def coordinator_engine_root() -> str:
     raise RuntimeError(_REMEDIATION)
 
 
+#: `coordinator_core/engine_root.py`'s parent-of-parent is the claude-klabauter repo
+#: root — no chicken-and-egg with resolving the very root this module exists
+#: to resolve, since the shim's path is fixed relative to this file, not to
 #: any already-resolved CLAUDE_KLABAUTER_ROOT value.
 _SHIM_PATH = Path(__file__).resolve().parent.parent / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
 
+#: Review: code-reviewer — the free-rung early returns below (Rung 1, Rung
+#: 1.5) hardcode this literal rather than importing the shim's
 #: `RESOLUTION_LIVE_WORKING_TREE` constant, deliberately: loading the shim
+#: just to read a string constant would defeat the hot-path short-circuit
+#: those rungs exist to preserve (no shim load, no gate walk). Kept as a
+#: named module-level constant instead of an inline literal so the
 #: duplication is self-documenting; per the shim's own `RESOLUTION_*`
+#: comment, these strings are "part of the contract, not just their names" —
+#: if the shim's constant value ever changes, this one must change with it.
 _RESOLUTION_LIVE_WORKING_TREE_LITERAL = "live-working-tree"
 
 _RESOLUTION_UNVERIFIED_ENV_LITERAL = "unverified-env"
 
 _RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
 
+#: Review: code-reviewer — sanctioned path-load consumer surface. This
+#: wrapper's Cheap-short-circuit step (see `coordinator_engine_root_with_class`
+#: step 2 below) reaches into the shim's underscore-prefixed helpers
+#: (`_ml_dir`, `_registry_value`, `_resolve_claude_klabauter_root`) rather than going
+#: exclusively through the shim's public `resolve_claude_klabauter_root_with_class()`.
 #: This is a DECLARED exception, not general license: `coordinator_core`
+#: (this module only) is a named path-load consumer of those three helpers
 #: plus `resolve_claude_klabauter_root_with_class` and the `RESOLUTION_*` constants —
+#: see the matching declaration in the shim's own module docstring
+#: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`). Changing
+#: `resolve_claude_klabauter_root_with_class()`'s step-1 precondition (the
+#: published-engine-registered-and-usable check) obliges updating this
+#: wrapper's short-circuit in the SAME change — the underscore prefix still
+#: means "not for general callers" for everyone else.
+#:
+#: The mechanical backstop for that obligation is
+#: `coordinator_core/tests/test_engine_root_two_tier.py`'s cross-entrypoint
+#: agreement test: it drives a fixture with `repos.claude_klabauter` ABSENT,
+#: so this wrapper takes the short-circuit while the shim runs its own full
+#: ladder, and both are asserted to still agree. A future step-order change
+#: that breaks that agreement fails there, not only in prose.
+#:
+#: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md) changed
+#: the step-1 precondition again: `_resolve_published_engine` now ALSO
+#: requires a valid engine build stamp ("an engine root is a stamped build.
+#: No stamp, no engine.") before treating `repos.claude_klabauter` as
+#: usable. This short-circuit's own precondition — `repos.claude_klabauter`
 #: is REGISTERED AT ALL (a bare `_registry_value` read, never
+#: `_resolve_published_engine`) — is unaffected: it decides only whether the
+#: gate's published-engine branches can fire, not whether they succeed, so
+#: a registered-but-unstamped root still takes the full-gate path at step 3
+#: below and correctly fails to resolve there rather than short-circuiting
+#: past the stamp check. Recorded here per the obligation above rather than
+#: left implicit.
 
 _shim_module: Optional[types.ModuleType] = None
 
@@ -202,7 +269,13 @@ def _load_shim() -> types.ModuleType:
         )
     spec = importlib.util.spec_from_file_location("_claude_klabauter_root_gate_shim", _SHIM_PATH)
     if spec is None or spec.loader is None:
+        # A bare `assert` here is stripped under
         # `python -O`/PYTHONOPTIMIZE, degrading this fail-loud check to an
+        # unguarded AttributeError two lines below; an explicit raise
+        # survives an optimized run.
+        # foreign-identity: SUBJECT — root-resolution failure, broadly reachable;
+        # remedy names the checkout (claude-klabauter) that must exist (audit row 4,
+        # engine_root.py:362, shim-path leg)
         raise RuntimeError(
             f"coordinator_engine_root_with_class: could not build an import spec "
             f"for shim at '{_SHIM_PATH}' — broken or partial claude-klabauter checkout."
@@ -223,9 +296,17 @@ def _reset_skew_advisory() -> None:
         _shim_module._reset_skew_advisory()
 
 
+#: Module-scope memo for the (expensive) two-tier gate answer, keyed on
+#: `(registry mtime pair, session root)`. Mirrors
 #: `coordinator_core.ops.coordinator_content_root`'s DECISION REVERSAL shape
 #: (module docstring § DECISION REVERSAL) — an explicit memo with a reset
+#: seam, not an `os.environ` export, so the cache dies with the test/process
+#: boundary rather than leaking into subprocess children or across pytest
+#: cases.
+#:
+#: PER-KEY DICT, not a single-entry `(key, value)` pair (C10, staff-eng
 #: review finding 8): a warm server serves dispatches from DIFFERENT
+#: session roots interleaved in one process, and a bare last-write-wins
 #: slot is the same missing-key COLLISION class C7 fixes for the two
 _GATE_MEMO: "dict[Tuple[float, float, Optional[str]], Tuple[str, str]]" = {}
 
@@ -296,6 +377,17 @@ def is_published_engine_mirror(root: str) -> bool:
     if not mirror:
         return False
     # FUNCTION-LOCAL, matching this module's lazy `no_console_creationflags`
+    # import in `coordinator_engine_root`'s Rung 2 rather than the module-level
+    # form this started as. C0's pin
+    # (tests/test_engine_root_module_name_is_not_repo_named.py) allows this
+    # ladder exactly ONE module-level cross-package import, `_settings_home`,
+    # because a candidate module loaded by file path under a synthetic
+    # sys.modules key resolves module-level cross-package imports through
+    # whichever coordinator_core package is already cached -- the mixed-root
+    # hole. `win_portability` is a stdlib-only leaf, so nothing about the
+    # dependency needs the module-level form; deferring it keeps the pin at one
+    # entry instead of widening the pin to accept a second. sys.modules makes the
+    # repeat cost a dict lookup.
     from coordinator_core.win_portability import same_path
 
     return same_path(root, mirror)
@@ -377,7 +469,13 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
     chains (see `coordinator_engine_root()`'s own remediation vs. the
     shim's registry-plus-published-engine remediation text).
     """
+    # Through the C10 accessor, not the raw name — same reason as
+    # `coordinator_engine_root`'s Rung 1 above: the publish transform rewrites
     # a literal "CLAUDE_KLABAUTER_ROOT" and the mirror's copy of this rung then cannot
+    # see what a live-tree caller exported. This is the site `cc_invoke`'s
+    # `_delegate_to_gate` reaches when it loads a MIRROR candidate's gate, so
+    # a raw read here is what sent that path falling through to the
+    # machine-local registry — the dependency Rung 1 exists to remove.
     existing = coordinator_engine_root_env(
         "engine_root.coordinator_engine_root_with_class"
     ) or ""
@@ -407,9 +505,29 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
     return result
 
 
+# --- C10: dual-read env accessor for the engine-root variable rename -------
+#
+# Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md
+# § "Design decision — the variable's new name" / § C10.
+#
+# WHY THIS EXISTS: the module rename (C1-C9) is atomic within one process; the
+# ENV VAR rename cannot be, because the variable crosses a process boundary
+# between parents and children running from trees at potentially different
+# published versions. `coordinator_engine_root_env()` and
+# `coordinator_engine_root_env_exports()` are the ONE seam every reader/writer
+# routes through, so the eventual one-line rename (C14) does not require a
+# second 256-site sweep.
+#
 # NEGATIVE SPEC — the dual-read fallback is a TIME-BOXED WINDOW, NOT A SHIM:
 #   - The old name (`CLAUDE_KLABAUTER_ROOT`) is never republished as new API — it is
+#     only ever READ here, never the spelling anything is told to write.
+#   - The window closes in C14, once a publish round converges the live tree
+#     and the published mirror on the new name. A reader that treats this
+#     fallback as permanent, or adds a third name to the ladder, is doing the
+#     one thing this window is explicitly not for.
 #   - `_ENGINE_ROOT_FALLBACK_EMITTED`/`_ENGINE_ROOT_CONFLICT_EMITTED` exist so
+#     C14's exit condition is evidence ("no reading site has hit the fallback
+#     in N days"), not an unverifiable claim.
 _ENGINE_ROOT_NEW_VAR = "COORDINATOR_ENGINE_ROOT"
 _ENGINE_ROOT_OLD_VAR = "CLAUDE_KLABAUTER_ROOT"
 
@@ -552,25 +670,59 @@ def coordinator_engine_root_env_exports(value: str) -> dict:
     return {_ENGINE_ROOT_NEW_VAR: value}
 
 
+# --- C18: the two axes get two variables ----------------------------------
+#
+# Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C18.
+# Canonical axis definition: docs/decisions/DR-326.
+#
 # THE DEFECT THIS ADDRESSES. One variable has been answering two questions:
+#
 #   DISPATCH  "which engine executes?"        -> COORDINATOR_ENGINE_ROOT
 #   LOCATOR   "where is the source checkout?" -> COORDINATOR_ENGINE_SOURCE_ROOT
+#
+# They coincide only on a box whose engine IS the live tree. On a stamped-mirror
+# box -- the direction this workstream is moving -- they differ, and a locator
+# consumer reading the dispatch answer is handed a build output where it wanted
+# a working tree. DR-326's 2026-08-19 refinement is explicit that the old name
 # dies on the DISPATCH axis.
+#
+# ON THE OLD NAME'S FATE, corrected 2026-08-20: that refinement also said
 # CLAUDE_KLABAUTER_ROOT SURVIVES on the locator axis. It does not. DR-326's 2026-08-20
+# amendment supersedes that clause on PM ruling -- the name is eliminated
+# outright and no axis inherits it, so the locator axis gets its own token-free
 # spelling (COORDINATOR_ENGINE_SOURCE_ROOT) rather than the legacy one. The
+# dispatch/locator SPLIT the refinement draws is untouched and is what this
+# block implements; only which spelling survives changed.
+#
 # NEGATIVE SPEC -- THE INVARIANT THAT MAKES THIS LANDABLE:
 # **THE EXISTING VARIABLE NEVER CHANGES MEANING. THE LOCATOR EXPORT IS PURELY
 # ADDITIVE.** C10's window is a RENAME window: old and new names carry the SAME
 # value, so a fallback read is always correct. C18 is a SEMANTIC SPLIT: afterwards
+# there are two facts, and a fallback read is correct for only one of them. If
+# this changed what the existing variable means, an unrouted locator consumer in
+# the published mirror, the deployed settings home, or coordinator-content-repo would silently
 # start getting a different answer -- four parties x two MEANINGS, which is not
+# landable in one plan or in ten. Additive-only makes it four parties x two
 # VARIABLES: a consumer that ignores the new one behaves exactly as it does today.
+#
+# DO NOT collapse the two axes "because they are usually the same path". That
+# they are usually equal is what makes the divergence dangerous, not what makes
+# it safe.
+#
 # NAME RATIONALE, held to the same discipline as C10's:
 #   COORDINATOR_ENGINE_SOURCE_ROOT
+#     - No repo token, so the publish depersonalization transform is a no-op on
+#       it and both trees ship one spelling -- the property that made
 #       `engine_root.py` and `COORDINATOR_ENGINE_ROOT` correct.
 #     - Shares the `COORDINATOR_ENGINE_` stem with the dispatch variable, so the
+#       pair reads as two facts about one thing rather than two unrelated knobs.
+#     - `SOURCE` is the discriminator that carries the axis: a source checkout
+#       versus a built engine.
 #   Rejected: `COORDINATOR_SOURCE_ROOT` (ambiguous with the CONSUMING project's
+#   source, which is what most callers mean by "source root");
 #   `COORDINATOR_CHECKOUT_ROOT` (same ambiguity, and "checkout" names a git
 #   operation rather than the thing); `CLAUDE_KLABAUTER_ROOT` retained as the locator name
+#   (carries the repo token the PM ruling removes, and the transform rewrites it).
 _ENGINE_SOURCE_ROOT_VAR = "COORDINATOR_ENGINE_SOURCE_ROOT"
 
 _LOCATOR_MISREAD_EMITTED: "set[str]" = set()

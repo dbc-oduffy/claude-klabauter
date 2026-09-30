@@ -107,6 +107,8 @@ def test_corpus_axis_flags_migration_that_moves_prose_out_of_gate_dependency(
         """,
     )
     # Deliberately left UNCOMMITTED -- the corpus axis compares the last
+    # commit against the working tree, the shape an in-flight migration
+    # takes before it lands.
 
     monkeypatch.setattr(oracle, "REPO_KEYS", (("repos.fixture", "FixtureRepo"),))
     monkeypatch.setattr(oracle, "_resolve_repo_root", lambda _key: corpus_repo)

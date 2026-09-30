@@ -296,7 +296,9 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
             with os.fdopen(fd, "wb") as fh:
                 fh.write(new_bytes)
             os.replace(tmp_name, str(target_path))
+            # DR-276: declared AFTER the atomic replace lands, never before —
             # the contract is a report of what was ACTUALLY written, not of
+            # an intended surface.
             declare_write(target_path)
         except OSError as exc:
             try:

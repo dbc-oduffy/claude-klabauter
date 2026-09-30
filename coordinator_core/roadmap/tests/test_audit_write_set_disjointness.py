@@ -223,7 +223,10 @@ def test_weak_sizing_object_basis_does_not_manufacture_a_collision(tmp_path: Pat
         root, "plan-y", "approved", [_plan_row("C1", ["only/in/y.py"])],
         sizing_object="shared-sizing",
     )
+    # Neither baton links via governing_plan -- both resolve ONLY via the
     # shared sizing_object, a _WEAK_PLAN_LINK_BASES member. Each baton's
+    # `link_plans` hit set is therefore [plan_x, plan_y] (both cite the same
+    # sizing object), which `_best_plan` must decline rather than guess.
     _baton(root, "baton-x", run_id, sizing_object="shared-sizing")
     _baton(root, "baton-y", run_id, sizing_object="shared-sizing")
 

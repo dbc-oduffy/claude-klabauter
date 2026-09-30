@@ -85,6 +85,11 @@ import re
 from typing import Sequence
 
 #: Same word list `bash_guards.commit_tripwires._DELETION_VERBS` validates
+#: (0 false positives over the 699-commit measurement recorded in the row
+#: above) -- kept as its own copy rather than imported, since this module's
+#: own negative spec is zero cross-module coupling beyond the two lazy
+#: `commit.py`/`block_subagent_commit` imports it already carries, and this
+#: predicate needs neither of those.
 _DELETION_VERBS = re.compile(
     r"\b("
     r"delet\w*|remov\w*|rm|retir\w*|drop(s|ped|ping)?|gravestone\w*|"

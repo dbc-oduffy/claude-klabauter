@@ -44,6 +44,10 @@ def test_dr207_shaped_raises_with_remediation():
 
 
 def test_dr207_mixed_case_is_not_cross_cutting():
+    # Bash oracle's `case` alternation matches only
+    # the literal `DR-207`/`dr-207` casings (no `shopt -s nocasematch`); a
+    # third casing like `Dr-207` must NOT match, faithfully reproducing the
+    # oracle's limitation rather than silently broadening it via
     # re.IGNORECASE. Falls through to the doctrine default.
     path = "docs/decisions/Dr-207-tri-plane-contract-boundary.md"
     assert classify(path) == Subject.DOCTRINE

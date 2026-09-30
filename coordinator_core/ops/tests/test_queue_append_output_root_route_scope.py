@@ -63,7 +63,19 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
     assert queue_append._output_root_override() is None
 
 
+# --- Swept-tmp-root refusal (2026-09-18) ------------------------------------
+#
+# Sibling hazard to the warm-server leak above: even on the genuine
 # IN_PROCESS route, `QUEUE_APPEND_OUTPUT_ROOT` can name a temp-dir path a
+# completed pytest run already tore down (a warm engine daemon started
+# mid test-run bakes its spawner's env in forever). Honouring a swept root
+# used to "succeed" anyway, because `os.makedirs(..., exist_ok=True)`
+# silently recreated it — the entry landed in a directory nothing durable
+# ever named, and was reported as written. `_output_root_override` must
+# refuse this shape outright, not fall through to routing it as a real
+# override.
+#
+# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
 
 
 def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
@@ -132,8 +144,15 @@ def test_is_swept_tmp_root_predicate(tmp_path):
     assert queue_append._is_swept_tmp_root("/no/such/repo/state/debt-backlog") is False
 
 
+# --- Published-mirror refusal (2026-08-21) ---------------------------------
+#
 # Sibling hazard to this module's subject. `QUEUE_APPEND_OUTPUT_ROOT` sends a
+# write somewhere the caller cannot see; the publish identifier transform does
+# the same thing without anyone setting a variable, by rewriting the registry
 # key this op reads so the PUBLISHED engine resolves "the central repo" to
+# itself. Confirmed lost: two working files, gitignored in the mirror, exit 0.
+#
+# Backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
 
 
 def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch):

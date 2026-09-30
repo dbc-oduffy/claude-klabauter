@@ -438,7 +438,13 @@ def test_get_snippet_meta_unknown_header_style_fails_loud(tmp_path):
         reg.get_snippet_meta(data, "foo")
 
 
+# ---------------------------------------------------------------------------
+# schema_version 4 — excluded_consumer + eligible_glob (DoE 355255cc3)
+#
 # Both fields are ADDITIVE-OPTIONAL: the v3-shaped-row case below is as
+# load-bearing as the violation cases, because "a v3 row is still valid at v4"
+# is the property that makes this a field-SET bump rather than a value break.
+# ---------------------------------------------------------------------------
 
 _V4_VALID = """
     schema_version = 4

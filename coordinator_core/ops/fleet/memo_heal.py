@@ -91,10 +91,23 @@ _MODE = "heal_inbox"
 
 _KNOWN_PARAM_KEYS = frozenset({"dry_run"})
 
+#: Review: apm A4 (EM-adjudicated) — measured 2026-09-11, one `update-ref
+#: --stdin` spawn does 150 creates in 206ms and 300 in 422ms (~1.35ms/ref);
 #: 100 creates is ~140ms. At most this many UNANCHORED inbox memos are
+#: adopted per run; the rest are picked up on later runs (a backlog of 289
+#: converges in 3 runs). Re-keys and retires are NOT capped — they are rare
+#: and bounded by losses/dispositions, not by inbox size.
+#: Review: overengineering-reviewer — this cap and its branch exist for the
+#: pre-A2 backlog only, which converges in 3 runs per repo; once the fleet's
+#: repos have converged, mark this constant and the cap branch below for
+#: deletion rather than leaving them resident on a number no live run
+#: still tests.
 ADOPT_CAP_PER_RUN = 100
 
+#: Both corpus roots -- shared with every other present-set reader in this
 #: feature via `_memo_anchor.CORPUS_ROOT_RELDIRS` (Review:
+#: overengineering-reviewer F1). Kept as a local alias so existing
+#: in-module references need no further churn.
 _CORPUS_ROOT_RELDIRS = CORPUS_ROOT_RELDIRS
 
 MUTATES = [

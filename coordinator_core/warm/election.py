@@ -151,14 +151,45 @@ class SocketPathTooLongError(ElectionError):
     pass
 
 
+#: BYTE read mode for both named-pipe creation sites -- THIS one (the first
+#: instance) and `server._create_pipe_instance` (every follow-on one), which
+#: imports this name rather than repeating the value. They must agree: if they
+#: did not, whether a request is served would depend on which instance
+#: happened to accept it. Defined here rather than in `server` because
+#: `server` already imports this module and the reverse edge would be a cycle.
+#:
 #: `_winapi` publishes no `PIPE_READMODE_BYTE` because the flag IS zero; the
+#: constant exists so both sites NAME the choice instead of silently omitting
+#: a flag.
+#:
+#: WHY BYTE AND NOT MESSAGE. The wire protocol is one newline-terminated JSON
+#: line in each direction -- `server._handle_connection` reads it with
+#: `io.readline()`, `door.c` scans for a newline byte. That is a byte-stream
+#: protocol; the pipe's message framing was read by nothing, and one leg of
+#: it was actively fatal.
+#:
+#: THE DEFECT THIS CLOSES (2026-09-06, reported from a live plan-blitz wave).
 #: Under `PIPE_READMODE_MESSAGE` a `ReadFile` whose buffer is smaller than the
 #: pending message fails with `ERROR_MORE_DATA` instead of returning a partial
+#: read. `server._wrap_handle` hands the pipe to a `BufferedReader` whose
 #: underlying reads are `io.DEFAULT_BUFFER_SIZE` (8192) -- so EVERY request
+#: frame over 8192 bytes made `io.readline()` raise `OSError`, which
+#: `_handle_connection` catches with a bare `return`, closing the connection
+#: without a reply. The caller's door had already delivered the bytes, so it
+#: could only emit `-32004 warm dispatch indeterminate`: the worst failure
+#: shape this transport has, on a request the server never even parsed.
+#: Measured threshold: 8192 bytes served, 8193 refused, exactly.
+#:
 #: THE ASYMMETRY THAT HID IT. A CLIENT handle opened with `CreateFile`
+#: (`client._open_pipe`'s `open(endpoint, "r+b")`, and `door.c`'s
+#: `CreateFileW`) defaults to BYTE read mode regardless of the pipe's type,
 #: and neither ever calls `SetNamedPipeHandleState`. Large RESPONSES therefore
 #: always worked and only large REQUESTS died -- which reads as "that one op
+#: is broken" rather than "every op with a big payload is".
+#:
 #: `PIPE_TYPE_MESSAGE` is deliberately LEFT at both sites: it governs how a
+#: handle's WRITES are framed, which no reader on either end depends on, so
+#: changing it would widen this fix's blast radius for nothing.
 _PIPE_READMODE_BYTE = 0x00000000
 
 def _is_windows() -> bool:
@@ -306,11 +337,21 @@ SOCKET_SUFFIX = ".sock"
 
 LOCK_SUFFIX = ".lock"
 
+#: `listen()` backlog. Deliberately larger than the server's acceptor-thread
+#: count: the backlog is what absorbs a connection burst in the window between
+#: one `accept()` returning and the next being posted, which on Windows is
+#: covered instead by the pre-created pending pipe-instance pool
 #: (`server.PENDING_LISTENER_POOL_SIZE`). A client that overflows it sees
 #: ECONNREFUSED, which `warm.client`'s anti-storm table already handles as a
+#: cold outcome -- but sizing it to the acceptor pool would guarantee that
+#: outcome under exactly the load this engine is built for.
 UNIX_LISTEN_BACKLOG = 128
 
+#: Connect-timeout for the staleness probe. A live server answers a unix-socket
+#: connect in microseconds (it is a memory operation, no network stack), and a
 #: dead one answers ECONNREFUSED just as fast. Only a live-but-backlog-full
+#: server pays this, and that outcome is read as LIVE, so the timeout bounds a
+#: case whose verdict does not depend on waiting it out.
 STALE_PROBE_TIMEOUT_SECS = 0.25
 
 PROBE_LIVE = "live"

@@ -82,5 +82,7 @@ def test_cross_phase_shared_priority_is_not_a_collision():
     by_phase = _guards_by_phase()
     hard_priorities = {g.priority for g in by_phase.get("hard-deny", [])}
     advisory_priorities = {g.priority for g in by_phase.get("advisory", [])}
+    # No assertion of non-overlap here on purpose -- overlap across phases
     # is EXPECTED and fine. This test exists to make that expectation
+    # explicit and executable, not to assert it never happens.
     assert isinstance(hard_priorities, set) and isinstance(advisory_priorities, set)

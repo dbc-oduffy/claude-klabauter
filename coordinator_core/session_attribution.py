@@ -67,7 +67,17 @@ from coordinator_core.win_portability import no_console_creationflags
 
 log = logging.getLogger(__name__)
 
+#: Standard 8-4-4-4-12 hex UUID shape. Local to this module by deliberate
+#: choice (see module docstring's "Explicitly OUT of scope" block) — NOT a
 #: reach into archive_stamp.py's `_SESSION_ID_UUID_RE`, which is looser and
+#: serves a different accessor's own contract. A trailer value that fails
+#: this shape check is not itself proof of corruption (a caller could inject
+#: a non-UUID own_session_id in a test fixture), but a well-formed Session-Id
+#: trailer produced by this repo's own tooling is always a UUID — a mismatch
+#: is a data-integrity signal worth a log line even when the classifier's
+#: existing over-refuse-not-over-credit posture is otherwise left unchanged
+#: (bug-backlog 2026-08-07-corrupted-session-id-trailer-reads-as-a-session-
+#: that-never-existed.yaml, proposed_action (1)).
 _SESSION_ID_UUID_SHAPE_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -126,6 +136,8 @@ def default_git_runner(args: List[str], cwd: Optional[str]) -> Tuple[int, str, s
             timeout=30,
             # stdin=DEVNULL paired with CREATE_NO_WINDOW, matching this
             # module's other subprocess call sites (`_git_run`) — CREATE_NO_WINDOW
+            # alone hangs on Windows when stdin is inherited/invalid; this is a
+            # LIVE git-invocation path, so it must not be left half-fixed.
             stdin=subprocess.DEVNULL,
             **no_console_creationflags(),
         )

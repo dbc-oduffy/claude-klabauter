@@ -426,19 +426,59 @@ def _compensate_grant_write(
     return None
 
 
+#: Per-directive-id compensators, fired in reverse landing order by
+#: `apply_base.execute_directives` when a handler raises. Only the grant
+#: write registers one: it is the single directive here whose effect
 #: OUTLIVES the run (a token in `.git/coordinator-sessions/<sid>/` that a
+#: later Tier-U consumer reads), so it is the only one an aborted run can
+#: strand.
 _COMPENSATORS: dict[str, Any] = {
     "d_grant_write": _compensate_grant_write,
 }
 
 
+#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk: NONE of merge's eight verbs (`node-ceremony-gate`,
+#: `merge-recovery-and-tag-cut`, `merge-gate-and-pr`, `portability-sweep`,
+#: `check-no-illegal-paths`, `merge-release-notes-derive`,
+#: `orphan-branch-sweep`, `tier-u-grant`) resolve to a registered op, so ALL
+#: EIGHT stay `cli`-named — none migrate to `op`. No new op is minted to
+#: force a migration (out of scope by name). `orphan-branch-sweep` is the
+#: one name that LOOKS closest to a registered surface — its own bin script
+#: composes four registered `git_branch.*` ops internally
 #: (`coordinator_core/ops/orphan_branch_sweep.py`), but the DIRECTIVE this
+#: table dispatches names the SCRIPT, never one of those four op keys
+#: directly, so the discriminator's answer is unchanged: not a registered
+#: op under this literal name. `node-ceremony-gate` spawns `node --test`
+#: (a genuinely external program with no import path — never converged).
+#: POST-C2: `merge-recovery-and-tag-cut`, `portability-sweep`, and
 #: `check-no-illegal-paths` dispatch IN-PROCESS via `ceremony_common.
+#: cli_dispatch` (no subprocess, ever); `merge-gate-and-pr`,
+#: `merge-release-notes-derive`, and `orphan-branch-sweep` still spawn an
+#: existing `coordinator/bin/*.py` script via `sys.executable` — each
 #: EXCLUDED from C2's conversion because it has no in-scope argument path
+#: for its own repo root (see each handler's own docstring for the specific
+#: gap). Neither population is `bash`/`sh`, so `docs/reference/
+#: shell-out-carve-outs.md` (scoped to interpreter/shell spawns) does not
 #: apply to any of the eight, and none is a `CONSUMES_MANIFEST`-driven
 #: script module in the completion-family sense, so no `CONSUMES_MANIFEST`
+#: entry applies either.
+#:
+#: AC5 (verified live this chunk, C2 — the reasoning is settled at plan
+#: time, this is verification, not a decision point): `apply_base.
+#: execute_directives`'s admission keys on `directives[].op` via
+#: `resolve_op`, which calls `assert_dispatchable`; `directives[].cli`
+#: routes through `resolve_cli`, which never calls it. C2 moves `cli` keys
+#: between execution models (in-process vs. spawned) — it introduces no
+#: `op` directive — so the premise `assert_dispatchable` gates is
 #: untouched, and `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/
+#: dispatchable.py) still carries NO `"merge_assemble"` entry (confirmed:
 #: `"merge_assemble" not in ASSEMBLER_DISPATCHABLE` at execution time).
+#:
+#: THE closed dispatch table — every key is a literal string written here
+#: by hand, matching `merge_assemble.build_directives`'s `cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "node-ceremony-gate": _dispatch_node_ceremony_gate,
     "merge-recovery-and-tag-cut": _dispatch_merge_recovery_and_tag_cut,

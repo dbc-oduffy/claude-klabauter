@@ -138,6 +138,8 @@ def test_redact_values_is_a_copy_not_a_mutation():
 
 
 def test_audit_record_has_run_id_redact_only():
+    # run_id (audit-record's run_id_placeholder field)
+    # was a real registry gap, previously patched only in the C6 test's own
     # private _LOCAL_EXTRA_REDACT, not in this frozen registry.
     redact_only = set(vol.redact_only_fields_for("audit-record"))
     assert redact_only == {"created", "run_id"}
@@ -188,8 +190,15 @@ def test_redact_text_is_idempotent():
     assert once == twice
 
 
+# ---------------------------------------------------------------------------
 # Regression: a present-but-empty redacted field must not consume its NEIGHBOUR
+# (break-class, 2026-07-28). The captured prefix padded with `\s*`, and `\s`
+# matches a newline, so on a bare `created:` the pad crossed the line break and
 # the trailing `.*$` matched the FOLLOWING line — `sub` then replaced that line
+# with the redaction token, deleting an unrelated field from one side of a
+# byte-identity comparison. Parametrized over BOTH line endings: the LF case
+# alone would leave the Windows-authored half unproven.
+# ---------------------------------------------------------------------------
 
 _EOLS = pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 
@@ -223,6 +232,37 @@ def test_redact_text_indented_empty_field_does_not_consume_next_line(eol):
     assert redacted == eol.join(["some:", f"  created:{vol.REDACTED_TOKEN}", "  status: open", ""])
 
 
+def test_spinoff_marker_date_redacted_who_and_session_kept():
+    text = "<!-- spinoff: 2026-09-30 by alice during sess-1 -->\n"
+    assert vol.redact_text(text, "spinoff") == (
+        f"<!-- spinoff: {vol.REDACTED_TOKEN} by alice during sess-1 -->\n"
+    )
+
+
+def test_spinoff_marker_redaction_identical_on_both_sides_and_idempotent():
+    a = "<!-- spinoff: 2026-09-30 by alice during s -->\n"
+    b = "<!-- spinoff: 2026-10-01 by alice during s -->\n"
+    assert vol.redact_text(a, "spinoff") == vol.redact_text(b, "spinoff")
+    once = vol.redact_text(a, "spinoff")
+    assert vol.redact_text(once, "spinoff") == once
+
+
+def test_spinoff_marker_different_who_still_differs():
+    a = vol.redact_text("<!-- spinoff: 2026-09-30 by alice during s -->\n", "spinoff")
+    b = vol.redact_text("<!-- spinoff: 2026-09-30 by bob during s -->\n", "spinoff")
+    assert a != b
+
+
+def test_non_marker_comment_lines_untouched():
+    text = "<!-- note: 2026-09-30 by alice during s -->\n<!-- other: 2026-09-30 by x -->\n"
+    assert vol.redact_text(text, "spinoff") == text
+
+
+def test_spinoff_marker_not_redacted_for_other_types():
+    text = "<!-- spinoff: 2026-09-30 by alice during s -->\n"
+    assert vol.redact_text(text, "handoff") == text
+
+
 def test_assert_closed_set_detects_untracked_volatile_field(tmp_path):
     import json
 
@@ -239,6 +279,10 @@ def test_assert_closed_set_detects_untracked_volatile_field(tmp_path):
         "body": None,
     }
     # run_id is not in VOLATILE_FIELDS, so this fabricated template alone should
+    # NOT trip the untracked-volatile-field branch; instead assert the
+    # missing-from-template branch fires because "handoff"'s real policy names
+    # branch/deliverable_id/handoff_id, none of which this fabricated template
+    # declares.
     (tmp_path / "handoff.json").write_text(json.dumps(bogus), encoding="utf-8")
     with pytest.raises(vol.VolatilitySetError):
         vol.assert_closed_set(templates_directory=tmp_path)

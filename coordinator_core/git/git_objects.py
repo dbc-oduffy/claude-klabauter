@@ -47,11 +47,26 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 
+#: Windows fails `os.replace` with `PermissionError` (WinError 5) when the
 #: DESTINATION is open in another process -- a reader, an indexer, a peer's
+#: `git status`. It is transient by construction: the other handle closes and
+#: the same call succeeds. POSIX does not have this failure mode at all.
+#:
+#: Measured on this tree at 21/200 failed commits under 12-way concurrency
+#: against one repo, scaling with concurrency, on a box specced for 50-70
+#: concurrent sessions. Two commits overlapping in wall clock is enough.
+#:
+#: The ladder is short on purpose. These are microsecond-scale handle
+#: collisions, so ~200ms of total patience covers them, and anything longer
+#: turns a transient into an occupancy cost the box cannot afford
+#: (CLAUDE.md § Load norm: the load is us).
 _REPLACE_RETRY_DELAYS_S = (0.002, 0.005, 0.01, 0.02, 0.05, 0.1)
 
 
 #: The index is REPLACED, never edited in place, so a failed read or stat is a
+#: handle collision against a file that is about to exist again -- a peer's
+#: `os.replace` landing between our open and our read. Shorter than the replace
+#: ladder because a read holds nothing and blocks nobody.
 _TRANSIENT_READ_RETRY_DELAYS_S = (0.002, 0.005, 0.01, 0.02, 0.05)
 
 
@@ -111,6 +126,11 @@ def write_object(
         tmp.write_bytes(zlib.compress(body))
         if not _replace_with_retry(tmp, path):
             # CONTENT-ADDRESSED, so a lost race is not a lost write. `path` is
+            # keyed on the SHA-1 of exactly these bytes: if it exists now, a
+            # peer wrote byte-identical content and the object IS in the store.
+            # That is a success, not a fallback -- there is no version of this
+            # object that differs. No other site in this module may reason this
+            # way, which is why it is not folded into the helper.
             if not path.exists():
                 raise OSError(
                     f"write_object: could not place {sha} at {path} -- the "
@@ -415,13 +435,18 @@ def _read_pack_object_at(
 ) -> tuple[int, bytes]:
     # Depth guard against a cyclic/over-deep OFS_DELTA chain (the direct
     # self-recursion below); REF_DELTA cycles route through `_read_object`
+    # and aren't depth-threaded, so a caller catches `RecursionError` too.
     if _depth > _MAX_DELTA_DEPTH:
         raise _GitReadModelError(f"delta chain exceeds max depth {_MAX_DELTA_DEPTH} (cyclic/corrupt pack?)")
     pos = offset
     first = pack_bytes[pos]
     pos += 1
     type_num = (first >> 4) & 0x7
+    # Object header size varint (7 bits/byte, little-endian, MSB continuation
+    # flag) -- for a non-delta object this is the uncompressed content size;
     # for OFS_DELTA/REF_DELTA it's the uncompressed size of the delta STREAM
+    # itself (base-size + copy/insert opcodes), which is exactly the byte
+    # count `_zlib_decompress_bounded` needs to size its first window.
     usize = first & 0x0F
     shift = 4
     byte = first
@@ -647,6 +672,18 @@ def cas_ref(
         return False
     except PermissionError:
         # WINDOWS SPELLS THE SAME LOSS DIFFERENTLY. `O_CREAT|O_EXCL` against a
+        # lock a peer is holding -- or one being unlinked in their `finally` as
+        # we open -- surfaces as `PermissionError`, not `FileExistsError`, and
+        # only the latter was caught. The raise then escaped `cas_ref`'s
+        # documented bool contract entirely and reached callers as a crash.
+        # Measured at 3/612 attempts under 12-way concurrency.
+        #
+        # Failing to TAKE the lock is a refusal, not an error: nothing has been
+        # written, no ref has moved, and the caller's own retry-or-refuse path
+        # is exactly right. This is deliberately NOT retried here -- the CAS
+        # contract is that a lost race returns False and lets the caller decide,
+        # and swallowing that decision inside the primitive is how a refused
+        # commit turns into a silently reattempted one.
         return False
     try:
         os.close(fd)

@@ -164,6 +164,10 @@ BLOCKER_FM = (
 
 def test_scalar_blocked_by_is_one_id_not_one_id_per_character(tmp_path: Path):
     # A `str` is iterable, so an unguarded loop resolves it per CHARACTER --
+    # 'sat-06' becoming six blockers named 's','a','t','-','0','6', and a
+    # recommendation naming characters. The schema declares a list but nothing
+    # enforces that at read time, so this function is the place that must not
+    # trust it. Found by the criterion-only reader at 6f146d4d06.
     repo = tmp_path
     _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
 

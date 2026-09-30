@@ -29,6 +29,11 @@ import pytest
 from coordinator_core.review_trail.receipt_credit import receipt_credited_shas
 
 #: Deliberately UNMARKED, unlike every sibling in this package. They carry
+#: `cadence` because they carry `spawns_process`; this module spawns nothing
+#: and the whole file runs in 0.3s. The defect it guards went unnoticed for
+#: 486 commits precisely because nothing in the fast tier could see it, so
+#: parking its guard behind a cadence gate would reproduce the conditions
+#: that hid it.
 
 _SHA_A = "a" * 40
 _SHA_B = "b" * 40

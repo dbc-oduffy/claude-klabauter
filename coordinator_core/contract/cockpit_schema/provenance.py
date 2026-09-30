@@ -82,6 +82,11 @@ class ProvenanceEnvelope(BaseModel):
         )
     )
     # BIDIRECTIONAL invariant (D9 / D1), runtime-enforced by
+    # `_check_ref_git_backed_directionality` below:
+    #   github_graphql / github_rest / git_commit → ref MUST be non-null (git-backed)
+    #   local_fs / coordinator_artifact / transcript_summary / sec_edgar /
+    #   code_comparison → ref MUST be null (not git-backed)
+    # present-as-null (no default — see module docstring).
     ref: Ref | P4Ref | None
     path: str
     observed_at: IsoDateTime
@@ -116,6 +121,10 @@ class ProvenanceEnvelope(BaseModel):
     @model_validator(mode="after")
     def _check_entity_anchor_well_formed(self) -> "ProvenanceEnvelope":
         # Well-formedness guard, UNCONDITIONAL on `repo`: a present
+        # entity_anchor must be non-empty `kind` AND non-empty `value`
+        # regardless of whether `repo` also anchors the fact (catches the
+        # malformed composite the anchorless guard alone would miss: real
+        # `repo` paired with `entity_anchor: {kind: "", value: ""}`).
         if self.entity_anchor is not None and (
             self.entity_anchor.kind == "" or self.entity_anchor.value == ""
         ):

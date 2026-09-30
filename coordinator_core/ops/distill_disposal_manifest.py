@@ -99,14 +99,32 @@ __all__ = [
 MASS_THROTTLE_RATIO: float = 0.5
 
 #: Named module-constant ABSOLUTE mass-throttle floor (2026-07-23 architecture
+#: review § 1a): the plan's own motivating F2 scenario — "a classifier bug
+#: marking 400 files eligible out of 1000" — is a 0.4 ratio and does NOT trip
 #: MASS_THROTTLE_RATIO at any corpus size where the bug doesn't also cross
+#: half the scan. An absolute count OR'd with the ratio test closes that gap:
+#: crossing this many eligible files trips the flag regardless of how large
+#: total_scanned is. Tune from dogfood data later; the number just needs a
+#: name today.
 MASS_THROTTLE_ABSOLUTE: int = 25
 
+#: Named module-constant HARD ceiling on eligible-delete count (2026-07-23
+#: distill-guard memo-class-blind-spots E2 — the mass-throttle-soft-band gap):
 #: MASS_THROTTLE_RATIO/MASS_THROTTLE_ABSOLUTE are a SOFT band — a stamp note
 #: carrying MASS_THROTTLE_ACK_MARKER authorizes an arbitrarily large batch
+#: above that band, with no further ceiling. This constant is the ceiling the
+#: ack cannot lift: `distill_apply_disposal.verify_stamp_and_throttle` refuses
+#: to apply ANY run whose eligible count exceeds this value, even with the
+#: ack present, forcing the run to be split into multiple smaller ones. The
+#: soft band (ratio/absolute -> hard cap) still governs everything below this
+#: line; only the space above it is unconditionally blocked. Tune from
+#: dogfood data later; the number just needs a name today.
 MASS_THROTTLE_HARD_CAP: int = 200
 
+#: Row-count above which eligible paths are additionally grouped into
 #: ``deletion_groups`` chunks (PIPELINE self-check parity — mirrors C10's
+#: ~20-50-file batch band; see module docstring for why this is an additive
+#: key, not a C9 schema field).
 GROUP_THRESHOLD: int = 50
 
 

@@ -298,6 +298,8 @@ def handler_elapsed_by_op(
         mx = max(values)
         if p50 >= bar_ms or mx >= bar_ms:
             # Wall clock cannot support an OVER_BAR verdict (module
+            # docstring) -- report as not-established rather than a breach
+            # this axis is not sound to claim.
             results[op] = AxisResult(
                 disposition=Disposition.NO_DATA,
                 no_data_reason=NoDataReason.NOT_ESTABLISHED_UNDER_LOAD,

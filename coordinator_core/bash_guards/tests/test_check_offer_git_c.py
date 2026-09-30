@@ -351,7 +351,10 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
 class TestOfferAnchorFollowersHelperDirect:
 
     def test_all_git_segments_anchored_no_unanchored(self):
+        # NOTE: `followers` starts exactly at the separator, with no leading
+        # whitespace -- `_offer_awk_parse` absorbs any space before the
         # '&&'/';' into the PRECEDING segment's body, never into TAIL. Mirror
+        # that shape here rather than a hand-picked leading space.
         rewritten, unanchored = guard._offer_anchor_followers(
             "&& git status && git log -1", "/tmp/repo"
         )

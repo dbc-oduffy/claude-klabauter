@@ -150,6 +150,7 @@ def test_contained_path_extended_length_prefix_on_candidate_only_still_contained
 
     assert result is not None
     # Load-bearing negative: the RETURNED path is the real resolved path,
+    # prefix intact — normalization is comparison-only, never returned.
     assert str(result).startswith("\\\\?\\")
 
 

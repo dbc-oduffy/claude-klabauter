@@ -372,6 +372,7 @@ def _post_status(
     except urllib.error.HTTPError as exc:
         if exc.code in (403, 429):
             # Fail closed on rate-limit exhaustion -- an INDETERMINATE case,
+            # never retried, never degraded to "assume covered".
             return PostResult(
                 posted=False,
                 state=None,

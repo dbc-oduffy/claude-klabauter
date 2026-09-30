@@ -35,6 +35,13 @@ output is not one, and could not make the op live if it tried -- which
 So the sweep now skips test files and the named harness, and `test_the_sweep_still
 _catches_a_production_caller` proves it did not go blind in the process.
 
+NARROWED AGAIN to imports: the sweep reads import statements and
+`import_module` calls, not name substrings. Sibling ceremonies import the
+roadmap package's `scaffold_directive` (a shared constructor, exempt by
+submodule), and the doctype-host registry and docstrings name the assemblers as
+data; none invokes `brief()`. An import of either assembler package itself from
+a non-test module is still an offender.
+
 Negative-spec:
     - Do NOT widen the exemptions further without the same argument. A file is
       exempt only if it cannot invoke the assembler as production work; "it is
@@ -58,6 +65,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import unittest
@@ -68,13 +76,6 @@ if _ENGINE_ROOT not in sys.path:
     sys.path.insert(0, _ENGINE_ROOT)
 
 _CORE_ROOT = os.path.join(_ENGINE_ROOT, "coordinator_core")
-
-_ASSEMBLER_NAMES = (
-    "roadmap-planning-assemble",
-    "roadmap_planning_assemble",
-    "sprint-planning-assemble",
-    "sprint_planning_assemble",
-)
 
 _EXEMPT_DIR_MARKERS = (
     os.path.join("coordinator_core", "roadmap_planning_assemble"),
@@ -105,8 +106,60 @@ def _is_swept(path: str, rel: str, fname: str) -> bool:
     return not any(marker in rel for marker in _EXEMPT_DIR_MARKERS)
 
 
+_ASSEMBLER_PACKAGES = (
+    "coordinator_core.roadmap_planning_assemble",
+    "coordinator_core.sprint_planning_assemble",
+)
+
+_SHARED_CONSTRUCTOR_SUBMODULES = tuple(
+    f"{pkg}.scaffold_directive" for pkg in _ASSEMBLER_PACKAGES
+)
+
+
+def _is_assembler_module(dotted: str) -> bool:
+    if dotted in _SHARED_CONSTRUCTOR_SUBMODULES or any(
+        dotted.startswith(c + ".") for c in _SHARED_CONSTRUCTOR_SUBMODULES
+    ):
+        return False
+    return any(dotted == pkg or dotted.startswith(pkg + ".") for pkg in _ASSEMBLER_PACKAGES)
+
+
 def _names_an_assembler(content: str) -> list[str]:
-    return [name for name in _ASSEMBLER_NAMES if name in content]
+    """Names of assemblers the source binds or loads as a module.
+
+    Import-shaped, not substring-shaped: other ceremonies legitimately import
+    `scaffold_directive`, the shared constructor that lives in the roadmap
+    package, and docs/registry rows name the assemblers as data. Neither
+    invokes `brief()`.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found += [a.name for a in node.names if _is_assembler_module(a.name)]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if _is_assembler_module(node.module):
+                found.append(node.module)
+            else:
+                found += [
+                    f"{node.module}.{a.name}"
+                    for a in node.names
+                    if _is_assembler_module(f"{node.module}.{a.name}")
+                ]
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+            and getattr(node.func, "attr", getattr(node.func, "id", "")) == "import_module"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and _is_assembler_module(node.args[0].value)
+        ):
+            found.append(node.args[0].value)
+    return found
 
 
 def _iter_in_tree_python_files():
@@ -136,7 +189,26 @@ class TestInertOnLanding(unittest.TestCase):
             _names_an_assembler(
                 "from coordinator_core import roadmap_planning_assemble as rpa\n"
             ),
-            ["roadmap_planning_assemble"],
+            ["coordinator_core.roadmap_planning_assemble"],
+        )
+        self.assertEqual(
+            _names_an_assembler("import coordinator_core.sprint_planning_assemble\n"),
+            ["coordinator_core.sprint_planning_assemble"],
+        )
+        self.assertEqual(
+            _names_an_assembler(
+                "import importlib\n"
+                "importlib.import_module('coordinator_core.roadmap_planning_assemble')\n"
+            ),
+            ["coordinator_core.roadmap_planning_assemble"],
+        )
+        self.assertEqual(
+            _names_an_assembler(
+                "from coordinator_core.roadmap_planning_assemble.scaffold_directive "
+                "import build_scaffold_directive\n"
+                "x = 'roadmap_planning_assemble'\n"
+            ),
+            [],
         )
 
         harness = os.path.join(_CORE_ROOT, "ceremony_common", "_phantom_sweep_providers.py")
@@ -169,6 +241,8 @@ class TestInertOnLanding(unittest.TestCase):
 
     def test_neither_assembler_is_a_registered_ipc_op(self):
         # Force full eager registration first -- a lazy OP_MODULE_MAP miss
+        # must not hide a registration that only a real dispatch would
+        # otherwise trigger.
         import coordinator_core.ops as ops_pkg  # noqa: PLC0415
 
         if hasattr(ops_pkg, "_eager_import_all"):

@@ -81,6 +81,7 @@ CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 130
 
+#: Escape-hatch env var, same shape as nudge_improvement_queue_write's
 #: COORDINATOR_QUEUE_PUNT — a typed, non-trivial reason suppresses the offer.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_BATON_BODY_PUNT"
 
@@ -97,7 +98,13 @@ _HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
 _MIN_ROW_LINES = 3
 
+# A bullet/numbered line matching
 # _BULLET_RE/_NUMBERED_RE syntactically could be either a terse data row
+# ("2026-07-23 | did thing one") or a full narrative bullet with real
+# reasoning ("Decided to defer X because Y would break Z..."). Only the
+# former is the bare-row-bar shape this guard targets. A coarse length +
+# terminal-punctuation heuristic (no NLP) tells them apart — either signal is
+# enough to call it prose, per false-positive-is-worse-than-a-miss.
 _PROSE_LEN_THRESHOLD = 60
 _TERMINAL_PUNCT_RE = re.compile(r"[.!?]\s*$")
 
@@ -269,6 +276,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             trivial_reason = True
 
         # COORDINATOR_BATON_BODY_PUNT is
+        # reason-shaped, not flag-shaped; render VAR="<reason>", not the
+        # default VAR=1 (which this guard's own _is_trivial_reason would
+        # reject).
         _note = operator_override_note(
             _ESCAPE_HATCH_ENV_VAR,
             payload=payload,

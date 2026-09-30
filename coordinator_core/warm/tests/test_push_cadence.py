@@ -375,6 +375,54 @@ def test_sweep_repos_refuses_to_start_a_repo_it_cannot_finish(tmp_path):
     assert swept == []
 
 
+def test_truncated_sweep_resumes_at_the_first_unreached_repo(tmp_path, monkeypatch):
+    swept = []
+    monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    repos = [_repo(tmp_path, n) for n in ("a", "b", "c", "d")]
+
+    def _run():
+        # Ceiling admits exactly two repos per call: one clock tick each.
+        ticks = {"n": 0}
+
+        def _clock():
+            ticks["n"] += 1
+            return 0.0 if ticks["n"] <= 3 else 999.0
+
+        push_cadence.sweep_repos(
+            repos, total_ceiling_secs=10.0, per_repo_budget_secs=6.0, clock=_clock
+        )
+
+    _run()
+    assert swept == ["a", "b"]
+    swept.clear()
+    _run()
+    assert swept == ["c", "d"]
+    swept.clear()
+    _run()
+    assert swept == ["a", "b"]
+
+
+def test_completed_sweep_clears_the_resume_cursor(tmp_path, monkeypatch):
+    swept = []
+    monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    repos = [_repo(tmp_path, n) for n in ("a", "b", "c")]
+    push_cadence._resume_repo = repos[2]
+    push_cadence.sweep_repos(repos, clock=lambda: 0.0)
+    assert swept == ["c", "a", "b"]
+    assert push_cadence._resume_repo is None
+    swept.clear()
+    push_cadence.sweep_repos(repos, clock=lambda: 0.0)
+    assert swept == ["a", "b", "c"]
+
+
+def test_resume_cursor_absent_from_served_set_starts_at_the_head(tmp_path, monkeypatch):
+    swept = []
+    monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    push_cadence._resume_repo = tmp_path / "gone"
+    push_cadence.sweep_repos([_repo(tmp_path, "a"), _repo(tmp_path, "b")], clock=lambda: 0.0)
+    assert swept == ["a", "b"]
+
+
 def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():
     assert push_cadence.EXIT_SWEEP_CEILING_SECS < push_cadence.SWEEP_TOTAL_CEILING_SECS
 
@@ -388,8 +436,17 @@ def test_sweep_lock_hold_secs_is_keyed_to_the_cadence_budget():
     assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
 
 
+# ---------------------------------------------------------------------------
+# P052-C6 (docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-
+# timeout.md): the mechanical relationship guard pinning C5's arm-B
+# derivation of the four enumerated constants -- a docstring alone does not
+# discharge AC6, a test asserting the exact formula does. Arm B was
+# selected (docs/research/2026-09-10-git-push-progress-stall-measurement.md):
 # `CADENCE_PUSH_RETRY_BUDGET_SECS` is RETAINED as the fallback rather than
 # retired, and `SWEEP_TOTAL_CEILING_SECS`/`EXIT_SWEEP_CEILING_SECS` are both
+# re-derived off it (this module's own docstrings for each constant name
+# the exact offsets pinned here).
+# ---------------------------------------------------------------------------
 
 
 def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin():

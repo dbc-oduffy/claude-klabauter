@@ -130,6 +130,14 @@ def test_output_is_two_space_json_plus_trailing_newline(monkeypatch, capsys):
 
 def test_describe_required_ordered_by_properties_declaration_not_required_array_order():
     # review-trail's required[] array is declared in a DIFFERENT order than the
+    # schema's properties-declaration order would be if it diverged; assert the
+    # emitted order tracks properties-declaration order (all 8 fields, in the
+    # exact order they appear under "properties" in review-trail.schema.json,
+    # filtered to required[] membership) rather than required[]'s own textual
+    # order — bug-backlog is the sharper regression case since it is a strict
+    # subset check the field-order-pin test above already exercises head-on;
+    # here we assert the described order equals properties-declaration order
+    # directly against schema_validate.describe(), independent of the CLI layer.
     from coordinator_core.frontmatter.schema_validate import describe as _describe
 
     result = _describe("review-trail")

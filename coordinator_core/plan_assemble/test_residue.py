@@ -125,7 +125,10 @@ def test_absent_route_resolves_to_default_route_plan(
     }
 
 
+# ---------------------------------------------------------------------------
 # 2026-08-30 — a sizing object's own `route:` outranks DEFAULT_ROUTE, and an
+# explicit flag that disagrees with it is loud rather than silent.
+# ---------------------------------------------------------------------------
 
 
 def _write_sizing_object(tmp_path: Path, route: str, name: str = "sizing.yaml") -> Path:

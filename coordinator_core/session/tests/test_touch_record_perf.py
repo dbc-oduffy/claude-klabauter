@@ -68,10 +68,16 @@ _MIN_ORDERS_OF_MAGNITUDE_ABOVE_TICK = 100
 
 _APPENDS_PER_DRIVER = 150_000
 
+#: `k` for the append-flatness legs. A single spawn per point already
 #: amortises tick noise internally via `_APPENDS_PER_DRIVER`'s own loop;
+#: `k=1` avoids the alternative (re-running the SAME driver argv `k` times
+#: against a sink that keeps growing between reps, biasing later reps of
+#: the SAME point upward for a reason that has nothing to do with the
+#: point being measured).
 _K_APPEND_FLATNESS = 1
 
 #: The one bar. `SUSPENSION_BAR_MS` (2000ms) is which-to-switch-off-first,
+#: never a target, and a figure in this file is never compared against it.
 _BRIGHTLINE_MS = 500.0
 
 _K_FULL_READ = 5
@@ -188,6 +194,11 @@ def test_append_cost_is_flat_across_prior_event_counts(tmp_path):
 
     baseline = per_append[0]
     # FLATNESS, not a threshold: every later point must stay within a
+    # generous multiple of the empty-sink baseline -- a real O(D^2)-shaped
+    # regression would blow past this by orders of magnitude at 10k prior
+    # events (module docstring's own retired-defect comparison), while
+    # ordinary run-to-run jitter on a shared, loaded box stays well inside
+    # it.
     _GROWTH_TOLERANCE_MULTIPLE = 3.0
     for point in points[1:]:
         multiple = point["per_append_ms"] / baseline if baseline > 0 else float("inf")
@@ -232,6 +243,15 @@ def _write_full_read_floor_driver(driver_path: Path) -> None:
 
 
 #: THE DEEPEST CLAIMANT A SESSION CAN PLAUSIBLY WRITE, derived from the
+#: live corpus measured 2026-08-27 (see docs/research/spike-verdicts/
+#: 2026-08-27-corpus-c-is-wrong-on-both-axes-and-the-fingerprint-prize-
+#: collapses-at-real-width.md): highest sustained per-session append rate
+#: observed anywhere on the box, 132 events/hour, held for a full 24 hours.
+#:
+#: Per-claimant depth does NOT accumulate the way claimant COUNT does -- a
+#: session's record stops growing when the session ends -- so the bound
+#: here is session lifetime x append rate, never a calendar projection.
+#: Measured reality for comparison: median 5 events, max 169.
 _PEAK_APPEND_RATE_PER_HOUR = 132
 _MAX_PLAUSIBLE_SESSION_HOURS = 24
 _DEEPEST_PLAUSIBLE_CLAIMANT = _PEAK_APPEND_RATE_PER_HOUR * _MAX_PLAUSIBLE_SESSION_HOURS

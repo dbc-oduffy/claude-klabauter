@@ -54,7 +54,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+#: Attempts an op needs before its breach rate is allowed to speak. A cold clone's
+#: first few dispatches routinely land over the bar (imports, page cache, a warm
+#: server not yet elected) and say nothing about the op. 10 is the same order as
 #: `warm_health_signal.MIN_SAMPLES` (20) scaled to a PER-OP count rather than a
+#: whole-clone one: it is reachable inside one working session for any op a session
+#: actually uses, and it is above the 1-2 attempt noise that dominates the tail of
+#: any real sink. Not a measured constant -- `ceremony.commit` cleared it 3x over at
 #: n=31 while every METHOD_NOT_FOUND straggler in the same window sat at n=2.
 MIN_ATTEMPTS = 10
 

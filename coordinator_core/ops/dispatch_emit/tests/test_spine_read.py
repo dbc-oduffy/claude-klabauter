@@ -66,7 +66,9 @@ def test_writes_present_but_empty_value_collapses_to_undeclared(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     rows = {row.id: row for row in read_spine(plan_path)}
 
+    # A present-but-empty writes: value is a third state AC2 forbids — it
     # must collapse to the same UNDECLARED sentinel as an absent key, never
+    # leak through as None.
     assert rows["C1"].writes is UNDECLARED
     assert rows["C2"].writes is UNDECLARED
 
@@ -140,7 +142,22 @@ def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path):
 
 
 def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path):
+    # Review-B MAJOR (the actual regression): commit ab7df1af0's schema-shape
+    # preflight fires on a TRUTHY non-list depends_on (e.g. a dict where a
+    # list belongs) before spine_read's own `elif not isinstance(depends_on,
+    # list)` check ever runs, raising MalformedDependencyEdgeError instead of
+    # InvalidFieldTypeError -- but only once the row otherwise satisfies the
+    # base schema's required fields (here: `change_kind`, matching
+    # `test_schema_shape_preflight_raises_with_validator_message` above);
+    # without it, the preflight's first hit is the unrelated missing-field
+    # error and this module's own InvalidFieldTypeError check fires instead
+    # (also a SpineReadError, but not the regression this test targets).
     # Either way is fine PROVIDED MalformedDependencyEdgeError is itself a
+    # SpineReadError -- composition_graph.py's `except SpineReadError:
+    # return undetermined(...)` sites must still catch it. Assert the
+    # subclass relationship, not the concrete class: that is the actual
+    # contract this test protects, and pinning only the concrete class would
+    # let a future edit re-detach it from SpineReadError unnoticed.
     body = """\
 - id: C1
   title: depends_on declared as a dict instead of a list
@@ -410,6 +427,9 @@ def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
 
 def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
     # INVERTED by the joint gate-reader bump (2026-08-20). `closure_evidence`
+    # is authored when the evidence has NOT arrived, so its natural content
+    # describes what is being awaited -- and under the retired rule that
+    # description cleared its own gate. Only `cleared: true` clears now.
     body = """\
 - id: C1
   title: gate cleared
@@ -447,7 +467,10 @@ def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
 
 
 def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
+    # The 1.9.0 bump was the additive half only and left `closure_evidence`
+    # clearing on its own. The joint two-repo bump its x-bump-note deferred
     # has now landed, so absence of `cleared` means UNCLEARED -- which is what
+    # the schema always said the field meant.
     body = """- id: C1
   title: gate cleared by evidence, no cleared key
   surface: some/surface
@@ -467,6 +490,9 @@ def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
 
 def test_cleared_non_true_value_does_not_clear(tmp_path):
     # The fail-closed posture SURVIVES the bump and gets stronger. Before, a
+    # malformed `cleared` fell through to closure_evidence and the row was
+    # admitted; now only the literal True clears, so a malformed value cannot
+    # clear a gate at all -- matching this module's posture for `blocks`.
     body = """- id: C1
   title: malformed cleared value
   surface: some/surface

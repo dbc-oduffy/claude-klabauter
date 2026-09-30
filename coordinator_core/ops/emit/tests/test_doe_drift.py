@@ -71,6 +71,9 @@ assert not issubclass(AheadOfReleaseWarning, DriftWarning), (
 
 # Reuse the EXISTING normalizer and typed sentinels from the shared normalizers module.
 # AC_NORMALIZER: these are the shared AC5-PROVENANCE oracles.
+# Import from normalizers (production module) rather than
+# cross-importing from test_emit_parity (test leaf); avoids pytest collection-isolation
+# breakage and makes the surface available for future runtime callers.
 from coordinator_core.ops.emit.normalizers import (
     _normalize,
     _TS_SENTINEL,
@@ -457,7 +460,9 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
 
+# ---------------------------------------------------------------------------
 # AC_NORMALIZER: provenance normalizer — reuse _normalize from strang-01
+# ---------------------------------------------------------------------------
 
 class TestProvenanceNormalizerReuse:
     """AC_NORMALIZER: normalize-then-compare using _normalize from test_emit_parity.
@@ -593,7 +598,9 @@ class TestProvenanceNormalizerReuse:
         )
 
 
+# ---------------------------------------------------------------------------
 # AC_DRIFT_CHECK: drift fails loud when pinned version lags min_supported
+# ---------------------------------------------------------------------------
 
 class TestRunDriftCheck:
     """AC_DRIFT_CHECK: run_drift_check fail-louds on synthetic version lag."""
@@ -652,6 +659,28 @@ class TestRunDriftCheck:
                 "coordinator_core.ops.emit.doe_drift.check_freshness",
                 return_value=None,
             ),
+            patch(
+                "coordinator_core.ops.emit.doe_drift.check_fixture_body",
+                return_value=None,
+            ),
         ):
             fixture = run_drift_check(pinned_version="2.5.0", doe_clone=tmp_path)
             assert fixture["contract_version"] == "3.0.0"
+
+    def test_drift_check_fails_when_fixture_body_violates_schema(self, tmp_path: Path) -> None:
+        synthetic_fixture = {
+            "contract_version": "3.0.0",
+            "min_supported_contract_version": "2.5.0",
+        }
+        fixture_dir = tmp_path / "coordinator/cockpit-contract/conformance"
+        fixture_dir.mkdir(parents=True)
+        (fixture_dir / "emission-conformance.json").write_text(
+            json.dumps(synthetic_fixture), encoding="utf-8"
+        )
+
+        with patch(
+            "coordinator_core.ops.emit.doe_drift.check_freshness",
+            return_value=None,
+        ):
+            with pytest.raises(DriftError, match="fails its own schema"):
+                run_drift_check(pinned_version="2.5.0", doe_clone=tmp_path)

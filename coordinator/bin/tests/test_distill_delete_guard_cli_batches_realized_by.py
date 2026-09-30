@@ -145,6 +145,7 @@ def test_resolve_realized_by_map_miss_falls_through_to_scalar_not_treated_as_abs
 
     monkeypatch.setattr(_delete_guard, "_git_object_exists", fake_scalar)
     # A map that only covers a DIFFERENT sha — sha_missing_from_map is absent
+    # from it and must fall through to the scalar (never treated as False).
     result = _delete_guard.resolve_realized_by(
         sha_missing_from_map, tmp_path, existence_map={sha_in_map: True}
     )

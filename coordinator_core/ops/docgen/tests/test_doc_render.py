@@ -289,8 +289,25 @@ def test_ready_to_fire_arms_still_scaffold_pickup_ready_true(doc_type):
     assert "pickup_ready: true" in output
 
 
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-
+# readiness.md): the templates are the SECOND authoring surface and must not
+# drift from C3's scaffold behaviour -- a template that keeps asserting a
+# readiness it cannot know reintroduces the defect through the other door.
+#
 # DISPOSITION: the three seed templates needed NO edit, and that is a finding
+# rather than an omission. They already default to `awaiting_gate`, already
+# omit `pickup_ready` entirely (deliberate -- § Cross-plan coordination
+# measured 13 live records where a genuinely-free baton advertises nothing,
+# and the plan's ruling is to leave that alone: derived readiness is about not
+# LYING, not about filling every field), and their `blocking_notes:
 # PLACEHOLDER` line is now a gate NOTE rather than a gate.
+#
+# What was missing is the assertion. C3's body says the placeholder "must not
+# make the stub un-pickup-ready ... C1 ignores the field entirely, so this
+# falls out for free -- but assert it, because it is the regression a later
+# well-meaning edit will introduce." These are that assertion.
+# ---------------------------------------------------------------------------
 
 _SEED_TYPES = ["goal-seed", "roadmap-seed", "roadmap-baton"]
 
@@ -306,7 +323,9 @@ def test_seed_placeholder_blocking_notes_derives_no_gate(doc_type):
     from coordinator_core.reconcile.gate_eval import derive_readiness
 
     # The PLACEHOLDER line is the ABSENT branch of the deprecated
+    # `gate_dependency` conditional, so it only renders with that value gone.
     # Rendering with FULL_VALUES takes the present branch and this test would
+    # assert nothing -- it must not be allowed to pass vacuously.
     values = {k: v for k, v in FULL_VALUES.items() if k not in ("gate_dependency", "blocking_notes")}
     output = render_document(doc_type, values)
 

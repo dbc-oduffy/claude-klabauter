@@ -12,25 +12,28 @@ is the only surface that runs AFTER the platform mounts a fresh
 
 Inert unless `CLAUDE_CODE_REMOTE=true` — a workstation session must never
 touch `/root/engine-current`. Re-points only when the discovered checkout
-carries a readable, non-empty `coordinator_core/_engine_stamp` AND that
-stamp's mtime is no older than the frozen root's. The stamp's content
-(`sha:<source-commit>`, `coordinator_core/warm/skew.py :: write_engine_stamp`)
-names a build but orders nothing, and ordering two shas needs git, which this
-budget forbids. In a git checkout the mtime is checkout time, not build time,
-so the comparison guarantees only "a stamped checkout mounted after the image
-was baked" -- it cannot catch an environment that pins an older ref.
+carries a readable, non-empty `coordinator_core/_engine_stamp` AND its publish
+instant (`_engine_published_at`, `skew.read_engine_published_at`) is no older
+than the frozen root's. The stamp's content (`sha:<source-commit>`) names a
+build but orders nothing, and ordering two shas needs git, which this budget
+forbids; the stamp's mtime is checkout time in a git checkout, so it would
+read an older pinned ref as fresher. The sibling publish instant is written by
+the round itself and survives clone, so it orders builds. Either root lacking
+a readable publish instant is UNKNOWN order: the link stays put.
 
 No network, no git subprocess, no spawn: `resolve_checkout` scans
 `/home/user`'s immediate children with `os.scandir` (case-insensitive
-basename match), and every stamp read is a single `Path.stat`. Any failure
+basename match), and every read is a single stat or small file read. Any failure
 (missing checkout, unreadable stamp, symlink error) leaves the existing link
 untouched and is swallowed — at most one line to stderr — never raised,
 never blocking the session (module docstring's own fail-open contract,
 matching every other `hooks.session_start_*` op in this package).
 
 Negative-spec:
-    Never re-points onto an unstamped checkout, or one strictly older than
-    the frozen root, however plausible its name.
+    Never re-points onto an unstamped checkout, one strictly older than the
+    frozen root, or one whose order against the frozen root is unknown,
+    however plausible its name.
+    Never orders builds by file mtime.
     Never touches `/root/engine-current` when `CLAUDE_CODE_REMOTE` is unset
     or not the literal string `"true"`.
     Never shells out — `git`, `os.system`, `subprocess` are absent from this
@@ -45,16 +48,23 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
+from coordinator_core.warm.skew import read_engine_published_at
 
+#: The stable symlink `scripts/cloud_setup.py` creates and pins
 #: `COORDINATOR_ENGINE_ROOT` at. Every engine CLI shim execs through this
+#: path, never through the frozen clone or a per-session checkout directly.
 DEFAULT_LINK_PATH = Path("/root/engine-current")
 
+#: This script's own frozen clone (`scripts/cloud_setup.py :: CLONES["klabauter"]["dest"]`),
+#: restated as a literal for the reason `cloud_setup.py`'s own
 #: `FRESH_ENGINE_CHECKOUT_PATH` gives: a hook body is a standalone process,
+#: it cannot import `scripts.cloud_setup`.
 DEFAULT_FROZEN_ROOT = Path("/root/klabauter")
 
 DEFAULT_SEARCH_PARENT = Path("/home/user")
@@ -71,15 +81,11 @@ def _stamp_path(root: Path) -> Path:
     return root.joinpath(*_STAMP_REL)
 
 
-def _readable_nonempty_stamp_mtime(root: Path) -> Optional[float]:
-    stamp = _stamp_path(root)
+def _has_readable_nonempty_stamp(root: Path) -> bool:
     try:
-        st = stamp.stat()
-        if st.st_size <= 0:
-            return None
-        return st.st_mtime
+        return _stamp_path(root).stat().st_size > 0
     except OSError:
-        return None
+        return False
 
 
 def resolve_checkout(search_parent: Path) -> Optional[Path]:
@@ -96,10 +102,10 @@ def resolve_checkout(search_parent: Path) -> Optional[Path]:
     return None
 
 
-def _is_fresher_or_equal(checkout_mtime: float, frozen_mtime: Optional[float]) -> bool:
-    if frozen_mtime is None:
+def _is_fresher_or_equal(checkout_at: datetime, frozen_at: Optional[datetime]) -> bool:
+    if frozen_at is None:
         return False
-    return checkout_mtime >= frozen_mtime
+    return checkout_at >= frozen_at
 
 
 def _atomic_repoint(link_path: Path, target: Path) -> None:
@@ -137,13 +143,15 @@ def repin_cloud_engine_root(
         if checkout is None:
             verdict["reason"] = "no fresh checkout mounted"
             return verdict
-        checkout_mtime = _readable_nonempty_stamp_mtime(checkout)
-        if checkout_mtime is None:
+        if not _has_readable_nonempty_stamp(checkout):
             verdict["reason"] = "checkout carries no readable engine stamp"
             return verdict
-        frozen_mtime = _readable_nonempty_stamp_mtime(frozen_root)
-        if not _is_fresher_or_equal(checkout_mtime, frozen_mtime):
-            verdict["reason"] = "checkout stamp is not fresher than the frozen root's"
+        checkout_at = read_engine_published_at(checkout)
+        if checkout_at is None:
+            verdict["reason"] = "checkout carries no readable publish instant"
+            return verdict
+        if not _is_fresher_or_equal(checkout_at, read_engine_published_at(frozen_root)):
+            verdict["reason"] = "checkout is not provably as fresh as the frozen root"
             return verdict
         _atomic_repoint(link_path, checkout)
         verdict["repinned"] = True

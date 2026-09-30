@@ -261,7 +261,12 @@ def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circ
 
 
 def test_seam_pins_host_is_windows_explicitly_per_cell():
+    # Seam-confirmed multiprobe shape (every segment a recognized single-
+    # process-rewritable form) -- same fixture literal as
     # `test_guard_multiprobe_banner.py`'s own `_BANNER_CMD_CONFIRMED`, whose
+    # docstring there records this exact command as the deny/advise-split
+    # fixture: DENY on the Windows leg, allow+advisory on the non-Windows
+    # leg for the identical command.
     cmd = 'echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
     sid_win = "guard-message-capture-host-windows"
     sid_mac = "guard-message-capture-host-mac"

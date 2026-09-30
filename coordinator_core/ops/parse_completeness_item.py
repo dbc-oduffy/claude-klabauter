@@ -72,6 +72,7 @@ def _extract_probe(item: str, item_rest: str) -> Tuple[str, str]:
         raise _Malformed(f'unterminated [probe: (no closing "]"): {item}')
 
     # Peel from the right to find the final UNESCAPED "]" -- a "\]" pair is an
+    # escaped literal bracket inside the command, not the closing delimiter.
     probe_scan = remainder
     probe_raw_content: Optional[str] = None
     while True:

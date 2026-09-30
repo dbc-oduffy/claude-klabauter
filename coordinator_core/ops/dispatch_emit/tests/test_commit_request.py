@@ -1,6 +1,9 @@
 """AC2: render_marker/parse_marker round-trip; one-line marker; malformed
 and multi-marker refusal."""
 
+import dataclasses
+import json
+
 import pytest
 
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -45,6 +48,36 @@ def test_round_trip_equal():
     assert marker is not None
     parsed = parse_marker(marker)
     assert parsed == req
+
+
+def test_round_trip_with_expected_branch():
+    req = dataclasses.replace(_fixture_request(), expected_branch="feat-x")
+    marker = render_marker(req)
+    assert marker is not None
+    parsed = parse_marker(marker)
+    assert parsed == req
+    assert parsed.expected_branch == "feat-x"
+
+
+def test_round_trip_expected_branch_none():
+    req = _fixture_request()
+    assert req.expected_branch is None
+    parsed = parse_marker(render_marker(req))
+    assert parsed is not None and parsed.expected_branch is None
+
+
+def test_pre_field_v1_payload_parses_expected_branch_none():
+    payload = {
+        "version": 1,
+        "chunks": [],
+        "deliverable_id": None,
+        "session_id": None,
+        "repo_root": None,
+        "plan_path": None,
+    }
+    parsed = parse_marker(f"{MARKER_PREFIX}{json.dumps(payload)}\n")
+    assert parsed is not None
+    assert parsed.expected_branch is None
 
 
 def test_marker_is_one_ascii_line():

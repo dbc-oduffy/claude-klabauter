@@ -633,7 +633,17 @@ def test_ac9_existing_entry_not_clobbered() -> None:
             raise AssertionError(f"{name}: " + (f"existing known_marketplaces.json['marketA'] was clobbered: {known}"))
 
 
+# ---------------------------------------------------------------------------
 # WRITE_SURFACE declaration
+# ---------------------------------------------------------------------------
+#
+# Spec backlink: pln-writer-declared-write-surface-49d3bd,
+# chunk C3b. This writer's surface (which `<plugin>@<marketplace>` /
+# `<marketplace>` entries get seeded) depends entirely on what
+# `_read_repos_registry` + `_enumerate_present_plugin_keys` find checked out
+# on the machine running install. These tests assert the declaration stays
+# SHAPED and machine-independent — never that it matches any particular
+# machine's actual registry/marketplace state.
 
 import importlib.util as _importlib_util  # noqa: E402
 

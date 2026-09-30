@@ -12,7 +12,16 @@ import pytest
 from coordinator_core.ops import setup_chain_walker as scw
 from coordinator_core.testing.content_root import resolve_content_root
 
+# Declared, not excused: the override-pair (exit 93) and trampoline-
+# transport-failure tests spawn a real `sys.executable` process because the
+# property under test is real `os.environ` isolation across a process
+# boundary -- deliberately "in-subprocess so os.environ isolation is real,
+# not monkeypatched" (see comment above `_make_repo_root`). No mock stands
+# in for that. This is the only spawn shape in the file (isolated to those
+# two call sites), so it is left as-is rather than hoisted. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -73,7 +82,13 @@ def test_phase_chain_preinstall_sets_flag_and_does_not_exit():
     assert flags["run_chain_preinstall"] is True
 
 
+# ---------------------------------------------------------------------------
+# _self_resolve_walker_roots — `python3 -m coordinator_core.ops.
+# setup_chain_walker` entry point fallback used when neither
 # COORDINATOR_SETUP_REPO_ROOT nor COORDINATOR_SETUP_LIB_DIR is set.
+# Every existing test sets
+# both env vars, leaving this branch entirely uncovered.
+# ---------------------------------------------------------------------------
 
 def _add_coordinator_claude_source_evidence(tree: Path) -> None:
     (tree / ".claude-plugin").mkdir(parents=True, exist_ok=True)
@@ -82,7 +97,10 @@ def _add_coordinator_claude_source_evidence(tree: Path) -> None:
 
 
 def test_self_resolve_walker_roots_success_via_flag(tmp_path):
+    # Defect B fix: the root comes from the override ladder
     # (--coordinator-root / $COORDINATOR_CLAUDE_ROOT), never a guess
+    # derived from this module's own on-disk location, and (Defect fix
+    # 2026-08-07) never a registered publish mirror.
     coordinator_tree = tmp_path / "coordinator-claude-checkout"
     coordinator_tree.mkdir()
     _add_coordinator_claude_source_evidence(coordinator_tree)
@@ -638,12 +656,28 @@ def test_pf_emit_row_present_maps_ndjson_status_pass(capsys):
     assert row["status"] == "pass"
 
 
+# ---------------------------------------------------------------------------
 # Fresh-install-shape smoke test (FAMILY-I: CLAUDE_KLABAUTER_ROOT may be unresolvable).
 # Exercises the real DoE-side trampoline end-to-end with CLAUDE_KLABAUTER_ROOT
+# forced-unresolvable, asserting the dedicated transport-failure exit code
+# (95) and an actionable remediation message — not a bare traceback.
+#
+# Not circular: this test probes the transport-failure arm exclusively —
+# claude-klabauter's own coordinator_core code is never imported/reached on this path
+# (the trampoline raises and exits at the RuntimeError catch in setup.py's
+# main() before op_main() is ever looked up). Isolation is layered across
+# every _resolve_claude_klabauter_root rung, not just the env-var one: env.pop(
 # "CLAUDE_KLABAUTER_ROOT") clears rung 1, COORDINATOR_SETTINGS_HOME redirected to an
+# empty temp dir clears the rung-1.5 machine-local pointer file, and HOME
+# redirected to a fake temp dir clears rung 2 (cc_invoke._claude_home() falls
 # back to os.path.expanduser("~"), i.e. $HOME, when CLAUDE_HOME is unset —
+# see coordinator-content-repo coordinator/bin/lib/cc_invoke.py:148-158 — so this also
+# starves _machine_local_get's bin/_machine_local.py lookup). Popping
 # CLAUDE_KLABAUTER_ROOT alone is NOT sufficient (_resolve_claude_klabauter_root falls through to
 # the machine-local registry rung); the COORDINATOR_SETTINGS_HOME + HOME
+# redirection is load-bearing for the no-circularity guarantee this test
+# relies on.
+# ---------------------------------------------------------------------------
 
 _DOE_SETUP_PY = Path(resolve_content_root() or "/content-root-unresolved") / "coordinator" / "scripts" / "setup.py"
 

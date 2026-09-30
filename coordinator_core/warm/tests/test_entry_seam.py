@@ -259,7 +259,13 @@ def test_try_warm_guard_dispatch_defaults_params_to_empty_dict(monkeypatch):
     assert captured[0]["params"] == {}
 
 
+# ---------------------------------------------------------------------------
 # AC5a closure -- "warm off" and "no door" exercised AS THEMSELVES, not
+# collapsed into the stubbed-None `try_warm_dispatch` case every test above
+# uses. `try_warm_dispatch` is left unstubbed in both: the real
+# `warm.client`/`warm.settings` chain is what has to produce the fall-open
+# result here.
+# ---------------------------------------------------------------------------
 
 
 def test_try_warm_guard_dispatch_falls_open_when_warm_is_genuinely_disabled(monkeypatch):

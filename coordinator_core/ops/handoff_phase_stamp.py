@@ -117,8 +117,12 @@ _EXEC_FIELDS = (
     "execution_authorized_note",
 )
 
+#: The optional four-field restamp record (docs/plans/2026-09-23-exec-
+#: authorized-restamp-shape.md § Design; C3). Present on the plan only when an
+#: EM restamp has landed on top of the PM authorization. Copied onto the
 #: execution handoff verbatim, all-or-none, beside _EXEC_FIELDS — mirrors
 #: exec_auth_stamp.RESTAMP_FIELDS byte-for-byte (not imported, to keep this
+#: op's plan-read free of a review_assemble dependency).
 _RESTAMP_FIELDS = (
     "execution_restamped_by",
     "execution_restamped_at",
@@ -126,6 +130,7 @@ _RESTAMP_FIELDS = (
     "execution_restamped_note",
 )
 
+#: Vendored handoff schema path — relative to this file's package location
 #: (mirrors handoff_transition.py's _SCHEMA_PATH).
 _SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "handoff.schema.json"
@@ -247,6 +252,8 @@ async def _handler(
             "sole v1 value-source for the execution_authorized_* stamp)"
         )
 
+    # P9: repo_root is required to derive the worktree root (common_dir scope
+    # keying guarantees the command-type invoker always supplies --repo; see
     # ipc.py's _OP_KEY_SCOPE["handoff.stamp_phase"] = "common_dir").
     if repo_root is None:
         return _err(
@@ -307,6 +314,8 @@ def _stamp_phase(
             )
 
         # Pre-write guard (H-CROSS-EXEC-2): handoff_phase requires kind==session-handoff.
+        # Checked BEFORE the write is attempted, rather than relying on the
+        # post-mutation validate gate alone to catch a wrong-kind target.
         kind = read_fm_field(split.fm_text, "kind")
         if kind != "session-handoff":
             raise MutateAbort(

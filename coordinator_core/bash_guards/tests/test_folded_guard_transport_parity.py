@@ -102,16 +102,59 @@ def _run_warm(payload: Dict[str, Any]) -> Any:
     return evaluate_payload_json(json.dumps(payload))
 
 
+#: Trailing wiki-citation line ("See <anchor>." / "See: <anchor>"), SPLIT OFF
+#: the prose before comparison and then compared on its own axis -- no longer
 #: discarded (REVERSED 2026-08-29; see `_split_citation` and
+#: `_assert_cold_and_warm_both_deny`).
+#:
+#: The prior revision stripped this line from BOTH sides unconditionally, on
+#: the measurement that case 1's cold citation resolved to a local absolute
+#: path while warm emitted the bare repo-relative anchor -- recorded then as
+#: "same anchor, different (both correct, for their own reader) resolution".
+#: That reading was wrong in a way this oracle is specifically supposed to
+#: catch. Warm's anchor resolved for NO reader: it named
+#: `coordinator/docs/wiki/...` relative to a repo that has no `coordinator/`
+#: directory, so a reader in this checkout got a path that does not exist,
+#: which is exactly the 404 DoE's own `resolve_wiki_citation()` exists to
+#: prevent. The engine now resolves it (`dispatch.
+#: resolve_doctrine_surface_wiki_citation`, threaded into the guard's
+#: `resolve_wiki_citation` parameter), and both sides emit the same absolute
+#: path -- verified 2026-08-29.
+#:
+#: Stripping the line is what let that divergence live: an oracle that
+#: discards the one line a fix changes cannot pin the fix, and cannot fail on
+#: a regression in either direction (anchor literal drift, or the resolver
+#: being unwired again -- it WAS unwired, `resolve_doctrine_surface_wiki_
+#: citation` sat with no caller at all while its own docstring named one).
+#: Same failure mode as the Bash-only fixture set that hid the seventh
 #: `_ALTERNATIVES` key: a case that cannot fail is not a measurement.
 _SEE_CITATION_RE = re.compile(r"\n\nSee:? (?P<anchor>.*)$", re.DOTALL)
 
 _CITATION_PERIOD_RE = re.compile(r"\.\s*$")
 
+#: Warm-only footer (`guard_unlock_sentinel._augment_deny_with_guard_name`,
+#: commit 0a1c92c0bb "guard denials name the guard"): "\n\nGuard: `<name>`."
+#: appended AFTER the citation line. Cold has no such footer, and it is not
+#: part of the citation -- it is a second, independent axis (guard identity,
+#: not wiki anchor). Stripped off before citation-splitting so it cannot be
 #: swallowed into the anchor capture (`_SEE_CITATION_RE` is DOTALL-to-end-of-
+#: string and would otherwise eat it); never stripped from the cold side,
+#: which never carries it.
 _GUARD_FOOTER_RE = re.compile(r"\n\nGuard: `[^`]+`\.\s*$")
 
 #: NO `_LEADING_BLOCKED_RE` LIVES HERE ANY MORE (REMOVED 2026-08-29). It used
+#: to strip a leading `BLOCKED: ` token from BOTH sides unconditionally,
+#: which hid a real divergence rather than measuring it: two of the four
+#: ported guards (`guard-host-subagent-bash-ban`, `guard-host-subagent-bash-
+#: spawn-shapes`) had dropped the literal `BLOCKED: ` token cold's own prose
+#: leads with, relying on the `[coordinator] ` provenance marker alone --
+#: and an unconditional strip that discards the one token that diverged buys
+#: a green test and no information, the same shape as the per-case text
+#: exception already removed from this file (see the removed-exception note
+#: below). The token is restored in both guards' own deny prose instead
+#: (`guard_host_subagent_bash_ban._compose_deny_reason`,
+#: `guard_host_subagent_bash_spawn_shapes._compose_deny_reason`), so nothing
+#: needs stripping: the token is now compared like the rest of the prose.
 
 
 def _split_citation(text: str) -> "tuple[str, Optional[str]]":
@@ -144,6 +187,15 @@ def _normalize_warm(text: str, *, case: str) -> "tuple[str, Optional[str]]":
     return text.strip(), anchor
 
 
+#: Cold scripts whose citation resolves into the coordinator-content-repo wiki family; the
+#: engine twins omit that `See:` line because message-register rule B7 bans the
+#: family unconditionally. Omission is the sanctioned divergence; a warm
+#: citation that IS present still has to equal cold's anchor.
+_ENGINE_OMITS_DOE_WIKI_CITATION = frozenset(
+    {"guard-host-subagent-bash-ban.py", "guard-host-subagent-bash-spawn-shapes.py"}
+)
+
+
 def _assert_cold_and_warm_both_deny(
     *, case: str, hook_name: str, payload: Dict[str, Any], env: Optional[Dict[str, str]] = None
 ) -> None:
@@ -174,6 +226,12 @@ def _assert_cold_and_warm_both_deny(
     )
 
     # Citation axis, compared rather than discarded (see `_SEE_CITATION_RE`).
+    if hook_name in _ENGINE_OMITS_DOE_WIKI_CITATION and warm_anchor is None:
+        assert cold_anchor is not None, (
+            f"{case}: cold no longer cites a wiki page, so "
+            f"_ENGINE_OMITS_DOE_WIKI_CITATION has gone stale for {hook_name}."
+        )
+        return
     assert (cold_anchor is None) == (warm_anchor is None), (
         f"{case}: one path emits a wiki citation and the other does not.\n"
         f"  cold: {cold_anchor!r}\n"
@@ -202,7 +260,15 @@ def test_case1_doctrine_surface_bash_write_parity() -> None:
         "tool_name": "Bash",
         "tool_input": {"command": 'echo "x" >> CLAUDE.md'},
         "cwd": cwd,
+        # `plugin_root` rides the payload directly (C1) rather than being
+        # left to the ambient ladder (env var / installed-plugin-dir /
+        # `.coordinator-content-root` pointer): a payload whose `cwd` points at the
+        # coordinator-content-repo checkout but omits `plugin_root` can still fail that
         # ladder on a host with no `CLAUDE_PLUGIN_ROOT` set and no installed
+        # `coordinator-claude` plugin dir -- measured directly (2026-08-28)
+        # under this exact fixture. `<content_root>/coordinator` is where
+        # `governed-authoring-surfaces.json` actually lives, matching
+        # `resolve_plugin_root_loud`'s own contract.
         "plugin_root": _fixture_plugin_root(),
     }
     _assert_cold_and_warm_both_deny(
@@ -328,9 +394,22 @@ def _write_local_md(tmp_path: Path, policy_key: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
 # AXIS 1 -- IDENTITY SHAPE SWEEP (state/audits/2026-08-29-unverified-parity-
+# findings-measured.md FINDING A).
+#
+# Every fixture above this point hardcodes `agent_id="abcdef1234567890"` --
+# the one shape both subagent guards agreed on while they gated cohort
+# membership through `_resolve_subagent_identity`. That resolver is now
 # GONE from both ported guards (2026-08-29, see each guard's own "IDENTITY
 # RESOLUTION" docstring section) -- both now ask cold's own question
+# directly, `isinstance(agent_id, str) and agent_id.strip()`, with no
+# canonical-id resolution step to disagree with cold about. This sweep
+# exercises the shapes that measured cold-DENY/warm-allow BEFORE that
+# reversal (named teammate + short session_id, uppercase hex, dashed UUID)
+# to prove the reversal actually closed the gap, rather than trusting the
+# source diff alone.
+# ---------------------------------------------------------------------------
 
 _IDENTITY_SHAPES: "tuple[tuple[str, str, str], ...]" = (
     ("bare_hex", "abcdef1234567890", "sess12345678"),
@@ -397,16 +476,26 @@ def test_identity_axis_can_actually_fail(tmp_path: Path) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
 # AXIS 2 -- SHAPE VOCABULARY SWEEP, derived from `_shape_classifier.
 # SHAPE_PRECEDENCE` itself (the guard's own shape vocabulary) rather than
+# from a hand-copied list of shape names -- so a shape added to the
 # classifier later fails this module (via the `_SHAPE_COMMANDS[shape]`
+# lookup below, a plain `KeyError`) until someone supplies a payload for it.
+# ---------------------------------------------------------------------------
 
+#: One (case suffix, tool_name, command, expectation) tuple per
 #: `SHAPE_PRECEDENCE` member -- `expectation` is `"deny"` (must deny on both
 #: sides) or `"decline"` (the one INTENDED divergence this axis carries; see
 #: `_INTENDED_DIVERGENCES`). Every command here was verified directly
+#: against `classify_command` to actually classify as its listed shape
+#: before being pinned here (per dispatch brief: "verify each with the
+#: classifier, do not assume from the name").
 _SHAPE_COMMANDS: "Dict[Shape, list]" = {
     Shape.GREP_VIA_BASH: [
         ("unanswerable_pipe", "Bash", "curl -s foo | grep bar", "deny"),
+        # `plan_for` fully answers a bare recursive grep -- the guard's own
+        # decline predicate returns None on the warm side. See
         # `_INTENDED_DIVERGENCES` below.
         ("answerable_bare", "Bash", "grep -rn foo .", "decline"),
     ],
@@ -433,9 +522,18 @@ _SHAPE_COMMANDS: "Dict[Shape, list]" = {
     Shape.FIND_EXEC_XARGS: [
         ("find_exec", "Bash", 'find . -name "*.log" -exec wc -l {} ;', "deny"),
     ],
+    Shape.LABEL_OR_EXIT_ECHO: [
+        ("label_echo", "Bash", 'echo "Session info:" && env', "deny"),
+    ],
 }
 
 #: Named registry of every INTENDED cold-vs-warm divergence this module
+#: asserts AS SUCH (dispatch brief: "never a skip and never a silent
+#: exclusion"). `test_shape_vocabulary_parity`'s "decline" branch looks up
+#: its case in this registry and FAILS if the entry is missing, so an
+#: undocumented divergence cannot slip in as a silent decline; the reverse
+#: direction is checked by `test_every_intended_divergence_maps_to_a_
+#: decline_case`.
 _INTENDED_DIVERGENCES: "tuple[dict, ...]" = (
     {
         "case": "grep_via_bash/answerable_bare",

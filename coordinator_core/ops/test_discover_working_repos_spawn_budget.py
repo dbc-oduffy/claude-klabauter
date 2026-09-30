@@ -106,7 +106,15 @@ def test_merged_flat_registry_eliminates_machine_local_cli_spawns(
 
     _seeded_registry(tmp_path, monkeypatch)
 
+    # `_tier_a5`'s tail (`_sort_unique`) shells out to `sort -u` for
     # byte-parity with the bash oracle — a SANCTIONED carve-out
+    # (`coordinator_core/tests/test_no_bash_dependency.py` names
+    # `discover_working_repos.py::_sort_unique` explicitly) counted
+    # separately by `test_tier_a5_and_publish_mirror_keys_real_spawn_count`
+    # below, via `spawn_count_budget.per_call`. Stub it out here so this
+    # test isolates only the registry-read path this fix targets
+    # (`_merged_flat_registry`'s elimination of the `machine-local` CLI
+    # spawns), not that separate, separately-counted spawn.
     monkeypatch.setattr(m, "_sort_unique", lambda lines: sorted(set(lines)))
 
     call_count = {"n": 0}

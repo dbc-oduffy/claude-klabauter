@@ -88,6 +88,8 @@ def test_a_free_standing_value_after_a_flag_is_still_forwarded(cli):
         ("ship-handoff", ["p.md", "--sha", "abc1234", "--archive", "--force"]),
         ("chain-archive-handoff", ["p.md", "--exclude", "a.md", "--exclude", "b.md"]),
         ("correct-handoff-body", ["p.md", "--old-string", "a", "--new-string", "b"]),
+        ("correct-memo-note", ["m.md", "--decision-note", "a"]),
+        ("correct-memo-note", ["m.md", "--decision-note-file", "n.txt"]),
     ],
 )
 def test_declared_flags_still_pass(cli, subcmd, argv):

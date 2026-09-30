@@ -35,7 +35,11 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
+    # `resolve_plugin_root()` (provision_report.py) resolves the
+    # coordinator-claude plugin's CONTENT root independently of this
     # fixture's own git root -- point its `CLAUDE_PLUGIN_ROOT` rung at
+    # THIS fixture's `coordinator/` dir so `_assemble_contract_blocks`
+    # resolves the synthetic snippets built below.
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "coordinator"))
     registry = tmp_path / "coordinator" / "snippets" / "registry.toml"
     registry.write_text(

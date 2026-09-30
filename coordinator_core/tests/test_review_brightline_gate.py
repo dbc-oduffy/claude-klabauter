@@ -396,7 +396,9 @@ def test_session_id_recovers_via_session_aware_floor_past_peer_commits(
     _git(repo, "commit", "-q", "-m", "own change\n\nSession-Id: session-under-test")
     own_sha = _git(repo, "rev-parse", "HEAD").strip()
 
+    # A peer's commit, pushed AFTER this session's own commit, carrying a
     # DIFFERENT session's trailer — this is what "range" below will start
+    # from, modeling a merge-base that has advanced past `own_sha`.
     (repo / "peer.py").write_text("theirs = 1\n", encoding="utf-8")
     _git(repo, "add", "peer.py")
     _git(repo, "commit", "-q", "-m", "peer change\n\nSession-Id: some-peer-session")

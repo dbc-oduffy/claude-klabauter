@@ -29,7 +29,10 @@ import pytest
 from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.p4 import runner as p4_runner
 
+#: Captured before any test monkeypatches `p4_verb_fence._is_p4_gated` --
 #: the two "real filesystem walk" cases below need the UNPATCHED function,
+#: since the autouse `_p4_gated` fixture below patches that same name for
+#: every other test in this module.
 _REAL_IS_P4_GATED = p4_verb_fence._is_p4_gated
 
 
@@ -229,6 +232,8 @@ class TestGitOnlyRepoPaysNothing:
         _allow("git clean -fdx")
 
     def test_marker_gate_is_a_real_filesystem_walk(self, tmp_path):
+        # Exercises `_find_repo_root_no_spawn` + `is_p4_repo` for real,
+        # rather than through the autouse monkeypatch (see
         # `_REAL_IS_P4_GATED` above).
         result = _REAL_IS_P4_GATED(str(tmp_path))
         assert result is False

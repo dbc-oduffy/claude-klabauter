@@ -109,7 +109,12 @@ class TestDetectorBPositiveOwnership:
             check=True,
             **no_console_passthrough_kwargs(),
         )
+        # `_classify_sync`'s first arg is the git COMMON DIR, not the worktree
         # root (_OP_KEY_SCOPE = "common_dir"); it derives the worktree via
+        # `main_worktree_root`, which takes the parent. Handing it the worktree
+        # root instead silently classifies the parent directory — Detector B
+        # then fails its merge-base and is skipped, which reads as a clean
+        # "open" verdict rather than an error.
         return repo / ".git"
 
     def test_ownerless_looking_record_is_not_read_as_consumed(self, tmp_path):

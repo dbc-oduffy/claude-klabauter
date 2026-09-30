@@ -172,7 +172,11 @@ def _synthetic_scope(monkeypatch, tmp_path):
     either) is what actually redirects `_build_corpus`."""
     monkeypatch.setattr(_gate, "_REPO_ROOT", tmp_path)
     monkeypatch.setattr(_gate, "_GATE_SCOPE_ROOTS", ("coordinator_core",))
+    # `_relpath` (in `test_no_unbatched_per_item_git_spawn.py`) tries its OWN
     # module's `_REPO_ROOT` first, only falling back to root-relative (which
+    # drops the `coordinator_core/` prefix `OpEntrypoint.relpath` always
+    # carries) when that fails -- patch it too so `func_defs` keys land on
+    # the SAME repo-root-relative strings entrypoint resolution produces.
     monkeypatch.setattr(_gate_scope, "_REPO_ROOT", tmp_path)
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
     root = tmp_path / "coordinator_core"

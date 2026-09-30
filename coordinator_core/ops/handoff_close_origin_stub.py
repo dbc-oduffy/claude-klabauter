@@ -260,8 +260,21 @@ _LOG = logging.getLogger(__name__)
 
 
 # Membership is EXPLICIT, not derived from `baton_class()`, and that is a
+# finding rather than a shortcut. This set's members do not share one
+# `baton_class`: `spinoff` derives `deflection` while `spinoff-roadmap` /
+# `roadmap-baton` derive `intention`. A `baton_class()`-based predicate here
+# would both WIDEN the set (pulling in every other `deflection` kind) and
+# NARROW it (dropping `roadmap-baton`, which is what the migrated live
+# records actually carry) -- so it would silently change behaviour in two
+# directions at once. Preserving the membership beats deriving it.
+#
 # Legacy values are retained PERMANENTLY, not time-boxed: sibling repos still
+# carry pre-rename values on disk after this repo's records have migrated, and
+# a half-migrated fleet is the normal state of a fleet vocabulary change.
+#
 # The retired/successor pair is sourced from the canonical `_PRE_RENAME_ALIASES`
+# table via `kind_values_for_canonical()` instead of being spelled as a literal
+# collection here (AC4 -- see `test_baton_class_is_the_only_membership_set.py`).
 _BATON_KINDS = frozenset(
     {"spinoff"} | set(kind_values_for_canonical("roadmap-baton"))
 )
@@ -284,10 +297,19 @@ def _is_baton_kind(kind: str | None) -> bool:
     return kind in _BATON_KINDS
 
 #: Deployment_state values UNCONDITIONALLY eligible for closure — no
+#: liveness check needed (mirrors the bash's `ready_to_fire|awaiting_gate`
+#: case match). `shipped`/`abandoned` stay unconditionally excluded (absent
 #: from both this set and `_LIVENESS_GATED_DEPLOYMENT_STATE` below).
 _UNCONDITIONAL_NON_TERMINAL_STATES = {"ready_to_fire", "awaiting_gate"}
 
 #: (M1) The one deployment_state value admitted CONDITIONALLY, iff its claim
+#: holder is not live (`_in_flight_eligible`). `/pickup` stamps `in_flight`
+#: the moment a roadmap baton is picked up, so the bare state alone is
+#: overloaded between two populations: "someone is on this right now"
+#: (holder live -> stays excluded) and "someone was on this, and it shipped
+#: without the stub ever transitioning" (holder not live / claim released ->
+#: eligible — the orphaned-after-ship case this op exists to close). See the
+#: module docstring's M1 spec backlink.
 _LIVENESS_GATED_DEPLOYMENT_STATE = "in_flight"
 
 _BATON_WALK_EDGE_KINDS: Set[str] = {"predecessor", "origin_handoff"}
@@ -731,7 +753,13 @@ async def _try_close(
     """
     rel = rel_id(stub_path, worktree)
 
+    # Delivery-proof close (PM ruling; see this function's own docstring):
     # a COMPLETE proof, stub-specific via `deliverable_id` equality, closes
+    # on that evidence and skips the live-children guard entirely. Safe
+    # because this close is IN PLACE (deployment_state -> shipped, no
+    # `git mv`) — it cannot strand a dependent the way an archival move
+    # could; archival remains separately gated on liveness in
+    # `archive_handoffs.py`, untouched here.
     close_basis = CLOSE_BASIS_GUARD
     proof_applies = False
     if _is_complete_delivery_proof(delivery_proof):
@@ -750,7 +778,16 @@ async def _try_close(
             close_basis = CLOSE_BASIS_DELIVERY_PROOF
 
     if not proof_applies:
+        # candidate MUST be absolute: handoff_children._handoff_has_live_children
+        # resolves "candidate" via contained_path(Path(candidate), ...), which
+        # calls .resolve() against the PROCESS cwd for a relative string — not
+        # the worktree. stub_path (from handoffs_dir.glob()) is already absolute.
+        # This guard answers a conclusion-shaped question ("may this origin stub
+        # be closed?") -- the close it gates is `deployment_state -> shipped` IN
         # PLACE, no `git mv`, so `CONCLUSION_EDGE_KINDS` (not the archival-shaped
+        # default) is the right predicate — see this function's own docstring
+        # above for the schema-argument specific to this call site (why a fork
+        # child is structurally incapable of being this stub's continuation).
         guard_params: dict = {
             "candidate": str(stub_path),
             "edge_kinds": CONCLUSION_EDGE_KINDS,
@@ -759,7 +796,16 @@ async def _try_close(
             guard_params["exclude"] = guard_exclude
         guard_res = await _live_children_guard(guard_params, repo_root)
         if guard_res.get("exit_code") != 1:
+            # exit_code 0 = has live children; exit_code 2 = indeterminate/fail-closed.
+            # Both are DO-NOT-stamp outcomes — mirrors the bash's tri-state guard
+            # contract: only guard exit 1 (safe-to-archive) proceeds; retention is
             # never an error. The two states demand OPPOSITE operator responses
+            # (wait for the live children to resolve vs. investigate why the scan
+            # could not complete), so the skip payload discriminates them via
+            # `reason` and surfaces the guard's own `children`/`error` fields
+            # instead of collapsing both into one opaque token — see
+            # `handoff_children._handoff_has_live_children`'s docstring for the
+            # authoritative tri-state contract this reads.
             return None, {
                 "roadmap_id": roadmap_id,
                 "stub_id": stub_id,
@@ -805,7 +851,9 @@ async def _try_close(
     )
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("handoff.close_origin_stub")
@@ -1060,7 +1108,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         guard_exclude = [str(handoff_resolved)]
 
     if not pairs and not direct_stubs and not filtered_stubs:
+        # `pairs_resolved == 0` on its own does NOT discriminate loud vs
+        # quiet (AC2/AC14 correction — see this function's own docstring and
+        # state/audits/2026-08-04-terminal-state-closer-exit-code-caller-
+        # audit.md's corrected per-closer scoring). `post_commit_tail` calls
+        # this op once per (plan, consumed-handoff) a close-out touches
         # REGARDLESS of whether that artifact ever had a roadmap origin, so
+        # a plan/handoff that legitimately carries no origin linkage at all
+        # (e.g. a memo-sourced plan with no roadmap_id anywhere) must stay
+        # quiet, not false-alarm every non-roadmap close-out.
+        #
+        # Unjoinable-inputs check first: a named plan_path/handoff_path that
+        # did not resolve to a readable file is "I could not read your
+        # inputs" — always loud, regardless of what follows.
         unresolved = [
             raw
             for raw, resolved in (

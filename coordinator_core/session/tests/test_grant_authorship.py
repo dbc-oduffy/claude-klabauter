@@ -75,12 +75,17 @@ def _install_fake_psutil(monkeypatch, process_factory):
     monkeypatch.setattr(ga_core, "_psutil", lambda: fake)
 
 
+# ---------------------------------------------------------------------------
 # HUMAN — POSIX only: a climb that COMPLETES (reaches the top of the
+# process tree with no harness ancestor found).
+# ---------------------------------------------------------------------------
 
 
 def test_human_on_completed_posix_chain(monkeypatch):
     monkeypatch.setattr(ga, "_IS_WINDOWS", False)
 
+    # ppid() returns falsy -> the climb reaches the top of the process
+    # tree (no-parent) without ever finding a harness ancestor. This is a
     # COMPLETED climb, the only clean HUMAN answer this mechanism has.
     _install_fake_psutil(
         monkeypatch, lambda pid: _FakeProc(cmdline=["/bin/bash"], name="bash", ppid=0)
@@ -125,7 +130,9 @@ def test_agent_on_windows_harness_ancestor(monkeypatch):
     assert result.refuses is True
 
 
+# ---------------------------------------------------------------------------
 # UNRESOLVED — Windows: every walk-miss reason refuses.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -179,7 +186,9 @@ def test_unresolved_windows_walk_raises_unexpected_exception(monkeypatch):
     assert result.refuses is True
 
 
+# ---------------------------------------------------------------------------
 # UNRESOLVED — POSIX: every walk-miss reason EXCEPT no-parent refuses.
+# ---------------------------------------------------------------------------
 
 
 def test_unresolved_posix_rung_unreadable(monkeypatch):

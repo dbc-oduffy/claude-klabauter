@@ -1,31 +1,23 @@
-"""test_coordinator_doc_new_plan_claim_acquire.py -- coverage for the
-author-side plan claim acquisition wired into `coordinator-doc-new --type
-plan`'s `_scaffold_plan` write path.
+"""test_coordinator_doc_new_plan_claim_acquire.py -- pins that plan authorship
+takes NO plan claim.
 
-Purpose: nothing on the plan-authoring path previously acquired
-`coordinator_core.session.claims.claim_plan` -- it was reachable only from
-`/pickup` and workstream-complete's `d-claim-plan-execution-lock` -- while
-`/handoff`'s d5 directive already emits `session-claim-cli release-artifact
-plan <slug>` on every handoff, releasing a claim nothing on the authoring
-path took. This suite pins the acquire half:
+Purpose: `coordinator-doc-new --type plan` scaffolds a draft; a draft that is
+never executed must not hold an execution claim. The acquirers are
+`session-claim-cli claim-plan --for-execution` (execution) and `/pickup`.
 
-1. A plan scaffold takes the claim under the plan's bare stem (no path
-   separator, no `.md` suffix) -- `coordinator_core.session.claims.claim_plan`
-   rejects a path-shaped slug loud and non-zero, so a passing claim proves
-   the bare-stem contract was honoured.
-2. A claim failure (the slug already held by a live peer session) does NOT
-   fail the scaffold -- the plan file still lands and the CLI still exits 0
-   (non-fatal, mirroring `claim_plan`'s own session-shape.json write).
-3. A non-plan doc_type (e.g. `memo`) takes no plan claim at all.
+1. A plan scaffold exits 0 and leaves no `plan-claims/<stem>/` directory.
+2. An abandoned draft is claimable by a different session (session B takes it
+   after session A authored it).
+3. Several scaffolds under one session id leave that session holding no plan
+   claims (`list_held_plan_claims` returns `[]`).
+4. A non-plan doc_type takes no plan claim either.
 
-Negative-spec: does not re-cover the sizing reverse-edge transaction
-(test_coordinator_doc_new_sizing_reverse_edge.py's surface) or claim_plan's
-own slug-validation unit coverage (coordinator_core/session/tests, if any) --
-only the NEW call site wired here.
+Negative-spec: does not cover the sizing reverse-edge transaction or the
+re-entrant same-session branch (covered by
+coordinator_core/session/tests/test_claims.py::test_plan_class_reentrant_same_session_accepted).
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
-module -- same load idiom as the sizing reverse-edge suite.
+`coordinator-doc-new` is an extensionless polyglot entrypoint.
 
 Run:
     pytest coordinator/bin/tests/test_coordinator_doc_new_plan_claim_acquire.py -v
@@ -120,65 +112,79 @@ def _run_cli(repo: Path, out_path: Path, title: str, doc_type: str = "plan",
     )
 
 
-class PlanClaimAcquiredOnScaffoldTest(unittest.TestCase):
-    """AC1: a plan scaffold takes the claim under the bare stem."""
+_SESSION_A = "test-session-author"
+_SESSION_B = "test-session-picker"
 
-    def test_plan_claim_lands_under_bare_stem(self):
+
+def _plan_claims_dir(repo: Path) -> Path:
+    return repo / ".git" / "coordinator-sessions" / "plan-claims"
+
+
+class PlanScaffoldTakesNoClaimTest(unittest.TestCase):
+    """A plan scaffold leaves no claim directory."""
+
+    def test_plan_scaffold_creates_no_claim_dir(self):
         with _tmp_git_repo() as (repo, out_path):
-            result = _run_cli(repo, out_path, "Plan claim acquire happy path")
+            result = _run_cli(repo, out_path, "Plan authorship takes no claim",
+                              session_id=_SESSION_A)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(out_path.exists())
-
-            stem = out_path.stem
-            claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / stem
-            self.assertTrue(claim_dir.is_dir(), f"expected claim dir at {claim_dir}")
-            self.assertEqual(
-                (claim_dir / "session_id").read_text().strip(), "test-session-abc"
+            self.assertFalse(
+                (_plan_claims_dir(repo) / out_path.stem).exists(),
+                "plan authorship must not take a claim",
             )
 
 
-class PlanClaimFailureNonFatalTest(unittest.TestCase):
-    """AC2: a claim failure does not fail the scaffold.
+class AbandonedDraftIsClaimableTest(unittest.TestCase):
+    """A draft authored under session A is claimable by session B."""
 
-    Exercised in-process (not via subprocess) so ``claim_plan`` can be
-    forced to fail deterministically -- reproducing a genuine live-peer
-    collision via ``liveness.claim_holder_live`` across a subprocess
-    boundary needs a real live PID under a registered session, which this
-    suite has no sanctioned way to fabricate; forcing the failure directly
-    at the one new call site under test is the narrower, deterministic
-    equivalent.
-    """
-
-    def test_claim_plan_failure_does_not_block_scaffold(self):
+    def test_other_session_claims_abandoned_draft(self):
         with _tmp_git_repo() as (repo, out_path):
-            import unittest.mock as mock
+            result = _run_cli(repo, out_path, "Abandoned draft seed", session_id=_SESSION_A)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stem = out_path.stem
 
-            from coordinator_core.session import claims as claims_mod
+            env = dict(os.environ)
+            env["COORDINATOR_SESSION_ID"] = _SESSION_B
+            claim = subprocess.run(
+                [sys.executable, str(_BIN_DIR / "session-claim-cli.py"), "claim-plan", stem],
+                cwd=str(repo), capture_output=True, text=True, timeout=30,
+                env=env, **_NO_CONSOLE,
+            )
+            self.assertEqual(claim.returncode, 0, f"{claim.stdout}{claim.stderr}")
+            self.assertEqual(
+                (_plan_claims_dir(repo) / stem / "session_id").read_text().strip(),
+                _SESSION_B,
+            )
 
-            argv = [
-                "coordinator-doc-new", "--type", "plan",
-                "--title", "Plan Claim Acquire Non Fatal Failure",
-                "--out", str(out_path), "--no-sizing-object",
-            ]
-            env_patch = {"COORDINATOR_SESSION_ID": "test-session-nonfatal"}
-            with mock.patch.object(sys, "argv", argv), \
-                 mock.patch.object(claims_mod, "claim_plan", return_value=False), \
-                 mock.patch.dict(os.environ, env_patch), \
-                 mock.patch("os.getcwd", return_value=str(repo)):
-                old_cwd = os.getcwd()
-                os.chdir(repo)
-                try:
-                    _cli.main()
-                except SystemExit as exc:
-                    self.assertIn(exc.code, (0, None))
-                finally:
-                    os.chdir(old_cwd)
 
-            self.assertTrue(out_path.exists())
+class BlitzShapeHoldsNoClaimsTest(unittest.TestCase):
+    """Three scaffolds under one session id leave no held plan claims."""
+
+    def test_three_scaffolds_hold_no_claims(self):
+        from coordinator_core.session.claimed_plan import list_held_plan_claims
+
+        with _tmp_git_repo() as (repo, _unused):
+            for n in range(3):
+                out = repo / f"blitz-plan-{n}.md"
+                result = _run_cli(repo, out, f"Blitz plan {n}", session_id=_SESSION_A)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(out.exists())
+
+            saved = os.environ.get("COORDINATOR_SESSION_ID")
+            os.environ["COORDINATOR_SESSION_ID"] = _SESSION_A
+            try:
+                held = list_held_plan_claims(repo)
+            finally:
+                if saved is None:
+                    os.environ.pop("COORDINATOR_SESSION_ID", None)
+                else:
+                    os.environ["COORDINATOR_SESSION_ID"] = saved
+            self.assertEqual(held, [])
 
 
 class NonPlanDocTypeTakesNoPlanClaimTest(unittest.TestCase):
-    """AC3: a non-plan doc_type takes no plan claim."""
+    """A non-plan doc_type takes no plan claim."""
 
     def test_memo_scaffold_takes_no_plan_claim(self):
         with _tmp_git_repo() as (repo, out_path):
@@ -189,78 +195,7 @@ class NonPlanDocTypeTakesNoPlanClaimTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(memo_out.exists())
-
-            plan_claims_dir = repo / ".git" / "coordinator-sessions" / "plan-claims"
-            self.assertFalse(plan_claims_dir.exists())
-
-
-class AuthorThenExecuteReclaimIsNoOpTest(unittest.TestCase):
-    """AC4: the same session authoring a plan and then executing it
-    re-claims cleanly rather than contending with itself.
-
-    This seam did not exist until the authorship acquire landed: before
-    it, `/execute-plan`'s Step 0 `claim-plan` was the FIRST acquire any
-    session made against a given plan, so the re-entrant branch was only
-    ever reached on a genuine re-entry (compaction, a second Phase 1.5
-    pass). Author-then-execute in one session now reaches it on the
-    first execute, a path with no prior coverage anywhere -- raised by
-    coordinator-content-repo-em in cross-repo/inbox/2026-08-12-coordinator-content-repo-em-claim-at-
-    authorship-widened.md, which correctly noted it had never run.
-
-    Guards `claim_artifact`'s plan-class-only re-entrant self-claim
-    branch: remove it and this test contends and fails, which is exactly
-    what /execute-plan's Step 0 would do to a session that authored its
-    own plan.
-    """
-
-    def test_execute_plan_step0_reclaim_after_authorship_returns_true(self):
-        with _tmp_git_repo() as (repo, out_path):
-            result = _run_cli(repo, out_path, "Author then execute same session")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            stem = out_path.stem
-
-            env = dict(os.environ)
-            env["COORDINATOR_SESSION_ID"] = "test-session-abc"
-            reclaim = subprocess.run(
-                [sys.executable, str(_CLI_PATH.parent / "session-claim-cli.py"), "claim-plan", stem],
-                cwd=str(repo), capture_output=True, text=True, timeout=30,
-                env=env, **_NO_CONSOLE,
-            )
-
-            self.assertEqual(
-                reclaim.returncode, 0,
-                "same-session re-claim after authorship must no-op to success, "
-                f"not contend: {reclaim.stdout}{reclaim.stderr}",
-            )
-            self.assertNotIn("concurrent /pickup detected", reclaim.stderr)
-            claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / stem
-            self.assertEqual(
-                (claim_dir / "session_id").read_text().strip(), "test-session-abc",
-                "the re-claim must leave the original holder in place, not take over",
-            )
-
-    def test_different_session_still_contends(self):
-        """The negative half: the carve-out is scoped to the SAME session.
-        A different live session must still be refused -- otherwise the
-        re-entrant branch would have widened into a claim bypass."""
-        with _tmp_git_repo() as (repo, out_path):
-            result = _run_cli(repo, out_path, "Author then foreign execute")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            stem = out_path.stem
-
-            env = dict(os.environ)
-            env["COORDINATOR_SESSION_ID"] = "test-session-different"
-            reclaim = subprocess.run(
-                [sys.executable, str(_CLI_PATH.parent / "session-claim-cli.py"), "claim-plan", stem],
-                cwd=str(repo), capture_output=True, text=True, timeout=30,
-                env=env, **_NO_CONSOLE,
-            )
-
-            claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / stem
-            self.assertEqual(
-                (claim_dir / "session_id").read_text().strip(), "test-session-abc",
-                "a foreign session must not silently take over the author's claim",
-            )
+            self.assertFalse(_plan_claims_dir(repo).exists())
 
 
 if __name__ == "__main__":

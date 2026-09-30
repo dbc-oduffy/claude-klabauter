@@ -205,7 +205,11 @@ def test_no_candidate_ever_spans_a_newline_or_is_unreasonably_long():
             assert len(candidate) < 200
 
 
+# ---------------------------------------------------------------------------
+# Operator-form coverage (review: MINOR-2) -- '&>' and '>|' were silently
 # unrecognised (missing from _REDIR_PRECEDING_OK / target-capture handling
+# respectively); '2>&1' and 'echo err >&2' must stay silent throughout.
+# ---------------------------------------------------------------------------
 
 
 def test_combined_redirect_operator_fires():
@@ -224,7 +228,14 @@ def test_fd_duplication_greater_and_2_stays_silent():
     assert not _fires('echo err >&2')
 
 
+# The two tests above only
+# assert indirectly via `_fires()`, which is silent regardless of whether
+# `_extract_redir_candidates` returns `[]` or some benign-but-nonempty
+# candidate -- neither `2>&1` nor `>&2` contains a character `_check_candidate`
+# treats as illegal, so `_fires()` can't distinguish "extracted nothing" from
+# "extracted something harmless". Assert against the extractor directly: `&`
 # is a member of `_REDIR_TARGET_STOP`, so target capture must break
+# immediately and emit no candidate at all.
 def test_extract_redir_candidates_fd_duplication_2_greater_1_yields_no_candidate():
     assert m._extract_redir_candidates('2>&1') == []
 
@@ -233,7 +244,10 @@ def test_extract_redir_candidates_fd_duplication_greater_2_yields_no_candidate()
     assert m._extract_redir_candidates('echo err >&2') == []
 
 
+# process-substitution
 # bodies (`(`/`)`) were added to `_REDIR_TARGET_STOP` so a construct like
+# `tee >(grep foo) < in` cannot have its `>(...)` treated as a redirect
+# target; this had zero regression coverage.
 def test_extract_redir_candidates_process_substitution_yields_no_candidate():
     cmd = "tee >(grep foo" + _QM + ") < in"
     assert m._extract_redir_candidates(cmd) == []
@@ -313,6 +327,11 @@ def test_updated_input_preserves_other_tool_input_keys():
 
 def test_updated_input_still_carries_advisory_context():
     # Merge note: this asserted the literal "ADVISORY". The register on
+    # `work/machine-a/2026-09-06to11` dropped that prefix — the message now
+    # states the fact and the correction and stops, per CLAUDE.md § "Agent-facing
+    # message text is a register" (one fact, once; no self-legitimacy). The
+    # claim worth pinning was never the prefix, it was that a rewritten call
+    # still explains ITSELF rather than silently changing under the agent.
     out = m.check(_payload('echo x > bad?name.txt'))
     hso = out["hookSpecificOutput"]
     assert "additionalContext" in hso

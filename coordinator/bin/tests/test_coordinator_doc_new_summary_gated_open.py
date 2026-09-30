@@ -218,7 +218,14 @@ class CliTypeScopingTest(unittest.TestCase):
         self.assertIn("--type goal", stderr)
 
 
+# ---------------------------------------------------------------------------
+# Asymmetry regression (C3 dispatch brief) -- the goal-seed/roadmap-seed/
 # roadmap-baton `blocking_notes: PLACEHOLDER` line is a gate NOTE under the
+# 2026-08-19 ruling, not a gate, and must not make a record un-pickup-ready.
+# C1's derive_readiness ignores blocking_notes entirely (consult_prose_gates=
+# False), so this falls out for free -- asserted here because it is the
+# regression a later well-meaning edit will introduce.
+# ---------------------------------------------------------------------------
 
 
 class SeedPlaceholderBlockingNotesDoesNotGateTest(unittest.TestCase):

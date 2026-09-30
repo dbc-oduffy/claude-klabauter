@@ -139,8 +139,12 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
+#: The exact basename this guard protects -- the grant record C2
+#: (`coordinator_core/session/fleet_delegation.py`) writes at
+#: `settings_home() / "fleet-delegation.json"`. Never relaxed to a
 #: substring/prefix match -- an unrelated file that merely CONTAINS this
 #: string in a longer name is a DIFFERENT file and is not the grant record
+#: this guard is chartered to protect.
 _TARGET_BASENAME = "fleet-delegation.json"
 
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)

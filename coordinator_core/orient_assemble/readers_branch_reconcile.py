@@ -73,6 +73,10 @@ from typing import Any
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
+#: The source CLI's absolute path — resolved relative to this file, never a
+#: literal device path (portability discipline, AC-16). This file lives at
+#: coordinator_core/orient_assemble/, so parents[2] is the claude-klabauter repo root
+#: (parents[0]=orient_assemble, parents[1]=coordinator_core, parents[2]=repo
 #: root — mirrors `readers_handoff_triage._SOURCE_PATH`'s same parents[2]).
 _SOURCE_PATH = (
     Path(__file__).resolve().parents[2]

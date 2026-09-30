@@ -83,6 +83,11 @@ is an optional verification-only tool. See the per-site table below.
 | `install/prereq_probe.py` `shell_login_env_reconstruction_source()` | (d) | zsh-specific self-probe (macOS-only path) | No — install-time |
 | `install/sandbox_check.py` `_tier1b_mirror_and_cold_tier()` | (e) | bash-specific, scoped to verification harness by its own carve-out text | No — explicitly excluded from install/ceremony/commit/session paths by the class-(e) rationale itself |
 | `coordinator/bin/static-check` `run_pyright()` | (f) | 3rd-party Node CLI, PATH-resolved, degrade-to-UNAVAILABLE | No — optional verification tool, not on any required path |
+| `ops/gate_dimension_types.py` `_run_mypy()` | (f) | 3rd-party Python CLI (mypy), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` types dimension, merge-gate cadence |
+| `ops/gate_dimension_docstrings.py` `_run_ruff()` | (f) | 3rd-party CLI (ruff), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` docstrings dimension, merge-gate cadence |
+| `ops/gate_dimension_docstrings.py` `_run_interrogate()` | (f) | 3rd-party Python CLI (interrogate), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` docstrings dimension, merge-gate cadence |
+| `ops/gate_dimension_tests.py` pytest `--cov` invocation (named at landing) | (f) | pytest, resolved with its `pytest-cov` plugin (`importlib.util.find_spec`), degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
+| `ops/gate_dimension_tests.py` diff-cover invocation (named at landing) | (f) | 3rd-party Python CLI (diff-cover), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
 
 ## Adversarial standard applied — no carve-out fails it
 
@@ -101,8 +106,11 @@ place. Within the cold-path set:
 - (e)'s one site is scoped by its own anti-loophole teeth to verification-harness-only, and its
   artifact is intrinsically shell-shaped (mutates the sourcing shell's own environment) — porting
   it would destroy the thing under test.
-- (f)'s one site is an optional, PATH-resolved, degrade-to-UNAVAILABLE convenience outside
-  `coordinator_core/`'s own gate scope.
+- (f)'s `static-check` site is an optional, PATH-resolved, degrade-to-UNAVAILABLE convenience
+  outside `coordinator_core/`'s own gate scope. Its five DoD-gate sites are in scope of
+  `coordinator_core/` but hold the same shape: each resolves its tool through
+  `gate_tool_resolve`, and a missing tool yields an UNAVAILABLE dimension verdict, never a
+  failure or a fallback.
 
 No entry in this doc rests on "porting was inconvenient" — the standard this audit checked for.
 
@@ -235,8 +243,39 @@ is a Node.js tool and this repo requires no Node runtime for its own work, so th
 be narrow, optional, and degrade-to-UNAVAILABLE rather than either porting pyright to Python or
 abandoning static-check verdicts in briefs.
 
+The five DoD-gate tool invocations under `gate.validate_invocable` are class-(f) sites by PM
+delegation ruling (2026-09-30, under the PM-delegate). Each spawns an optional third-party tool
+that `coordinator_core.ops.gate_tool_resolve.resolve_tool` resolves (`shutil.which`, or
+`importlib.util.find_spec("pytest_cov")` for the pytest plugin) and that degrades to an
+UNAVAILABLE dimension verdict when absent. Their per-invocation timeouts are granted in
+`docs/reference/external-tool-carve-outs.md`; this entry sanctions only the shell-out shape.
+
 Sites:
 - `coordinator/bin/static-check` `main()`/`run_pyright()` (pyright, PATH-resolved via `shutil.which("pyright")`/`shutil.which("pyright.cmd")`, `--outputjson` invocation; UNAVAILABLE + exit 0 when unresolved)
+- `coordinator_core/ops/gate_dimension_types.py` `_run_mypy()` (mypy over the changed `.py` set; types dimension)
+- `coordinator_core/ops/gate_dimension_docstrings.py` `_run_ruff()` (`ruff check --select D1`; docstrings dimension)
+- `coordinator_core/ops/gate_dimension_docstrings.py` `_run_interrogate()` (`interrogate --fail-under`; docstrings dimension)
+- `coordinator_core/ops/gate_dimension_tests.py` pytest `--cov` and diff-cover invocations (tests dimension; not yet landed). Two sites, named here by shape only: the module does not exist, so neither can be digest-pinned. The commit that lands each adds its register row below, or the site is unsanctioned under the enumeration rule.
+
+## (g) mutating 3rd-party cache-prune CLI, PATH-resolved, degrades to UNAVAILABLE
+
+Invoking the cache-prune command of a 3rd-party toolchain CLI named in
+`cruft_sweep._TOOLCHAIN_CACHE_TOOLS`, resolved only via `shutil.which` (never a hardcoded path),
+and reached only behind the sweep's operator-confirmed `apply` gate. A tool absent from the host
+degrades to a truthful UNAVAILABLE row, never a failure. This class RECORDS the 2026-08-16 PM
+ruling that authorises these spawns; it does not request one.
+
+Why (f) and (e) do not cover it: (f) is verification-only and this spawn mutates the tool's cache;
+(e) is observe-only and this spawn consumes no artifact of claude-klabauter's own generation.
+
+Anti-loophole teeth:
+
+- Bounded to cache-prune invocations of the tools named in `_TOOLCHAIN_CACHE_TOOLS`. A tool not in
+  that table, or any non-prune subcommand, is out of the class.
+- The mutating call runs only when the operator has confirmed `apply`; dry-run never mutates.
+
+Sites:
+- `coordinator_core/ops/cruft_sweep.py` `sweep_toolchain_caches()` (dry-run probe + prune, two calls: ordinals 0 and 1)
 
 ## Machine-readable register
 
@@ -348,6 +387,46 @@ entered below.
   argv_digest: "aacb8d29a475"
   reason: "optional 3rd-party static-verification tool, PATH-resolved only, degrades to UNAVAILABLE + exit 0 when absent"
   ruled_on: "2026-08-11"
+- cls: g
+  path: coordinator_core/ops/cruft_sweep.py
+  enclosing: sweep_toolchain_caches
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "6736964dd8ae"
+  reason: "toolchain cache-prune dry-run probe, PATH-resolved via shutil.which, degrades to UNAVAILABLE"
+  ruled_on: "2026-08-16"
+- cls: g
+  path: coordinator_core/ops/cruft_sweep.py
+  enclosing: sweep_toolchain_caches
+  argv0: <dynamic>
+  ordinal: 1
+  argv_digest: "5a6e537c2ba2"
+  reason: "mutating toolchain cache-prune, PATH-resolved, behind the operator-confirmed apply gate"
+  ruled_on: "2026-08-16"
+- cls: f
+  path: coordinator_core/ops/gate_dimension_types.py
+  enclosing: _run_mypy
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "05a1fafdfd60"
+  reason: "DoD types dimension: optional mypy, resolved by gate_tool_resolve, degrades to UNAVAILABLE"
+  ruled_on: "2026-09-30"
+- cls: f
+  path: coordinator_core/ops/gate_dimension_docstrings.py
+  enclosing: _run_ruff
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "0fec16854c33"
+  reason: "DoD docstrings dimension: optional ruff D1 check, resolved by gate_tool_resolve, degrades to UNAVAILABLE"
+  ruled_on: "2026-09-30"
+- cls: f
+  path: coordinator_core/ops/gate_dimension_docstrings.py
+  enclosing: _run_interrogate
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "b78e5586548a"
+  reason: "DoD docstrings dimension: optional interrogate coverage, resolved by gate_tool_resolve, degrades to UNAVAILABLE"
+  ruled_on: "2026-09-30"
 ```
 
 ## Adjudicated and CLOSED 2026-07-21 — no longer a residual

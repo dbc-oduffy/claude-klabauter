@@ -235,7 +235,10 @@ def test_handler_rejects_unknown_closure_fidelity(tmp_path):
         )
 
 
+# ---------------------------------------------------------------------------
+# (d) five-surface wiring + command-type smoke (C11's own body: registry,
 #     classification, scope, module_map, _EAGER_OP_MODULES)
+# ---------------------------------------------------------------------------
 
 
 def test_registered_in_registry_map():

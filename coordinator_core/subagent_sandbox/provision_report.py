@@ -1028,11 +1028,14 @@ def resolve_plugin_root() -> Optional[str]:
          (content directly at that root) -- mirroring
          ``coordinator_root._resolve_plugin_root_for_machine_local``'s same
          two-shape probe for a different artifact.
-      3. ``<machine_local_dir()>/.coordinator-content-root`` + ``coordinator`` -- the fleet's
+      3. ``claude_config_dir()/plugins/installed_plugins.json`` -- the harness's install
+         registry; any ``coordinator@*`` entry's ``installPath``, both shapes. A cloud or
+         marketplace install lands outside ``plugins/coordinator-claude`` entirely.
+      4. ``<machine_local_dir()>/.coordinator-content-root`` + ``coordinator`` -- the fleet's
          own pointer file, an in-process read with no spawn. Required because
          on a dev-clone box the live plugin root is a checkout OUTSIDE
          ``.claude`` entirely (``C:\\coordinator-content-repo\\coordinator``), which rungs 1
-         and 2 cannot see: rung 2's directory EXISTS there but holds only
+         to 3 cannot see: rung 2's directory EXISTS there but holds only
          ``coordinator/bin``.
 
     EVERY rung PROBES FOR THIS RESOLVER'S OWN ARTIFACT (``snippets/``), never
@@ -1063,6 +1066,26 @@ def resolve_plugin_root() -> Optional[str]:
     for candidate in (plugin_base / "coordinator", plugin_base):
         if _has_content(candidate):
             return str(candidate)
+
+    # The harness's own install registry: a cloud or marketplace install records the plugin's
+    # real `installPath`, which need not sit under `plugins/coordinator-claude` at all.
+    try:
+        registry = json.loads(
+            (claude_config_dir() / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")
+        )
+        entries = registry.get("plugins", {}) if isinstance(registry, dict) else {}
+    except (OSError, ValueError):
+        entries = {}
+    for key, installs in entries.items():
+        if not key.startswith("coordinator@") or not isinstance(installs, list):
+            continue
+        for install in installs:
+            install_path = install.get("installPath") if isinstance(install, dict) else None
+            if not install_path:
+                continue
+            for candidate in (Path(install_path) / "coordinator", Path(install_path)):
+                if _has_content(candidate):
+                    return str(candidate)
 
     try:
         pointer = machine_local_dir() / ".coordinator-content-root"

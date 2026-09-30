@@ -7,7 +7,7 @@ Purpose: each ``compose_*`` function is a pure function of its arguments
 that returns the JS text of ONE ``agent(...)`` call -- prompt, options
 object, everything -- for one row of the stage-library table (``triage``,
 ``refute-close``, ``fix``, ``verify`` in both its agent and op forms,
-``commit`` in both its per-row and ledger-only forms, and ``undo``). No
+``commit``, the drain's ``ledger-sweep``, and ``undo``). No
 function here writes to disk, derives a graph, or schedules a batch --
 ``grind_compose.py`` (C7) is the sole caller that stitches these calls into
 one script's edge interpreter.
@@ -17,7 +17,8 @@ This module owns the trap text every stage-kind prompt must carry:
   positive rule ("you do not stage; only the committer does") and never
   names the forbidden git verbs;
 - trap 3: the commit composer's prompt names every removed path as a
-  declared deletion (``deleted_paths``), never as a ``settle`` flag;
+  declared deletion (``deleted_paths``), never as a ``settle`` flag, and
+  never names a ``state/queue-grind/`` ledger in either list;
 - trap 4: the commit composer's prompt reconciles an indeterminate outcome
   against ``git log``/``git status`` before any retry, never retrying blind;
 - trap 5: the fix composer's prompt pre-checks its locked files for peer
@@ -59,6 +60,7 @@ from coordinator_core.contract.grind_vocab import (
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+#: The two non-op agent types this module's composers dispatch under.
 #: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the third.
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
@@ -127,7 +129,7 @@ def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     ``_js_string_literal``, the existing escaper) or ``("expr", js_expr)``
     (emitted verbatim, parenthesised). Runtime interpolation support for
     ``compose_fix_call``/``compose_commit_call``/``compose_undo_call``/
-    ``compose_commit_ledger_only_call`` -- fixes the break-class defect
+    ``compose_ledger_sweep_call`` -- fixes the break-class defect
     where a static per-row manifest path stood in for the live triage-
     declared/fixer-touched file list a real committer/undoer needs."""
     pieces: list[str] = []
@@ -142,6 +144,18 @@ def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     return " + ".join(pieces) if pieces else "''"
 
 
+#: The bare name is not on an agent's PATH; name the settings-home shim.
+ASSEMBLE_CMD = "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble"
+
+#: A dispatched agent inherits the firing session's cwd, which need not be the
+#: emitted repo. `REPO_ROOT` is the script's fire-time `args.repo_root`.
+_REPO_ANCHOR_PARTS: tuple[tuple[str, str], ...] = (
+    ("lit", "Your repo is `"),
+    ("expr", "REPO_ROOT"),
+    ("lit", "`: `cd` there before any command and resolve every relative path against it. "),
+)
+
+
 def _preamble_parts(preamble_expr: Optional[str]) -> list[tuple[str, str]]:
     """The run-wide posture block, as ``_join_prompt_parts`` parts
     prepended ahead of a stage's own prompt text -- a bare runtime
@@ -149,8 +163,8 @@ def _preamble_parts(preamble_expr: Optional[str]) -> list[tuple[str, str]]:
     when ``--preamble`` is given), never the literal text inlined here.
     Empty when ``preamble_expr`` is ``None``."""
     if not preamble_expr:
-        return []
-    return [("expr", preamble_expr), ("lit", "\n\n")]
+        return list(_REPO_ANCHOR_PARTS)
+    return [("expr", preamble_expr), ("lit", "\n\n"), *_REPO_ANCHOR_PARTS]
 
 
 def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str, str]]:
@@ -174,7 +188,7 @@ def compose_triage_call(
     script_path_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
 ) -> str:
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
@@ -186,11 +200,12 @@ def compose_triage_call(
         *_preamble_parts(preamble_expr),
         ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
         rows_part,
-        ("lit", ". Run `backlog-grind-assemble grind-row check --manifest "),
+        ("lit", ". Run `" + ASSEMBLE_CMD + " grind-row check --manifest "),
         script_part,
         ("lit", " --batch "),
         batch_id_part,
-        ("lit", " --repo-root ."),
+        ("lit", " --repo-root "),
+        ("expr", repo_root_js),
         (
             "lit",
             "` first, and list any row it reports as `stale` "
@@ -205,13 +220,14 @@ def compose_triage_call(
             "`tradeoff`; otherwise set `has_tradeoff` to false and leave "
             "`tradeoff` empty. "
             "Name every file your triage declares the row touches. As you finish "
-            "each row, run `backlog-grind-assemble grind-row append --profile "
+            "each row, run `" + ASSEMBLE_CMD + " grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict <its verdict> --outcome <its verdict> "
             "--evidence-file <a file with your evidence> --run-stamp ",
         ),
         run_id_part,
-        ("lit", f" --repo-root {repo_root}"),
+        ("lit", " --repo-root "),
+        ("expr", repo_root_js),
         (
             "lit",
             "` immediately (idempotent under a retried agent -- an identical "
@@ -271,7 +287,7 @@ def compose_refute_close_call(
     proposals_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
 ) -> str:
     proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
@@ -285,7 +301,7 @@ def compose_refute_close_call(
             "lit",
             ". For each one, actively try to refute it -- look for evidence the "
             "row is not actually resolved. For every proposal that survives "
-            "that attempt, run `backlog-grind-assemble grind-row close --profile-dir ",
+            "that attempt, run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
         ),
         profile_dir_part,
         (
@@ -295,7 +311,8 @@ def compose_refute_close_call(
             "with your evidence> --closed-by refute-close --run-stamp ",
         ),
         run_id_part,
-        ("lit", f" --repo-root {repo_root}"),
+        ("lit", " --repo-root "),
+        ("expr", repo_root_js),
         (
             "lit",
             "`, and report the `{old,new}` path pair it prints as that "
@@ -371,7 +388,7 @@ def compose_resize_call(
     fix_verdict: Optional[str] = None,
     close_verdict: Optional[str] = None,
     agent_type_host: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
 ) -> str:
     rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
@@ -407,16 +424,18 @@ def compose_resize_call(
             "answer in `design_question`. `focused-fix` means it fits a "
             "normal fix after all. `not-reproduced` means the defect is "
             "not reproduced. As you decide each row, run "
-            "`backlog-grind-assemble grind-row append --profile "
+            "`" + ASSEMBLE_CMD + " grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict resize --outcome <the verdict named below "
             "for your answer> --evidence-file <a file with your evidence> "
             "--run-stamp ",
         ),
         run_id_part,
+        ("lit", " --repo-root "),
+        ("expr", repo_root_js),
         (
             "lit",
-            f" --repo-root {repo_root}` immediately. {plan_note}; {fix_note}; "
+            f"` immediately. {plan_note}; {fix_note}; "
             f"{close_note}. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
         ),
     ]
@@ -469,7 +488,7 @@ def compose_fix_call(
     row_path_js: Optional[str] = None,
     digest_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
 ) -> str:
@@ -522,8 +541,10 @@ def compose_fix_call(
             "not catch, and describe it in `tradeoff`; otherwise set "
             "`has_tradeoff` to false and leave `tradeoff` empty. "
             "Otherwise, fix the row, run its tests, "
-            "report every file you touched and every file you created, and "
-            "when they pass run `backlog-grind-assemble grind-row close --profile-dir ",
+            "report every file you touched and every file you created -- "
+            "paths inside this repo relative to the repo root, any file outside it "
+            "by its absolute path -- and "
+            "when they pass run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
         )
     )
     _manifest_stale_note = (
@@ -540,9 +561,11 @@ def compose_fix_call(
         " --verdict fix --evidence-file <a file with your evidence> --closed-by fix --run-stamp ",
     ))
     parts.append(("expr", run_id_js) if run_id_js else ("lit", "<run-id>"))
+    parts.append(("lit", " --repo-root "))
+    parts.append(("expr", repo_root_js))
     parts.append((
         "lit",
-        f" --repo-root {repo_root}`, reporting the `{{old,new}}` path pair it prints as "
+        "`, reporting the `{{old,new}}` path pair it prints as "
         f"`close_result`.{_manifest_stale_note}",
     ))
     if feedback_js:
@@ -701,15 +724,24 @@ _COMMIT_SCHEMA = {
     },
 }
 
-_COMMIT_TAIL_LIT = (
-    " Then commit via `coordinator/bin/coordinator-safe-commit.py`, passing "
-    "`--declared-revert <path>` for every removed path above (this row's "
-    "settled ledger jsonl and any scratch TF yaml the settle step removed) -- "
-    "the only committer route. Raw `git commit` is refused by the "
-    "block-subagent-commit guard and is NOT a route."
-    " If the outcome is indeterminate, reconcile it against "
-    "`git log` and `git status` before doing anything else -- never retry blind."
-    " On commit-failed, put the verbatim refusal or the divergence you found in `reason`."
+#: The committer's sanctioned route (agents/git-commit-agent.md, shape 1). `--repo` is
+#: the only anchor `ceremony.commit_v2` honours; omitted, the commit resolves the
+#: dispatching session's cwd -- a sibling repo when that session has hopped.
+_COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
+    (
+        "lit",
+        " Then commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
+        "/bin/coordinator-invoke\" ceremony.commit_v2 --repo ",
+    ),
+    ("expr", "REPO_ROOT"),
+    (
+        "lit",
+        " '{\"paths\":[...],\"deleted_paths\":[...],\"message\":\"<subject>\"}'` -- the only committer route. Raw `git commit` "
+        "is refused by the block-subagent-commit guard and is NOT a route."
+        " If the outcome is indeterminate, reconcile it against "
+        "`git log` and `git status` before doing anything else -- never retry blind."
+        " On commit-failed, put the verbatim refusal or the divergence you found in `reason`.",
+    ),
 )
 
 
@@ -741,16 +773,18 @@ def compose_commit_call(
     removed_files: Sequence[str] = (),
     removed_files_js: Optional[str] = None,
     regenerate_op: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
     agent_type_host: Optional[str] = None,
+    trailers: Sequence[str] = (),
 ) -> str:
     """`commit` (`coordinator:git-commit-agent`, sonnet, low). Stages the
-    worker's touched list plus the row's ledger deletion, via the full
+    worker's touched list, runs the profile's index-regenerate op when one
+    is named, commits, and only then settles the row's ledger via the full
     `backlog-grind-assemble grind-row settle --profile P --row-id R
-    --repo-root <repo_root>` invocation (every flag `grind_rows.cmd_settle`
-    requires -- matching how every other composer in this module renders
-    its CLI invocation, never a bare/underspecified subcommand mention),
-    runs the profile's index-regenerate op when one is named, then commits.
+    --repo-root <REPO_ROOT>` invocation. The ledger never enters `paths` or
+    `deleted_paths`: it is usually untracked (absent from HEAD, which
+    `ceremony.commit_v2` refuses as a declared deletion) and, when tracked,
+    its removal reads as a staged rollback.
     Names every removed path as a declared deletion in the committer's own
     shapes (`deleted_paths` on `ceremony.commit_v2`, or the scoped-commit
     pathspec) -- never as a `settle` flag, which takes only `--profile`,
@@ -765,24 +799,31 @@ def compose_commit_call(
     paths a `close` moved to archive, and the row's own id) to interpolate
     at RUN time instead of the static values -- letting ONE composed call
     site serve every row, with the committer staging what the worker
-    ACTUALLY touched, never a static per-row approximation."""
+    ACTUALLY touched, never a static per-row approximation.
+
+    ``trailers`` are host-required commit trailer lines; when non-empty the
+    committer ends the message with them verbatim, in order. Empty renders
+    byte-identically to a call without the kwarg."""
     row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
     outcome_part: tuple[str, str] = ("expr", outcome_js) if outcome_js else ("lit", "settled")
     parts: list[tuple[str, str]] = [
+        *_REPO_ANCHOR_PARTS,
         ("lit", "You are the committer for row "),
         row_id_part,
         ("lit", ". You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
     ]
     parts.extend(_list_parts(touched_files, touched_files_js))
     parts.append(
-        ("lit", f"], plus this row's ledger deletion via `backlog-grind-assemble grind-row settle --profile {profile} --row-id ")
+        (
+            "lit",
+            "]. Never name a state/queue-grind/ path in either commit path list: the row's "
+            "ledger is working state, settled out of band, never committed.",
+        )
     )
-    parts.append(row_id_part)
-    parts.append(("lit", f" --repo-root {repo_root}` (it takes only those three flags; running it is part of staging this dispatch)."))
     if regenerate_op:
         parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
     if removed_files or removed_files_js:
-        parts.append(("lit", " Record every one of these removed paths as a declared deletion (`deleted_paths` on `ceremony.commit_v2`; in a scoped `git commit --`, name them in the pathspec): ["))
+        parts.append(("lit", " Record every one of these removed paths as a declared deletion (`deleted_paths` on `ceremony.commit_v2`): ["))
         parts.extend(_list_parts(removed_files, removed_files_js))
         parts.append(("lit", "]."))
     parts.append(("lit", f" Use commit subject `grind({profile}): "))
@@ -790,76 +831,90 @@ def compose_commit_call(
     parts.append(("lit", " "))
     parts.append(outcome_part)
     parts.append(("lit", "` and a commit body naming this row."))
-    parts.append(("lit", _COMMIT_TAIL_LIT))
+    if trailers:
+        parts.append(
+            (
+                "lit",
+                " End the commit message with exactly these trailer lines, verbatim and in order "
+                "(JSON-quoted list): " + json.dumps(list(trailers)) + ".",
+            )
+        )
+    parts.extend(_COMMIT_TAIL_PARTS)
+    parts.append(("lit", f" Once the commit lands, settle the ledger with `{ASSEMBLE_CMD} grind-row settle --profile {profile} --row-id "))
+    parts.append(row_id_part)
+    parts.append(("lit", " --repo-root "))
+    parts.append(("expr", repo_root_js))
+    parts.append(("lit", "` (it takes only those three flags); never stage what it removes."))
     return _compose_commit_agent_call(
         parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
     )
 
 
-def compose_commit_ledger_only_call(
+def compose_ledger_sweep_call(
     *,
     label: str,
     phase_title: str,
     profile: str,
-    unsettled_row_ids: Sequence[str] = (),
-    unsettled_row_ids_js: Optional[str] = None,
+    queue_dirs: Sequence[str] = (),
     run_id: Optional[str] = None,
     run_id_js: Optional[str] = None,
-    is_drain: bool = False,
     record_js: Optional[str] = None,
-    repo_root: str = ".",
+    repo_root_js: str = "REPO_ROOT",
+    profile_dir_js: str = "PROFILE_DIR",
     agent_type_host: Optional[str] = None,
 ) -> str:
+    """The drain's `ledger-sweep` op-runner call: settles, out of band, every
+    ledger whose row left the named queues (`grind-row sweep`), then writes
+    the run-cost record (`grind-row run-record`). Nothing under
+    `state/queue-grind/` is ever staged or committed -- ledgers and run
+    records are working state, not history. ``queue_dirs`` must be the FULL
+    queue set the manifest was selected from: a queue left out reads as
+    closed and its live rows' ledgers are settled. With no ``queue_dirs``
+    the sweep clause is omitted rather than guessed."""
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", str(run_id))
-    parts: list[tuple[str, str]] = [
-        (
-            "lit",
-            "You are the committer for a ledger-only commit. You are the only "
-            "stage that stages or commits anything. Stage exactly these "
-            "unsettled rows' ledger files: [",
-        )
-    ]
-    parts.extend(_list_parts(unsettled_row_ids, unsettled_row_ids_js))
+    parts: list[tuple[str, str]] = [*_REPO_ANCHOR_PARTS]
+    if queue_dirs:
+        queue_flags = " ".join(f"--queue {q}" for q in queue_dirs)
+        parts.append(("lit", f"Run `{ASSEMBLE_CMD} grind-row sweep --profile-dir "))
+        parts.append(("expr", profile_dir_js))
+        parts.append(("lit", f" --profile {profile} {queue_flags} --repo-root "))
+        parts.append(("expr", repo_root_js))
+        parts.append(("lit", "`. Then run "))
+    else:
+        parts.append(("lit", "Run "))
+    parts.append(("lit", f"`{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id "))
+    parts.append(run_id_part)
+    parts.append(("lit", " --repo-root "))
+    parts.append(("expr", repo_root_js))
+    parts.append(("lit", "`"))
+    if record_js:
+        parts.append(("lit", ", passing this JSON on stdin, byte for byte: "))
+        parts.append(("expr", record_js))
     parts.append(
         (
             "lit",
-            "], and nothing else. If any one of those files does not exist, "
-            "skip it, report which one(s) you skipped in your reason, and "
-            "commit the rest rather than failing the whole commit.",
+            ". Return `swept` when every command exits 0, else `sweep-failed` with the "
+            "verbatim stderr in `reason`. Ledgers and run records under state/queue-grind/ "
+            "are never committed. " + _NO_STAGING_CLAUSE,
         )
     )
-    if is_drain:
-        parts.append(
-            (
-                "lit",
-                f" This is the drain commit: also run `backlog-grind-assemble grind-row "
-                f"run-record --profile {profile} --run-id ",
-            )
-        )
-        parts.append(run_id_part)
-        parts.append(("lit", f" --repo-root {repo_root}` to write and stage state/queue-grind/{profile}/runs/"))
-        if run_id_js:
-            parts.append(("expr", run_id_js))
-        else:
-            parts.append(("lit", str(run_id)))
-        parts.append(("lit", ".json in this same commit."))
-        if record_js:
-            parts.append(("lit", " Pass this JSON on stdin, byte for byte: "))
-            parts.append(("expr", record_js))
-            parts.append(("lit", "."))
-    if is_drain:
-        parts.append(("lit", f" Use commit subject `grind({profile}): drain run "))
-        parts.append(run_id_part)
-        parts.append(("lit", "` and a commit body naming these rows."))
-    else:
-        parts.append(("lit", f" Use commit subject `grind({profile}): ledger for "))
-        parts.append(("expr", "unsettled.length"))
-        parts.append(("lit", " row(s), run "))
-        parts.append(run_id_part)
-        parts.append(("lit", "` and a commit body naming these rows."))
-    parts.append(("lit", _COMMIT_TAIL_LIT))
-    return _compose_commit_agent_call(
-        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
+    schema = {
+        "type": "object",
+        "required": ["outcome"],
+        "properties": {
+            "outcome": {"type": "string", "enum": ["swept", "sweep-failed"]},
+            "reason": {"type": "string"},
+        },
+    }
+    return _agent_call(
+        _join_prompt_parts(parts),
+        label=label,
+        phase_title=phase_title,
+        agent_type=OP_RUNNER_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        effort="low",
+        schema=schema,
+        is_expr=True,
     )
 
 

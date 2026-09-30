@@ -13,6 +13,11 @@ is not a failure anyone reads.
 That is the same shape as the defects this module's own doctor layers exist to
 catch: a capability absent rather than broken, reported as nothing at all.
 
+The probe calls `_eager_import_all()` because a bare `import coordinator_core.ops`
+registers nothing (package-init is lazy); `_eager_import_all` is the same full
+registration the ipc registry-miss fallback runs, and it imports `scan` after
+`sentinel` is already loaded.
+
 NEGATIVE SPEC: this test must run the import in a SUBPROCESS. Import order is a
 process-global, once-only side effect — by the time any in-process test body
 runs, pytest's own collection has already imported half the package, so an
@@ -38,8 +43,9 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _PROBE = """
 import sys
 from coordinator_core.plugin_health.sentinel import main
-import coordinator_core.ops
+from coordinator_core.ops import _eager_import_all
 from coordinator_core.ipc import _REGISTRY
+_eager_import_all()
 sys.stdout.write("REGISTERED" if "plugin_health.scan" in _REGISTRY else "MISSING")
 """
 

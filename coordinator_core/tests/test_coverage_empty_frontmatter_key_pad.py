@@ -6,7 +6,7 @@ The defect
 ``coordinator_core/coverage.py``'s two raw handoff readers each carried a
 forked frontmatter-key regex whose value pad was ``\\s*``::
 
-    _parse_handoff_consumed_by    rf'^{field}:\\s*["\\']?([^"\\'#\\n\\r]+)["\\']?\\s*$'
+    _parse_handoff_claimed_by    rf'^{field}:\\s*["\\']?([^"\\'#\\n\\r]+)["\\']?\\s*$'
     _parse_handoff_deliverable_id  r'^deliverable_id:\\s*["\\']?([^"\\'#\\n\\r]+)["\\']?\\s*$'
 
 ``\\s`` matches a NEWLINE, so on a handoff whose ``claimed_by:`` is present but
@@ -38,7 +38,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.coverage import (
-    _parse_handoff_consumed_by,
+    _parse_handoff_claimed_by,
     _parse_handoff_deliverable_id,
 )
 
@@ -68,7 +68,7 @@ def test_empty_claimed_by_does_not_return_the_next_line(tmp_path, eol):
         eol,
     )
 
-    holder = _parse_handoff_consumed_by(path)
+    holder = _parse_handoff_claimed_by(path)
 
     assert holder != "consumed_by: alice-session"
     assert holder is None or ":" not in holder, (
@@ -94,7 +94,7 @@ def test_empty_claimed_by_with_no_fallback_yields_no_holder(tmp_path, eol):
         eol,
     )
 
-    assert _parse_handoff_consumed_by(path) is None
+    assert _parse_handoff_claimed_by(path) is None
 
 
 @EOLS
@@ -113,7 +113,7 @@ def test_empty_claimed_by_does_not_capture_a_live_session_id(tmp_path, eol):
         eol,
     )
 
-    holder = _parse_handoff_consumed_by(path)
+    holder = _parse_handoff_claimed_by(path)
 
     assert holder is None
     assert holder != f"session_id: {session_id}"
@@ -133,7 +133,7 @@ def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
         eol,
     )
 
-    assert _parse_handoff_consumed_by(path) == "new-session"
+    assert _parse_handoff_claimed_by(path) == "new-session"
 
 
 @EOLS
@@ -152,7 +152,7 @@ def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
 def test_ordinary_values_survive_the_pad_change(tmp_path, line, expected, eol):
     path = _write_handoff(tmp_path, ["---", "id: h-3", line, "---", ""], eol)
 
-    assert _parse_handoff_consumed_by(path) == expected
+    assert _parse_handoff_claimed_by(path) == expected
 
 
 @EOLS
@@ -163,10 +163,16 @@ def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path, eol):
         eol,
     )
 
-    assert _parse_handoff_consumed_by(path) is None
+    assert _parse_handoff_claimed_by(path) is None
 
 
+# ---------------------------------------------------------------------------
+# _parse_handoff_deliverable_id — the literal-key sibling
+#
 # Invisible BY CONSTRUCTION to test_no_forked_frontmatter_key_regex.py, whose
+# narrowing (1) requires a runtime-interpolated key. These cases are the only
+# standing guard on this half.
+# ---------------------------------------------------------------------------
 
 @EOLS
 def test_empty_deliverable_id_does_not_return_the_next_line(tmp_path, eol):

@@ -64,7 +64,10 @@ from typing import List, Optional, Tuple
 
 _PROG = "verify-ps51-clean.sh"
 
+# subprocess.run over the powershell.exe engine per file — bounded so one
 # pathological .ps1 (or a wedged engine) cannot hang the whole scan (PORTER-BRIEF
+# rule 2: every subprocess.run over external/looping input needs timeout + a
+# stdin guard).
 _PS_PARSE_TIMEOUT_SECS = 30
 
 _REQUIRES_RE = re.compile(r"^[ \t]*#[Rr][Ee][Qq][Uu][Ii][Rr][Ee][Ss][ \t]")

@@ -87,6 +87,7 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.git import repo_root as _repo_root_seam
+from coordinator_core.git import run as _git_run
 from coordinator_core.session import core as _session_core
 
 _UUID_RE = re.compile(
@@ -961,6 +962,21 @@ def read_trailer_value(
             value = line[len(prefix) :].strip()
             return value or None
     return None
+
+
+def read_host_commit_trailers(repo_root: Union[str, Path]) -> List[str]:
+    """Trailer lines the emitting repo declares via the multi-valued git key
+    `coordinator.commitTrailer`, in config order.
+
+    Each value is a whole trailer line (`Key: value`) copied verbatim, never
+    parsed or rewritten. Absent key, or any git failure, means no trailers:
+    `[]`. One git spawn."""
+    result = _git_run.run_git(
+        ["-C", str(repo_root), "config", "--get-all", "coordinator.commitTrailer"]
+    )
+    if not result.ok:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 _CLOSES_LINE_RE = re.compile(r"^Closes:\s*(.+?)\s*$")

@@ -106,15 +106,32 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("CONTENT_ROOT", BORROW),
     _entry("CLAUDE_PROJECT_DIR", CALLER),
     _entry("CLAUDE_CODE_REMOTE", CALLER),
+    # Job mode. `session.mode_resolution`'s resolver reads this to learn
     # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`
+    # above, this server's own `os.environ` belongs to whoever spawned it,
+    # not the session that dispatched the op. Without this entry an
+    # engine-side read returns the daemon's environment, not the session's.
     _entry(COORDINATOR_JOB_MODE, CALLER),
+    # Agent-type host ladder. The documented Phase 5 invocation sets
     # COORDINATOR_AGENT_TYPE_HOST=coordinator; a warm-served CLI reads
+    # os.environ inside the server, which belongs to whoever spawned it, not
+    # the session that dispatched the op -- same reasoning as
     # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE above.
     _entry("COORDINATOR_AGENT_TYPE_HOST", CALLER),
 )
 
 
+#: Per-session guard overrides, forwarded BY PREFIX rather than by name. The
+#: guards own this namespace and add keys to it without telling this module, so
+#: a fixed list here would miss the next key silently -- and miss it in the
+#: permissive-for-nobody direction: an override the caller set arrives as "not
+#: requested", every Bash-guard override on the box becomes a hard wall, and
+#: nothing errors on either side. Each matching name is CALLER-mode: the server's
+#: own values belong to whichever session spawned it, so an omitted name pops.
+#:
+#: The same four prefixes the http header channel carries
 #: (`warm.hook_http.FORWARDED_ENV_PREFIXES` is this tuple). No `FORWARDING_SET`
+#: name may match one -- a name is forwarded by exactly one rule.
 CALLER_PREFIXES: Tuple[str, ...] = (
     "COORDINATOR_ALLOW_",
     "COORDINATOR_OVERRIDE_",

@@ -90,8 +90,22 @@ from coordinator_core.ops.discover_working_repos import main as _discover_workin
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
+# ---------------------------------------------------------------------------
 # Exit-code contract (PORTER-BRIEF-ADDENDUM § 3/3b).
+#   0 -- success (incl. dry-run preview, interactive-abort, non-interactive
+#        print-and-exit -- all no-op-safe terminal states, matching the
+#        oracle's own posture for those branches).
+#   1 -- a real business failure (unknown arg, brew/toolchain install failed,
+#        a post-toolchain step failed). Matches the oracle's uniform use of
+#        exit 1 for every failure branch -- first-run.sh predates the
+#        dedicated-code convention and never distinguished failure classes;
+#        faithfully reproduced, not "improved" mid-port.
 #   3 -- DEDICATED transport-failure code for the TRAMPOLINE layer only (the
+#        claude-klabauter link/import failed before this module's own main() could
+#        run at all) -- never returned by this module itself, only by the
+#        DoE polyglot trampoline that imports it. Documented here so the two
+#        files' contracts are readable together.
+# ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_FAIL = 1
 
@@ -152,10 +166,26 @@ class _UsageError(Exception):
         self.unknown_arg = unknown_arg
 
 
+# ---------------------------------------------------------------------------
+# unit3 (detection half) -- toolchain probes. Mirrors the oracle's 3.2-safe
 # detection block (L266-312): own minimal probes, no shared prereq_probe.
+# ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Host platform + package-manager resolution.
+#
+# This module was Homebrew-only with no platform or root guard. Homebrew's
+# installer aborts by design when run as EUID 0, so on any root container --
+# the ordinary shape for a cloud box or CI runner -- `_install_homebrew()`
 # returned EXIT_FAIL and killed the entire first-run flow, reported only as a
+# bare non-zero exit with no statement that the box was unsupported. Linux is
+# a first-class platform for this system, so the toolchain leg needs the
+# platform's own package manager, not a second copy of macOS's.
+#
+# macOS behaviour is unchanged: `_host_platform() == "darwin"` routes every
+# install back through `_brew_install`/`_install_homebrew` exactly as before.
+# ---------------------------------------------------------------------------
 
 _LINUX_PKG_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("apt-get", ("apt-get", "install", "-y")),
@@ -346,7 +376,10 @@ def detect_environment() -> _Env:
     return env
 
 
+# ---------------------------------------------------------------------------
+# unit3 (plan-building half) -- mirrors _fr_next_step / _fr_build_plan
 # (L318-356). Plain list, no bash-4 arrays needed here either.
+# ---------------------------------------------------------------------------
 
 
 def _plan_install_line(env: _Env, formula: str, suffix: str = "") -> str:
@@ -496,9 +529,59 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, tuple(registered))
 
 
+# ---------------------------------------------------------------------------
+# Stamped-engine provisioning (docs/plans/2026-08-19-an-engine-root-is-a-
 # stamped-build.md chunk C1) -- PREREQUISITE FOR that plan's C4 (fail-closed
+# on an unstamped engine root). Without this, a fresh box would have no
+# mirror and no way to get one once C4 lands: `_resolve_published_engine`
+# would return None forever and the ladder would have nothing left to fall
+# back to.
+#
+# SHAPE CHOSEN: (b) from C1's plan body -- a stamped LOCAL BUILD OUTPUT
 # DIRECTORY, never the live working tree (`write_engine_stamp`'s own
+# docstring forbids that: "never a development convenience", because it
+# pins the generation while the code moves underneath it). (b) is admissible
+# ONLY if it runs the SAME `_resolve_claude_klabauter_root` -> `_resolve_claude_klabauter_root`
+# identifier transform a human publish round runs (see C11) -- this
+# provisioning step satisfies that by invoking the REAL `coordinator/bin/
+# publish.py` machinery (never reimplemented -- Hard constraint 6), targeting
+# the `publish-mirror:claude_klabauter` row set, exactly as a human publish
+# round does. Because the destination is a freshly `git init`'d local
+# directory rather than a network clone of the published repo, (b) needs NO
+# NETWORK AT ALL: a fresh clone with no connectivity still reaches a
+# stamped, registered engine via this path -- this is (a) minus the network
+# clone, per the plan body's own framing ("(b) is (a) minus the network
+# clone -- a legitimate lighter-weight shape").
+#
+# Advisory, never fail-closed: this step WARNS and continues on any failure
+# (git unavailable, publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
+# the unstamped fallback (Hard constraint 3), so a failure here must not
+# brick the rest of first-run/setup.py.
+# NOT a member of the `install` timeout family, and it must never be moved
+# there. `install/timeouts.py` admits only work we do not own; what this
+# bounds is `coordinator/bin/publish.py` — claude-klabauter's own compute — so it is
+# governed by DR-344's budget like any other op of ours, and the hitlist
+# (docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G11,
+# Exception 1) names it as the campaign's thesis in one line: an author
+# measured their own code at a large number, wrote the number down, and wrote
+# the excuse next to it ("a real percolate round over ~40 rows is not fast").
+#
 # MEASUREMENT that retires the excuse (2026-08-21, normal tier, warm):
+# `publish.py claude-klabauter-bin --dry-run` — the preview leg, which copies
+# nothing and skips every engine phase — cost **80.8s of process time** in the
+# parent alone, children uncounted. The real round is strictly more. So the
+# 900 was never buying a slow network; it was absorbing eighty-plus seconds of
+# our own CPU to preview forty rows, silently, on a box carrying 50-70 peers.
+#
+# WHAT THIS BUDGET IS INSTEAD. `provision_stamped_engine` is advisory at both
+# call sites: every failure path already prints a runnable remediation and the
+# install proceeds. So the honest question is not "how slow is publish.py"
+# (a defect report against that file, not a licence for this one) but "how
+# long may an advisory install step block an operator". The answer is a slice,
+# not a quarter-hour: on expiry the step prints the same one-line remediation
+# it prints for a non-zero exit, and the operator reaches a stamped engine by
+# running it. Raising this number does not fix anything — it re-buries the
+# 80.8s. The fix is in `publish.py`.
 _PUBLISH_ROUND_ADVISORY_BUDGET_SECS = 30
 _ENGINE_BUILD_SUBDIR = ("engine-build", "claude-klabauter")
 _KLABAUTER_MIRROR_REGISTRY_KEY = "repos.claude_klabauter"
@@ -656,8 +739,27 @@ def run_post_toolchain(plugin_root: Path, args: _Args) -> int:
 def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     print(f"[post-toolchain] PLUGIN_ROOT={plugin_root}")
 
+    # Step 2: optional preflight via the coordinator-claude install-chain
+    # walker (non-fatal on the walker's own failure). The retired oracle's
+    # `plugin_root/scripts/setup.sh` was itself a python3-shebanged
+    # trampoline over this SAME engine's coordinator_core.ops.setup_chain_walker
+    # -- an in-process call replaces the stale `bash <path>` spawn, which fed
+    # the trampoline's Python source to bash as a script (never worked;
+    # reimplemented native, not merely de-bashed). The trampoline's SOURCE
+    # FILE has since moved: the b644d5a9 executable-surface relocation moved
+    # coordinator/scripts/ (and coordinator/lib/, coordinator/bin/) out of the
     # coordinator-content-repo CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
+    # (this repo's `coordinator/` tree) -- so the walker's repo_root/lib_dir
+    # env vars (mirroring the trampoline's own `main()`: repo_root =
+    # <coordinator-tree-root>, lib_dir = <coordinator-tree-root>/scripts/lib,
     # SCRIPT_DIR-relative not repo_root-relative -- see that file's header)
+    # must resolve off coordinator_claude_klabauter_root(), never plugin_root. Unlike
+    # site 3 below, an unresolvable engine root here is fail-loud: this is
+    # install-path code and a broken/absent claude-klabauter checkout at this point
+    # means the rest of Steps 4a-4c (which import coordinator_core modules
+    # that live in THIS SAME checkout) cannot possibly succeed either --
+    # silently skipping the preflight and stumbling into those steps would
+    # produce a much more confusing failure downstream.
     try:
         claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_engine_root_with_class()
         claude_klabauter_root_for_preflight = Path(claude_klabauter_root_for_preflight_str)
@@ -688,7 +790,13 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
 
     _seed_machine_local_registry(args.confirm, args.non_interactive)
 
+    # Step 3b: provision a stamped engine root (docs/plans/2026-08-19-an-
+    # engine-root-is-a-stamped-build.md C1), best-effort. On a genuinely
+    # fresh box this usually no-ops here (claude-klabauter is not yet cloned,
+    # so the engine root is unresolvable) -- `scripts/setup.py`'s own
     # `register_claude_klabauter_root` is the AUTHORITATIVE call site for that case
+    # and calls the same function once claude-klabauter's own installer runs.
+    # This call site exists for the re-run/already-registered case.
     try:
         claude_klabauter_root_for_engine_str, _resolution_class = coordinator_engine_root_with_class()
         provision_stamped_engine(Path(claude_klabauter_root_for_engine_str))
@@ -712,7 +820,18 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     print("[post-toolchain] install-substrate: done.")
 
 
+    # Step 4c: platform-localize -- native in-process call (2026-07-21
+    # pure-Python-shop cutover). `plugin_root/bin/platform-localize.sh` is
+    # itself a python3-shebanged trampoline over this SAME engine's
+    # coordinator_core.hooks.platform_localize (DoE-owned file kept
+    # `.sh`-suffixed for caller-path stability -- see that trampoline's own
+    # header); the retired `bash <path>` spawn fed the trampoline's Python
+    # source to bash as a script, which never worked -- reimplemented
+    # native, not merely de-bashed. This also RETIRES the module docstring's
+    # previously-documented "platform-localize.sh not found at
     # $PLUGIN_ROOT/bin/" negative-spec bug: this port no longer looks for
+    # that file on disk at all, so the resolved-source-tree-vs-install-
+    # destination path mismatch it described can no longer fire.
     print("[post-toolchain] Step 4c: platform-localize...")
     try:
         from coordinator_core.hooks.platform_localize import main as _platform_localize_main
@@ -752,7 +871,10 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     return EXIT_OK
 
 
+# ---------------------------------------------------------------------------
 # Homebrew install + brew-offers (oracle L421-493). Live system mutation --
+# each step idempotent (brew install is a no-op when already sufficient).
+# ---------------------------------------------------------------------------
 
 
 def _install_homebrew() -> int:
@@ -802,7 +924,9 @@ def _brew_install(formula: str, label: Optional[str] = None) -> int:
     return EXIT_OK
 
 
+# ---------------------------------------------------------------------------
 # unit3 -- top-level orchestration (main). Mirrors oracle L358-526.
+# ---------------------------------------------------------------------------
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -825,11 +949,18 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         return EXIT_FAIL
 
     # unit1: PLUGIN_ROOT = parent of the resolved coordinator source tree.
+    # The trampoline resolves and passes this via env (see DoE-side file);
+    # fall back to this module's own package location for direct-import
+    # callers/tests that don't go through the trampoline.
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if plugin_root_env:
         plugin_root = Path(plugin_root_env)
     else:
+        # coordinator_core/install/first_run.py has no reliable relative path
+        # to a DoE coordinator/ tree in the general case (they are separate
+        # repos) — callers that need the toolchain-mutation flow to actually
         # locate `bin/`, `lib/`, `scripts/` MUST pass CLAUDE_PLUGIN_ROOT
+        # (the trampoline always does — see its own header).
         plugin_root = Path.cwd()
 
     env = detect_environment()
@@ -927,7 +1058,14 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
+        # Clause 3 — `_brew_install` (bash/python@3.12/node/uv/git-lfs
+        # formulae, invoked from `_main_body` when `detect_environment`
+        # finds a tool absent). No kind in the eight-kind vocabulary
+        # honestly names an unbounded third-party-installer footprint (see
         # `_BREW_INSTALL_REASON`) — a stated-reason entry naming the
+        # mechanism, deliberately not a fabricated `file-path`, so this
+        # surface is visible to a future drift/uninstall pass rather than
+        # silently missing.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(

@@ -93,6 +93,9 @@ IN_PROCESS = op_latency.IN_PROCESS
 
 UNRESOLVED = "unresolved"
 
+#: The known-cold control invocation ALSO came back `unresolved` -- the sink
+#: itself is inert on this box, so an `unresolved` result from the door
+#: invocation proper cannot be trusted as "fall-through occurred". A distinct
 #: outcome from both `WARM_SERVER` and `IN_PROCESS`, never folded into either.
 DISCRIMINATOR_UNAVAILABLE = "discriminator_unavailable"
 
@@ -196,6 +199,8 @@ def read_door_route(
     route = row.get("route")
     if route not in (WARM_SERVER, IN_PROCESS):
         # An unstamped or unrecognised route is UNOBSERVABLE, not a route --
+        # matches `engine_report.route_distribution`'s "unstamped is
+        # unobservable, not cold" rule; this module never guesses.
         return DoorRouteResult(UNRESOLVED, row)
 
     return DoorRouteResult(route, row)

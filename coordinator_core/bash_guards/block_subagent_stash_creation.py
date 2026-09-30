@@ -141,7 +141,14 @@ from coordinator_core.bash_guards._dialect import (
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # CONVERTED 2026-08-19 (C5 of docs/plans/2026-08-19-the-held-guard-cohort-
+# becomes-dialect-safe.md) onto the `_dialect` seam and widened off the prior
+# Bash-only hold recorded at docs/reference/guard-tool-name-membership.md
 # § 3. `MATCHERS` now admits `COMMAND_TOOL_NAMES`; the PowerShell leg sources
+# tokens via `resolve_segments_for_dialect` and, on a parse failure (`tokens
+# is None`), routes to `_dialect.strip_powershell_prose_noise` + a dedicated
+# PowerShell-shaped free-text scanner (`_evaluate_powershell_legacy`) --
+# NEVER to the Bash-shaped `_evaluate_legacy` below, which stays the Bash
+# leg's own fallback, unchanged (AC6). See the plan's Conventions (a)-(c).
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
@@ -228,6 +235,10 @@ def _evaluate(cmd: str) -> Optional[str]:
             continue
 
         # 2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED -- same shape as
+        # block_subagent_destructive_action.py's stash branch, see
+        # `_strip_leading_redirection_tokens`'s docstring): `git stash 2>&1`
+        # tokenized `remaining` to `["2>&1"]`, which is neither `None` nor
+        # `"push"`/`-`-prefixed, so `_classify_stash_subcommand` allowed it.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
         verdict = _classify_stash_subcommand(second)
@@ -331,8 +342,23 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
         "BLOCKED: `%s` creates a stash entry, and on a shared working tree "
         "a stash is GLOBAL -- it sweeps every concurrent session's "
         "uncommitted work, not just yours, and you have no sanctioned way "
+        # `instead` here is load-bearing, not decorative: it is what puts
+        # `git stash pop`/`git stash apply` inside `_alternative_liveness`'s
         # cue window so its extractor has SOMETHING backtick-classifiable to
+        # verify. Those two placeholder-bearing bullets above (`<sha>`,
+        # `<tmpdir>`, `<path>`) can never classify as COMMAND themselves --
+        # `_classify_backtick_span` excludes any span containing `<`/`>`/`|`
+        # on principle (real shell metacharacters it cannot safely probe),
         # and un-backticked they only reach a COMMAND-shaped alternative via
+        # `_alternative_liveness`'s "if not alts" indented-line fallback,
+        # which reads the bullet'S LABEL LINE as its own one-token command
+        # (argv[0] "-") before it ever reaches the real command line below
+        # it -- confirmed by direct extractor calls during this dispatch
+        # (see run report). The two bullets are the real, correct offer and
+        # stay; this one word is what keeps the gate from going DEAD without
+        # restoring the deleted incident narrative. Do not remove "instead"
+        # here without re-verifying `extract_alternatives` against this
+        # exact string first.
         "to undo it instead (`git stash pop`/`git stash apply` are denied for you).\n\n"
         "  Command:  %s\n"
     ) % (deny_kind, cmd_safe)
@@ -350,8 +376,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if tool_name not in MATCHERS:
         return None
 
+    # AC1: dialect resolved from `payload["tool_name"]` alone -- the ONLY
+    # recognized carry path (`_dialect.dialect_from_tool_name`'s own
     # contract). Never reachable as `None` in practice (`MATCHERS` and
     # `_TOOL_NAME_TO_DIALECT` agree on the same two names), kept as a
+    # defensive decline-to-rule rather than an assumption.
     dialect = dialect_from_tool_name(tool_name)
     if dialect is None:
         return None
@@ -367,7 +396,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _STASH_WORD_RE.search(cmd_for_classification):
         return None
 
+    # EM/subagent discriminator -- raw presence of `agent_id`, not whether
     # it canonicalizes (see module docstring "IDENTITY-GATE POSTURE"). No
+    # further kind-resolution is needed: every subagent kind is denied
+    # equally, so an `agent_id` present but unresolvable to a kind still
+    # denies here rather than falling open.
     raw_agent_id = payload.get("agent_id")
     if not raw_agent_id:
         return None

@@ -106,7 +106,14 @@ def _set_anchor(monkeypatch, repos, session_id: str, extra: dict | None = None) 
     the `~/.claude` fleet-recovery hatch (`_anchor_is_under_claude_home`)
     resolves to "not under" rather than fail-opening on an unresolvable
     home."""
+    # `sandbox_home`, not a bare HOME setenv: `_clean_bump_env` deletes HOME
     # *and* USERPROFILE, and on Windows `expanduser` reads USERPROFILE first --
+    # so HOME alone leaves `Path.home()` with nothing to read. `claude_config_dir()`
+    # then raises RuntimeError("Could not determine home directory") inside
+    # `resolve_plugin_root_loud`, and a guard-chain test here fails on a Windows
+    # host while passing on POSIX, where HOME alone IS what expanduser reads.
+    # The docstring above always intended a resolvable home; this delivers one on
+    # both platforms, and names the sandbox rather than inheriting conftest's.
     sandbox_home(monkeypatch, repos["home"])
     for k, v in (extra or {}).items():
         monkeypatch.setenv(k, v)
@@ -210,7 +217,13 @@ def test_fetch_with_colon_refspec_destination_still_bumps(repos, monkeypatch):
     assert "hookSpecificOutput" in result
 
 
+# ---------------------------------------------------------------------------
 # GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/--git-dir/--work-tree evasion --
+# 2026-08-06 live incident: a command that never `cd`s and never passes
+# `-C` still reaches a foreign repo's WRITE surface through these, since
+# `git` itself honours them independent of `cwd`. `-C`/`cd` were the only
+# shapes this guard's candidate-target resolution tracked before this fix.
+# ---------------------------------------------------------------------------
 
 
 def test_evasion_env_git_dir_write_subcommand_bumps(repos, monkeypatch):
@@ -889,7 +902,16 @@ def test_same_repo_write_does_not_bump(repos, monkeypatch):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
 # AC14 FAIL-OPEN REGRESSION (2026-08-21,
+# state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-
+# both-sides.yaml) -- `_evaluate_foreign_repo_candidate`'s AC14 same-repo
+# comparison used to fall through to the FOREIGN branch whenever EITHER
+# side's `resolve_git_root` spawn transiently failed (returned `None`),
+# reading "could not resolve" as "confirmed different repo". These two
+# tests pin the fix: an unresolvable comparison must ALLOW, and a resolved,
+# genuinely-different comparison must still DENY.
+# ---------------------------------------------------------------------------
 
 
 def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, monkeypatch):
@@ -1000,7 +1022,15 @@ def test_ac5_powershell_semicolon_chained_canonical_path_never_bumps(repos, monk
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# Quoted PowerShell write-target reproduction/regression (break-class fix):
+# the PowerShell tokenizer emits a quoted leaf's raw source span (quotes
+# attached, see `_dialect._flatten_powershell_tokens`), which previously
 # defeated `_WINDOWS_DRIVE_ABSOLUTE_RE`/`os.path.isabs` downstream and
+# silently re-rooted the candidate under the session's own anchor repo
+# instead of judging it as foreign -- an affirmative false-clean.
+# `_write_bump_sink_shapes` now strips quotes per-extractor.
+# ---------------------------------------------------------------------------
 
 
 @requires_powershell_grammar
@@ -1182,8 +1212,22 @@ def test_marker_for_a_different_session_does_not_clear_this_ones_bump(repos, mon
     assert result is not None
 
 
+# ---------------------------------------------------------------------------
+# AC6 -- cross-repo `cwd` drift: the live payload `cwd` has already crossed
+# a repo boundary (simulating an earlier Bash call's `cd <foreign>`, since
+# "Working directory persists between calls" -- harness contract) by the
+# time this guard sees a plain, no-`-C`, no-`cd` write in that SAME foreign
+# repo. This is the plan's own repro-table cell: `cd <foreign> && git
 # commit`, `CLAUDE_PROJECT_DIR` unset -- pre-C1/C2 the guard fired `False`
+# (the headline defect); this test pins the fix on the exact surface the
+# memo reproduced against. Uses a REAL `write_session_start_record` so
+# applicability is genuinely True -- a test that passes only because
+# applicability failed open proves nothing (this is exactly how the
+# original AC12 test slipped through; that one only drifted `cwd` to a
 # SUBDIRECTORY of the anchor repo, where `sessions_dir` resolves
+# identically either way -- this test drifts ACROSS a repo boundary
+# instead, which the subdirectory-only test never covered).
+# ---------------------------------------------------------------------------
 
 
 def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, monkeypatch):
@@ -1349,7 +1393,15 @@ def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-14 percolate-push memo -- the publish-mirror refusal must name the
+# real alternative for a PUSH (`percolate-push <target>`), while a
+# content-authoring write into the same mirror keeps the doctrine citation
+# unchanged (that copy is correct for THAT shape, see
 # `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`'s own docstring). Both
+# halves of this split are asserted here so a future edit cannot silently
+# collapse them back onto a single template.
+# ---------------------------------------------------------------------------
 
 
 def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
@@ -1412,6 +1464,7 @@ def test_fail_open_when_cmd_empty(repos, monkeypatch):
 def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
     # No CLAUDE_PROJECT_DIR / session-start record at all -- this IS the
     # genuinely-unresolvable-anchor case, not a `CLAUDE_PROJECT_DIR`
+    # fallback test.
     monkeypatch.setenv("HOME", str(repos["home"]))
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
@@ -1505,13 +1558,31 @@ def test_ac4_unregistered_foreign_repo_still_bumps_alongside_claude_home_carveou
     assert "hookSpecificOutput" in result
 
 
+#: NOTE: this leg's own `check_bump_foreign_repo_write` never consults
+#: `target_is_registered_repo` -- that predicate governs only the
+#: anchor-in-no-repo branch (`bump_outside_repo_write.py` [C5] / the tool
+#: leg), not this leg, which bumps on ANY foreign repo unconditionally. A
+#: distinct "registered foreign repo" regression cell would therefore be
+#: identical in setup and assertion to the unregistered one immediately
+#: above -- not duplicated here for that reason; the spike verdict record's
 #: "(c) REGISTERED repo" row is pinned instead on the tool leg (see
+#: `test_bump_out_of_repo_tool_write.py::test_ac4_registered_repo_
+#: destination_still_bumps`) and on C5 (`bump_outside_repo_write.py`),
+#: where the registry membership actually changes the verdict.
 
 
+# ---------------------------------------------------------------------------
 # ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
 # 2026-08-15) -- see module docstring, "UNRESOLVED IS NOT THE SAME FACT AS
 # REPO-LESS". `resolve_gitdir(anchor)` returning `None` from a transient
+# `git rev-parse --git-dir` spawn failure must not be read as "the anchor
+# has no repo": `_evaluate_foreign_repo_candidate`'s no-repo-anchor branch
 # bumps a REGISTERED target unconditionally, so without the fix, a
+# transient spawn failure could deny a write into the session's OWN repo
+# whenever that repo happens to be registered -- exactly the shape needed
+# to make the defect observable (an unregistered target inside the anchor's
+# own subtree already never bumped, registry membership or not).
+# ---------------------------------------------------------------------------
 
 
 def _write_repos_registry(reg_dir: Path, **repos: str) -> None:
@@ -1678,7 +1749,18 @@ def test_ac13_registered_as_a_guard_entry_in_dispatch_build_guard_chain():
     assert len(entries) == 1
 
 
+# ---------------------------------------------------------------------------
+# AC10/AC10b -- `offer-git-c` and this bump were both registered in
 # `GuardBand.ADVISORY_REWRITE`, and the chain returns on the first non-None
+# result: `offer-git-c` sat first, so a bare `git commit` (no pathspec) in a
+# foreign repo never reached this bump at all -- C2's destination-class
+# message axis was built for a verdict nobody ever saw. C8 moved this guard
+# (and its `bump-outside-repo-write` sibling) ahead of `offer-git-c` in
+# `_build_guard_chain`'s own registration order to close that gap. These two
+# tests exercise the REAL chain in registration order (not a single guard's
+# `check_bump_foreign_repo_write` call in isolation, as the rest of this file
+# does) so the fix is asserted at the level it actually broke at.
+# ---------------------------------------------------------------------------
 
 
 def _first_verdict(chain):
@@ -1721,6 +1803,7 @@ def test_ac10b_offer_git_c_no_longer_rewrites_the_case_it_used_to(repos, monkeyp
 
     cmd = f"cd {_posix(repos['foreign'])} && git commit --allow-empty -m x"
 
+    # `offer-git-c` in isolation still rewrites this shape -- confirms the
     # guard's own behaviour is unchanged; only its chain POSITION moved.
     solo_result = check_offer_git_c(cmd, session_id, str(repos["anchor"]))
     assert solo_result is not None
@@ -1742,11 +1825,15 @@ def test_ac19_registration_attributes_pinned_not_left_to_default():
 
     # `fail_closed=False` -- the OPPOSITE of every neighbouring
     # CONFINEMENT_DENY entry: a crash in this guard must swallow to
+    # "allow", never route through the hard-deny crash path.
     assert entry.fail_closed is False
     # `band=ADVISORY_REWRITE`, NOT `CONFINEMENT_DENY` -- the blanket-disarm
     # marker can suppress every band except CONFINEMENT_DENY; registering
+    # a deliberately passable bump there would make it the LEAST passable
+    # guard in the suite.
     assert entry.band is dispatch.GuardBand.ADVISORY_REWRITE
     # Explicit, never the UNCLASSIFIED default (dispatch.py's own
+    # registry-validation test also fails loud on this).
     assert entry.advisory_value is not AdvisoryValue.UNCLASSIFIED
     assert entry.advisory_value is AdvisoryValue.NOT_COST_ARGUED
 
@@ -2002,8 +2089,22 @@ def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeyp
     assert result is not None
 
 
+# ---------------------------------------------------------------------------
 # AC14 ANCHOR-SIDE COVERAGE GAP (2026-08-21)
+#
+# The suite could not see this class of defect at all: it went 196-green
+# against a build that ALLOWED a genuinely foreign write. Both AC14 tests
+# above drive the TARGET side, and the target side is only reached after the
+# anchor side has already resolved -- so no amount of target-side patching
+# constructs the dangerous state. "Tests pass" was never evidence of safety
+# for a change to this comparison, which is how a fail-open widening reached
+# the working tree with a green suite behind it.
+#
 # The state that matters: `resolve_gitdir(anchor)` SUCCEEDS (so the
+# missing-gitdir early return in `check_bump_foreign_repo_write` does not
+# fire) while `resolve_git_root(anchor)` transiently MISSES. Control then
+# falls through with `anchor_common_cf is None` and no guard above it.
+# ---------------------------------------------------------------------------
 
 
 def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monkeypatch):

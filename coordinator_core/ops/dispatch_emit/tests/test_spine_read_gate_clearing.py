@@ -24,6 +24,7 @@ def _write_plan(tmp_path, body: str):
       closure_evidence: >-
         Not yet received.
 """,
+            # This is the defect row (AC1): presence of closure_evidence
             # alone used to clear the gate (ADMITTED). It must now withhold.
             False,
         ),

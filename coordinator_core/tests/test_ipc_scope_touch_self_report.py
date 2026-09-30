@@ -353,7 +353,9 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     )
 
 
+# ---------------------------------------------------------------------------
 # 11. F2 — a declared DIRECTORY is rejected, never recorded.
+# ---------------------------------------------------------------------------
 
 
 def test_declared_directory_is_rejected_not_recorded(tmp_path, monkeypatch, caplog):

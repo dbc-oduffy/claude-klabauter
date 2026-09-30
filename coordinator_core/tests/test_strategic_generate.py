@@ -181,18 +181,54 @@ def test_track_a_empty_is_typed_list_not_crash(tmp_path):
 
 
 def test_track_a_tagless_and_fallback_branches_exercised(tmp_path):
-    """Tag-less branch exercised directly above; here assert the gitlog-fallback branch
-    (signal 3: neither tags nor changelog) degrades to [] cleanly on a repo with zero commits
-    (git log has nothing to report), and does not raise. The tagged path (signal 1) is
-    dogfooded live via claude-klabauter's own invocation below rather than fixtured here — claude-klabauter
-    itself is tag-less (0 git tags verified), so a tagged-repo exercise would need a second
-    throwaway git identity/commit setup; the branch logic is directly inspectable in
-    version_highlights.py's _derive_from_tags and is covered by the empty/typed contract
-    asserted here for the no-signal-at-all case.
-    """
+    """Signal 3 (neither tags nor changelog) degrades to [] cleanly on a repo with zero
+    commits (git log has nothing to report), and does not raise."""
     _init_bare_git_repo(tmp_path)
     result = derive_version_highlights(tmp_path)
     assert result == []
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+         "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
+        cwd=str(root), check=True, capture_output=True, creationflags=_NO_CONSOLE,
+    )
+
+
+def test_track_a_tagged_repo_leads_with_annotation_body_then_commit_subjects(tmp_path):
+    """Signal 1: an annotated tag's message body is surfaced ahead of post-tag commit subjects."""
+    _init_bare_git_repo(tmp_path)
+    (tmp_path / "f.txt").write_text("a", encoding="utf-8")
+    _git(tmp_path, "add", "f.txt")
+    _git(tmp_path, "commit", "-q", "-m", "initial")
+    _git(tmp_path, "tag", "-a", "v1.0.0", "-m", "Release 1.0.0\n\n- faster indexing\n- new query API")
+    (tmp_path / "f.txt").write_text("b", encoding="utf-8")
+    _git(tmp_path, "commit", "-q", "-am", "post-tag fix")
+
+    highlights = derive_version_highlights(tmp_path)
+
+    assert len(highlights) == 1
+    assert highlights[0]["label"] == "v1.0.0"
+    assert highlights[0]["provenance"] == "generated"
+    assert highlights[0]["bullets"] == [
+        "Release 1.0.0", "faster indexing", "new query API", "post-tag fix",
+    ]
+
+
+def test_track_a_lightweight_tag_does_not_echo_commit_message_as_annotation(tmp_path):
+    """A lightweight tag has no annotation: only post-tag commit subjects surface."""
+    _init_bare_git_repo(tmp_path)
+    (tmp_path / "f.txt").write_text("a", encoding="utf-8")
+    _git(tmp_path, "add", "f.txt")
+    _git(tmp_path, "commit", "-q", "-m", "tagged commit subject")
+    _git(tmp_path, "tag", "v0.1.0")
+    (tmp_path / "f.txt").write_text("b", encoding="utf-8")
+    _git(tmp_path, "commit", "-q", "-am", "after tag")
+
+    highlights = derive_version_highlights(tmp_path)
+
+    assert [h["bullets"] for h in highlights] == [["after tag"]]
 
 
 # ---------------------------------------------------------------------------

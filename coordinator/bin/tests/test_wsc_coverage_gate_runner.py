@@ -42,7 +42,16 @@ from coordinator_core.workstream_complete.directives_review import (
     verify_trail_range_termination,
 )
 
+# Declared, not excused: `_git`'s callers below spawn real `git` processes
+# because the properties under test are real DAG-mode chain re-derivation
+# and commit-clock/history plumbing (`_derive_dag_chain_set`,
+# ceremony-bookkeeping exclusion) that no mock stands in for. Each test
+# builds its own scratch repo via the per-test `_git`/`_make_commit`
+# call sites rather than a shared module-scoped fixture, since these are
+# mutation-heavy (fresh commit histories per scenario) and a shared repo
 # would leak commits across tests. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for
+# this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
@@ -129,13 +138,30 @@ _TIER_B_STDOUT = (
     'verdict=PARTITION-MANDATORY basis="plan_oracle=4(...) tier=B"\n'
 )
 
+#: Fixed chain code sha used across the C13 discharge tests below (2026-08-06
+#: chain-scoping correction: `chain_partition_verdict_discharged` now scopes
 #: by WITHIN-CHAIN MEMBERSHIP — a trail record's resolved range must be a
+#: non-empty subset of the chain's own code-review obligation set to
+#: discharge — never by tip ancestry on the shared branch).
 _CHAIN_CODE_SHA = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee0"
 _CHAIN_CODE_SHAS = [_CHAIN_CODE_SHA]
 
 
+# ---------------------------------------------------------------------------
+# brightline-gate — C13 (docs/plans/2026-08-05-coverage-gate-planning-
+# artifact-class.md, AC20/AC21/AC23): refuse the chain-terminal cap on an
 # UNDISCHARGED PARTITION-MANDATORY verdict. The narrow exception carved out
+# of tier=B/none's "never a hard stop" posture — see this test module's own
 # `_TIER_B_STDOUT` fixture for the shared verdict=PARTITION-MANDATORY line.
+# AC23 watched-to-fail evidence: with `coordinator/bin/wsc-coverage-gate-
+# runner.py` and `coordinator_core/workstream_complete/directives_review.py`
+# reverted to their pre-C13 content (`git stash push` scoped to those two
+# files), `test_partition_mandatory_undischarged_refuses_the_cap` below FAILS
+# (observed rc=0, "tier=B is communicate-only" — the chain-terminal close
+# reaches a clean terminal stamp with zero discharging review-trail
+# records). After restoring the C13 content, the same test PASSES (rc=1,
+# HALT). Reported verbatim in the chunk's completion report.
+# ---------------------------------------------------------------------------
 
 
 _TIER_B_SINGLE_REVIEWER_OK_STDOUT = (
@@ -145,15 +171,60 @@ _TIER_B_SINGLE_REVIEWER_OK_STDOUT = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Test gap flagged in brightline-discharge
+# round4 (2026-08-06): `chain_owes_no_code_review` is the ONE branch in
 # `cmd_brightline_gate`'s PARTITION-MANDATORY handling that GRANTS a pass
+# with an EMPTY review-trail, and had no test at all before this pin.
+# ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-07 (state/audits/2026-08-07-wsc-chain-gate-counts-doc-only-
 # commits.md): the HALT's own UNCOVERED message told two lies — it called
 # every entry a "chain code commit" (PLANNING commits stay in the
+# obligation set by design but aren't code) and stayed silent when an
+# uncovered commit is foreign to the closing session (frequently
 # undischargeable BY CONSTRUCTION, not because no one reviewed it). This is
+# a rendering-only fix: `chain_partition_uncovered_shas`'s output, the
+# denominator, and the verdict are untouched — only the message's labeling
+# of the SAME uncovered list.
+# ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# chain_partition_verdict_discharged / chain_partition_uncovered_shas —
+# 2026-08-06 chain-scoping correction. Live instrumentation against
+# `state/handoffs/2026-08-06-eliminate-claude-klabauter-s-non-test-subprocess-spawn-
+# population.md` (chain tip `72eee33c6`, 15 chain code shas) proved the
+# original tip-reaching scoping condition (`tip == chain_tip_sha or
+# is_ancestor(chain_tip_sha, tip)`, shared by both the retired "leg (a)" and
+# "leg (b)") is not a chain-scoping check at all on this fleet's ONE SHARED
+# `work/{machine}/{date}` branch: every record ANY concurrent peer session
+# wrote later on the shared branch also satisfies it, regardless of whether
+# it reviewed a single commit of the chain under evaluation. All 11 records
+# that discharged the old condition against the live chain belonged to two
+# unrelated peer sessions; zero belonged to this chain's own 17 records.
+#
+# Both legs are replaced by ONE within-chain-membership check: a record
+# contributes to discharge only when its resolved range's sha set is a
 # NON-EMPTY SUBSET of `chain_code_shas`. `chain_partition_verdict_
+# discharged` no longer takes `chain_tip_sha`/`is_ancestor` at all — the
+# tests below drive the fixed, four-argument signature directly. See
+# `directives_review.chain_partition_verdict_discharged`'s own docstring
+# for the full incident writeup and why the legacy leg collapsed into
+# redundancy under the new scoping rather than surviving as a second leg.
+#
+# 2026-08-06 membership-vs-coverage split (review-integrator P1): unless a
+# test is specifically exercising the difference, `chain_dag_shas` below is
+# passed equal to `chain_code_shas` — every scenario that doesn't name a
+# same-chain bookkeeping/handoff-authoring sha behaves identically whether
+# membership is tested against the filtered or unfiltered set, since
+# `chain_code_shas` is always a subset of `chain_dag_shas` in practice. See
+# `test_record_spanning_code_and_same_chain_bookkeeping_commit_accepted_and_
+# contributes_only_code_shas` below for the dedicated case where the two
+# sets must actually differ.
+# ---------------------------------------------------------------------------
 
 
 def test_record_membership_rejects_stored_head_range_before_consulting_resolver():
@@ -228,7 +299,12 @@ def _commit_with_unparseable_trailing_session_trailer(repo_dir, filename, messag
     return _git("rev-parse", "HEAD", cwd=repo_dir)
 
 
+# ---------------------------------------------------------------------------
+# op_latency instrumentation of the `--from-handoff` chain (state/kill-ledger.md
+# K-004, 2026-08-16: "No stage of it is instrumented ... one timing span in
+# cmd_brightline_gate makes this decidable"). `_run_review_brightline_gate`
 # is the single span — see its own docstring/`_OP_LATENCY_LABEL` for why.
+# ---------------------------------------------------------------------------
 
 
 _CARRIED_SID = "304997f1-4143-4beb-b2dc-657a16fef082"

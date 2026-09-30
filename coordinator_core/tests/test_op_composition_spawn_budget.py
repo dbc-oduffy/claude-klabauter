@@ -65,7 +65,9 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     find_unbatched_per_item_spawns,
 )
 
+#: Sized only to separate this module's own two planted fixtures (six unrolled spawns vs. one
 #: batched spawn) -- see module docstring's "NON-GATING, PENDING AC11" section. Never AC11's
+#: ratified process-time threshold.
 _FIXTURE_SPAWN_BUDGET = 2
 
 pytestmark = pytest.mark.pending_fix

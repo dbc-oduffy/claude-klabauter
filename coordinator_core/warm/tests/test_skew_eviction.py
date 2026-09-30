@@ -323,7 +323,9 @@ def test_source_stale_is_sticky(monkeypatch, tmp_path):
     assert state.is_skewed(client_token) is True
 
 
+# ---------------------------------------------------------------------------
 # evict_on_skew -- THE INVERSION: close precedes drain, no idleness input
+# ---------------------------------------------------------------------------
 
 
 def test_evict_on_skew_orders_respond_close_drain():

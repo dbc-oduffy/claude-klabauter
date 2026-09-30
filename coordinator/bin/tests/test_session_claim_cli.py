@@ -291,6 +291,8 @@ def test_clear_claim_if_dead_bogus_basename_emits_not_found_note_exit_0(
     stub_import_module, tmp_path, capsys
 ):
     # Real claim dir exists under a DIFFERENT basename; the bogus one is not
+    # on disk at all -- mirrors the field report's "claim still present"
+    # (a real claim exists) while the queried basename does not.
     (tmp_path / "plan-claims" / "the-real-plan").mkdir(parents=True)
     stub_import_module(_StubClaims(
         clear_claim_if_dead=lambda *a, **k: True,
@@ -634,7 +636,18 @@ def test_claim_plan_no_args_exits_2(stub_import_module):
     assert rc == 2
 
 
+# ---------------------------------------------------------------------------
 # claim-artifact / release-artifact / clear-claim-if-dead catch the REQUIRED-
+# arg ValueError claims.py raises on an empty class/basename (a
+# syntactically-complete argv — arity passed — but an empty string slipped
+# through, e.g. the d5 baton-assembler directive's ``Path(artifact_path).
+# stem`` on an empty artifact_path) and report it exit 1 with a clean
+# stderr line, the same class of clean failure claim-plan's own boundary
+# check already produces on bad input — never a raw Python traceback out of
+# main(). Without _call_claim_bool's try/except this ValueError would
+# propagate uncaught and pytest would report an ERROR (not a clean
+# assertion failure) — that IS the red-proof for this guard.
+# ---------------------------------------------------------------------------
 
 def test_release_artifact_empty_basename_value_error_exits_1_not_traceback(
     stub_import_module, capsys
@@ -695,8 +708,10 @@ def test_release_artifact_empty_class_value_error_exits_1(stub_import_module, ca
     assert "artifact class required" in err
 
 
+# ---------------------------------------------------------------------------
 # is-session-live exit-code contract: live sid -> 0; dead sid -> _NOT_LIVE
 # (1); malformed/absent sid -> _MALFORMED_SID (4), NEVER the not-live code.
+# ---------------------------------------------------------------------------
 
 def test_live_sid_exits_0(stub_import_liveness_module):
     stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
@@ -735,7 +750,11 @@ def test_path_traversal_sid_exits_malformed_code(stub_import_liveness_module):
 
 
 def test_colon_drive_letter_sid_exits_malformed_code(stub_import_liveness_module):
+    # A blocklist of `/`, `\`, `..`, NUL
+    # did not reject a bare drive-letter/colon component, and on Windows
     # `ntpath.join(base, "C:evil")` DISCARDS `base` entirely, a full
+    # containment escape out of the sessions corpus. liveness must never be
+    # consulted for such a sid.
     def _fail_if_called(*a, **k):
         raise AssertionError("liveness must not be consulted for a malformed sid")
 
@@ -755,8 +774,17 @@ def test_missing_sid_arg_exits_usage_error(stub_import_liveness_module):
 def test_unexpected_exception_from_ungarded_callsite_exits_transport_fail_not_1(
     monkeypatch,
 ):
+    # guard-per-callsite structural
+    # fragility. claim-artifact/release-artifact/clear-claim-if-dead route
+    # through `_call_claim_bool`, which only catches `ValueError` (the
+    # required-arg guard) — NOT a general engine failure. Before the
+    # top-level `main` safety net, an unexpected exception here (e.g. an
+    # `OSError` from the underlying claims.py call) propagated uncaught out
+    # of `main`, and an uncaught Python exception exits the interpreter with
     # code 1 — indistinguishable from `_NOT_LIVE`'s "confirmed dead"
+    # verdict, exactly the claim-theft shape this file exists to close. The
     # top-level backstop in `main` must catch it and exit `_TRANSPORT_FAIL`
+    # instead, regardless of which callsite forgot its own guard.
     class _FakeClaimsModule:
         @staticmethod
         def claim_artifact(*a, **k):
@@ -867,6 +895,10 @@ def test_dead_sid_reports_liveness_basis_line(
 def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
     stub_import_liveness_module, stub_import_holder_evidence_module, capsys
 ):
+    # C1's ripple, unreviewed.
+    # session_live() stays False for a live foreign-repo peer (AC1: unchanged,
+    # unmigrated) but the basis is "harness-registry-elsewhere"; printing
+    # "dead" over that basis reproduces this plan's own Problem statement in
     # this sibling CLI. Exit code is unchanged (_NOT_LIVE) for compat.
     stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
     stub_import_holder_evidence_module(
@@ -1010,7 +1042,12 @@ def test_list_claims_by_session_transport_failure_exits_3():
     assert rc == _cli._TRANSPORT_FAIL
 
 
+# ---------------------------------------------------------------------------
 # who-claims-path: reads the PATH-TOUCH plane (claim_index.lookup) + liveness
+# per claimant, TAB-delimited "<sid>\t<live|dead>\t<name>" rows, exit 0. A
+# separate question from list-claims-by-session (artifact-claim store)
+# above — see the CLI's own comment block.
+# ---------------------------------------------------------------------------
 
 def test_who_claims_path_no_claimant_exits_0_no_output(
     stub_import_claim_index_module, stub_import_liveness_module, capsys
@@ -1186,6 +1223,8 @@ def test_who_claims_path_neither_rung_resolves_prints_unnamed_marker(
     )
     assert "sess-c\t" not in _cli._NO_REGISTRY_RECORD_MARKER
     # The registry ANSWERED and holds nothing. That is a fact, and it must not
+    # render as the marker for "the registry could not be asked" -- the
+    # rung-2-raise test below pins the other side of the same split.
     assert _cli._NO_REGISTRY_RECORD_MARKER != _cli._NAME_UNRESOLVED_MARKER
 
 
@@ -1213,6 +1252,8 @@ def test_who_claims_path_rung2_registry_raise_degrades_to_unnamed(
         f"sess-d\tlive\t{_cli._NAME_UNRESOLVED_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
     )
     # A DEGRADATION, not a fact: the registry was never successfully asked, so
+    # this must stay distinguishable from the no-record marker. Asserting only
+    # "the row survived" would let the two collapse back together silently.
     assert _cli._NAME_UNRESOLVED_MARKER != _cli._NO_REGISTRY_RECORD_MARKER
 
 
@@ -1416,8 +1457,17 @@ def test_help_flag_exits_0(stub_import_module):
         assert rc == 0
 
 
+# ---------------------------------------------------------------------------
 # The advertised verb list must reach the PATH-TOUCH release path.
+#
+# `release-artifact artifact <repo-relative-path>` IS the release verb for a
 # claim `who-claims-path` reports. A peer EM read `_SUBCOMMANDS`, saw eight
+# verbs and no `release-path`, and reported a ledger-derived path claim as
+# having no exit while holding one — twice, across two memos
+# (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-claim-
+# {has-no-release,narrowed}.md). Enumerating verbs without their classes is
+# what made a shipped capability unreachable by reading.
+# ---------------------------------------------------------------------------
 
 
 def test_subcommand_advertisement_names_the_artifact_path_class():

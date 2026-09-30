@@ -61,7 +61,10 @@ SCRIPT_OPERAND = [
     "bash -",
 ]
 
+#: Attached-form (`--opt=value`) shapes, 2026-08-22 security-review finding:
 #: an argv made ENTIRELY of these was misclassified option-only and ALLOWED,
+#: since each token starts with `-` and the pre-fix scan never split the
+#: `=`. `--rcfile=`/`--init-file=` source an unexamined file on shell start.
 ATTACHED_VALUE_SCRIPT_OPERAND = [
     "bash --rcfile=/tmp/evil.rc --norc",
     "bash --init-file=/tmp/evil.rc",

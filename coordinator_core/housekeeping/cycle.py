@@ -114,7 +114,10 @@ _LOG = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 
+#: The `deployment_state` value C6's gate-clear machinery acts on — mirrors
 #: `gate_clear._AWAITING_GATE` (not re-imported: that name is module-private
+#: there, and this module's own scope is which records to OFFER to
+#: `evaluate_gate_clear`, not gate-clear's own internal vocabulary).
 _AWAITING_GATE = "awaiting_gate"
 
 
@@ -125,6 +128,11 @@ def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[s
     if not named:
         return set()
     # `handoff_path` arrives REPO-RELATIVE from the real callers
+    # (`baton_assemble/apply.py` builds `repo_root / predecessor_path` from
+    # the same string). Resolving it bare would resolve against the process
+    # CWD, so on any caller whose CWD is not the worktree root the exclusion
+    # would silently match nothing -- a fail-OPEN on the one rail whose whole
+    # job is to stop the sweep touching another leg's handoff.
     candidate = Path(named)
     root = worktree_root.resolve()
     if not candidate.is_absolute():
@@ -229,7 +237,17 @@ def run(
         if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
     })
 
+    # -- Memo family (C2, the actioned-memo class gets an occasion). --
+    # `archive_actioned_memos.plan_sweep` owns its own scan/classify/cap-slot
+    # machinery entirely -- this module never re-derives it. The ONE thing
+    # folding the memo family into this cycle needs from HERE is its own
+    # candidate relpaths, unioned into the SINGLE dirty-check call below, so
+    # the memo family never triggers a second `git status` spawn.
+    # Resolved through the same named resolver `archive_actioned_memos`'s own
+    # candidate/dest resolution uses -- migration-aware (`state/cross-repo/`
     # vs legacy `cross-repo/`), never the retired `INBOX_RELDIR` literal (see
+    # state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-hardcodes-
+    # the-legacy-cross-repo-inbox-literal.yaml).
     memo_inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
 
     memo_scan_error: Optional[str] = None
@@ -308,7 +326,23 @@ def run(
         bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
     )
 
+    # Persist for the next cycle, ONLY when the on-disk cache would differ.
+    # Best-effort by construction: a cache that cannot be written costs the
+    # next cycle a rebuild, nothing else.
+    #
+    # The write is gated because it is NOT free and it was previously
+    # unconditional: `save_index` serialises the whole index to JSON, measured
+    # at 94ms / 16232 `_iterencode` calls over a 1,470-record archive by
+    # cProfile on process_time (2026-08-30). A cycle that archived nothing
+    # rewrote byte-identical content every run, which at backlog scale was the
+    # difference between the two-family cycle sitting inside
     # CYCLE_PROCESS_TIME_BUDGET_MS and breaching it. Two cases genuinely need
+    # the write: a rebuild (there was no usable cache, or it was stale), and a
+    # revalidate that actually patched the index. `revalidate` itself now
+    # runs on every cycle with an archive tree (F4 above), so it also catches
+    # cross-process drift; `save_index` stays gated on the same
+    # `index_rebuilt or index_changed` pair -- only the (cheap) detection
+    # moved off the `acted` gate, not the (expensive) write.
     index_cache_written = (
         archive_index_mod.save_index(archive_idx, cache_path)
         if archive_dir_exists and (index_rebuilt or index_changed)
@@ -332,7 +366,29 @@ def run(
     }
 
 
+# ---------------------------------------------------------------------------
+# The op boundary — `housekeeping.cycle`
+# ---------------------------------------------------------------------------
+#
+# DR-384 admits `housekeeping.cycle` to DR-211 § D1's sanctioned-writer list.
+# That decision was ratified against an op that did not exist: `run()` above is
+# a module function, and nothing in this package called `register_op`. The
+# consequence is not cosmetic -- `handoff.housekeeping`'s key is carried in
 # `authz/classification.py` (as MUTATING) and referenced by the bash guards, and
+# a caller reaches it through the registry, not by import. A replacement that
+# never registers cannot be repointed onto, only imported around.
+#
+# `run()` also does not accept what two of its three real callers pass:
+#   - `close=False`, for a caller that has already closed records itself and
+#     wants the sweep alone.
+#   - `transition`, a targeted transition on ONE named handoff, which
+#     `baton_assemble/apply.py`'s d6 needs because it must stamp
+#     `continued`/`continued_into` on a predecessor whose successor was minted
+#     seconds ago by the same run -- a fact no population scan can derive.
+#
+# So the op boundary lives here, with the same parameter contract, and delegates
+# the transition leg to `handoff_archive_transition` exactly as before (that
+# module is NOT part of this plan's deletion set and stays where it is).
 
 OP_KEY = "housekeeping.cycle"
 

@@ -72,6 +72,7 @@ def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
             "elapsed_ms": 9.0,
             "outcome": "computed",
         },
+        # Synthetic microbenchmark row under the same `session_facts.` prefix —
         # excluded by name, never by prefix. See PRODUCTION_FACT_ROW_NAMES.
         {
             "kind": "fact_span",

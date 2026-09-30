@@ -75,6 +75,8 @@ def _write_record(
 def _decoy_filename(index: int) -> str:
     # A real production filename shape (`{TIMESTAMP}-{SESSION_ID[:8]}.json`)
     # for a DIFFERENT session — every decoy is a plausible on-disk record,
+    # never a synthetic name that would trivially miss the filter for an
+    # unrelated reason.
     return f"2026-08-{(index % 27) + 1:02d}-{index:06d}-{_FOREIGN_SID[:8]}.json"
 
 

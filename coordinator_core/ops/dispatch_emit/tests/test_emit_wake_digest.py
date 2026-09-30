@@ -407,3 +407,22 @@ def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path,
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incomplete():
+    """terminal_commit stamps every row it is NOT told is incomplete as coded,
+    so a halted run's not-started rows must ride `incomplete_chunks` too --
+    otherwise they are stamped coded with no work behind them."""
+    waves = [[_row("C1", ["a.py"])], [_row("C2", ["b.py"])]]
+    script = compose_script(waves, name="wf", description="halt")
+    line = next(l for l in script.splitlines() if "incomplete_chunks:" in l)
+    assert "_notStarted" in line and "_incompleteChunks" in line
+
+
+def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch():
+    """Per-row clones and venvs left behind filled a cloud disk mid-run."""
+    waves = [[_row("C1", ["a.py"])]]
+    script = compose_script(
+        waves, name="wf", description="scratch", plan_path="docs/plans/example.md"
+    )
+    assert "delete that directory before you write your report" in script

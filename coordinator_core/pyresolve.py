@@ -50,11 +50,30 @@ _WINDOWS_PYORG_VERSIONS = ("313", "312", "311", "310")
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Windowless (``/SUBSYSTEM:WINDOWS``) interpreter basenames -- a general-purpose
+# shim baked/resolved with one of these gives a child with a live stdin pipe a
+# null/invalid stdin handle. Shared between ``coordinator_core.install.substrate``
+# (``_resolve_baked_python_bin``) and ``coordinator_core.ops.ensure_python3_exe_shim``
+# (``_resolve_python_bin``) -- both bake/shim a general-purpose interpreter and both
+# need the same defense-in-depth rejection; lifted here as the one definition so
+# neither caller carries its own copy. See ``resolve_python_bin()``'s
+# ``prefer_windowless`` docstring for the general windowless-vs-console rationale,
+# and ``coordinator_core.install.substrate._resolve_baked_python_bin``'s docstring
+# for the originating incident.
 _WINDOWLESS_BASENAMES = ("pythonw.exe", "pyw.exe")
 
 
 def _console_sibling(windowless_path: str) -> str:
     # `windowless_path` is a WINDOWS-shaped path string (baked/resolved for a
+    # Windows target), parsed here regardless of the host running this code --
+    # `os.path` is bound to the HOST's flavour at interpreter start (`posixpath`
+    # on a POSIX dev box), so it silently mis-splits a backslash path. `ntpath`
+    # is the explicit, host-independent flavour selection, mirroring the
+    # precedent in `coordinator_core.win_portability` (see that module's own
+    # docstring). `os.path.isfile` stays as-is below: that call dereferences the
+    # real filesystem, which only ever happens against a real path on the host
+    # actually running this code (and is mocked outright in the tests exercising
+    # this branch on a non-Windows dev box) -- a host-local check, not a
+    # Windows-path parse, so it correctly keeps host semantics.
     directory = ntpath.dirname(windowless_path)
     basename = ntpath.basename(windowless_path).lower()
     if basename == "pythonw.exe":

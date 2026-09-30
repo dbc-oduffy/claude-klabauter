@@ -66,6 +66,8 @@ def test_blanket_disarm_cache_does_not_fail_open_past_expiry():
         result = _blanket_disarm.disarm_status({"session_id": session_id})
 
         # FIXED BEHAVIOUR (C4): a cache hit whose own expires_at has passed
+        # is re-evaluated live, not replayed -- the fail-open defect this
+        # test used to pin is closed.
         assert result.active is False
         assert result is not already_expired
     finally:
@@ -130,6 +132,7 @@ def test_ledger_artifact_readable_serves_each_roots_own_verdict(tmp_path):
 
         assert readable_a is True
         # FIXED BEHAVIOUR (C5): root_b's broken artifact reads False on its
+        # own merits, unaffected by root_a's True.
         assert readable_b is False
     finally:
         deliverable_equivalence._reset_deliverable_ledger_cache()
@@ -176,6 +179,8 @@ def test_ledger_validated_flag_still_validates_a_second_roots_ledger(tmp_path):
         )
 
         # FIXED BEHAVIOUR (C5): root_b's own key is not yet in the VALIDATED
+        # set, so validation runs and raises loudly rather than being
+        # silently skipped because root_a already validated once.
         with pytest.raises(deliverable_equivalence.DeliverableLedgerValidationError):
             deliverable_equivalence.dual_read_deliverable_id(
                 root_b, str(root_b / "b.md"), {}, read_frontmatter_field=_no_frontmatter
@@ -229,6 +234,8 @@ def test_session_identity_does_not_cross_contaminate_under_interleave():
         thread_b.join(timeout=5)
 
         # FIXED BEHAVIOUR (C6): session A's own contextvar-scoped identity is
+        # unaffected by session B's overlapping block -- no cross-context
+        # contamination.
         assert observed_inside_a["COORDINATOR_SESSION_ID"] == "session-A"
         for var in apply_base.SESSION_ENV_VARS:
             assert os.environ.get(var) is None
@@ -321,7 +328,9 @@ def test_registry_snapshot_cache_re_fetches_after_ttl_expiry(monkeypatch):
         liveness._registry_snapshot_cache_at = None
 
 
+# ---------------------------------------------------------------------------
 # Site 5: coordinator_core/ops/gate_dimension_latency.py -- `_REENTRANCY_GUARD`
+# ---------------------------------------------------------------------------
 
 
 def test_reentrancy_guard_isolates_unrelated_concurrent_dispatches(monkeypatch):
@@ -389,6 +398,8 @@ def test_git_probe_deadline_not_shared_across_interleaved_dispatches():
         assert dispatch_checks._git_probe_budget_spent() is True
 
         # A second, interleaved dispatch, in a DIFFERENT Context (thread),
+        # arms its own generous budget while the first dispatch's exhausted
+        # budget is still logically live in its own Context.
         second_dispatch_result: dict[str, object] = {}
 
         def _second_dispatch():
@@ -401,6 +412,7 @@ def test_git_probe_deadline_not_shared_across_interleaved_dispatches():
         thread.join(timeout=5)
 
         # FIXED BEHAVIOUR (C8): the second dispatch's own generous budget is
+        # not spent in its own Context...
         assert second_dispatch_result["spent"] is False
         assert dispatch_checks._git_probe_budget_spent() is True
     finally:
@@ -443,11 +455,14 @@ def test_capture_session_does_not_cross_contaminate_under_interleave():
     thread_b.join(timeout=5)
 
     # FIXED BEHAVIOUR (C8): session A's record lands in its OWN sink, not
+    # session B's -- each Context's ContextVar is independent.
     assert ("builder_a", {"from": "session_a"}) in sink_a_holder["sink"]
     assert sink_b_holder["sink"] == []
 
 
+# ---------------------------------------------------------------------------
 # Site 8: coordinator_core/hooks/track_touched_files.py -- `_MAX_FILE_LOCKS`
+# ---------------------------------------------------------------------------
 
 
 def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
@@ -473,6 +488,8 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
             track_touched_files._get_lock(str(tmp_path / f"other-{i}.txt"))
 
         # FIXED BEHAVIOUR (C9): the held entry survives -- unrelated UNHELD
+        # entries are evicted to make room instead, keeping the table at
+        # (not past) the cap since unheld candidates were available.
         assert held_path in track_touched_files._FILE_LOCKS
         assert len(track_touched_files._FILE_LOCKS) == track_touched_files._MAX_FILE_LOCKS
 
@@ -486,7 +503,11 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
         track_touched_files._MAX_FILE_LOCKS = original_max
 
 
+# ---------------------------------------------------------------------------
 # Site 9: coordinator_core/engine_root.py -- CLAUDE_KLABAUTER_ROOT process-memoization
+# (staff-eng review finding 8; state/lessons/2026-07-06-tri-plane-read-ops-
+# must-process-memoize.yaml)
+# ---------------------------------------------------------------------------
 
 
 def test_engine_root_gate_memo_keys_per_interleaved_session_root(
@@ -540,6 +561,7 @@ def test_engine_root_gate_memo_keys_per_interleaved_session_root(
     result_a2 = engine_root.coordinator_engine_root_with_class()
 
     # FIXED BEHAVIOUR (C10): session A's second call hits its own still-valid
+    # memo entry rather than recomputing -- no third gate walk.
     assert calls["n"] == 2
     assert result_a2[0] == "/repo/session-a"
 

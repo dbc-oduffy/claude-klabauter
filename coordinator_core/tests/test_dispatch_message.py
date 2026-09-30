@@ -263,6 +263,8 @@ def test_handler_raises_structural_error_returns_32001():
     assert d["error"]["code"] == STRUCTURAL_PIN_ERROR
     assert d["error"]["code"] != INTERNAL_ERROR
     assert d["id"] == 12
+    # The exception's own message (which already states the remediation for a real
+    # ContractPinError) is preserved verbatim, unlike the generic class-name-only
     # INTERNAL_ERROR message.
     assert "deliberate structural test failure — pin desync" in d["error"]["message"]
 
@@ -305,7 +307,9 @@ def test_handler_raises_plain_value_error_still_returns_32603():
     )
 
 
+# ---------------------------------------------------------------------------
 # PRECEDENCE test — jsonrpc version checked BEFORE params type
+# ---------------------------------------------------------------------------
 
 def test_version_checked_before_params():
     """jsonrpc='1.0' with bad params (int) → -32600 (version gate fires first, not params gate).
@@ -322,7 +326,9 @@ def test_version_checked_before_params():
     )
 
 
+# ---------------------------------------------------------------------------
 # PRECEDENCE test — params type checked BEFORE method type
+# ---------------------------------------------------------------------------
 
 def test_params_checked_before_method():
     """params=[1,2] (not dict) with method=999 (not str) → -32602 (params gate fires first).
@@ -342,7 +348,10 @@ def test_params_checked_before_method():
     )
 
 
+# ---------------------------------------------------------------------------
 # C1a — _ORIGIN_WORKTREE_FIELD constant and wire-level acceptance
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
+# ---------------------------------------------------------------------------
 
 def test_origin_worktree_field_constant_defined():
     """_ORIGIN_WORKTREE_FIELD constant is defined with the correct value.
@@ -847,7 +856,10 @@ def test_timeout_poison_request():
         _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
 
     # Slow handler must have timed out. `test.slow` is not in OP_CLASSIFICATION,
+    # and `_op_may_mutate` fail-closes an unknown op to True, so the timeout is
     # reported as INDETERMINATE rather than as a flat failure (F1, 2026-08-27 --
+    # see `ipc._timeout_error_envelope`). The op may have run to completion in its
+    # abandoned thread; saying "failed" here is what got a landed commit retried.
     assert "error" in slow_result, (
         f"Slow (stalled) handler must return an error; got result: {slow_result.get('result')}"
     )
@@ -956,9 +968,21 @@ def test_base_exception_absorbed():
     )
 
 
+# ---------------------------------------------------------------------------
+# Per-op timeout overrides — ceremony.* rows retired by DEC-2 of
+# docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md (a dispatch timeout is
+# a runaway guard, not a performance budget; the <2s ruling is a KPI test).
+# Historical: state/improvement-queue/2026-07-13-ceremony-wsc-commit-reliably-times-out-o-62330efd3dd4.yaml
+#
+# `ceremony.scoped_git_commit`'s own 150.0s override row (added after DEC-2, for the
+# same op DEC-2 had just un-widened) was itself revoked 2026-08-21 by the ceremony
 # budget (DR-348) — see ipc.CEREMONY_BUDGET_SECS and
+# coordinator_core/tests/test_ceremony_budget_ratchet.py, which is now the sole
+# authority on ceremony.* op timeouts. The tests below therefore assert every
 # ceremony.* method resolves at-or-below CEREMONY_BUDGET_SECS, not at the global
+# default — the clamp in `_timeout_for` applies whether or not an override row
 # exists, so a ceremony op no longer falls all the way to DISPATCH_TIMEOUT_SECS.
+# ---------------------------------------------------------------------------
 
 def test_timeout_for_resolves_per_op_override():
     """Unlisted, non-ceremony ops fall to the global runaway guard.
@@ -1069,7 +1093,9 @@ def test_near_miss_timeout_env_warns(caplog):
     )
 
     # A legitimate future COORDINATOR_* var that merely
+    # mentions "timeout" in passing (not shaped like the real knob) must NOT fire.
     # A bare substring test ("COORDINATOR" in key and "TIMEOUT" in key) would have
+    # nagged on this; the narrowed suffix-shaped match must not.
     caplog.clear()
     with caplog.at_level(_logging.WARNING, logger="coordinator_core.ipc"):
         ipc._warn_on_near_miss_timeout_env(

@@ -107,6 +107,7 @@ authz/classification.py — no registration action needed.
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -177,7 +178,10 @@ def _run(
         return 1, "", str(exc)
 
 
+# ---------------------------------------------------------------------------
 # Trail-file collection (positional args + TRAIL_FILES env, deduplicated,
+# .json-suffix-only — mirrors the bash oracle).
+# ---------------------------------------------------------------------------
 
 
 def _collect_trail_files(trail_files_env: str, trail_args: Sequence[str]) -> List[str]:
@@ -212,7 +216,10 @@ def _load_intersect_shas(intersect_file: str) -> Set[str]:
     return shas
 
 
+# ---------------------------------------------------------------------------
 # Record loading — date-prefix filter (WEEK_START/TODAY) + on_record_error
+# policy. Mirrors the bash oracle.
+# ---------------------------------------------------------------------------
 
 
 def _load_records(
@@ -222,6 +229,7 @@ def _load_records(
     on_record_error: str,
 ) -> List[Tuple[str, dict]]:
     all_records: List[Tuple[str, dict]] = []
+    skipped_files = 0
     for f in trail_files:
         basename = os.path.basename(f)
         if week_start and today:
@@ -233,15 +241,26 @@ def _load_records(
         except _TrailParseError as exc:
             if on_record_error == "skip":
                 print(f"WARN: skipping unparseable trail record: {exc}", file=sys.stderr)
+                skipped_files += 1
                 continue
             print(f"ERROR: {exc}", file=sys.stderr)
             raise _FatalError(str(exc)) from exc
         for rec in recs:
             all_records.append((f, rec))
+    if skipped_files:
+        print(
+            f"WARN: {skipped_files} trail file(s) skipped as unparseable — "
+            "coverage assessment is partial",
+            file=sys.stderr,
+        )
     return all_records
 
 
+# ---------------------------------------------------------------------------
 # Shared classification: scope_kind + SAFE_RANGE + verdict filter.
+# Mirrors the identical block duplicated in the bash oracle between its
+# --reviewed-set and --segments-json code paths.
+# ---------------------------------------------------------------------------
 
 
 def _classify_shape(
@@ -364,10 +383,30 @@ def build_reviewed_set(
     return set(reviewed)
 
 
+# ---------------------------------------------------------------------------
+# --segments-json mode — per-record git rev-list + git log --name-only.
 # Mirrors the bash oracle. NOT batched across distinct ranges (SAFE_RANGE
+# admits symbolic/live-HEAD endpoints; git computes reachable(positives) \
+# reachable(negatives) as ONE set expression per range — combining ranges
+# would silently drop coverage on a linear chain, with no test failure).
+#
 # The two legs ARE now ONE spawn per DISTINCT sha_range instead of two
+# (C17, docs/plans/2026-08-15-composition-invocation-budgets.md): `git
+# rev-list <range>` and `git log --name-only --format= <range>` walk the
 # IDENTICAL commit set for the same range (no pathspec, no --first-parent
+# on either side), so `git log --format=%H --name-only <range>` answers
+# both in a single spawn — one `%H` line per commit (the rev-list leg) plus
+# that commit's changed-file lines (the name-only leg), same as today: a
+# merge commit still emits its `%H` line and no file lines under both the
+# old two-call form and this combined one, since --name-only shows no diff
+# for a merge either way. `_parse_combined_log_output` splits the two
+# interleaved sets back apart. This is a leg MERGE, not a range collapse —
+# each distinct sha_range is still resolved by its own independent spawn;
+# the forbidden operation (batching >1 range into one git invocation) is
 # untouched. Memoised per DISTINCT sha_range exactly as the two-leg form
+# was: two records citing the same range emit their own segment dict, the
+# memoised (shas, files) pair is just not re-resolved by a fresh spawn.
+# ---------------------------------------------------------------------------
 
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -478,12 +517,20 @@ def _batch_single_commit_segments(
         if current:
             by_sha[current][1].add(line)
 
+    # Sorted-key bisect, not a scan of by_sha per range: ~1000 ranges against
+    # ~1000 commits is a million `startswith` calls. A prefix that matches more
+    # than one commit is left to the per-range path, where git rejects it as
+    # ambiguous exactly as it would have without the batch.
+    ordered = sorted(by_sha)
     memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
     for sha_range, abbrev in wanted.items():
-        for full, pair in by_sha.items():
-            if full.startswith(abbrev.lower()):
-                memo[sha_range] = pair
-                break
+        prefix = abbrev.lower()
+        at = bisect.bisect_left(ordered, prefix)
+        if at == len(ordered) or not ordered[at].startswith(prefix):
+            continue
+        if at + 1 < len(ordered) and ordered[at + 1].startswith(prefix):
+            continue
+        memo[sha_range] = by_sha[ordered[at]]
     return memo
 
 
@@ -494,30 +541,39 @@ def build_segments(
 ) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
 
+    # Per-range memo for the combined `git log --format=%H --name-only` spawn
+    # (keyed on sha_range alone — build_segments has no kind-partition, unlike
     # build_reviewed_set). Each DISTINCT range is still resolved independently
     # (no multi-range batching: SAFE_RANGE admits symbolic/live-HEAD endpoints,
+    # and git computes reachable(positives) \ reachable(negatives) as ONE set
+    # expression per range — combining ranges would silently drop coverage on
+    # a linear chain with no test failure). This memo only eliminates
+    # RE-resolving a range already seen in this same build_segments call.
+    #
     # Per-segment file ATTRIBUTION (the reason the name-only leg exists) is
+    # preserved because the memoised (shas, files) pair is still emitted into
+    # every record's own segment dict below, not deduplicated away.
     segment_memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
     segment_skip: Set[str] = set()
     unrecognized_kind_counts: Dict[str, int] = {}
+    skipped_records = 0
 
-    _prescan_kinds: Dict[str, int] = {}
-    _prescan = [
-        classified[0]
+    classified_records = [
+        classified
         for classified in (
-            _classify(rec, unrecognized_sink=_prescan_kinds) for _path, rec in all_records
+            _classify(rec, unrecognized_sink=unrecognized_kind_counts)
+            for _path, rec in all_records
         )
         if classified is not None
     ]
-    segment_memo.update(_batch_single_commit_segments(_prescan, cwd=cwd))
+    segment_memo.update(
+        _batch_single_commit_segments([c[0] for c in classified_records], cwd=cwd)
+    )
 
-    for _source_path, rec in all_records:
-        classified = _classify(rec, unrecognized_sink=unrecognized_kind_counts)
-        if classified is None:
-            continue
-        sha_range, artifact, _kind = classified
+    for sha_range, artifact, _kind in classified_records:
 
         if sha_range in segment_skip:
+            skipped_records += 1
             continue
 
         if sha_range in segment_memo:
@@ -535,6 +591,7 @@ def build_segments(
                         file=sys.stderr,
                     )
                     segment_skip.add(sha_range)
+                    skipped_records += 1
                     continue
                 print(
                     f"ERROR: command failed: git log --format=%H --name-only {sha_range}\n{err}",
@@ -547,6 +604,12 @@ def build_segments(
         segments.append({"sha_range": sha_range, "shas": shas, "files": files})
 
     emit_unrecognized_kind_warning(unrecognized_kind_counts)
+    if skipped_records:
+        print(
+            f"WARN: {skipped_records} trail record(s) over {len(segment_skip)} "
+            "unresolvable range(s) skipped — coverage assessment is partial",
+            file=sys.stderr,
+        )
 
     return [
         {
@@ -558,8 +621,20 @@ def build_segments(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Pending-record closure — DERIVED state, never a stored field.
+#
+# A pending (verdict=pending) trail record is the "review round opened" marker
+# a freeze emits. It is CLOSED when some non-pending record's resolved SHA set
 # is a SUPERSET of the pending record's resolved SHA set: the round it opened
+# has since been verdicted, by a record that covers at least everything the
+# freeze froze. No `loop_state` field exists or should exist (plan Anti-scope:
+# a parallel field would give two sources of truth for the same fact).
+#
 # ADDITIVE-ONLY: this is a second, diagnostic read of records the crediting
+# path already parsed. Nothing here feeds reviewed_set / segments, and a
+# pending record still credits ZERO coverage whether closed or not (AC4).
+# ---------------------------------------------------------------------------
 
 
 def classify_pending_records(
@@ -636,9 +711,18 @@ def classify_pending_records(
             memo[sha_range] = resolved
             return resolved
     else:
+        # Batch pre-scan for the default resolver (no caller-injected
+        # resolve_range — i.e. no single graph_range window exists to walk
         # in one shot): resolve every DISTINCT range across pending AND
+        # non_pending in ONE bounded-parallel sweep, instead of the
+        # closers/pending loops below triggering one `git rev-list` spawn
+        # per distinct range each as they walk their own inputs in series.
+        # Same command, same per-distinct-range memoization, same result —
         # only the SCHEDULING changes (concurrent instead of serial), so
+        # this cannot change which record ends up in which bucket. Worker
         # cap reuses coverage.py's own `_REVLIST_MAX_WORKERS`, the identical
+        # bound already accepted in this codebase for the identical
+        # primitive (build_reviewed_set's Strategy B fan-out).
         _distinct_ranges = sorted(
             {sha_range for sha_range, _artifact in pending}
             | {sha_range for sha_range, _artifact in non_pending}

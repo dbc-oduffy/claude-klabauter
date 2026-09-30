@@ -311,7 +311,9 @@ def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
     assert mapping["X--coordinator-content-repo"] == "C:/coordinator-content-repo"
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler surface
+# ---------------------------------------------------------------------------
 
 
 def test_handler_default_dry_run(tmp_path, monkeypatch):

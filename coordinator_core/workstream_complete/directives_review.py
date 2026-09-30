@@ -134,6 +134,10 @@ from coordinator_core.coverage import (
     _record_range_has_stored_head,
 )
 
+#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: record_gate_memo() below writes state/ceremony/wsc-gate-verdict-memo/<hash>.json
+#: (hashed-key filename, one per distinct (gate_id, resolved-inputs) pair) -- a
+#: data-dependent set of tracked artifacts, not a fixed one, so this is a
 #: corpus-mutator declaration rather than GENERATES.
 MUTATES = ["state/ceremony/wsc-gate-verdict-memo/*.json"]
 
@@ -148,14 +152,32 @@ def _directive(
     return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on, "already_satisfied": already_satisfied}
 
 
+#: Unlike its six siblings, no builder in this module reads a `decisions`
+#: mapping directly — each takes its inputs as explicit typed parameters
+#: (`session_id`, `range_`, `slices`, `plan_file`, ...), resolved by the
+#: caller (`__init__.py`'s `build_directives`) from ITS OWN `decisions`
+#: keys (`review_partition`, `classify_dispatch_plan_file`).
+#: Declared empty here — rather than omitted — so every `directives_*.py`
 #: sibling carries the same `FREE_VALUE_KEYS` contract point per AC3
+#: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md),
+#: and a future caller-side `decisions` param added to this module has one
+#: obvious place to register its keys.
 FREE_VALUE_KEYS: tuple[str, ...] = ()
 
 
 class ReviewScaleDecision(NamedTuple):
     row: Optional[int]
     scale: str
+    #: `None` iff `resolved is False` — the same "not measured" state `row`
+    #: already carries, on the field a caller is most likely to read alone.
     #: `False` here means MEASURED and not mandatory; a reader that saw only
+    #: `False` could not tell a genuinely small diff from an unmeasured
+    #: 976-LOC/26-commit one, and the arm is silent (rc=0), so the gate the
+    #: skill body calls mandatory failed open. Reported by
+    #: example-retrieval-repo-ue-addon-em, 2026-08-31. `None` is falsy, so every
+    #: truthiness test downstream is unchanged; only a reader that
+    #: distinguishes it — or a JSON consumer, which now sees `null` beside
+    #: `scale: "unresolved"` — sees any difference.
     partition_mandatory: Optional[bool]
     commit_message_names_change: bool
     reason: str
@@ -167,8 +189,15 @@ _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
 _SMALL_FIX_LOC_CEILING = 50
 
+#: Chain-wide arm ceiling (C7, restoring what K-007's row-6 removal lost).
 #: Mirrors row 4's `_BRIGHTLINE_COMMITS` on the same unit -- an
 #: `OracleReport` figure's `weight` accumulates at `_DEFAULT_BASELINE_
+#: WEIGHT` (1.0, `commit_ledger/classify.py`) per non-noise commit absent
+#: repo-specific elevation, so this ceiling reads as "the chain-wide
+#: equivalent of row 4's 5-commit brightline" rather than an unrelated
+#: figure. Scoped to this module only -- not exported, not reused by the
+#: oracle itself (`oracle.py`'s own docstring: NO threshold comparison
+#: there, that stays here).
 _CHAIN_WEIGHT_CEILING = float(_BRIGHTLINE_COMMITS)
 
 def _unresolved(reason: str) -> ReviewScaleDecision:
@@ -298,12 +327,47 @@ def _decide_review_scale_core(
     is_chain_terminal = canonicalize(chain_disposition) == PREDECESSOR_CONSUMED
 
     # `baton_count >= 2` MULTIPLIES the row-4 metrics (never forces the
+    # partitioned row outright) — see the docstring's `baton_count` bullet.
+    # `None`/`1` leaves `effective_*` identical to the raw measurement, so
+    # every existing caller (which omits `baton_count`) sees byte-identical
+    # row-4 behaviour. Hoisted above the `is_chain_terminal` branch (fix,
+    # 2026-08-10): row 4 must be evaluable on a chain terminal too — see
+    # this function's own docstring precedence paragraph.
+    # shell-doc-ok: the backticked comparison above is a Python boolean
+    # expression, not a shell version constraint.
     baton_multiplier = baton_count if (baton_count is not None and baton_count >= 2) else 1
+    # 2026-08-11 (AC4): row 4 reads `code_loc` — the noise-excluded,
+    # reviewable LOC rows 1-3 already discriminate on — not `gross_loc`'s
+    # raw diff-stat sum. `gross_loc` stays an accepted parameter (unused by
+    # this predicate now) for callers not yet threading `code_loc` through.
+    #
     # HOW BOTH ARE MEASURED, cited here because the definition crosses a repo
+    # boundary and the divergence was accruing with no citation at either end.
+    # coordinator-content-repo-em asked us to adopt or counter their C5 ruling (cross-repo/
+    # archive/2026-08-29-coordinator-content-repo-em-review-scale-ships-no-brightline-
     # inputs.md, ask (b)): sum PER-OWNED-COMMIT diffs (`<sha>~1..<sha>` each),
+    # never a range over oldest..newest. ADOPTED, 2026-08-31 — and this engine
+    # already computed it that way independently, for the same reason. See
+    # `__init__.py :: _measure_session_review_scale_inputs`, whose own
+    # Negative-spec is "never widen either leg back to a branch-scoped range":
+    # on a shared branch a range spans every peer commit interleaved between
+    # base and HEAD. Their measured cost of getting it wrong by hand was 33,246
+    # gross LOC reported where the per-owned-commit sum is 16,037.
+    #
+    # So the two planes agree, and the citation is the deliverable — a reader
+    # who finds a number that disagrees with these should suspect a RANGE
+    # measurement before suspecting either engine.
     effective_code_loc = code_loc if code_loc is None else code_loc * baton_multiplier
+    # 2026-08-20 (same memo as the `code_loc_resolved_zero` note below): the
     # commit-count arm is a proxy for ACCUMULATED RISK, and a commit with a
+    # zero-line diff carries none. `baton-assemble apply` scaffold commits
+    # are the reported instance — nine of one session's sixteen, every one
+    # at `diff_loc: 0`, pushing a doc-only close past the five-line threshold.
+    # Subtracted from the brightline's commit arm ONLY: `commit_count`
+    # itself stays the honest count of this session's commits everywhere it
     # is REPORTED (row-4 reason string, review trail, commit slices), so
+    # this narrows what the threshold reads without making a counter lie
+    # about what it counted. `None` no-ops for every caller not supplying it.
     brightline_commit_count = commit_count
     if commit_count is not None and zero_diff_commit_count:
         brightline_commit_count = max(0, commit_count - zero_diff_commit_count)
@@ -312,7 +376,20 @@ def _decide_review_scale_core(
     )
     effective_surface_count = surface_count if surface_count is None else surface_count * baton_multiplier
 
+    # 2026-08-20 (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-
     # only-em-discretion.md, PM-endorsed): a RESOLVED `code_loc == 0` means
+    # the reviewable-LOC oracle measured this session and found nothing to
+    # review. The commit-count and surface-count arms are PROXIES for
+    # accumulated code risk; letting a proxy mandate a partition over the
+    # direct measurement's own zero is the reported defect — it converted a
+    # doc-only close into one legal exit, a PM waiver, for work the EM can
+    # obviously judge. The brightline stays fully armed for every session
+    # with any code in it: this suppresses the proxies ONLY when the direct
+    # measure is a resolved, honest zero (`None` is unresolvable and is
+    # deliberately NOT treated as zero — that would fail toward less
+    # review). Falls through to row 1 ("no code touched"), an EM-discretion
+    # row, which is what `review-brightline-gate`'s own `VERDICT=single-
+    # reviewer-ok` on the same range already said.
     code_loc_resolved_zero = code_loc is not None and code_loc == 0
     brightline_known_true = (not code_loc_resolved_zero) and (
         (effective_code_loc is not None and effective_code_loc >= _BRIGHTLINE_LOC)
@@ -326,8 +403,18 @@ def _decide_review_scale_core(
             f", baton_count={baton_count} multiplier applied" if baton_multiplier != 1 else ""
         )
         scope_note = f", commit_count_scope={commit_count_scope}" if commit_count_scope is not None else ""
+        # THE REASON STRING NAMES WHICH ARM TRIPPED, AND SAYS SO WHEN AN INPUT
         # WAS NEVER MEASURED. `brightline_known_true` is an OR of three
+        # independently sufficient arms, so row 4 is legitimately reachable
+        # with one input still `None` -- a resolved proxy that trips is
+        # dispositive, and no later measurement can un-trip it. That verdict is
+        # sound. What was NOT sound was printing the unmeasured input as though
+        # it were a measurement: `code_loc=None` inside "big-diff brightline
+        # hit" reads as a measurement that came back empty -- see this
         # function's own "HOW BOTH ARE MEASURED" comment above for the
+        # 33,246-vs-16,037 incident that cost (not restated here). Naming the
+        # tripped arm tells the reader the verdict does not depend on what is
+        # missing.
         tripped = [
             name
             for name, value, floor in (
@@ -383,6 +470,11 @@ def _decide_review_scale_core(
 
     if is_chain_terminal:
         # Row 6 (the chain-scoped PARTITION-MANDATORY verdict) is REMOVED with
+        # the chain-terminal brightline gate that produced it — state/kill-
+        # ledger.md K-007, 2026-08-19, PM ruling. A chain terminal now decides
+        # on the session-scoped brightline alone: row 4 when it trips, row 5
+        # otherwise. The accumulated-over-many-small-sessions case row 6 used
+        # to catch has no detector until the PM specifies the replacement.
         if brightline_known_true:
             return _row4_decision()
         if not brightline_resolved:
@@ -395,7 +487,15 @@ def _decide_review_scale_core(
     if brightline_known_true:
         return _row4_decision()
 
+    # 2026-08-11 (reverted C7): row 4's unresolved inputs must block the
+    # decision ahead of row 3, not the other way around. Row 3 is a
+    # strictly smaller review obligation than row 4 -- resolving to row 3
+    # while row 4's metrics (`code_loc`/`commit_count`/`surface_count`) are
+    # genuinely unmeasured risks silently under-scoping a session whose
     # real diff would have tripped row 4's PARTITION-MANDATORY. The
+    # module's own failure direction is toward asking, never toward a
+    # smaller review, so an unresolved row-4 input keeps the whole
+    # decision unresolved rather than falling through to row 3.
     if not brightline_resolved:
         return _row4_inputs_unresolved()
 
@@ -530,10 +630,58 @@ def decide_review_scale(
     return _apply_chain_wide_arm(decision, oracle_report)
 
 
+# ---------------------------------------------------------------------------
+# Gate verdict memo — C4 (docs/plans/2026-08-10-commit-event-5s-cap-and-the-
+# silent-tail.md, AC6). Multi-pass `apply` (the skill's own `next_move`:
+# "resolve a subset and re-run to pick up the rest") re-invokes both gate
 # builders with UNCHANGED inputs every pass, and until this memo existed
+# neither builder had any way to tell `apply` the verdict was already
+# walked — `already_satisfied` defaulted False and stayed False forever.
+#
 # Keyed on THE INPUTS EACH GATE WAS COMPUTED FROM, never on session id or
+# wall-clock: `build_chain_coverage_gate_directive`'s only input is
+# `consumed_handoff` (the sole value threaded into its
+# `coverage-gate --from-handoff <consumed_handoff>` argv);
+# `build_review_brightline_gate_directive`'s input is the FINAL resolved
+# argv (`session_id` plus the optional trailing `<git-range>` this module's
+# own `resolve_mid_chain_review_scope` derives from `trail_records`/
+# `chain_tip_sha`/`is_ancestor`/`session_start_sha`) — the range string is
+# what the underlying gate actually walks, so a caller supplying a
 # DIFFERENT floor (new trail record landed, chain tip moved) mints a new
+# key and misses, even with the same `session_id`. A key match means "this
+# exact argv was already resolved for this gate before" — nothing narrower,
+# nothing session-scoped, matching the stub's explicit instruction that a
+# stale-input memo must MISS rather than serve a wrong verdict.
+#
+# Storage shape only borrows from `chain_partition_verdict_store.py` (that
+# module was removed 2026-08-19, state/kill-ledger.md K-007; the SHAPE it
+# established is what this still mirrors)
+# (per-record JSON file under `state/ceremony/`, atomic mkstemp+replace,
+# hashed filename) — that module's KEYING (session id) is explicitly the
+# wrong key for this correctness-bearing skip (its own module docstring:
+# "does NOT short-circuit gate execution"), so it is precedent for the
+# shape, not reused directly. This memo stores a presence marker only — it
+# never fabricates or reads back a verdict VALUE, it only tells `apply`
+# "this exact input set was already resolved once," which is what flips
+# `already_satisfied` so `_execute_directives` skips the re-walk.
+#
 # BUILD-TIME IS READ-ONLY; RECORDING IS EXECUTION-TIME ONLY (fix, C4 retry
+# #3, docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-tail.md AC6).
+# The first two attempts at this AC had the builders below call
+# `record_gate_memo` unconditionally, INSIDE the builder, at directive-BUILD
+# time — independent of whether the gate CLI ever actually dispatched, and
+# independent of the verdict it returned. `build_directives` is called from
+# `brief()`, which serves BOTH `apply()`'s mutating pass AND every read-only
+# preview caller — so build-time recording poisoned the memo on a plain
+# `brief()` preview before the gate ran even once, and cached a WARN/FAIL
+# result as done. Both builders below now perform ONLY a read-only
+# `gate_memo_hit` check (never a write) when `repo_root` is supplied; the
+# WRITE happens exactly once, from `apply.py::_execute_directives`, via
+# `record_gate_verdict_if_passed` below, called ONLY after the gate CLI
+# actually dispatched this pass, gated on its captured exit code (and, for
+# the coverage gate, its verdict line — a `VERDICT=WARN` exit is 0 but is
+# NOT a confirmed pass and must not be memoized).
+# ---------------------------------------------------------------------------
 
 GATE_VERDICT_MEMO_RELDIR = "state/ceremony/wsc-gate-verdict-memo"
 
@@ -574,9 +722,16 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
 
 _LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate"})
 
+#: C4 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+#: failed.md): `__init__.py::build_write_trail_directives` emits ONE
+#: `d-write-trail` directive for the single-dict `review` shape, or N
 #: `d-write-trail-<index>` directives (index = position in the ORIGINAL
+#: list, not a count of qualifying entries) for the list shape — see that
 #: function's own docstring. `_LIVE_GATE_MEMO_DIRECTIVE_IDS` is a frozenset
+#: of exact strings and therefore CANNOT match the indexed shape by simple
+#: membership, so eligibility for a write-trail directive is a prefix test
 #: (`_is_write_trail_directive_id`) checked ALONGSIDE, never inside, the
+#: frozenset — see `record_gate_verdict_if_passed`'s combined check.
 _WRITE_TRAIL_DIRECTIVE_ID_PREFIX = "d-write-trail"
 
 
@@ -587,6 +742,11 @@ def _is_write_trail_directive_id(gate_id: Optional[str]) -> bool:
         _WRITE_TRAIL_DIRECTIVE_ID_PREFIX + "-"
     )
 
+#: Full-length git object id — 40 hex digits (sha1; this fleet has not
+#: migrated to sha256 object ids). Deliberately strict (fullmatch, not
+#: search): a bare ref name (`"HEAD"`, `"main"`, `"origin/main"`), an
+#: abbreviated sha, or a range annotation (`"<sha>^"`) all fail this check
+#: and correctly disqualify the range from being memoized — see
 #: `record_gate_verdict_if_passed`'s KEY-STALENESS restriction paragraph.
 _CONCRETE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -705,6 +865,14 @@ _REVIEW_BRIGHTLINE_CLI = "review-brightline-gate"
 _COVERAGE_GATE_RUNNER_CLI = "wsc-coverage-gate-runner"
 
 #: The review-trail writer, addressed DIRECTLY rather than through
+#: `wsc-coverage-gate-runner write-trail`. That subcommand was REMOVED by PM
+#: ruling 2026-08-23 (kill `review_trail.write`'s wrapper) and its argparse now
+#: offers only `claim-plan`, so every emitted `d-write-trail-*` directive was
+#: rejected at argv before the CLI ran -- which gates `d-run-wsc-tail`, i.e. the
+#: ceremony's own commit step, on a partitioned close. This CLI is the same
+#: native-op trampoline the removed subcommand shelled out to (see
+#: `build_write_review_trail_directive`'s docstring), so addressing it directly
+#: is the shortest path back to the behaviour the ruling intended to keep.
 _REVIEW_TRAIL_WRITER_CLI = "coordinator-write-review-trail"
 
 
@@ -820,7 +988,23 @@ def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]
     return ids
 
 
+# ---------------------------------------------------------------------------
+# d-run-chain-coverage-gate (SKILL.md:476-486) — mechanical CLI + verdict
+# branch. C10 (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md):
+# the underlying `coordinator_core.coverage.run_coverage_gate` this CLI wraps
 # no longer resolves a binary VERDICT=UNCOVERED — below the code-partition
+# coverage-ratio threshold it resolves VERDICT=WARN, carrying a
+# coordinator:review-code remediation OFFER rather than a halt token. This
+# builder's own shape (a mechanical CLI directive, no VERDICT parsing) is
+# unchanged by C10; it moves in lockstep only in the sense that its
+# generated directive now runs a ratio/warn-aware gate underneath, never a
+# binary-block one. Remediation-on-WARN (dispatch coordinator:review-code,
+# then re-run this same directive) remains an EM Agent-dispatch decision,
+# never modeled here. C10 DOES also update
+# `coordinator/bin/wsc-coverage-gate-runner.py`'s own `cmd_coverage_gate`
+# string-parse of the gate's stdout to match `VERDICT=WARN`; no gap remains
+# there as of this commit.
+# ---------------------------------------------------------------------------
 
 
 def resolve_mid_chain_review_scope(
@@ -978,7 +1162,12 @@ def build_write_review_trail_directive(
     return _directive("d-write-review-trail", _REVIEW_TRAIL_WRITER_CLI, args)
 
 
+#: A range-endpoint token whose BASE (before any ^/~N ops) is the literal
+#: symbolic ref "HEAD" — case-sensitive, matching git's own ref spelling.
 #: Mirrors `coordinator_core.coverage._STORED_HEAD_ENDPOINT_RE`: a stored
+#: "HEAD" (with or without ^/~N suffixes) re-resolves against whatever
+#: commit is HEAD at READ time, not write time, so it is never a fixed
+#: anchor a disbelief predicate can trust.
 _HEAD_TIP_RE = re.compile(r"^HEAD(?:[~^][0-9]*)*$")
 
 
@@ -1037,10 +1226,20 @@ _NON_DISCHARGING_VERDICTS = frozenset({"pending", "waived"})
 
 
 #: Scope-kind values that never discharge ANYTHING in this chain-terminal
+#: path, unconditionally — mirrors `coverage.build_reviewed_set`'s Phase 1
+#: classification (review-integrator finding W1, 2026-08-06): "integration"
+#: is skipped entirely, not reopened by this module.
+#:
+#: 2026-08-07 correction (audit `state/audits/2026-08-07-wsc-chain-gate-
 #: counts-doc-only-commits.md`, Q4's "second gap"): "plan" is DELIBERATELY
+#: NOT in this set any more. It used to be — a `scope_kind: "plan"` record
+#: was rejected outright, exactly like "integration" — but that made the
+#: chain-terminal discharge path structurally incapable of crediting a plan
 #: review for a PLANNING-classified commit, even a session's own honest,
 #: self-owned plan review of its own PLANNING commit (chain_code_shas keeps
 #: PLANNING commits IN the obligation set per AC9 — see
+#: `_record_membership_shas`'s own "membership-vs-coverage split" docstring
+#: note). `_record_membership_shas` now credits a "plan" record, but
 #: ONLY against `chain_planning_sha_set` (the PLANNING-classified subset of
 _NON_CODE_SCOPE_KINDS = frozenset({"integration"})
 

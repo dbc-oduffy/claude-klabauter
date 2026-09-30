@@ -18,7 +18,10 @@ class CrossCuttingArtifact(Exception):
 
 
 _CROSS_CUTTING_PATTERNS = (
+    # Bash oracle's `case` alternation matches only
+    # the two literal casings `DR-207`/`dr-207` (no case-insensitive flag set);
     # re.IGNORECASE was an undocumented broadening past the faithful-repro
+    # contract this migration wave holds itself to. Tightened to exact parity.
     re.compile(r"DR-207|dr-207"),
     re.compile(r"fleet-spine.*emitter"),
     re.compile(r"emitter-binding"),

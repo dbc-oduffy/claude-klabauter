@@ -164,6 +164,10 @@ CONTENT_ROOT_KEY = "repos.content_root"  # private-name-ok: compat-fallback
 CLAUDE_KLABAUTER_KEY = "repos.claude_klabauter"
 
 
+#: The registry key naming the coordinator plugin tree a machine SERVES, as
+#: distinct from `repos.content_root`, which names the coordinator-content-repo authoring
+#: checkout. On a workstation both spellings resolve to one tree and the
+#: distinction is invisible; where they diverge, only this key can say which
 #: directory a session's `CLAUDE_PLUGIN_ROOT` legitimately came from.
 PLUGIN_MIRROR_LIVE_PATH_KEY = "plugin.mirrors.coordinator-claude.live_path"
 
@@ -461,8 +465,12 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     root_cmp = _norm(root)
 
     trusted = False
+    # `claude_home and` is load-bearing, not defensive noise: with home fully
     # unresolved, `trusted_prefix` degrades to the RELATIVE ".claude/" and a
     # bare "CLAUDE_PLUGIN_ROOT=.claude/x" would be trusted. This repo already
+    # treats that relative-join class as a defect elsewhere
+    # (test_settings_home_never_relative_when_home_fully_absent), and "anchor 1
+    # stays descendants-only" is only as strong as this guard.
     if claude_home and root_cmp.startswith(trusted_prefix):
         trusted = True
 

@@ -33,7 +33,10 @@ import pytest
 from coordinator_core import dag
 
 
+# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_cache_coherency.py
+# convention — module-level cache state must not leak between test cases).
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -57,7 +60,9 @@ def _write_handoff(path: Path, *, slug: str, status: str = "active",
     )
 
 
+# ---------------------------------------------------------------------------
 # (a) EDGE_KIND_META — origin_handoff presence and shape
+# ---------------------------------------------------------------------------
 
 class TestEdgeKindMetaOriginHandoff:
     def test_origin_handoff_in_meta(self):

@@ -291,7 +291,18 @@ def read_doe_identity() -> dict:
     the load-bearing repos.* registry itself. Never raises.
     """
     try:
+        # The full DR-071 ladder, per this function's own docstring: registry
+        # `repos.content_root`, then <settings-home>/machine-local/.coordinator-content-root,
         # then the legacy path. This read USED to be a bare `<CLAUDE_HOME>/
+        # .claude/.coordinator-content-root` file read — rung 3 alone, the one rung the
+        # docstring above explicitly identifies as "a location no writer has
+        # written since ops.gen_content_root_pointer moved the pointer to rung 2".
+        # So it reproduced, verbatim, the reader/writer split the docstring
+        # narrates as already fixed: every receiver's `is_central` came back
+        # False and manifest-backed resolution silently disabled itself on a
+        # machine where `repos.content_root` was registered and delivery worked.
+        # `read_content_root_pointer` was already imported at the top of this
+        # module and simply never called.
         raw_root = read_content_root_pointer()
         if not raw_root.strip():
             _LOG.warning(
@@ -425,7 +436,23 @@ def read_registry_repos() -> dict[str, str]:
     return merged
 
 
+# ---------------------------------------------------------------------------
+# Publish-target mirror ownership — shared classification seam (C5 addition)
+#
+# Publish-target mirrors (OSS distribution destinations, e.g. `coordinator-claude`,
+# `deep-research-claude`) are NOT EM working trees — they are outward `publish.sh`
+# destinations. A memo addressed `to` a mirror is invisible to any EM and gets
+# clobbered on the next publish run (mirrors DoE cross-repo-memo's
+# `_is_publish_target_em` / `_get_publish_target_owners` guard, C4 2026-06-30).
+# Mirrors live in the SAME `registry.toml`/`registry.local.toml` files
 # `read_registry_repos()` reads, under a DISTINCT `[publish.mirrors.<key>]`
+# namespace (never `repos.*` — mirrors were removed from `repos.*` by the
+# 2026-06-30 registry-publish-vs-working-targets migration).
+#
+# Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C5 (AC5)
+#                 Parity source: DoE coordinator/bin/cross-repo-memo.py
+#                 `_get_publish_target_owners` / `_derive_mirror_alias_set`.
+# ---------------------------------------------------------------------------
 
 def _read_merged_publish_mirrors() -> dict[str, dict]:
     try:
@@ -1028,7 +1055,28 @@ def unique_nearest_receiver(
     return matches[0] if len(matches) == 1 else None
 
 
+# ---------------------------------------------------------------------------
+# Never-inbox mirrors (PM ruling 2026-09-23) — the ONE chokepoint every
+# delivery path (memo.send's `to:` and `cc:` legs, and the `cross-repo-memo`
+# CLI which forwards onto memo.send) must call before writing a byte.
+#
+# coordinator-claude and claude-klabauter are publish mirrors, not EM working
+# trees, and must NEVER receive a cross-repo/inbox/ write — on ANY machine,
+# regardless of how (or whether) that machine's registry declares them.
+# `reroute_owner()`/`publish_mirror_path_match()` above already rereoute a
 # CORRECTLY-registered mirror to its owner, but that routing is itself
+# registry-state-dependent (`publish.mirrors.<key>.path`/`.owner` must be
+# set) — the live hole this closes (2026-09-23, reported by example-retrieval-repo-em):
+# a `to: coordinator-claude-em` item on a machine where that mirror wasn't
+# (fully) declared fell through registry-driven classification entirely,
+# resolved as an ordinary `repos.*` receiver, and got written+committed+
+# marked `status: sent` into a coordinator-claude clone.
+#
+# Deliberately hardcoded, unlike every other reader in this module: this is
+# not a registry fact to read declaratively, it is a fixed identity these two
+# repos always carry (their receiver-EM names, or the mirror's own path
+# basename) — no registry state should ever be able to change the answer.
+# ---------------------------------------------------------------------------
 
 _NEVER_INBOX_MIRROR_PATH_BASENAMES = frozenset({"coordinator-claude", "claude-klabauter"})
 

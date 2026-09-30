@@ -28,7 +28,9 @@ def test_wc_l_counts_newlines(tmp_path):
     assert lwc._wc_l(f) == "3"
 
 
+# ---------------------------------------------------------------------------
 # main() — full CLI behavior via LWC_TEST_STATE_ROOT seam
+# ---------------------------------------------------------------------------
 
 
 def _run_main(monkeypatch, tmp_path, argv):

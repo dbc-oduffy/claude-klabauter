@@ -204,6 +204,14 @@ canonical disposition — routed to `skipped` with the reason given here, NOT th
 action preserves §7's fail-loud guarantee: only a genuinely unrecognized action (none
 of the 7 DR-053 tokens) falls through to "unrecognized action '<x>'"."""
 
+BULK_GLOB_SKIP_REASON = RECOGNIZED_SKIP_ACTIONS["DELETE-GROUP"]
+
+_BULK_GLOB_PATH_RE = re.compile(r"\*|\{[^}]*\}|\(\d+[^)]*\)\s*$")
+"""Path-cell shape of a bulk-glob row: a `*`/`**` metacharacter, a `{...}` alternation, or
+a trailing `(N ...)` count annotation. Bulk rows may reuse per-spec action tokens
+(`deleted`, `harvested`, `consolidated`), so for them the path cell is the only class
+signal. Shape-on-the-path-cell only — never a general "looks bulky" test."""
+
 _LEGACY_ROW_RE = re.compile(
     r"^\|\s*(?P<date>[^|]*?)\s*\|\s*(?P<action>[^|]*?)\s*\|\s*(?P<path>[^|]*?)\s*\|"
     r"\s*(?P<last_sha>[^|]*?)\s*\|\s*(?P<belongs_to_spec>[^|]*?)\s*\|\s*(?P<reason>[^|]*?)\s*\|\s*$"
@@ -377,8 +385,10 @@ def normalize_log(log_path: Path) -> NormalizeResult:
       3. Parse legacy rows; map action -> disposition per `ACTION_DISPOSITION_MAP`
          (DR-053's 4 disposition-bearing tokens); route `RECOGNIZED_SKIP_ACTIONS`
          tokens (DELETE-GROUP + the 4 event-row actions) to `skipped` with their
-         DR-053 reason; any other `action` (or a malformed row) goes to `skipped`
-         with an "unrecognized action" reason.
+         DR-053 reason; route any row whose path cell has a bulk-glob shape (`*`,
+         `{...}`, trailing `(N ...)`) to `skipped` with the DELETE-GROUP reason
+         whatever its action token; any other `action` (or a malformed row) goes to
+         `skipped` with an "unrecognized action" reason.
       4. Render each row via `log_append.render_row` and round-trip-validate it
          (`_row_round_trips`) BEFORE counting it as migrated — a row whose rendered
          form cannot be re-parsed back to its source values (e.g. embedded whitespace
@@ -438,6 +448,14 @@ def normalize_log(log_path: Path) -> NormalizeResult:
             skipped.append(
                 SkippedRow(line=line_no, reason=RECOGNIZED_SKIP_ACTIONS[action])
             )
+            continue
+
+        # Regardless of action token: bulk rows reuse per-spec tokens (some, like
+        # `harvested`, are not in ACTION_DISPOSITION_MAP). Keys on the cell that would
+        # become the canonical path; runs before the map so a bulk row never reaches render.
+        path_cell = fields["belongs_to_spec" if action == "distill-harvest" else "path"]
+        if _BULK_GLOB_PATH_RE.search(path_cell):
+            skipped.append(SkippedRow(line=line_no, reason=BULK_GLOB_SKIP_REASON))
             continue
 
         disposition = ACTION_DISPOSITION_MAP.get(action)

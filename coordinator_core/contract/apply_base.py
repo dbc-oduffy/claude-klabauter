@@ -559,8 +559,17 @@ def resolve_op(
     return handler
 
 
+# ---------------------------------------------------------------------------
+# Session-id propagation — explicit only, never an ambient tier-4
 # sentinel. `SESSION_ENV_VARS` names the two identity chains a resolved
+# explicit id is scoped INTO for the duration of a call, via a
+# `contextvars.ContextVar` per name (see `session_identity` below) — NOT
 # `os.environ` process-wide, since chunk C6. `SESSION_ENV_READ_ORDER` is
+# what an implicit id is read FROM, highest-precedence first, when no
+# explicit id is supplied — that read is a genuine ambient-environment
+# read (the caller's own launch environment), unrelated to the
+# `session_identity` contextvar scope.
+# ---------------------------------------------------------------------------
 SESSION_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID")
 
 SESSION_ENV_READ_ORDER = (
@@ -969,7 +978,12 @@ def execute_directives(
                 "landed": [],
             }
 
+    # Composition-budget boundary #1 -- before any mutation (§ module
     # docstring "COMPOSITION BUDGET WIRING"). Nothing has mutated yet
+    # regardless of what the loop below finds at its own first entry
+    # (an already_satisfied directive does not mutate either), so this
+    # single pre-loop check is genuinely "before first mutation," not
+    # merely "before first iteration."
     if composition_budget is not None:
         breach_message: Optional[str] = None
         try:
@@ -1036,7 +1050,18 @@ def execute_directives(
             blocked_directive_ids.add(directive_id)
             continue
 
+        # A judgment block propagates along directive-to-directive
+        # `depends_on` edges. `directive_gate_open` only reads
+        # judgment-point ids, and `order_by_depends_on` only ORDERS on
+        # directive ids -- so before this, a directive whose named
+        # dependency had just been blocked at its own judgment point still
+        # dispatched, against a repo state that dependency was supposed to
+        # have established. `merge_assemble`'s `d7 depends_on d2` was the
+        # live case: `d2` (cut-tag) blocked on an unresolved
+        # `version_bump_final`, and `d7` fired anyway. Propagation reports
         # the ORIGINATING judgment points, not the intermediate directive
+        # id, so `unresolved_judgment_points` stays a list of things an
+        # operator can actually resolve with `--decisions`.
         upstream_blocked = [
             dep
             for dep in normalize_depends_on(directive.get("depends_on"))
@@ -1048,6 +1073,12 @@ def execute_directives(
 
         try:
             # Outermost boundary (§ module docstring "SESSION IDENTITY
+            # SHAPE"): a dispatch-table handler receives no explicit
+            # session-id parameter -- it resolves identity, if it needs
+            # one, from `os.environ` and may itself shell out (e.g. a
+            # claim-mechanics handler's own git call). Mirror the active
+            # `session_identity()` contextvar scope for the duration of
+            # THIS ONE handler call only.
             with _mirror_session_env_for_subprocess():
                 detail = handler(directive.get("args", []), repo_root)
         except Exception as exc:  # noqa: BLE001 - captured for the partial-mutation report
@@ -1072,6 +1103,9 @@ def execute_directives(
 
         # Mid-directive advisory (§ module docstring "COMPOSITION BUDGET
         # WIRING") -- WARN-ONLY, no control-flow effect, never for an
+        # already_satisfied entry (it did no work this run). Runs right
+        # after the directive that may have just been the slow one, so a
+        # breach surfaces here rather than only at the run's final report.
         if composition_budget is not None:
             _budget_call(
                 "mid-directive advisory",
@@ -1091,10 +1125,15 @@ def execute_directives(
 
             _budget_call("mid-directive advisory", _advise)
 
+    # Composition-budget boundary #2 -- after the last mutation (§ module
     # docstring "COMPOSITION BUDGET WIRING"). Only reachable when the loop
     # above completed WITHOUT raising -- the PARTIAL_MUTATION `except`
+    # branch returns before this point, so this check can never precede
+    # (and therefore never triggers) `_run_compensators`. A breach here is
     # rc=0-with-loud-stderr, never PARTIAL_MUTATION: the mutation already
     # landed successfully, and PARTIAL_MUTATION's own reverse-compensation
+    # pass exists to undo a run that failed mid-mutation, not one that
+    # merely finished slowly.
     post_budget_breach: Optional[str] = None
     if composition_budget is not None:
         try:
@@ -1136,9 +1175,15 @@ def execute_directives(
 
 
 #: Mirrors `commit_ledger.oracle._DOCS_KIND` -- duplicated as a literal
+#: (not imported) for the same reason `ops.ceremony.scoped_git_commit`
+#: duplicates it: `oracle.py` declares the constant private to its own
+#: two-figure split, and this module is a peer producer of the same
+#: vocabulary, not a consumer of that constant.
 _LEDGER_DOCS_KIND = "doctrine"
 
 #: Mirrors `ops.ceremony.scoped_git_commit._LEDGER_CODE_KIND` -- the oracle
+#: only ever branches on `kind == "doctrine"`, so one stable non-doctrine
+#: label is sufficient here too.
 _LEDGER_CODE_KIND = "code"
 
 

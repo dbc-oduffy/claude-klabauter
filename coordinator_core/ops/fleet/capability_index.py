@@ -116,8 +116,14 @@ _MANIFEST_REL_PATH = ("state", "capabilities", "manifest.json")
 _INDEX_REL_PATH = ("state", "capabilities", "fleet-index.json")
 
 # Minimal ISO-8601 duration parser — supports the P#Y#M#W#D[T#H#M#S] subset the
+# two schemas' own descriptions cite as the expected form (e.g. "P7D", "P1D").
+# Y/M are approximated at 365/30 days respectively — adequate for a staleness
+# comparison at day-scale cadences; this op never needs calendar-exact duration
 # arithmetic. Returns None (never raises) for anything else, INCLUDING a "human
+# cadence label" a manifest's refresh_cadence is explicitly permitted to carry
 # (capability-manifest.schema.json's own description: "an ISO-8601 duration...
+# or a human cadence label") — see _is_stale for how an unparseable cadence is
+# treated (fail-closed, not "assume fresh").
 _ISO8601_DURATION_RE = re.compile(
     r"^P(?!$)(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?"
     r"(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$"

@@ -9,7 +9,11 @@ if str(_LIB_DIR) not in sys.path:
 
 _ENGINE_ROOT_VAR = "COORDINATOR_ENGINE_ROOT"
 
+#: Repo-relative parts to an engine build stamp, mirroring
 #: `coordinator_core.ipc`'s `_ENGINE_STAMP_RELATIVE_PARTS`. Restated rather than
+#: imported: importing `coordinator_core` here to ask the question would bind the
+#: package from whichever tree pytest happens to have on `sys.path` first, which
+#: is the very ambiguity this fixture exists to remove.
 _STAMP_PARTS = ("coordinator_core", "_engine_stamp")
 
 

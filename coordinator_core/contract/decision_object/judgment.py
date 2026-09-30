@@ -31,6 +31,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+#: `recommendation` carries exactly these two string fields when non-null —
+#: matches the DoE schema-of-record's object-shaped `recommendation` (AC-13
+#: cross-slice correction; see `coordinator_core.pickup_assemble`'s
 #: `_RECOMMENDATION_FIELDS` for the pre-existing sibling shape this mirrors).
 _RECOMMENDATION_FIELDS = frozenset({"disposition", "rationale"})
 
@@ -187,6 +190,10 @@ def partition_reportable(
     reported: list[dict[str, Any]] = []
     for point in judgment_points:
         # PRECONDITION (a): gate-nothing alone is insufficient -- demotion
+        # additionally requires an explicit `reportable=True` opt-in. A
+        # `False` (explicitly action-class) or `None` (unclassified) marker
+        # both keep the point asked -- only their `is True` truth value
+        # differs in intent, not in outcome here.
         demote = (
             _gates_nothing(point, directive_ids, depended_on_ids)
             and point.get("reportable") is True

@@ -219,7 +219,10 @@ _CLAUDE_DIRNAME = "claude"
 _DEFAULT_TTL_DAYS = 7.0
 _SECONDS_PER_DAY = 86400.0
 
+#: Watchdog ceiling default — matches
 #: ``coordinator_core.ops.cruft_sweep._WATCHDOG_CEILING_SECS_DEFAULT`` so this
+#: module converges on the same convention rather than inventing a second one
+#: (see module docstring's "Watchdog ceiling" note).
 _DEFAULT_WATCHDOG_CEILING_SECS = 300.0
 
 
@@ -237,6 +240,7 @@ class _Watchdog:
     def remaining(self) -> float:
         return max(self._ceiling - (time.monotonic() - self._start), 0.0)
 
+#: Size-cut pass defaults (surfaced as ``_handler`` params, same style as
 #: ``_DEFAULT_TTL_DAYS`` above) — see module docstring's "Size-cut pass" note.
 _DEFAULT_SIZE_CUT_TARGET_BYTES = 500 * 1024 * 1024
 _DEFAULT_SIZE_CUT_FLOOR_DAYS = 1.0
@@ -251,6 +255,10 @@ _ARCHIVE_SHAPE_RE = re.compile(
 )
 
 #: Sibling cap to ``_MAX_ERRORS_PER_DIR`` — the collected ``archives`` list
+#: per entry is capped so one directory containing thousands of archive-shaped
+#: files cannot blow up the report. ``archive_count``/``archive_bytes`` are
+#: NEVER capped — they must stay accurate even once the list itself is
+#: truncated, since a reader judges risk off the byte total, not the list.
 _MAX_ARCHIVES_PER_DIR = 20
 
 
@@ -472,6 +480,11 @@ def _apply_size_cut(
 
     ttl_floor = int(math.floor(ttl_days))
     # Lowest eligible whole-day cohort for an ORDINARY (non-large-file) entry:
+    # ceil(floor_days), not floor(floor_days) — a fractional floor_days (e.g.
+    # 1.5) must never make the day==1 cohort (ages [1.0, 2.0)) eligible,
+    # since ages 1.0-1.499 are strictly younger than the stated floor —
+    # matches the module's own hard invariant, "nothing younger than
+    # size_cut_floor_days is ever eligible".
     floor_int = int(math.ceil(floor_days))
 
     large_file_floor_day_bound = int(math.floor(large_file_floor_days))
@@ -693,7 +706,13 @@ def sweep_scratchpads(
 
     for slug_dir in _enumerate_project_slug_dirs(claude_root, project_slugs):
         project_slug = slug_dir.name
+        # Resolved ONCE per project-slug (not per session dir): the owning
+        # repo's root, used as the fixed cwd for every session_live() call
+        # under this slug. A fixed, repeated cwd string also routes every
+        # call through core._sessions_dir_cached's lru_cache — one git spawn
         # per DISTINCT repo root for the whole sweep, not one per directory
+        # and not one per slug (the load-norm win from the earlier fix,
+        # preserved under the corrected per-repo scoping).
         repo_root_for_slug = slug_to_root_map.get(project_slug)
 
         for session_dir in _enumerate_session_dirs(slug_dir):

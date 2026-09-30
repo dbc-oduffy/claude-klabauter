@@ -183,5 +183,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
+        # Unexpected processing error fails open — this guard denies only on a
         # POSITIVELY OBSERVED sibling collision, never on its own inability to
+        # read/parse something (see module docstring's negative-spec).
         return None

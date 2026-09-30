@@ -68,7 +68,13 @@ class Message:
     anchor: Optional[str] = None
 
 
+#: First non-blank-line "looks like a command or path" proxy. Deliberately
+#: cheap, not a real shell parser -- see `_looks_like_command_or_path`'s own
+#: docstring for what it does and does not catch. A token carrying a literal
+#: `$` (a `${VAR}`/`$VAR` shell expansion) is checked against the WIDER
 #: `_SHELL_VAR_TOKEN_RE` instead. A Windows drive-letter prefix -- a single
+#: letter immediately followed by `:` and a path separator -- is admitted as
+#: an optional leading segment, mirroring the identical narrow carve-out
 #: `_PROSE_PUNCT_RE` already applies to the SAME shape.
 _COMMAND_TOKEN_RE = re.compile(r"^(?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\-]+$")
 _SHELL_VAR_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./\\${}:=,@%+~-]+$")
@@ -95,7 +101,11 @@ _STOPWORDS = frozenset(
         "for",
     }
 )
+#: Closed-class English grammar words -- ANY single hit among the line's
 #: tokens is treated as prose, unlike `_STOPWORDS`'s >=2 threshold.
+#: Deliberately excludes everyday CLI-subcommand-shaped verbs (`add`,
+#: `remove`, `use`, `fix`, ...) -- those are NOT closed-class and appear in
+#: genuine commands (`git add`).
 _FUNCTION_WORDS = frozenset(
     {
         "the", "a", "an",
@@ -196,11 +206,45 @@ def compose(
     return Message(prose=prose.strip(), alternative=alternative, anchor=anchor)
 
 
+# --------------------------------------------------------------------------
+# Wiki-citation resolution.
+#
 # ADAPTATION FROM THE PORTED SOURCE, not a straight port: DoE's
+# `_message_envelope.resolve_wiki_citation` resolved a `docs/wiki/<page>.md`
+# citation to an absolute path anchored at `_coordinator_dir()`, computed as
+# `Path(__file__).resolve().parent.parent.parent` -- correct there because
+# that module lived inside the doctrine-plane `coordinator/hooks/scripts/`
+# tree, three levels under the doctrine root that actually holds
+# `docs/wiki/`. This module now lives inside the ENGINE
+# (`coordinator_core/hooks/support/`), whose own `__file__`-relative
+# ancestor is this claude-klabauter checkout's root, not the doctrine-plane root that
+# holds `docs/wiki/` -- porting the old computation verbatim would silently
+# resolve every citation into the WRONG repo's tree.
+#
+# This repo's own already-landed hooks (e.g.
+# `coordinator_core/hooks/nudge_harness_directive_dispatch.py`) already
+# settle this: they emit a doctrine-plane wiki citation as a literal,
+# unresolved `coordinator/docs/wiki/<page>.md` string rather than attempting
+# runtime absolute-path resolution, consistent with
+# `docs/reference/boundary-and-data-planes.md`'s planes split (doctrine
+# content is coordinator-claude's, not claude-klabauter's, to resolve). This module
+# follows that established convention: `resolve_wiki_citation` rewrites a
 # citation to an absolute path ONLY when `CLAUDE_PLUGIN_ROOT` names a real
+# doctrine root at call time (the one reliable, harness-supplied anchor for
+# "where is the doctrine plane running from" -- unlike a `__file__`-relative
+# guess, it cannot point at the wrong repo), and leaves the citation
+# untouched otherwise -- never resolves into this engine's own tree.
+# --------------------------------------------------------------------------
 
+#: `docs/wiki/`, optionally `coordinator/`-prefixed -- the two forms
 #: observed across the ported `_WIKI_ANCHOR` constants and the hand-rolled
+#: "Reference:" citations already landed in `coordinator_core/hooks/`.
+#:
 #: The page part spans SUBDIRECTORIES, not just a flat page name. Each
+#: interior segment must itself match the same conservative character class
+#: and the final one must end `.md`, so a directory-only target
+#: (`docs/wiki/`, `docs/wiki/coordinator-tripwires/`) still does not match
+#: and is emitted verbatim.
 _WIKI_CITATION_RE = re.compile(
     r"(?:coordinator/)?docs/wiki/((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)"
 )

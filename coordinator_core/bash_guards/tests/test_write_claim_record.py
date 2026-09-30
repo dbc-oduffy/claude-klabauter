@@ -86,7 +86,9 @@ def _sink_bytes(root, session_id=_SESSION_ID) -> bytes:
     return sink.read_bytes() if sink.exists() else b""
 
 
+# ---------------------------------------------------------------------------
 # AC1 -- one VERB_TOUCH claim per recovered shape.
+# ---------------------------------------------------------------------------
 
 _AC1_SHAPES = [
     pytest.param("cat > f.py <<'EOF'\nhello\nEOF", "f.py", id="heredoc"),
@@ -222,8 +224,14 @@ def test_ac5_sed_inplace_claims_file_not_script(tmp_path):
     "cmd,expected",
     [
         # THE REGRESSION THIS EXISTS FOR. The first shape of
+        # `_is_claimable_target` judged the token alone against
         # `_SED_SCRIPT_RE` and silently dropped any path starting `s`/`y`
+        # whose second character recurred before a letters-only tail --
+        # which is most of `state/*.txt`. It shipped green because AC5
+        # above happens to use `f.py`, a name outside the bad class, and it
+        # was caught only by running the offer end-to-end. A dropped claim
         # is INVISIBLE: the file just quietly fails to make the commit,
+        # which is the exact bug this module exists to fix, so every case
         # here asserts the CLAIMING direction.
         ("cat >> state/e2e-probe-bash-write.txt", "state/e2e-probe-bash-write.txt"),
         ("cat >> state/x.txt", "state/x.txt"),
@@ -441,7 +449,15 @@ def test_c1_unreadable_or_vanished_script_raises_nothing(tmp_path, monkeypatch):
     assert _touched_paths(root) == set()
 
 
+# ---------------------------------------------------------------------------
+# C1 P1/P2 (docs/plans/2026-08-30-the-guard-s-own-remediation-route-hides.md,
+# review round): each row of the reviewer's measured table -- a case-folded
+# head verb, a version-pinned interpreter, a value-taking flag ahead of the
 # script operand, and a chained invocation naming two DIFFERENT scripts.
+# `env python3 <script>` is deliberately NOT included here -- the reviewer's
+# claim about it was wrong (already covered by `interpreter-payload`-style
+# depth-0 resolution) and this round records that, it does not "fix" it.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -569,6 +585,8 @@ def _run_ac7_timing(root, monkeypatch):
     )
 
 
+# --- C1: resolve_read_targets -----------------------------------------------
+# Spec backlink: docs/plans/2026-09-02-a-write-that-discards-what-you-never-
 # saw.md, chunk C1. TEMPLATE table from that chunk's own body, verbatim.
 
 

@@ -217,6 +217,12 @@ class PipelineContext:
 
     def to_dict(self) -> dict[str, Any]:
         # Emit a CONSISTENT plural
+        # list even for a scalar-only-constructed context, so from_dict() can
+        # switch to presence-based (not truthiness-based) plural-key detection
+        # without breaking scalar-only round-trips. The `or` fallback only
+        # fires when the plural list is empty AND the scalar is non-empty;
+        # a real chain-terminal context with a populated plural list is
+        # unaffected.
         consumed_handoffs_out = list(self.consumed_handoffs) or (
             [self.consumed_handoff] if self.consumed_handoff else []
         )

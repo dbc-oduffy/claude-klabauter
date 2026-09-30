@@ -69,6 +69,14 @@ Wire params:
                                      READ-only guard.
     name (str, optional)          — forwarded to ``emit.emit_script``.
     description (str, optional)   — forwarded to ``emit.emit_script``.
+    cloud_spawn (dict, optional)  — the CLOUD-SPAWN route: ``{kind: probe|worker,
+                                     source_repo, parent_session_id,
+                                     channel_pr, question}``. Replies
+                                     ``{"ok": True, "create_session":
+                                     {source_url, prompt, title}}`` and writes
+                                     nothing; mutually exclusive with every
+                                     other route param. See
+                                     ``cloud_spawn_brief``.
 
     session_id (str, optional)    — recorded verbatim in the provenance
                                      receipt. Absent, the fleet-canonical
@@ -174,11 +182,13 @@ from typing import Optional
 
 from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
+from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
-from coordinator_core.ops.dispatch_emit.inventory_mint import mint_spine
+from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.review_mint.op import load_fragment as _load_review_roster_fragment
 from coordinator_core.session.core import resolve_session_id
@@ -371,6 +381,15 @@ class FiredDriftError(ValueError):
     deterministic emission path after this caller's emit returned but
     before its fire read the bytes back.
     """
+
+
+def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
+    """``guarded_path`` as the repo-relative forward-slash path
+    ``dispatch.terminal_commit`` takes as ``script_path``; None if not under ``root``."""
+    try:
+        return guarded_path.resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        return None
 
 
 def guard_against_fired_drift(script_path: Path, expected_sha256: str) -> None:
@@ -702,6 +721,8 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         name (str, optional): forwarded to ``emit.emit_script`` (plan route).
         description (str, optional): forwarded to ``emit.emit_script`` (plan
             route).
+        cloud_spawn (dict, optional): the cloud-spawn route -- see module
+            docstring. Replies ``{"ok": True, "create_session": {...}}``.
         force (bool, optional, default False): overwrite an ``output_path``
             that already holds a different session's emission. Off by
             default -- see ``ForeignEmissionError``.
@@ -758,6 +779,26 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     inventory_path = params.get("inventory_path")
     queue = params.get("queue")
     profile_name = params.get("profile")
+
+    cloud_spawn = params.get("cloud_spawn")
+    if cloud_spawn is not None:
+        if not isinstance(cloud_spawn, dict):
+            raise ValueError("dispatch.emit cloud_spawn must be an object")
+        if plan_path or inventory_path or queue or profile_name or params.get("output_path"):
+            raise ValueError(
+                "dispatch.emit accepts cloud_spawn alone, not with plan_path/"
+                "inventory_path/queue/profile/output_path"
+            )
+        return {
+            "ok": True,
+            "create_session": build_cloud_spawn(
+                cloud_spawn.get("kind"),
+                cloud_spawn.get("source_repo"),
+                cloud_spawn.get("parent_session_id"),
+                cloud_spawn.get("channel_pr"),
+                cloud_spawn.get("question"),
+            ),
+        }
     is_queue_route = bool(queue) or bool(profile_name)
 
     if is_queue_route and (plan_path or inventory_path):
@@ -776,7 +817,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     if not is_queue_route:
         if inventory_path:
-            spine_text, spine_path = mint_spine(inventory_path)
+            spine_text, spine_path = mint_spine(
+                inventory_path, max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS
+            )
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
             )
@@ -834,6 +877,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
     )
 
+    plan_findings: list = []
     receipt_extras: Optional[dict] = None
     receipt_plan_path: Optional[str] = plan_path
     preamble = params.get("preamble")
@@ -872,6 +916,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             session_id=emitting_session_id,
             agent_type_host=agent_type_host,
             preamble=preamble,
+            commit_trailers=read_host_commit_trailers(target_root_path),
         )
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
@@ -893,9 +938,11 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             review_stage_schemas=review_stage_schemas,
             agent_type_host=agent_type_host,
             preamble=preamble,
+            script_path=_script_path_under(guarded_path, target_root),
+            findings_out=plan_findings,
         )
 
-    findings = run_checks(script)
+    findings = [*run_checks(script), *plan_findings]
     error_count = sum(1 for f in findings if f.severity is Severity.ERROR)
     warn_count = sum(1 for f in findings if f.severity is Severity.WARN)
 

@@ -42,6 +42,9 @@ _CLEAN = (
 )
 
 # ORDERING-violating: a `backlogged` (defer) row precedes an `open` (do) row.
+# Legacy plan, so the grouping-approval leg is silent (no gated disposition
+# scan on a legacy plan) and the violation this source carries is ordering
+# ONLY — isolating which leg's error surfaces first.
 _ORDERING_VIOLATING = (
     "- id: C1\n"
     "  title: deferred first\n"
@@ -60,6 +63,9 @@ _ORDERING_VIOLATING = (
 )
 
 # GROUPING-violating: ordering-VALID (open before backlogged), on a GOVERNED
+# plan (bare `grouping_approvals` key, per `is_governed_plan`) whose `defer`
+# block is absent/pending — the grouping-approval leg refuses this, and the
+# ordering leg has nothing to say about it.
 _GROUPING_VIOLATING = (
     "- id: C1\n"
     "  title: live\n"
@@ -86,6 +92,7 @@ _BAD_ROW = (
 )
 
 # MALFORMED-fence: no `## Tasks` heading at all, so `locate_fenced_block`
+# cannot locate the block under it.
 _MALFORMED_FENCE_SOURCE = (
     "# A plan\n\n"
     "## Not Tasks\n\n"

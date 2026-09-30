@@ -45,6 +45,11 @@ def test_topo_number_respects_dependency_order_every_edge():
     assert result["order"] == ["B", "A", "C", "D"]
     assert result["number"] == {"B": 1, "A": 2, "C": 3, "D": 4}
     # sprintWave: this port DELIBERATELY diverges from the oracle here (see
+    # topo_number's docstring + graph.py's module Negative-spec) — the oracle's
+    # flat wave=depth+1 would give A and C (same depth) the identical wave 2,
+    # which fails audit.py's Audit 2 uniqueness gate. Same-depth siblings are
+    # spread across distinct waves instead, tie-broken by the same `cmp` used
+    # to order `order` (here: default nodes-array index, A before C).
     assert result["sprintWave"] == {
         "B": {"sprint": 1, "wave": 1},
         "A": {"sprint": 1, "wave": 2},

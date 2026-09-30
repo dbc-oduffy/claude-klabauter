@@ -11,7 +11,9 @@
       {"kind": "literal", "line": "divergence:"},
       {"kind": "literal", "line": "  diverged: false"},
       {"kind": "literal", "line": "commits: []"},
-      {"kind": "literal", "line": "dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter"}
+      {"kind": "literal", "line": "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter"},
+      {"kind": "literal", "line": "  gate_kind: none"},
+      {"kind": "literal", "line": "  write_files: []"}
     ]
   },
   "body": [

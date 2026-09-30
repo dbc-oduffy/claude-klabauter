@@ -58,6 +58,8 @@ def _identity_seen_by_chain(monkeypatch, event: dict) -> list:
 class TestColdRungBindsTheCaller:
     def test_the_chain_sees_the_events_session_not_the_hosts(self, monkeypatch):
         # The host process's own environ names a DIFFERENT session -- the shape a
+        # resident forwarder or server always has, and the one the ambient read
+        # silently returned.
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)

@@ -113,7 +113,11 @@ class TestClassifyDriftIndeterminateAncestry:
         assert result["floor_sha"] == FLOOR
 
 
+# _git_is_behind's merge-base --is-ancestor rc
+# mapping was entirely unexercised; a regression flipping the rc0/rc1 branches would
+# have passed the full suite silently. Exercised against this repo's own real git
 # history rather than a throwaway repo fixture, since MIN_KNOWN_GOOD_SHA is a known
+# ancestor of HEAD in this checkout by construction (the floor is always <= HEAD).
 class TestGitIsBehindEqualShaShortCircuit:
     def test_equal_sha_returns_false_without_subprocess(self):
         with patch("coordinator_core.ops.engine_drift.git_predicate") as mock_probe:
@@ -125,6 +129,7 @@ class TestGitIsBehindEqualShaShortCircuit:
 class TestGitIsBehindRealAncestry:
     def test_ancestor_sha_returns_true(self):
         # MIN_KNOWN_GOOD_SHA is an ancestor of this checkout's HEAD by construction —
+        # the floor is a committed-in-the-past SHA relative to any checkout built on it.
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core",
             **no_console_creationflags(),
@@ -147,7 +152,10 @@ class TestGitIsBehindRealAncestry:
         assert result is None
 
 
+# The registered-op wiring (_engine_drift) had zero
+# test coverage: no test verified it calls resolve_engine_sha() + _git_is_behind() (not
 # some other pair), passes MIN_KNOWN_GOOD_SHA as the floor, or that register_op("engine.drift")
+# application doesn't blow up on import.
 class TestEngineDriftHandlerWiring:
     def test_smoke_does_not_raise_and_returns_state(self):
         result = _engine_drift({})
@@ -165,6 +173,7 @@ class TestEngineDriftHandlerWiring:
 
         mock_resolve.assert_called_once_with()
         # Argument order + floor constant: _git_is_behind(running_sha, MIN_KNOWN_GOOD_SHA),
+        # not swapped and not a hardcoded/stale value.
         mock_is_behind.assert_called_once_with(RUNNING, FLOOR)
         assert result["state"] == "clean"
         assert result["running_sha"] == RUNNING

@@ -476,6 +476,8 @@ def test_git_exe_off_path_is_a_noop_off_windows(monkeypatch):
     [
         ("work/machine-a/2026-07-15", True, False),
         ("work/x", True, False),
+        ("origin/work/m/2026-09-22", True, True),
+        ("origin/origin/work/x", False, True),
         ("feature/foo", False, True),
         ("release/1.0", False, True),
         ("migration/legacy", False, True),

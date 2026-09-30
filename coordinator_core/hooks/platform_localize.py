@@ -125,7 +125,9 @@ COORDINATOR_GITHUB_REPO = "dbc-oduffy/coordinator-claude"
 
 _REGISTRY_LINE_RE = re.compile(r'^"?([^"=]+)"?\s*=\s*"([^"]*)"')
 
+#: Generator-provenance declaration: this install-time localizer patches
 #: settings.local.json / known_marketplaces.json under CLAUDE_HOME (the
+#: operator's ~/.claude), entirely outside this repo's tracked tree.
 GENERATES: list = []
 
 

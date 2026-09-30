@@ -51,6 +51,7 @@ Spec backlink: docs/plans/2026-08-31-the-hook-category-stops-paying-an-interpret
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
@@ -119,7 +120,7 @@ def _resolve_posture(cwd: str, env: Mapping) -> str:
 
     claude_home = env.get("CLAUDE_HOME") if isinstance(env, Mapping) else None
     if not (isinstance(claude_home, str) and claude_home and os.path.isabs(claude_home)):
-        claude_home = os.path.expanduser("~")
+        claude_home = str(Path.home())
 
     identity_path = os.path.join(claude_home, ".claude", "coordinator-identity.yaml")
     value = _read_key_from_file(identity_path, _ADVISORY_PREFIX_KEY)

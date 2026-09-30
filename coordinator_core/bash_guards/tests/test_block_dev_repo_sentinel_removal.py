@@ -165,6 +165,7 @@ class TestAdvisoryOnUnexaminableIndirection:
 
     def test_xargs_check_leg_allows_with_no_content(self):
         # The CONFINEMENT_DENY leg must not shadow anything for this input
+        # -- it returns bare `None`, not the advisory envelope.
         assert guard.check(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
     def test_bare_file_interpreter_unrelated_allows(self):
@@ -209,6 +210,14 @@ class TestDenyMessageDiscipline:
 
     def test_deny_reason_advertises_override(self):
         # RETARGETED (2026-08-17, override-key message-register ruling): a
+        # guard message names the guard that fired and nothing else about
+        # its override -- no key, no assignment form
+        # (docs/reference/guard-override-keys.md, opening sentence). This
+        # deny message renders via the shared `operator_override_note`
+        # helper, which no longer interpolates the bare key or any
+        # assignment form -- it points to the reference doc instead.
+        # Asserting a pasteable `KEY=1` literal was stale against that
+        # doctrine.
         reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2).
         assert OVERRIDE_KEYS_DOC_DISPLAY in reason
@@ -246,6 +255,7 @@ class TestReachableThroughTheDispatchChain:
         return "allow"
 
     def test_bare_rm_denied_end_to_end(self):
+        # Deny leg retired (C13); the sole registered leg now advises
         # instead of denying -- see module's own "CLASS-CENSUS CONVERSION".
         assert self._decision("rm %s" % SENTINEL) == "advisory"
 
@@ -482,7 +492,11 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
 
     @requires_powershell_grammar
     def test_env_wrapped_direct_removal_still_denies_not_silent(self):
+        # `_env_skip_index` already walks past a leading `env`/`VAR=value`
+        # prefix to the real argv0 -- this is fully examinable and denies
         # DIRECTLY, the control proving the shape check does not
+        # over-classify an env-prefixed but otherwise plain command as
+        # unresolved indirection.
         with _verdict.collecting() as silences:
             out = guard.check_advisory(
                 _payload("env FOO=bar rm %s" % SENTINEL, tool_name="PowerShell")

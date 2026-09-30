@@ -114,6 +114,7 @@ def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git
         f"reaper-dry-run reader must be zero-spawn; observed {forbid_git_fetch!r}"
     )
     # No threaded root supplied: falls back to _CLAUDE_KLABAUTER_ROOT, never _REPO_ROOT
+    # (retired name) -- the split this chunk exists to enforce.
     assert seen_roots == [rhr._CLAUDE_KLABAUTER_ROOT]
 
     seen_roots.clear()

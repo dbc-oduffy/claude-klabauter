@@ -141,8 +141,14 @@ from coordinator_core.docindex.spec import IndexSpec, IndexSpecError, parse_inde
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ipc import register_op
 
+#: Declared per DR-084-class provenance discipline (see module docstring
 #: "GENERATOR-PROVENANCE RATCHET"): this module rewrites the emitted region
+#: of whichever tracked markdown file currently self-declares
+#: `index_source_dir:` in its own frontmatter — a data-dependent set, never
 #: a fixed artifact GENERATES could name. `**/*.md` carries a literal file
+#: extension (never the catch-all `*`/`**`/`**/*`/`*/*` shape) and a
+#: wildcard metacharacter, matching the corpus-mutator convention this
+#: repo's other MUTATES declarations already use.
 MUTATES = ["**/*.md"]
 
 _EXCLUDED_TOP_SEGMENTS = ("state", "archive", "tasks")

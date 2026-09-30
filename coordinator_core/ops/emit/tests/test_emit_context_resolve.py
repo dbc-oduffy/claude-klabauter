@@ -247,7 +247,9 @@ class TestResolveOnRealRepoIsSpawnFreeForBranchAndSha:
         assert ctx.git_sha != "unknown"
 
 
+# ---------------------------------------------------------------------------
 # Guard: META_REPO_NAME_FALLBACK is reached via normal resolution, not a catch
+# ---------------------------------------------------------------------------
 
 class TestMetaRepoFallbackIsOracleOnly:
     """META_REPO_NAME_FALLBACK holds the expected slug value but is never a runtime default."""

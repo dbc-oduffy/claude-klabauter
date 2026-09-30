@@ -80,6 +80,8 @@ _SIBLING_OP_LAZY_RESOLUTION_SCRIPT = textwrap.dedent(
 
 def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
     # PYTHONPATH must point at the claude-klabauter repo root so the subprocess can
+    # import coordinator_core regardless of the parent process's cwd --
+    # mirrors ops/tests/test_registry_map_sync.py's _run_subprocess_script.
     import os
 
     project_root = str(Path(__file__).resolve().parents[3])

@@ -128,6 +128,7 @@ class TestUnresolvableSessionIdFailsClosed:
 
 #: Still CONFINEMENT_DENY and never identity-gated (module docstring
 #: "CLASS-CENSUS NOTE") -- `git stash drop`/`clear` is the AC4 exemplar
+#: `block-dev-repo-sentinel-removal` can no longer serve now that its own
 #: registration is ADVISORY_REWRITE. `block_stash_destruction.py`'s own
 #: "DELIBERATE ALLOW-LIST" restricts the deny to `drop`/`clear` only.
 STASH_GUARD_NAME = "block-stash-destruction"
@@ -164,6 +165,13 @@ class TestIndirectionLegIsAllowNotDeny:
 
     def test_unparseable_indirection_allows_and_leaves_sentinel_unconsumed(self):
         # An unbalanced-quote command that only TEXTUALLY mentions the
+        # sentinel basename -- one of `SentinelRemovalDetector`'s
+        # documented indirection triggers. A plain `xargs`/interpreter
+        # indirection shape is unsuitable here: it trips the earlier
+        # `block-approval-sentinel-creation`/`block-worktree-sentinel-
+        # creation` guards' own outright, content-independent xargs deny
+        # first (both precede this guard in the chain), so this leg is
+        # only bash-leg-reachable via the unparseable-shell-shape trigger.
         cmd = "rm '%s" % SENTINEL_BASENAME
         sentinel = gus.sentinel_path("sess-1", GUARD_NAME)
         sentinel.write_text("", encoding="utf-8")

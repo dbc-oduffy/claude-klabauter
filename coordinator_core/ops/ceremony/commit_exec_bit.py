@@ -190,8 +190,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"exec-bit promotion is defined only for regular files (CC-7 fail-loud)"
         )
 
+    # ------------------------------------------------------------------
     # 2. Foreign-staged-entries guard (B2 AMENDMENT). Unrestricted commit under
     #    live concurrency is the safe-commit stomp hazard: it commits EVERYTHING
+    #    staged. Any index entry other than the target → fail loud, name them,
+    #    touch nothing (never sweep, never reset/unstage — DEC-3).
+    # ------------------------------------------------------------------
     foreign, guard_err = _foreign_staged_entries(worktree_root, rel_path)
     if guard_err is not None:
         return _error(guard_err)

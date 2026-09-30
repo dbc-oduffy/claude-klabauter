@@ -324,7 +324,9 @@ def advance_status(tracker_file: Path, stub_ids: List[str], to_status: str) -> d
     return {"updated": updated, "unchanged": unchanged, "changed": True}
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.advance_status")

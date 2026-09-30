@@ -153,8 +153,13 @@ _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
 _REASON_FORWARD_PLAN_NOT_TERMINAL = "forward-plan-not-terminal"
 
+# Named reason for the worktree-dirty retention gate (AC5). Re-exported
+# under this module's own naming convention — the single definition lives
 # in `coordinator_core.ops.ceremony.git_native` (`REASON_WORKTREE_DIRTY`),
+# shared with `archive_terminal_handoffs.py`'s identical gate (its own
 # `_SCAN_REASON_WORKTREE_DIRTY` is the same alias) rather than duplicated —
+# the two used to read byte-for-byte the same string from two independent
+# module-local constants.
 _REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 
 
@@ -483,7 +488,9 @@ async def _handle_preview(
 
         rel_path = rel_id(path, worktree_root)
 
+        # cannot-derive-date guard (T1 filter, mirrors archive_plans): a
         # terminal sizing with no YYYY-MM-DD prefix has no archive
+        # destination — never present it as an archivable candidate.
         if _derive_yyyy_mm(path.name) is None:
             if scan_skipped is not None:
                 scan_skipped.append({
@@ -587,6 +594,10 @@ async def _handle_act(
         classified.append((cid, sizing_path))
 
     # Worktree-dirty retention gate (AC5) — CLASSIFICATION TIME: scoped to
+    # the classification survivors above, applied once as a single batched
+    # status call before any resource-specific refinement (AC6, dest-
+    # collision, Move construction) runs. A peer's uncommitted edit on a
+    # candidate is retained here rather than moved out from under them.
     dirty: Set[str] = set()
     if classified:
         dirty = _dirty_sizing_relpaths(worktree_root, [cid for cid, _p in classified])
@@ -628,6 +639,8 @@ async def _handle_act(
         if dst.exists():
             if not _is_identical_duplicate(sizing_path, dst):
                 # A DIFFERENT file already occupies the archive destination —
+                # never "already-archived" (that string is AC12-pinned to the
+                # source-gone case), never clobbered.
                 skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
                 continue
             force = True

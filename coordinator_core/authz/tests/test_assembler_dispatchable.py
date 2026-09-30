@@ -23,7 +23,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
-from coordinator_core.authz.registration_quad import _live_classification, _live_registry
+from coordinator_core.authz.registration_quad import (
+    _discover_all_ops,
+    _live_classification,
+    _live_registry,
+)
 
 
 def _is_dispatchable(assembler_name: str, op_name: str) -> bool:
@@ -152,21 +156,33 @@ class TestPluginLocalBarewordsPresent:
         assert {"baton-chain-closure", "plan-reversibility-eligibility"} <= set(entry)
 
 
+# The mixed-end-state discriminator (plan § The discriminator for the mixed end
 # state) is keyed by ASSEMBLER_DISPATCHABLE's assembler-name key, not by per-entry
+# name shape: the five assembler-family module names dispatch via `resolve_cli` /
+# `resolve_op` and their entries must be live registered ops; the three
+# completion-family module names dispatch via a private `_resolve_cli` built from
 # CONSUMES_MANIFEST and are validated by that membership check instead (already
+# asserted by workstream_complete/apply.py; not re-derived here). This split is
+# named explicitly rather than inferred from whether an entry happens to be in
 # `_REGISTRY`, so a genuine assembler-family phantom name cannot be
+# misclassified as a completion-family exemption.
 _COMPLETION_FAMILY_ASSEMBLERS = frozenset(
     {"workday_complete", "workstream_complete", "workweek_complete"}
 )
+# `learn_lessons_pipeline` dispatches CLI barewords (its `CONSUMES_MANIFEST` plus the
+# run-stamp step), never registered ops, so it is exempt from the registry/classification
+# and op-migrated-verbs checks; `test_learn_lessons_pipeline_entry_equals_its_declared_verbs`
+# pins it against its own module instead.
+_BAREWORD_ASSEMBLERS = _COMPLETION_FAMILY_ASSEMBLERS | {"learn_lessons_pipeline"}
 
 
 class TestAC7RegistryAndClassificationBacking:
     """Every op-family entry in ASSEMBLER_DISPATCHABLE (assembler-family assemblers
     only) must be a live registered op (present in `_REGISTRY`) carrying an
-    `OP_CLASSIFICATION` entry — no phantom names. Reuses registration_quad's
-    live-table accessors (its own discovery walk already imports the full ops
-    tree) rather than a plain `import coordinator_core.ops`, which under-discovers
-    per that module's own docstring.
+    `OP_CLASSIFICATION` entry — no phantom names. Runs registration_quad's
+    `_discover_all_ops` walk before reading its live-table accessors: `_live_registry`
+    alone is empty in a process that has not imported the ops tree, and a plain
+    `import coordinator_core.ops` under-discovers per that module's own docstring.
 
     Completion-family entries are exempt from this check by construction — see
     `_COMPLETION_FAMILY_ASSEMBLERS` above. C1 ships no entries of either family,
@@ -174,13 +190,14 @@ class TestAC7RegistryAndClassificationBacking:
     generically so C4-C7's additions are covered without editing this test."""
 
     def test_every_assembler_family_entry_is_registered_and_classified(self) -> None:
+        _discover_all_ops()
         registry = _live_registry()
         classification = _live_classification()
 
         not_registered = []
         missing_classification = []
         for assembler_name, op_names in ASSEMBLER_DISPATCHABLE.items():
-            if assembler_name in _COMPLETION_FAMILY_ASSEMBLERS:
+            if assembler_name in _BAREWORD_ASSEMBLERS:
                 continue
             for op_name in op_names:
                 if op_name not in registry:
@@ -215,6 +232,16 @@ class TestAC7RegistryAndClassificationBacking:
         actual = {
             name: frozenset(ops)
             for name, ops in ASSEMBLER_DISPATCHABLE.items()
-            if name not in _COMPLETION_FAMILY_ASSEMBLERS
+            if name not in _BAREWORD_ASSEMBLERS
         }
         assert actual == declared
+
+    def test_learn_lessons_pipeline_entry_equals_its_declared_verbs(self) -> None:
+        from coordinator_core.learn_lessons_pipeline import (
+            CONSUMES_MANIFEST,
+            STAMP_RUN_COMPLETE_OP,
+        )
+
+        assert ASSEMBLER_DISPATCHABLE["learn_lessons_pipeline"] == (
+            frozenset(CONSUMES_MANIFEST) | {STAMP_RUN_COMPLETE_OP}
+        )

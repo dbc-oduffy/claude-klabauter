@@ -125,7 +125,10 @@ _PREFIX_TO_NATURE: Dict[str, str] = {
 
 _PREFIX_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9_-]*)(?:\([^)]*\))?:")
 
+#: Handoff statuses that mark a handoff as no longer live (not a continuity candidate).
 #: SSOT alias of HANDOFF_ANCHOR_EXCLUDED_STATUSES — that export carries defensive
+#: non-schema tokens (e.g. "archived") and is a standalone SSOT export by design
+#: (EM axis-check decision, DR-084 C3).
 from coordinator_core.lifecycle_constants import HANDOFF_ANCHOR_EXCLUDED_STATUSES
 
 _TERMINAL_STATUSES = HANDOFF_ANCHOR_EXCLUDED_STATUSES
@@ -163,7 +166,9 @@ def _read_commit_subject(common_dir: Path) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
 # Staged-index frontmatter reader (COMPUTE_ONLY-safe — read-only subprocess)
+# ---------------------------------------------------------------------------
 
 
 def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
@@ -634,7 +639,12 @@ def _handler(
                     )
                 )
             ):
+                # Never silently prefer the staged-diff guess -- see
+                # `_resolve_plan_from_governing_slug`'s own docstring for the
+                # incident this disagreement guards against. Widened beyond a
                 # deliverable_id mismatch: a staged-diff match on a DIFFERENT
+                # plan path whose deliverable_id is null or coincidentally
+                # equal still disagrees and must still be logged.
                 logger.warning(
                     "commit.anchors: staged-diff plan scan resolved %s "
                     "(deliverable_id=%s), which DISAGREES with the supplied "

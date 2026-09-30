@@ -108,7 +108,10 @@ def parse_commit(content: bytes) -> dict[str, Any]:
     }
 
 
+#: Content-addressed, so sound for this process's whole lifetime -- a sha
+#: cannot come to name different bytes. Same reasoning as
 #: `git_objects._OBJECT_CACHE`, and bounded for the same reason: this
+#: module is reachable from a warm long-running engine.
 _COMMIT_CACHE_MAX_ENTRIES = 4096
 _COMMIT_CACHE: "dict[tuple[str, str], Optional[dict[str, Any]]]" = {}
 

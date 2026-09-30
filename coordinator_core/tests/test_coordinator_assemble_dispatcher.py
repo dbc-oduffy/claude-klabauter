@@ -1,5 +1,11 @@
+# test_coordinator_assemble_dispatcher.py — verifies coordinator-assemble.py
+# (the C8 fan-in dispatcher) and coordinator/bin/lib/entry_point_shim.py.
+#
+# Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C8
 # What this pins: (1) the dispatcher batches MULTIPLE subcommands into ONE
+# process — the whole point of C8 per C7's 7.17x measurement — and (2) no
 # subprocess is ever spawned by the in-process shim path (the REJECTED
+# shape from C7, -0.5123, was exactly a subprocess-spawning forwarder).
 from __future__ import annotations
 
 import importlib.util
@@ -64,6 +70,8 @@ def test_each_target_py_cmd_present_ps1_asymmetric():
 
 
 def test_assemble_targets_partition_engine_vs_by_path():
+    # Mirrors GATE's
+    # test_gate_targets_partition_engine_vs_by_path so a future edit that
     # drops a target from _ENGINE_ENTRIES without adding it to
     # BY_PATH_TARGETS (or vice versa) fails loud here instead of surfacing
     # as a bare KeyError at `_ENGINE_ENTRIES[name]` inside run_target.

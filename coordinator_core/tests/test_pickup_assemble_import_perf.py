@@ -96,13 +96,32 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SAMPLE_COUNT = 2
 
+# Heavy modules named in the module docstring's deferral history, asserted ABSENT
+# from `sys.modules` after importing `coordinator_core.pickup_assemble`. `pydantic`
+# is confirmed absent as of this test's authorship (verified via a fresh-subprocess
+# `sys.modules` diff, see `_imported_module_names`). `asyncio` is named in the same
+# docstring passage but is NOT included here: it is currently PRESENT (see the
 # docstring's "long tail of additional _EAGER_OP_MODULES leaves ... still import
+# asyncio at module scope" note) -- asserting its absence today would land a
+# red test. Add it back here only once that residual is actually closed.
 _HEAVY_MODULES_EXPECTED_ABSENT = ("pydantic",)
 
 _THIRD_PARTY_ALLOWED = frozenset({"yaml", "_cython_3_1_4", "cython_runtime"})
 
 # Ceiling on the EXTERNAL (non-`coordinator_core`) module count -- 133 measured on
+# this machine/Python version, ~28% headroom. Deliberately NOT a ceiling on the
+# whole imported set: 443 of the 576 modules imported here are `coordinator_core`'s
+# own, and that number grows every time an op module is added to
 # `ops/__init__.py::_EAGER_OP_MODULES` -- a whole-set ceiling therefore rots by
+# construction (it went red in a week of ordinary op growth, 522 -> 576, with the
+# external set unchanged and no heavy subtree anywhere near it). The external count
+# is what a genuine new subtree moves, and it is stable against in-repo growth.
+# Headroom here absorbs platform-specific stdlib substitutions (POSIX's
+# `_posixsubprocess` vs Windows's `_winapi`/`_wmi`, psutil's per-OS leaf modules).
+#
+# Negative-spec: do NOT re-add a whole-set count ceiling "for completeness" -- the
+# in-repo module count is not a property this test has any opinion about, and pinning
+# it only buys a recurring red test with no signal in it.
 _EXTERNAL_MODULE_COUNT_CEILING = 170
 
 

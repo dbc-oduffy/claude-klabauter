@@ -275,3 +275,11 @@ def test_validate_digest_rejects_over_cap_string():
     d["decision_required"] = "x" * 301
     errs = wd.validate_digest(d)
     assert errs
+
+
+def test_terminal_commit_params_carry_script_path_and_session_id():
+    sid = "0f2b6a5e-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
+    js = wd.completion_return_js(**_kwargs(script_path="tasks/run/x.mjs", session_id=sid))
+    assert 'script_path: "tasks/run/x.mjs"' in js
+    assert f'session_id: "{sid}"' in js
+    assert "script_path" not in wd.completion_return_js(**_kwargs())

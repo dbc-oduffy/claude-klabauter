@@ -102,8 +102,32 @@ _TELL_ASKS_PERMISSION = re.compile(
 )
 
 # Tell C — the EM ASCRIBING a dispatch restriction to the PM as the PM's own
+# standing instruction. Distinct from Tell A (citing the harness line in the
+# EM's own voice) and Tell B (asking the PM's permission): this is the EM
+# misattributing an unattributed harness line's authorship, e.g. "holding
+# that dispatch on your standing don't-call-the-Agent-tool instruction" or
+# reporting it as "your standing instruction". Missed by both prior tells on
+# 2026-08-02 (spec backlink below).
+#
+# Three components, all required within the SAME sentence to hold precision:
+#   1. a possessive-attribution phrase ("your ... instruction/rule/...", or
+#      "as you('ve) instructed") naming the PM as the source of a rule;
+#   2. a dispatch-shaped noun/verb in that same sentence (dispatch, delegate,
+#      fan-out, spawn, subagent, Agent-tool);
+#   3. a restriction cue (don't, not, held/holding, declined, avoided, ...) —
 #      this is what discriminates a RESTRICTION ("your rule against
+#      dispatching") from a legitimate report of something the PM actually
+#      asked for ("as you instructed, I dispatched two reviewers" has no
+#      restriction cue and must not trip).
+# Requiring all three in one sentence is deliberately narrower than a
+# whole-message co-occurrence check: "your standing instruction to keep PRs
+# under 300 lines" (a real, unrelated PM instruction) must not trip merely
+# because some other sentence in the same turn happens to mention dispatch.
 #: Quantity nouns that make a nearby rule-noun a MEASUREMENT rather than an
+#: authored rule. Native vocabulary here — CLAUDE.md itself says "invocation
+#: budget" and "spawn-count budget" — so both word orders have to be excluded:
+#: "instruction budget" (quantity follows) and "spawn-count budget policy"
+#: (quantity precedes). Both were live false positives found in review.
 _QUANTITY_WORDS = r"budget|count|limit|cap|quota|allowance|spend|overhead"
 
 _POSSESSIVE_PM_ATTRIBUTION = re.compile(
@@ -113,7 +137,10 @@ _POSSESSIVE_PM_ATTRIBUTION = re.compile(
     r"|\byours\s+to\s+\w+"
     r"|\b(?:this\s+)?(?:session|conversation)\s+was\s+started\s+with\s+a\s+standing\s+\w+"
     r"|\b(?:this|the)\s+(?:session|conversation|turn)'s\s+(?:standing\s+)?"
+    # Tempered span: a quantity word anywhere between the possessive and the
     # rule-noun disqualifies the match, which is what catches the MODIFIER word
+    # order ("spawn-count budget policy") that a trailing lookahead alone
+    # cannot. Both orders are native vocabulary here.
     r"(?:(?!" + _QUANTITY_WORDS + r")[^.?!\n]){0,40}?"
     r"\b(?:instruction|rule|directive|order|policy)\b"
     r"(?!\s+(?:" + _QUANTITY_WORDS + r"))",
@@ -144,11 +171,39 @@ def _tell_misattributes_to_pm(text: str) -> bool:
     return False
 
 
+# Tell D — the EM asking the PM for permission to commit or stage work it
 # already owns. Modelled directly on Tell B (_TELL_ASKS_PERMISSION above): same
+# permission-phrase alternation, same "verb within N chars" shape, swapped to
+# commit/stage terms. Added after a live 2026-08-02 session where the EM
+# completed a full dispatch wave and then asked the PM "stage and commit?" —
+# the identical permission reflex Tell B catches, aimed at the commit step
+# instead of the dispatch step, and no tell fired. The EM's own doctrine
 # (Commit Gate: only the EXECUTOR never commits) makes the commit step
+# unconditionally the EM's own to take, so asking permission for it is the
+# same error as Tell B, independent of how the EM arrived at it.
+#
+# Two closely-adjacent asks LOOK similar but must NOT trip, and are handled by
+# dedicated negatives rather than folded into the permission pattern itself:
+#   - merging to main is a genuine PM gate requiring a literal keyword
+#     ("merge"), which this pattern's commit/stage vocabulary never matches on
+#     its own;
+#   - pushing to a shared remote / opening a PR is ask-before-external-action,
+#     also a correct ask, and likewise never matches on "push"/"PR"/"remote"
+#     alone.
 # `_COMMIT_GATE_OR_OUTWARD_CUE` is a defensive backstop: a sentence naming
+# BOTH a commit/stage verb AND one of merge/push/PR/remote/upstream is treated
+# as the (correct) gated-or-outward ask and suppressed, even though the
+# vocabulary mismatch alone already excludes most such cases.
+#
 # A third negative, `_COMMIT_SCOPING_CUE`, catches the scoping question —
+# "which files should I include", "should I leave X out", "out of scope" —
 # which asks about the CONTENTS of a commit the EM is already going to make,
+# not for permission to make it.
+#
+# The leading `\b` carries the same load as Tell B's — see that pattern's note.
+# Unanchored, "ho-ok" supplies the permission phrase and the commit vocabulary
+# is one clause away, so ordinary engine prose about commit hooks ("hook path
+# and `commit-tree` path both") reads as a permission ask.
 _TELL_ASKS_COMMIT_PERMISSION = re.compile(
     r"\b(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
     r"[^.?!\n]{0,60}?"

@@ -15,7 +15,7 @@ guard pass a handoff that is actually claimed by a DIFFERENT live session:
     as this session's own predecessor.
   - `branch_resolution.py::_sanitize_consumed_handoffs` /
     `_resolve_branches` — already ledger-first via C2's migration of
-    `coverage._get_handoff_consumed_by` (both call sites import and use it
+    `coverage._get_handoff_claimed_by` (both call sites import and use it
     unchanged); this file's (c)/(d) tests are a regression proof that C2's
     fix already covers these sites, per this chunk's own re-verify-first
     instruction, not a second independent fix.
@@ -26,7 +26,7 @@ Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 Negative-spec: does NOT re-test `resolve_claim_state`'s own ledger/mirror
 resolution logic (see `coordinator_core/tests/test_claim_state_accessor.py`)
 — only that these two sites route the claimant read through it (or, for the
-C2-covered branch_resolution.py sites, through `_get_handoff_consumed_by`,
+C2-covered branch_resolution.py sites, through `_get_handoff_claimed_by`,
 which itself routes through it) instead of a raw frontmatter mirror read.
 Does NOT touch the raw-grep-fallback comments in branch_resolution.py's
 module docstring — `_grep_disposition` was found, on inspection, to already

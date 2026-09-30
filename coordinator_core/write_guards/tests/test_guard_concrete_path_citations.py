@@ -152,6 +152,7 @@ def test_quiet_tier_fires_at_most_once_per_session(repo_root: Path) -> None:
     assert "additionalContext" in first["hookSpecificOutput"]
 
     # A second, DIFFERENT file, same quiet-tier, same session -- still
+    # suppressed. The once-per-session claim is session-wide, not per-file.
     target_b = repo_root / "scratch" / "b.md"
     target_b.parent.mkdir(parents=True, exist_ok=True)
     second = check(_write_payload(str(target_b), offending, session_id="warn-once-session"))

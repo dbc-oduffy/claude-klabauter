@@ -8,6 +8,9 @@ from coordinator_core.git.commit_trailers import (
 
 
 def test_demoted_closes_paragraph_still_records():
+    # Built the way `git commit -m subject -m "Closes: RECS-1" -m "Commit-Token: abc"`
+    # produces it: three blank-line-separated paragraphs, `Closes:` sitting
+    # ABOVE the trailer block git itself would parse -- the exact demotion
     # shape DECISION-2 used to miss.
     text = "Subject line\n\nCloses: RECS-1\n\nCommit-Token: abc123\n"
     closes, reverts_sha = extract_closure_facts_from_text(text)
@@ -41,6 +44,8 @@ def test_revert_line_captured():
 
 
 def test_quoted_embedded_closes_outside_trailing_region_not_recorded():
+    # A quoted prior commit message sitting in the body, separated from the
+    # trailing region by an ordinary (non-trailer-shaped) paragraph -- the
     # DECISION-2 supersession's named hazard this bound must still close.
     text = (
         "Subject\n\n"

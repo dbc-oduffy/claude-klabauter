@@ -27,7 +27,7 @@ root-fixed in ``primitives`` (01abd643 / fbf375a8 / ff30c16f — the last added
 fork the pattern); a later tree-wide sweep found two more live forks
 (``ops/docgen/volatility.py`` ``redact_text``, ``ops/changelog_ops.py``
 ``_extract_field_fallback``); and a 2026-07-28 follow-up dispatch fixed the two
-in ``coverage.py`` (``_parse_handoff_consumed_by``, ``_parse_handoff_deliverable_id``)
+in ``coverage.py`` (``_parse_handoff_claimed_by``, ``_parse_handoff_deliverable_id``)
 that this file's ``_KNOWN_UNFIXED`` used to carry — both now route through
 ``primitives.read_fm_field_unquoted``, so that exemption set is empty. Prose
 alone has demonstrably not stopped the pattern from reappearing, which is why
@@ -175,7 +175,7 @@ _FORKED_KEY_SHAPE = re.compile(
 # set shrinks; it does not grow by silently widening the matcher.
 #
 # EMPTY as of 2026-07-28. Its only entry — `coverage.py`'s
-# `_parse_handoff_consumed_by` — was deleted when that function and its
+# `_parse_handoff_claimed_by` — was deleted when that function and its
 # literal-key sibling `_parse_handoff_deliverable_id` were both routed through
 # `primitives.read_fm_field_unquoted`. Adding an entry here is a last resort:
 # `test_known_unfixed_entries_still_describe_a_real_violation` below re-scans

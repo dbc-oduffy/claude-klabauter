@@ -72,18 +72,32 @@ from coordinator_core.ipc import STRUCTURAL_PIN_ERROR
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+# ---------------------------------------------------------------------------
 # Project root — needed for PYTHONPATH injection so subprocess can import
+# coordinator_core regardless of cwd (tests may run from temp dirs).
+# ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 # Portable Windows console-suppression flag — resolves to CREATE_NO_WINDOW (0x08000000)
+# on Windows and 0 (no-op) on macOS/Linux.  Required for every python.exe subprocess so
+# the headless Bash-tool parent does not get a focus-stealing console window.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 # A cheap, read-only op in WORKTREE_SCOPED_OPS, used as the vehicle for the two
+# `_origin_worktree`-injection branches below. Requirements on the vehicle: it must
+# be worktree-scoped (so main() resolves a repo root and injects it) and its cost
+# must not scale with the repo's history or corpora — see
+# `test_worktree_scoped_op_dispatches_inside_repo`'s "Vehicle note" for the
+# incident behind that second requirement. The candidate path is deliberately one
 # that does not exist: the handler resolves it RELATIVE to the injected repo root
+# and reports it back, so the resulting error string is itself the witness that
+# repo_root arrived.
 # `_WORKTREE_SCOPED_PROBE` / `_PROBE_EXPECTED_ERROR` lived here: a production op
+# borrowed as a worktree-scope vehicle, plus the error string that stood in for a
 # witness. Both cases that used them now drive `_WORKTREE_SCOPED_PROBE_SCRIPT`,
+# which owns its op and reports the root directly.
 
 
 def _make_env(**overrides: str) -> dict[str, str]:
@@ -100,7 +114,15 @@ def _make_env(**overrides: str) -> dict[str, str]:
 
 
 #: Breadcrumbs the engine emits on stderr that are CONFIGURATION notices, not the log
+#: noise the "stderr must be empty" assertions exist to catch. Each is a once-per-process
+#: line stating a deliberate operator setting, and whether it appears depends on the box
+#: rather than on the code under test -- so asserting a literally empty stderr made those
+#: cases pass or fail on where they ran. `[warm-settings]` fires on any machine with
+#: warmth disabled, which is a supported configuration and turns every dispatching case
+#: in this module red for a reason none of them is about.
+#:
 #: Deliberately a prefix ALLOWLIST, not a regex over the whole stream: an unrecognised
+#: line is still a failure, which is the property these assertions are for.
 _BENIGN_STDERR_PREFIXES = ("[warm-settings]",)
 
 
@@ -835,7 +857,23 @@ def test_exit_code_for_response_structural_pin_error_is_two():
     assert _exit_code_for_response(response, STRUCTURAL_PIN_ERROR) == 2
 
 
+# ---------------------------------------------------------------------------
+# Branch 14 -- stdout transport hardening: a handler print() must not corrupt
 # the JSON-RPC envelope on stdout.
+#
+# Live incident this pins: coordinator_core/ops/plan_tasks_mutate.py's
+# _resolve() calls close_out_and_stamp._stamp_plan_landed(...) in-process,
+# which unconditionally print()s a status line. That line landed on the same
+# stdout stream cc_invoke parses as JSON, breaking every
+# coordinator/bin/ CLI built on cc_invoke with "invoke stdout is not valid
+# JSON". main()'s dispatch loop must capture ANY handler-level stdout write
+# and relay it to stderr, never letting it interleave with the envelope.
+#
+# A throwaway op is registered directly in the SAME subprocess that runs
+# main() (via `python -c`, not `python -m coordinator_core.invoke`) — main()
+# calls os._exit so it cannot be exercised in-process from THIS test process,
+# but the registration + main() call can still share one child process.
+# ---------------------------------------------------------------------------
 
 _PRINT_OP_SCRIPT = """
 import sys
@@ -870,6 +908,13 @@ main()
 
 #: The worktree-scope vehicle, OWNED. `WORKTREE_SCOPED_OPS` is a frozenset computed
 #: from `_OP_KEY_SCOPE` at import, and `main()` reads it from `ipc` at call time, so a
+#: probe can enter the class by rebinding that name before calling `main()` -- without
+#: touching the production table or depending on any production op continuing to exist.
+#:
+#: The handler REPORTS the `repo_root` it was handed, which is a direct witness that
+#: resolution and `_origin_worktree` injection both happened. The borrowed-op versions
+#: could only infer it: they asserted a specific handler error string that was merely
+#: unreachable without a resolved root, and each died with its vehicle.
 _WORKTREE_SCOPED_PROBE_SCRIPT = """
 import sys
 from coordinator_core import ipc

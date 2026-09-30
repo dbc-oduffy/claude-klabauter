@@ -59,7 +59,10 @@ through its real CLI on 2026-09-17 (k=20, fresh process per sample) read
 ~56.8ms process time — under this 120.3ms figure and far under the
 428.1ms regression a 2026-08-23 handoff attributed to this same module,
 which its own Session Ledger later refuted as measured against the
-klabauter mirror's build rather than this tree. Budget ceiling remains
+klabauter mirror's build rather than this tree. Re-measured 2026-09-30
+(k=25, fresh process per sample, in-process `route()` call, getrusage
+children): median ~56.0ms, max ~75.7ms — 120.3ms stays a reference
+target only. Budget ceiling remains
 ≤200ms / ≤2.0 procs/call (DR-344 §7's single-process bar).
 
 READ-ONLY, by construction: `brief()` only reads its arguments — it never
@@ -505,7 +508,7 @@ EXIT_TRANSPORT_FAIL = 3
 def _usage(prog: str, stream=None) -> int:
     stream = __import__("sys").stderr if stream is None else stream
     print(
-        f"{prog}: usage: {prog} --run-id <id> --sprint-id <id> [--decisions <json>]",
+        f"{prog}: usage: {prog} --run-id <id> --sprint-id <id> [--decisions <json> | --decisions-file <path>]",
         file=stream,
     )
     return EXIT_USAGE
@@ -515,10 +518,20 @@ def main(argv: list[str]) -> int:
     import json
     import sys
 
+    from coordinator_core.ceremony_common.json_payload_flag import (
+        detect_conflicting_payload_channels,
+        resolve_json_payload_flag,
+    )
+
     prog = "sprint-planning-assemble"
     run_id = None
     sprint_id = None
     decisions: dict[str, Any] = {}
+
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"{prog}: {conflict}", file=sys.stderr)
+        return EXIT_USAGE
 
     i = 0
     while i < len(argv):
@@ -532,13 +545,12 @@ def main(argv: list[str]) -> int:
         elif tok == "--sprint-id" and i + 1 < len(argv):
             sprint_id = argv[i + 1]
             i += 2
-        elif tok == "--decisions" and i + 1 < len(argv):
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"{prog}: malformed --decisions JSON: {exc}", file=sys.stderr)
+        elif (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"{prog}: {payload.error}", file=sys.stderr)
                 return EXIT_USAGE
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)

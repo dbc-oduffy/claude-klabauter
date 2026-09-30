@@ -33,7 +33,10 @@ import pytest
 from coordinator_core import dag
 
 
+# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_dag_edge_kinds.py
+# convention — module-level cache state must not leak between test cases).
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -164,8 +167,19 @@ class TestResolveTargetRootAnchoredLiveResolution:
         )
 
 
+# ---------------------------------------------------------------------------
+# (e) The premise that licensed deleting the archival live-children guard.
+#
+# 2026-08-28: the guard's last surviving arm kept a live `forked_from` child
+# (a spinoff) blocking archival, on the stated ground that archiving would
+# "strand that spinoff's own origin pointer (DR-224, AC4)". That citation does
+# not resolve — DR-224 contains no AC4, and its actual contract makes
 # has-children mean SUPERSEDE. The guard was deleted, but a guard whose stated
+# reason is false may still be load-bearing for an unstated one, so the
 # premise was MEASURED rather than argued. These tests pin that measurement so
+# a future reader can see what the deletion rests on instead of taking it on
+# the same trust the original claim asked for.
+# ---------------------------------------------------------------------------
 
 
 class TestSpinoffOriginSurvivesArchivalOfItsOrigin:

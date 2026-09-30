@@ -548,8 +548,7 @@ def test_flags_present_on_every_wrapper(fn, args, kwargs):
     assert call_kwargs.get("stdin") is subprocess.DEVNULL
     assert call_kwargs.get("capture_output") is True
     assert call_kwargs.get("text") is True
-    assert "creationflags" in call_kwargs
-    assert call_kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert call_kwargs.get("creationflags", 0) == no_console_creationflags().get("creationflags", 0)
 
     # argv[0] is always "git" -- no wrapper shells out to anything else.
     argv = mock_run.call_args.args[0]
@@ -813,7 +812,7 @@ def test_git_capture_false_still_carries_windows_safe_flags():
     call_kwargs = mock_run.call_args.kwargs
     assert call_kwargs.get("stdin") is subprocess.DEVNULL
     assert call_kwargs.get("text") is True
-    assert call_kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert call_kwargs.get("creationflags", 0) == no_console_creationflags().get("creationflags", 0)
 
 
 def test_git_capture_false_with_input_data_still_feeds_stdin_not_devnull():
@@ -1534,7 +1533,7 @@ def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path)
     assert result.ok, result.stderr
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs.get("creationflags", 0) == no_console_creationflags().get("creationflags", 0)
     assert kwargs["input"] == b"hashed content\n"
     assert "text" not in kwargs
     assert "encoding" not in kwargs
@@ -1573,7 +1572,7 @@ def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
     assert result == {"file.txt": "original\n"}
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    assert kwargs["creationflags"] == leaf_spawn_creationflags().get("creationflags", 0)
+    assert kwargs.get("creationflags", 0) == leaf_spawn_creationflags().get("creationflags", 0)
     assert kwargs["input"] == b"HEAD:file.txt\n"
     assert "text" not in kwargs
 
@@ -1684,7 +1683,7 @@ def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
     assert result == {"HEAD:file.txt": "original\n"}
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    assert kwargs["creationflags"] == leaf_spawn_creationflags().get("creationflags", 0)
+    assert kwargs.get("creationflags", 0) == leaf_spawn_creationflags().get("creationflags", 0)
     assert kwargs["input"] == b"HEAD:file.txt\n"
     assert "text" not in kwargs
 
@@ -3049,6 +3048,26 @@ def test_status_porcelain_both_options_compose_with_untracked_files_last(tmp_pat
     assert argv == [
         "git", "-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain",
         "--untracked-files=all",
+    ]
+
+
+def test_status_porcelain_untracked_all_unscoped_argv(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo, untracked_all=True)
+    assert mock_run.call_args[0][0] == [
+        "git", "-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain",
+        "--untracked-files=all", "--no-renames",
+    ]
+
+
+def test_status_porcelain_untracked_all_chunked_argv(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo, ["a.md", "b.md"], untracked_all=True)
+    assert mock_run.call_args[0][0] == [
+        "git", "-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain",
+        "--untracked-files=all", "--no-renames", "--", "a.md", "b.md",
     ]
 
 

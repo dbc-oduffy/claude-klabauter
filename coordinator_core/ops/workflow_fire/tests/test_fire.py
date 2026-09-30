@@ -498,6 +498,10 @@ def test_win32_spawn_uses_no_window_process_group_flags(repo, script, monkeypatc
     """
     _patch_plugin_dir(monkeypatch)
     monkeypatch.setattr(fire, "sys", SimpleNamespace(platform="win32"))
+    # The module constants are getattr(subprocess, ..., 0): zero off Windows.
+    # Pin the real Win32 values so the flag assertions hold on every host.
+    monkeypatch.setattr(fire, "_CREATE_NO_WINDOW", 0x08000000)
+    monkeypatch.setattr(fire, "_CREATE_NEW_PROCESS_GROUP", 0x00000200)
     captured = {}
 
     def fake_popen(command, **kwargs):

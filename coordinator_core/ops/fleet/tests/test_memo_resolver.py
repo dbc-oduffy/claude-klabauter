@@ -158,6 +158,8 @@ class TestRegistryHomeHonorsMachineLocalImpl:
 
     def test_read_registry_repos_honors_machine_local_impl_override(self, tmp_path, monkeypatch):
         # Point CLAUDE_HOME at an unrelated, EMPTY home — if MACHINE_LOCAL_IMPL were
+        # ignored, read_registry_repos would silently fall through to this empty
+        # home and return {}, masking the override entirely.
         unrelated_home = tmp_path / "unrelated-claude-home"
         unrelated_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(unrelated_home))
@@ -279,8 +281,6 @@ class TestMachineLocalImplSecondVectorDeterministic:
             }
         finally:
             shutil.rmtree(durable_dir, ignore_errors=True)
-
-        # module — most of which never mention MACHINE_LOCAL_IMPL — from
 
 
 class TestResolveReceiverInboxZeroMatch:

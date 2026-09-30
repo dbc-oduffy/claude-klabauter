@@ -46,6 +46,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `_path_guard.py` | — | Shared caller-supplied-path containment helpers (generalized from `handoff_lineage_ancestry.py`) |
 | `_param_alias.py` | — | One op parameter accepted under more than one spelling; disagreeing spellings refused |
 | `assert_doctrine_cross_reference_counts.py` | `doctrine.assert_cross_reference_counts` | Read-only doctrine cross-reference count assertion over the caller's skills/wiki doctrine tree |
+| `audit_two_repo_rate.py` | `goal.kr2_two_repo_rate` | COMPUTE_ONLY — KR2 engine-tool commit count over a date window (two git spawns; shallow clones refused; pairing leg `unmeasured`) |
 | `cartography_stack.py` | `cartography.stack` | Read-only project-stack fingerprint (languages, test frameworks, config files) via pathlib scan |
 | `changelog_ops.py` | — | Family-A changelog write ops (strang-10 C1) |
 | `commit_anchors.py` | `commit.anchors` | COMPUTE_ONLY — derives git-trailer block from read-model + staged diff |
@@ -78,6 +79,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `lessons_filter.py` | `lessons.filter_undated_universal`, `lessons.reject_orphan_strip_entries` | learn-lessons routing-set filters — undated-universal-lesson filter + orphan strip-list-entry rejection |
 | `list_files_newer_than_marker.py` | `percolate.list_files_newer_than_marker` | Lists files newer than a marker file (`Path.stat().st_mtime` comparison), capped at 20 results |
 | `match_core.py` | — | Shared difflib-based candidate ranking kernel (used by `goals_match`, siblings) |
+| `memo_correct_note.py` | `memo.correct_note` | Authorship-gated `decision_note` correction on an actioned memo — `decision`/`realized_by` immutable, stamped `[correction ...]` clause per applied correction |
 | `memo_transition.py` | `memo.transition` | Native port of `memo-transition.js` |
 | `merge_branch_into_workstream.py` | `branch.merge_into_workstream` | Idempotent branch consolidation into the active workstream branch (merge-base ancestor pre-check + `merge --abort` on conflict) |
 | `merge_quiet_activity_gate.py` | `merge.quiet_activity_gate` | Read-only quiet-activity gate comparing now vs. the caller's most recent commit timestamp |

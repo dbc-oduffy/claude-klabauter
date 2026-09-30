@@ -141,6 +141,7 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
     def test_t4_nested_layout_staged_violation(self):
         # T4/T5: NESTED-LAYOUT + --staged — regression guard for the manual
         # ${ABS#$GIT_ROOT/} path-strip bug (Windows/Git-Bash path-format
+        # divergence between --show-toplevel and pwd).
         repo = os.path.join(self.tmp.name, "tripwire_repo4")
         nested = os.path.join(repo, "plugins", "coordinator-claude", "coordinator")
         os.makedirs(nested, exist_ok=True)

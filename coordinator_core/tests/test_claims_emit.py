@@ -269,6 +269,8 @@ def test_a_failed_restore_never_destroys_the_caller_s_only_surviving_copy(tmp_pa
 
     assert rc == claims_emit.EXIT_PRODUCER_FAILURE
     # The original bytes must still exist SOMEWHERE on disk — restored to the
+    # destination if that worked, else surviving as the untouched backup. What
+    # must never happen is that they exist nowhere.
     survivors = [
         p for p in tmp_path.iterdir()
         if p.is_file() and p.read_bytes() == original_claims_bytes

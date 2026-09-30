@@ -45,7 +45,11 @@ import coordinator_core.pickup_brief as pb
 
 import pytest
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -142,6 +146,8 @@ def test_recommendation_present_still_emits_full_judgment_point_unchanged_dispos
     assert jp["recommendation"] == {"disposition": "cleared", "rationale": "shipped, resolvable sha"}
     assert jp["reason"] is None
     # Dispositions/resolves are IDENTICAL to the no-recommendation shape —
+    # a recommendation narrows what the EM reads, never the EM's own
+    # dispositions or what resolving each one clears (negative spec 4).
     assert [{"value": d["value"], "resolves": d["resolves"]} for d in jp["dispositions"]] == [
         {"value": "cleared", "resolves": ["d2"]},
         {"value": "not-cleared", "resolves": []},

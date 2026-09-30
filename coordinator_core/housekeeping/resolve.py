@@ -63,7 +63,12 @@ from coordinator_core.housekeeping.archive_index import ArchiveIndex
 from coordinator_core.housekeeping.head_scan import scan_keys
 from coordinator_core.reconcile.gate_eval import collapse_to_chain_heads
 
+#: Sentinel returned as `deployment_state` when, after collapsing to chain
 #: heads, more than one DISTINCT record still resolves the same id — a real
+#: `handoff_id` collision, never a legitimate chain. Deliberately not a real
+#: `deployment_state` value, so a caller's clearing logic falls through to
+#: its catch-all non-clearing branch exactly like any other unresolvable
+#: state. Existing spelling (contract 3): unchanged from
 #: `coordinator_core.ops.handoff_transition._AMBIGUOUS_BLOCKER_SENTINEL`.
 AMBIGUOUS_BLOCKER_SENTINEL = "<ambiguous-duplicate-id>"
 

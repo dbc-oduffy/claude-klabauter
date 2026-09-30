@@ -38,20 +38,18 @@ per leg:
      `tool_name`) routes to `_handle_stop` — the Stop leg is already built.
      Called here via the same `_handler({"payload": payload})` shape.
 
-  3. `guard_manufactured_blocker` — NOT PORTED. BLOCKING-class per
-     `DR-warm-hook-miss-policy` ("Blocking hooks refuse on a miss. Settled
-     prior behavior, unchanged by this decision"). `coordinator_core/warm/
-     hook_http.py::BLOCKING_EVENTS` is `frozenset({"PreToolUse"})` only —
-     `Stop` is NOT a member, so an `http`-flipped Stop registration gets NO
-     `unreachable_response` fail-closed treatment on a miss; it fails OPEN
-     silently against a dead engine, which is exactly the semantic a
-     blocking guard must never have. Widening `BLOCKING_EVENTS` past
-     PreToolUse is out of this plan's scope (§ Out of scope) — the answer
-     this leg needed ("can it survive today's transport?") is "no", so it
-     stays a `command` hook and no engine op is built for it here. A
-     `hooks.guard_manufactured_blocker` op existing would not change this
-     registration's transport safety, so building one is deferred rather
-     than performed as unused residue.
+  3. `guard_manufactured_blocker` — NOT COMPOSED. The op exists:
+     `hooks.guard_manufactured_blocker` (`coordinator_core/hooks/
+     guard_manufactured_blocker.py`) is its own command/native-door `Stop`
+     registration. It is BLOCKING-class per `DR-warm-hook-miss-policy`
+     ("Blocking hooks refuse on a miss. Settled prior behavior, unchanged by
+     this decision"), and `coordinator_core/warm/hook_http.py::
+     BLOCKING_EVENTS` is `frozenset({"PreToolUse"})` only — `Stop` is NOT a
+     member, so an `http`-flipped Stop registration would get NO
+     `unreachable_response` fail-closed treatment on a miss; it would fail
+     OPEN silently against a dead engine, which a blocking guard must never
+     do. Composing it into this fan-in would route it through that
+     transport, so it stays a separate registration outside the fan-in.
 
   4. `guard_kira_verdict_routed` — PORTED (residue; no existing op or
      library module covered this script before this chunk). Full verbatim
@@ -170,7 +168,12 @@ def _wrap_flat_op(op_fn) -> dict:
     return _handler
 
 
+# These three keys had no
+# registration, dispatch site, or cross-module caller (grepped across
+# claude-klabauter and coordinator-content-repo); DoE's own hook shims import
+# `coordinator_core.hooks.<module>.op` directly and never go through
 # `_REGISTRY`. @register_op removed from all three; the plain functions
+# the fan-in below actually calls are unchanged.
 _stop_em_report_altitude_handler = _wrap_flat_op(_em_report_altitude_op)
 _nudge_harness_directive_dispatch_handler = _wrap_flat_op(
     _nudge_harness_directive_dispatch_op
@@ -178,8 +181,11 @@ _nudge_harness_directive_dispatch_handler = _wrap_flat_op(
 _nudge_unrouted_sizing_handler = _wrap_flat_op(_nudge_unrouted_sizing_op)
 
 
+# ---------------------------------------------------------------------------
+# Aggregation: normalise every leg's own return shape uniformly, then
 # CONCATENATE-ALL per the source dispatcher's own contract (see module
 # docstring "AGGREGATION CONTRACT").
+# ---------------------------------------------------------------------------
 
 
 def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
@@ -243,6 +249,16 @@ async def _handler(params: dict, repo_root=None) -> dict:
             advisories.append(text)
 
     # receiver_state_sensor — PRODUCER only (see module docstring item 8):
+    # composed for its write side-effect; its return is never folded into
+    # this aggregate's verdict. It is "common_dir"-scoped, so under normal
+    # IPC dispatch its `repo_root` handler arg is `git_common_dir(request_
+    # repo)` (ipc.py::resolve_op_repo_key) — resolved here explicitly from
+    # the SAME payload["cwd"] every other leg above already reads, since
+    # this in-process call bypasses that resolution. Never the ambient
+    # process cwd: leaving `repo_root` at its own default here previously
+    # wrote a `sess-1` entry into THIS repo's own `.git/coordinator-sessions/`
+    # from a `tmp_path`-rooted test payload (caught by
+    # coordinator_core/conftest.py's live-session-hub litter guard).
     try:
         cwd = payload.get("cwd")
         common_dir = None

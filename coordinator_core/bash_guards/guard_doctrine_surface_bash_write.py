@@ -202,7 +202,11 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.machine_profile import feature_enabled
-from coordinator_core.write_guards._guard_level import apply_level
+from coordinator_core.write_guards._guard_level import (
+    apply_level,
+    doctrine_surface_advisory,
+    level_for,
+)
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_interpreter_payload_write_sink_targets,
     extract_write_sink_targets_for_segment,
@@ -263,6 +267,18 @@ _WGET_OUTPUT_RE = re.compile(r"\bwget\b.{0,200}?(-O\b|--output-document\b)", re.
 _SED_WRITE_SCRIPT_RE = re.compile(r"\bsed\b.{0,200}?\bw\s+\S", re.DOTALL)
 
 #: PowerShell's own write verbs. `MATCHERS` has declared `"PowerShell"` since
+#: this guard was written, but every marker above it is a POSIX shape, so a
+#: `Set-Content CLAUDE.md x` reached no write marker at all and the guard
+#: bare-cleaned on the dialect it claimed to cover -- exactly the
+#: declaration-without-capability gap
+#: `test_no_false_clean_on_unparsed_dialect.py` exists to name. Measured
+#: 2026-08-30: `Set-Content`/`Add-Content`/`Out-File` all missed, while the
+#: bash-idiom `echo x > <gov>` denied.
+#:
+#: Cmdlet names are matched case-insensitively (PowerShell itself is), and
+#: each is anchored at a token boundary so `Set-ContentType` is not one.
+#: `Set-Item`/`New-Item`/`Remove-Item`/`Move-Item`/`Copy-Item` are the
+#: item-level writes; `Tee-Object` mirrors `tee`; the `>`/`>>` operators are
 #: already covered by `_BARE_REDIRECT_RE`, which is dialect-neutral.
 _PS_WRITE_CMDLET_RE = re.compile(
     r"(?<![\w-])(?:"
@@ -362,9 +378,34 @@ def _has_indirection_marker(text: str) -> bool:
 
 
 #: A ZERO-WIDTH literal join: two quote characters with nothing between them
+#: but an optional ``+``, each optionally backslash-escaped. Covers shell
+#: adjacency (``'CLAU''DE.md'``), Python implicit concatenation (the same
+#: bytes), Python explicit concatenation (``'CLAU' + 'DE.md'``), either quote
+#: style, mixed between them, and the escaped form a payload nested inside a
+#: double-quoted shell word must use (``'CLAU'+\"DE.md\"``).
 #: WHITESPACE-SEPARATED words are deliberately NOT joined: ``'a' 'b'`` is one
+#: string in Python but two arguments in shell, and folding it would invent
+#: governed mentions in ordinary commands. That is why a gap requires a ``+``.
+#:
 #: THIRD ALTERNATIVE -- a WORD-INTERNAL quote, i.e. one with a non-space
+#: character on BOTH sides. Pair-folding alone leaves an ODD quote standing,
+#: and one surviving quote separates the name just as well as two did.
+#: Measured live 2026-08-31, a real Bash call that was ALLOWED and created
+#: the file: ``echo probe > "$S/CLAUDE""".md``. Three adjacent quotes; the
+#: pair rule consumed two and left ``claude".md``, which matches no governed
+#: identifier. Real bash concatenates the lot and wrote ``CLAUDE.md``.
+#:
+#: This is shell semantics, not a heuristic: inside ONE word, quotes are
+#: pure delimiters and every one of them is removed -- ``a"b"c`` is the
+#: single word ``abc``. The whitespace guard above is what keeps ``'a' 'b'``
+#: two arguments, and it is preserved exactly: a quote with space on either
+#: side is not word-internal and is left alone, so a quoted target
+#: containing spaces (``> "my file.md"``) still parses as before.
+#:
+#: Direction of error, per this function's own contract: folding is applied
 #: IN ADDITION to the raw text, so a wider fold can only admit MORE commands
+#: to the sink legs, never fewer. An over-fold costs a sink-leg evaluation
+#: that then declines; an under-fold is the bypass above.
 _LITERAL_JOIN_RE = re.compile(
     r"\\?['\"]\\?['\"]|\\?['\"]\s*\+\s*\\?['\"]|(?<=\S)\\?['\"](?=\S)"
 )
@@ -558,6 +599,10 @@ def _strip_data_heredoc_bodies(text: str) -> str:
     return "\n".join(out)
 
 
+#: A heredoc whose delimiter is QUOTED (``<<'PY'``, ``<<"PY"``). The quoting is
+#: the whole point: the shell performs NO expansion inside such a body -- no
+#: parameter expansion, no command substitution -- so a ``$(`` or a backtick
+#: there is inert text by the shell's own contract, not a substitution the
 #: guard is declining to analyse. `_HEREDOC_START_RE`'s own group 1 is
 #: OPTIONAL and matches the unquoted form too; this pattern requires it.
 _HEREDOC_QUOTED_START_RE = re.compile(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -609,8 +654,19 @@ _STDIN_PROGRAM_RE = re.compile(
     r"(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s+-(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s+-s(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s*(?=<<)"
+    # A python3/perl/ruby/node token with NO `-` flag at all, immediately
+    # followed by a heredoc, is stdin-as-program too -- exactly the same
+    # shell contract already carved out for bash/sh above one line up.
+    # Measured miss 2026-09-23: `python3 <<'PY' ... PY` denied nothing
+    # because this regex required the `-` flag that real `python3` does
     # NOT require to read a heredoc as its script. See P143-T10.
+    #
     # Anchored on END-OF-STRING (`\s*$`), not a `(?=<<)` lookahead: every
+    # caller here matches this against `line[:match.start()] + " "` --
+    # the text BEFORE the heredoc token, with the `<<` itself already cut
+    # off -- so a lookahead for `<<` can never fire (the bash/sh third
+    # alternative one line up shares this same call shape and is exactly
+    # as unreachable via that path; left as-is, out of this item's scope).
     r"|(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s*$"
 )
 
@@ -748,7 +804,14 @@ _ASSIGN_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _git_subcommand(segment: str) -> Optional[str]:
+    # Folded before tokenizing: `'g''it' checkout HEAD~5 -- <governed>` is a
+    # git content mutation to the shell, but the raw first token was never the
+    # literal `git`, so point 8 never classified it and the segment fell
+    # through to the read-shape carve-out (measured 2026-08-29). This reads
     # the segment for verb IDENTITY only, never to reconstruct arguments --
+    # which is also why the quote characters come off each token: folding
+    # `'g''it'` leaves `'git'`, still not the literal `git` the walk below
+    # compares against.
     tokens = [
         token.replace("'", "").replace('"', "")
         for token in _fold_literal_joins(segment).split()
@@ -1298,6 +1361,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         ):
             return False
         # Judge the RESOLVED command from here: every leg below asks what
+        # this command writes, and the resolved form is what writes it.
         cmd = expanded
 
     segments = _split_top_level_segments(cmd)
@@ -1516,13 +1580,49 @@ def _compose_deny_message(
     return f"{prose}\n\nSee {citation}."
 
 
+#: CLAUDE.md-class surfaces beyond the governed manifest: the live rules
+#: mirror and its authoring source. Plain-substring identifiers, like the rest.
+_ADVISORY_EXTRA_IDENTIFIERS = (".claude/rules/", "global-doctrine/rules/")
+_UNGOVERNED_FOR_ADVISORY = frozenset({"coordinator.local.md"})
+
+
+def _advisory_identifiers(governed_surfaces: Optional[List[str]]) -> Tuple[str, ...]:
+    """Identifiers for the warn-and-pass leg: every governed surface except
+    ``coordinator.local.md`` (config, not doctrine), plus any repo's
+    ``CLAUDE.md`` and the rules trees. Fixed floor so a missing manifest
+    still leaves the advisory armed."""
+    surfaces = [
+        surface
+        for surface in (governed_surfaces or [])
+        if surface.rsplit("/", 1)[-1].lower() not in _UNGOVERNED_FOR_ADVISORY
+    ]
+    if "CLAUDE.md" not in surfaces:
+        surfaces.append("CLAUDE.md")
+    identifiers = set(_governed_identifiers_lower(surfaces))
+    identifiers.update(_ADVISORY_EXTRA_IDENTIFIERS)
+    return tuple(sorted(identifiers, key=len, reverse=True))
+
+
+def _check_advisory(
+    cmd: str, governed_surfaces: Optional[List[str]], cwd: str
+) -> Optional[Dict[str, Any]]:
+    """Warn-and-pass verdict for a Bash-path write to a CLAUDE.md-class
+    surface; the approval-gate deny in ``check`` supersedes it when armed."""
+    identifiers = _advisory_identifiers(governed_surfaces)
+    if not is_denied_bash_write(cmd, identifiers):
+        return None
+    if level_for(_GUARD_NAME) == "off":
+        return None
+    if _is_onboarding_write(cmd, identifiers, cwd):
+        return None
+    return doctrine_surface_advisory()
+
+
 def check(
     payload: Dict[str, Any],
     governed_surfaces: Optional[List[str]],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    if not feature_enabled("doctrine_edit_gate"):
-        return None
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -1531,6 +1631,9 @@ def check(
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+
+    if not feature_enabled("doctrine_edit_gate"):
+        return _check_advisory(cmd, governed_surfaces, str(payload.get("cwd") or ""))
 
     if not governed_surfaces:
         return None

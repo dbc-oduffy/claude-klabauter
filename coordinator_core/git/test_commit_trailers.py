@@ -177,7 +177,12 @@ def test_ops_registry_survives_commit_trailers_import():
     assert "OK" in cp.stdout
 
 
+# ---------------------------------------------------------------------------
+# (vi) tier-0 (artifact-first) coverage -- 2026-08-04 cross-repo memo,
+# defect 2: a multi-baton session's commits must each resolve to the
 # COMMITTED ARTIFACT's own deliverable_id, not the session's (last-write-
+# wins) pickup record.
+# ---------------------------------------------------------------------------
 
 def _write_handoff(repo: Path, rel_path: str, deliverable_id: str) -> None:
     _write_plan(repo, rel_path, f'deliverable_id: "{deliverable_id}"\n')
@@ -621,7 +626,16 @@ def test_env_var_tiers_win_regardless_of_sentinel(tmp_path, monkeypatch):
     assert f"Session-Id: {_SID}" in joined
 
 
+# ---------------------------------------------------------------------------
+# `session_id_override` -- state/bug-backlog/2026-08-18-scoped-git-commit-
+# stamps-a-foreign-session-id-8d21f0c4e7b9.yaml. The caller's own
+# already-resolved committing-session identity must win over the blind
 # `$CLAUDE_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` env read -- the two can
+# legitimately disagree on a shared, many-concurrent-session process
+# (`scoped_git_commit.py::_resolve_committing_session_id` honors an
+# explicit `params["session_id"]` override this module's blind env read has
+# no way to see).
+# ---------------------------------------------------------------------------
 
 _OTHER_LIVE_SID = "e77424be-b452-43bd-a995-e12d60168cb6"
 
@@ -1067,6 +1081,39 @@ def test_tier0_artifact_wins_over_multiple_held_pickups(
 
     joined = " ".join(args)
     assert "Deliverable-Id: dlv-artifact" in joined
+
+
+def test_host_trailers_unset_returns_empty(tmp_path):
+    repo = _init_repo(tmp_path)
+    assert commit_trailers.read_host_commit_trailers(repo) == []
+
+
+def test_host_trailers_set_once(tmp_path):
+    repo = _init_repo(tmp_path)
+    _git(["config", "coordinator.commitTrailer", "Ticket: ABC-1"], repo)
+    assert commit_trailers.read_host_commit_trailers(repo) == ["Ticket: ABC-1"]
+
+
+def test_host_trailers_set_twice_keeps_order(tmp_path):
+    repo = _init_repo(tmp_path)
+    _git(["config", "--add", "coordinator.commitTrailer", "Zed: 1"], repo)
+    _git(["config", "--add", "coordinator.commitTrailer", "Alpha: 2"], repo)
+    assert commit_trailers.read_host_commit_trailers(repo) == ["Zed: 1", "Alpha: 2"]
+
+
+def test_host_trailers_exactly_one_git_spawn(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _git(["config", "coordinator.commitTrailer", "Ticket: ABC-1"], repo)
+    calls = []
+    real = commit_trailers._git_run.run_git
+
+    def counting(args, **kw):
+        calls.append(list(args))
+        return real(args, **kw)
+
+    monkeypatch.setattr(commit_trailers._git_run, "run_git", counting)
+    commit_trailers.read_host_commit_trailers(repo)
+    assert len(calls) == 1
 
 
 def test_single_held_pickup_unchanged(tmp_path, monkeypatch, _live_session):

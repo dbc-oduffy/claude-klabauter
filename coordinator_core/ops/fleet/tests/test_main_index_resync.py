@@ -709,6 +709,66 @@ def test_moves_resync_failure_is_recoverable_after_process_exit(tmp_path):
     assert "index-resync-failed" in record_text
 
 
+def _persist(worktree_root, candidate_id, reason, op_label="archive-failed"):
+    from coordinator_core.ops.fleet._common import _persist_index_resync_failure
+
+    _persist_index_resync_failure(
+        worktree_root=worktree_root,
+        candidate_id=candidate_id,
+        reason=reason,
+        op_label=op_label,
+    )
+
+
+def test_repeated_resync_failure_increments_one_row_instead_of_appending(tmp_path):
+    """The sink is bounded per (candidate_id, reason): repeats bump `occurrences`."""
+    import yaml
+
+    for _ in range(4):
+        _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+
+    written = list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))
+    assert len(written) == 1, written
+    doc = yaml.safe_load(written[0].read_text(encoding="utf-8"))
+    assert doc["occurrences"] == 4
+    assert doc["status"] == "open"
+    assert doc["system"]["provenance_completeness"] in ("complete", "unknown")
+
+
+def test_distinct_candidate_or_reason_files_a_new_row(tmp_path):
+    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+    _persist(tmp_path, "state/handoffs/b.md", "index.lock still held")
+    _persist(tmp_path, "state/handoffs/a.md", "a different failure")
+    # A path that is a suffix of another must not be absorbed into its row.
+    _persist(tmp_path, "a.md", "index.lock still held")
+
+    written = list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))
+    assert len(written) == 4, written
+
+
+def test_closed_row_is_not_bumped(tmp_path):
+    """A closed row is never incremented; the failure files a fresh open row.
+
+    Same-day identical content is content-keyed to the same filename, so the
+    fresh row lands over the closed file — that is append_queue_entry's own
+    dedup, not this sink's.
+    """
+    import yaml
+
+    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+    (row,) = (tmp_path / "state" / "bug-backlog").glob("*.yaml")
+    row.write_text(
+        row.read_text(encoding="utf-8").replace("status: open", "status: closed"),
+        encoding="utf-8",
+    )
+
+    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+
+    doc = yaml.safe_load(row.read_text(encoding="utf-8"))
+    assert doc["status"] == "open"
+    assert "occurrences" not in doc
+
+
 def test_reap_sink_write_failure_does_not_fail_the_op(monkeypatch):
     """AC4 — a sink-write failure must never fail the (already-committed,
     authoritative) archival op. Forces `append_queue_entry` to raise and

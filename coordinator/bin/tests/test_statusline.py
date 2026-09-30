@@ -45,6 +45,10 @@ def _run(stdin_bytes: bytes, tmp_path: Path, extra_env: dict[str, str] | None = 
     env = dict(os.environ)
     env["TMPDIR"] = str(tmp_path)
     # The sidecar lives under the SETTINGS HOME, not a tempdir --
+    # `context_usage_sidecar.sidecar_path` carries that as an explicit
+    # negative-spec ("this is NOT a tempdir path. It was one."). Without this
+    # the CLI wrote into the real ~/.coordinator-claude-settings and the
+    # assertions looked for a file nothing had produced since the move.
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path)
     env.pop("COORDINATOR_STATUSLINE_DEBUG", None)
     if extra_env:

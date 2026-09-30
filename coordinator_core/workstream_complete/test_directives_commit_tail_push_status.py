@@ -81,7 +81,13 @@ def test_normal_status_still_probes(monkeypatch):
     assert len(calls) == 1
     assert "log" in calls[0]
     assert gate.pushed is True
+# ---------------------------------------------------------------------------
+# "cadence-pending" — AC9c, docs/plans/2026-08-25-push-re-homes-onto-the-
+# cadence-surfaces.md. Same defect shape as the "declined" arm above, one
 # regime later: under DR-329 a close commit is made at PUSH_MODE_NEVER and
+# its publish belongs to the next cadence checkpoint, so a git-log probe
+# would find it unpushed and report a failure for the NORMAL outcome.
+# ---------------------------------------------------------------------------
 
 
 def test_cadence_pending_issues_no_git_log_probe(monkeypatch):

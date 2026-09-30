@@ -140,6 +140,7 @@ from coordinator_core.claude_md_budget import (
     resolve_ledger_path,
 )
 from coordinator_core.ops.measure_token_envelope import estimate_tokens
+from coordinator_core.write_guards._guard_level import doctrine_surface_advisory
 
 
 def _find_repo_root(start: str) -> Optional[str]:
@@ -237,8 +238,20 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             watermark = parse_watermark(ledger_path)
         except RatchetWatermarkError as exc:
+            # A malformed ledger is auxiliary-bookkeeping corruption, NOT a
+            # statement about whether THIS edit is legitimate -- denying
+            # every edit to the governed surface until an operator happens
+            # to notice and hand-repair the ledger is a wedge with no
             # escape hatch (this module carries zero COORDINATOR_OVERRIDE_*
+            # keys). Fail OPEN on the ratchet leg exactly like `_simulate`'s
+            # own explicit fail-open above (this makes the two failure
+            # paths on this module consistent, not merely fixes one of
+            # them): treat the surface as UNARMED for this evaluation (same
+            # as "no ledger" -- `watermark = None`), print a stderr warning
+            # naming the malformed ledger path so the operator can repair
+            # it, and fall through to the real size/ratchet evaluation
             # below. The flat `HARD_LIMIT_BYTES` check further down still
+            # applies regardless of this leg's outcome.
             print(
                 f"[check_claude_md_size] WARNING: ratchet watermark ledger "
                 f"at {ledger_path} is malformed, ratchet leg unarmed for "
@@ -256,7 +269,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
 
     if size <= HARD_LIMIT_BYTES:
-        return None
+        return doctrine_surface_advisory()
 
     reason = (
         f"{file_path}: {size}b{_token_note(new_content)}, over "

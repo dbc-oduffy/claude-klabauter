@@ -21,7 +21,10 @@ def node_dir(tmp_path: Path) -> Path:
     return d
 
 
+# ---------------------------------------------------------------------------
 # THE ACCEPTANCE ORACLE — A(explicit high) -> B(explicit low) -> C(no explicit)
+# C resolves to low, NEVER high.
+# ---------------------------------------------------------------------------
 
 
 def test_worked_example_resolves_to_nearest_explicit_ancestor_low(node_dir: Path):
@@ -149,7 +152,9 @@ def test_fan_in_agreeing_priorities_resolves_inherited(node_dir: Path):
     assert result["origin"] == "inherited"
 
 
+# ---------------------------------------------------------------------------
 # forked_from / origin_handoff / etc. are NON-EDGES — must not be traversed.
+# ---------------------------------------------------------------------------
 
 
 def test_forked_from_is_not_traversed(node_dir: Path):

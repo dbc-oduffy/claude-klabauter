@@ -72,6 +72,7 @@ def test_build_segments_dedupes_repeated_range_revlist_calls(monkeypatch):
     log_calls = [c for c in calls if c[:2] == ["git", "log"]]
 
     # The combined `git log --format=%H --name-only` call: one per DISTINCT
+    # range (2 distinct ranges), not one per record (4).
     assert len(log_calls) == 2, log_calls
 
     assert len(segments) == 4
@@ -155,3 +156,69 @@ def test_build_segments_skip_on_unresolvable_namelog_is_memoised(monkeypatch):
     log_calls = [c for c in calls if c[:2] == ["git", "log"]]
     assert len(log_calls) == 1, log_calls
     assert segments == []
+
+
+_AGGREGATE_TOKEN = "coverage assessment is partial"
+
+
+def _aggregate_lines(err: str) -> List[str]:
+    return [ln for ln in err.splitlines() if _AGGREGATE_TOKEN in ln]
+
+
+def test_load_records_skip_emits_one_unparseable_file_aggregate(tmp_path, capsys):
+    bad = tmp_path / "2026-01-01-bad.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+
+    recs = rcc._load_records([str(bad)], "", "", "skip")
+
+    assert recs == []
+    lines = _aggregate_lines(capsys.readouterr().err)
+    assert len(lines) == 1, lines
+    assert "1 trail file(s)" in lines[0]
+
+
+def test_build_segments_skip_emits_one_unresolvable_range_aggregate(monkeypatch, capsys):
+    def fake_run(cmd, cwd=None):
+        if cmd[:2] == ["git", "log"]:
+            sha_range = cmd[-1]
+            if sha_range.startswith("bad"):
+                return 1, "", "fatal: bad range"
+            return 0, f"{_sha_for(sha_range)}\nfile-for-{sha_range}.py\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(rcc, "_run", fake_run)
+
+    records = [
+        _rec("bad1..x", "record-1"),
+        _rec("bad1..x", "record-2"),
+        _rec("bad2..y", "record-3"),
+        _rec("aaa..bbb", "record-4"),
+    ]
+
+    segments = rcc.build_segments(records, on_unresolvable_ref="skip")
+
+    lines = _aggregate_lines(capsys.readouterr().err)
+    assert len(lines) == 1, lines
+    assert "3 trail record(s)" in lines[0]
+    assert "2 unresolvable range(s)" in lines[0]
+
+    resolvable_only =rcc.build_segments([_rec("aaa..bbb", "record-4")], on_unresolvable_ref="skip")
+    assert segments == resolvable_only
+    assert len(segments) == 1
+
+
+def test_build_segments_all_resolvable_emits_no_aggregate(monkeypatch, capsys):
+    def fake_run(cmd, cwd=None):
+        if cmd[:2] == ["git", "log"]:
+            sha_range = cmd[-1]
+            return 0, f"{_sha_for(sha_range)}\nfile-for-{sha_range}.py\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(rcc, "_run", fake_run)
+
+    rcc.build_segments(
+        [_rec("aaa..bbb", "record-1"), _rec("ccc..ddd", "record-2")],
+        on_unresolvable_ref="skip",
+    )
+
+    assert _aggregate_lines(capsys.readouterr().err) == []

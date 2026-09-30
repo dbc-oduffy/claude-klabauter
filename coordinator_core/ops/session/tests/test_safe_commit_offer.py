@@ -2893,17 +2893,20 @@ class TestSpawnBudget:
         paths = []
         for i in range(n_files):
             rel = "f%02d.%s" % (i, ext)
-            # CRLF on disk is load-bearing, not cosmetic. `blob_fallback`
-            # fires when in-process staging cannot reproduce the blob git
-            # would write -- which needs the worktree bytes to DIFFER from
-            # the normalized object (CRLF on disk, LF in the store under an
-            # `eol=crlf` pin). Content with bare LF, or with no line ending
-            # at all, normalizes to itself: staging succeeds in process and
-            # the second spawn never fires. A fixture that writes either one
-            # silently measures the unpinned budget while looking like it
-            # measures the pinned one -- which is how the first pass of this
-            # budget missed the spawn the live census had already recorded.
-            (repo / rel).write_text("body %d\r\n" % i, newline="")
+            # CRLF on disk is load-bearing for the PINNED ext only.
+            # `blob_fallback` fires when in-process staging cannot reproduce
+            # the blob git would write -- which needs the worktree bytes to
+            # DIFFER from the normalized object (CRLF on disk, LF in the
+            # store under an `eol=crlf` pin). Bare-LF content under a pin
+            # normalizes to itself, so the second spawn never fires and the
+            # fixture silently measures the unpinned budget.
+            # The unpinned ext must stay LF: with no attribute match,
+            # `stage_paths_in_process` refuses CR-bearing bytes unless
+            # `core.autocrlf=true`, so a CRLF `.txt` pays the fallback on
+            # any host that does not set it (once per group) and the
+            # "unpinned" arms measure the wrong budget.
+            eol = "\r\n" if ext == "cmd" else "\n"
+            (repo / rel).write_text("body %d%s" % (i, eol), newline="")
             scope.touch(sid, rel, cwd=str(repo))
             paths.append(rel)
 

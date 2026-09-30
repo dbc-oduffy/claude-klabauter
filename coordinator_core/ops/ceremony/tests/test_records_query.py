@@ -319,6 +319,7 @@ class TestQueryUnattachedAll:
             tmp_path / "docs/plans/2026-07-02-unattached-plan.md",
             "---\nstatus: implemented\n---\nBody.\n",
         )
+        # Non-member type — decision has no `initiative` field either, but
         # must never surface since it's not in UNATTACHED_TYPES.
         _write(
             tmp_path / "docs/decisions/2026-07-01-example.md",

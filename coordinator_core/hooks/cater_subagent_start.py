@@ -777,11 +777,9 @@ def _compute_unnamed_sentinel_leaf(agent_type: str) -> Optional[str]:
     Nonce, not digest: with no `agent_id` there is nothing stable to key on,
     so there is no identity to be idempotent about and a re-fired dispatch
     is MEANT to open a new doc -- `_provision`'s own nonce branch states the
-    same rationale. The EM-derivability argument that keeps the raw
-    `a<name>-<16hex>` named shape sentinel-less does not reach here: this
-    arm's consumer is `stop_dispatch :: _guard_kira_verdict_routed`, which
-    SCANS the session share directory and classifies on frontmatter, never
-    on a derived path.
+    same rationale. This arm's consumer is
+    `stop_dispatch :: _guard_kira_verdict_routed`, which SCANS the session
+    share directory and classifies on frontmatter, never on a derived path.
 
     Returns `None` when `agent_type` sanitizes to a degenerate result -- the
     caller must not write a path-less sentinel.
@@ -986,17 +984,18 @@ def _resolve_sidecar_leg(
         `resolve_effective_types`'s own contract), so the roster lookup
         below is structurally incapable of finding it there; only the
         back-pointer-resolved `subagent_type` could ever have matched, and
-        it did not. `agent_id` in the EM-derivable canonical `<name>@
-        session-<short>` shape ALSO gets a sentinel written eagerly here
-        (`_write_miss_sentinel`, `docs/plans/2026-08-25-a-missed-sidecar-
-        leaves-a-file-the-em-ca.md`), and the miss notice names its literal
-        path; the raw `a<name>-<16hex>` fallback shape gets no sentinel
-        (its hex is not EM-derivable) and takes the no-path body instead.
-        That fallback is the MINORITY arm, not the ordinary named dispatch.
-        The block comment at the gate itself carries the reachability
-        precondition and which sub-case the gate is load-bearing for --
-        stated once, there, rather than restated here where the two copies
-        would drift.
+        it did not. Every such dispatch ALSO gets a sentinel written
+        eagerly here (`_write_miss_sentinel`, `docs/plans/2026-08-25-a-
+        missed-sidecar-leaves-a-file-the-em-ca.md`), and the miss notice
+        names its literal path -- both the canonical `<name>@session-<short>`
+        shape and the raw `a<name>-<16hex>` fallback (`session_id` absent or
+        shorter than 8 chars). The consumer is the scanning
+        `subagent_sidecar_fill_check` (and an EM listing the share
+        directory), never a derived path, so what makes a sentinel findable
+        is its existence; the leaf is digest-keyed on the raw id, so the raw
+        shape cannot collide with a canonical one. A payload with no
+        `session_id` (or no git root) still yields the no-path body, via
+        `_write_miss_sentinel`'s own guards.
       - NO type resolved at all (`agent_type` and `subagent_type` both
         falsy) ALSO emits the miss notice -- the resolver-exception arm
         (`compose_catering`'s own `except` catching a `resolve_effective_
@@ -1017,9 +1016,8 @@ def _resolve_sidecar_leg(
       - an eligible type whose `_provision` came back empty also emits the
         miss notice (unchanged) -- an eligible dispatch is told, never
         left to read silence as ineligibility. A sentinel is written and
-        named for every such dispatch EXCEPT the raw `a<name>-<16hex>`
-        named-teammate shape, whose consumer is the polling EM and whose
-        hex no EM can derive. A dispatch carrying no `agent_id` at all is
+        named for every such dispatch, the raw `a<name>-<16hex>`
+        named-teammate shape included. A dispatch carrying no `agent_id` at all is
         served too, on a leaf minted the way `_provision` mints its own --
         that population is unnamed, not malformed, and excluding it left
         the scanning guard blind to exactly the dispatches this leg exists
@@ -1048,34 +1046,17 @@ def _resolve_sidecar_leg(
         return "", _compose_sidecar_miss_text()
 
     if not subagent_type and agent_id and _is_named_teammate_agent_id(agent_id):
-        # SHAPE GATE (AC2): sentinel keys ONLY on the canonical
-        # `<name>@session-<short>` shape. The raw `a<name>-<16hex>`
-        # fallback carries 16 hex digits no EM can derive, so a sentinel
-        # there would be unpollable by construction -- write none, take
-        # the no-path body.
-        # WHEN THIS GATE IS REACHED, since nothing beside it says so and a
-        # reader who checks finds `compose_catering` canonicalizing first:
-        # `resolve_effective_types` hands back the canonical
-        # `<name>@session-<short>` form for every payload carrying a usable
-        # `session_id`, so the raw form survives ONLY on the Staff Engineer F4
-        # fallback -- `session_id` absent, or shorter than the 8 chars the
-        # `<short>` half needs. This gate is NOT dead code; deleting it
-        # fails `tests/test_cater_subagent_start.py ::
-        # test_raw_fallback_shape_gets_no_sentinel`, which drives that
-        # fallback with a 3-char session_id.
-        #
-        # It is load-bearing for exactly one of those two sub-cases. With
-        # `session_id` absent, `_write_miss_sentinel` returns "" on its own
-        # `if not session_id` guard, so the gate is redundant there -- do
-        # not "simplify" by removing that guard instead, it is the one this
-        # arm does not cover. With `session_id` present but short, the write
-        # WOULD succeed, and the gate is the only thing stopping it: the EM
-        # knows that session_id (it dispatched with it) but never the 16 hex
-        # digits the subagent minted, so the path is unpollable by
-        # construction and a sentinel there is a file nobody comes for.
-        sentinel_path = ""
-        if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
-            sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
+        # Every named shape gets a sentinel, the raw `a<name>-<16hex>`
+        # fallback included. `subagent_sidecar_fill_check` finds unfilled
+        # sidecars by SCANNING the session share directory, so findability is
+        # existence, not derivability; withholding the file from the raw shape
+        # left the one population that lost six reports with nothing for the
+        # fill-check to surface. The leaf digests the RAW id, so a raw id
+        # cannot collide with a canonical one. The raw form is reached only
+        # when `session_id` is absent (`_write_miss_sentinel` returns "" on
+        # its own guard, taking the no-path body) or shorter than the 8 chars
+        # canonicalization needs.
+        sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
         no_repo_cwd = _no_repo_cwd_diagnosis(sentinel_path, cwd)
         return sentinel_path, _compose_sidecar_miss_text(
             sentinel_path, is_named=True, no_repo_cwd=no_repo_cwd
@@ -1094,9 +1075,8 @@ def _resolve_sidecar_leg(
     if sidecar_path:
         return sidecar_path, _compose_sidecar_offer_text(sidecar_path)
 
-    # Same shape gate as above: an eligible type whose `_provision` came
-    # back empty still only gets a sentinel when `agent_id` is in the
-    # EM-derivable canonical shape.
+    # An eligible type whose `_provision` came back empty gets a sentinel for
+    # every `agent_id` shape, named or not, as above.
     #
     # The stamped type is RESOLVED against the same vocabulary the
     # `sidecar_eligible` gate just consulted, not raw `agent_type`. That gate
@@ -1109,13 +1089,8 @@ def _resolve_sidecar_leg(
     # programmatically today, so this is a correctness-of-record fix rather
     # than a live-defect one -- but the sentinel is a file an EM opens and
     # reads, and it named the wrong agent.
-    # THIRD ARM -- an UNNAMED dispatch also gets a sentinel, and the
-    # derivability argument above does not forbid it.
-    #
-    # That argument is about ONE consumer: an EM polling a path it must be
-    # able to derive, for which an underivable sentinel is "a file nobody
-    # comes for". A second consumer post-dates it and finds files a different
-    # way. `hooks/stop_dispatch.py :: _guard_kira_verdict_routed` SCANS
+    # An UNNAMED dispatch gets a sentinel too. Its consumer is
+    # `hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, which SCANS
     # `state/subagent-share/<session>/` and classifies on frontmatter, never
     # on a derived path -- and its two branches diverge on exactly this file's
     # existence. `_kira_unstamped_integrators` selects sidecars carrying an
@@ -1132,34 +1107,17 @@ def _resolve_sidecar_leg(
     # (P1, state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-
     # integrator-receipt-into-a-siblings-file.yaml).
     #
-    # Deliberately NOT widening either gate above: the raw `a<name>-<16hex>`
-    # fallback is a NAMED dispatch and stays excluded (its 16 hex digits are
-    # underivable and its consumer IS the polling EM), pinned by
-    # `test_raw_fallback_shape_gets_no_sentinel`. An unnamed id carries no
-    # `@` and matches neither named shape, so this arm cannot reach it.
-    #
-    # FOURTH ARM -- a dispatch carrying NO `agent_id` gets one too, and the
-    # third arm above could not reach it. `if agent_id and ...` reads as a
-    # malformed-payload guard and is not one: an absent id is the ordinary
-    # shape for an unnamed child on several live harnesses, and it is the
-    # shape `_provision` itself already serves -- its nonce branch fires on
-    # exactly `agent_id` falsy, and the sidecars it writes there carry
-    # `agent_id: ''`. So the OFFER leg covered this population and the MISS
-    # leg did not: an eligible unnamed dispatch whose provisioning came back
-    # empty left nothing on disk at all, which is the guard-blinding state
-    # the third arm exists to prevent, still reachable through the one
-    # population that arm's gate excluded. The leaf cannot key on the id
-    # (there is none), so it is minted the same way `_provision` mints its
-    # own -- `_compute_unnamed_sentinel_leaf`.
+    # A dispatch carrying NO `agent_id` is served as well: an absent id is the
+    # ordinary shape for an unnamed child on several live harnesses, and
+    # `_provision`'s nonce branch already serves it (its sidecars carry
+    # `agent_id: ''`). The leaf cannot key on the id, so it is minted the way
+    # `_provision` mints its own -- `_compute_unnamed_sentinel_leaf`.
     stamped_type = _receipt_agent_type(
         agent_type or "", subagent_type or "", policy.report_sidecar
     )
     sentinel_path = ""
     if agent_id:
-        if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id) or not (
-            _is_named_teammate_agent_id(agent_id)
-        ):
-            sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, stamped_type)
+        sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, stamped_type)
     else:
         sentinel_path = _write_miss_sentinel(
             payload,

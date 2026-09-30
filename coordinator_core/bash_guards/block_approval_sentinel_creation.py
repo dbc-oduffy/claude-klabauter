@@ -223,8 +223,12 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
+#: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
+#: longer name (e.g. `.coordinator-doctrine-edit-approved.bak`) is a
 #: DIFFERENT file and is not the approval sentinel the sibling DoE hook
+#: reads; matching it too would be scope creep past what this guard is
+#: chartered to protect.
 _TARGET_BASENAME = ".coordinator-doctrine-edit-approved"
 
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
@@ -615,7 +619,26 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
     )
 
+    #: `git` subcommands that only read repo state. Anything else under
+    #: `git` (`checkout`, `restore`, `stash`, or an unrecognized subcommand)
+    #: is NOT presumed safe and falls through to the mention-based deny.
+    #:
+    #: `check-ignore` and `check-attr` are pure path QUERIES -- they resolve a
+    #: pathname against `.gitignore` / `.gitattributes` and report, touching
+    #: no file and no index. Both were missing until 2026-07-31, when a
+    #: `git check-ignore .coordinator-doctrine-edit-approved` -- the exact
+    #: command that verifies the sentinel is ignored, i.e. that the
+    #: checkout-materialises-a-fresh-sentinel hole is closed -- was denied as
+    #: a write. That is the guard refusing the very check that confirms its
+    #: own boundary holds. `check-attr` is admitted alongside it as the
+    #: identical query shape rather than waiting for its own false positive.
+    #:
+    #: Deliberately NOT widened past demonstrated need: this set is an
+    #: enumerate-the-harmless allowlist by construction (see the class
     #: docstring's "THE INVERSION ITSELF"), so it grows one justified entry at
+    #: a time. `blame`, `cat-file`, and `ls-tree` are equally read-only and
+    #: equally absent -- add them when something actually needs them, with
+    #: the same note.
     _SAFE_GIT_SUBCOMMANDS = frozenset(
         {
             "status", "diff", "log", "show", "ls-files", "rev-parse", "describe",
@@ -635,6 +658,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 
     def __init__(self, target_basename: str) -> None:
         super().__init__(target_basename)
+        #: Variable names, tainted for the CURRENT `evaluate()` call only --
+        #: recomputed at the top of `evaluate()` from that call's own
+        #: command string, never carried over between calls. See class
         #: docstring "VARIABLE TAINT".
         self._tainted_vars: "set[str]" = set()
         #: Item 33: the PreToolUse payload's own `cwd`, set fresh by
@@ -1112,13 +1138,36 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None, cwd: Optional[str] = 
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
+    # Deliberately does NOT echo `cmd` back into the message and does NOT
+    # name the target basename in either branch below -- both would print
+    # the exact bypass an eager agent could copy-paste, which reads as
+    # sanctioning it rather than blocking it. `cmd` stays accepted for
+    # call-site symmetry with the sibling guard, but is intentionally
+    # unused here.
+    #
+    # `reason_class` (2026-07-28 diagnosability fix -- see
+    # `_sentinel_creation_guard.py` module docstring "REASON CLASS") splits
+    # the ONE fixed message this function used to return into two truthful
     # ones: a REASON_DIRECT deny means a rule positively matched the
+    # sentinel, so the "this command would create/modify the sentinel"
     # assertion is actually correct. A REASON_INDIRECTION deny means the
+    # opposite -- the payload sits behind an interpreter/env/xargs/heredoc
     # wrapper this guard cannot examine, so it denies BY CONSTRUCTION, not
+    # because anything was found. The prior single-message version asserted
     # the DIRECT text on an INDIRECTION deny too, which is how a caller
+    # whose script never mentioned the sentinel got told it would create
+    # one -- a false assertion that cost a live cross-repo debugging
+    # round-trip (see dispatch brief, 2026-07-28).
     del cmd
     if reason_class == REASON_INDIRECTION:
+        # `reason_kind` is safe to surface here (it names a shell SHAPE --
+        # e.g. "bash <file> (interpreter-invoked script -- indirection
+        # wrapper, script content unexamined)" -- never a bypass to
         # copy-paste), but a RECURSIVE indirection verdict can still bottom
+        # out one level down in the direct branch's target-naming string
+        # (e.g. `bash -c "touch <sentinel>"` unwraps through exactly that).
+        # Redact the basename out regardless of which sub-path produced it,
+        # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
             "BLOCKED (approval-sentinel guard): payload unreadable (%s); it "
@@ -1180,7 +1229,15 @@ def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
 
     # NOTE: deliberately no raw-text `_MENTION_RE` pre-filter gate here
+    # (unlike the sibling guards' cheap-probe posture) -- a partially-quoted
+    # spelling such as `'.coordinator-doctrine-edit'"-approved"` does NOT
+    # contain the sentinel basename as a contiguous raw substring (the quote
     # characters sit between the two halves); only the TOKENIZED form (after
+    # shlex merges the adjacent quoted segments) reconstructs it. Gating on
+    # the raw substring here would silently defeat exactly the "partially-
+    # quoted spellings" coverage this guard is chartered to close. The
+    # tokenized pass below is cheap enough that skipping this pre-filter is
+    # not a meaningful cost.
     deny, reason_kind, reason_class = _evaluate(cmd, dialect, cwd=cwd)
     if not deny:
         return None

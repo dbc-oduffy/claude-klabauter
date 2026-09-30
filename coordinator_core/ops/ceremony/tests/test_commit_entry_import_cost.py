@@ -10,7 +10,16 @@ import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+#: Modules that must stay OUT of the interpreter after a bare
+#: `import coordinator_core.git.commit`. Prefix-matched, so a
+#: submodule (`asyncio.events`) counts as a hit for its parent.
+#:
+#: `socket` (with `selectors`/`select`, ~4.3ms) arrives by a SECOND route:
+#: `machine_resolver._hostname_short`, reached through `content_root_pointer` ->
 #: `commit_trailers`. `compute_machine` resolves `$COORDINATOR_MACHINE` and the
+#: settings file first, so most invocations never ask for a hostname at all --
+#: the import there is deferred for the same reason asyncio's is here, and is
+#: pinned here because this is the path that pays for it.
 _FORBIDDEN_PREFIXES = (
     "asyncio",
     "coordinator_core.ops.fleet.archive_terminal_handoffs",

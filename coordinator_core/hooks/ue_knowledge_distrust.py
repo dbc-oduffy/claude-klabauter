@@ -25,8 +25,10 @@ Ported behavior, in order:
           dependency of any kind).
        c. override already true -> no action, no message (falls through both
           branches, mirroring the bash elif chain where no branch fires).
-  3. UE PROJECT DETECTED banner -- byte-identical golden-diff target, emitted
-     whenever a ".uproject" was found (unconditional on the bootstrap outcome).
+  3. UE PROJECT DETECTED banner -- emitted whenever a ".uproject" was found
+     (unconditional on the bootstrap outcome). Held to the agent-facing
+     message register (docs/wiki/guard-messaging.md, Register); no golden
+     artifact pins its wording, only test_ue_knowledge_distrust_message_text.py.
 
 INTENTIONAL DIVERGENCE from the bash oracle (flagged per recipe section 2.5,
 "same divergence class as section 2.3"): the bash oracle's jq-ABSENT /
@@ -54,6 +56,7 @@ from typing import NamedTuple, Optional
 _OVERRIDE_KEY = "example-game-repo-control@example-game-workbench-repo"
 _MAX_DEPTH = 3
 
+# The full set of plugin keys claude-ue-bootstrap.sh wrote/merged to true.
 # Mirrors that script's EXPECTED_KEYS array verbatim (C5 port target).
 _BOOTSTRAP_KEYS = (
     "example-game-repo-control@example-game-workbench-repo",
@@ -236,9 +239,9 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         )
 
     banner = (
-        "UE PROJECT DETECTED (%s): UE training data is untrustworthy -- "
-        "names/signatures/behaviors may be stale/hallucinated. MCP (333K+ "
-        "docs, 73K APIs) is ground truth. Use quick_ue_lookup first.\n"
+        "UE PROJECT DETECTED (%s): UE training data is stale or wrong on "
+        "names, signatures, behavior. MCP docs are ground truth; "
+        "use quick_ue_lookup first.\n"
     ) % project_name
 
     return DistrustResult(banner=banner, stderr_lines=stderr_lines)

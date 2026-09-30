@@ -179,6 +179,8 @@ class TestGitFailureReturnsNonBlocking:
         scope.touch("mine", "a.py", cwd=str(repo))
 
         # A git-level commit failure is an EXCEPTION from `commit_paths`
+        # (`CommitRefused`), not a return-value shape -- `_commit_group`
+        # catches it and maps it onto `GroupResult`.
         def _failed_commit(*args, **kwargs):
             raise CommitRefused("simulated git-level commit failure")
 

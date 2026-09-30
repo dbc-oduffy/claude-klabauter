@@ -2743,7 +2743,14 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
 # coordinator_core.ops.plan_status_transition port (no subprocess/node hop).
 # ---------------------------------------------------------------------------
 
-def cs_stamp_plan_implemented(plan_path: str) -> int:
+def cs_stamp_plan_implemented(
+    plan_path: str,
+    *,
+    falsifier_verdict: Optional[str] = None,
+    falsifier_output: Optional[str] = None,
+    prose: Optional[str] = None,
+    refuse_open_spine_rows: bool = False,
+) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
     byte-parity port of the node oracle's stamp-implemented verb — see that
@@ -2758,8 +2765,41 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
     divergent AC parser here would be a duplicate, register-breaking notice
     (spec: docs/plans/2026-09-12-the-direct-stamp-verb-refuses-what-close-
     out-refuses.md, C3).
+
+    ``falsifier_verdict``/``falsifier_output``/``prose`` forward the verb's
+    ``--falsifier-*``/``--prose`` flags, recording ``exit_criterion_met`` for
+    a spineless plan; each omitted one is simply not passed, so the verb's
+    own all-or-none refusal judges a partial set.
+
+    ``refuse_open_spine_rows`` (the operator CLI route) refuses, naming them,
+    while the plan-tasks spine has `open`-disposition rows. Close-out leaves
+    it off: it certifies landing from the dispatch ledger before the spine's
+    own rows are rewritten, and workstream-complete gates on the same oracle
+    upstream.
     """
-    return plan_status_transition.main(["stamp-implemented", "--plan", plan_path])
+    if refuse_open_spine_rows:
+        from coordinator_core.workstream_complete.directives_spine_worklist import (
+            compute_open_spine_row_gate,
+        )
+
+        gate = compute_open_spine_row_gate(Path(plan_path).stem, Path(plan_path))
+        if gate.verdict == "applicable" and gate.open_count > 0:
+            print(
+                f"stamp-plan-implemented: refusing: {plan_path}: {gate.open_count} spine "
+                f"row(s) still open: {', '.join(r.id for r in gate.rows)} -- land or "
+                "disposition them first",
+                file=sys.stderr,
+            )
+            return 1
+    argv = ["stamp-implemented", "--plan", plan_path]
+    for flag, value in (
+        ("--falsifier-verdict", falsifier_verdict),
+        ("--falsifier-output", falsifier_output),
+        ("--prose", prose),
+    ):
+        if value is not None:
+            argv += [flag, value]
+    return plan_status_transition.main(argv)
 
 
 def cs_stamp_plan_superseded(plan_path: str, by: str) -> int:
@@ -2787,6 +2827,7 @@ def cs_repair_archived_shipped_in(
     reason: str,
     sha: Optional[str] = None,
     unset: bool = False,
+    clear_advancement: bool = False,
 ) -> int:
     """Repairs ``shipped_in`` on a handoff that has ALREADY been archived
     (``archive/handoffs/``) — a narrow, separate door onto a path every other
@@ -2807,6 +2848,12 @@ def cs_repair_archived_shipped_in(
     with no recoverable correct sha (four of the eight audited rows have
     none). ``sha`` and ``unset=True`` are mutually exclusive.
 
+    ``clear_advancement=True`` removes ``advanced_by``/``advanced_at`` (a false
+    cascade's advancement claim) without a ``deployment_state`` transition —
+    the door for a record that IS correctly ``shipped``. It composes with
+    ``sha`` in one write or stands alone; ``shipped_in`` is left untouched
+    unless ``sha``/``unset`` is also given.
+
     ``reason`` is REQUIRED on every call and is echoed back in the result for
     the caller's own audit trail — this function does not persist a ledger of
     its own. Convention (not enforced): prefix ``reason`` with the root cause
@@ -2818,7 +2865,7 @@ def cs_repair_archived_shipped_in(
 
     Returns 0 on a successful repair/clear (or a byte-identical no-op — the
     requested state already holds), 1 on any rejection (missing reason,
-    sha/unset both-or-neither, malformed sha shape, path outside
+    sha/unset both, none of sha/unset/clear_advancement, malformed sha shape, path outside
     archive/handoffs/, file not found, malformed frontmatter, lock timeout).
     """
     hpath = Path(handoff_path)
@@ -2837,6 +2884,8 @@ def cs_repair_archived_shipped_in(
     params: dict = {"handoff_path": handoff_path, "reason": reason, "unset": unset}
     if sha:
         params["sha"] = sha
+    if clear_advancement:
+        params["clear_advancement"] = True
 
     result = asyncio.run(_repair_handler(params, repo_root=repo_root))
     rc = int(result.get("exit_code", 1))
@@ -3057,6 +3106,10 @@ def cs_correct_handoff_body(handoff_path: str, old_string: str, new_string: str)
     made VISIBLE ON DISK rather than closed off. This CLI must never be read
     as enforcing "only the author can correct this body."
 
+    NO `override_reason` HERE, BY DESIGN. The op's recovery-only override stays
+    on the JSON-RPC surface: keeping it off this casually-reachable veneer
+    raises the cost of taking it. Do not plumb it through without a ruling.
+
     Returns the op's own `exit_code` verbatim: 0 applied / 1 refused (one of
     19 distinct, verbatim refusal reasons — see the op's module docstring).
     Nothing is written on refusal. Prints `error` to stderr on refusal,
@@ -3084,4 +3137,36 @@ def cs_correct_handoff_body(handoff_path: str, old_string: str, new_string: str)
         print(f"cs_correct_handoff_body: {result.get('error', 'unknown error')}", file=sys.stderr)
     else:
         print(f"cs_correct_handoff_body: {result.get('message', '')}", file=sys.stderr)
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# memo.correct_note verb wrapper — cs_correct_memo_note
+# ---------------------------------------------------------------------------
+
+def cs_correct_memo_note(memo_path: str, decision_note: str) -> int:
+    """CLI veneer over the `memo.correct_note` op — replaces the ``decision_note``
+    of an already-actioned (or closed) decision-shape memo and stamps a
+    ``[correction ...]`` clause naming the calling session. ``decision`` and
+    ``realized_by`` are immutable here: this cannot re-action a memo.
+
+    THE AUTHORSHIP GATE IS ANTI-ACCIDENT, NOT ANTI-ADVERSARY. The resolved session
+    id must equal the memo's ``picked_up_by``; that id is a caller-controlled
+    environment lookup, so the real control is the stamped clause, which makes a
+    spoofed call visible on disk rather than preventing it. The op's recovery-only
+    ``override_reason`` stays on the JSON-RPC surface and is not plumbed through
+    this veneer.
+
+    Returns the op's ``exit_code`` verbatim: 0 applied (or idempotent no-op) /
+    1 refused. Nothing is written on refusal.
+    """
+    from coordinator_core.ops.memo_correct_note import _handler as _correct_note_handler
+
+    params = {"memo": memo_path, "decision_note": decision_note}
+    result = asyncio.run(_correct_note_handler(params, repo_root=None))
+    rc = int(result.get("exit_code", 1))
+    if rc != 0:
+        print(f"cs_correct_memo_note: {result.get('error', 'unknown error')}", file=sys.stderr)
+    else:
+        print(f"cs_correct_memo_note: {result.get('message', '')}", file=sys.stderr)
     return rc

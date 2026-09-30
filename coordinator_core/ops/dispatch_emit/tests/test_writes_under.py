@@ -121,6 +121,7 @@ def test_a_scalar_prefix_is_refused(tmp_path):
 
 def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path):
     # The holdout keys on UNDECLARED writes. A prefix row has declared where
+    # it writes, so it must be scheduled after its gate, not held.
     body = """\
 - id: C1
   title: decides

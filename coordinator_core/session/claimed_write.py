@@ -83,6 +83,7 @@ from coordinator_core.session.declared_writes import declare_write
 
 __all__ = ["replace_text", "replace_bytes", "create_exclusive", "append_claimed_line"]
 
+# Bounded retry attempts before create_exclusive(retry_suffix=True) fails loud.
 # Mirrors ops/queue_append.py::_COLLISION_RETRY_CAP.
 _COLLISION_RETRY_CAP = 1000
 

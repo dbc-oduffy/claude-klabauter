@@ -457,8 +457,15 @@ class TestBooleanCoercion:
         assert "nondraft-handoff.md" in Path(paths[0]).name
 
 
+# ---------------------------------------------------------------------------
+# Tests (T4d-g1c): full --where grammar operator support
+#
 # Pre-T4d-g1c, these operators (!=, <, >, <=, >=, in) were REJECTED with
+# sys.exit(1) — the op only supported equality-AND conjunctions. T4d-g1c
+# EXTENDS records_query.py to the full query-records.js grammar (freeze-
 # query-records-grammar.md Surface 3), so these operators are now SUPPORTED,
+# not rejected. Only a genuinely unparseable clause still exits loud.
+# ---------------------------------------------------------------------------
 
 
 class TestWhereGrammarOperators:
@@ -627,6 +634,8 @@ class TestLivenessPredicateSmoke:
 
     def test_handoff_two_axis(self):
         assert liveness({"deployment_state": "awaiting_gate"}, "handoff") == "BLOCKED"
+        # DR-084: status: claimed is the current vocabulary; status: consumed is
+        # the retired predecessor, kept here as an old-name tolerance check —
         # _TERMINAL_STATUS is old-union-new widened (lifecycle_constants.py).
         assert liveness({"status": "claimed"}, "handoff") == "DONE"
         assert liveness({"status": "consumed"}, "handoff") == "DONE"
@@ -996,10 +1005,19 @@ class TestLegacyProseQueueSignal:
         [
             "- The lesson: verify SQL backslash semantics empirically first.",
             "- Rejected: the sweeper's hypothesis does not survive engine source review.",
+            # mixed-case natural-language bold lead-in — a lower-case segment
+            # ("regressions retrospective") after the first hyphen means it's
             # not ALL-CAPS, so branch (c) can't match (digit presence in "2"
+            # is irrelevant) — real fleet false-positive candidate: project-
+            # rag-ue-addon bug-backlog.md "Notes" section.
+            # Comment was swapped with
+            # the C3-priming line below; each now describes its own line.
             "- **Round-2 regressions retrospective:** three round-1 fixes broke tests.",
             # short label starting with an ALL-CAPS-with-digit token ("C3")
+            # followed by a lower-case segment ("priming") — same exclusion
             # mechanism as above (not ALL-CAPS throughout), NOT "no digit":
+            # C3 plainly contains one. Real fleet false-positive candidate
+            # (example-retrieval-repo bug-backlog.md summary section).
             "- **C3-priming:** 14/15 already-fixed, 1 file-removed.",
             "- **C1-core:** stale TODOs cited are now rationale comments.",
             "  - Same family — a flaky order-dependence issue, RESOLVED 2026-06-01.",
@@ -1018,11 +1036,20 @@ class TestLegacyProseQueueSignal:
         coverage without losing precision."""
         assert not _LEGACY_PROSE_ENTRY_LINE_RE.search(line), f"unexpected match: {line!r}"
 
+    # Branch (b) (markdown-table ID cell)
+    # has no digit requirement or case constraint, unlike its sibling ID
+    # branches, so it has no adversarial negative coverage for its own
+    # broadest failure mode. These document the current (accepted) false-
+    # positive surface rather than asserting a fix — see the digit-lookahead
     # note on `_LEGACY_PROSE_ENTRY_LINE_RE`'s branch (b) comment for why the
+    # lookahead was NOT added (it drops a real corpus row,
+    # example-stats-repo/state/debt-backlog.md's `| G-OVR | ... |`).
     @pytest.mark.parametrize(
         "line",
         [
+            # plausible hyphenated-but-non-ID first cell (glossary/legend-shaped
             # row) — CURRENTLY matches branch (b); no real corpus row does this
+            # today, but the branch has no digit/case guard against it.
             "| high-priority | items flagged for immediate attention |",
             "| self-review | a reviewer checking their own prior work |",
         ],
@@ -1208,9 +1235,22 @@ class TestTypeToGlobDerivedGate:
     _DOE_REPO = Path(_content_root_str) if _content_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
+    # Deliberately-excluded types — every member of the delta between
     # build_type_to_glob's schema-derived set and this module's _TYPE_TO_GLOB
+    # (post-goal, post-research-synthesis/gap-report/coverage-audit,
+    # post-archived-memo, post-sizing-object, post-cutover) NOT wired into
     # _TYPE_TO_GLOB.
+    # Two categories, each type's reason inline:
+    #
+    #   (A) NOT a query-servable record collection at all — either a single
+    #       fixed-path file (no wildcard: "query the record set" is meaningless
+    #       for exactly one file) or a JSON file/glob that would hit this
+    #       module's .md/.yaml frontmatter parser branches and silently
+    #       collect zero records rather than parsing.
+    #   (B) A genuine record-shaped collection (wildcard glob, .md or .yaml)
     #       that is simply not yet wired into _TYPE_TO_GLOB — out of scope
+    #       for this fix, not structurally unqueryable. Candidates for a
+    #       future add when a caller needs them.
     _TYPE_TO_GLOB_DELIBERATE_EXCLUSIONS: dict[str, str] = {
         "capability-manifest":     "single JSON file (state/capabilities/manifest.json), no wildcard, not frontmatter-shaped",
         "fleet-capability-index":  "single JSON file (state/capabilities/fleet-index.json), no wildcard, not frontmatter-shaped",
@@ -1516,7 +1556,14 @@ class TestSiblingExclusionDerivedFromWiredSet:
     _DOE_REPO = Path(_content_root_str) if _content_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
+    # 'plan' is exempted: its docs/plans/*.md glob DOES have genuine unwired
+    # suffix-sidecar siblings (docs-check-sidecar/integration-summary/
+    # plan-coverage-check/prior-art-check/review-sidecar), but those are
     # already excluded by the SEPARATE, dedicated `_apply_plan_filename_filter`
+    # positive-allowlist — the same "both filters coexist" architecture the
+    # oracle itself uses (query-records.js's own comment at bin/query-records.js
+    # :1325-1326). No divergence risk: the sidecar files never reach
+    # `_apply_sibling_exclusion` matched into a plan result either way.
     _EXEMPT_WIRED_TYPES: frozenset[str] = frozenset({'plan'})
 
     def _skip_if_unresolvable(self):
@@ -2246,7 +2293,11 @@ class TestUnattachedUnionLens:
         )
         records = result["records"]
         assert len(records) == 3
+        # All 6 unattached fixtures share created=2026-07-02, so a stable sort
+        # keeps the union's collection order (bug, debt, improvement, roadmap,
         # handoff, plan) for the first 3 — proves limit sliced the ASSEMBLED
+        # union rather than truncating per type (a per-type limit=3 with only
+        # ~1-2 unattached records per type would never even trigger a slice).
         types_kept = [r["_type"] for r in records]
         assert types_kept == ["bug", "debt", "improvement"]
 

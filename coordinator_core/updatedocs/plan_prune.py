@@ -112,6 +112,10 @@ def compute_plan_prune_candidates(
             mtime = plan_path.stat().st_mtime
         except OSError:
             # Present at glob time, gone or unreadable by the stat. INDETERMINATE,
+            # never a silent `continue`: the three lists must account for every
+            # file the glob returned, or a caller reconciling totals finds a gap
+            # with nothing explaining it. "We looked and it was not there to tell"
+            # belongs with "we looked and could not tell", not with neither.
             indeterminate.append(rel)
             continue
         age = (now - mtime) / 86400.0

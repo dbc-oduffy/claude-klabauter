@@ -139,7 +139,10 @@ _JUSTIFICATION_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: A bare YAML block-scalar header with no inline content, e.g. `|`, `|-`,
 #: `>+`. When `_JUSTIFICATION_LINE_RE`'s captured value is one of these, the
+#: real justification text lives on the following more-indented lines, not
+#: in the header itself.
 _BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\d*$")
 
 _FIVE_QUESTIONS_DOC = "docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo)"
@@ -312,6 +315,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             legacy_prose_note = _LEGACY_PROSE_NOTE.format(queue_dir="improvement-queue")
 
         # COORDINATOR_QUEUE_PUNT is
+        # reason-shaped, not flag-shaped; its own _is_trivial_reason
+        # denylists the literal "1", so the default VAR=1 render would be
+        # refused by the very guard printing it. reason_placeholder
+        # renders the correct VAR="<reason>" syntax instead.
         _note = operator_override_note(
             _ESCAPE_HATCH_ENV_VAR,
             payload=payload,

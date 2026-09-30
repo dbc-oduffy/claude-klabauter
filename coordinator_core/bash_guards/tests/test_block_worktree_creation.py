@@ -215,13 +215,36 @@ class TestHeredocBodyIsNotShellText:
 
     def test_real_invocation_preceding_unrelated_heredoc_still_denies(self):
         # Anti-bypass: stripping an UNRELATED heredoc's body must not mask a
+        # real invocation living on an earlier line. This guard has no
+        # interpreter-indirection probe of its own (that lives in the
+        # identity-gated sibling -- see that module's own
+        # `test_heredoc_interpreter_fed_wrapper_still_denies`, which covers
+        # the genuine interpreter-FED-by-heredoc shape, i.e. `bash <<EOF ...
+        # EOF` where the body is what gets executed). This test does NOT
+        # exercise that shape -- it puts a real invocation on a line before
+        # an unrelated, harmless heredoc; see
+        # `test_interpreter_fed_by_heredoc_via_worktree_guard_is_a_known_open_residual`
+        # below for this guard's own (allow-side) coverage of the genuine
+        # shape.
         cmd = "git worktree add ../wt-1 x\ncat <<EOF\nharmless\nEOF\n"
         _reason(guard.check(_payload(cmd)))
 
     def test_interpreter_fed_by_heredoc_via_worktree_guard_is_a_known_open_residual(self):
         # KNOWN-OPEN RESIDUAL, not a regression from the `<<\EOF` regex
+        # widening (2026-07-29 review finding 1). This guard (unlike its
+        # identity-gated sibling in `block_subagent_destructive_action.py`)
+        # has no interpreter-wrapper probe of its own -- it only looks for
+        # the literal `worktree` word in the (heredoc-body-stripped) command
+        # text. So `bash <<EOF ... git worktree add ... EOF`, where the
+        # heredoc body IS what bash actually executes, strips the deny-
         # triggering text away before `_WORKTREE_WORD_RE` ever sees it, and
+        # this guard ALLOWS -- for `<<EOF` and `<<'EOF'` identically, already,
         # before this file touched `_HEREDOC_OP_RE` at all. Widening the
+        # regex to also recognize `<<\EOF` extends this SAME pre-existing
+        # allow to one more delimiter spelling; it does not open a new class
+        # of bypass. Recorded here as an explicit, named assertion (not a
+        # silent pass) so a future reader sees the gap rather than assuming
+        # it's covered by the "still denies" test above.
         for spelling, cmd in (
             ("<<EOF", "bash <<EOF\ngit worktree add ../wt-1 x\nEOF\n"),
             ("<<'EOF'", "bash <<'EOF'\ngit worktree add ../wt-1 x\nEOF\n"),

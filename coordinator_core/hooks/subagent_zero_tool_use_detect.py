@@ -59,6 +59,7 @@ from coordinator_core.hooks.subagent_review_mark import _handler as _subagent_re
 from coordinator_core.hooks.subagent_zero_tool_use import _handler as _subagent_zero_tool_use_handler
 from coordinator_core.ipc import register_op
 
+# Path-traversal guard for session_id before it is used to build filesystem
 # paths -- mirrors the source script's own `_ID_CHARSET_RE`.
 _ID_CHARSET_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 

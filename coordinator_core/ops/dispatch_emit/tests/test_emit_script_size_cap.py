@@ -59,3 +59,15 @@ def test_compose_script_emits_fine_under_the_runner_byte_cap():
     script = compose_script(waves, name="small", description="small inventory")
 
     assert len(script.encode("utf-8")) <= _WORKFLOW_SCRIPT_BYTE_CAP
+
+
+def test_inventory_over_max_rows_is_refused_before_compose(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import inventory_mint
+
+    monkeypatch.setattr(inventory_mint, "parse_chunk_table", lambda text: [])
+    monkeypatch.setattr(inventory_mint, "mint_rows", lambda rows, inventory_path=None: [{}] * 3)
+    inv = tmp_path / "inv.md"
+    inv.write_text("---\nrun_id: r\n---\n", encoding="utf-8")
+
+    with pytest.raises(inventory_mint.InventoryTooLargeError, match="3 live rows, over max_rows 2"):
+        inventory_mint.mint_spine(str(inv), max_rows=2)

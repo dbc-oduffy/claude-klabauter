@@ -84,7 +84,13 @@ def cap_judgment_points(
 
 
 #: Max rendered length of one interpolated EXTERNAL string, in CODE POINTS —
+#: a plain Python string slice, not a byte-count bound. Mirrors
+#: `coordinator_core.orientation.regenerate_cache`'s
 #: `_HOUSEKEEPING_DETAIL_TRUNCATE_CHARS` precedent and its rationale
+#: verbatim: a byte-based cut risks splitting a multi-byte UTF-8 character
+#: (CJK, emoji) mid-sequence for no real budget gain, since the count cap
+#: above already catches the genuine flood case this exists to backstop
+#: (Review: code-reviewer — Finding 3).
 EXTERNAL_TEXT_TRUNCATE_CHARS = 200
 
 

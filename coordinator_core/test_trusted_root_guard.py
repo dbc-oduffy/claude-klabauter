@@ -224,7 +224,10 @@ def test_traversal_segment_rejected_even_under_trusted_prefix():
 
 
 def test_dotdot_prefixed_basename_false_reject_documented():
+    # Documented pre-existing edge case in the bash trust-core: a
     # dotdot-PREFIXED (not traversal) segment like `..cache` still matches
+    # the `*"/.."*` glob and is rejected, even though it is not a real `..`
+    # traversal. Faithfully reproduced, not "fixed", per port instructions.
     env = _env()
     assert not is_trusted("/home/tester/.claude/..cache", env=env)
 
@@ -235,16 +238,26 @@ def test_plugin_root_trusted_env_opt_out():
 
 
 def test_plugin_root_trusted_env_opt_out_overrides_traversal_reset():
+    # Faithfully reproduced bash trust-core ordering, NOT "fixed": the
+    # bash sourced-lib applies the traversal reset (`_cc_trusted=0`) BEFORE
     # the `COORDINATOR_PLUGIN_ROOT_TRUSTED=1` opt-out check, so the
+    # explicit developer opt-out is applied last and DOES override the
+    # traversal guard. This is documented as intentional in the bash
+    # header ("sanctioned --plugin-dir spike opt-out") — the opt-out is a
+    # deliberate full bypass, not merely of the prefix anchors.
     env = _env(COORDINATOR_PLUGIN_ROOT_TRUSTED="1")
     assert is_trusted("/home/tester/.claude/../../tmp/evil", env=env)
 
 
 # --- home resolution: USERPROFILE rung (F2 regression, 2026-07-28) --------
+#
 # F2 (machine-a install dogfood): the guard's home chain was CLAUDE_HOME ->
 # HOME with no USERPROFILE rung. HOME is a POSIX convention; native Windows
 # shells (PowerShell, cmd.exe) set USERPROFILE instead. With home empty,
+# _settings_home_dir_from_env returned "" and EVERY rung of _content_root was
+# skipped -- including the canonical registry rung whose value was present
 # and correct. Every PRE-EXISTING test in this file injects HOME, so this
+# configuration was unreachable by the suite -- these tests inject ONLY
 # USERPROFILE, reproducing a native-Windows shell invocation.
 
 

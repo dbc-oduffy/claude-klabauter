@@ -178,9 +178,18 @@ from __future__ import annotations
 import dataclasses
 
 # `.gitignore` stays a concrete `MUTATES` path, not a `GENERATES` entry, by
+# design: `_append_to_gitignore` makes a surgical, deduplicated append onto a
+# shared file this module did not create and does not own the rest of
 # (`_act_gitignore`). A stamped `GENERATES` entry would claim this module
+# emits `.gitignore` wholesale, which is false, and stamping a file this
+# module only ever appends one line to is not an option.
+# `generator_provenance.py :: _build_record` therefore scores this module
 # UNDECLARED (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md,
+# P012-C5) -- an accepted outcome, not a gap: a surgical edit to a shared
+# file has no honest declaration under the checker's current vocabulary.
 # Filed to C6's checker-vocabulary finding. Do not add `GENERATES = []` (the
+# module writes) and do not rewrite this path as a glob to dodge
+# `_mutates_concrete_patterns`.
 MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
 import fnmatch
@@ -199,7 +208,9 @@ _CREATIONFLAGS = no_console_creationflags()
 _PROG = "step2.5"
 _GIT_TIMEOUT_SECS = 30
 
+# ---------------------------------------------------------------------------
 # Unit 3 message text (AUTO-GITIGNORE / AUTO-COMMIT act blocks use these).
+# ---------------------------------------------------------------------------
 _GITIGNORE_COMMIT_MSG = "chore(gitignore): exclude orphaned transients at workday-complete"
 
 # AUTO-GITIGNORE basename/prefix allow-list — pattern written to .gitignore.
@@ -212,7 +223,10 @@ _GITIGNORE_BASENAME_GLOBS = [
     ("*.pid", "*.pid"),
 ]
 
+# CLAIM (C6) commit-roots-seen label for a path committed BY CLAIM rather
+# than by any prefix below -- distinguishes a claim-driven commit-message
 # root entry from a genuine `_COMMIT_PREFIXES` match without inventing a
+# fake filesystem prefix.
 _CLAIM_COMMIT_ROOT_LABEL = "(session claim)"
 
 # AUTO-COMMIT prefix allow-list (path startswith root -> commit_root == root).
@@ -412,7 +426,13 @@ def _resolve_claim_context(
     if not sid:
         return None
 
+    # `full_ownership_map`, not `compute_offer(...)["ownership"]` (2026-08-21):
+    # the offer's `peer` bucket is scoped to paths the CLOSING session itself
+    # holds, and this loop asks about paths it got from `git status` instead.
+    # Read off the offer, a peer's in-flight file that this session never
     # touched is absent from `peer` entirely and classifies AMBIGUOUS -- which
+    # is how an unattended sweep gets nudged toward committing it. See that
+    # function's own docstring for why the wider map is in-process only.
     try:
         mine_paths, peer_map = full_ownership_map(sid, repo_root)
     except Exception:
@@ -460,7 +480,9 @@ def _classify_main_pass(
 ) -> bool:
     needs_pm = False
 
+    # Pre-pass: parse every status line once and batch the two per-path git
     # probes (EOL-PHANTOM diff check, SUBMODULE stage check) into at most two
+    # subprocess spawns total instead of up to two per dirty path.
     parsed: List[Tuple[str, str]] = []
     eol_check_paths: List[str] = []
     sub_check_paths: List[str] = []
@@ -520,10 +542,18 @@ def _classify_main_pass(
             counters.gitignore += 1
             continue
 
+        # 5.5 CLAIM (C6) — a claim decides before any prefix does, EXCEPT
         # SOURCE-TREE (branch 7): a claim proves WHO wrote a path, never
+        # that it is safe for an unattended ceremony to commit unreviewed.
         # SOURCE-TREE exists precisely to force human review of source
+        # changes, and this carve-out is unconditional -- a source-tree
+        # path provably claimed by the closing session still falls through
         # UNTOUCHED to branch 7 below, exactly as pre-C6 (see the module
         # docstring's CLAIM description and its "SOURCE-TREE carve-out"
+        # paragraph for the full rationale). Skipped entirely when
+        # `claim_ctx` is None (session unresolvable, or the ownership read
+        # failed -- see `_resolve_claim_context`): every path then
+        # classifies by branches 6-8 exactly as before C6.
         if claim_ctx is not None and not _classify_source_tree(path):
             mine_paths, peer_map = claim_ctx
             if path in mine_paths:
@@ -543,6 +573,8 @@ def _classify_main_pass(
                 counters.claim_peer += 1
                 needs_pm = True
                 continue
+            # Unattributed (or non-mine while ownership["degraded"] --
+            # peer_map is already empty in that case): falls through
             # unchanged to AUTO-COMMIT / SOURCE-TREE / AMBIGUOUS below --
             # "stays AMBIGUOUS, rc unchanged" per the plan's own bullet.
 
@@ -608,7 +640,9 @@ def _classify_rename_source_pass(
     return needs_pm
 
 
+# ---------------------------------------------------------------------------
 # Unit 3 — act blocks (AUTO-GITIGNORE, AUTO-COMMIT), summary, verdict.
+# ---------------------------------------------------------------------------
 
 
 def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Accumulators) -> Optional[int]:

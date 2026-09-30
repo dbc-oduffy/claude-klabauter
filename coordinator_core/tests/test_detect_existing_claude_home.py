@@ -109,7 +109,9 @@ def test_t3b_stub_claude_md_is_used_vanilla(tmp_path):
     _assert(tmp_path, "used-vanilla", "A")
 
 
+# ---------------------------------------------------------------------------
 # T4 / T4b: git-tracked target → configured; git-tracked ANCESTOR → pristine
+# ---------------------------------------------------------------------------
 def test_t4_git_tracked_target_is_configured(tmp_path):
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30, **no_console_passthrough_kwargs())
     _assert(tmp_path, "configured", "B")
@@ -155,6 +157,7 @@ def test_resolve_target_precedence_arg_over_env_over_home(tmp_path, monkeypatch)
 
 def test_resolve_target_falls_back_to_expanduser_when_home_unset():
     # Windows-shape env: no HOME, no CLAUDE_CONFIG_DIR — must not crash or
+    # resolve to a bogus path; falls back to os.path.expanduser("~").
     result = resolve_target(None, env={})
     assert result == os.path.join(os.path.expanduser("~"), ".claude")
 

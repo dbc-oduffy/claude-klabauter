@@ -33,8 +33,13 @@ from coordinator_core.ops.session.guard_roster_ops import (
     list_ported_advisory_ops,
 )
 
+# `test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter`
+# spawns a real `sys.executable -c` fresh interpreter because the
+# exhaustiveness property -- that `list_ported_advisory_ops` still resolves
 # all six ops when `_REGISTRY` starts empty -- only exists in a process with
 # no prior op imports, which no same-process mock can reproduce. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

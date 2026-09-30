@@ -207,6 +207,7 @@ class TestNotIdentityGated:
         _reason(out)
 
     def test_denies_with_em_shaped_payload_no_identity(self):
+        # Main-loop EM calls carry no agent_id/agent_type at all -- this
         # guard must still fire (see module docstring "NOT IDENTITY-GATED").
         out = guard.check(_payload("touch %s" % SENTINEL))
         _reason(out)
@@ -590,7 +591,11 @@ class TestVariableTaintClosesRoundTwoForge:
         assert out and '"deny"' in json.dumps(out)
 
     def test_known_open_gap_glob_near_miss_still_allows(self):
+        # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block: a purely
+        # lexical matcher cannot statically evaluate a shell glob, so a
+        # single-character-wildcard near-miss of the basename is NOT
+        # detected -- pinned here as a KNOWN gap, not an untested oversight.
         assert guard.check(_payload("touch .coordinator-doctrine-edit-approv?d")) is None
 
     def test_previously_denied_forms_still_deny(self):
@@ -653,8 +658,15 @@ class TestTransitiveTaintClosesRoundThreeForge:
         )
 
     def test_string_construction_near_miss_is_knowingly_allowed(self):
+        # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block, under
         # "VARIABLE-ASSEMBLED BASENAMES": neither `S` nor `S2` is ever
+        # assigned a value containing the sentinel basename as a
+        # contiguous substring -- the basename only becomes complete once
+        # bash concatenates the two fragments at runtime, which is string
+        # construction, not variable chaining, and is explicitly NOT
+        # closed by the transitive-taint fix. Pinned here as a KNOWN gap,
+        # not an untested oversight.
         cmd = 'S=".coordinator-doctrine-edit-"; S2="${S}approved"; mkdir $S2'
         assert guard.check(_payload(cmd)) is None
 

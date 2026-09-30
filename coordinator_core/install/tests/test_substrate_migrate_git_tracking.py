@@ -40,7 +40,11 @@ def _mock_posix(monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
+# ---------------------------------------------------------------------------
+# structural guard — a git-TRACKED legacy machine-local can never converge
 # (2026-08-22 install dogfood: `DIVERGENT FILE` on machine-local/.gitignore,
+# from a `~/.claude` meta-repo that tracked the whole directory)
+# ---------------------------------------------------------------------------
 
 
 def _git_repo_tracking(claude_base: Path, *, tracked: list[str]) -> None:

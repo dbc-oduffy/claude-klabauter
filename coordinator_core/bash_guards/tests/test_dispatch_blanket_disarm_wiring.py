@@ -118,7 +118,10 @@ class TestControlledBandSuppression:
             f"Since: {_iso(now)}\n"
             "Bands: advisory-rewrite,confinement-deny\nReason: x\n",
         )
+        # The whole marker is malformed (see _blanket_disarm's own "BAND-
         # SCOPED SUPPRESSION" doctring) -- so NEITHER band is suppressed,
+        # not even the otherwise-legitimate advisory-rewrite one. Proves
+        # this at the dispatcher level: fake-advisory still fires.
         assert _run(EM_PAYLOAD) == {"marker": "advisory"}
 
     def test_confinement_deny_never_suppressed_even_if_fake_confinement_denied(self, monkeypatch, tmp_path):

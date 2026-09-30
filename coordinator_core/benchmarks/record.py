@@ -40,7 +40,9 @@ the ambient-context trio `ambient_before`/`ambient_after`/`ambient_delta`
 (Optional[dict]). `from_json` accepts a v1 payload (none of these keys
 present) by defaulting every one of them to None -- see from_json()."""
 
+# Named constants for floor_scope's
 # documented "run"|"per_op" enum, mirroring gate.py's VERDICT_* constant pattern,
+# so callers (harness.py) reference a name instead of a bare string literal.
 FLOOR_SCOPE_RUN = "run"
 FLOOR_SCOPE_PER_OP = "per_op"
 

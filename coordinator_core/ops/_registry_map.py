@@ -24,7 +24,14 @@ from __future__ import annotations
 
 from typing import Dict
 
+# op-name -> dotted module path whose import triggers that op's register_op(...)
+# side-effect. Some modules register multiple related ops (e.g. coordinator_core.hooks
+# registers all 10 hooks.* ops in one import) — those ops share the same module value.
+#
+# Every key here must ALSO be reachable from the eager-import path
 # (coordinator_core/ops/__init__.py::_EAGER_OP_MODULES), or the op registers only under
+# whichever import order happens to pull its module in — see coordinator_core/hooks/
+# __init__.py for the order-dependent drift-guard failure that shape produces.
 OP_MODULE_MAP: Dict[str, str] = {
     "ping":                                   "coordinator_core.ops.ping",
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
@@ -36,13 +43,29 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
     "handoff.discharge_landed":               "coordinator_core.ops.handoff_discharge_landed",
     # (see op_scopes.py::_OP_KEY_SCOPE's peer_notice.* entries, both "common_dir"),
+    # each registered by its own
     # owning module. Registered in _REGISTRY and _OP_KEY_SCOPE/OP_CLASSIFICATION but
+    # absent from this map until C3's three-way reconciliation (docs/plans/
+    # 2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C3) — a real
     # registry_map.py::OP_MODULE_MAP gap, not a deliberate omission; per this
+    # module's docstring the absence degraded silently to the eager-import
+    # fallback rather than breaking dispatch, which is why it went unnoticed.
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
+    # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
+    # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
+    # import. This package-level
+    # granularity (one shared module value for all 15 keys, rather than a per-op
+    # owning submodule) IS the correct mapping here, not a stand-in for a finer
+    # split — confirmed C2 (docs/plans/2026-08-06-windows-hot-path-less-work-per-
+    # interpreter.md): under the lazy hooks channel (C1), importing the shared
+    # "coordinator_core.hooks" value alone is a lazy-gated no-op that registers
+    # nothing, so ipc._lazy_import_and_lookup adds a hooks-scoped fallback stage
+    # (coordinator_core.hooks._eager_import_all()) ahead of the ops-wide SAFE
     # FALLBACK, rather than repointing these entries to nonexistent per-op
+    # submodules.
     "hooks.nudge_foreground_agent_dispatch":  "coordinator_core.hooks",
     "hooks.nudge_named_agent_report_delivery": "coordinator_core.hooks",
     "hooks.nudge_em_code_dispatch":           "coordinator_core.hooks",
@@ -50,6 +73,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.agent_completion_log":             "coordinator_core.hooks",
     "hooks.track_dispatched_agents":          "coordinator_core.hooks",
     "hooks.agent_postuse_dispatch":           "coordinator_core.hooks",
+    "hooks.postuse_agent_dispatch":           "coordinator_core.hooks",
     "hooks.suggest_sonnet_research":          "coordinator_core.hooks",
     "hooks.nudge_unauthorized_handoff":       "coordinator_core.hooks",
     "hooks.postuse_advisory_dispatch":        "coordinator_core.hooks",
@@ -160,6 +184,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "updatedocs.gates":                       "coordinator_core.ops.updatedocs_gates",
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
     "memo.transition":                        "coordinator_core.ops.memo_transition",
+    "memo.correct_note":                      "coordinator_core.ops.memo_correct_note",
     "handoff.transition":                     "coordinator_core.ops.handoff_transition",
     "handoff.stamp":                          "coordinator_core.ops.handoff_stamp",
     "handoff.repair_deployment_state":        "coordinator_core.ops.handoff_stamp",
@@ -184,6 +209,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
+    # of plan.stamp_prepped; the DoE-side runnable half is
+    # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
     "queue.append":                           "coordinator_core.ops.queue_append",
@@ -211,6 +238,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.cascade_divergence_report":   "coordinator_core.ops.cascade_divergence_report",
+    "goal.kr2_two_repo_rate":                  "coordinator_core.ops.audit_two_repo_rate",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
     "push.outstanding":                       "coordinator_core.ops.push_outstanding",
     "records.query":                          "coordinator_core.ops.records_query",
@@ -397,7 +425,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "p4.session_state":                        "coordinator_core.p4.session_state",
     "learn_lessons_pipeline.brief":             "coordinator_core.learn_lessons_pipeline.ops",
     "learn_lessons_pipeline.apply":             "coordinator_core.learn_lessons_pipeline.ops",
+    # C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md): the closed
     # queue-grind op list the vocabulary's SOURCE_OPS/VERIFY_OPS/REGENERATE_OPS
+    # (C1) resolve to — one shared owning module, same many-keys-one-value
+    # shape as the learn_lessons_pipeline.* pair above.
     "lessons.extract":                          "coordinator_core.ops.grind_ops",
     "lessons.verify_extraction":                "coordinator_core.ops.grind_ops",
     "doctrine.surface_split_regenerate":        "coordinator_core.ops.grind_ops",

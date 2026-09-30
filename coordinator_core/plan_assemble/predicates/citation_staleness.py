@@ -159,7 +159,12 @@ def _find_anchor_text(text: str, start: int, end: int) -> Optional[str]:
     ]
     if following_spans:
         return following_spans[0].group(1)
+    # A whitespace-only backtick span (` ` `) is
+    # filtered out above rather than returned as anchor_text: it would
+    # otherwise match almost every non-empty target line at rung 1
+    # (`anchor_text in line`), producing a bogus non-undetermined match
     # instead of the `undetermined` this module's RESOLUTION RULE reserves
+    # for "no adjacent quoted anchor text found".
     return None
 
 

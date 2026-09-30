@@ -151,7 +151,18 @@ def test_handler_happy_path(tmp_path):
     assert result["estimate"] == {"tshirt": "M", "provisional": False}
 
 
+# ---------------------------------------------------------------------------
+# (e) real dispatch path — through ipc.dispatch_message, not a direct
+# `_handler(...)` call. B1 (code review, slice B): `sizing.read_object_fields`
 # was absent from `op_scopes.py::_OP_KEY_SCOPE`, so every real JSON-RPC
+# dispatch resolved `scope = "none"` and reached the handler with
+# `repo_root=None` — 100% failure in production despite every test above
+# (which all call `_handler(...)` directly with an explicit `repo_root=`)
+# passing green. Mirrors `test_artifact_emit_scope_touch.py`'s dispatch-path
+# pattern (drive the REAL registered handler end-to-end through
+# `dispatch_message`, not a synthetic stand-in) — the only in-repo precedent
+# found for a scope-table regression test of this shape.
+# ---------------------------------------------------------------------------
 
 
 def test_dispatch_message_resolves_repo_root_and_returns_fields(tmp_path):

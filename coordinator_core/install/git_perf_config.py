@@ -94,11 +94,20 @@ def filesystem_supports_untracked_cache(repo: Path) -> bool:
 
 
 def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
+    # This was a loop over a
     # one-entry SETTINGS dict, but the entry's real behaviour (the fs-probe gate
+    # and the index-extension step below) was reached by two literal
+    # key == "core.untrackedCache" checks inside the loop body, so the
+    # abstraction never generalized. A second setting starts by re-reading the
+    # module docstring's measurement bar, not by restoring the dict.
     key, wanted = "core.untrackedCache", "true"
     report: List[str] = []
     current_result = run_git(["config", "--get", key], cwd=str(repo))
+    # An unread current value (timeout/missing
+    # git) must not be folded into "unset", which the branch below treats as
     # license to write. That would let a peer's deliberately differing value
+    # (the negative spec's own "never overwritten" case) get clobbered simply
+    # because this read never came back, not because it was confirmed absent.
     if current_result.timed_out or current_result.returncode == 127:
         report.append("skip    %s (could not read current value: git did not answer)" % key)
         return report
@@ -133,11 +142,55 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     return report
 
 
+# The three keys that hand maintenance to the ceremony leg. They live HERE and
 # not in configure_git's _SETTINGS because they are actions taken against a
+# repo at install time, not declarations -- the same reason
+# `update-index --untracked-cache` lives here.
+#
 # maintenance.prefetch.enabled=false IS NOT IN THE ORIGINATING ASK. It is
+# required by the spike: git's schedules CASCADE, so `prefetch` runs at the
+# daily and weekly tiers as well as hourly, and it is the one task in this
+# otherwise network-free design that goes to the network -- a `git fetch`
+# against every remote plus two `gh auth git-credential` round-trips, 293.8 ms
+# and 11.2 processes. With prefetch enabled the daily tier measures 575.0 ms
+# and weekly 618.8 ms, both over the 500 ms brightline; with it disabled they
+# are 190.6 ms and 178.1 ms.
+#
 # THE ALTERNATIVE NOT TAKEN: pinning daily and weekly to explicit `--task=`
+# lists, the shape `git_maintenance` already gives hourly. The key wins because
+# it is one key set once per repo, versus a task list that must be kept in sync
+# with git's own strategy definition across git versions -- if a future git
+# adds a task to `--schedule=daily`, the task-list shape silently drifts back
+# open while the key shape does not.
+#
+# The key suppresses prefetch for ALL `git maintenance` invocations in this
+# repo, including manual ones and future ones no coordinator code authors --
+# not only the daily/weekly tiers the ceremony drives.
+#
 # THE TWO-WRITER ROLLOUT WINDOW, mirrored from configure_git._SETTINGS's own
+# comment on `gc.auto`: `coordinator_core.ops.configure_git` writes `gc.auto=0`
+# on a separate invocation path from this module's `apply()`/`apply_fleet()`.
+# A repo can sit with `gc.auto=0` already written and these three maintenance
+# keys still at git's defaults (`maintenance.auto` true, `prefetch.enabled`
+# true) until this module's sweep reaches it -- an installer ordering where
+# configure_git's Phase 1 runs before the fleet-sweep phase in
+# `maximalist.py`, or a repo-setup-onboarded worktree awaiting its first
+# fleet sweep. In that window `git maintenance run --auto`, including the
+# network-touching `prefetch` task, keeps firing unconstrained. WHAT CLOSES
+# IT: the daily workday-start ceremony's `git-perf-currency` health probe
+# (`orient_assemble.readers_health_reaper :: _read_git_perf_currency`) --
+# its `--fix` path calls `apply_fleet` in-process, which reaches these three
+# keys via `apply()` on every registered worktree. The window is bounded to
+# "until the next workday-start ceremony run," not indefinite; it is not
+# transactional, and co-locating the two writers into one op is a design
+# change beyond this module's scope.
+#
 # UNINSTALL DISPOSITION, stated rather than left silent: none of the three are
+# unset on uninstall, and that is deliberate. git's compiled defaults
+# (maintenance.strategy unset, maintenance.auto true, prefetch enabled) resume
+# harmlessly the moment the keys are gone, and a coordinator-uninstalled
+# worktree reverting to git's own defaults is what an uninstall is supposed to
+# do -- not a residue needing its own removal step.
 _MAINTENANCE_KEYS: tuple[tuple[str, str], ...] = (
     ("maintenance.strategy", "incremental"),
     ("maintenance.auto", "false"),
@@ -162,6 +215,7 @@ def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
     report: List[str] = []
     for key, wanted in _MAINTENANCE_KEYS:
         current_result = run_git(["config", "--get", key], cwd=str(repo))
+        # Same "unread is not unset" gap as
         # `apply()` above: a timeout must not license the write branch below.
         if current_result.timed_out or current_result.returncode == 127:
             report.append(

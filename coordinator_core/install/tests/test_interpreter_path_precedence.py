@@ -53,7 +53,10 @@ def _force_windows_shell(monkeypatch):
     assert substrate._is_windows_shell() is True
 
 
+# Deliberately NOT tmp_path-derived — tmp_path lives under the system temp
+# dir, which `_refuse_machine_mutation` blocks as "the signature of a test
 # sandbox path" (see test_substrate.py's own `_FAKE_REAL_INSTALL_PATH`
+# convention this mirrors). A literal string that never touches disk.
 _FAKE_REAL_INTERPRETER_DIR = (
     r"C:\fake-operator-profile\real-interpreter"
     if os.name == "nt"

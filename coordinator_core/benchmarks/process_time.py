@@ -217,6 +217,18 @@ if IS_WINDOWS:
         ]
 
     _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+    _JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _ERROR_MORE_DATA = 234
+    _PID_LIST_CAPACITY = 1024
+
+    class _JobObjectBasicProcessIdList(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", wintypes.DWORD),
+            ("NumberOfProcessIdsInList", wintypes.DWORD),
+            ("ProcessIdList", ctypes.c_size_t * _PID_LIST_CAPACITY),
+        ]
+
     _CREATE_SUSPENDED = 0x00000004
     _CREATE_NO_WINDOW = 0x08000000
     _PROCESS_SET_QUOTA = 0x0100
@@ -228,7 +240,12 @@ if IS_WINDOWS:
 if IS_DARWIN:
     _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
 
+    # -- posix_spawn / posix_spawnattr -----------------------------------
+    # os.posix_spawn exposes no raw attr-flag argument (its signature is
+    # file_actions/setpgroup/resetids/setsid/setsigmask/setsigdef/scheduler
     # only), so POSIX_SPAWN_START_SUSPENDED genuinely requires this ctypes
+    # route -- the real justification for ctypes here, alongside the
+    # module's existing Windows ctypes usage (dispatch brief).
     _POSIX_SPAWN_START_SUSPENDED = 0x0080
 
     _libc.posix_spawnattr_init.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
@@ -252,6 +269,7 @@ if IS_DARWIN:
     _NOTE_EXIT = 0x80000000
     _NOTE_FORK = 0x40000000
     # NOTE_TRACK (0x1) is ENOTSUP on this kernel -- verified, EV_ERROR
+    # data=45. Not used, and not attempted-then-fallen-back-from: the
     # NOTE_FORK enumeration path below is the only path (dispatch brief).
     _EV_ADD = 0x0001
     _EV_ENABLE = 0x0004
@@ -486,35 +504,136 @@ class LiveTreeAccountant:
         self.close()
 
 
+def _image_tally(images: dict, total_processes: int) -> dict:
+    """Folds a pid -> image-name map into a per-image tally beside the
+    authoritative job count. `total_processes` is `TotalProcesses` from the
+    job and is never adjusted: the shortfall is REPORTED as
+    `unattributed_procs`, not reconciled away -- a process that started and
+    exited between two polls, or whose image name could not be read, is
+    visible there rather than silently absorbed into a named bucket."""
+    tally: dict = {}
+    for image in images.values():
+        tally[image] = tally.get(image, 0) + 1
+    return {
+        "process_tally": dict(sorted(tally.items())),
+        "procs_total": int(total_processes),
+        "unattributed_procs": int(total_processes) - len(images),
+    }
+
+
+def _windows_image_name(pid: int) -> Optional[str]:
+    """Lower-cased basename of `pid`'s executable, or None when the process
+    is gone or unopenable."""
+    handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(buf))
+        if not _k32.QueryFullProcessImageNameW(
+            wintypes.HANDLE(handle), 0, buf, ctypes.byref(size)
+        ):
+            return None
+        return os.path.basename(buf.value[: size.value]).lower()
+    finally:
+        _k32.CloseHandle(wintypes.HANDLE(handle))
+
+
+class _JobImageNamer:
+    """Background poll of a job's live pid list, resolving each new pid to
+    its image name once. Opt-in only (`batched_process_time_ms(...,
+    name_processes=True)`): the poll thread contends with the measured spawn
+    loop, so a naming run is a DIAGNOSIS run, never a gating sample.
+
+    A process shorter-lived than one poll tick is never seen and lands in
+    `unattributed_procs`; that is the honest reading, not a defect to hide.
+    Keyed by pid, so a pid Windows recycles within one run is counted once."""
+
+    _POLL_INTERVAL_S = 0.0005
+
+    def __init__(self, job) -> None:
+        import threading
+
+        self._job = job
+        self._images: dict = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="job-image-namer", daemon=True
+        )
+
+    def _poll_once(self) -> None:
+        info = _JobObjectBasicProcessIdList()
+        ok = _k32.QueryInformationJobObject(
+            wintypes.HANDLE(self._job),
+            _JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            None,
+        )
+        if not ok and ctypes.get_last_error() != _ERROR_MORE_DATA:
+            return
+        for i in range(min(info.NumberOfProcessIdsInList, _PID_LIST_CAPACITY)):
+            pid = int(info.ProcessIdList[i])
+            if pid in self._images:
+                continue
+            image = _windows_image_name(pid)
+            if image is not None:
+                self._images[pid] = image
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._poll_once()
+            self._stop.wait(self._POLL_INTERVAL_S)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> dict:
+        self._stop.set()
+        self._thread.join()
+        return self._images
+
+
 def _windows_batched_process_time_ms(
     cmd: Sequence[str],
     k: int,
     env: Optional[dict],
     cwd: Optional[str],
+    name_processes: bool = False,
 ) -> dict:
     job = _k32.CreateJobObjectW(None, None)
     if not job:
         raise ctypes.WinError(ctypes.get_last_error())
+    namer = _JobImageNamer(job) if name_processes else None
     try:
+        if namer:
+            namer.start()
         rc = 0
         t0 = time.perf_counter()
         for _ in range(k):
             rc = _windows_spawn_into_job(job, cmd, env, cwd)
         wall_ms = (time.perf_counter() - t0) * 1000.0 / k
+        images = namer.stop() if namer else None
+        namer = None
 
         info = _windows_query_job_accounting(job)
         process_time_ms = (info.TotalUserTime + info.TotalKernelTime) / 10000.0 / k
         procs_per_call = info.TotalProcesses / k
     finally:
+        if namer:
+            namer.stop()
         _k32.CloseHandle(wintypes.HANDLE(job))
 
-    return {
+    result = {
         "process_time_ms": round(process_time_ms, 3),
         "wall_ms": round(wall_ms, 3),
         "procs_per_call": round(procs_per_call, 3),
         "rc": rc,
         "k": k,
     }
+    if images is not None:
+        result.update(_image_tally(images, info.TotalProcesses))
+    return result
 
 
 def _proc_listchildpids(ppid: int) -> list:
@@ -604,7 +723,9 @@ def _kevent_register(kq: int, pid: int) -> bool:
     change.data = 0
     change.udata = None
     out = _Kevent()
+    # A zero timespec (poll, don't block) is still passed for symmetry with
     # the rest of this module's kevent calls, though EV_RECEIPT makes the
+    # result synchronous regardless of timeout.
     zero_timeout = _Timespec(0, 0)
     n = _libc.kevent(kq, ctypes.byref(change), 1, ctypes.byref(out), 1, ctypes.byref(zero_timeout))
     if n < 0:
@@ -614,7 +735,9 @@ def _kevent_register(kq: int, pid: int) -> bool:
         raise OSError(errno_val, f"kevent registration syscall failed for pid {pid}")
     if n == 0 or not (out.flags & _EV_ERROR):
         # EV_RECEIPT guarantees a synchronous EV_ERROR-flagged result for
+        # this exact changelist entry -- anything else means the kernel
         # did not honor EV_RECEIPT the way this module relies on, and
+        # AC6's guarantee (no silent inert kqueue) no longer holds.
         raise OSError(
             0,
             f"kevent EV_RECEIPT registration for pid {pid} returned no result "
@@ -659,7 +782,14 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
             if old_cwd is not None:
                 os.chdir(old_cwd)
 
+        # F2 (EM-confirmed): every path from here to the wait4() reap below
+        # must not leak a live or suspended root/subtree on error -- the
         # root is spawned POSIX_SPAWN_START_SUSPENDED and only SIGCONT'd a
+        # few lines down, so an exception before that leaves it suspended
+        # forever, and an exception after SIGCONT leaves a live tree
+        # running, unreaped, contaminating the next invocation's
+        # window-open assertion. `reaped` tracks whether wait4()/waitpid()
+        # already ran normally so this finally never double-reaps.
         reaped = False
         try:
             if not _kevent_register_with_retry(kq, root_pid):
@@ -687,6 +817,10 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
                     pid = ev.ident
                     if ev.flags & _EV_ERROR:
                         # F3: defensive only. EV_ERROR on this eventlist is
+                        # documented as arising from changelist processing
+                        # during registration (a submitted nchanges entry),
+                        # never from this pure nchanges=0 data-retrieval
+                        # call -- kept as a guard, not a steady-state path.
                         continue
                     if ev.fflags & _NOTE_FORK:
                         for child in _proc_listchildpids(pid):
@@ -702,6 +836,8 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
             _reaped_pid, status, rusage = os.wait4(root_pid, 0)
             reaped = True
             # PROCESS-TIME SCOPING (AC4): this rusage is keyed to root_pid --
+            # self plus whatever root_pid itself reaped -- so it cannot be
+            # contaminated by another thread's unrelated child exiting in the
             # same window, unlike getrusage(RUSAGE_CHILDREN) (module docstring).
             process_time_ms = (rusage.ru_utime + rusage.ru_stime) * 1000.0
             if hasattr(os, "waitstatus_to_exitcode"):
@@ -949,7 +1085,11 @@ def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional
     "elsewhere" in a process that only ever does this one thing.
     """
     read_fd, write_fd = os.pipe()
+    # Review: reviewer (F3) -- os.fork() itself can raise (EAGAIN under
     # RLIMIT_NPROC/memory pressure, exactly the condition most likely to make
+    # fork fail, since this runs in a k-iteration loop). Previously both fds
+    # leaked on that path since neither the child branch nor the parent's
+    # os.close(write_fd) below ever ran. Close both before propagating.
     try:
         pid = os.fork()
     except OSError:
@@ -1049,6 +1189,7 @@ def batched_process_time_ms(
     k: int = 20,
     env: Optional[dict] = None,
     cwd: Optional[str] = None,
+    name_processes: bool = False,
 ) -> dict:
     """Runs `cmd` `k` times and returns the per-invocation process time,
     amortised over `k`. On Windows this beats the ~15.6ms scheduler-tick
@@ -1064,6 +1205,29 @@ def batched_process_time_ms(
             "rc": int,                 # last invocation's return code
             "k": int,
         }
+
+    NAMING MODE (`name_processes=True`, Windows only). The count above is one
+    integer: a command you issued, a child git spawned for itself, and a
+    console host Windows allocated for a `CREATE_NO_WINDOW` spawn are each
+    +1 to it and indistinguishable. Naming mode polls the job's live pid list
+    on a background thread, resolves each new pid to its image name, and adds
+    to the result:
+
+        "process_tally": {"git.exe": 11, "conhost.exe": 4, ...},  # over all k
+        "procs_total": int,         # job TotalProcesses over all k
+        "unattributed_procs": int,  # procs_total - sum(tally), never hidden
+
+    `procs_total` / `procs_per_call` stay authoritative; a process that
+    started and exited between two polls (or whose image cannot be read) is
+    REPORTED in `unattributed_procs`, never folded into a named bucket. On
+    POSIX the flag raises `NotImplementedError` -- an unnamed count is not a
+    substitute for a named one, so it never degrades silently.
+
+    Read a tally MARGINALLY: run reps=N+1 and reps=N and subtract, with
+    fixture setup OUTSIDE the measured window. An absolute tally includes the
+    harness's own interpreter and setup spawns. The poll thread contends
+    with the spawn loop, so use naming for diagnosis, never as a gating
+    sample.
 
     `rc` reports only the LAST invocation's exit code -- a caller that needs
     every invocation's exit status verified (e.g. AC9-style "an erroring
@@ -1089,11 +1253,18 @@ def batched_process_time_ms(
     """
     if k < 1:
         raise ValueError(f"batched_process_time_ms: k must be >= 1, got {k!r}")
+    if name_processes and not IS_WINDOWS:
+        raise NotImplementedError(
+            "batched_process_time_ms(name_processes=True) is Windows-only "
+            f"(job-object pid list); no naming path for {sys.platform!r}"
+        )
 
     child_env = _env_with_benchmark_origin(env)
 
     if IS_WINDOWS:
-        return _windows_batched_process_time_ms(cmd, k, child_env, cwd)
+        return _windows_batched_process_time_ms(
+            cmd, k, child_env, cwd, name_processes
+        )
     if IS_DARWIN:
         return _darwin_batched_process_time_ms(cmd, k, child_env, cwd)
     if IS_LINUX:
@@ -1353,9 +1524,16 @@ def single_invocation_tree_process_time(
 
 
 # Quantisation is +/-1 tick per window, so MIN_WINDOW_TICKS=10 bounds the
+# per-call error at 10%, where a 1-tick window can be off by up to 100%.
 MIN_WINDOW_TICKS = 10
 
+# The adaptive ramp in `in_process_time_ms` doubles k until the window spans
 # MIN_WINDOW_TICKS -- a callable that genuinely never advances the process
+# clock (it is waiting on I/O or a lock, not doing CPU work) would otherwise
+# double forever. 1 << 20 (1,048,576) is far past any k a real CPU-bearing
+# in-process callable should need to clear a 10-tick window, so hitting this
+# cap is itself the signal: the callable belongs on
+# `pytest.mark.deliberate_wall_clock`, not this primitive.
 MAX_K = 1 << 20
 
 _observed_tick_cache_s: Optional[float] = None

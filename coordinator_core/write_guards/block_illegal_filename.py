@@ -148,5 +148,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
+        # Unexpected processing error (malformed payload/missing field) fails
+        # open — NOT a directory/path-shape exemption (this guard is
         # Class-3 fail-closed for genuinely-illegal basenames; INTERFACE.md
+        # fidelity rule 6 covers guard-crash isolation only).
         return None

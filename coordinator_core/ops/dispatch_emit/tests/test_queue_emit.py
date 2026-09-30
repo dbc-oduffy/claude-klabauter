@@ -193,6 +193,7 @@ def _expected_signature() -> inspect.Signature:
         session_id: Optional[str] = None,
         agent_type_host: Optional[str] = None,
         preamble: Optional[str] = None,
+        commit_trailers: Sequence[str] = (),
     ) -> QueueEmission: ...
 
     return inspect.signature(emit_queue_script)
@@ -564,3 +565,41 @@ def test_end_to_end_resume_over_a_seeded_ledger(tmp_path):
     )
     assert emission.script
     assert emission.receipt_extras["manifest_digest"] == manifest.digest
+
+
+# ---------------------------------------------------------------------------
+# commit_trailers threading
+# ---------------------------------------------------------------------------
+
+_TRAILER = "Host-Trailer: queue-grind-7"
+
+
+def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    with_trailer = _emit(tmp_path / "a", commit_trailers=[_TRAILER]).script
+    without = _emit(tmp_path / "b").script
+    assert json.dumps([_TRAILER]) in with_trailer
+    assert _TRAILER not in without
+
+
+def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
+    repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
+    (repo_root / ".git").rmdir()
+    subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_root), "config", "--add", "coordinator.commitTrailer", _TRAILER],
+        check=True,
+    )
+    output_path = tmp_path / "queue-grind" / "emitted.mjs"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _dispatch_emit(
+        {
+            "queue": [str(repo_root / "state" / "bug-backlog")],
+            "profile": "fixture",
+            "profile_dir": str(_FIXTURE_PROFILE_DIR),
+            "output_path": str(output_path),
+        },
+        repo_root=repo_root,
+    )
+    assert json.dumps([_TRAILER]) in output_path.read_text()

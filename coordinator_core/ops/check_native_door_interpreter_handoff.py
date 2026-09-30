@@ -165,6 +165,8 @@ _INTERPRETER_LITERALS = frozenset(
 _INTERPRETER_FILE_TOKENS = ("sys.executable", "python", "run_path", "read_text")
 
 # Nor can a file carry a suffix DISPATCH without naming one of these: every
+# shape `_native_suffix_test` recognises reads the suffix through `.suffix`,
+# `splitext` or `endswith`.
 _SUFFIX_READ_FILE_TOKENS = (".suffix", "splitext", "endswith")
 
 _SOURCE_EXEC_CALLS = frozenset({"run_path", "spec_from_file_location", "exec", "compile"})

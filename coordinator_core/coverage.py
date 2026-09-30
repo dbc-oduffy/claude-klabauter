@@ -96,13 +96,27 @@ from coordinator_core.win_portability import no_console_creationflags
 
 
 #: SAFE_RANGE — argument-injection validator.
+#: Each side must START with an alphanumeric (blocks leading-dash argument injection,
+#: e.g. "--output=/x..y" reaching `git rev-list` as a flag). Permits legitimate trail
+#: shapes: hex SHAs, HEAD, and ^/~N ancestry suffixes.
 SAFE_RANGE = re.compile(
     r"^[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*\.\.\.?[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*$"
 )
 
 _STORED_HEAD_ENDPOINT_RE = re.compile(r"^HEAD(?:[~^][0-9]*)*$")
 
+#: DR-234-class default: the code-partition coverage ratio (covered_code /
+#: (covered_code + uncovered_code)) below which the gate WARNs instead of
+#: reporting COVERED. A 100%-or-block
+#: posture was ruled "absurd even for agents" (PM, 2026-08-06) — this is the
+#: SINGLE named home for the threshold; every consumer (coverage.py's own
+#: verdict logic, coordinator/bin/merge-gate-and-pr.py,
+#: coordinator_core/workstream_complete/directives_review.py) reads this
+#: constant rather than hardcoding its own copy. Overridable via the
 #: COORDINATOR_COVERAGE_RATIO_THRESHOLD environment variable (a float string
+#: in [0.0, 1.0]) for local experimentation — an invalid or out-of-range
+#: override is ignored (falls back to the default) rather than raising, since
+#: this constant is read at import time by non-daemon CLI callers too.
 DEFAULT_COVERAGE_RATIO_THRESHOLD = 0.66
 
 
@@ -144,31 +158,86 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
     return bool(_STORED_HEAD_ENDPOINT_RE.match(left) or _STORED_HEAD_ENDPOINT_RE.match(right))
 
 
+#: Deliverable-Id shape pattern (fidelity guard 1, deliverable-attribution
+#: variant). Mirrored the retired `_UUID_RE`'s purpose (Session-Id UUID-shape
+#: validation; see kill-ledger for the DAG-fixpoint cut that removed it) — a
+#: malformed deliverable_id containing
+#: regex metacharacters interpolated raw into `git log --grep` would
+#: over-match commits outside this deliverable → false COVERED. Matches the
+#: two real mint shapes from coordinator_core.ops.mint_deliverable_id
+#: ("dlv-<stub_id>" / "dlv-<slug>-<6hex>") — alphanumeric + hyphen + `.` body,
+#: `dlv-` prefix required (schema cross-field rule). Widened
+#: (docs/plans/2026-08-05-author-the-dlv-pattern-for-deliverable-i.md) to admit
+#: `.` and to reject the scaffolder's placeholder slug — a live carrier
+#: (dlv-first-class-consumer-install-5.8-dogfood-2d336d, example-retrieval-repo-ue-addon)
+#: falsified the previous "matches the two real mint shapes" claim, which was
+#: a blind spot, not cosmetic: a malformed id that this regex under-rejects
+#: still over-matches `git log --grep` and yields a false COVERED. Now
+#: mirrors handoff.schema.json's `deliverable_id` pattern exactly (same
+#: negative lookahead, same body class) and is pinned against it by a shared
+#: case table (coordinator_core/tests/
+#: test_deliverable_id_pattern_parity.py) so the two cannot drift apart
 #: again. Malformed → INDETERMINATE (never FALSE COVERED), same as a
+#: malformed Session-Id.
 _DELIVERABLE_ID_RE = re.compile(r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$")
 
+#: Both were defined inside the block C5 deleted, but their consumer is
+#: `_filter_shas_by_scope_paths` — scope filtering, on C5's explicit
 #: NOT-DELETED list — so they are restored here rather than dropped. The
+#: `cat-file --batch-check` line shape they parse is `<sha> <type>`, and the
+#: match is fail-closed: a token that does not resolve to a full 40-hex sha of
+#: a known object type is degraded out of the chunk, never fed to diff-tree.
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _GIT_OBJECT_TYPES = frozenset({"commit", "tree", "blob", "tag"})
 
 # `_GIT_TIMEOUT` (the per-spawn `git rev-list` timeout convention shared with
+# machine_resolver.py / person_resolver.py) was dropped in the same hunk as
+# the above restoration, but deliberately, not as a second miss: `_run`'s
+# actual timeout is always caller-supplied via its `timeout=` parameter, and
 # grep confirms `_GIT_TIMEOUT` had no reader anywhere in this module — only
+# its own now-removed docstring referenced it.
 
 # `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD` and `_add_commit_touched_file_count`
+# (the leg-(b) bulk-sweep guard for the DAG-mode fixpoint's deliverable
+# attribution) were removed 2026-08-19 along with `_derive_dag_chain_set`,
+# their only caller — see state/kill-ledger.md.
 
+#: Verdict filter:
 #:   pending  → EXCLUDED (review not complete; counting pending as coverage would allow
+#:              the gate to pass on un-reviewed commits — the latent gap this filter closes).
 #:   ok / warn / blocked / waived / absent (no verdict field) → INCLUDED.
 EXCLUDED_VERDICTS: FrozenSet[str] = frozenset({"pending"})
 
 #: The CONTINUATION edge kinds — the lineage edges along which a review
 #: obligation propagates. Derived from `dag.CONTINUATION_EDGE_KINDS` (the
+#: SSOT; see that constant's docstring for why `forked_from` is deliberately
+#: absent — schema rule A3a-3, frontmatter/schema_validate.py::
+#: _cf_spinoff_predecessor_none) rather than restated — see
+#: coordinator_core/tests/test_dag_edge_kind_ssot.py for the drift guard.
+#: (Rule C2-4, _cf_origin_predecessor_none_invariant, reinforces the same
+#: invariant from the origin-axis side but fires only when an `origin_*`
+#: field is present — A3a-3 is the unconditional guarantee this constant
+#: rests on.) Used by BOTH legs of _derive_dag_chain_set — Step 1's walk and
+#: Step 2's blocker enumeration MUST agree on this set or an ancestor gets
+#: deferred to a chain that is structurally incapable of ever claiming it
+#: (false COVERED).
 _CONTINUATION_EDGE_KINDS: FrozenSet[str] = _DAG_CONTINUATION_EDGE_KINDS
 
+# ---------------------------------------------------------------------------
 # Subprocess helper — no shell=True; portable CREATE_NO_WINDOW flag (AC9 safe)
+# ---------------------------------------------------------------------------
 
 _NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 
+# Max concurrent `git rev-list` spawns for a per-range fan-out over distinct,
+# independent read-only shell-outs. Imported by
+# `coordinator_core.ops.review_coverage_core` (this module's own
+# `build_reviewed_set`, which used to bound its own fan-out with this
+# constant, was removed — see docs/plans/2026-08-27-the-reviewed-set-is-a-
+# file-not-a-computation.md § C5). On Windows each git spawn costs ~90ms
 # (CREATE_NO_WINDOW), so resolving N records serially is N×90ms. Bounded
+# fan-out keeps wall-clock ~= one spawn without launching an unbounded swarm
+# of git.exe at once.
 _REVLIST_MAX_WORKERS = 16
 
 def _run(
@@ -386,16 +455,55 @@ def _narrow_foreign_session_scope(
     return foreign
 
 
+# ---------------------------------------------------------------------------
+# Bookkeeping-vs-code partition (signal-honesty fix — coverage.py is an ORACLE,
+# not a lock; see ops/ceremony/tail_ops.py:698's own disclaimer). A ceremony
+# like /workstream-complete necessarily authors its own bookkeeping commits
+# (completion entry, review-trail record, shipped_in stamp, boot sweep,
+# pickup-assemble claim) AFTER the trail record that would cover them, which
 # used to pin VERDICT=UNCOVERED forever on any workstream that ran the
+# ceremony even when every genuinely-uncovered commit was ceremony
+# bookkeeping, not code a reviewer could open. This partition keeps the
+# verdict keyed on the CODE partition only, while still surfacing the
+# bookkeeping partition (never silently dropping it).
+# ---------------------------------------------------------------------------
 
+#: Path prefixes whose commits are ceremony bookkeeping, never code a reviewer
+#: opens (completion entries, review-trail records, shipped_in stamps, boot
+#: sweep notes, pickup-assemble claims). Editable/greppable single source of
+#: truth for the bookkeeping-vs-code partition below.
+#: Review: code-reviewer — each prefix carries a trailing `/`, which is what
+#: makes `str.startswith` safe here (a path-component match, not a substring
+#: match): "statement.py".startswith("state/") is False. Without the trailing
+#: slash this would false-classify e.g. "statement.py" as bookkeeping.
+#:
+#: Negative-spec: this prefix tuple is NOT the whole discriminator, and must
+#: not be read as one. Path prefix alone cannot separate a handoff being
 #: AUTHORED (trackable content) from ceremony exhaust that merely mutates the
+#: same tree — both land under `state/`. The change-type leg lives in
+#: `_handoff_authoring_shas` below; widening this tuple without consulting it
+#: is how 87578a319 turned the gate vacuous. Do not "simplify" by dropping
+#: `state/` from here and enumerating ceremony subpaths instead: that flips
+#: `shipped_in`-stamp and pickup-assemble-claim commits back to CODE, which
 #: is the permanent false-UNCOVERED tail
+#: 87578a319 existed to remove.
 _BOOKKEEPING_PATH_PREFIXES: Tuple[str, ...] = ("state/", "archive/", "tasks/", "cross-repo/")
 
+#: The handoff corpus. A commit that *introduces* a file here is authoring a
+#: handoff — the primary content the DAG coverage gate exists to track, and
+#: the commit `_derive_dag_chain_set` attributes a node to (it resolves a
+#: node's authoring commit with `git log --follow -M100% --diff-filter=A`,
+#: then reads the `Session-Id` trailer off it). A commit that merely MUTATES a
+#: file here is ceremony exhaust — the `shipped_in` stamp, the
+#: pickup-assemble claim, the fleet archival move — which is what
 #: `_BOOKKEEPING_PATH_PREFIXES` catches. See `_handoff_authoring_shas`.
 _HANDOFF_AUTHORING_PATH_PREFIX = "state/handoffs/"
 
 #: `git log --name-status` status letters that INTRODUCE the destination path
+#: (add, copy, rename-in), as opposed to mutating or removing one. Renames and
+#: copies are included fail-closed: a file appearing at a `state/handoffs/`
+#: path by any means reads as content the gate should keep tracking, and
+#: over-classifying as CODE is the loud direction.
 _PATH_INTRODUCING_STATUSES = ("A", "C", "R")
 
 _COMMIT_HEADER_SENTINEL = "\x02"
@@ -407,8 +515,19 @@ def _is_bookkeeping_path(path: str) -> bool:
 
 
 #: Path prefixes whose commits are PLANNING artifacts — a plan, a piece of
+#: planning research/problem-framing prose, or a plan's own sidecar — never
+#: code a reviewer opens, but ALSO never exempt from review the way EXHAUST
+#: is (see AC9 / _classify_bookkeeping_shas' docstring). Deliberately its OWN
 #: tuple, separate from `_BOOKKEEPING_PATH_PREFIXES` — see the negative-spec
+#: above that constant and AC2: widening the bookkeeping tuple to cover this
+#: class would exempt plan commits from review entirely, the vacuity
+#: direction 87578a319 exists to prevent.
+#:
+#: Widened 2026-08-06 (EM ruling, docs/plans/2026-08-05-coverage-gate-
+#: planning-artifact-class.md § Out of scope) from `docs/plans/` alone to the
+#: four prefixes below — `docs/decisions/`, `docs/reference/`, and
 #: `docs/wiki/` are deliberately EXCLUDED: they are doctrine/reference prose,
+#: not planning artifacts, and stay reviewable exactly like code.
 _PLANNING_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "docs/plans/",
     "docs/research/",
@@ -424,6 +543,16 @@ def _is_planning_artifact_path(path: str) -> bool:
 
 
 #: `git --numstat`'s rename-row notation — the CANONICAL definition, shared
+#: by `review_brightline_gate.py` and `workstream_complete/__init__.py`
+#: (both re-export `_resolve_numstat_row_path` below rather than each
+#: keeping its own copy — see this module's own callers' path-predicate
+#: bug this shared home fixes, docs/plans/2026-08-12-numstat-rename-rows-
+#: leak-past-the-noise-fi.md). Homed here, not in either gate module,
+#: because `review_brightline_gate.py` is imported BY
+#: `workstream_complete/__init__.py` at module scope — a straight import
+#: the other direction would be a true two-file cycle, not merely a
+#: fragile ordering; this module is a dependency of both and a dependent
+#: of neither.
 _REVIEW_SCALE_BRACED_RENAME_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
 _REVIEW_SCALE_BARE_RENAME_RE = re.compile(r"^(.*) => (.*)$")
 
@@ -453,7 +582,13 @@ def _resolve_numstat_row_path(path: str) -> str:
     return path
 
 
+#: Chunk size for `_commit_touched_paths`' bare-SHA `git log --no-walk`
 #: positional-args batching — mirrors `_TRAILER_LOOKUP_CHUNK`'s rationale
+#: (keeps each spawn's argv comfortably under Windows' ~32K command-line
+#: length ceiling; a 40-hex SHA plus separator is a few bytes, so 300 per
+#: chunk leaves ample headroom). Unscoped whole-chain runs on this repo have
+#: exceeded 1900 SHAs, which previously blew a single unchunked argv past the
+#: ceiling ([WinError 206] "The filename or extension is too long").
 _TOUCHED_PATHS_CHUNK = 300
 
 
@@ -638,6 +773,7 @@ def _classify_bookkeeping_shas(
         if not paths:
             continue
         if all(_is_bookkeeping_path(p) for p in paths):
+            # EXHAUST wins on overlap — a bookkeeping-only commit (which may
             # include state/plan-sidecars/ paths) never reaches PLANNING.
             by_path.append(sha)
             continue
@@ -782,7 +918,7 @@ def emit_unrecognized_kind_warning(unrecognized_kind_counts: Dict[str, int]) -> 
     )
 
 
-def _parse_handoff_consumed_by(
+def _parse_handoff_claimed_by(
     handoff_path: str,
     *,
     common_dir: Optional[Path] = None,
@@ -806,7 +942,7 @@ def _parse_handoff_consumed_by(
     called bare.
 
     No try/except here by design: the two callers below
-    (``_get_handoff_consumed_by``, ``_handoff_session_live``) need DIFFERENT
+    (``_get_handoff_claimed_by``, ``_handoff_session_live``) need DIFFERENT
     failure treatment — the former's contract is depended on verbatim by
     external call sites, the latter feeds the DAG-fixpoint Guard-2
     notes/indeterminate machinery — so each catches independently.
@@ -844,7 +980,7 @@ def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
     back to the legacy Session-Id-only attribution (unchanged from today),
     never treated as an error.
 
-    Mirrors _parse_handoff_consumed_by's key resolution and 4 KiB read cap —
+    Mirrors _parse_handoff_claimed_by's key resolution and 4 KiB read cap —
     deliverable_id lives in the same frontmatter block.
 
     Negative-spec (break-class fix, 2026-07-28): this carried the identical
@@ -874,7 +1010,7 @@ def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
     return val
 
 
-def _get_handoff_consumed_by(
+def _get_handoff_claimed_by(
     handoff_path: str,
     *,
     common_dir: Optional[Path] = None,
@@ -882,13 +1018,13 @@ def _get_handoff_consumed_by(
 ) -> Optional[str]:
     try:
         if common_dir is not None or repo_root is not None:
-            return _parse_handoff_consumed_by(
+            return _parse_handoff_claimed_by(
                 handoff_path, common_dir=common_dir, repo_root=repo_root
             )
-        return _parse_handoff_consumed_by(handoff_path)
+        return _parse_handoff_claimed_by(handoff_path)
     except Exception as exc:
         print(
-            f"_get_handoff_consumed_by: {handoff_path}: {type(exc).__name__}: {exc} "
+            f"_get_handoff_claimed_by: {handoff_path}: {type(exc).__name__}: {exc} "
             f"(non-fatal, conservative-live default)",
             file=sys.stderr,
         )
@@ -904,8 +1040,8 @@ def _handoff_session_live(
 ) -> Tuple[bool, Optional[str]]:
     """True if the session that claimed handoff_path is currently live.
 
-    Ledger-first (C2, this plan) via ``_parse_handoff_consumed_by`` —
-    calls it DIRECTLY, bypassing ``_get_handoff_consumed_by``, so this is
+    Ledger-first (C2, this plan) via ``_parse_handoff_claimed_by`` —
+    calls it DIRECTLY, bypassing ``_get_handoff_claimed_by``, so this is
     the DAG-fixpoint's own call path onto the same C1 accessor.
 
     Conservative default: if session cannot be resolved (unclaimed or unreadable)
@@ -915,18 +1051,18 @@ def _handoff_session_live(
     legitimately-unclaimed handoff) — None when there is nothing to surface.
     ``common_dir``/``repo_root`` are optional hot-path pre-resolution hooks
     (this function runs per-handoff inside the fixpoint) — see
-    ``_parse_handoff_consumed_by``.
+    ``_parse_handoff_claimed_by``.
     """
     try:
         if common_dir is not None or repo_root is not None:
-            sid = _parse_handoff_consumed_by(
+            sid = _parse_handoff_claimed_by(
                 handoff_path, common_dir=common_dir, repo_root=repo_root
             )
         else:
-            sid = _parse_handoff_consumed_by(handoff_path)
+            sid = _parse_handoff_claimed_by(handoff_path)
     except Exception as exc:
         note = (
-            f"{handoff_path}: _get_handoff_consumed_by raised "
+            f"{handoff_path}: _get_handoff_claimed_by raised "
             f"{type(exc).__name__}: {exc} — INDETERMINATE"
         )
         return True, note
@@ -1113,8 +1249,17 @@ class _DagChainResult:
     notes: List[str] = field(default_factory=list)
     ordered_ancestry: List[str] = field(default_factory=list)
     node_attribution: Dict[str, _DagNodeAttribution] = field(default_factory=dict)
+    #: C2 (AC3): commits seen in a coverable node's Session-Id segment but
     #: EXCLUDED from that node's leg (b) because the add-commit that would
+    #: have seeded leg (b) was judged a bulk sweep (the threshold constant
     #: this compared against, `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD`, was
+    #: removed 2026-08-19 with its only caller — see state/kill-ledger.md).
+    #: Never a member of `shas` —
+    #: these are "in range, unattributable to this chain", not "this
+    #: chain's inheritance". Reported so a closer sees they exist and are
+    #: someone else's, rather than the report silently shrinking. Additive
+    #: field — existing callers reading only `shas`/`node_attribution` are
+    #: unaffected.
     unattributable_shas: List[str] = field(default_factory=list)
     terminated_early: str = ""
 
@@ -1271,10 +1416,15 @@ class CoverageResult:
     unattributable_shas: List[str] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
 # DAG-mode UNCOVERED render — baton-ancestry inheritance disclosure
+# ---------------------------------------------------------------------------
 
+#: Labels assigned to ancestry nodes in chronological (oldest-first) order for
 #: the UNCOVERED render below. Falls back to a numeric "N<i>" token past
 #: len(_ANCESTRY_LABELS) — a real baton chain has never been observed anywhere
+#: near 26 nodes deep, so this is a graceful-degradation floor, not a limit
+#: this code expects to hit.
 _ANCESTRY_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 

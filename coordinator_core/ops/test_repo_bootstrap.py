@@ -166,6 +166,7 @@ def test_resolve_machine_local_bin_fallback_uses_userprofile_when_home_absent(
     fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fallback.chmod(0o755)
     # Path.home() only consults USERPROFILE on a real Windows interpreter;
+    # simulate that resolution here so the test proves the delegation shape.
     monkeypatch.setattr(Path, "home", lambda: userprofile_home)
 
     assert rb._resolve_machine_local_bin() == str(fallback)

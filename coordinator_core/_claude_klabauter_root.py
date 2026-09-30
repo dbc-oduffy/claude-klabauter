@@ -1,7 +1,7 @@
 """
-coordinator_core._claude_klabauter_root -- shared, memoized ``_machine_local_get`` and
-the ``_claude_klabauter_root()`` resolution-rung helpers duplicated across
-coordinator_core's non-server ops (R4,
+coordinator_core._claude_klabauter_root -- shared, memoized ``_machine_local_get`` plus
+the ``_claude_home`` / ``_machine_local_impl`` path helpers it depends on,
+consumed by coordinator_core's non-server ops (R4,
 docs/plans/2026-09-22-spawn-budget-and-census.md).
 
 No import-time side effects: no ``register_op``, no I/O, no subprocess spawn
@@ -11,10 +11,9 @@ write-op's side effects. Do NOT import this module from
 import, a write-op side effect a read-op importer must never inherit
 transitively.
 
-Rung helpers (env override, ``engine.source_root``, machine-local registry,
-mirror refusal) are kept as SEPARATE functions here, never assembled into one
-``_claude_klabauter_root()`` -- each caller keeps its own raise-versus-degrade policy on
-an unresolvable or mirror-resolved root. See
+Mechanism only: each caller keeps its own ``_claude_klabauter_root()`` rung order and
+its own raise-versus-degrade policy on an unresolvable or mirror-resolved
+root (``queue_append`` raises, ``deliverable_rollup`` degrades). See
 state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extraction.yaml.
 """
 
@@ -26,16 +25,9 @@ import sys
 from typing import Dict, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.engine_root import (
-    coordinator_engine_root_env,
-    engine_source_root,
-    is_published_engine_mirror,
-)
-from coordinator_core.telemetry import op_latency
 
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
-_REGISTRY_KEY = "repos.claude_klabauter"
 
 _MACHINE_LOCAL_TIMEOUT = 5
 
@@ -113,47 +105,3 @@ def _machine_local_get(key: str) -> Optional[str]:
     value = result.stdout.strip()
     _machine_local_cache[cache_key] = value
     return value
-
-
-def env_override_rung(caller_module_name: str) -> Optional[str]:
-    """Rung 1: the ``COORDINATOR_ENGINE_ROOT`` env var, via the accessor,
-    honoured only when this process IS the one the caller ran in
-    (``execution_route() == IN_PROCESS``) -- a warm-served process inherits
-    its SPAWNER's environment, not the current caller's, so trusting the raw
-    read under warm serving would name the spawner's root rather than the
-    current caller's.
-
-    Returns the expanded (``~``/env-var) candidate root, unchecked for
-    mirror -- callers apply their own mirror-refusal policy
-    (``is_published_mirror_root``) to the result.
-
-    ``caller_module_name`` tags the reading call site for
-    ``coordinator_engine_root_env``'s advisories -- pass the calling module's
-    ``__name__``."""
-    override = (coordinator_engine_root_env(caller_module_name) or "").strip()
-    if override and op_latency.execution_route() == op_latency.IN_PROCESS:
-        return os.path.expanduser(os.path.expandvars(override))
-    return None
-
-
-def engine_source_root_rung() -> Optional[str]:
-    """Rung 1.5: the transform-proof ``engine.source_root`` registry key.
-    Reached on the served route, where rung 1 (``env_override_rung``) is
-    skipped. Already mirror-safe by construction -- see
-    ``coordinator_core.engine_root.engine_source_root``'s own docstring."""
-    return engine_source_root() or None
-
-
-def registry_rung(key: str = _REGISTRY_KEY) -> Optional[str]:
-    """Rung 2: ``machine-local get <key>``, defaulting to
-    ``repos.claude_klabauter``."""
-    return _machine_local_get(key) or None
-
-
-def is_published_mirror_root(root: str) -> bool:
-    """Mirror-refusal predicate: True when ``root`` resolves to the
-    published engine mirror rather than a live working tree. Callers apply
-    their own raise-versus-degrade policy on a True result -- some raise
-    (e.g. ``queue_append._refuse_published_mirror``), some return None with a
-    WARN (e.g. ``deliverable_rollup._refuse_published_mirror``)."""
-    return is_published_engine_mirror(root)

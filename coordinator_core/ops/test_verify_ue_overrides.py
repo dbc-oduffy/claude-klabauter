@@ -64,7 +64,10 @@ def _setup_success_tree(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
     _write_settings(str(example_game_repo_dir / ".claude" / "settings.json"), _FULLY_ENABLED)
     _write_settings(str(example_retrieval_repo / ".claude" / "settings.json"), _FULLY_ENABLED)
+    # The GLOBAL file is UE-OFF, and that is the passing shape. It used to be
     # seeded `_FULLY_ENABLED` here because the verifier demanded `true` in it --
+    # the exact state per-project gating forbids, which is why a correct machine
+    # reported three WRONG lines on every close ceremony.
     _write_settings(str(home / ".claude" / "settings.json"), _GLOBAL_UE_OFF)
     return example_game_repo_dir, example_retrieval_repo, home
 

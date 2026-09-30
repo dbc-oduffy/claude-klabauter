@@ -108,7 +108,13 @@ def test_pathspec_covers_every_contributing_root_and_inject_src():
         assert entry in pathspec, f"inject src {src} missing from pathspec: {pathspec}"
 
 
+# ---------------------------------------------------------------------------
+# AC2: an inject src that would have been dropped by naive
+# contributing-roots-only scoping is present in the pathspec — pin the
+# regression the prior executor correctly feared, using the
 # cockpit-contract/LICENSE shape (a real production inject entry, declared
+# in percolate-store.yaml `!`-excluded from its row's own allowlist).
+# ---------------------------------------------------------------------------
 
 
 def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
@@ -133,6 +139,8 @@ def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
     assert license_src.exists(), f"resolved inject src does not exist on disk: {license_src}"
 
     # The regression this pins: LICENSE's containing directory is not a
+    # subtree of any contributing root at all — a naive
+    # contributing-roots-only pathspec would never include it.
     assert not any(
         root in license_src.resolve().parents or root == license_src.resolve()
         for root in contributing_roots
@@ -171,7 +179,11 @@ def test_empty_pathspec_for_own_toplevel_fails_loud(monkeypatch):
 
 def test_root_tracked_at_sha_but_absent_from_working_tree_is_still_covered(tmp_path, monkeypatch):
     # `_required_pathspec_for_toplevel` only scopes `toplevel == _REPO_ROOT`
+    # (§ docstring: any other toplevel is "not this pathspec's business").
     # Point `_REPO_ROOT` at a disposable throwaway repo for the duration of
+    # this test so the fix is exercised through the same code path
+    # `_extract_git_archive` actually uses, without touching this repo's
+    # real tree.
     root = tmp_path / "tracked-repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, creationflags=_NO_WINDOW)

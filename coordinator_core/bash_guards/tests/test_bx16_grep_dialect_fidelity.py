@@ -78,6 +78,7 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
         , **no_console_creationflags())
     else:
         result = subprocess.run(
+            # popup-intentional-last-resort: shell=True spawns a cmd.exe
             # intermediary that CREATE_NO_WINDOW does not suppress; the
             # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             cmd, shell=True, capture_output=True, text=True, timeout=timeout,
@@ -157,7 +158,12 @@ class TestRefusesRatherThanGuesses:
         assert dc.check_grep_via_bash_rewrite(cmd) is None
 
     def test_perl_shorthand_escape_refused_in_every_dialect(self, fixture_file):
+        # Single-quoted in the command TEXT (not merely an `r"..."` Python
         # literal) -- an UNQUOTED `\d` would have its backslash stripped by
+        # the shell-mimicking tokenizer before the pattern operand is even
+        # extracted (bare backslash-before-ordinary-char is a no-op escape
+        # in POSIX shell quoting), silently turning this into "d+" and
+        # testing the wrong thing entirely.
         for binary in ("grep", "egrep"):
             cmd = "%s -n '\\d+' %s" % (binary, fixture_file)
             assert dc.check_grep_via_bash_rewrite(cmd) is None, binary
@@ -201,6 +207,16 @@ class TestDifferentialExecutionMatchesRealBinary:
         assert rewritten is not None, "expected a rewrite for: %s" % cmd
         assert _lines_of(real) == _lines_of(rewritten), (cmd, real, rewritten)
 
+    #: These four were carried as `pending_fix` in
+    #: state/bash-guards/known-red.json group "dispatch-checks-windows-path",
+    #: attributed to a `check_grep_via_bash_rewrite` `os.path.join` defect.
+    #: That attribution was wrong. Retired 2026-09-01 after measuring the
+    #: rewrite's actual output: the MATCHES were already byte-identical to
+    #: real `grep`'s on every one of them, and the sole divergence was in
+    #: `_lines_of` -- this file's own normalizer -- which could not span the
+    #: drive colon in a Windows path and so left the rewrite's line unparsed
+    #: while parsing `grep`'s. A red test does not establish where the defect
+    #: is; it establishes that two sides disagree, and here one of the two
     #: sides was the instrument. See `_PATH_LINE_RE`.
     def test_dot_metachar_basic(self, fixture_file):
         self._assert_matches("grep", "-n", ".", fixture_file)

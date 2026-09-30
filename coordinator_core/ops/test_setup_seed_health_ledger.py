@@ -119,6 +119,7 @@ def test_resolve_state_root_meta_repo_falls_back_when_claude_klabauter_unresolva
 
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(mod, "_machine_local_get", lambda key: None)
 
     resolved = mod._resolve_state_root(str(fake_home))

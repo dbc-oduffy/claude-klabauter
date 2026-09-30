@@ -182,6 +182,7 @@ def test_seven_dim_reference_impl_seen_undetermined_no_plan_body(tmp_path):
 
 def test_premise_gate_m_band_uncovered_false_for_m(tmp_path):
     # M is IN _PREMISE_DETENT_TSHIRTS — the premise_unproven detent DOES
+    # fire for M, so M is covered, not a gap.
     ctx = _ctx(tmp_path, sizing_frontmatter={"estimate": {"tshirt": "M"}})
     result = m.premise_gate(ctx)
     assert result == {"m_band_uncovered": False, "tshirt": "M"}
@@ -233,6 +234,8 @@ def test_premise_gate_undetermined_no_estimate_key(tmp_path):
 
 def test_premise_gate_reads_premise_detent_tshirts_not_hardcoded():
     # Bug-for-bug guard: the row must observe `_PREMISE_DETENT_TSHIRTS`
+    # live, not a copy — mutate-and-restore the module constant and confirm
+    # the predicate's answer tracks it.
     import coordinator_core.sizing_assemble as sizing_assemble
 
     original = sizing_assemble._PREMISE_DETENT_TSHIRTS

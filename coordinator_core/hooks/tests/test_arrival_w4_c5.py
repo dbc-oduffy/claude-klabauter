@@ -183,6 +183,37 @@ def test_derive_global_doctrine_live_copy_already_synced_is_silent(tmp_path, mon
     assert result is None
 
 
+def _shell_payload(command: str) -> dict:
+    return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
+def test_derive_global_doctrine_live_copy_rederives_on_a_bash_write(tmp_path, monkeypatch):
+    (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    (tmp_path / "global-doctrine").mkdir()
+    (tmp_path / "global-doctrine" / "CLAUDE.md").write_text("edited by heredoc", encoding="utf-8")
+    monkeypatch.setattr(dgdlc, "_resolve_doctrine_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(dgdlc.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    result = dgdlc.evaluate(
+        _shell_payload("python3 - <<'EOF'\nopen('global-doctrine/CLAUDE.md','w').write('x')\nEOF")
+    )
+
+    assert result is not None
+    assert (tmp_path / "home" / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == (
+        "edited by heredoc"
+    )
+
+
+def test_derive_global_doctrine_live_copy_ignores_a_bash_command_off_the_authoring_tree(
+    tmp_path, monkeypatch
+):
+    def _boom():
+        raise AssertionError("filesystem probe on an unrelated Bash call")
+
+    monkeypatch.setattr(dgdlc, "_resolve_doctrine_repo_root", _boom)
+    assert dgdlc.evaluate(_shell_payload("ls -la /tmp")) is None
+
+
 # ---------------------------------------------------------------------------
 # derive_setup_copies — evaluate() core
 # ---------------------------------------------------------------------------

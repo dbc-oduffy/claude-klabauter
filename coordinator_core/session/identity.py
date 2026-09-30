@@ -38,7 +38,9 @@ import re
 from typing import Any, Dict, Optional
 
 #: CS_CANONICAL_AGENT_ID_RE — single source of truth for the bare-hex
+#: unnamed-agent format predicate. Format: lowercase hex, >= 12 chars, no
 #: upper bound. Port of ``CS_CANONICAL_AGENT_ID_RE``
+#: (DoE coordinator-session.sh, e34f2484, 2026-07-22).
 CANONICAL_AGENT_ID_RE = re.compile(r"^[a-f0-9]{12,}$")
 
 _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
@@ -233,6 +235,9 @@ def resolves_em_audience(
             return False
         raw_agent_id = payload.get("agent_id")
         if raw_agent_id:
+            # Present-but-possibly-unresolvable: distinguish from "no
+            # agent_id key at all" BEFORE the shared resolver canonicalizes
+            # both cases to the same empty string. See "ABSENT VS
             # UNRESOLVABLE" above.
             return False
         from coordinator_core.subagent_sandbox.engine import resolve_effective_types

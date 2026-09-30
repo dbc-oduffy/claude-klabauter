@@ -94,7 +94,15 @@ def test_sample_forwarders_execute_and_resolve_their_real_target(tmp_path, monke
     bin_dst.mkdir()
     _run_install(tmp_path, monkeypatch, bin_dst)
 
+    # A written forwarder's runtime resolution ladder (_resolve_claude_klabauter.py,
+    # exec'd BY the forwarder as a fresh subprocess) is independent of this
     # install pass's CLAUDE_KLABAUTER_ROOT env-var shortcut -- it consults the
+    # settings-home machine-local registry / `.claude-klabauter-live-root` sentinel, per its
+    # own module docstring's Rung 1/Rung 2. On a genuinely fresh machine
+    # neither exists, and every forwarder rc=1s with "cannot resolve
+    # claude-klabauter" -- an unstated prereq this test surfaces by supplying
+    # the sentinel a real install's operator would also have to write (see
+    # the dispatch report's "unstated prereqs" list).
     settings_home = Path(os.environ["HOME"])
     ml_dir = settings_home / ".coordinator-claude-settings" / "machine-local"
     ml_dir.mkdir(parents=True, exist_ok=True)

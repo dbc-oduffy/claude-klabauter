@@ -157,7 +157,11 @@ def test_record_range_has_stored_head_false(sha_range: str) -> None:
     assert _record_range_has_stored_head(sha_range) is False
 
 
+# ---------------------------------------------------------------------------
 # _FOREIGN_STRIPPED_SCOPES — the whole admission story for foreign-session
+# narrowing (K-010 removed the per-record attestation exemption that briefly
+# qualified it).
+# ---------------------------------------------------------------------------
 
 def test_foreign_stripped_scopes_is_the_three_narrowed_scopes() -> None:
     """`_FOREIGN_STRIPPED_SCOPES` is the whole admission story: a foreign

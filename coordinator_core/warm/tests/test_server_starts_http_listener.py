@@ -109,6 +109,12 @@ def test_pipe_server_boots_unchanged_when_ensure_listener_raises(tmp_path, monke
     monkeypatch.setattr(supervisor, "ensure_listener", _boom)
 
     # `main()` dispatches on WHICH ENDPOINT WON the election (server.py's own
+    # comment at the `serve_forever`/`serve_forever_unix` branch), not on a
+    # platform read: on the POSIX box this suite actually runs on, that is
+    # `serve_forever_unix`, never `serve_forever` (the Windows named-pipe
+    # arm `_patch_boot_seams` stubs `election.elect` for but never wins on
+    # this platform). Both are patched so the assertion below is the
+    # platform-appropriate one rather than one hard-coded to Windows.
     served = []
     monkeypatch.setattr(
         server._ServerContext, "serve_forever", lambda self, handle: served.append(handle)

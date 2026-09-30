@@ -554,7 +554,20 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 135
 
+#: Sibling of `_write_bump_marker.resolve_gitdir` -- this module also needs
+#: the human-readable repo ROOT (`git rev-parse --show-toplevel`) for the
+#: two display strings the message names (`target_repo`/`session_repo`).
+#: Deliberately NOT exported from `_write_bump_marker.py` (that module's
+#: job is the marker's own git-DIR, worktree-private by design); this is a
+#: small, best-effort, display-only resolver, fail-open like every sibling
+#: git resolver in this package.
+#:
+#: AC4 migration note (2026-08-07 no-window-subprocess-primitive, C3b): this
+#: resolver now delegates to the shared `write_guards._repo_root` seam (see
+#: `_resolve_git_root` below), which owns its own Windows console-popup
 #: suppression -- the `_creationflags`/`_CREATIONFLAGS` memoized-flag helper
+#: that used to feed this module's own inline spawn was removed as dead code
+#: once that spawn was.
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
@@ -606,7 +619,10 @@ def _resolve_sandbox_root(git_root: Optional[str], session_id: str) -> str:
     return machinery_paths.share_dir(git_root, sanitized)
 
 
+#: Adjacent, case-folded directory-path pair this predicate keys on -- see
 #: module docstring, "LESSONS-OUTBOX IS NOT A MISWRITE". Deliberately the
+#: two literal segments only, never a broader `cross-repo/` prefix -- see
+#: that section's "DO NOT WIDEN" paragraph.
 _LESSONS_OUTBOX_SEGMENTS = ("state", "lessons-outbox")
 
 
@@ -877,8 +893,14 @@ def _verdict_bumps(
     branch below, `own_gitdir` non-`None`, is untouched by this parameter).
     """
     if own_gitdir is None:
+        # Session anchor is in no git repo -- mirrors C5's outside-repo
+        # no-bump condition when the target ALSO has no repo (never bumps;
+        # no gitdir anywhere to site a clearable marker). A target that DOES
+        # resolve to a repo mirrors C4's cross-repo condition, narrowed by
         # Narrow (PM ruling 2026-08-10): a REGISTERED target still bumps
         # unconditionally, as it always has; an UNREGISTERED target now
+        # ALSO bumps unless it sits at or under the session's own anchor
+        # SUBTREE -- see `anchor_subtree_contains`'s own docstring.
         if target_gitdir is None:
             return False
         if target_dir is None:
@@ -956,8 +978,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         own_gitdir = resolve_gitdir(anchor)
         if own_gitdir is None and path_has_git_ancestor(anchor):
             # UNRESOLVED, not repo-less -- see module docstring, "VERDICT
+            # LOGIC" is a fact-of-the-anchor question, and `resolve_gitdir`
+            # returning `None` here is ambiguous between "the anchor
+            # genuinely sits in no git repo" (the branch `_verdict_bumps`
             # below still bumps a REGISTERED target for, unconditionally,
+            # per the 2026-08-10 PM ruling) and "the `git rev-parse
+            # --git-dir` spawn itself failed" -- a real, expected outcome
+            # under this box's documented load norm (50-70 concurrent LLMs,
+            # `docs/wiki/machine-load-norm.md`), not an anomaly. A
+            # filesystem-only ancestor walk (`path_has_git_ancestor`, no
+            # subprocess) that finds a `.git` entry at/above `anchor` is
+            # positive evidence for the SECOND fact, not the first --
             # treated as UNRESOLVED and allowed, matching this module's own
+            # unconditional fail-open contract ("never bump on a path this
+            # guard could not resolve"). A genuinely repo-less anchor (no
+            # `.git` entry on the walk either) falls through unchanged into
+            # `_verdict_bumps` below, preserving the 2026-08-10 ruling
+            # exactly.
             return None
         target_dir = _resolve_target_dir(file_path, payload_cwd)
         target_gitdir = _target_gitdir_from_dir(target_dir)
@@ -997,7 +1034,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ):
             return None
 
+        # Marker location -- the TARGET's own gitdir when the target
+        # resolves to a repo, else the session's (see module docstring,
         # "MARKER LOCATION"). `legacy_marker_gitdir` is the pre-narrowing
+        # location, honoured on the read path only so a marker a live
+        # session already holds keeps clearing (see "LIVE MARKERS ARE NOT
         # INVALIDATED"); it is never advertised and never printed.
         marker_gitdir, legacy_marker_gitdir = _marker_locations(
             own_gitdir, target_gitdir
@@ -1032,7 +1073,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             sandbox_root = _resolve_sandbox_root(own_git_root or target_repo, session_id)
 
         if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+            # Nothing to compose a clear line against, OR the marker
             # location exists but is not writable/readable (STAFF-ENG
+            # F0/AC5, mirrored from `bump_foreign_repo_write.
+            # _evaluate_foreign_repo_candidate`) -- fail open (allow) in
+            # BOTH cases rather than advertise a `touch` that can never
+            # succeed. Under the pre-hard-deny `advisory` CLASS this was an
+            # unsatisfiable suggestion; under `hard-deny` it would be an
+            # unclearable wall.
             return None
 
         destination_class = DESTINATION_FOREIGN

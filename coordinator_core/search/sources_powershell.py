@@ -104,6 +104,9 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 
+#: Literal tokens PowerShell itself resolves to `Get-Content` -- matched
+#: case-insensitively (PowerShell cmdlet/alias names are case-insensitive by
+#: language design, the same convention `_dialect.py`'s own
 #: `_START_PROCESS_NAMES` documents).
 _CONTENT_VERBS = frozenset({"get-content", "cat", "gc", "type"})
 
@@ -317,6 +320,7 @@ def run_childitem(spec: ChildItemSpec, cwd: str = ".") -> List[str]:
 
 
 #: `FILE_ATTRIBUTE_HIDDEN` (0x2) | `FILE_ATTRIBUTE_SYSTEM` (0x4) -- the two
+#: attributes `Get-ChildItem` excludes by default (i.e. without `-Force`).
 _FILE_ATTRIBUTE_HIDDEN = 0x2
 _FILE_ATTRIBUTE_SYSTEM = 0x4
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF

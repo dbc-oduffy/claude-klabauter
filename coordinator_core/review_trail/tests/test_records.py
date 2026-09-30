@@ -13,7 +13,9 @@ def _touch(path: Path) -> None:
     path.write_text("{}", encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
 # _resolve_state_root — COORDINATOR_ROOT override branching
+# ---------------------------------------------------------------------------
 
 
 def test_coordinator_root_state_suffix_used_verbatim(monkeypatch, tmp_path):
@@ -33,7 +35,9 @@ def test_no_override_at_all_returns_none(monkeypatch):
 
 
 def test_explicit_override_param_takes_precedence_over_env(monkeypatch, tmp_path):
+    # Warm-server callers must pass state_root_override rather than staging
     # COORDINATOR_ROOT into os.environ (module docstring's precedence-1
+    # rationale) — an explicit override wins even when the env var disagrees.
     monkeypatch.setenv("COORDINATOR_ROOT", str(tmp_path / "env-root"))
     explicit = str(tmp_path / "state")
     assert records._resolve_state_root(explicit) == explicit

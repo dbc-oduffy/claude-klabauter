@@ -142,8 +142,13 @@ def test_resolve_gitdir_submodule_resolves_to_file_backed_dotgit(tmp_path):
     assert "modules" in gitdir.parts
 
 
+# ---------------------------------------------------------------------------
+# path_has_git_ancestor -- pure filesystem walk, no subprocess. Exists to
+# disambiguate `resolve_gitdir(path) is None` between "genuinely no repo"
+# and "the git rev-parse spawn failed" -- see its own docstring and
 # `write_guards.bump_out_of_repo_tool_write`'s "UNRESOLVED IS NOT THE SAME
 # FACT AS REPO-LESS" for the defect this closes.
+# ---------------------------------------------------------------------------
 
 
 def test_path_has_git_ancestor_true_for_plain_repo_root(tmp_path):
@@ -212,6 +217,8 @@ def test_marker_present_true_for_exact_basename(tmp_path):
 def test_marker_present_true_for_prefix_match_not_just_exact(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
+    # Deliberately not an exact-name match -- an entry whose basename
+    # STARTS WITH the session's marker basename still counts. See module
     # docstring "BASENAME MATCHING ON READ IS BY PREFIX".
     (gitdir / (marker.marker_basename("sess-123") + "-stray-suffix")).touch()
     assert marker.marker_present(gitdir, "sess-123") is True
@@ -390,6 +397,7 @@ def test_sweep_stale_markers_removes_only_named_session(tmp_path):
 
     assert removed == 1
     assert marker.marker_present(gitdir, "ended-session") is False
+    # A live session's own marker must never be swept as a side effect of
     # sweeping a DIFFERENT session's marker in the same gitdir.
     assert marker.marker_present(gitdir, "still-live-session") is True
 
@@ -432,8 +440,12 @@ def test_sweep_stale_markers_removes_exact_match_even_when_a_longer_id_would_col
     removed = marker.sweep_stale_markers(gitdir, ["abc"])
 
     assert removed == 1
+    # The exact-match `abc` marker file is gone -- swept as the ended
+    # session's own record. (`marker_present(gitdir, "abc")` would still
+    # read `True` here because its READ path is a deliberate prefix match
     # against the surviving `abcdef` file -- see module docstring "BASENAME
     # MATCHING ON READ IS BY PREFIX" -- so this asserts on the file directly
+    # rather than through that read-path helper.)
     assert not abc_marker.exists()
     assert abcdef_marker.exists()
     assert marker.marker_present(gitdir, "abcdef") is True
@@ -491,7 +503,9 @@ def test_sweep_stale_markers_ignores_non_string_and_empty_ids(tmp_path):
     assert marker.marker_present(gitdir, "sess-1") is False
 
 
+# ---------------------------------------------------------------------------
 # marker_gitdir_is_writable -- STAFF-ENG F0 / AC5, write-axis fail-open.
+# ---------------------------------------------------------------------------
 
 
 def test_marker_gitdir_is_writable_true_for_ordinary_dir(tmp_path):
@@ -638,7 +652,11 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert result is not None, "guard must actually fire for the absence assertions below to mean anything"
 
     hook_output = result["hookSpecificOutput"]
+    # This is an advisory bump (`permissionDecision: "deny"`, a passable
     # speed bump), never a hard CONFINEMENT_DENY -- the registration-side
+    # `band`/`fail_closed` attributes this asserts are pinned by
+    # test_bump_foreign_repo_write.py's own AC19 test; this test asserts the
+    # MARKER's own absence properties, on a genuinely fired result.
     assert hook_output["permissionDecision"] == "deny"
     reason = hook_output["permissionDecisionReason"].lower()
     assert "expir" not in reason

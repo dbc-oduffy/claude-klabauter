@@ -77,6 +77,8 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
             "print(json.dumps({'manifest': reg._MANIFEST_PATH}))\n"
         )
         # Scrubbed env: CONTENT_ROOT / REPO_CONTENT_ROOT / CLAUDE_PLUGIN_ROOT absent, so
+        # the registry rung is the ONLY thing that can resolve the manifest. On
+        # the pre-fix module this subprocess dies with FileNotFoundError.
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self.home,

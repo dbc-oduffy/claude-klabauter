@@ -91,9 +91,22 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 )
 
 CLASS = "hard-deny"
+#: WIDENED 2026-08-07 (C4, docs/plans/2026-08-07-command-guards-fire-under-
+#: both-tool-names.md) -- unlike its two former cohort-mates
+#: (`guard_plumbing_and_loops.py`, `guard_multiprobe_banner.py`, still
+#: held), this guard is deny-incapable at the chain level: its
+#: `GuardEntry` registration in `dispatch.py`'s `guard_chain` (the
 #: "check-raw-pid-liveness" entry) declares `GuardBand.ADVISORY_REWRITE`
+#: with `fail_closed=False`, and `check()` below never constructs a deny
+#: envelope in any branch. `CLASS = "hard-deny"` immediately above is a
+#: DEAD attribute (DR-277) -- C1 deliberately did not revive it as a live
+#: signal, and reading it as evidence this guard can deny is exactly the
+#: misreading that put this file in the held cohort in the first place.
 #: It also already dialect-branches to SILENT for `Dialect.POWERSHELL`
+#: rather than guessing (its three POSIX-only idioms have no recognized
+#: PowerShell analogue) -- a declined verdict, never a scan of unreadable
 #: text. `MATCHERS` therefore references the shared tool-name universe
+#: directly, not a guard-local subset.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 46
 
@@ -137,7 +150,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is Dialect.POWERSHELL:
+        # C5 (row 19, `docs/reference/guard-dialect-coverage.md`): this
         # guard's own segment splitter (`_SEGMENT_SPLIT_RE`) and all three
+        # detection forms (`ps -p`, `kill -0`, `os.kill(pid, 0)`) are
+        # POSIX-only -- no PowerShell liveness idiom (`Get-Process -Id`) is
+        # recognized at all. A PowerShell command is therefore never a
+        # confirmed clean verdict here; record SILENT rather than let an
+        # unscanned command read as cleared. Does NOT scan `cmd` -- the
+        # splitter itself is the closed hole the tokenizer docstring warns
+        # about (module docstring "Detection shape"), so re-using it against
+        # PowerShell input would be exactly the guess this plan forbids.
         record_silent(
             "check_raw_pid_liveness",
             "PowerShell dialect: no recognized liveness idiom "
@@ -152,7 +174,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+    # Heredoc bodies are stdin DATA, not shell command text -- strip them
+    # before scanning, same as every sibling guard in this package (2026-
+    # 07-29 incident fix; see e.g. `check_test_suite_invocation.py`'s own
+    # `_strip_heredoc_bodies` call). Without this, a heredoc body merely
     # CONTAINING the string "ps -p 1234" as data (a probe script, a
+    # findings write-up) was denied as if it were a live liveness probe.
     cmd = _strip_heredoc_bodies(cmd)
 
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":

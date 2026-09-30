@@ -120,10 +120,28 @@ def test_legacy_rows_same_identity_different_declared_at_collapse(tmp_path: Path
     assert records[0]["declared_at"] == "2026-06-24T11:00:00Z"
 
 
+# ---------------------------------------------------------------------------
 # KNOWN CROSS-CUTOVER GAP (2026-07-22, goal.append explicit-goal_id feature).
+#
 # goal_append.py's append_goal() now accepts an EXPLICIT goal_id (validated to
 # the same 12-hex shape _goal_id() emits — see goal_append.py's _GOAL_ID_RE).
+# This section's dedup key groups on the row's OWN goal_id when present, and
+# ONLY falls back to recomputing _goal_id() when goal_id is absent-in-row
+# (see collect()'s `if not goal_id:` branch above). Consequence, NAMED here
+# rather than silently absorbed: a LEGACY row for a logical goal (written
+# before this feature existed, no goal_id in the row -> falls back to the
+# content-hash) and a LATER row for the SAME logical goal that arrives with a
 # DIFFERENT explicit goal_id (any valid 12-hex string not equal to that
+# content-hash) do NOT unify — they are two distinct dedup keys, so both
+# survive as separate records instead of the later one superseding the
+# earlier one. This is exactly the identity-fragmentation hazard the whole
+# goal.append memo exists to prevent, now showing up one layer over: at the
+# READ (dedup) side instead of the write side, for any goal with emitted
+# history that a caller later re-declares under an explicit id. Fixing the
+# dedup key is a direction-class call (which identity should win, and how to
+# reconcile two colliding shards) outside this task's scope — this test only
+# makes the current, un-fixed behaviour visible and citable.
+# ---------------------------------------------------------------------------
 
 def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
     tmp_path: Path,

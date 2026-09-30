@@ -90,8 +90,14 @@ import tempfile
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
+# Every test here invokes each fixed CLI as a REAL subprocess with
 # PYTHONPATH unset -- an in-process import cannot reproduce the
+# "sys.path[0] is bin/, not the checkout root" defect this file guards
+# against (see module docstring). age-sweep-lessons's probe additionally
+# spawns real `git init`/`git add` on a throwaway temp dir to exercise its
 # --apply write path. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -766,7 +772,12 @@ _RESOLVER_FAMILY_BY_FILE = {
     "tests/test_checked_repo_resolver_c4.py": frozenset({"env_first"}),
     "validate-fast-and-packageability.py": frozenset({"self_location"}),
     "whats-next.py": frozenset({"env_first"}),
+    # FAMILY CHANGED 2026-09-22, deliberately, per this map's own contract: both
+    # wrappers import `coordinator_core.testing.*` -- the test helper belonging to
+    # the checkout they live in -- so self-location is the only ladder that can
+    # answer correctly. Env-first sent a run from the claude-klabauter checkout to whatever
     # COORDINATOR_ENGINE_ROOT named, which on a cloud box is a published mirror
+    # pinned at clone time, and the import died on a helper not yet published there.
     "with-suite-mutex": frozenset({"self_location"}),
     "with-tier-t-slot": frozenset({"self_location"}),
     "workday-complete-args-and-validate.py": frozenset({"env_first"}),

@@ -133,12 +133,16 @@ _OP_KEY = "fleet.archive_actioned_memos"
 
 _TERMINAL_MEMO_STATUSES = frozenset({"actioned", "superseded", "closed", "withdrawn"})
 
+# Refusal reasons — same "every rail names itself" discipline as the
 # handoff precedent's `_SCAN_REASON_*` block.
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 
+# Recommended cap VALUE for a future caller of this op — a CHOICE, not a
+# fallback this module substitutes. Mirrors the handoff precedent's own
 # `_RECOMMENDED_CAP_CHOICE` framing; `cap` stays a required param with no
+# default.
 _RECOMMENDED_CAP_CHOICE = 150
 
 _NO_REPO_ROOT_RECEIPT_DIR = Path(tempfile.gettempdir()) / "coordinator-fleet-no-repo-root"
@@ -474,6 +478,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+        # No common_dir to root a receipt under when repo_root is ALSO None —
+        # fall back to the machine-wide sink rather than letting
+        # record_sweep_outcome's own None-no-op swallow this row (see
         # _NO_REPO_ROOT_RECEIPT_DIR's own comment).
         _receipt_dir = Path(repo_root) if repo_root is not None else _NO_REPO_ROOT_RECEIPT_DIR
         record_sweep_outcome(

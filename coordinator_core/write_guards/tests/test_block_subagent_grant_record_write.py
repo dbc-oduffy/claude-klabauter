@@ -216,7 +216,14 @@ class TestLinkedWorktreeResolution:
         )
 
 
+# ---------------------------------------------------------------------------
+# Reviewer findings (coordinatorcode-reviewer-6fca63b7.md, slice
+# grant-record-leg) -- two P1 bypasses in `_is_grant_record_path`: a `..`
+# traversal segment defeating the segment-count check, and a missing
+# case-fold on the containment comparison. Both fixed by mirroring
 # `block_memo_status_hand_edit.py`'s `_TRAVERSAL_RE` reject and
+# `casefold_path` usage.
+# ---------------------------------------------------------------------------
 
 
 class TestTraversalAndCaseFoldBypasses:

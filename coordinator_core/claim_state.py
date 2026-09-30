@@ -49,7 +49,7 @@ triggers a second resolution. `lifecycle.git_common_dir` is itself
 
 DR-084: reads stay dual-tolerant — `claimed_by` (canonical) and `consumed_by`
 (legacy) on the mirror side, via the same `claimed_by`-wins-on-both-present
-resolution `coverage.py::_parse_handoff_consumed_by` uses.
+resolution `coverage.py::_parse_handoff_claimed_by` uses.
 
 Negative-spec:
   - Does NOT write — not the ledger, not the frontmatter mirror. Read-only,
@@ -198,7 +198,7 @@ def _read_mirror_claim(handoff_path: Path) -> tuple:
 
     DR-084 dual-tolerant: `claimed_by` (canonical) wins over `consumed_by`
     (legacy) when both are present — mirrors
-    `coverage.py::_parse_handoff_consumed_by`'s exact resolution order and 4
+    `coverage.py::_parse_handoff_claimed_by`'s exact resolution order and 4
     KiB read cap (avoids loading large handoff bodies; the frontmatter block
     is always near the top of the file).
     """

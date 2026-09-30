@@ -30,6 +30,7 @@ Spec backlink: state/dispatch-briefs/2026-08-21-catering-costs-what-the-work-cos
 from __future__ import annotations
 
 import subprocess
+import json
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,32 @@ def test_resolve_plugin_root_prefers_env_var(tmp_path: Path, monkeypatch: pytest
     assert provision_report.resolve_plugin_root() == str(plugin_root)
 
 
+def test_resolve_plugin_root_reads_installed_plugins_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cloud or marketplace install records its real `installPath` outside
+    `plugins/coordinator-claude`; the registry rung must find it."""
+    plugin_root = _make_fixture_plugin_root(tmp_path)
+    config_dir = tmp_path / "claude-config"
+    (config_dir / "plugins").mkdir(parents=True)
+    (config_dir / "plugins" / "installed_plugins.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "other@elsewhere": [{"installPath": str(tmp_path / "nope")}],
+                    "coordinator@coordinator-claude": [{"installPath": str(plugin_root)}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setattr(provision_report, "claude_config_dir", lambda: config_dir, raising=False)
+
+    assert provision_report.resolve_plugin_root() == str(plugin_root)
+
+
 def test_resolve_plugin_root_returns_none_on_full_miss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -109,6 +136,8 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
     )
 
     # No CLAUDE_PLUGIN_ROOT, an unresolvable claude_config_dir()-relative
+    # probe, and no .coordinator-content-root pointer -- every leg misses, so the resolver
+    # must fail open to None rather than raise or fabricate a path.
     assert provision_report.resolve_plugin_root() is None
 
 

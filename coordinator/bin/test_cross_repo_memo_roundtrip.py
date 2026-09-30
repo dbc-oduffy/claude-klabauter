@@ -244,6 +244,10 @@ def test_send_delivers_staged_draft() -> None:
                 "--title", "Roundtrip send test memo",
                 "--summary", "A test summary for the send roundtrip",
                 # --kind is REQUIRED in practice even though `draft` treats it as
+                # optional: memo.send refuses a draft without it ("draft is missing
+                # required field 'kind'"). Omitting it made this test assert a
+                # workflow the op cannot complete. The draft/send asymmetry is filed
+                # separately -- a draft you cannot send is a trap, not a default.
                 "--kind", "fyi",
             ],
             env=env,
@@ -530,7 +534,21 @@ def test_draft_summary_file_resolves_into_draft() -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# Test 9 — AC4 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
+# compares-them.md, P026-C1): the `sender_unattributed` post-send notice's
 # cause is MEASURED from `attributable_session_id_with_source` (source /
+# warm / pid), not one hardcoded sentence claiming "engine env and caller
+# both unresolved" regardless of which case actually held.
+#
+# Same in-process unit pattern as Test 5 (`route_mutation`'s return envelope
+# is the one seam `_cmd_send` reads for this branch — faking it exercises
+# the CLI's own contract, not arithmetic it should compute itself). The
+# `attributable_session_id_with_source` import inside `_cmd_send` is a
+# late/inline import, so patching the source attribute on
+# `coordinator_core.session.core` before calling `_cmd_send` is what the
+# call actually resolves against.
+# ---------------------------------------------------------------------------
 
 def test_send_sender_unattributed_notice_names_measured_cause() -> None:
     name = "test_send_sender_unattributed_notice_names_measured_cause"

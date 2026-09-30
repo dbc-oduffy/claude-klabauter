@@ -148,7 +148,17 @@ def test_absent_result_key_returns_empty_dict(_register_test_ops, monkeypatch):
     assert result == {}
 
 
+# --- dispatch_ops_from_hook: the multi-op sibling -----------------------------
+#
+# Spec backlink: cross-repo/inbox/2026-08-19-coordinator-content-repo-em-widen-the-seam-dispatch-ops-from-hook.md
+#
+# Coverage:
+#   (f) results are positionally aligned with the input ops.
 #   (g) a failing op yields a RETURNED HookDispatchError and does NOT suppress
+#       the ops after it -- the per-concern isolation this entry point exists for.
+#   (h) ops run sequentially, in the order given, under ONE asyncio.run.
+#   (i) origin_worktree stamping follows dispatch_from_hook's omit-empty rule.
+#   (j) an empty op list returns [] without opening an event loop.
 
 
 def test_ops_results_are_positionally_aligned(_register_test_ops):

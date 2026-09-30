@@ -19,6 +19,10 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE — see the sibling fixture
+    # (`test_publish_skipped_row_not_counted_succeeded.py::_init_git_repo`)
+    # for why: `publish.py` resolves targets twice per invocation, and this
+    # helper runs once per resolution inside the monkeypatched `load_targets`
+    # fake.
     if (root / ".git").is_dir():
         return
 

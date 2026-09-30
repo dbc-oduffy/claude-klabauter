@@ -66,8 +66,11 @@ def _sibling_directive(id_: str) -> dict[str, Any]:
     stands in for "the rest of the close" so AC2's "no sibling directive
     gained a `depends_on` edge onto the advisory" assertion has something
     concrete to check."""
+    # Review: code-reviewer (Finding 2, nit) -- aligned with sibling test
     # files in this slice (`wsc-close` left CONSUMES_MANIFEST/
     # ASSEMBLER_DISPATCHABLE); inert either way since already_satisfied=True
+    # short-circuits before CLI resolution, but kept consistent for the next
+    # reader who copies this helper as a template.
     return {
         "id": id_,
         "cli": "wsc-coverage-gate-runner",
@@ -142,7 +145,10 @@ def test_uncovered_set_lands_advisory_without_gating_the_close(
     assert captured.err == ""
 
 
+# ---------------------------------------------------------------------------
+# AC3 — three arms, three separate injection points, D2's exact wording:
 # "UNAVAILABLE, an exception, or a missing store all take the same path".
+# ---------------------------------------------------------------------------
 
 
 def test_silent_when_dimension_returns_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -202,7 +208,11 @@ def test_silent_when_reviewed_set_store_is_absent(tmp_path: Path, capsys: pytest
     assert directive["depends_on"] is None
 
 
+# ---------------------------------------------------------------------------
+# AC4 — register conformance + the 220-byte prose cap, against the
 # RENDERED string (`_render_close_coverage_advisory_message`), never a
+# second measurement path.
+# ---------------------------------------------------------------------------
 
 _FORBIDDEN_SUBSTRINGS = (
     "override",
@@ -278,9 +288,55 @@ def test_no_shell_out_to_merge_gate_and_pr() -> None:
     assert "merge_gate_and_pr" not in source
 
 
+# ---------------------------------------------------------------------------
+# AC5 — the advisory's ADDED cost, measured AT THE CLOSE CALLER, never at the
+# merge-gate caller. `single_invocation_tree_process_time` (whole
+# process-tree job-object accounting) brackets two one-shot child scripts —
+# one that calls `build_close_coverage_advisory_directive`, one that does the
+# identical import/setup work (including the three modules
+# `_emit_close_coverage_advisory` itself lazily imports — see Finding 2,
+# below) and stops short of the call — so the delta isolates the advisory's
+# own WORK from interpreter start and module import, neither of which the
+# advisory's call itself introduces.
+#
+# NOT the merge-gate figure. The Anti-scope section of this plan is explicit
+# that 93.75ms/4 procs was taken at `merge-gate-and-pr.py :: cmd_coverage_gate`
+# on a 37-file changeset, and is context, never a substitute, for a figure
+# taken at the close caller on the close's own changeset shape. This test
+# supplies that missing figure rather than reusing the merge-gate one.
+#
 # NEEDS RE-MEASUREMENT (coordinator:code-reviewer Finding 2, P2): the figure
+# below (93.75ms/2 procs) was taken before the "without" script paid the
+# three lazy imports `_emit_close_coverage_advisory` triggers
+# (`gate_dimension_review`, `gate_validate_invocable`, `_message_size`), so
+# it conflates the advisory's own `git log` cost with first-import cost the
+# "without" baseline never paid. The scripts below now import those three
+# modules on both sides before the measured call, which changes the true
+# delta; the number in this comment has not been re-derived against that
+# fix and should not be trusted as the current figure until it is.
+#
 # ORIGINAL MEASUREMENT (stale, pre-fix; kept for provenance only -- this
+# file, 2026-08-28, single sample, k=1 -- single_invocation_
+# tree_process_time cannot be batched, module docstring -- Windows job-object
+# accounting, +-15.6ms scheduler-tick quantisation applies): close caller,
+# 5-file changeset (HEAD~5..HEAD, this branch): without=140.625ms/1 proc,
+# with=234.375ms/3 procs, ADDED = 93.75ms process time / 2 procs (the
 # dimension's own `git log` plus its conhost, UNCONTROLLED for the lazy-
+# import cost noted above). Coincidentally the same process-time figure as
+# the merge-gate's 93.75ms/4 procs, on a differently-shaped changeset (5
+# files vs 37) and a different proc delta (2 added here vs the merge gate's
+# own 4-proc total) -- read as coincidence, not as evidence the two call
+# sites share a cost, since they measure different quantities (an ADDED
+# delta here vs a TOTAL there).
+#
+# NOT a small fraction of the 500ms brightline by the letter of AC5's own
+# wording (93.75ms is ~18.75% of 500ms) -- clears the brightline itself with
+# room, but this is the finding AC5's own body says to surface rather than
+# silently accept: "If the added cost is NOT a small fraction of 500ms...
+# the handoff's build-vs-don't question reopens rather than resolving by
+# default." Surfaced here rather than asserted through a hand-picked
+# percentage threshold this test would otherwise be tuned to always pass.
+# ---------------------------------------------------------------------------
 
 _AC5_CHILD_PREAMBLE = """
 import sys
@@ -305,6 +361,13 @@ print("OK")
 """
 
 # AMORTISED, not one-shot. Windows reports process time on a 15.625ms
+# quantum and one advisory call costs well under that, so a single-call
+# delta measures the scheduler, not the code -- observed directly: the
+# one-shot form returned +46.875ms on one run and -46.875ms on another for
+# identical code, and min-of-5 still went negative. Both scripts now do the
+# SAME K iterations and differ only in whether the advisory runs; the
+# per-call figure is the delta over K, which lifts the signal above the
+# quantum instead of hiding inside it.
 _AC5_ITERATIONS = 20
 
 _AC5_WITH_ADVISORY = _AC5_CHILD_PREAMBLE + """

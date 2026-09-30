@@ -593,7 +593,15 @@ def test_classify_make_direct_adjacency_unit_cases():
     assert guard._classify_make(["CC=gcc", "check"]) == "make check"
 
 
+# ---------------------------------------------------------------------------
+# 2026-07-26 defect -- a bare-word ``do`` cue fired on the ordinary English
+# negator lead-in "do not <verb other than run>", licensing an unrelated
+# later ``make``/suite-target mention on the same clause as command-shaped.
 # ``_NEGATION_RE``'s ``\bdo not run\b`` marker never fires here because its
+# governing verb is "weaken", not "run" -- this is not a mislabeled negated
+# match, it is a match that should never have been detected at all. This
+# dispatch was itself blocked by the defect on its first attempt.
+# ---------------------------------------------------------------------------
 
 def test_bare_line_is_command_shaped_do_not_non_run_verb_no_match():
     prefix = "do not weaken the guard to "
@@ -697,8 +705,23 @@ def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
     assert reason.startswith("Full-suite subagent runs are denied")
 
 
+# ---------------------------------------------------------------------------
+# 2026-07-26 P3 regression -- "re-verify" false-positive on a dispatch-brief
+# sentence instructing a subagent NOT to redo work already confirmed.
+# Repro: state/bug-backlog/2026-07-26-dispatch-suite-guard-classify-text-
 # false-bd5afe033da4.yaml. Root cause: ``_IMPERATIVE_CUE_RE``'s bare
+# ``\bverify\b`` alternative matched inside the compound word "re-verify"
+# (``\b`` fires at the hyphen/letter boundary same as at whitespace), so a
+# report-only, read-only subagent brief was misclassified as command-shaped
+# even though the sentence opens with "Do NOT" and the runner mention sits
+# deep inside an unrelated parenthetical list. Fixed via a negative
+# lookbehind scoped to ``verify``/``verifying`` only (see the cue-list
 # comment) -- NOT via ``_NEGATION_RE`` (that marker requires "do not run",
+# not bare "do not", and per the module/consumer contract, negation only
+# relabels an already-detected match's ``position``; it does not gate
+# detection). The correct fix is that no match is produced at all -- the
+# consumer (DoE's block-dispatch-suite-invocation.py) has nothing to see.
+# ---------------------------------------------------------------------------
 
 def test_classify_text_no_match_re_verify_settled_claims_repro(repo):
     text = (
@@ -784,7 +807,20 @@ def test_classify_text_negation_on_preceding_line_still_flips_position(repo):
     assert matches[0].position == "negated"
 
 
+# ---------------------------------------------------------------------------
+# position discrimination -- "reported" (2026-07-28 field report)
+# ---------------------------------------------------------------------------
+#
+# Field-report repro: "They stated plainly they could not run pytest to
+# confirm." classified position="imperative" (denying) despite being pure
+# reported speech about someone ELSE's inability to run something -- no
 # instruction anywhere in the sentence. ``_NEGATION_RE`` could not fix this:
+# it only recognizes "do not run"/"don't run"/"never run", not
+# modal-capability negation ("could not run") or past-tense reporting
+# frames ("they stated"). The downstream consumer (coordinator-content-repo's
+# ``block-dispatch-suite-invocation.py``) denies a dispatch iff any match
+# has ``position == "imperative"``, so this false positive blocked
+# legitimate Agent dispatches.
 
 def test_classify_text_reported_speech_field_report_repro(repo):
     text = "They stated plainly they could not run pytest to confirm."
@@ -851,7 +887,19 @@ def test_classify_text_reported_speech_does_not_suppress_later_imperative(repo):
     q_matches = [m for m in matches if m.matched_text.strip() == "pytest -q"]
     assert q_matches, "expected the second, genuinely imperative command to still match"
     assert all(m.position == "inline_code" for m in q_matches)
+    # No match at or after the second command may be "reported"/"negated" as a
+    # side effect of the reported-speech window reaching too far forward.
+    #
     # SCOPE NOTE (2026-07-28): this assertion read "no match ANYWHERE in the
+    # text is reported/negated", justified by "the only match here is the
+    # second command". That premise was itself a bug -- the first sentence's
+    # "pytest." tokenized as argv[0] == "pytest." and was silently dropped, so
+    # the first clause contributed no match to be labelled. With token-final
+    # sentence punctuation now normalized (``_strip_sentence_punctuation``) it
+    # does match, and "They could not run pytest" is reported speech, so
+    # "reported" is the correct label for it and non-denying either way. The
+    # assertion is therefore scoped forward to what it was always about --
+    # non-suppression of the LATER command -- rather than relaxed.
     second_command_start = min(m.span[0] for m in q_matches)
     assert all(m.position not in ("reported", "negated")
                for m in matches if m.span[0] >= second_command_start)
@@ -924,7 +972,18 @@ def test_classify_text_reported_speech_word_boundary_hyphen_compound_no_false_po
     assert all(m.position == "descriptive" for m in matches)
 
 
+# ---------------------------------------------------------------------------
+# 2026-07-28 -- structural clause-head predicate (``_cue_is_clause_head``),
+# replacing the bag-of-words position="imperative" call for a bare-line cue
+# match. Four independent false-positive denials landed in five days on the
 # lexical-only leg (``_IMPERATIVE_CUE_RE.search(clause)`` with no notion of
+# what governs the runner token); this table pins the discriminator: a real
+# imperative has the cue AS its clause head (no subject, no auxiliary/modal/
+# copula precedes it), every repro instead has one directly governing the
+# cue. Per DR-088 layer 2's negative spec, a withheld "imperative" is
+# EMITTED as "descriptive", never dropped -- so every case here still
+# asserts a non-empty match list, only the ``position`` value differs.
+# ---------------------------------------------------------------------------
 
 _CLAUSE_HEAD_CASES = [
     ("run ", True),
@@ -1039,7 +1098,24 @@ def test_sentence_punctuation_strip_preserves_span_offsets(repo):
     assert text[start:end].startswith("pytest"), text[start:end]
 
 
+# ---------------------------------------------------------------------------
 # 2026-07-28 -- ``_PROSE_NEGATIVE_RE`` is NOT dead code.
+#
+# It reads as redundant under the clause-head predicate, and a review pass
+# proposed removing it: every example in its own docstring is independently
+# caught by ``_bare_line_is_command_shaped``'s cosmetic-lead fallback, and
+# disabling it leaves the whole bash_guards suite green. Both observations
+# are true and the conclusion is still wrong -- they only probe clauses with
+# NO imperative cue, where the fallback is what was answering all along.
+#
+# Its load-bearing case is a clause where a cue and a prose-negative shape
+# co-occur AND the cue is clause-initial, so neither the fallback nor the
+# clause-head predicate withholds: "run counts is in pytest testpaths" has
+# "run" as its first word, but "pytest" there is the object of a copula, not
+# the thing being run. Without this gate that clause classifies "imperative"
+# and denies -- a false positive of exactly the class this file exists to
+# prevent. Pinned so the redundancy hypothesis cannot land as a removal.
+# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("text", [
     "run counts is in pytest testpaths",
@@ -1053,8 +1129,16 @@ def test_prose_negative_gate_survives_a_clause_initial_cue(repo, text):
     )
 
 
+# ---------------------------------------------------------------------------
 # 2026-07-28 review (P1) -- ``\n`` briefly added to ``_CLAUSE_BOUNDARY_RE``
+# broke cross-line reported-speech detection: that regex is SHARED with
 # ``_REPORTED_SPEECH_RE.search(clause)``, which is deliberately designed to
+# reach backwards across a line break (see the negation-lookback passes'
+# own cross-line comments). Reverted; line-scoping now lives locally inside
+# ``_cue_is_clause_head``, on the pre-cue text only, so it cannot again
+# blind the reported-speech check to a modal-negation cue split across a
+# soft-wrapped line.
+# ---------------------------------------------------------------------------
 
 def test_classify_text_reported_speech_survives_line_break_before_cue(repo):
     text = (
@@ -1088,8 +1172,19 @@ def test_strip_sentence_punctuation_preserves_quoted_internal_punctuation(repo):
     assert matches[0].position == "imperative"
 
 
+# ---------------------------------------------------------------------------
+# 2026-07-28 review (P3, deliberate gap) -- a fronted adverbial with no
 # comma is NOT measured off by ``_FRONTED_ADVERBIAL_BOUNDARY_RE`` (comma-only
+# by construction), so a real imperative in this shape is demoted to
+# "descriptive" rather than promoted to "imperative". This is pinned as a
 # DECISION, not an oversight: widening the predicate to strip a leading
+# subordinator-headed phrase would also strip it from a genuinely
+# declarative clause ("After the peer sessions run pytest nightly, the
+# dashboard updates") and flip THAT to a false "imperative" -- trading a
+# cheap false negative (layer 3's identity leg fail-CLOSES on real argv and
+# never consults this path) for the expensive false positive this module
+# exists to eliminate. Do NOT "fix" this by stripping fronted adverbials.
+# ---------------------------------------------------------------------------
 
 def test_position_fronted_adverbial_without_comma_stays_descriptive_deliberate_gap(repo):
     text = "After merging your change run pytest to confirm."

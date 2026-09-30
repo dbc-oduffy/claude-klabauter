@@ -63,7 +63,10 @@ def _is_cloud_session() -> bool:
 
 CUT = "FRESH-CUT"
 ADOPTED = "ADOPTED-EXISTING"
+#: Today's branch existed but lagged HEAD -- the ordinary state after
+#: `/merging-to-main` returns the tree to `main` -- and its ref was advanced
 #: to HEAD and checked out. See `session_ensure_branch.ADVANCED_TO_HEAD` for
+#: why that is content-neutral and what it deliberately does NOT cover.
 ADVANCED = "ADVANCED-TO-HEAD"
 INHERITED = "INHERITED"
 COMPLIANT = "COMPLIANT"
@@ -226,6 +229,10 @@ def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:
     )
 
 
+#: `auto_push.branch_gate`'s own doctrine splits non-`work/*` branches into two
+#: populations. Warning identically for both is nag-shaped and habituates away
+#: from the genuinely loud cases, so the message is differentiated: these are
+#: deliberate, legitimate, long-lived shapes for which auto-push is off BY
 #: DOCTRINE, and they get one informational line, not the escalating banner.
 _RECOGNIZED_LONG_LIVED = ("migration/", "release/", "feature/")
 

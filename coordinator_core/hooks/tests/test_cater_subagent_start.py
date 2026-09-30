@@ -814,22 +814,34 @@ def test_mangling_collision_pair_gets_distinct_leaves_no_reuse(git_repo: Path) -
     assert (git_repo / rel_path_b).is_file()
 
 
-def test_raw_fallback_shape_gets_no_sentinel(git_repo: Path) -> None:
-    """AC2: the subagent-side raw `a<name>-<16hex>` fallback shape carries
-    16 hex digits no EM can derive -- a sentinel keyed on it would be
-    unpollable by construction. A short `session_id` (<8 chars) forces the
-    the Staff Engineer F4 fallback in `_canonical_agent_id`, so the raw id survives
-    unchanged rather than being delegated into the canonical shape."""
+def test_raw_fallback_shape_gets_a_sentinel(git_repo: Path) -> None:
+    """The subagent-side raw `a<name>-<16hex>` fallback shape gets a sentinel
+    like the canonical one: `subagent_sidecar_fill_check` finds unfilled
+    sidecars by scanning the session share directory, so existence -- not
+    EM-derivability -- is what makes it findable. A short `session_id`
+    (<8 chars) forces the Staff Engineer F4 fallback in `_canonical_agent_id`, so the
+    raw id survives unchanged."""
     raw_id = "aworker-0123456789abcdef"
     payload = _payload("worker", "abc", str(git_repo))
     payload["agent_id"] = raw_id
 
     result = compose_catering(payload, cwd=str(git_repo))
 
-    assert SIDECAR_MISS_MARKER in result
-    assert SIDECAR_PATH_MARKER_PREFIX not in result
-    session_dir = Path(machinery_paths.share_dir(str(git_repo), "abc"))
-    assert not session_dir.exists() or list(session_dir.glob("*.md")) == []
+    assert SIDECAR_MISS_MARKER not in result
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    assert rel_path.endswith(f"{_compute_sentinel_leaf(raw_id)}.md")
+    assert "provisioning: missed" in (git_repo / rel_path).read_text(encoding="utf-8")
+
+
+def test_raw_fallback_leaf_cannot_collide_with_the_canonical_shape() -> None:
+    """The digest is over the raw id, so the raw shape and the canonical shape
+    for the same teammate land on distinct leaves."""
+    raw_id = "aworker-0123456789abcdef"
+    canonical_id = "worker@session-deadbeef"
+    assert _compute_sentinel_leaf(raw_id) != _compute_sentinel_leaf(canonical_id)
 
 
 def test_canonical_shape_without_a_session_id_does_not_litter_subagent_share(git_repo: Path) -> None:
@@ -1398,10 +1410,8 @@ def _force_sidecar_eligible(monkeypatch, mod, *types):
     monkeypatch.setattr(mod, "load_policy", lambda *a, **k: _Policy())
 
 
-def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
-    """The existing gate stays intact. A named dispatch's raw
-    `a<name>-<16hex>` id carries hex no EM can derive, and its consumer IS the
-    polling EM -- the new arm must not reach it."""
+def test_named_raw_fallback_shape_gets_a_sentinel_on_the_eligible_arm(tmp_path, monkeypatch):
+    """The eligible-type miss arm serves the raw `a<name>-<16hex>` id too."""
     import subprocess
 
     from coordinator_core.hooks import cater_subagent_start as mod
@@ -1410,7 +1420,7 @@ def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:executor")
 
-    mod._resolve_sidecar_leg(
+    path, text = mod._resolve_sidecar_leg(
         _miss_payload(tmp_path, "areview-agent-0123456789abcdef"),
         str(tmp_path),
         "areview-agent-0123456789abcdef",
@@ -1418,7 +1428,9 @@ def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
         "coordinator:executor",
     )
 
-    assert _sentinels(tmp_path) == []
+    assert path
+    assert len(_sentinels(tmp_path)) == 1
+    assert path in text
 
 
 def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypatch):

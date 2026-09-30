@@ -233,7 +233,18 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
+    # -----------------------------------------------------------------
+    # The four cases from the reopened review, reproduced directly. An
+    # earlier revision keyed the per-line check off "line contains a
     # slash" (`_PATH_TOKEN_RE`), which passed the "prose, no slash" case
+    # below but failed both cases that actually mattered: an author who
+    # drops a slash into every line of a sentence ducked the cap entirely
+    # (slash presence was ALSO what qualified the line, so it could never
+    # disqualify anything), and a genuine path list with one slash-
+    # bearing prose line smuggled in was never disqualified either. The
+    # word-count-based `_is_path_entry_line` replaces it; these four
+    # cases are the regression test for exactly that failure mode.
+    # -----------------------------------------------------------------
 
     def test_legit_path_list_is_charged_as_data(self):
         text = (

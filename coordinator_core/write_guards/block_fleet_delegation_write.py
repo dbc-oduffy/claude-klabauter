@@ -102,6 +102,14 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 49 -- unique within the HARD-DENY phase (checked against the
 #: full set of hard-deny PRIORITY values at HEAD this session: 5, 10, 20,
+#: 30, 40, 45, 46, 47, 48, 50, 56, 65, 76, 129, 130, 131, 132, 135, 136,
+#: 137 taken -- 47 and 48 already claimed by block_subagent_guard_grant_
+#: write.py and block_confined_agent_write.py respectively). Slotted
+#: immediately after those two nearest siblings in the same grant-adjacent
+#: artifact family, ahead of block_consumed_handoff_edit (50). The phase
+#: runs first-non-None-wins, so relative order among non-overlapping-path
+#: guards has no behavioral effect here -- this is a readability/grouping
+#: choice only.
 PRIORITY = 49
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}

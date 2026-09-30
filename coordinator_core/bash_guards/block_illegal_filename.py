@@ -133,10 +133,19 @@ _TOKEN_SPLIT_RE = re.compile(r"[ \t\n\r\f\v]+")
 
 #: Preceding-char whitelist for a '>' to count as a redirect OPERATOR
 #: (mirrors the retired ``_REDIR_RE``'s ``(?:^|[ \t]|[0-9])`` prefix class):
+#: start-of-command, start-of-line (after '\n'), whitespace, or an fd digit.
+#: '-' and '=' are deliberately excluded, which is what makes '->'/'=>'
+#: arrows fall through untouched — no separate arrow check needed. '&' is
+#: included (review: MINOR-2) so ``&>`` (combined stdout+stderr redirect) is
+#: recognised as an operator instead of being silently missed.
 _REDIR_PRECEDING_OK = set(" \t\n0123456789&")
 
+#: Characters that end an unquoted redirect-target word (mirrors the retired
 #: ``_REDIR_RE``'s target class ``[^ \t>|;&]+`` upper bound). ``\n``/``\r``
 #: are load-bearing (review: BLOCKER-1) -- without them an unquoted target
+#: runs past its own line and swallows the next command as part of the
+#: "filename". ``(``/``)`` (review: NIT-1) keep a process-substitution body
+#: (``tee >(grep foo) < in``) from becoming a candidate at all.
 _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 
 _OUT_RE = re.compile(r"(?<![^ \t])(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
@@ -486,6 +495,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not cmd:
             return None
 
+        # CRLF strip — redundant-but-safe insurance at THIS check function's
+        # own entry, independent of any dispatcher-level strip (recipe §(c):
+        # "the Python port should keep that same double-strip discipline PER
         # CHECK FUNCTION").
         cmd = cmd.replace("\r", "")
 
@@ -494,6 +506,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd = _strip_heredocs(cmd)
 
         # Strip double- then single-quoted spans to build CMD_FOR_SCAN. Order
+        # matters: double-quoted spans first, so an apostrophe inside a
+        # double-quoted body is gone before the single-quote pass.
         cmd_for_scan = re.sub(r'"[^"]*"', "", cmd)
         cmd_for_scan = re.sub(r"'[^']*'", "", cmd_for_scan)
 
@@ -521,7 +535,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
 
+            # C2 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md):
+            # `_make_deny_msg` already computes the sanitized suggestion for the
+            # human-readable reason text; reuse the SAME `_safe_suggestion` call to
+            # rewrite the offending candidate in place, so the fix lands without the
+            # agent having to re-issue the call by hand. Substitution is scoped to the
             # raw candidate substring within the ORIGINAL (unprocessed) command text —
+            # never `cmd`, which has been heredoc-stripped/continuation-joined and is
+            # not a faithful copy of what the caller actually sent.
             safe_basename = _safe_suggestion(basename)
             if basename and safe_basename and basename != safe_basename:
                 original_cmd = tool_input.get("command") or ""

@@ -5,6 +5,7 @@ Coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md, ro
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import textwrap
 from pathlib import Path
@@ -13,6 +14,9 @@ import pytest
 
 from coordinator_core.ops import review_stamp as m
 from coordinator_core.win_portability import no_console_creationflags
+
+# Hoisted: a backslash inside an f-string expression is a SyntaxError before Python 3.12.
+_FOO_PY_SHA = hashlib.sha256(b"x = 1\n").hexdigest()
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -577,14 +581,13 @@ def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_
         },
     )
 
-    import hashlib
 
     wave_text = (
         "---\n"
         "agent_type: coordinator:code-reviewer\n"
         "applied: 2\n"
         "baseline_sha256:\n"
-        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        f"  coordinator_core/foo.py: {_FOO_PY_SHA}\n"
         "---\n"
         "## Findings Ledger\n\n```json\n"
         '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
@@ -640,14 +643,13 @@ def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path):
     )
     _write_sidecar(share / "2026-09-28-delivery.md", {"verdict": "PASS"})
 
-    import hashlib
 
     wave_text = (
         "---\n"
         "agent_type: coordinator:code-reviewer\n"
         "applied: 1\n"
         "baseline_sha256:\n"
-        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        f"  coordinator_core/foo.py: {_FOO_PY_SHA}\n"
         "---\n"
         "## Findings Ledger\n\n```json\n"
         '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
@@ -695,7 +697,6 @@ def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_p
     bookkeeping step always supplies `prep_sidecar` itself (it is a required
     parameter of `bookkeep_wave`), so this shape can never be built without
     one."""
-    import hashlib
 
     from coordinator_core.ops.review_mint.wave_bookkeeping import (
         bookkeep_wave,
@@ -727,7 +728,7 @@ def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_p
         "agent_type: coordinator:code-reviewer\n"
         "applied: 2\n"
         "baseline_sha256:\n"
-        f"  coordinator_core/foo.py: {hashlib.sha256(b'x = 1\\n').hexdigest()}\n"
+        f"  coordinator_core/foo.py: {_FOO_PY_SHA}\n"
         "---\n"
         "## Findings\n\n### Finding 1\nSomething.\n"
         "## Findings Ledger\n\n```json\n"

@@ -88,6 +88,7 @@ def _payload(command: str, agent_id: str = "deadbeef0123", agent_type: str = _CO
     }
 
 
+#: 2026-08-11 order-dependency fix -- see this module's own docstring
 #: addendum below (`_FAKE_ENUMERATED_TYPES`) for the incident this closes.
 _FAKE_ENUMERATED_TYPES = frozenset({_CONFINED_TYPE, _REVIEWER_TYPE})
 
@@ -173,7 +174,12 @@ def _assert_allowed(result):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# Bucket 2 (chunk C2 three-way rule) -- commit/push/stash/reset shapes.
+# This guard (block_reviewer_bash_outside_allowlist) now allows an executor
 # unconditionally; the two-guard assertion is that a DIFFERENT, still-live
+# guard independently denies the shapes that remain genuinely dangerous.
+# ---------------------------------------------------------------------------
 
 
 def test_git_commit_denies(monkeypatch):
@@ -567,7 +573,22 @@ def test_ac4_reviewer_verdict_table_unchanged_by_removing_executor_from_set(monk
     assert before_table == after_table
 
 
+# ---------------------------------------------------------------------------
+# Deny-message content -- RETIRED 2026-08-03 (DR-125, chunk C2).
 # ``coordinator:executor`` was removed from ``_helpers._CONFINED_FINDINGS_
+# AGENTS``, the SOLE gate this guard consults to decide whether to evaluate
+# a payload at all -- ``guard.check`` now returns ``None`` (allow)
+# unconditionally for any ``coordinator:executor`` payload, so the
+# executor-framed deny-message content this section used to pin (no
+# "review-findings" pin, no findings-agent framing, no "dispatch a separate
+# executor" advice, names what it can run -- originally reported at
+# cross-repo/inbox/2026-08-02-coordinator-content-repo-em-executor-confinement-deny-
+# message-addresses-wrong-agent-class.md) can never render again through
+# this guard: there is no longer a deny envelope to read a reason off.
+# ``test_reviewer_executor_deny_message_parity.py``'s
+# ``TestCodeReviewerDenyMessageByteParity`` remains the byte-identical pin
+# for the type that stays confined.
+# ---------------------------------------------------------------------------
 
 
 def test_executor_no_longer_denied_by_this_guard(monkeypatch):
@@ -576,7 +597,16 @@ def test_executor_no_longer_denied_by_this_guard(monkeypatch):
     assert guard.check(payload) is None
 
 
+# ---------------------------------------------------------------------------
+# Structural pin (this plan's C1): every key in
 # ``_DEFAULT_RULESET_TYPE_OVERRIDES`` must be a type ``_is_confined_type``
+# actually confines under the CURRENT, hermetic policy this guard resolves at
+# runtime -- never DoE's ``subagent-sandbox-policy.yaml`` directly, which is
+# non-hermetic (lives in a sibling repo, unresolvable in a cloud container).
+# This is the pin that would have caught Divergence 9 going stale: an
+# override entry surviving the type it was written for being removed from
+# confinement, silently testing a state production cannot reach.
+# ---------------------------------------------------------------------------
 
 
 def test_ruleset_override_keys_are_confined_types(monkeypatch):

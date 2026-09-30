@@ -75,9 +75,20 @@ from coordinator_core.ops.agent_worktree_sweep import (
     classify_worktree,
 )
 
+#: addon-health severity modes this family's `collect()` cadence-maps onto —
+#: mirrors the CLI's own two live modes (`--check-sentinel-presence` is a
+#: fresh-install bootstrap probe, not a per-cadence orient concern, and is
+#: intentionally not wired here).
+#:
+#: Default-direction convention (Review: code-reviewer — Finding 6, nit): this
+#: map's own `collect()` call-site default (`.get(cadence, "--red-only")`)
 #: and `_MEMO_SURFACE_MODE_BY_CADENCE`'s call-site default
 #: (`.get(cadence, "surface")`) below both fail an UNRECOGNIZED cadence
 #: toward the MORE-VERBOSE mode, never toward suppression — "show more" is
+#: the safe failure direction (never a silent KeyError, never a silent
+#: under-report), and it is deliberate parallelism between the two maps, not
+#: a coincidence. A future map added alongside these two should default the
+#: same direction.
 _ADDON_HEALTH_MODE_BY_CADENCE = {
     "day": "--red-and-stale",
     "session": "--red-only",
@@ -85,6 +96,14 @@ _ADDON_HEALTH_MODE_BY_CADENCE = {
 }
 
 #: Memo-surface behaviour by cadence — mirrors `_ADDON_HEALTH_MODE_BY_CADENCE`'s
+#: cadence→behaviour map shape (Approach § "cadence-parameterized reader
+#: behaviour", not a second, parallel dispatch mechanism). `~/.claude/CLAUDE.md`
+#: ruling (2026-07-30): "The cross-repo memo inbox doesn't move without
+#: deliberate Claude+human action. Depth is not a backlog and waiting memos
+#: are not overdue work — don't report the count." At `session` cadence this
+#: family emits ZERO judgment points and NO depth count anywhere — not a
+#: summary line, not an "N pending" aggregate. `day` (where `/workday-start`
+#: Step 1.45's blitz escalation lives) and `week` keep surfacing memos,
 #: capped per `_MEMO_JUDGMENT_POINT_CAP`.
 _MEMO_SURFACE_MODE_BY_CADENCE = {
     "day": "surface",
@@ -95,7 +114,11 @@ _MEMO_SURFACE_MODE_BY_CADENCE = {
 _MEMO_JUDGMENT_POINT_CAP = 15
 
 
+#: Per-character complement base for `_inverted_date` — one past `"9"`, the
 #: highest code point an ISO-8601 date's digits or `"-"` separator can take.
+#: Complementing each character against it reverses lexicographic order for
+#: that field, letting a single ascending `sorted()` express "band ascending,
+#: date descending" without a second sort pass or a `functools.cmp_to_key`.
 _INVERTED_DATE_SENTINEL = ":"
 
 

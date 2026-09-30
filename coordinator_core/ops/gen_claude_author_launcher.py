@@ -271,7 +271,9 @@ def main(argv: List[str]) -> int:
         try:
             shutil.copyfile(tmpl, tmp_dest)
             os.replace(tmp_dest, dest)
+            # DR-276: declared AFTER the write lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an
+            # intended surface.
             declare_write(dest)
         except OSError:
             try:

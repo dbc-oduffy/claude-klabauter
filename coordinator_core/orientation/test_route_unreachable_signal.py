@@ -54,6 +54,11 @@ def test_the_writer_and_reader_agree_on_the_path():
     import cc_invoke
 
     # FULL RESOLVED PATH, not the relpath. The first version of this test
+    # compared the relative tuple and passed while the two halves wrote and
+    # read different files: the path was repo-relative, the publish transform
+    # rewrote the registry key anchoring it, and source and mirror resolved the
+    # same tuple to different places. Equal spellings were never the property
+    # worth pinning -- one file is.
     assert cc_invoke._route_unreachable_ledger_path() == ledger_path()
     assert cc_invoke._ROUTE_UNREACHABLE_LEDGER == LEDGER_RELPATH
 

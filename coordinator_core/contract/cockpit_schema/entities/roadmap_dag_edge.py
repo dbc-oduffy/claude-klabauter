@@ -64,7 +64,18 @@ class RoadmapDagEdge(BaseModel):
     roadmap_id: str
     from_: str = Field(alias="from")
     to: str
+    # Edge type. D47 (DoE 77018f647) widened this to Literal["blocks",
+    # "blocks-sprint"], MINOR 3.14.0 -> 3.15.0, for sprint-altitude gates.
     # This is atomic with CONTRACT_VERSION -> 3.15.0 in emit_schema.py AND a
+    # regen run (coordinator/bin/regen-cockpit-schema.py), because
+    # test_committed_emit_drift.py compares every committed schema file
+    # against a fresh emit.
+    #
+    # Sprint gates ride this SAME property — no `edge_type` key,
+    # `extra="forbid"` untouched, which is why it is a value widen and not a
+    # shape change. Altitudes stay separable only because the id namespaces
+    # are disjoint (spine.schema.json reserves `^sprint-`); `roadmap_dag_fleet`
+    # has no type filter to lean on.
     type: Literal["blocks", "blocks-sprint"]
     provenance: ProvenanceEnvelope
 

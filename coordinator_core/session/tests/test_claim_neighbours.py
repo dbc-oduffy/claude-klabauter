@@ -79,7 +79,12 @@ def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
     assert neighbour.overlapping_paths == ["coordinator_core/session/claims.py"]
 
 
+# ---------------------------------------------------------------------------
+# A deliverable_id alone (no governing_plan stamp, no scope:) is no longer a
+# bridge — that scan was retired (PM ruling R1: absence is information, not
+# a search). This premise dissolved with the design; the artifact resolves
 # UNRESOLVABLE rather than falling through to a docs/plans/ walk.
+# ---------------------------------------------------------------------------
 
 
 def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch):
@@ -265,7 +270,10 @@ def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path):
     assert result.reason is not None
 
 
+# ---------------------------------------------------------------------------
 # AC2 (explicit) — UNRESOLVABLE is structurally distinct from "resolved,
+# zero neighbours" — never inferred from an empty list
+# ---------------------------------------------------------------------------
 
 
 def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path):

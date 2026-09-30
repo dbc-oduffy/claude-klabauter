@@ -55,6 +55,7 @@ def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_p
     assert per_op["op.b"]["n"] == 1
     assert per_op["op.b"]["max_ms"] == 900.0
 
+    # "some.other.op" style hot-path-only limiting must NOT apply here —
     # every op present shows up, unlike cost_census.HOT_PATH_OPS.
     assert "op.a" in per_op and "op.b" in per_op
 

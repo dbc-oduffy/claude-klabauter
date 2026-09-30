@@ -182,6 +182,8 @@ def _fake_module(main_fn: Callable[..., Any]) -> ModuleType:
 def test_execute_directives_unchanged_inputs_after_pass_skip_the_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Review-integrator (Finding 1, 2026-08-11): the floor and tip must both
+    # be concrete 40-hex-digit shas for `record_gate_verdict_if_passed` to
     # memoize this pass at all — see `_FLOOR_SHA`/`_TIP_SHA`'s docstring.
     args = ["--session-id", "sid-1", f"{_FLOOR_SHA}..{_TIP_SHA}"]
     dispatch_count = {"n": 0}
@@ -261,4 +263,10 @@ def test_execute_directives_symbolic_tip_re_dispatches_every_pass(
     assert dispatch_count["n"] == 2
 
 
+# ---------------------------------------------------------------------------
 # C4 (AC7)'s `_SINGLE_REVIEW`/`build_write_trail_directives` gate-memo tests
+# REMOVED (C12, DR-358): `build_write_trail_directives` and the rest of the
+# `d-write-trail` family were dropped from `__init__.py` -- no review trail
+# is owed at close, and the CLI verb it fronted (`wsc-coverage-gate-runner
+# write-trail`) was removed by PM ruling 2026-08-23. No replacement.
+# ---------------------------------------------------------------------------

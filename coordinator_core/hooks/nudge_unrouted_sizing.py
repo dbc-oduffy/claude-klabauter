@@ -389,15 +389,31 @@ def _get_arrival_check():
     return _arrival_check
 
 
+# Membership rule, not a fixed count: routes whose room an EM can enter WITHOUT a
+# PM utterance. `goal-setting` and `roadmap` are excluded because coordinator-content-repo's
+# `coordinator/skills/{goal-setting,roadmap-planning}/SKILL.md` frontmatter marks
 # each `description: "PM-GATED. ..."` — see the module docstring's Negative-spec
+# section for the full account, including why "PM-gated" is not the right blanket
+# label for every excluded route (`shape` is PM-collaborative, not frontmatter-
+# gated) and the caveat that this rule's truth for goal-setting/roadmap rests on
+# another repo's frontmatter, unpinnable by any test here.
 _ROUTABLE_ROUTES = frozenset({"plan", "spec-dispatch", "dispatch"})
 
 _SIZING_PATH_RE = re.compile(r"^state/sizings/[^/]+\.ya?ml$")
 
+# The appetite<->estimate divergence signal. `coordinator_core.sizing_assemble.
+# route()` emits this detent and leaves `fork` null; `fork` is filled later, by
+# the sizing skill, once the PM has picked. So THIS is the field to read for
+# "is an appetite fork open" — never `fork`'s nullity, which is null on both
+# sides of that question. Kept as a named constant so the coupling to
 # `sizing_assemble.DETENT_ENUM` is greppable from either side.
 _APPETITE_DIVERGENCE_DETENT = "appetite_exceeded"
 
+# The post-size, M+ open-appetite-question halt. `coordinator_core.sizing_assemble.
+# route()` emits this detent (appetite absent, resized t-shirt M/L/XL) and leaves
+# `fork` null — the PM has not yet answered the open "shall we go with that or
 # split/cut/what's up?" question. Same shape as `_APPETITE_DIVERGENCE_DETENT`
+# above: read the DETENT, never `fork`'s nullity. Kept as a named constant so the
 # coupling to `sizing_assemble.DETENT_ENUM` is greppable from either side.
 _POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 
@@ -406,8 +422,14 @@ _SKILL_BY_ROUTE = {
     "spec-dispatch": "coordinator:plan",
 }
 
+# ---------------------------------------------------------------------------
 # seam: plan->execute-plan — a SEPARATE evaluator from the sizing->room seam
 # above (not a member of `_ROUTABLE_ROUTES`; see the boundary test
+# `test_execute_plan_is_never_a_routable_route` and the negative-spec in the
+# module docstring). Only ever consulted once `execution_authorized_by` is
+# present on the candidate plan's frontmatter — see
+# `_plan_execution_authorized_and_active`.
+# ---------------------------------------------------------------------------
 
 _PLAN_PATH_RE = re.compile(r"^docs/plans/[^/]+\.md$")
 
@@ -450,8 +472,23 @@ def _runtime_threshold_minutes(model: str) -> int:
         return haiku_default
     return opus_default
 
+# ---------------------------------------------------------------------------
 # Text half — a single POSITIVE forward-intent gate, no suppressor. A completion
+# report is already excluded on its own (it carries no forward-intent tell, so the
+# gate simply never opens for it) — see module docstring's "Text half" section for
+# why no suppressor is needed, and why that is a stronger discharge of the cited
+# lesson than a correctly-ordered suppressor would be.
+#
+# The tell alone is NOT sufficient (F4): it must co-occur, in the same sentence
+# (bounded to a ~120-char window either side, for a long unpunctuated sentence),
 # with a ROUTE REFERENT — the resolved route's own skill name or route noun. A
+# forward-intent phrase with no route referent nearby is route-agnostic prose
+# ("Next I'll need your call on X") that a legitimate PM-question stop can
+# contain just as easily as the incident this op targets.
+# (Review: eng-director/the Director of Engineering F3 + F4 — probed live: 11/12 realistic incident
+# phrasings missed the old regex, and 3/5 realistic legitimate-stop phrasings
+# fired it; both are one precision story, fixed together.)
+# ---------------------------------------------------------------------------
 
 _CURLY_APOSTROPHE_RE = re.compile("[’ʼ]")
 

@@ -17,15 +17,18 @@
       {"kind": "literal", "line": "finished_at: null"},
       {"kind": "literal", "line": "divergence:"},
       {"kind": "literal", "line": "  diverged: false"},
-      {"kind": "literal", "line": "dispatch_feed: null"}
+      {"kind": "literal", "line": "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter"},
+      {"kind": "literal", "line": "  gate_kind: none"},
+      {"kind": "literal", "line": "  write_files: []"}
     ]
   },
   "body": [
     {"kind": "raw", "lines": [
       "",
       "<!-- Run-report lifecycle: dispatched → in_flight → complete | blocked | thrashing.",
-      "     Lives at state/subagent-share/<session-id>/<key>.md (applies_to:",
-      "     state/subagent-share/*/*.md), path owned and computed by claude-klabauter's",
+      "     Lives at .coordinator-local/subagent-share/<session-id>/<key>.md",
+      "     (applies_to: .coordinator-local/subagent-share/*/*.md), path owned and",
+      "     computed by claude-klabauter's",
       "     provision_report engine at spawn time (see CONTRACT.md). This scaffold's",
       "     --out path is caller-supplied; there is no default path.",
       "     Swept at /workstream-complete: complete entries are folded-and-deleted.",

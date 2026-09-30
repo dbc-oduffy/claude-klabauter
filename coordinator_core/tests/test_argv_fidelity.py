@@ -11,6 +11,20 @@ from coordinator_core.argv_fidelity import (
 
 
 #: The three cases below load a `coordinator/bin` CLI IN-PROCESS via
+#: `SourceFileLoader`. Those CLIs bootstrap their siblings with a bare
+#: `import lib`, which `coordinator/bin/lib/__init__.py` documents as resolving
+#: "because a script's own directory is `sys.path[0]`" -- true when the CLI is
+#: executed, false when a test loads it by path. Until 2026-09-06 these three
+#: therefore passed only when some EARLIER test in the same worker had already
+#: put those directories on `sys.path`: order-dependent, green or red purely on
+#: how xdist happened to distribute the run. Reproducing the interpreter state a
+#: real invocation provides is the test's job, not a neighbour's side effect.
+#:
+#: A FIXTURE, not a helper that restores on the way out: these CLIs bootstrap
+#: LAZILY (`_bootstrap_imports()` moved off module scope precisely so importing
+#: one would stop mutating the warm server's `sys.path`), so the imports fire
+#: when the test CALLS the CLI, not when it loads it. Restoring at the end of
+#: the load put the path back before the only line that needed it.
 @pytest.fixture
 def bin_cli_loader():
     import importlib.machinery
@@ -221,7 +235,14 @@ def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
 def test_coordinator_lesson_promote_refuses_newline_body(
     capsys, bin_cli_loader, monkeypatch
 ):
+    # This CLI's lazy bootstrap resolves the claude-klabauter root before argparse ever
+    # runs, and the suite-root home quarantine leaves the machine-local
+    # registry empty by design -- so the refusal under test is unreachable
     # without naming a root. `COORDINATOR_ENGINE_ROOT` is the documented rung-1
+    # override (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`), pointed at
+    # THIS checkout: an explicit, machine-independent answer rather than
+    # `@pytest.mark.real_home`, which is scoped to live-parity oracles and this
+    # is not one -- it asserts a pure argv refusal.
     from pathlib import Path
 
     monkeypatch.setenv(

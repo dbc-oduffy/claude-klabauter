@@ -59,6 +59,8 @@ from __future__ import annotations
 
 from typing import Dict
 
+#: A third-party installer script fetched over the network (`curl -fsSL ...`),
+#: piped into a shell the vendor supplies. Network leg only — the execution
 #: that follows is bounded by `TOOLCHAIN_BOOTSTRAP_SECS`.
 NETWORK_FETCH_SECS = 60
 

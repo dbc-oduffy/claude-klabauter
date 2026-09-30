@@ -53,7 +53,16 @@ def _invoke(doc_type: str, out_path: str, extra_args: list[str]) -> tuple[int, s
         *_REQUIRED_ARGS.get(doc_type, []),
         *extra_args,
     ]
+    # The spinoff scaffolder refuses fail-loud when no session id resolves
     # (COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID all
+    # unset), so an ambient-env-dependent child would pass under an interactive
+    # session and fail wherever the fleet runs this suite without one. Pin the
+    # highest-precedence rung to a literal so the category assertions below
+    # exercise category handling and never the session-resolution arm.
+    #
+    # Negative-spec: does NOT assert anything about the resolved session id --
+    # that property is owned by
+    # tests/test_coordinator_doc_new_spinoff_resolvable_fields.py.
     env = {**os.environ, "COORDINATOR_SESSION_ID": "test-category-flag-session"}
     result = subprocess.run(
         cmd,

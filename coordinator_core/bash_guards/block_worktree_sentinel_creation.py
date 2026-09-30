@@ -90,8 +90,10 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
+#: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
 #: longer name is a DIFFERENT file and is not the worktree-ban override
+#: sentinel the sibling DoE hooks read.
 _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
@@ -198,9 +200,24 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
+    # Deliberately does NOT echo `cmd` back into the message and does NOT
+    # name the target basename in either branch below -- both would print
+    # the exact bypass an eager agent could copy-paste, which reads as
+    # sanctioning it rather than blocking it (same discipline as
+    # block-worktree-tool.py's and guard-doctrine-surface-edits.py's own
+    # deny messages). `cmd` stays accepted for call-site symmetry with the
+    # sibling guard, but is intentionally unused here.
+    #
+    # `reason_class` (2026-07-28 diagnosability fix, mirrors
+    # `block_approval_sentinel_creation._deny_reason` -- see
+    # `_sentinel_creation_guard.py` module docstring "REASON CLASS") splits
+    # the single fixed message this function used to return into two
     # truthful ones: REASON_DIRECT means a rule positively matched the
+    # override sentinel, so the "this command would create/modify it"
     # assertion is correct. REASON_INDIRECTION means the payload sits
+    # behind an interpreter/env/xargs/heredoc wrapper this guard cannot
     # examine, so it denies BY CONSTRUCTION -- not because anything was
+    # found. Keep both guards mirrored.
     del cmd
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")

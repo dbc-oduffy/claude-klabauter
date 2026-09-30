@@ -88,6 +88,17 @@ def test_permitted_span_behaviour_unchanged_by_the_new_boundary():
 
 
 # KNOWN, ACCEPTED FALSE-POSITIVE CLASS
+# -------------------------------------
+# The escape alternative is deliberately escape-agnostic: it checks for
+# `\<single letter>` immediately before the token, without verifying the
+# letter is one of the real Python/regex escape letters (b, t, n, r, f, v,
+# s, w, d, ...). That is by design -- narrowing to the real escape-letter set
+# does not solve the case it would be narrowed for (`x` IS a real escape
+# letter, via `\x41`), so a Windows path segment or line-continuation
+# backslash glued directly to a single letter and then a banned token can
+# also fire. This table pins the accepted tradeoff rather than leaving it
+# unstated: a rare false positive is preferred over missing a real persona
+# leak on a public-publish boundary.
 def test_single_backslash_letter_prefix_false_positive_is_accepted():
     assert _labels('    r"\\b' + _PERSONA + '\\b",') != []
     assert _labels("\\x" + _PERSONA) != []

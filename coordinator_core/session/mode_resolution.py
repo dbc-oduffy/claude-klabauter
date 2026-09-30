@@ -111,8 +111,22 @@ from coordinator_core.session.job_mode_env import (
 COMPACTION_WARNING_VARIANTS: FrozenSet[str] = frozenset({"standard", "informational"})
 
 #: ``_MOST_CAUTIOUS_POSTURE`` (renamed 2026-09-06 from ``_FAIL_OPEN_POSTURE``
+#: -- that vocabulary is not reintroduced here; see
 #: ``coordinator_core.conservatism`` for the fuller RAISE/FALL_BACK split).
+#:
 #: FAIL DIRECTION: FALL_BACK to ``"interactive"``. Declared explicitly here,
+#: beside the anchor, per this chunk's own spec, so a later conservatism
+#: primitive (``cloud-em-01``) can generalise this site without re-deriving
+#: the reasoning:
+#:   - Getting this WRONG toward ``"interactive"`` (the actual mode was
+#:     ``blitz``/``cron``) costs a redundant surface -- an advisory or
+#:     confirmation shown to nobody, wasted but harmless.
+#:   - Getting this wrong the OTHER way (defaulting to ``blitz``/``cron``
+#:     when the actual mode was ``interactive``) costs an unwitnessed
+#:     autonomous act on an attended box -- unbounded and not survivable the
+#:     way a redundant surface is.
+#: That asymmetry is why ``"interactive"`` is the anchor and not, say, the
+#: numerically- or alphabetically-first value.
 _MOST_CAUTIOUS_JOB_MODE: str = "interactive"
 
 #: same shape as ``COMPACTION_WARNING_VARIANTS`` / ``JOB_MODE_VALUES`` --
@@ -264,6 +278,15 @@ MODE_KEYS: Dict[str, ModeKey] = {
         default=False,
     ),
     # COST-INCIDENCE: `compaction_warnings` is `fleet-wins`. The strongest
+    # counter-argument is that only the session knows whether its own state
+    # is on disk. It does not hold (module docstring has the discriminator):
+    # - The cost lands on the session's own state, not on ~50 peers' shared
+    #   tree, which is what made `autonomous` session-wins.
+    # - The `informational` variant never withholds the signal: it still says
+    #   compaction is involuntary and lossy, commit and checkpoint now. The
+    #   session-state risk is answered in the text, not by precedence.
+    # - Session-wins is not constructible: no session-scoped value exists and
+    #   `_validate_registry` refuses session-wins with `session_pair=None`.
     "compaction_warnings": ModeKey(
         session_pair=None,
         precedence="fleet-wins",
@@ -272,6 +295,17 @@ MODE_KEYS: Dict[str, ModeKey] = {
         environment_default=lambda env: _compaction_default_for_environment(env),
     ),
     # COST-INCIDENCE: `job_mode` is `environment-wins`. The cost of this key
+    # being wrong lands on whoever consumes the mode a session was actually
+    # invoked as — the baton's Specification states the mode "is asserted by
+    # the environment that launched the session," so a stale fleet-mode
+    # record silently overriding that explicit assertion externalizes a cost
+    # the fleet record was never in a position to bear (`read_fleet_mode` is
+    # fail-open by design and would otherwise surface nothing). This is why
+    # `job_mode` sits on `environment-wins`, distinct from `compaction_
+    # warnings`' `fleet-wins`: that key's environment rung is a tiebreaker
+    # over a static default (see its own module-docstring paragraph above),
+    # while `job_mode`'s environment rung is the caller's own explicit
+    # assertion and must not be shadowed by a stale fleet record.
     "job_mode": ModeKey(
         session_pair=None,
         precedence="environment-wins",

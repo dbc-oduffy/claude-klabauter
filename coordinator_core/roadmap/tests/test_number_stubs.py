@@ -367,7 +367,13 @@ def test_main_check_dispatches_to_run_check_mode(tmp_path, monkeypatch, capsys):
     assert "No roadmap-baton (spinoff-roadmap) stubs found for roadmap_id=rm-check3" in out
 
 
+# ---------------------------------------------------------------------------
+# Canonical `kind: roadmap-baton` spelling — Review: code-reviewer (P1,
+# Finding 1). Every fixture above seeds the RETIRED `kind: spinoff-roadmap`
+# spelling, which already matched the pre-fix hardcoded `kind=spinoff-roadmap`
 # literal — so none exercise `_ROADMAP_BATON_KIND_WHERE`'s `kind in (...)`
+# term against the canonical spelling the live defect was about.
+# ---------------------------------------------------------------------------
 
 
 def test_check_mode_canonical_kind_roadmap_baton_is_found(tmp_path, monkeypatch, capsys):

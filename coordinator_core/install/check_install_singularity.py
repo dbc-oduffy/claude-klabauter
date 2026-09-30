@@ -98,6 +98,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import machine_resolver
+from coordinator_core._settings_home import is_doubled_claude_home
 from coordinator_core.path_identity import dir_identity
 
 # ---------------------------------------------------------------------------
@@ -393,11 +394,7 @@ def _check1_claude_home_suffix_guard(claude_home: Optional[str]) -> Optional[Tup
     """
     if not claude_home:
         return None
-    # Mirrors bash `case "$CLAUDE_HOME" in */.claude|*/.claude/)` — matches a
-    # string ending in "/.claude" or "/.claude/" (a literal "/" must precede
-    # ".claude"; a bare ".claude" with no path separator does NOT match).
-    claude_home_cmp = _norm_sep(claude_home)
-    if claude_home_cmp.endswith("/.claude") or claude_home_cmp.endswith("/.claude/"):
+    if is_doubled_claude_home(claude_home):
         return (
             f"CLAUDE_HOME is set to a .claude-suffixed path: {claude_home}",
             "CLAUDE_HOME must be a $HOME substitute (the parent directory), not the .claude "

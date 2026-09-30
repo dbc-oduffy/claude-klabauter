@@ -234,7 +234,14 @@ def _decorators_by_enclosing(tree: ast.Module) -> Dict[str, list[ast.expr]]:
     return out
 
 
+#: Local mirror of `coordinator_core.bash_guards._message_size.
 #: MESSAGE_PROSE_CAP_BYTES` -- deliberately NOT imported: that module pulls
+#: in `dispatch.py`'s full guard-registration chain, a cost this write-time
+#: guard cannot afford on every Write/Edit/MultiEdit (see this guard's own
+#: F5 hot-path finding). A drift between this mirror and the SSOT constant
+#: is caught by `guard_message_corpus.py`'s own render of this guard's
+#: real fire row against the SSOT, not by this local copy agreeing with
+#: itself.
 _MESSAGE_PROSE_CAP_BYTES = 220
 
 _BASENAME_MAX_BYTES = 40

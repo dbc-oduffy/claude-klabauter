@@ -410,6 +410,9 @@ class ConsumerRootModeTests(unittest.TestCase):
 
     def test_anchored_plugin_root_citation_is_never_dead_from_consumer(self):
         # ${CLAUDE_PLUGIN_ROOT}/ is harness-expanded, cwd-independent by
+        # construction -- the consumer-cwd question this mode asks does not
+        # apply to it, even though its target exists only in a DoE tree and
+        # is absent under consumer_root (self.fixture.claude-klabauter) verbatim.
         self.fixture.write_corpus_file(
             "doc.md", "See ${CLAUDE_PLUGIN_ROOT}/docs/wiki/only-in-coordinator.md.\n"
         )
@@ -805,6 +808,9 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
 
     def test_dot_md_followed_by_a_further_extension_is_not_a_citation(self):
         # `templates/<name>.md.tmpl` names a TEMPLATE, not the document --
+        # without the extension boundary the core backtracks to `.md` and
+        # reports a dead citation to a file nobody wrote (this fired live on
+        # coordinator-content-repo's commands/install.md:175 render-template invocation).
         self.fixture.write_corpus_file(
             "doc.md", "render-template coordinator/templates/onboarding.md.tmpl -o out\n"
         )

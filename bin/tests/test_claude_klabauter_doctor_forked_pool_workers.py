@@ -33,6 +33,8 @@ _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
 _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 #: Must end with ``_WARM_SERVER_CMDLINE_SIGNATURE`` for a process to be matched.
+#: Three ``.parent`` hops off this path is what the enumerator calls the engine
+#: root, so the leading directory is the engine root under test.
 _SERVER_SCRIPT = "/engine/coordinator_core/warm/server.py"
 
 

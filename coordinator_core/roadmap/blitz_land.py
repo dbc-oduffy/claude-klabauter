@@ -511,6 +511,11 @@ def close_dispatched(
     state, and a `shipped` baton that already cites a commit, stays refused: a
     re-landing must never overwrite a citation it did not write.
 
+    This op stamps `deployment_state` and `shipped_in` and nothing else: `pickup_ready`
+    and `status` on the tracker row belong to the `handoff.transition` ship verb, which
+    the driver runs over every returned row reporting `deployment_state: shipped`
+    (`land-wave.py :: _ship_closed_tracker_rows`). The returned row carries that state.
+
     `shipped_in_kind: ship-commit` is written in lockstep with every `shipped_in`
     (DR-096; `handoff.schema.json` requires it once a `shipped` baton carries a
     `shipped_in`). A confirm-and-close's prior SHA is a ship commit too — it names
@@ -526,8 +531,11 @@ def close_dispatched(
     if not baton_abs.is_file():
         raise LandingRefused(f"baton does not exist on disk: {baton_path}")
 
+    seen: Dict[str, Optional[str]] = {}
+
     def _close(old: str) -> str:
         state = _read_field(old, "deployment_state")
+        seen["state"] = state
         cited = _read_field(old, "shipped_in") not in (None, "null", "~")
         if state in BATON_CODED_STATES and (state != "shipped" or cited):
             raise MutateAbort(
@@ -556,6 +564,12 @@ def close_dispatched(
         "baton": baton_path,
         "closed": stamped,
         "shipped_in": shipped_in,
+        # The baton's terminal state as it stands AFTER this call, so a driver can tell a
+        # row it may hand to the shipped-transition ceremony from one another terminal
+        # decision already owns. This op flips `deployment_state` only; the tracker row's
+        # `pickup_ready` is the ceremony's, which is why the row names the state rather
+        # than the op reaching into a second field.
+        "deployment_state": "shipped" if stamped else seen.get("state"),
         "note": detail,
     }
 
@@ -1102,6 +1116,7 @@ def land_wave(
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
     pulled: List[Any] = []
+    pulled_without_plan: List[Any] = []
     for entry in wave_result.get("pulled") or []:
         baton_id = entry.get("batonId")
         try:
@@ -1119,13 +1134,18 @@ def land_wave(
             # refused its whole landing with "verdict carries no planPath", which is a
             # STOP condition, so a run whose every other lane was clean halted on the
             # one baton it had handled exactly right.
+            #
+            # A pull with no plan named anywhere (the planner declined the baton as a
+            # duplicate, so nothing was written) has no edge to repair either. The link is
+            # a repair, never the verdict, so a refusal here would stop the loop on a correct
+            # outcome. It is still reported by name in `pulled_without_plan`: a verdict that
+            # merely DROPPED a real plan's path is indistinguishable here, and the name is
+            # what lets a reader tell the two apart.
+            named = entry.get("planPath") or _plan_path_from_trail(entry, wave_result)
             plan_path = (
                 None
-                if _carries_no_plan(entry.get("route"))
-                else _rel(
-                    entry.get("planPath") or _plan_path_from_trail(entry, wave_result),
-                    worktree_root,
-                )
+                if _carries_no_plan(entry.get("route")) or not named
+                else _rel(named, worktree_root)
             )
             if plan_path is not None:
                 plan_abs = worktree_root / plan_path
@@ -1138,6 +1158,8 @@ def land_wave(
                 # status exactly where it was; the missing edge is what made the
                 # next gate read it as never-planned, not the status.
                 _link_baton_to_plan(worktree_root, baton_path, plan_path, report)
+            elif not _carries_no_plan(entry.get("route")):
+                pulled_without_plan.append(baton_id)
             pulled.append(baton_id)
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": baton_id, "reason": str(exc)})
@@ -1224,6 +1246,8 @@ def land_wave(
         "refused": refused,
         "minted": minted,
         "pulled": pulled,
+        # Pulled batons on a plan-carrying route that named no plan: nothing was linked.
+        "pulled_without_plan": pulled_without_plan,
         "surfaced_to_pm": [e.get("batonId") for e in wave_result.get("surfacedToPm") or []],
         "next_wave": {
             "waveIndex": (wave_result.get("waveIndex") or 0) + 1,

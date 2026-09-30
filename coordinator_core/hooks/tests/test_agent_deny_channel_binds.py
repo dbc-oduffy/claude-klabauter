@@ -60,10 +60,19 @@ import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
 
 # Repo root -- prepended onto PYTHONPATH for the one genuine subprocess spawn
+# below so `coordinator_core.hooks.block_unenumerated_agent_type`'s own
+# module-level `from coordinator_core._hook_envelope import deny` resolves
+# regardless of the spawned child's cwd. Same shape as
 # coordinator_core/tests/test_invoke_main.py::_make_env's _PROJECT_ROOT.
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 
+# test_main_subprocess_contract_exit_and_stdout_shape needs one genuine OS-
+# level subprocess run of main()'s real stdin/stdout/exit-code boundary
+# (per module docstring) -- the in-process monkeypatch runs elsewhere in
+# this file cannot observe the actual process exit-code/stdout channel a
 # real hooks.json registration drives. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

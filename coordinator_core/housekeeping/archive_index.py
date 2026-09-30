@@ -166,8 +166,40 @@ def revalidate(
     return {Path(p) for p in changed}
 
 
+# ---------------------------------------------------------------------------
+# Persistence — the leg that makes `revalidate` mean anything
+# ---------------------------------------------------------------------------
+#
+# `revalidate`'s 1.95ms is the cost of checking an index that ALREADY EXISTS.
+# Rebuilt from scratch each cycle, the index costs 171.9ms at 1,470 records
+# (measured, 85% of a 203ms cycle) because `build_index` must open every
+# archived file to read its `handoff_id` -- zero of 878 real archived records
+# carry an id derivable from the filename, so enumeration alone cannot supply
+# it. A per-cycle rebuild is also exactly what the plan's own Anti-scope
+# forbids: "Do not build anything whose per-cycle cost is linear in the
+# archive."
+#
+# So the index persists between cycles, and `revalidate` patches it.
+#
 # CORRECTNESS DOES NOT DEPEND ON THE CACHE. It is a pure derived artifact, and
+# every failure mode collapses to "rebuild": missing, unreadable, corrupt,
+# wrong schema version, or built against a different archive_dir. That is the
+# same asymmetry the module docstring already states for index entries
+# themselves -- a stale cache costs a wasted scan, never a wrong answer --
+# extended one level out. Nothing here may become load-bearing for a verdict.
+#
 # CONCURRENCY, on a tree with ~50 live peers: no lock, deliberately. The write
+# is atomic (tempfile in the same directory + `os.replace`), so a reader sees
+# either the whole previous file or the whole new one, never a torn one. Two
+# peers finishing a cycle together both write a valid cache and the last wins;
+# whichever survives is revalidated by its next reader anyway. A lock here
+# would serialise ~50 sessions behind a file that is safe to lose.
+#
+# The cache lives under the git common dir, not the worktree: it is derived,
+# per-checkout, and must never be committed -- an archive-index blob churning
+# on a shared `work/*` branch is noise every peer would pay for. This reuses
+# the `.git/coordinator-*` convention already established here by
+# `.git/coordinator-sessions/`.
 
 import json
 import tempfile

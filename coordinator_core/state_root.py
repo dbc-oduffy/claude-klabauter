@@ -137,8 +137,15 @@ from coordinator_core.ops.coordinator_content_root import coordinator_content_ro
 
 _STATE_SUBDIR = "state"
 
+#: Review: code-reviewer — duplicated from the C3 shim's
 #: `RESOLUTION_RESOLVED_ENGINE` module-level string constant
+#: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) rather than loading
+#: the shim just to read one string, mirroring the SAME duplication pattern
+#: `coordinator_core.engine_root` already uses for
 #: `_RESOLUTION_LIVE_WORKING_TREE_LITERAL` (see that module's comment for the
+#: full rationale). Per the shim's own docstring, this string is "part of the
+#: contract, not just its name" — if the shim's constant value ever changes,
+#: this one must change with it.
 _RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
 
 
@@ -324,6 +331,9 @@ def coordinator_state_root(
         return _claude_klabauter_state()
 
     # Rule 5: default branch (central=False). BACKWARD-COMPAT DEFAULT.
+    # Call _resolve_git_root() zero-arg when no override is supplied (matches
+    # its long-standing zero-arg call shape byte-for-byte) and only pass
+    # git_root through when a caller actually supplied one.
     resolved_git_root = _resolve_git_root(git_root) if git_root else _resolve_git_root()
     try:
         meta = is_meta_repo(resolved_git_root)

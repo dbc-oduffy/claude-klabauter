@@ -56,6 +56,8 @@ import claude_home_shim  # noqa: E402
 def _isolated_env(**overrides):
     """Drop CLAUDE_HOME/HOME/USERPROFILE, then apply *overrides*; restore on exit."""
     # Add COORDINATOR_SETTINGS_HOME so _isolated_env-based
+    # test classes are fully environment-isolated; host/CI shells with this var set would
+    # otherwise cause settings_home() to return the wrong path.
     saved = {k: os.environ.get(k) for k in ("CLAUDE_HOME", "HOME", "USERPROFILE", "COORDINATOR_SETTINGS_HOME")}
     for k in saved:
         os.environ.pop(k, None)
@@ -124,6 +126,8 @@ class TestHomeResolution(unittest.TestCase):
 
     def test_relative_claude_home_fails_loud(self):
         # CLAUDE_HOME is a deliberate operator override — a relative value is
+        # a configuration error, not a soft fallback. Spec: 2026-05-28
+        # addon-pluggy audit, INFO finding on env-var absolute-path validation.
         with _isolated_env(CLAUDE_HOME="relative/sandbox"):
             with self.assertRaises(ValueError) as cm:
                 home_dir()
@@ -131,6 +135,7 @@ class TestHomeResolution(unittest.TestCase):
             self.assertIn("absolute", str(cm.exception))
 
     def test_empty_claude_home_fails_loud(self):
+        # An empty string set in the environment is unambiguously
         # malformed; the docstring contract on CLAUDE_HOME is fail-loud, not silent
         # fallthrough. Common when CI clears a variable with `CLAUDE_HOME=`
         # instead of `unset CLAUDE_HOME`.
@@ -140,7 +145,9 @@ class TestHomeResolution(unittest.TestCase):
             self.assertIn("empty", str(cm.exception))
 
     def test_relative_home_is_skipped(self):
+        # Relative HOME (OS-provided) is ignored; resolution falls through to
         # USERPROFILE or stdlib. Prevents env-derived relative path from
+        # anchoring later path-joins at the process cwd.
         fake = self.tmp_path / "win_home"
         with _isolated_env(HOME="../escape", USERPROFILE=str(fake)):
             self.assertEqual(home_dir(), fake)

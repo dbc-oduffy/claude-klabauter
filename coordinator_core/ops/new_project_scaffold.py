@@ -93,6 +93,7 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 _CREATIONFLAGS = no_console_creationflags()
 
 # writes only into a brand-new project dir under COORDINATOR_PROJECTS_ROOT or
+# $HOME/Code_Projects, always a fresh separate repo outside claude-klabauter's own tree
 GENERATES = []
 
 _PROG = "new-project-scaffold.sh"
@@ -457,6 +458,7 @@ def main(argv: List[str]) -> int:
     except OSError as exc:
         print(f"{_PROG}: writing seed files failed: {exc}", file=sys.stderr)
         return 1
+    # DR-276: declared after both writes land — the contract is a report of
     # what was ACTUALLY written, not of an intended surface.
     declare_write(coordinator_local_path)
     declare_write(readme_path)

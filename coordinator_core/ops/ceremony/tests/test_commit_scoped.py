@@ -38,6 +38,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.divergence import DivergenceCheckFailed
+from coordinator_core.git.git_state import IndexSnapshot
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import DeliverableIdAssertionConflictError
 from .fixtures.real_git import (
@@ -125,6 +126,43 @@ def test_diverged_path_result_names_excluded_worktree_edits(tmp_path):
     assert result.worktree_excluded == ("file.txt",)
     assert "file.txt" in result.stderr
     assert "not included" in result.stderr.lower()
+
+
+def test_six_diverged_paths_notice_states_shared_index_provenance_and_bounds_list(tmp_path):
+    repo = real_git_repo(tmp_path)
+    rels = [f"f{i}.txt" for i in range(6)]
+    for rel in rels:
+        make_diverged_path(repo, rel, staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(rels, msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert "shared index" in result.stderr
+    assert "no author for staged content" in result.stderr
+    assert "worktree edits" in result.stderr
+    assert ", ".join(rels[:5]) + ", ..." in result.stderr
+    assert rels[5] not in result.stderr
+
+
+def test_diverged_path_with_absent_index_notice_states_head_provenance_only(tmp_path, monkeypatch):
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("HEAD content\n", encoding="utf-8")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "add file.txt"], repo)
+    (repo / "file.txt").write_text("WORKTREE\n", encoding="utf-8")
+    msg_file = _write_msg(tmp_path)
+    monkeypatch.setattr(
+        git_native, "read_index", lambda *a, **k: IndexSnapshot({}, None)
+    )
+
+    result = git_native._commit_scoped_private_index(["file.txt"], [], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert "HEAD" in result.stderr
+    assert "file.txt" in result.stderr
+    assert "staged" not in result.stderr.lower()
+    assert "shared index" not in result.stderr
 
 
 def test_agree_branch_result_reports_no_excluded_worktree_edits(tmp_path):

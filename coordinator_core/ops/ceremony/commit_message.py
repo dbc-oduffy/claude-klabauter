@@ -78,7 +78,19 @@ _DELETED_HEADER = "Deleted (Step 2.67):"
 _KEPT_HEADER = "Kept (Step 2.67):"
 
 
+#: Matches one git-trailer-shaped line ("Key: value") -- used only to decide
 #: whether an appended trailer/token must join a message's EXISTING trailer
+#: block rather than start a new paragraph. Shared home for this predicate
+#: (moved here from `commit_pipeline.py`, staff-eng R1 F1,
+#: state/review-trail/2026-08-08-landed-commit-close-review/r1-w1.md):
+#: `compose_message()` ends a trailered message with exactly ONE trailing
+#: "\n" (`"\n" + trailers + "\n"`), so a caller that blindly appends another
+#: block after a blank line inserts a NEW paragraph -- git's trailer parser
+#: (`interpret-trailers`, `%(trailers:key=...)`) recognises only the LAST
+#: paragraph as trailers, so that blank line silently demotes every
+#: pre-existing trailer to body prose. `commit_pipeline.commit()`'s
+#: `Commit-Token:` mint relies on this same predicate to avoid repeating
+#: that mistake; do not fork a second copy -- import from here.
 _TRAILER_LINE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
 
 

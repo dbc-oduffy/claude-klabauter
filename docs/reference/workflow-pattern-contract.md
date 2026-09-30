@@ -143,6 +143,10 @@ that's a roughly 4x cost defect. The check can't textually tell a mechanical
 fan-out apart from a genuine judgment call that should legitimately inherit
 Opus, so it's advisory: pin `model: 'sonnet'` for fan-outs, and leave the
 inherited default alone when the call really is a judgment agent.
+Only a `model:` key of an object literal passed directly to the `agent(...)`
+call counts, so a `model:` nested in a helper-call argument or a nested object
+does not. `effort:` hints are not checked: tier selection is non-correctness
+guidance and lives in scaffold template comments, not the validator contract.
 `workflow.scaffold`'s emitted output is model-default-WARN-clean by
 construction — every `agent()` call it emits already carries an active
 `model: 'sonnet'`.

@@ -153,7 +153,9 @@ def test_resolve_python_bin_pythonpininvalid_fallback_rejects_windowless_sys_exe
     assert "windowless" in err
 
 
+# ---------------------------------------------------------------------------
 # _install_shim — no PYTHON_BIN resolved
+# ---------------------------------------------------------------------------
 
 
 def test_install_shim_no_interpreter_resolved(capsys):
@@ -229,7 +231,17 @@ def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path, capsys
     assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
 
 
-def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys):
+@pytest.fixture
+def case_insensitive_fs(tmp_path):
+    # The trap models NTFS, where "Python._pth" IS "python._pth"; on a
+    # case-sensitive FS they are distinct files and no trap exists to trip.
+    probe = tmp_path / "CaseProbe"
+    probe.write_bytes(b"")
+    if not (tmp_path / "caseprobe").exists():
+        pytest.skip("case-sensitive filesystem: mixed-case ._pth is a different file")
+
+
+def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys, case_insensitive_fs):
     _write(tmp_path / "python.exe")
     _write(tmp_path / "Python._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -237,7 +249,7 @@ def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys):
     assert not (tmp_path / "python3.exe").exists()
 
 
-def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys):
+def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys, case_insensitive_fs):
     _write(tmp_path / "python.exe")
     _write(tmp_path / "PYTHON._PTH", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -255,7 +267,9 @@ def test_install_shim_already_valid_noop(tmp_path, capsys):
     assert captured.err == ""
 
 
+# ---------------------------------------------------------------------------
 # _install_shim — CHECK_ONLY on a stale shim reports without mutating
+# ---------------------------------------------------------------------------
 
 
 def test_install_shim_check_only_stale_no_mutation(tmp_path, capsys):

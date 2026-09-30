@@ -118,6 +118,8 @@ class AckStore:
                     payload["error_code"] = record["error_code"]
                 return payload
             if outcome in _UNKNOWABLE_OUTCOMES:
+                # No named reason in § 6 covers a stamped abandoned/worker-lost
+                # outcome; the outcome value itself is the honest reason a
                 # caller gets no re-run license here.
                 return {"state": STATE_UNKNOWABLE, "reason": outcome}
             return {"state": STATE_UNKNOWABLE, "reason": REASON_NO_RESIDENT_ENGINE}

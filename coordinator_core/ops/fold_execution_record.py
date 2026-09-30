@@ -95,6 +95,8 @@ _PROG = "coordinator-fold-execution-record"
 
 _DATE_PREFIX_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-")
 _SLUG_VALID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# re.ASCII constrains \s to the same [\t\n\x0b\f\r ]
+# class as bash's POSIX [[:space:]], matching the oracle rather than Python's
 # default Unicode-whitespace superset (e.g. NEL, LINE/PARAGRAPH SEPARATOR).
 _CHUNKS_SECTION_ENTER_RE = re.compile(r"^##\s+Chunks", re.ASCII)
 _HEADING2_RE = re.compile(r"^##\s", re.ASCII)
@@ -128,7 +130,10 @@ def _resolve_git_root(plan_path: str) -> str:
 def _parse_chunk_ac_map(plan_text: str) -> Dict[str, str]:
     chunk_ac_map: Dict[str, str] = {}
     in_chunks_section = False
+    # str.splitlines() treats a wider set of Unicode
     # characters as line boundaries (e.g. NEL, LINE/PARAGRAPH SEPARATOR) than
+    # bash's `while IFS= read -r line` (splits on \n only). split("\n") mirrors
+    # the oracle's newline-only semantics.
     for line in plan_text.split("\n"):
         if _CHUNKS_SECTION_ENTER_RE.match(line):
             in_chunks_section = True

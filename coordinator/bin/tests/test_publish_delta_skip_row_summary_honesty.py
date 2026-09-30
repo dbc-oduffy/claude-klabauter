@@ -20,6 +20,13 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE. This helper is called from inside the
     # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
+    # once per test. `publish.py` resolves targets twice now -- `main()` with
+    # the `--target` filter, and `_declared_repo_roots_carrying_
+    # coordinator_core` unfiltered -- so a second call re-seeded an already
+    # committed repo and `git commit` failed "nothing to commit, working tree
+    # clean". Guarding here rather than counting call sites: a fixture that
+    # cannot be invoked twice encodes a production call count no test should
+    # be asserting by accident.
     if (root / ".git").is_dir():
         return
     def _git(*args: str) -> None:
@@ -117,6 +124,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
         # Must never be reached for `_SKIPPED_ROW` — the delta whole-row skip
+        # happens in `main()`'s loop before `process_target` dispatch.
         assert target.name != _SKIPPED_ROW
         rows_reached.append(target.name)
         totals.processed += 1

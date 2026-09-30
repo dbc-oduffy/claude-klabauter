@@ -66,6 +66,8 @@ def test_the_four_states_are_pairwise_distinct():
 
 def test_zero_string_requests_the_gate_because_the_predicate_is_js_truthiness():
     # `if (q.CLAUDE_CODE_HARBOR_KITE) return !0;` -- every non-empty JS string
+    # is truthy, so "0" opens the gate rather than declining it. Reading "0"
+    # as a decline here would report an opt-out the harness never performed.
     gate = messaging_gate.classify({messaging_gate.GATE_ENV_VAR: "0"})
 
     assert gate.requested is True

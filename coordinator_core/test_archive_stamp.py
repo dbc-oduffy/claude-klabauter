@@ -2911,6 +2911,27 @@ class TestMemoTransitionWrappers:
         assert rc == 0
         assert "status: actioned" in mp.read_text(encoding="utf-8")
 
+    def test_action_dead_holder_warns_and_proceeds(self, tmp_path, monkeypatch, capsys):
+        """Guard 6: a claim held by a DIFFERENT but dead session is stale --
+        warn on stderr and proceed with the flip (no refusal)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m9dead.md", "in_progress")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m9dead.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
+
+        monkeypatch.setattr(arstamp, "cs_claim_holder_live", lambda claim_path: False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-caller")
+        monkeypatch.chdir(repo)  # Guard 4 requires cwd_git_root == memo_git_root
+        rc = arstamp.cs_action_memo(str(mp), "--actioned-note", "done")
+        assert rc == 0
+        assert "status: actioned" in mp.read_text(encoding="utf-8")
+        err = capsys.readouterr().err
+        assert "stale claim" in err
+        assert "dead session sess-owner" in err
+        assert "REFUSING" not in err
+
     # -- --superseded-by (receiver-side supersession pair, AC1/AC2) -----------
 
     def test_action_superseded_by_writes_pair(self, tmp_path, monkeypatch):
@@ -3025,6 +3046,171 @@ class TestResolveMemo:
         assert rc != 0
         assert "status: open" in mp.read_text(encoding="utf-8")
 
+    def test_actioned_note_correction_route_is_named_and_works(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A re-action with a different decision_note is refused with the
+        --correct-realization route named; following it amends decision_note only,
+        leaving decision and realized_by intact and appending a correction clause."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "r5.md", "open")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
+        base = ["--decision", "accepted", "--realized-by", "commit-abc123"]
+        assert arstamp.cs_resolve_memo(
+            str(mp), *base, "--decision-note", "raised with the author"
+        ) == 0
+        capsys.readouterr()
+
+        rc = arstamp.cs_resolve_memo(
+            str(mp), *base, "--decision-note", "raised with the PM"
+        )
+        assert rc != 0
+        assert "--correct-realization" in capsys.readouterr().err
+        assert "raised with the author" in mp.read_text(encoding="utf-8")
+
+        rc = arstamp.cs_resolve_memo(
+            str(mp), *base, "--decision-note", "raised with the PM",
+            "--correct-realization",
+        )
+        assert rc == 0
+        text = mp.read_text(encoding="utf-8")
+        assert "raised with the PM" in text
+        assert "[correction " in text and "decision_note corrected]" in text
+        assert "decision: accepted" in text
+        assert "realized_by: commit-abc123" in text
+
+
+
+class TestCorrectMemoNote:
+    """memo.correct_note / archive-stamp-cli correct-memo-note: decision_note only,
+    authorship-gated, clause-stamped; decision and realized_by immutable."""
+
+    _BASE = ("--decision", "accepted", "--realized-by", "commit-abc123")
+
+    def _actioned(self, tmp_path, monkeypatch, name="c1.md", note="raised with the author"):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, name, "open")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-author")
+        assert arstamp.cs_resolve_memo(str(mp), *self._BASE, "--decision-note", note) == 0
+        return repo, mp
+
+    def test_note_replaced_and_clause_stamped_with_verdict_untouched(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo, mp = self._actioned(tmp_path, monkeypatch)
+        before = mp.read_text(encoding="utf-8")
+        capsys.readouterr()
+
+        assert arstamp.cs_correct_memo_note(str(mp), "raised with the PM") == 0
+
+        text = mp.read_text(encoding="utf-8")
+        assert "raised with the PM [correction " in text
+        assert "raised with the author" not in text
+        assert "by session sess-author (resolved via CLAUDE_SESSION_ID)" in text
+        assert "decision_note corrected]" in text
+        for kept in ("status: actioned", "decision: accepted", "realized_by: commit-abc123",
+                     "picked_up_by: sess-author"):
+            assert kept in text
+        assert kept in before
+        assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+        assert "correct_note" in _git(repo, "log", "-1", "--format=%s").stdout
+
+    def test_second_correction_keeps_the_first_clause(self, tmp_path, monkeypatch):
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        assert arstamp.cs_correct_memo_note(str(mp), "second") == 0
+        assert arstamp.cs_correct_memo_note(str(mp), "third") == 0
+        text = mp.read_text(encoding="utf-8")
+        assert text.count("[correction ") == 2
+        assert "third [correction " in text and "second" not in text.split("third", 1)[0]
+
+    def test_identical_note_is_an_uncommitted_noop(self, tmp_path, monkeypatch):
+        repo, mp = self._actioned(tmp_path, monkeypatch)
+        head = _git(repo, "rev-parse", "HEAD").stdout
+        assert arstamp.cs_correct_memo_note(str(mp), "raised with the author") == 0
+        assert "[correction" not in mp.read_text(encoding="utf-8")
+        assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+    def test_non_author_session_is_refused_without_a_write(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        before = mp.read_text(encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-someone-else")
+        capsys.readouterr()
+        assert arstamp.cs_correct_memo_note(str(mp), "hijacked") == 1
+        assert "only the actioning session" in capsys.readouterr().err
+        assert mp.read_text(encoding="utf-8") == before
+
+    def test_decision_and_realized_by_are_immutable(self, tmp_path, monkeypatch):
+        import asyncio
+        from coordinator_core.ops.memo_correct_note import _handler
+
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        before = mp.read_text(encoding="utf-8")
+        for extra in ({"decision": "declined"}, {"realized_by": "other-sha"}):
+            result = asyncio.run(
+                _handler({"memo": str(mp), "decision_note": "x", **extra}, repo_root=None)
+            )
+            assert result["exit_code"] == 1 and "immutable" in result["error"]
+        assert mp.read_text(encoding="utf-8") == before
+
+    def test_override_reason_lets_a_non_author_correct_and_is_stamped(
+        self, tmp_path, monkeypatch
+    ):
+        import asyncio
+        from coordinator_core.ops.memo_correct_note import _handler
+
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-successor")
+        result = asyncio.run(_handler(
+            {"memo": str(mp), "decision_note": "fixed", "override_reason": "author session ended]"},
+            repo_root=None,
+        ))
+        assert result["exit_code"] == 0 and result["applied"] is True
+        text = mp.read_text(encoding="utf-8")
+        assert "by session sess-successor" in text
+        from coordinator_core.frontmatter.primitives import (
+            read_fm_field_unquoted, split_frontmatter,
+        )
+        note = read_fm_field_unquoted(split_frontmatter(text).fm_text, "decision_note")
+        assert "override_reason='author session ended)'" in note
+
+    def test_actioned_note_shape_is_refused_with_the_other_route_named(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "c2.md", "open")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-author")
+        assert arstamp.cs_resolve_memo(str(mp), "--actioned-note", "done") == 0
+        capsys.readouterr()
+        assert arstamp.cs_correct_memo_note(str(mp), "new") == 1
+        assert "--correct-realization" in capsys.readouterr().err
+
+    def test_unactioned_memo_is_refused(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "c3.md", "open")
+        assert arstamp.cs_correct_memo_note(str(mp), "new") == 1
+        assert "expected actioned or closed" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["two\nlines", "", "forged [correction 2026-01-01 by session x]", "zero\u200bwidth"],
+    )
+    def test_malformed_or_forged_notes_are_refused(self, tmp_path, monkeypatch, bad):
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        before = mp.read_text(encoding="utf-8")
+        assert arstamp.cs_correct_memo_note(str(mp), bad) == 1
+        assert mp.read_text(encoding="utf-8") == before
+
+    def test_no_session_id_is_refused(self, tmp_path, monkeypatch):
+        _, mp = self._actioned(tmp_path, monkeypatch)
+        for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        assert arstamp.cs_correct_memo_note(str(mp), "new") == 1
 
 # ---------------------------------------------------------------------------
 # AC6 (P080-C3): cs_action_memo / cs_resolve_memo print exactly one stderr
@@ -3276,6 +3462,48 @@ class TestStampPlanImplemented:
         missing = tmp_path / "does-not-exist.md"
         rc = arstamp.cs_stamp_plan_implemented(str(missing))
         assert rc == 1
+
+    def test_exit_criterion_flags_are_forwarded_to_the_verb(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(arstamp.plan_status_transition, "main", lambda argv: seen.append(argv) or 0)
+        rc = arstamp.cs_stamp_plan_implemented(
+            "p.md", falsifier_verdict="pass", falsifier_output="out", prose="why"
+        )
+        assert rc == 0
+        assert seen == [[
+            "stamp-implemented", "--plan", "p.md",
+            "--falsifier-verdict", "pass", "--falsifier-output", "out", "--prose", "why",
+        ]]
+
+    def _seed_spine_plan(self, tmp_path: Path, disposition: str) -> Path:
+        path = tmp_path / "plan.md"
+        path.write_text(
+            "---\nstatus: draft\n---\n\n# a plan\n\n## Tasks\n\n```yaml plan-tasks\n"
+            f"- id: C1\n  title: A row\n  disposition: {disposition}\n"
+            + ("  disposition_ref: abc123\n" if disposition != "open" else "")
+            + "\n```\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_cli_route_refuses_while_a_spine_row_is_open(self, tmp_path, capsys):
+        plan = self._seed_spine_plan(tmp_path, "open")
+        rc = arstamp.cs_stamp_plan_implemented(str(plan), refuse_open_spine_rows=True)
+        assert rc == 1
+        assert "status: draft" in plan.read_text(encoding="utf-8")
+        assert "still open: C1" in capsys.readouterr().err
+
+    def test_cli_route_stamps_a_resolved_spine(self, tmp_path):
+        plan = self._seed_spine_plan(tmp_path, "coded")
+        rc = arstamp.cs_stamp_plan_implemented(str(plan), refuse_open_spine_rows=True)
+        assert rc in (0, 2)
+        assert "status: implemented" in plan.read_text(encoding="utf-8")
+
+    def test_partial_exit_criterion_set_is_refused_by_the_verb(self, tmp_path):
+        plan = self._seed_plan(tmp_path, "draft")
+        rc = arstamp.cs_stamp_plan_implemented(str(plan), falsifier_verdict="pass")
+        assert rc == 1
+        assert "status: draft" in plan.read_text(encoding="utf-8")
 
 
 def _seed_archived_handoff(

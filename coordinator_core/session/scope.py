@@ -2362,6 +2362,28 @@ def _tree_relocation_claim_pairs(
     return pairs
 
 
+def _normalize_tree_path(
+    path: str, cwd: Optional[str], root: Optional[str]
+) -> Optional[str]:
+    """Repo-relative form of a DIRECTORY path for tree-claim restatement.
+
+    :func:`normalize_touch_path` returns ``None`` for an absolute path that is
+    an existing directory (its ``ls-files`` arm would resolve to an unrelated
+    descendant), so the tree callers route absolute inputs through the
+    pure-Python relpath arm instead. Non-absolute input takes
+    :func:`normalize_touch_path` unchanged. ``None`` when the path is outside
+    the worktree or no worktree root resolves.
+    """
+    fpath = _strip_extended_length_prefix(path)
+    if not _is_absolute(fpath):
+        return normalize_touch_path(path, cwd)
+    resolved_root = root or core.git_root(cwd)
+    if not resolved_root:
+        return None
+    candidate, _exc = _relpath_candidate(fpath, resolved_root)
+    return canonicalize_relative_path(candidate) if candidate else None
+
+
 def _restate_tree_claims(
     session_id: str,
     src_rel: str,
@@ -2409,10 +2431,10 @@ def _restate_tree_claims(
     :func:`release_committed_claims` to retire once the tree's deletions
     land in a commit, the same invariant the single-path form relies on.
     """
-    src_norm = normalize_touch_path(src_rel, cwd)
+    src_norm = _normalize_tree_path(src_rel, cwd, root)
     if src_norm is None:
         return
-    dst_norm = normalize_touch_path(dst_rel, cwd)
+    dst_norm = _normalize_tree_path(dst_rel, cwd, root)
     if dst_norm is None or not _dst_is_claimable(dst_norm):
         return
     for old_path, new_path in _tree_relocation_claim_pairs(sdir, src_norm, dst_norm):

@@ -98,6 +98,10 @@ def test_run_all_recognised(tmp_path, monkeypatch):
 
 def test_run_missing_type_reported(tmp_path, monkeypatch):
     # widget-thing has no entry in _SCHEMA_NAME_TO_QUERY_TYPE, so its derived
+    # query type is the bare stem "widget-thing" (unlike bug-backlog/
+    # debt-backlog/improvement-queue, which ARE mapped and now correctly
+    # resolve to bug/debt/improvement -- see the false-positive-fix note in
+    # the module docstring).
     _write_schema(tmp_path / "schemas", "widget-thing.yaml", "state/widget-thing/*.yaml")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "query-records.js").write_text("", encoding="utf-8")
@@ -253,6 +257,8 @@ def test_golden_oracle_parity_against_live_doe_repo():
     joined = "\n".join(expected["stdout_lines"])
     assert "OK" in joined
     # Corpus-size pin (see _EXPECTED_CORPUS_SIZE docstring): guards against a
+    # recapture over a silently-narrowed schemas/ dir producing a
+    # byte-identical drift-entry golden while covering far fewer schemas.
     assert expected["schemas_checked"] == _EXPECTED_CORPUS_SIZE
 
 

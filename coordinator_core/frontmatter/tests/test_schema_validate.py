@@ -1442,6 +1442,23 @@ class TestKindGatedFields:
         assert any(e['field'] == 'forked_from' for e in errors)
 
 
+class TestRecoversSessionGate:
+    def test_recovers_session_on_non_recovery_fails(self):
+        fm = _valid_handoff(recovers_session='aa1626ec-221a-4d6c-9c16-e8ac86ff93bb')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'] == 'recovers_session' and 'recovery' in e['error'] for e in errors)
+
+    def test_recovers_session_on_recovery_ok(self):
+        fm = _valid_handoff(kind='recovery', recovers_session='aa1626ec-221a-4d6c-9c16-e8ac86ff93bb')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'recovers_session' for e in errors)
+
+    def test_null_recovers_session_on_non_recovery_ok(self):
+        fm = _valid_handoff(recovers_session=None)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'recovers_session' for e in errors)
+
+
 # ---------------------------------------------------------------------------
 # Cross-field rules — spinoffKinds extension (Rule A3a-3 sister kinds)
 # ---------------------------------------------------------------------------

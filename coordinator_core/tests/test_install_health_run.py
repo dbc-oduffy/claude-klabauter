@@ -424,7 +424,7 @@ def test_declared_launch_oserror_counts_one_failure_and_loop_continues(tmp_path,
 # ---------------------------------------------------------------------------
 # Regression: native in-process repoint (DR-079). seed-skill-overrides.sh has
 # a direct claude-klabauter port and must be called IN-PROCESS — no subprocess spawn at
-# all — rather than dispatched through resolve_by_shebang + subprocess.call.
+# all — rather than dispatched through a shebang-sniffing launcher + subprocess.call.
 # ---------------------------------------------------------------------------
 
 

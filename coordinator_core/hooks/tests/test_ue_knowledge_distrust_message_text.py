@@ -65,3 +65,14 @@ def test_banner_drops_named_adjacency_hazard_string(tmp_path):
 
     assert "via example-game-repo-docs MCP" not in result.banner
     assert "example-game-repo-docs" not in result.banner
+
+
+def test_banner_fits_prose_cap_and_names_live_alternative(tmp_path):
+    (tmp_path / "MyGame.uproject").write_text("{}")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}")
+
+    result = mod.run(str(tmp_path), "unused-plugin-root")
+
+    assert len(result.banner.encode("utf-8")) <= 220
+    assert "quick_ue_lookup" in result.banner

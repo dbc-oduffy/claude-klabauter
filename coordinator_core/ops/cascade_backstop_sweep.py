@@ -274,6 +274,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     handoff_ids = _terminal_handoff_deliverable_ids(worktree_root)
 
     # Exact-equality plan-vs-handoff join (C6b/AC11). The SEPARATE
+    # slug-prefix-family check below stays on raw ids by design -- it exists
+    # precisely to catch a fork a declared-equivalence join would hide.
     all_ids: dict[str, list[str]] = {}
     for did, sources in plan_ids.items():
         all_ids.setdefault(did, []).extend(sources)

@@ -82,7 +82,15 @@ def _resolve_state_root(explicit_override: Optional[str] = None) -> Optional[str
     if not override:
         return None
 
+    # Detect "already ends in a `state` path segment" by basename, not
+    # by a literal ``.endswith("/state")`` string suffix check —
+    # os.path.basename() (ntpath on Windows) splits on either
     # separator, so this matches a COORDINATOR_ROOT that was supplied
+    # in the platform's own native form (e.g. "...\\state" on Windows).
+    # The old suffix-only check silently missed that on Windows and
+    # doubled the "/state" append (C5 root-cause: os.sep-in-wire-id
+    # class — an os.sep-bearing value was compared against a
+    # forward-slash-only literal).
     if os.path.basename(override.rstrip("/\\")) == "state":
         return override
     return override.rstrip("/") + "/state"

@@ -8,9 +8,10 @@
       {"kind": "value", "key": "from", "field": "from_id", "quote": true},
       {"kind": "value", "key": "to", "field": "to", "quote": true},
       {"kind": "value", "key": "created", "field": "created", "quote": false},
-      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "status: draft"},
       {"kind": "literal", "line": "delivery_mode: receiver-repo"},
-      {"kind": "value", "key": "summary", "field": "explicit_summary", "quote": true}
+      {"kind": "value", "key": "summary", "field": "explicit_summary", "quote": true},
+      {"kind": "literal", "line": "kind: \"fyi\""}
     ]
   },
   "body": [

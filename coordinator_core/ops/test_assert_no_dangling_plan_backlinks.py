@@ -36,6 +36,8 @@ def _fm(title: str, plan_id: str = None, deliverable_id: str = None) -> str:
 
 
 def _make_moved_plan_tree(root: str) -> None:
+    # C5-fix: both records carry a real id -- mint-at-creation is wired into
+    # main()'s default flow now, so a shared fixture without ids would trip
     # MISSING-ID on every test that reuses this helper.
     _write(
         root,
@@ -462,3 +464,9 @@ def test_archive_round_trip_id_citation_survives_and_gate_stays_clean(tmp_path):
 
 
 # GRAVESTONE (TF-20260923-bb-066): test_archive_plans_act_phase_wires_the_citation_gate
+# deleted. The inline post-move backlink gate it pinned measured ~5.2s on
+# archive_plans' normal path, over the DR-344 500ms kill bar
+# (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md). The
+# requirement (a post-move dangling-plan-backlink audit for archive_plans)
+# survives as an open bug row, to be met by a first-principles plan — not by
+# restoring this inline call.

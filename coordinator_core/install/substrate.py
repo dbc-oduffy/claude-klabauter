@@ -64,6 +64,7 @@ guard's spirit, not its BASH_SOURCE mechanism).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import enum
 import filecmp
 import json
@@ -3720,40 +3721,15 @@ def _write_agent_helper_forwarders(
     from coordinator_core.install import door_install
     _PER_NAME_DEGRADE_EXCEPTIONS = (OSError, door_install.DoorInstallError, SystemExit)
 
-    if check_only:
-        agent_helper_resolved: "list[WriteSurfaceEntry]" = []
-        for f, target in sorted(agent_helper_target_map.items()):
-            try:
-                native_dst = _cut_over_to_native_door(
-                    f, bin_dst, check_only, engine_root=engine_root,
-                    static_family_names=static_family_names,
-                )
-                if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
-                    continue
-                if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
-                    # Off PATH entirely is the intended end state -- writing
-                    # the Python pair here is what put an unexecutable
-                    # extensionless file on Windows for 14 names.
-                    continue
-                if native_dst is not None:
-                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                    continue
-                py_dst = bin_dst / f
-                _write_agent_forwarder(
-                    f, py_dst, check_only, target=target,
-                    resolver_module=resolver_module,
-                )
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-            except _PER_NAME_DEGRADE_EXCEPTIONS as exc:
-                failed.append((f, exc))
-        _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
-        _raise_if_agent_helper_forwarders_failed(
-            failed, agent_helper_target_map, check_only=True, agent_helper_resolved=agent_helper_resolved,
-        )
-        return agent_helper_resolved
-
-    agent_helper_resolved = []
-    with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
+    agent_helper_resolved: "list[WriteSurfaceEntry]" = []
+    # One loop body for both modes: `check_only` never writes, so it runs
+    # unlocked and skips the door hoist; a real run holds the lock throughout.
+    lock = (
+        contextlib.nullcontext()
+        if check_only
+        else held_lock(bin_dst, holder_label="install-substrate-forwarders")
+    )
+    with lock:
         # HOIST install_door OUT OF THE PER-NAME LOOP (C5 part b). Every
         # name's own `install_named_forwarder` used to call `install_door`
         # itself -- idempotent, but not free: a content check of the door
@@ -3766,7 +3742,7 @@ def _write_agent_helper_forwarders(
         # to calling `install_door` itself and degrades exactly as before --
         # this is a perf hoist, never a new failure mode.
         door_source: "Optional[Path]" = None
-        if engine_root is not None:
+        if engine_root is not None and not check_only:
             try:
                 door_source = door_install.install_door(bin_dst, engine_root, check_only=False)
             except _PER_NAME_DEGRADE_EXCEPTIONS:
@@ -3797,12 +3773,12 @@ def _write_agent_helper_forwarders(
             except _PER_NAME_DEGRADE_EXCEPTIONS as exc:
                 failed.append((f, exc))
 
-    if engine_root is not None:
+    if engine_root is not None and not check_only:
         _write_native_forwarder_manifest(bin_dst, native_written)
 
     _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
     _raise_if_agent_helper_forwarders_failed(
-        failed, agent_helper_target_map, check_only=False, agent_helper_resolved=agent_helper_resolved,
+        failed, agent_helper_target_map, check_only=check_only, agent_helper_resolved=agent_helper_resolved,
     )
 
     return agent_helper_resolved

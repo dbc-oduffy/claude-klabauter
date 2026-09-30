@@ -170,8 +170,13 @@ def _resolve_worktree_root(repo_root_arg: str) -> Optional[str]:
     return show_toplevel(os.getcwd())
 
 
+#: Fixed 1-day threshold before a `restorable` row becomes a nudge — the
+#: plan's own words ("the sender reads restorable, surfaced after 1 day").
 #: Deliberately not env-configurable and deliberately a SEPARATE constant
 #: from `COORDINATOR_OUTBOX_STALE_HOURS` above: that knob governs unsent
+#: draft nudges, this one governs delivered-but-currently-unreadable ones,
+#: and the two landing at the same 24h by no coincidence should not be read
+#: as one knob controlling both.
 _RESTORABLE_SURFACE_AFTER_DAYS = 1
 
 

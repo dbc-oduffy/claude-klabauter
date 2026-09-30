@@ -110,7 +110,16 @@ def _refusing_helpers(src):
     return names
 
 # Functions in `coordinator_core.argv_fidelity` that THEMSELVES call
+# refuse_newline_argv on their inline argument. Membership is a claim about
+# that module's source and is pinned by test_prose_flag_transport_coverage.py
+# -- adding a name here that does not refuse silently re-opens the over-credit
+# staff-eng finding 1 closed.
+#
 # resolve_body is DELIBERATELY ABSENT and must stay absent. Verified at source
+# and stated in resolve_optional_prose's own docstring: resolve_body does NOT
+# call refuse_newline_argv; only resolve_optional_prose wires the two together.
+# Crediting resolve_body would mark a flag refused that accepts newlines --
+# the precise false-negative direction this instrument exists to prevent.
 _REFUSING_SEAM_FUNCS = ("resolve_optional_prose",)
 
 def _seam_refusers(src):

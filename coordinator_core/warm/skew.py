@@ -86,6 +86,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -98,6 +99,8 @@ __all__ = [
     "compute_client_token",
     "write_engine_stamp",
     "read_engine_stamp_sha",
+    "ENGINE_PUBLISHED_AT_FILENAME",
+    "read_engine_published_at",
     "PublishLag",
     "publish_lag",
     "publish_lag_message",
@@ -417,6 +420,35 @@ def read_engine_stamp_sha(engine_root: Path) -> Optional[str]:
     # straight to a git history check that cannot resolve a decorated ref.
     sha = sha.split("+", 1)[0].strip()
     return sha or None
+
+
+#: Sibling of `ENGINE_STAMP_FILENAME`: one ISO-8601 UTC line naming when the
+#: round that shipped this engine ran. Pinned equal to the writer's
+#: `rewrite_basename.PUBLISHED_AT_BASENAME` by
+#: `warm/tests/test_engine_published_at_order.py`.
+ENGINE_PUBLISHED_AT_FILENAME = "_engine_published_at"
+
+
+def read_engine_published_at(engine_root: Path) -> Optional[datetime]:
+    """Publish instant of a published engine, tz-aware UTC, or `None`.
+
+    The stamp names a build and orders none; this sibling file is the order.
+    Unlike file mtime it survives clone, copy and archive extract. `None`
+    means UNKNOWN -- a missing, unreadable, empty or unparsable file -- never
+    an epoch-zero, so an ordering caller must refuse rather than assume. A
+    naive timestamp is read as UTC. Never raises; one read, no spawn.
+    """
+    path = Path(engine_root) / "coordinator_core" / ENGINE_PUBLISHED_AT_FILENAME
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        parsed = datetime.fromisoformat(raw)
+    except (OSError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)

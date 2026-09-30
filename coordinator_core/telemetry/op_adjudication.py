@@ -67,15 +67,13 @@ Negative-spec (hard-won, from the C2 brief's own citations):
       `ceremony.commit` 363 rows all-time and zero in a 24h arm because the
       op was deleted) — a verdict citing "the last day" without the bound
       that produced it cannot be checked against a second run.
-    - The two-route rule (`op_verdicts`): an op observed on more than one
-      execution route is adjudicated on the WORSE (higher-p95) route's
-      figure, with every route's figure retained in the output so neither is
-      silently dropped. A `CONFIDENCE_SPAWNS_UNKNOWN` figure NEVER convicts
-      on its own — `op_verdicts` only considers `EXACT`/`FLOOR` buckets for
-      the verdict figure; an op with only spawns-unknown data (however large
-      its n) reports `verdict: "insufficient_confidence"`, never a numeric
-      conviction, because a floor with no spawn accounting cannot be told
-      apart from a genuinely cheap op that merely lacks the counter.
+    - There is no per-op verdict here: `adjudicate` returns one figure per
+      `(op, route, confidence)` bucket and never collapses routes. A caller
+      convicting an op reads every route's figure and takes the WORSE
+      (higher-p95) `EXACT`/`FLOOR` one; a `CONFIDENCE_SPAWNS_UNKNOWN` figure
+      NEVER convicts on its own, however large its n, because a floor with no
+      spawn accounting cannot be told apart from a genuinely cheap op that
+      merely lacks the counter.
     - Bounded by shard mtime, not by parsing every shard and discarding: a
       requested `window_start` skips any shard whose own mtime predates it
       (a rotated generation's mtime is its last write, so it cannot contain a
@@ -86,15 +84,10 @@ Negative-spec (hard-won, from the C2 brief's own citations):
 Budget (brightline: DR-344, 500ms kill / project CLAUDE.md § The
 brightline): a naive read of all five live shards with a `kind ==
 "process_time"` substring-adjacent prefilter measured 343.8ms process time
-over ~116,000 rows / ~128MB on this box, this pass — ~150ms of headroom
-under the 500ms bar. `_MEASURED_ROWS_PER_SECOND` states what that implies
-(~337k rows/sec); `_GATE_BREAK_ROW_COUNT` is the row count at which a
-linear projection of that same rate would consume the full 500ms bar on a
-sink growing ~17MB/day — stated so a future caller can tell, from the
-sink's own row count, how much of that headroom remains, rather than
-re-deriving it from a fresh timing run every time the question comes up.
-This module does not re-measure itself; the figures above are recorded, not
-computed live.
+over ~116,000 rows / ~128MB on this box (~337k rows/sec) -- ~150ms of headroom
+under the 500ms bar. A linear projection of that rate reaches the full bar at
+~169,000 rows, on a sink growing ~17MB/day. This module does not re-measure
+itself; the figures above are recorded, not computed live.
 
 Spec backlink: state/dispatch-briefs/2026-08-29-a-zero-is-under-one-tick-not-unmeasured/C2.md
 """
@@ -109,6 +102,7 @@ from coordinator_core.telemetry.op_latency import (
     BENCHMARK,
     EXECUTION_ROUTES,
     TEST,
+    _percentile_idx,
     sink_generations,
 )
 
@@ -120,13 +114,8 @@ __all__ = [
     "EXCLUDED_ORIGINS",
     "EXCLUDED_FIXTURE_OPS",
     "UNROUTED",
-    "MEASURED_PROCESS_TIME_MS",
-    "MEASURED_ROW_COUNT",
-    "_MEASURED_ROWS_PER_SECOND",
-    "_GATE_BREAK_ROW_COUNT",
     "candidate_shards",
     "adjudicate",
-    "op_verdicts",
 ]
 
 CONFIDENCE_EXACT = "EXACT"
@@ -134,27 +123,25 @@ CONFIDENCE_EXACT = "EXACT"
 CONFIDENCE_FLOOR = "FLOOR"
 
 #: SPAWNS-UNKNOWN: the row carries no `spawns` key -- structurally the case
+#: for the warm route today (see `coordinator_core.ipc.record_op_process_time`
+#: docstring: an absent `spawns` key means "not counted here", never `0`).
 CONFIDENCE_SPAWNS_UNKNOWN = "SPAWNS-UNKNOWN"
 
+#: Minimum row count a bucket must hold before it is offered as a verdict
+#: rather than merely a figure. Mirrors
 #: `coordinator_core.telemetry.op_latency.TREND_MIN_ATTEMPTS_PER_HALF`'s own
+#: under-powered-sample discipline.
 MIN_N = 30
 
 EXCLUDED_ORIGINS = frozenset({BENCHMARK, TEST})
 
 EXCLUDED_FIXTURE_OPS = frozenset({"ping", "meter.selftest"})
 
+#: Route label for a row whose `route` field is missing or not one of
 #: `EXECUTION_ROUTES` -- kept as its own bucket rather than dropped or
+#: merged into a real route, so an unrouted population is visible rather
+#: than silently absorbed.
 UNROUTED = "unrouted"
-
-MEASURED_PROCESS_TIME_MS: float = 343.8
-MEASURED_ROW_COUNT: int = 116_000
-
-_MEASURED_ROWS_PER_SECOND: float = MEASURED_ROW_COUNT / (MEASURED_PROCESS_TIME_MS / 1000.0)
-
-#: reason `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS` mirrors it
-_BRIGHTLINE_MS: float = 500.0
-
-_GATE_BREAK_ROW_COUNT: int = int(MEASURED_ROW_COUNT * (_BRIGHTLINE_MS / MEASURED_PROCESS_TIME_MS))
 
 
 def _confidence(spawns: Optional[int]) -> str:
@@ -163,15 +150,6 @@ def _confidence(spawns: Optional[int]) -> str:
     if spawns == 0:
         return CONFIDENCE_EXACT
     return CONFIDENCE_FLOOR
-
-
-def _percentile(sorted_vals: List[float], fraction: float) -> Optional[float]:
-    if not sorted_vals:
-        return None
-    if len(sorted_vals) == 1:
-        return sorted_vals[0]
-    idx = min(len(sorted_vals) - 1, int(round(fraction * (len(sorted_vals) - 1))))
-    return sorted_vals[idx]
 
 
 def candidate_shards(repo_root: Path, *, window_start: Optional[float] = None) -> List[Path]:
@@ -335,7 +313,7 @@ def adjudicate(
                 "op": op,
                 "route": route,
                 "confidence": confidence,
-                "p95_ms": _percentile(values, 0.95),
+                "p95_ms": _percentile_idx(values, 0.95),
                 "n": n,
                 "zero_rows": bucket["zero_rows"],
                 "null_origin_rows": bucket["null_origin_rows"],
@@ -347,69 +325,3 @@ def adjudicate(
 
     figures.sort(key=lambda f: (f["op"], f["route"], f["confidence"]))
     return figures
-
-
-#: excludes `CONFIDENCE_SPAWNS_UNKNOWN`, per module docstring's two-route
-#: rule ("a SPAWNS-UNKNOWN figure never convicts on its own").
-_CONVICTING_CONFIDENCES = frozenset({CONFIDENCE_EXACT, CONFIDENCE_FLOOR})
-
-
-def op_verdicts(figures: Iterable[dict]) -> Dict[str, dict]:
-    """Per-op verdict from `adjudicate`'s figures, applying the two-route rule.
-
-    An op observed on more than one route is convicted on the WORSE
-    (higher-`p95_ms`) route among its `adjudicated`, `EXACT`/`FLOOR`
-    figures -- every figure for the op (every route, every confidence) is
-    retained under `"figures"` so neither route is silently dropped, and the
-    convicting route/confidence is named explicitly so a reader never has to
-    re-derive which one produced the verdict.
-
-    An op with no `adjudicated` `EXACT`/`FLOOR` figure -- because it has
-    only `SPAWNS-UNKNOWN` data, or only `unadjudicated` (`n < min_n`) data,
-    or both -- reports `verdict: "insufficient_confidence"` rather than a
-    numeric conviction, however large its `SPAWNS-UNKNOWN` `n` is. This is
-    the module docstring's "a SPAWNS-UNKNOWN figure never convicts on its
-    own" made concrete.
-
-    Return shape, keyed by op:
-        {op: {"op": str, "verdict": "adjudicated"|"insufficient_confidence",
-              "worst_route": str|None, "worst_confidence": str|None,
-              "p95_ms": float|None, "n": int|None,
-              "routes_considered": [str, ...], "figures": [dict, ...]}}
-    """
-    by_op: Dict[str, List[dict]] = {}
-    for fig in figures:
-        by_op.setdefault(fig["op"], []).append(fig)
-
-    result: Dict[str, dict] = {}
-    for op, figs in by_op.items():
-        convicting = [
-            f
-            for f in figs
-            if f["confidence"] in _CONVICTING_CONFIDENCES and f["verdict"] == "adjudicated"
-        ]
-        if not convicting:
-            result[op] = {
-                "op": op,
-                "verdict": "insufficient_confidence",
-                "worst_route": None,
-                "worst_confidence": None,
-                "p95_ms": None,
-                "n": None,
-                "routes_considered": [],
-                "figures": figs,
-            }
-            continue
-
-        worst = max(convicting, key=lambda f: f["p95_ms"])
-        result[op] = {
-            "op": op,
-            "verdict": "adjudicated",
-            "worst_route": worst["route"],
-            "worst_confidence": worst["confidence"],
-            "p95_ms": worst["p95_ms"],
-            "n": worst["n"],
-            "routes_considered": sorted({f["route"] for f in convicting}),
-            "figures": figs,
-        }
-    return result

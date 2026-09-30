@@ -66,7 +66,18 @@ from coordinator_core.orient_assemble.reader_result import (
 
 _UNRECOGNIZED_STATUS_LINE_CAP = 10
 
+#: Cap on rendered lines for the `ready` / `awaiting-gate` listings. Neither
+#: subcommand is bounded by the source CLI — each is a query over ALL
+#: matching handoffs — and both grow with disk contents; on this branch
+#: `ready` alone rendered 109 lines / ~19.2KB, the single largest
+#: contributor to `brief('session')`'s byte-budget overage (see
+#: state/bug-backlog/2026-08-13-session-brief-byte-budget-assertion-is-r-8733361330d6.yaml).
 #: Bounded post-hoc, the same way `_UNRECOGNIZED_STATUS_LINE_CAP` bounds
+#: the orphan census's diagnostic tier and `_suppress_live_ledger_claims`
+#: already filters this module's rendered text post-hoc rather than
+#: touching the ported query/format logic: keep the query's own first N
+#: lines (never re-sorted or re-ranked here) plus one trailing "+K more"
+#: line naming the exact CLI invocation that lists the rest.
 _READY_LINE_CAP = 15
 _AWAITING_GATE_LINE_CAP = 15
 
@@ -121,8 +132,12 @@ def _cap_awaiting_gate_listing(text: str, cap: int, *, subcommand: str) -> str:
         return f"{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
     return f"{capped_full}\n{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
 
+#: Module-locally derived repo root (precedent: readers_health_reaper.py's
 #: own `_REPO_ROOT = Path(__file__).resolve().parents[2]`) — passed
 #: EXPLICITLY to `list_orphaned` below, in-process, so the production
+#: consumer keeps AC14's explicit-repo_root discipline rather than being
+#: routed through the bin CLI's deliberately cwd-relative scope resolution
+#: (see coordinator/bin/list-orphaned-plans.py's own module docstring).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SOURCE_PATH = (
@@ -159,6 +174,7 @@ _cmd_stale_plans = _handoff_triage._cmd_stale_plans
 _cmd_ready = _handoff_triage._cmd_ready
 _cmd_awaiting_gate = _handoff_triage._cmd_awaiting_gate
 
+#: `_cmd_stale_plans` reads `args.plans_dir`/`args.threshold_days` — mirror
 #: the source CLI's own argparse defaults (`_DEFAULT_PLANS_DIR`,
 #: `_DEFAULT_STALE_THRESHOLD_DAYS`) rather than hardcoding new literals here.
 _STALE_PLANS_DEFAULT_ARGS = argparse.Namespace(
@@ -251,6 +267,17 @@ def _suppress_live_ledger_claims(
     kept: list[str] = []
     for line in lines:
         # Take the RIGHTMOST `](...)` match, not the first (Review:
+        # code-reviewer — Finding 0): `_display_handoff`'s rendered shape is
+        # `- [title](link_path) — state`, and `title` is free text that can
+        # itself contain the literal sequence `](` (e.g. a title reading
+        # `Fix ](broken) link`). A leftmost `re.search` would then extract
+        # garbage from inside the title as `link_path`, causing
+        # `resolve_claim_state` to look up a bogus path, find no ledger
+        # claim, and fail to suppress a genuinely live-claimed baton — the
+        # exact false-negative this suppression exists to prevent. The real
+        # link is always the LAST `](...)` occurrence on the line, since
+        # nothing follows it but the fixed ` — {state}` suffix (state is
+        # drawn from a closed vocabulary that never contains `](`).
         matches = list(_LINK_PATH_RE.finditer(line))
         if matches:
             link_path = matches[-1].group(1)

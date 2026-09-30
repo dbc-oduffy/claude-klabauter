@@ -157,6 +157,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
 
     # baton_class resolved over the DISTINCT `kind` values only, per
+    # frontmatter.baton_class's own docstring instruction to callers wanting
+    # to avoid repeated schema-file I/O in a tight loop — one dict
+    # comprehension over the corpus's distinct kinds (not O(records) reads
+    # of the ~60KB vendored schema), then joined back per record below.
     distinct_kinds = {rec["frontmatter"].get("kind") for rec in records}
     baton_class_by_kind = {kind: baton_class(kind) for kind in distinct_kinds}
 

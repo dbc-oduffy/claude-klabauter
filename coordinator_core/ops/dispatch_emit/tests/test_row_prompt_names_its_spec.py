@@ -97,7 +97,18 @@ def test_emitted_script_carries_the_spec_pointer_for_every_row():
     assert "id: C11" in script
 
 
+# ---------------------------------------------------------------------------
+# The absolute-vs-relative decision point.
+#
+# Review finding (slice 3, 2026-08-19): the repo-relative conversion originally
+# lived inline in `emit_script` guarded by `if repo_root is not None`, so a
+# None repo_root -- documented as reachable per-request in op.py -- or a plan
 # on a different drive silently put an ABSOLUTE drive-lettered path into every
+# executor prompt. That is the AC12 concrete-path-citation hazard the code's
+# own comment claimed to be avoiding, and nothing went red.
+#
+# Negative-spec: `_spec_path_for_prompt` must never return an absolute path.
+# ---------------------------------------------------------------------------
 
 from pathlib import Path
 

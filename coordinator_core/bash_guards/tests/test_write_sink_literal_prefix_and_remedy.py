@@ -55,7 +55,9 @@ _GOVERNED_MD = "CLAUDE" + ".md"
 _GOVERNED_DOCTRINE = "em-operating-" + "doctrine.md"
 _GOVERNED_ROLE = "agent-role-" + "dispatched.md"
 
+#: The identifier tuple this guard's caller resolves and threads down (module
 #: docstring, "GOVERNED IDENTIFIER SOURCE"). Lowercased, as the caller
+#: supplies it.
 _IDENTIFIERS = (
     _GOVERNED_MD.lower(),
     _GOVERNED_DOCTRINE.lower(),

@@ -32,10 +32,25 @@ import pytest
 from coordinator_core.ops.workday_complete_backfill_scan import main
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: this file's `main()` calls genuinely shell out to
+# `git log --after/--before` (see `_window_args` below) to build per-day commit
+# windows -- the property under test IS git's own date-window resolution and
+# local-timezone interpretation, which no mock stands in for. The module port's
 # own oracle-parity contract requires this. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+# `_window_args` passes bare (offset-less) date-times to `git log --after/--before`,
 # which git's date parser interprets in the INVOKING PROCESS's local system timezone
+# (documented git behavior) — a faithfully-reproduced oracle seam, not a bug (see the
+# module docstring's negative-spec list). Every commit fixture in this file is stamped
+# with an explicit `Z` (UTC) offset, so the window computation and the fixture commit
+# instants only agree deterministically when the test process itself runs in UTC. Pin
+# it here so results are host/CI-timezone-independent regardless of the local operator's
+# or CI runner's `TZ`. Confirmed empirically (2026-07-19 review): without this pin,
+# `TZ=Pacific/Auckland` flips 5 of 11 tests in this file (window-boundary and
+# root-commit-fallback both drift with the host offset).
 os.environ["TZ"] = "UTC"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -447,9 +462,22 @@ def test_empty_output_when_no_commit_window(repo, monkeypatch, capsys):
     assert out == ""
 
 
+# ---------------------------------------------------------------------------
+# DEC-5: per-day predicate semantics — a day carrying BOTH artifact types
+# (changelog block + daily summary, per the 2026-08-06 AND fix) is "covered,"
 # even if they belong to one machine (M1) and a DIFFERENT machine (M2) has
+# genuinely older, unrecorded co-committed work on that same day. This is the
 # INTENTIONAL semantic shift from the pre-de-machining behavior: retiring
 # per-machine EXCLUSIVITY ATTRIBUTION wholesale (2026-07-19 PM ruling) means
+# the prior TM5/TM6 "reconcile-only machine" false-negative guard rail, and
+# the finer-grained per-machine coverage check it protected against, are BOTH
+# gone — coverage is now day-level, full stop. See DEC-5
+# (docs/plans/2026-07-19-de-machine-backfill-scan-per-day.md) and the
+# 2026-07-01 multi-machine-coverage blind-spot-1 plan
+# (docs/plans/2026-07-01-workday-complete-multi-machine-coverage.md) /
+# 2026-06-30 machine-a incident it documents, whose per-machine coverage check
+# this scanner deliberately no longer performs.
+# ---------------------------------------------------------------------------
 
 
 def test_dec5_any_block_covers_the_day_even_with_older_unrecorded_peer_work(repo, monkeypatch, capsys):
@@ -468,3 +496,99 @@ def test_dec5_any_block_covers_the_day_even_with_older_unrecorded_peer_work(repo
 
     assert rc == 0
     assert f"{day}\t" not in out
+
+
+def _cover_day(repo: Path, day: str, anchor_line: Optional[str]) -> None:
+    body = "summary\n" if anchor_line is None else f"summary\n{anchor_line}\n"
+    (repo / "archive" / "daily-summaries" / f"{day}.md").write_text(body)
+    wc = repo / "state" / "week-changelog"
+    wc.mkdir(parents=True, exist_ok=True)
+    (wc / f"{day}.md").write_text("changelog block\n")
+
+
+def _rows(out: str, day: str) -> List[List[str]]:
+    return [ln.split("\t") for ln in out.splitlines() if ln.startswith(f"{day}\t")]
+
+
+def test_tip_align_anchor_before_later_same_day_commit_emits_row(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    early = _commit_on(repo, day, "early", fname="e.txt", time_="08:00:00Z")
+    later = _commit_on(repo, day, "later", fname="l.txt", time_="18:00:00Z")
+    _cover_day(repo, day, f"covered_tip_sha: {early}")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    rows = _rows(out, day)
+    assert len(rows) == 1
+    assert rows[0][3] == later
+
+
+def test_tip_align_anchor_at_day_tip_emits_no_row(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    _commit_on(repo, day, "early", fname="e.txt", time_="08:00:00Z")
+    tip = _commit_on(repo, day, "later", fname="l.txt", time_="18:00:00Z")
+    _cover_day(repo, day, f"covered_tip_sha: {tip}")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+
+    assert rc == 0
+    assert _rows(capsys.readouterr().out, day) == []
+
+
+def test_tip_align_anchor_descending_from_tip_emits_no_row(repo, monkeypatch, capsys):
+    day, next_day = "2026-03-10", "2026-03-11"
+    _commit_on(repo, day, "day tip", fname="d.txt")
+    nxt = _commit_on(repo, next_day, "next day tip", fname="n.txt")
+    _cover_day(repo, day, f"covered_tip_sha: {nxt}")
+    _cover_day(repo, next_day, f"covered_tip_sha: {nxt}")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=2, today="2026-03-12")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert _rows(out, day) == []
+    assert _rows(out, next_day) == []
+
+
+def test_tip_align_anchor_on_diverged_branch_while_main_holds_tip_emits_no_row(
+    repo, monkeypatch, capsys
+):
+    day = "2026-03-10"
+    root = _commit_on(repo, "2026-03-08", "shared root", fname="root.txt")
+    m2 = _branch_commit_from(repo, f"work/m2/{day}", root, day, "08:00:00Z", "m2 work", "m2.txt")
+    _git(repo, "checkout", "main", "-q")
+    _commit_on(repo, day, "main tip", fname="mt.txt", time_="20:00:00Z")
+    _cover_day(repo, day, f"covered_tip_sha: {m2}")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+
+    assert rc == 0
+    assert _rows(capsys.readouterr().out, day) == []
+
+
+def test_tip_align_anchor_none_emits_no_row_and_warns(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    _commit_on(repo, day, "a commit", fname="a.txt")
+    _cover_day(repo, day, "covered_tip_sha: none")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert _rows(captured.out, day) == []
+    assert any(day in ln and "WARN" in ln for ln in captured.err.splitlines())
+
+
+def test_tip_align_anchor_only_inside_fence_is_treated_as_missing(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    sha = _commit_on(repo, day, "a commit", fname="a.txt")
+    _cover_day(repo, day, f"```\ncovered_tip_sha: {sha}\n```")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert _rows(captured.out, day) == []
+    assert any(day in ln and "WARN" in ln for ln in captured.err.splitlines())

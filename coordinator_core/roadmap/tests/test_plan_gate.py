@@ -445,7 +445,12 @@ def test_narrow_scan_agrees_with_the_general_parser(subtree):
     )
 
 
+#: Every block-scalar shape `_parse_yaml_mapping_block` and `_scan_fields`
+#: must agree on: folded and literal, with each chomping indicator and with
+#: none (`_consume_block_scalar` does not distinguish `-`/`+`/bare in its
 #: RETURNED text — trailing blank body lines are always dropped — so this
+#: list exists to pin that non-distinction on both readers, not to expect a
+#: different result per form).
 _BLOCK_SCALAR_FORMS = ["|", "|-", "|+", ">", ">-", ">+"]
 
 
@@ -1115,6 +1120,7 @@ def test_a_hold_is_not_an_edge_and_does_not_hold_its_dependents(tmp_path):
     dependent = _by_id(report, "dependent-1")
 
     # The dependent is held by `held-1` being UNPLANNED, which it genuinely is —
+    # not by the hold, which contributes no edge of its own.
     assert dependent["blocked_by"] == ["held-1"]
     assert [b["blocker"] for b in dependent["blockers"]] == ["held-1"]
     assert report["counts"]["held"] == 1

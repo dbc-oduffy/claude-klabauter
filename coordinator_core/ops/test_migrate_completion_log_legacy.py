@@ -159,7 +159,11 @@ def test_env_var_root_used_when_no_explicit_flag(tmp_path, capsys, monkeypatch):
     assert "Moved:  1" in out
 
 
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
 # test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_completion_log_legacy.py::main -> _git_mv)
+# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):

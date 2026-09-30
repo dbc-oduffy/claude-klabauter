@@ -157,7 +157,9 @@ def test_rerun_after_first_pass_is_idempotent(tmp_path, monkeypatch, capsys):
     assert "Skipped: 0" in out or "Skipped: 1" in out
 
 
+# ---------------------------------------------------------------------------
 # Negative-spec: FNM_PATHNAME glob-pattern bug reproduced verbatim
+# ---------------------------------------------------------------------------
 
 
 def test_two_segment_daily_convention_branch_is_not_matched_bash_oracle_bug(
@@ -254,7 +256,13 @@ def test_push_cleanup_without_remote_does_not_crash(tmp_path, monkeypatch, capsy
 def test_push_cleanup_attempts_remote_push_when_a_rename_actually_happens(
     tmp_path, monkeypatch, capsys
 ):
+    # Two-level branches never collide case-insensitively with themselves the
+    # way `test_single_segment_mixed_case_branch_is_renamed_or_skipped_by_fs`
     # documents for a bare `work/MixedCase` -- but per the FNM_PATHNAME
+    # negative-spec, two-level names aren't enumerated at all. So exercise
+    # the RENAME + push-cleanup path with a distinct sibling-free
+    # single-segment name and accept the FS-driven SKIP alternative too, same
+    # as the sibling rename test above.
     repo = tmp_path / "repo"
     _mkrepo(repo)
     assert _git(repo, "branch", "work/PushMixedCase").returncode == 0
@@ -263,7 +271,9 @@ def test_push_cleanup_attempts_remote_push_when_a_rename_actually_happens(
 
     assert rc == 0
     if "RENAME: work/PushMixedCase → work/pushmixedcase" in out:
+        # No remote configured -> ls-remote fails (non-zero), so no
         # REMOTE-DELETE line, but the REMOTE-PUSH attempt still happens and
+        # warns rather than crashing.
         assert "REMOTE-DELETE" not in out
         assert "REMOTE-PUSH: origin/work/pushmixedcase" in out
         assert "WARN: push of 'work/pushmixedcase' returned non-zero" in out
@@ -292,7 +302,11 @@ def test_bad_arg_short_circuits_before_git_root_lookup():
     assert rc == 1
 
 
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
 # test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_branch_canonical_case.py::_migrate -> _git)
+# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch, capsys):

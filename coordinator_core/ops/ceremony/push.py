@@ -1144,6 +1144,9 @@ def _emit_push_policy_line(
           gate's own text through, the two surfaces would drift in wording
           while agreeing in policy -- the failure this function exists to
           prevent (see `PushOutcome.message`'s own docstring).
+      "accepted-remote-prefixed" -- `branch_gate()` accepted an
+          `origin/`-prefixed work branch and returned a notice. `message` is
+          REQUIRED and printed VERBATIM; the push proceeds unchanged.
       "declined-unresolvable" -- the branch itself could not be resolved
           (detached HEAD, or the `git` call failed), so there was no branch
           to hand `branch_gate()` and therefore no gate message to carry.
@@ -1173,6 +1176,12 @@ def _emit_push_policy_line(
         if message is None:
             raise ValueError(
                 "_emit_push_policy_line: kind='declined-policy' requires message"
+            )
+        print(message, file=sys.stderr)
+    elif kind == "accepted-remote-prefixed":
+        if message is None:
+            raise ValueError(
+                "_emit_push_policy_line: kind='accepted-remote-prefixed' requires message"
             )
         print(message, file=sys.stderr)
     elif kind == "declined-unresolvable":
@@ -1651,7 +1660,9 @@ def push_with_retry(
         _emit_push_policy_line("declined-unresolvable")
         return PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
 
-    should_push, skip_message = branch_gate(branch)
+    should_push, gate_message = branch_gate(branch)
+    if should_push and gate_message is not None:
+        _emit_push_policy_line("accepted-remote-prefixed", message=gate_message)
     if not should_push:
         if allow_protected_branch:
             # AC14 -- the gate would have declined this branch, and the
@@ -1664,11 +1675,11 @@ def push_with_retry(
                 reason=protected_branch_override_reason,
             )
         else:
-            _emit_push_policy_line("declined-policy", message=skip_message)
+            _emit_push_policy_line("declined-policy", message=gate_message)
             return PushOutcome(
                 exit_code=0,
                 skipped=["push:branch-policy"],
-                message=skip_message,
+                message=gate_message,
             )
 
     # AC7 -- resolved only now, after both gates above passed. `None` (no

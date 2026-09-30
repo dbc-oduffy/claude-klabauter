@@ -64,12 +64,19 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional,
 
 from coordinator_core.session_attribution import GitLogFailed
 
+#: Same DI contract session_attribution.GitRunner documents: a "never
+#: raises, returns (rc, stdout, stderr)" helper. Injected rather than owned
+#: here so a caller's existing subprocess conventions (Windows
 #: CREATE_NO_WINDOW, stdin=DEVNULL, etc.) and its existing test-time
+#: monkeypatch hook keep working unchanged.
 GitRunner = Callable[[List[str], Optional[str]], Tuple[int, str, str]]
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 
+#: Record separator for the one-walk format string below. `\x1e` framing (not
+#: line-based splitting) is what lets a multi-valued Session-Id trailer —
 #: which `%(trailers:...,valueonly)` emits as ONE LINE PER MATCHING TRAILER —
+#: be detected as ambiguous instead of silently truncated to its first line.
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
 
@@ -232,6 +239,40 @@ def bulk_grep_attributed_shas(
         argv.append(f"--since={since}")
     argv.append(range_str)
     rc, out, err = run(argv, cwd)
+    if rc != 0:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def shas_touching_paths(
+    range_str: str,
+    scope_paths: FrozenSet[str],
+    cwd: str,
+    run: GitRunner,
+    since: Optional[str] = None,
+) -> List[str]:
+    """Every non-merge commit in the window that touched one of `scope_paths`,
+    in `git log` order (newest first) — ONE pathspec-limited `git log`, no
+    per-commit diff output.
+
+    The pathspec limits the history walk itself, so the cost tracks the
+    commits touching the scope rather than every commit in the window;
+    `--name-only` would diff every commit in the window and is deliberately
+    absent. `scope_paths` are exact repo-relative forward-slash paths, passed
+    after `--` as `:(literal)` pathspecs so a glob character in a path cannot
+    widen the match. An empty scope spawns nothing. `since` has
+    `bulk_grep_attributed_shas`'s argv semantics. Returns `[]` on any git
+    failure, never raising.
+    """
+    if not scope_paths:
+        return []
+    argv = ["git", "log", "--no-merges", "--format=%H"]
+    if since is not None:
+        argv.append(f"--since={since}")
+    argv.append(range_str)
+    argv.append("--")
+    argv.extend(f":(literal){p}" for p in sorted(scope_paths))
+    rc, out, _err = run(argv, cwd)
     if rc != 0:
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]

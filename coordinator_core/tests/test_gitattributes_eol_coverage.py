@@ -90,8 +90,16 @@ CORRECTNESS_PINS: dict[str, str] = {
     ".ps1": "text eol=crlf",
 }
 
+# Tracked extensions deliberately carrying no pin, each because a mangled line
+# ending in that class is cosmetic rather than correctness-affecting: the
+# consumer is a parser (Python, YAML, JSON, Markdown, TOML, JS) or a
+# human, and every one of them reads LF and CRLF identically.
+#
 # `.ps1` used to be listed here as an acknowledged JUDGEMENT call. It has since
 # moved to CORRECTNESS_PINS — the judgement was wrong, because the class's
+# correctness constraint is not PowerShell's parser (which is indeed
+# ending-agnostic) but the launcher-parity byte compare. See the module
+# docstring.
 ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
     {
         "",  # extensionless: hook shims, CLI entrypoints, LICENSE-likes
@@ -124,10 +132,26 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
     }
 )
 
+# What the `i/` column must read for a file resolving ANY `text` pin.
+#
+# Determined empirically rather than assumed, because the intuitive expectation
+# is wrong: `git ls-files --eol` reports `i/lf` for all 395 tracked `*.cmd`
 # files despite their `text eol=crlf` pin. `eol=` sets the CHECKOUT direction
+# only — `text` normalizes to LF on the way INTO the object store in BOTH
+# directions, so the index expectation is `i/lf` for an `eol=crlf` class just
+# as much as for an `eol=lf` one. Asserting `i/crlf` for the `.cmd` class would
+# have made this guard permanently red against a perfectly correct repo.
+#
+# `i/none` is conformant rather than an exemption: git reports it for a blob
+# carrying no line terminator at all — a single-line `.sha` written without a
+# trailing newline. There is no ending to mangle, so it cannot be the defect
+# this guard exists to catch. The failure states are `i/crlf` (a CRLF blob that
+# predates its pin, never renormalized) and `i/mixed`.
 INDEX_CONFORMANT: frozenset[str] = frozenset({"i/lf", "i/none"})
 
 # The `w/` column a conformant CHECKOUT produces, per pin direction — this is
+# the half `eol=` actually governs. `w/none` joins each set for the same
+# no-line-terminator reason as `i/none` above.
 WORKTREE_CONFORMANT: dict[str, frozenset[str]] = {
     "text eol=lf": frozenset({"w/lf", "w/none"}),
     "text eol=crlf": frozenset({"w/crlf", "w/none"}),

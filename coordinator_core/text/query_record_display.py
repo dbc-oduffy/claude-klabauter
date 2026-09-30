@@ -48,7 +48,9 @@ from typing import Callable, Optional
 _DisplayFn = Callable[[str, dict], str]
 
 
+# ---------------------------------------------------------------------------
 # Per-type renderers — each transcribed verbatim from its TYPE_DISPLAY entry.
+# ---------------------------------------------------------------------------
 
 
 def _display_handoff(link_path: str, fm: dict) -> str:

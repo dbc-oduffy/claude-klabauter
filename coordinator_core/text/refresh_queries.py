@@ -163,9 +163,19 @@ MUTATES = ["**/*.md"]
 BEGIN_PREFIX = "<!-- BEGIN query:"
 END_MARKER = "<!-- END query -->"
 
+# A `roadmap_id=` clause on a `handoff` callout is, by construction, a
 # roadmap STUB-INDEX chunk-status tracker (every such callout on disk in
 # this repo is exactly that shape — `state/roadmap/*/STUB-INDEX.md`) rather
+# than a "what's currently live" query. Mirrors the union
+# `coordinator_core.roadmap.audit`'s `_audit1_stub_coverage` et al. already
+# perform explicitly (`query_records("handoff", ...) + query_records(
+# "handoff-archived", ...)` over the same `roadmap_id`-scoped `where`) — see
+# `_run_query_records_native`'s archive-union branch below, which reuses the
 # same two calls rather than widening `_TYPE_TO_GLOB['handoff']` itself
+# (that glob is depended on elsewhere — session_hierarchy_derive.py,
+# ceremony/renderers.py, roadmap/number_stubs.py — for strictly-live
+# semantics; narrowing this fix to the roadmap_id-filtered case keeps those
+# callers untouched).
 _ROADMAP_ID_WHERE_RE = re.compile(r"(?:^|[\s(])roadmap_id=")
 
 EXCLUDED_DIRS = frozenset({"node_modules", ".git", "archive"})
@@ -367,7 +377,11 @@ def _run_query_records_native(
         raise QueryRecordsTransportError(f"native format_records crashed: {exc}") from exc
 
 
+# ---------------------------------------------------------------------------
+# Unit 2 — refresh/check logic + orchestration
+# (processFile, resolveFilesOpt, main in the oracle —
 #  coordinator/bin/refresh-queries.js L175-432)
+# ---------------------------------------------------------------------------
 
 
 def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResult:

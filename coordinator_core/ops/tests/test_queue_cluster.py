@@ -121,7 +121,9 @@ def _init_repo(root) -> None:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
+# ---------------------------------------------------------------------------
 # Signal enum pin -- same mechanical teeth as C2's STOP_WORDS pin
+# ---------------------------------------------------------------------------
 
 
 def test_signal_enum_pinned() -> None:
@@ -238,7 +240,10 @@ class TestSignalSetParameter:
         assert raised, "an unrecognized signal name must raise InvalidSignalError"
 
 
+# ---------------------------------------------------------------------------
 # Caller-supplied floor -- default MIN_CLUSTER_SIZE == 3; a lower floor
+# surfaces smaller clusters when explicitly requested.
+# ---------------------------------------------------------------------------
 
 
 class TestFloorParameter:

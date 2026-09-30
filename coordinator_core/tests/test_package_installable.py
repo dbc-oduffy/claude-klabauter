@@ -167,7 +167,13 @@ def test_non_editable_install_exposes_deep_subpackage_outside_repo_cwd(
     venv.create(venv_dir, with_pip=True)
     python = _venv_python(venv_dir)
 
+    # Install from a pristine tracked-files export in tmp_path, never from
     # _PROJECT_ROOT directly: this is the leg that actually catches
+    # coordinator_core.contract silently going missing (see module
+    # docstring), so it must not be able to false-green off a stale
+    # repo-root build/ or *.egg-info/ that still has the old package layout
+    # baked in. See _pristine_source_export for why this is a working-tree
+    # copy and not `git archive HEAD`.
     src_export = tmp_path / "src"
     _pristine_source_export(_PROJECT_ROOT, src_export)
 

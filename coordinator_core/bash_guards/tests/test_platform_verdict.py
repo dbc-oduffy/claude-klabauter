@@ -83,7 +83,12 @@ def test_shape_helper_allows_regardless_of_os_name(monkeypatch):
 
 
 def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch):
+    # Same process, same imported module object -- flipping os.name between
     # two calls must flip the LOW-LEVEL platform_verdict's verdict both
+    # times, proving the read happens at call time (never cached on a prior
+    # import or a prior call). platform_verdict_for_shape no longer varies
+    # by host at all (DR-280), so this property is exercised against
+    # `platform_verdict` directly instead.
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "nt")
     first = pv.platform_verdict("deny text", "advise text")
@@ -177,9 +182,17 @@ def test_no_override_env_var_influences_anything(monkeypatch):
 
 
 def test_declared_registry_key_env_override_does_not_influence_verdict(monkeypatch, tmp_path):
+    # `machine_resolver.registry_get` has
     # its own MACHINE_LOCAL_<KEY> env-override rung, checked BEFORE the TOML
+    # file, which is a live third override surface for this specific
+    # security-sensitive key unless `_declared_host_is_windows` reads the
+    # TOML directly instead of going through `registry_get`. This is real,
+    # not a real host on this machine confirms it: with the pre-fix code,
     # MACHINE_LOCAL_COORDINATOR_HOST_IS_WINDOWS=false silently downgrades
     # every PLATFORM_CONDITIONED_DENY guard from DENY to ADVISE on a genuine
+    # Windows box. Uses a real empty registry dir (no declared value) so the
+    # only signal in play is the env var; asserts sniffing (os.name) alone
+    # decides the verdict in both directions, in both env-var polarities.
     monkeypatch.setattr(
         "coordinator_core.machine_resolver.registry_dir", lambda: tmp_path
     )

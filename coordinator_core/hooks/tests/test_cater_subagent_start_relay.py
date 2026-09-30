@@ -37,7 +37,10 @@ from coordinator_core.hooks.cater_subagent_start import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 ELIGIBLE_TYPE = "coordinator:code-reviewer"
+#: Bare-hex, unnamed-agent id shape (>=12 hex chars) -- accepted by both
+#: track_dispatched_agents._valid_agent_id and subagent_sandbox.engine's
 #: _canonical_agent_id / _BARE_HEX_RE, and passed through UNCHANGED by both
+#: (no teammate-form normalization to reason about here).
 AGENT_ID = "abcdef0123456789"
 SESSION_ID = "session-relay-1"
 

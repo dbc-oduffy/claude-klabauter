@@ -43,7 +43,11 @@ import pytest
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -119,7 +123,25 @@ class TestSubagentOriginatedDenied:
         _allow(monkeypatch, "CLAUDE.md", tool_name="Read")
 
 
+# ---------------------------------------------------------------------------
+# AC8 regression pin -- an EM-acquired grant, written via the DEFAULT
+# env-driven acquisition path (``write_claude_md_write_grant`` with no
 # explicit ``session_id``), still authorizes a SUBAGENT-shaped payload on
+# this guard's real ``check_claude_md_write_grant`` predicate -- not the
+# module-monkeypatched shortcut every other test in this file uses. This is
+# the inheritance property the whole plan exists to preserve: EM and
+# dispatched-subagent turns resolve to the SAME session id, so the grant the
+# EM wrote is visible to the guard evaluation a subagent's own tool call
+# triggers, with no separate wiring. Paired with the identical payload
+# absent any grant, asserting DENY, so the allow leg cannot pass for the
+# wrong reason (a mis-shaped payload silently tripping an earlier allow
+# branch). ``test_subagent_write_allowed_with_live_grant`` above already
+# pins the ALLOW shape against a directly-monkeypatched
+# ``check_claude_md_write_grant`` -- what it does NOT cover is the real
+# acquisition path (``write_claude_md_write_grant`` -> disk ->
+# ``check_claude_md_write_grant``) nor the paired no-grant negative; this
+# class adds exactly that missing half.
+# ---------------------------------------------------------------------------
 
 
 def _make_repo(tmp_path):

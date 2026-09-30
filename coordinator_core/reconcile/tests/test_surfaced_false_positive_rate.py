@@ -118,6 +118,10 @@ def test_commit_reality_ambiguous_attribution_rows_are_tagged() -> None:
     assert all(not r["is_false_positive"] for r in ambiguous_rows)
 
 
+#: C6's own live pinning tests (test_gate_eval.py::
+#: TestSatFamilyOracleAsymmetryFalsePositivesGoToZero) prove these 6
+#: detector_bug-tagged rows no longer surface an asymmetry finding against
+#: the real, symmetric sat graph -- referenced by name, not imported, per
 #: this module's negative-spec (see module docstring, C12 ADDITION).
 _FIXED_DETECTOR_BUG = "asymmetry_detector_bare_stub_id"
 

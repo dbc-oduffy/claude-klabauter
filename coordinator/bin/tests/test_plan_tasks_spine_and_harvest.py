@@ -75,8 +75,17 @@ import sys
 import tempfile
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+# Declared, not excused: the harvest CLI tests below spawn a real python3
+# subprocess to exercise `coordinator-harvest-deferrals`'s actual exit-code/
+# stdout contract end to end (idempotency counts, dedup notes) -- no
+# in-process call observes that subprocess-boundary behaviour. Each test
+# also `git init`s its own `mkdtemp` fixture dir per test (see the module
+# docstring: exercises the git-root fallback leg), not hoisted to module
+# scope, since every test isolates its own harvest state under
 # QUEUE_APPEND_OUTPUT_ROOT/LESSON_PROMOTE_OUTBOX_ROOT rooted at that dir.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 
 try:
     import yaml as _yaml
@@ -103,6 +112,8 @@ if _LIB_DIR not in sys.path:
 from coordinator_data_root import data_root  # noqa: E402
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
+# schemas/ is DoE-resident post-2026-07-22 executable-surface migration (this
+# script moved to claude-klabauter; schemas/ did not) — resolve via the shared
 # two-rung helper rather than a bare _COORDINATOR_DIR-relative path.
 _PLAN_TASKS_SCHEMA = os.path.join(str(data_root("schemas")), "plan-tasks.schema.json")
 _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
@@ -155,13 +166,19 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     env = dict(os.environ)
     env["QUEUE_APPEND_OUTPUT_ROOT"] = tmpdir
     outbox_dir = os.path.join(tmpdir, "state", "lessons-outbox")
+    # Must EXIST before the spawn. coordinator-lesson-promote refuses an
     # absent LESSON_PROMOTE_OUTBOX_ROOT under the system temp dir — it cannot
+    # distinguish a never-created fixture dir from a swept tmp_path held by a
+    # long-lived process, and recreating it would file the entry where nobody
+    # looks. Latent until 2026-09-20: the child resolved to the published
     # launcher, which carried no LESSON_PROMOTE_OUTBOX_ROOT handling at all,
+    # so the refusal never ran and the write went to the live sibling repo.
     os.makedirs(outbox_dir, exist_ok=True)
     env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
     env["COORDINATOR_WARM"] = "0"
     # Avoid any ambient CONTENT_ROOT/REPO_CONTENT_ROOT/CLAUDE_KLABAUTER_ROOT bleeding writes
     # out of the isolated tmpdir. REPO_CONTENT_ROOT is content_root()'s rung-1b
+    # ammo and is exported in a login shell on a provisioned machine —
     # stripping only CONTENT_ROOT leaves the sibling repo one rung away.
     env.pop("CONTENT_ROOT", None)
     env.pop("REPO_CONTENT_ROOT", None)
@@ -239,6 +256,8 @@ def test_zero_fenced_blocks_is_warn_and_skip() -> None:
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_ZERO_BLOCKS, dry_run=True)
     try:
         # Parser-locate rule: zero fenced blocks -> WARN-AND-SKIP (exit 0) for
+        # the harvest, per the pinned contract (fail-loud is the
+        # coverage-checker's posture, not this CLI's).
         if result.returncode != 0:
             raise AssertionError(
                 name + ": " +
@@ -447,7 +466,25 @@ def test_ledger_expansion_row_count_exceeds_task_count() -> None:
         raise AssertionError(name + ": " + f"expected derived non-deferred row-count >= 3 (C1, C2a, C2b), got {len(non_deferred)}")
 
 
+# ===========================================================================
+# (c) plan-coverage-checker FLAGS a deferred-without-pm_approved fixture row.
+#
+# plan-coverage-checker is an agent-prompt (agents/plan-coverage-checker.md),
+# not executable code — there is no CLI to invoke against a fixture. The
+# mechanically-testable proxy is the pinned schema's OWN cross-field rule:
+# plan-tasks.schema.json's allOf/if-then conditional requires pm_approved
+# whenever deferred is true. D3 in the valid fixture (deferred:true,
 # pm_approved:false) legitimately VALIDATES against the base per-property
+# schema (pm_approved:false is a valid boolean) but the malformed-row.md
+# fixture's D1 (deferred:true, pm_approved:true, but MISSING change_kind and
+# surface) fails validation outright — that is the more directly testable
+# assertion this suite can make: an incomplete deferred row does not
+# silently validate. For the "unratified but otherwise well-formed" shape
+# (this suite's D3), we assert against the schema's documented conditional
+# directly via jsonschema, which is the same conditional-shape enforcement
+# that backs the checker's Lens 2b prose rule (agents/plan-coverage-checker.md
+# Phase 3.5 Step 3).
+# ===========================================================================
 
 
 def test_schema_conditional_requires_pm_approved_when_deferred() -> None:
@@ -501,6 +538,8 @@ def test_schema_conditional_allows_ratified_deferral() -> None:
 
 def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
     name = "test_coverage_checker_prompt_documents_the_exact_flag_text"
+    # agents/ is DoE-resident post-2026-07-22 executable-surface migration —
+    # resolve via the shared two-rung helper rather than a bare
     # _COORDINATOR_DIR-relative path.
     checker_path = os.path.join(str(data_root("agents")), "plan-coverage-checker.md")
     if not os.path.isfile(checker_path):

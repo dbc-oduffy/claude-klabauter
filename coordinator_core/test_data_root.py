@@ -167,7 +167,11 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     (plugin_root / "coordinator" / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
     (plugin_root / "coordinator" / "snippets").mkdir(parents=True)
 
+    # coordinator_content_root() is NOT stubbed — it IS the C1B ladder this test
+    # proves engine-side gets "for free" via delegation (per C2's finding:
+    # this module needs no ladder of its own). Its rung-1 env override
     # (REPO_CONTENT_ROOT) is cleared so it does not short-circuit ahead of the
+    # ladder this test targets.
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CONTENT_ROOT", raising=False)
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_core_miss)

@@ -175,7 +175,17 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.git.git_dir import resolve_git_common_dir
 
+#: Review: review-integrator -- Finding 3/4 (nit, mirrors guard_grep_via_
+#: bash.py's own precedent): these three attributes are vestigial in
+#: `bash_guards` -- `dispatch.py` imports `check` explicitly and hardcodes
+#: ordering + `fail_closed` in its `guard_chain` literal rather than doing
+#: attribute-based discovery (only `write_guards/tests/`, a different guard
+#: family, reads `CLASS`). `CLASS = "hard-deny"` here does NOT mean this
+#: guard fails closed -- see the module docstring's own Negative-spec
+#: ("Does NOT fail closed") and this file's `fail_closed=False` registration
 #: in `dispatch.py`. `PRIORITY` governs nothing here either; `41` happening
+#: to sort ahead of `guard_grep_via_bash.py`'s `42` is coincidental, not
+#: enforced -- see `dispatch.py`'s `guard_chain` list for the actual order.
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
@@ -183,6 +193,9 @@ PRIORITY = 41
 _DISABLE_ENV_VAR = "COORDINATOR_DISABLE_INPROCESS_SEARCH"
 
 #: SC-DR-009 (DoE `scoped-safety-commits.md`): the ONLY acceptable session-id source
+#: for session-scoped state. `.current-session-id` is documented last-writer-wins
+#: under concurrent sessions and is never an acceptable fallback for this latch -- see
+#: the module docstring's "Session latch" section.
 _SESSION_ID_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
 
 _LATCH_MARKER_NAME = "inprocess-search-footer-seen"
@@ -267,6 +280,10 @@ def _footer(cwd: str) -> str:
             pass
 
     # States the identical fact `_ANSWERED_MARKER` carries standalone (see that
+    # constant's own comment), plus "recognized as a search" -- a PINNED
+    # substring (test_guard_inprocess_search.py, test_alternative_liveness_gate.py)
+    # that discriminates this full paragraph from the latched marker; keep it
+    # verbatim if this paragraph is edited again.
     full = (
         "[Answered in-process: recognized as a search, no subprocess spawned.]"
     )
@@ -355,7 +372,24 @@ def check(
         return None
     if rendered is None:
         return None
+    # footer FIRST, rendered SECOND: the substitution contract must be the
+    # first thing an agent reads, before anything that could otherwise be
+    # misread as a leaked answer beneath a denial -- see the module
+    # docstring's "Composed message leads with the contract, not the output".
+    #
+    # `tool_input` is guaranteed a dict with a non-empty `command` here --
+    # `_extract_command` (above) already returned None otherwise, and this
+    # branch is unreachable without a truthy `command`. `updated_input` is a
+    # SHALLOW COPY of the original `tool_input` with only `command` replaced
+    # by `true` (the coreutils no-op: exits 0, no output, negligible fork
     # cost against the search already computed) -- `rewrite_input` REPLACES
+    # the whole tool input object, so every other key (description, timeout,
+    # run_in_background, ...) must be carried over unchanged. Not the shell
+    # builtin `:` -- `_alternative_liveness.py`'s own guard-message-liveness
+    # gate (`test_alternative_liveness_gate.py`) treats `updatedInput.command`
+    # as a suggested alternative and resolves its argv[0] on PATH; `:` is a
+    # bash builtin with no on-PATH binary and reads DEAD there, while `true`
+    # is a real coreutils binary every supported platform ships.
     tool_input = payload.get("tool_input") or {}
     updated_input = dict(tool_input)
     updated_input["command"] = "true"

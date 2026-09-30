@@ -215,7 +215,11 @@ def run_stop_family_guards(
     return combined_exit, combined_text
 
 
+#: Enrolment registry: populated by whichever later wave lands the four
+#: Stop-family guard bodies this registry enrols. Left empty here -- see
 #: this module's own docstring, and `guard_runner.REAL_GUARD_REGISTRY`'s
+#: identical reasoning, for why an empty registry is the correct landing
+#: state for this chunk.
 REAL_STOP_FAMILY_REGISTRY: Tuple[RegisteredStopFamilyGuard, ...] = ()
 
 

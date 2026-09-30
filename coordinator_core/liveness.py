@@ -46,8 +46,21 @@ from coordinator_core.session import liveness as _session_liveness
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
 # Lib path resolution — RETAINED for its own dedicated coverage in
+# tests/test_liveness.py (test_lib_path_*), and for callers that still want the
+# on-disk successor path (e.g. diagnostics). Production liveness no longer
+# shells to any coordinator-
+# session lib — it delegates to the native session.* port above. The
+# 3-rung __file__-walk + resolve-coordinator-clone subprocess ladder this
+# function used to run is GONE: coordinator-session.sh was retired
+# repo-wide (migrated to claude-klabauter's coordinator/lib/coordinator_session.py,
+# not to a DoE-side sibling __file__ can walk to), so every one of those
+# rungs always missed. The ladder collapses to a single call through the
+# canonical engine-root resolver (coordinator_core.engine_root) — no
+# __file__-walking, no hardcoded sibling names, no subprocess spawn (and
 # therefore no 15s hang path if CLAUDE_KLABAUTER_ROOT can't be resolved).
+# ---------------------------------------------------------------------------
 _CACHED_LIB: Optional[str] = None
 
 
@@ -73,8 +86,31 @@ def _lib_path() -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Short-TTL per-process cache for resolve_live_session_ids() (C12 — originally
 # Windows bash-spawn cost hardening; RETAINED post-native-port).
+#
+# The native live_session_ids() pass is a single in-process meta.json scan — no
+# per-dir subprocess spawns — so the raw cost is far lower than the old bash
+# shell-out. The TTL cache is kept anyway because the archival/pickup hot path
+# (archive_handoffs._is_terminal) calls this once per scanned handoff, and the
+# underlying 30-minute recency window makes sub-second staleness immaterial: the
+# cached frozenset IS the exact value the uncached pass would return, just reused
+# within one scan pass. cs_claim_holder_live is deliberately NOT cached — its
+# callers (session.reap) take two sequential fresh reads of the SAME claim_path
+# for TOCTOU detection, and caching would silently defeat that race check.
+# ---------------------------------------------------------------------------
+#
 # The cache key is the RESOLVED SESSIONS DIR, not a bare timestamp (break-class
+# fix, 2026-08-07; cross-repo memo `2026-08-07-coordinator-content-repo-em-scoped-commit-
+# calls-a-live-peer-dead-and-reapable`). This function is zero-arg and resolves
+# its registry from the PROCESS cwd, so in a process that touches two repos --
+# ordinary in a fleet where one engine serves sibling clones -- an unkeyed
+# cache served repo A's live set as the answer for repo B for up to the TTL.
+# Every one of B's live peers then reads not-live, which downstream renders as
+# a confident DEAD verdict on a live session. Keying on the sessions dir makes
+# a cross-repo hit a MISS rather than a wrong answer; an unresolvable dir
+# (empty key) is cached separately and equally correctly.
 _LIVE_IDS_CACHE_TTL_SEC = 2.0
 _live_ids_cache: Optional[Tuple[str, float, FrozenSet[str]]] = None
 

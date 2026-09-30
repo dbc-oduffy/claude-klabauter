@@ -482,9 +482,12 @@ def _resolve_content_root_rungs_1_to_275() -> Tuple[Optional[str], Optional["Doe
 # Module-scope memo replacing the retired `os.environ["REPO_CONTENT_ROOT"]` export as
 # the same-process re-resolution guard (see module docstring § DECISION REVERSAL).
 # `_CONTENT_ROOT_RESOLVED` distinguishes "not yet attempted" from "attempted, resolved to
+# None" so a hard failure is not re-shelled once per call either.
 _RESOLVED_CONTENT_ROOT: Optional[str] = None
 _CONTENT_ROOT_RESOLVED: bool = False
 
+# Separate memo pair for `coordinator_content_root_in_process()` -- holds the full
+# `(root, rung)` tuple. Never read or written by the full-ladder pair above
 # (see module docstring, "IN-PROCESS ENTRY POINT").
 _IN_PROCESS_CONTENT_ROOT: Tuple[Optional[str], Optional["DoeRootRung"]] = (None, None)
 _IN_PROCESS_CONTENT_ROOT_RESOLVED: bool = False
@@ -554,6 +557,8 @@ def coordinator_content_root() -> Optional[str]:
     global _RESOLVED_CONTENT_ROOT, _CONTENT_ROOT_RESOLVED
 
     # Rung 1: REPO_CONTENT_ROOT already set in environment (operator override).
+    # Checked ahead of the memo: the env var is the authoritative override, and a
+    # cached value must never shadow it.
     existing = os.environ.get("REPO_CONTENT_ROOT", "")
     if existing:
         return existing

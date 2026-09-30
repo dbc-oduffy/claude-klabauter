@@ -13,10 +13,15 @@ from coordinator_core.contract.decision_object.judgment import (
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
 from coordinator_core.ops.queue_family import load_family_records
 
+#: This reader's own cadence name — one of the five surfaces enumerated by
 #: `coordinator_core.test_backlog_grind_assemble._CADENCES`
+#: (`"bug-blitz"`, `"mise-en-place"`, `"bug-sweep"`, `"debt-triage"`,
+#: `"dogfood"`). Self-gating below compares `cadence` against this literal;
+#: every other cadence gets an empty `ReaderResult` from this module.
 _CADENCE = "bug-sweep"
 
 #: The `queue_family.FAMILY_TO_RECORD_TYPE` key for bug-sweep's own queue
+#: surface (`state/bug-backlog/`) — the only family this reader touches.
 _BUG_BACKLOG_FAMILY = "bug-backlog"
 
 _OPEN_STATUS = "open"

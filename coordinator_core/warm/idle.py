@@ -115,7 +115,13 @@ ZERO_SERVED_DEADLINE_SECS = 90.0
 
 ServedCountFn = Callable[[], int]
 
+# The seam the server binds its superseded-generation check to (module
+# docstring): a zero-arg callable returning True iff this server's own
+# generation token no longer matches the current engine fingerprint.
 # A CALLABLE rather than a bool for the same reason `ServedCountFn` is --
+# the predicate must read live state at check time, never a snapshot taken
+# at server boot, since the whole point is to observe a change that
+# happens mid-life.
 TokenStaleFn = Callable[[], bool]
 
 _clock_lock = threading.Lock()

@@ -95,7 +95,12 @@ class TestPhraseOverlapPrecisionRegression:
         hit = next(c for c in candidates if c["signal"] == "phrase-overlap")
         assert "propagation ask needs a worked" in hit["excerpt"]
 
+    # The two tests above pin the exact anecdote
+    # ("a cross-repo memo") that motivated the 4->5 n-gram size change. This pair
     # generalizes the assertion to the PROPERTY the fix is meant to hold, using a
+    # different recurring generic phrase built from actual coordinator jargon (not
+    # the anecdote's vocabulary), and a distinct rare long shared run -- so passing
+    # both is evidence the fix generalizes rather than evidence it fits one file.
 
     def test_does_not_fire_on_generic_coordinator_jargon_alone(self, tmp_path):
         target = _write(

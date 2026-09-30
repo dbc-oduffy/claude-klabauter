@@ -167,3 +167,29 @@ def test_budget_exhaustion_still_yields_failed_not_unconfirmed(tmp_path, monkeyp
     assert outcome.unconfirmed == []
     assert outcome.failed
     assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_FAILED
+
+
+def test_accepted_remote_prefixed_notice_printed_once_and_push_attempted(
+    tmp_path, monkeypatch, capsys
+):
+    repo = init_push_repo(tmp_path)
+    notice = "coordinator-auto-push: pushing origin/work/x (notice)"
+    monkeypatch.setattr(push_mod, "branch_gate", lambda b: (True, notice))
+    push_calls: list = []
+
+    def _ok_push(*a, **kw):
+        push_calls.append(1)
+        return GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "push", _ok_push)
+    monkeypatch.setattr(git_native, "push_refspec", _ok_push)
+
+    push_mod.push_with_retry(repo)
+
+    assert capsys.readouterr().err.count(notice) == 1
+    assert push_calls
+
+
+def test_accepted_remote_prefixed_arm_raises_without_message():
+    with pytest.raises(ValueError):
+        push_mod._emit_push_policy_line("accepted-remote-prefixed")

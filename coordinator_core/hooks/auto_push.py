@@ -87,6 +87,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.daily_branch import has_remote_prefix, is_work_branch
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.push_stall import PUSH_STALL_MARKER
 from coordinator_core.win_portability import no_console_creationflags
@@ -822,9 +823,11 @@ def resolve_branch(repo_root: str | None) -> str | None:
 
 
 def branch_gate(branch: str) -> tuple[bool, str | None]:
-    """Return (should_push, skip_message).
+    """Return (should_push, message).
 
-    `work/*` -> proceed (True, None). `migration/*|release/*|feature/*` ->
+    message is a notice to print when pushing, or the skip reason when not.
+    `work/*` -> proceed (True, None). `origin/work/*` (one leading `origin/`)
+    -> proceed with a rename notice (True, notice). `migration/*|release/*|feature/*` ->
     skip with a stderr message (False, message). Anything else (including
     `main`) -> skip with a stderr message naming the branch and the work/*-only
     doctrine (False, message) -- this is the canonical/unrecognized catch-all,
@@ -869,7 +872,13 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     feature above -- the skip message names it explicitly rather than
     silently dropping it.
     """
-    if branch.startswith("work/"):
+    if has_remote_prefix(branch):
+        bare = branch[len("origin/"):]
+        return True, (
+            f"coordinator-auto-push: pushing {branch} (name carries a remote "
+            f"prefix). Rename: git branch -m {branch} {bare}"
+        )
+    if is_work_branch(branch):
         return True, None
     if branch.startswith(("migration/", "release/", "feature/")):
         msg = (
@@ -1015,6 +1024,35 @@ def _module_provenance() -> str:
     return f"module={module_path} interp={interp} python={version}"
 
 
+# git's own words when an https push reaches the credential step and nothing
+# answers: no helper, no askpass, prompts disabled (stdin is DEVNULL). Matched on
+# the prompt wording, never on `_PAT_AUTH`'s broader "could not read from remote".
+_PAT_NO_CREDENTIAL_PROMPT = re.compile(r"could not read (Username|Password) for ", re.IGNORECASE)
+_PAT_HTTPS_USERINFO = re.compile(r"^https?://[^/@]+@", re.IGNORECASE)
+_PAT_HTTPS_URL = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _credentialless_https_remote(repo_root: str) -> bool:
+    """True when `origin` is an https remote with no credential source at all:
+    no userinfo in the URL, no `credential.*helper` in any config scope, no
+    `GIT_ASKPASS`.
+
+    Such a push cannot authenticate from this process on any retry. In a cloud
+    container the session's real pushes travel a proxy path this probe never
+    uses, so the failure is a property of the probe, not of the repo's
+    publication. A remote that HAS a helper (an expired token on a workstation)
+    returns False and still logs: that one is a genuine failure.
+
+    Reads through `_run_git`, the module's one sanctioned spawn seam.
+    """
+    if os.environ.get("GIT_ASKPASS", "").strip():
+        return False
+    url = _run_git(repo_root, ["remote", "get-url", "origin"])
+    if not url or not _PAT_HTTPS_URL.match(url) or _PAT_HTTPS_USERINFO.match(url):
+        return False
+    return not _run_git(repo_root, ["config", "--get-regexp", r"^credential\..*helper$"])
+
+
 def log_failure(
     repo_root: str,
     branch: str,
@@ -1079,6 +1117,14 @@ def log_failure(
     a separate, open question (the 2026-08-26 measurement it cites reads
     p50 753.9ms for a leg that now floors an order of magnitude higher).
     """
+    # A no-credential https push is not a publication failure (see
+    # `_credentialless_https_remote`): no row and no sidecar, so the log's counts
+    # keep meaning "a push that could have worked did not".
+    if _PAT_NO_CREDENTIAL_PROMPT.search(f"{first_err}\n{stderr_text}") and _credentialless_https_remote(
+        repo_root
+    ):
+        return
+
     git_dir = resolve_git_common_dir(repo_root)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     forensic_path = git_dir / f"push-stderr-{stamp}.log"

@@ -4123,22 +4123,19 @@ class TestDispatchHandoffSupersedePredecessor:
             )
         assert not successor_abs.exists()
 
-    def test_never_claimed_predecessor_refuses_before_dispatch_and_names_dr242(
+    def test_never_claimed_predecessor_is_not_prefiltered_the_op_choke_point_owns_dr242(
         self, tmp_path, monkeypatch
     ):
-        """C5/AC8 negative case -- the entire point of the DR-242 gate: a
-        predecessor that was never claimed or shipped is refused BEFORE
-        `handoff.archive_transition` is ever dispatched, even though it is
-        named as this successor's `continued_into`/predecessor -- exactly
-        the successor-named-child evidence DR-242 (`docs/decisions/DR-242-
-        successor-named-child-is-not-evidence-of-succ.md`) forbids treating
-        as sufficient on its own.
+        """The wrapper composes `housekeeping.cycle` for a never-claimed
+        predecessor rather than refusing before dispatch: DR-242 is enforced by
+        `handoff_archive_transition`'s `mode == "supersede"` choke point, and
+        DR-242 Amendment A2 section 7.3 lets that op admit an apply-minted
+        successor there. A wrapper-side pre-filter would shut that door.
 
-        The refusal DEGRADES as of 2026-08-03 -- the op is still never
-        dispatched, and the already-scaffolded successor is now left where d1
-        put it. Why deleting it was break-class:
-        `baton_assemble/tests/test_apply_degrade_no_compensation.py`."""
-        successor_rel = "state/handoffs/2026-07-28-successor-refused.md"
+        The op's own refusal (clause 3 failing) is pinned by
+        `test_apply_minted_successor_attestation.py`, and the degrade that
+        follows it by `test_apply_degrade_no_compensation.py`."""
+        successor_rel = "state/handoffs/2026-07-28-successor-admitted.md"
         successor_abs = _render_real_scaffold(tmp_path / successor_rel)
 
         _write_artifact(tmp_path / "state/handoffs/predecessor.md", ["title: never claimed"])
@@ -4147,7 +4144,7 @@ class TestDispatchHandoffSupersedePredecessor:
 
         def _fake_invoke(op_name, params, repo_root):
             calls.append((op_name, params))
-            return {"exit_code": 0, "superseded": True, "moved": True}
+            return {"exit_code": 0, "transition": {"superseded": True, "moved": True}}
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
 
@@ -4155,9 +4152,14 @@ class TestDispatchHandoffSupersedePredecessor:
             ["state/handoffs/predecessor.md", successor_rel, successor_rel], tmp_path
         )
 
-        assert calls == []
+        assert [name for name, _ in calls] == ["housekeeping.cycle"]
+        assert calls[0][1]["transition"] == {
+            "handoff_path": "state/handoffs/predecessor.md",
+            "mode": "supersede",
+            "continued_into": successor_rel,
+        }
+        assert "degraded" not in result
         assert successor_abs.exists()
-        assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
 
 
 #: A predecessor whose FRONTMATTER carries no claim at all -- the exact
@@ -5600,9 +5602,10 @@ class TestReplayAfterPartialAbortBeforeD6:
 class TestDr242IsNotReachableViaAlreadySatisfied:
     """AC-5. Two independent teeth: resumption itself refuses a predecessor that
     was never claimed or shipped, and d6 carries no `already_satisfied` at all,
-    so its own DR-242 gate cannot be skipped past."""
+    so the op's DR-242 choke point cannot be skipped past. Reaching it with an
+    apply-minted successor is what DR-242 Amendment A2 admits."""
 
-    def test_never_claimed_predecessor_is_still_refused_end_to_end(
+    def test_never_claimed_predecessor_is_admitted_end_to_end_by_the_attested_succession(
         self, tmp_path, monkeypatch
     ):
         never_claimed = [
@@ -5613,13 +5616,16 @@ class TestDr242IsNotReachableViaAlreadySatisfied:
         harness = _ReplayHarness(tmp_path, monkeypatch, predecessor_fm=never_claimed)
         exit_code, report = harness.run()
 
-        # The REFUSAL is what AC-5 pins and it is intact: no succession edge is
-        # written. As of 2026-08-03 it degrades rather than aborting the mint --
-        # `baton_assemble/tests/test_apply_degrade_no_compensation.py`.
+        # A never-claimed predecessor is not refused when apply itself minted
+        # the successor: d6 attests the succession and the op's choke point
+        # admits it (DR-242 Amendment A2 section 7.3). `replayed == []` still
+        # holds -- d6 carries no `already_satisfied`, so it ran rather than
+        # being skipped. The refusal for a successor that fails the identity
+        # check is pinned by `test_apply_minted_successor_attestation.py`.
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert harness.continued_into() is None
-        assert harness.archived_predecessor() is None
-        assert [d["directive_id"] for d in report["degraded"]] == ["d6"]
+        assert harness.continued_into() is not None
+        assert harness.archived_predecessor() is not None
+        assert report["degraded"] == []
         assert report["replayed"] == []
 
     def test_d6_never_carries_already_satisfied_for_any_predecessor_state(
@@ -6101,12 +6107,13 @@ class TestAdoptionIsNotASuccessionConclusion:
         assert d6["already_satisfied"] is False
         assert "already_satisfied_reason" not in d6
 
-    def test_a_never_claimed_predecessor_is_still_refused_end_to_end_under_adoption(
+    def test_a_never_claimed_predecessor_is_not_adopted_and_the_fresh_mint_is_attested(
         self, tmp_path, monkeypatch
     ):
-        """The carve-out cannot launder a DR-242 refusal: an adoption for a
-        never-claimed predecessor is not even offered, and d6 refuses regardless.
-        """
+        """The carve-out cannot launder a DR-242 gate: an adoption for a
+        never-claimed predecessor is not even offered, so the re-run mints a
+        fresh successor and d6 attests THAT one (DR-242 Amendment A2 section
+        7.3), never the stranded file."""
         never_claimed = [
             line
             for line in _PREDECESSOR_FM
@@ -6123,19 +6130,20 @@ class TestAdoptionIsNotASuccessionConclusion:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert [d["directive_id"] for d in report["degraded"]] == ["d6"]
-        # The refusal's substance: no succession edge, no archival.
-        assert harness.continued_into() is None
-        assert harness.archived_predecessor() is None
+        assert report["degraded"] == []
+        # The succession edge names the fresh mint, not the stranded survivor.
+        successor = harness.continued_into()
+        assert successor is not None
+        assert Path(successor).name != stranded[0]
+        assert harness.archived_predecessor() is not None
         # d6's own cleanup destroyed neither the operator's prose (it is
         # pristine-gated, and this file is not pristine) nor this run's mint.
         # KNOWN RESIDUE, asserted rather than hidden: adoption is not offered
         # for a never-claimed predecessor -- this class's whole subject -- so
         # the re-run mints a FRESH successor beside the stranded one and both
-        # survive. Pre-2026-08-03 the fresh mint vanished, but only as a side
-        # effect of d6 destroying it: that is the defect, not a cleanup policy.
+        # survive.
         assert stranded[0] in harness.live_handoffs()
-        assert len(harness.live_handoffs()) == 3
+        assert sorted(harness.live_handoffs()) == sorted([stranded[0], Path(successor).name])
 
 
 class TestD6CleanupNeverDeletesOperatorContent:

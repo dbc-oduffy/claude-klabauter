@@ -3,7 +3,7 @@ coordinator_core.ops.fleet.migrate_handoff_vocabulary — fleet.migrate_handoff_
 
 Purpose: one-shot corpus migrator for the DR-084 handoff-lifecycle vocabulary
 (``docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md`` § C7). The
-dual-read tolerance restored in ``coverage.py._parse_handoff_consumed_by``,
+dual-read tolerance restored in ``coverage.py._parse_handoff_claimed_by``,
 ``ops/ceremony/resolver.py``, and ``session_hierarchy/derive.py`` (fix commit
 ``9d00b459``) is transitional, not permanent — its named exit condition is that
 every consumer repo's on-disk handoff corpus is migrated to the new vocabulary AND
@@ -200,7 +200,18 @@ _KNOWN_DEPLOYMENT_STATES: Set[str] = {
     "abandoned", "continued", "closed",
 }
 
+# deployment_state: superseded is INVALID on every vocabulary (old or new) — it is
+# the handoff STATUS axis's retired 2026-06-26 token (DoE ruling: retirement
+# replacement expression is status: consumed + deployment_state: abandoned)
+# written onto the wrong axis. Observed in example-retrieval-repo's corpus on records dated
+# AFTER that retirement (2026-07-03..07-14) — fleet-migration fallout, not a
+# data-entry error local to that repo. Recognized (not fail-loud) so it can be
 # REPAIRED (normalized to "abandoned" per the 2026-06-26 ruling, then split by
+# the same succession-proof rule) rather than reported unclassifiable — but
+# tracked as its own category (plan["repairs"]) so a reviewer never mistakes a
+# repair for an ordinary vocabulary rename. Distinct from (and must never be
+# confused with) status: superseded, the permanently grandfathered STATUS-axis
+# value on archived records, which this module never touches.
 _DEPLOYMENT_STATE_REPAIRABLE: Set[str] = {"superseded"}
 
 _STATUS_OLD_TO_NEW: Dict[str, str] = {"active": "open", "consumed": "claimed"}
@@ -208,7 +219,16 @@ _STATUS_OLD_TO_NEW: Dict[str, str] = {"active": "open", "consumed": "claimed"}
 _FIELD_RENAMES = (("consumed_at", "claimed_at"), ("consumed_by", "claimed_by"))
 
 # Succession edges only — mirrors archive_handoffs.py's _HEIR_EDGE_KINDS, PLUS
+# origin_handoff (added 2026-07-23 per example-cockpit-repo's dr084 memo). A
+# `kind: spinoff` handoff carries `predecessor: none` BY DESIGN (coordinator
+# spinoff-handoff schema — see DoE `docs/wiki/spinoff-handoffs.md` §
+# "predecessor is none by design") and names its parent in `origin_handoff:`
+# instead, so without this edge every spinoff succession looks like an orphan.
 # origin_handoff is a registered walkable edge in dag.EDGE_KIND_META, so
+# referenced_by handles it with no other change once it's unioned in here.
+#
+# forked_from is branch-point/derivation ancestry (DR-224), not succession, and
+# is deliberately excluded: a spinoff does not retire its origin.
 _HEIR_EDGE_KINDS = {"predecessor", "additional_predecessors", "origin_handoff"}
 
 MUTATES = ["state/handoffs/**/*.md", "archive/handoffs/**/*.md"]
@@ -264,7 +284,11 @@ def _key_line_re(key: str) -> "re.Pattern[str]":
 
 def _rename_fm_key(fm_text: str, old_key: str, new_key: str) -> str:
     pattern = _key_line_re(old_key)
+    # negative-spec: the replacement MUST stay a callable. `re` processes backslash
     # escapes in a replacement TEMPLATE, so a template built from a runtime value is a
+    # latent crash (`\U`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\<digit>`) and a
+    # latent mis-group against any backreference. Enforced by
+    # coordinator_core/tests/test_re_sub_replacement_template_is_literal_or_callable.py.
     new_text, count = pattern.subn(lambda _m: new_key + ":", fm_text, count=1)
     if count == 0:
         raise ValueError(f"_rename_fm_key: {old_key!r} not found in frontmatter")

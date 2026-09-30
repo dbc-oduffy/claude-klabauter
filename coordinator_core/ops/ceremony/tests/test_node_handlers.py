@@ -329,7 +329,14 @@ def test_handle_d_defaults() -> None:
     assert node["tail_step"] is False
 
 
+# ---------------------------------------------------------------------------
+# Regression: bug-blitz audit — STEP_2B/STEP_4B F→D reclassification
+# state/bug-backlog/2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml
+# ---------------------------------------------------------------------------
+# The audit found STEP_2B/STEP_4B classified "F" with no wsc_commit
 # transcriber — the same disk-first / silent-drop shape STEP_1B/STEP_2_4B had
+# before their Option B reclassification. This locks the same fix for these
+# two steps: they emit as D-nodes via handle_d, not F-nodes via emit_f.
 
 
 @pytest.mark.parametrize("step_id", [STEP_2B, STEP_4B])
@@ -352,7 +359,9 @@ def test_emit_x_node_shape(step_id: str) -> None:
     assert len(node["missing_signal"]) > 0
 
 
+# Add direct positive-path test for emit_x via a synthetic
 # X_MISSING_SIGNALS injection.  _ALL_X_STEPS is [] (all X-steps reclassified D); the
+# parametrized tests collect 0 cases.  This direct test keeps the happy path covered.
 
 
 def test_emit_x_direct_with_synthetic_registration(monkeypatch) -> None:

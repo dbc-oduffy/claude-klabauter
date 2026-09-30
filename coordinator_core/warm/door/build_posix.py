@@ -46,6 +46,9 @@ from .build import write_sidecar
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
 _HEADER = _HERE / "door_core.h"
+#: Generated X-macro table of forwarded env-var names, `#include`d by
+#: `door_posix.c` (and `door.c`) -- a real compile input, so it belongs in
+#: `sources` exactly like `_HEADER`, same reasoning as `build.py ::
 #: _ENV_SET_HEADER`.
 _ENV_SET_HEADER = _HERE / "door_env_set.h"
 
@@ -119,6 +122,10 @@ def write_provenance(
         "engine_root": str(Path(engine_root).resolve()),
         "platform": sys.platform,
         # Describes THIS ARTIFACT, not the source. It stays False on a fresh
+        # build by design: a successful compile is not a successful
+        # invocation, and this builder does not invoke what it produces. The
+        # SOURCE is no longer unverified -- see the module docstring -- so the
+        # note no longer claims it has never run anywhere.
         "verified": False,
         "verified_note": (
             "compiled here, not invoked here. This builder does not exercise "
@@ -169,8 +176,19 @@ def build(
     resolved_root = str(Path(engine_root).resolve())
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    # `-std=c11` selects STRICT ISO C on glibc, which hides every POSIX
+    # declaration behind the feature-test macros: `readlink`, `sigemptyset`,
     # `sigaddset`, `CLOCK_MONOTONIC` and `O_CLOEXEC` are all undeclared on
+    # Linux even though `<unistd.h>`, `<signal.h>`, `<time.h>` and `<fcntl.h>`
+    # are included -- and under C99-and-later rules that is an error, not a
+    # warning, so the door did not compile there at all. Darwin's libc exposes
+    # them regardless of dialect, which is why macOS never saw it.
+    #
+    # Restricted to non-Darwin deliberately: on macOS, defining
     # `_POSIX_C_SOURCE` switches the headers INTO strict-POSIX mode and hides
+    # the Darwin extensions this file uses under `__APPLE__`
+    # (`<mach-o/dyld.h>`'s `_NSGetExecutablePath`). Leaving it undefined there
+    # keeps the macOS compile byte-identical.
     posix_source_flags = [] if sys.platform == "darwin" else ["-D_POSIX_C_SOURCE=200809L"]
     cmd = [
         compiler_path,

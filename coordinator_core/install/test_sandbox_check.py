@@ -78,7 +78,9 @@ def test_run_missing_executable_converts_to_synthetic_rc_127_not_an_exception():
     assert cp.returncode == 127
 
 
+# ---------------------------------------------------------------------------
 # resolve_doe_clone — REPO_CONTENT_ROOT precedence over machine-local
+# ---------------------------------------------------------------------------
 
 
 def test_resolve_doe_clone_prefers_env_var(monkeypatch):
@@ -186,7 +188,9 @@ def test_main_unknown_argument_exits_transport_code(monkeypatch):
     assert rc == 3
 
 
+# ---------------------------------------------------------------------------
 # run_all -- graceful degrade when DoE clone is unresolved (FAMILY-I contract)
+# ---------------------------------------------------------------------------
 
 
 def test_run_all_never_raises_when_doe_clone_unresolved(monkeypatch):
@@ -231,7 +235,11 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     )
     (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
     (clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl").write_text(
+        # Minimal stand-in for the real DoE template, in its DR-087 shape:
+        # the pointer is read at CALL time and handed to claude-author through
         # the explicit `--content-root` argv seam, and REPO_CONTENT_ROOT is never
+        # exported (DR-087 demoted the pointer mirror out of rung-1
+        # authority). Variable expansion only -- no hardcoded machine path.
         "claude() {\n"
         '  _r="$(cat "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/machine-local/.coordinator-content-root" 2>/dev/null)"\n'
         '  if [ -z "$_r" ]; then\n'
@@ -278,13 +286,23 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         "AC5: resolve_coordinator_clone.resolve_content_root()" in line and "returned expected" in line
         for line in r.lines
     )
+    # The synthetic sandbox has no positive hook-generation marker, so
     # gen_settings_hooks DECLINES to write — reported as a SKIP, not a FAIL.
+    # Until 2026-08-14 this was asserted as "settings.json hooks array empty",
+    # i.e. the validator called the generator's correct refusal a defect.
     assert any(
         "hook seed declined by the generator" in line and "skipped" in line
         for line in r.lines
     )
     assert not any("settings.json hooks array empty" in line for line in r.lines)
+    # AC2 is derived against the DR-087 argv seam: a conforming shim hands
+    # claude-author `--content-root <pointer>` and exports nothing. Both rows PASS
     # here, so an AC2 re-derived against REPO_CONTENT_ROOT would go RED on a
+    # correct install — which is the failure this fixture exists to catch.
+    # `run_all`'s own AC2 cold-shell leg sources a POSIX `.sh` shim under a
+    # hand-built `/usr/bin:/bin` PATH — not applicable on Windows (see
+    # sandbox_check.py's own `os.name == "nt"` SKIP branch there), so neither
+    # PASS row is ever emitted on this host.
     if os.name != "nt":
         assert any(
             "AC2 cold-shell: claude-author --content-root resolved from pointer alone" in line for line in r.lines

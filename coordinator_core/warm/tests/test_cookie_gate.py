@@ -125,6 +125,8 @@ def test_a_repeated_cookie_header_is_refused(live_listener):
     assert _still_serving(port, token)
 
     # CASE-FOLDING, ASSERTED RATHER THAN ASSUMED. `get_all` is case-insensitive
+    # per the stdlib, which is what makes one lower-cased duplicate still count
+    # as a repeat -- the refusal leans on that and should say so.
     lowered = _request(
         port,
         supervisor.HOOK_PATH,
@@ -163,6 +165,10 @@ def test_an_unreadable_expected_cookie_refuses_every_caller(live_listener, tmp_p
     finally:
         restored = cookie.mint(tmp_path)
     # THE STILL-SERVING HALF, ON THE BRANCH THAT MOST NEEDS IT. This is the
+    # one refusal driven by the SERVER's own state rather than the caller's
+    # header, so "did the listener survive it" is least obvious here and was
+    # the assertion originally missing. Checked after the mint, because
+    # `_still_serving` presents a cookie and there has to be one to present.
     assert _still_serving(port, restored)
 
 

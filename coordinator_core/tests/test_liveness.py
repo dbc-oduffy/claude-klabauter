@@ -165,7 +165,20 @@ def test_resolve_live_session_ids_uncached_degrades_to_empty_on_error(monkeypatc
     assert _liveness._resolve_live_session_ids_uncached() == frozenset()
 
 
+# ---------------------------------------------------------------------------
+# cs_claim_holder_live() — confirmed-alive / confirmed-dead / indeterminate
+#
+# Spec backlink: cross-repo/inbox/2026-07-14-claude-central-em-claim-lock-fleet-fanout-accept.md
+# ("One flag back to your engine tier — the exception-swallow is on YOUR side")
+#
+# 2026-07-21 fix: cs_claim_holder_live previously caught every exception from
+# the native port and returned False — indistinguishable from a confirmed-dead
+# verdict, and downstream that False authorizes claim takeover / reaping of a
 # session that might still be alive. It must now PROPAGATE an indeterminate/
+# errored read rather than collapse it to a dead verdict; callers own the
+# fail-closed-to-keep decision (see liveness.py's module + function docstrings
+# and each caller's own try/except).
+# ---------------------------------------------------------------------------
 
 
 def test_cs_claim_holder_live_confirmed_alive(monkeypatch):

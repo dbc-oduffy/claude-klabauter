@@ -82,7 +82,13 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+# Documented consumes-manifest members that are never a `directives[].cli`
 # value because they are invoked by a DISPATCHED WORKER rather than the
+# assembler itself. Empty today -- no current census row is worker-only
+# invoked (unlike workday's `coordinator-queue-append`). Extend by NAME,
+# with a one-line reason, if C2d's review-dispatch shell (or any other
+# submodule) turns out to name a CLI that only a dispatched review worker
+# invokes -- never widen this to a blanket exemption.
 _DISPATCHED_WORKER_ONLY_MANIFEST_MEMBERS: frozenset[str] = frozenset()
 
 _REVIEW_FIELDS_PRESENT = {
@@ -154,7 +160,13 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
             }
         ],
         "plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
+        # AC15's plugin-root sweep axis needs `build_plan_reversibility_
+        # eligibility_directive` to actually fire (gated on a resolved
+        # governing plan path, § Approach table) -- `directives_completion.
         # _KEY_GOVERNING_PLAN_PATH`, a key this sweep did not previously
+        # supply (a genuine new conditional axis, per module docstring's
+        # Coverage caveat, not something `_plugin_cli_reachable` alone
+        # could paper over).
         "governing_plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
         "orientation_cache_exists": True,
         "pinboard_note": "contract-test pinboard note",

@@ -522,10 +522,16 @@ def test_derive_progress_rung1_selects_the_newest_week_changelog(tmp_path):
     wc_dir = Path(record_homes.home_dir(str(repo_dir), "week-changelog"))
     wc_dir.mkdir(parents=True)
 
-    (wc_dir / "2026-07-06.md").write_text(
+    # Both dates sit inside the freshness bound, so only iteration order — not
+    # the staleness gate — decides which file is selected. Hardcoded dates age
+    # out of the bound and route the test through the git-log rung.
+    now = datetime.now(timezone.utc)
+    older = (now - timedelta(days=10)).strftime("%Y-%m-%d")
+    newer = now.strftime("%Y-%m-%d")
+    (wc_dir / f"{older}.md").write_text(
         "## Highlights\n- The stale one.\n", encoding="utf-8"
     )
-    (wc_dir / "2026-08-24.md").write_text(
+    (wc_dir / f"{newer}.md").write_text(
         "## Highlights\n- The current one.\n", encoding="utf-8"
     )
 

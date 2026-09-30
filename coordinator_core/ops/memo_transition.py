@@ -191,11 +191,19 @@ from coordinator_core.wire_paths import rel_id
 _CREATIONFLAGS = no_console_creationflags()
 
 
+# ---------------------------------------------------------------------------
 # Containment gate (SECURITY)
+#
 # UDS-only + MUTATING op; caller is a local same-user coordinator session with
+# direct FS access; containment is defense-in-depth, not an escalation boundary.
+# ---------------------------------------------------------------------------
 
 _ALLOWED_SUBTREES = ("cross-repo", "state")
+# Bound the containment-check subprocess the same way the
+# sibling workday_complete_step2_5_dirty_tree.py's _run_git helper does: timeout so a
+# hung git process can't wedge the asyncio.to_thread pool indefinitely, stdin=DEVNULL so
 # an interactive prompt never blocks on the daemon's inherited stdin, and CREATE_NO_WINDOW
+# so Windows callers don't flash a console per memo transition.
 _GIT_TIMEOUT_SECS = 30
 
 
@@ -281,7 +289,27 @@ def _attach_surface_advisory(reply: dict, params: dict | None, content: str, git
     return reply
 
 
+# ---------------------------------------------------------------------------
+# Commit ownership (DR-273) — the terminal write's own follow-up commit.
+#
+# memo.transition takes commit ownership of the frontmatter mutation it just
+# wrote, using the git root `_containment_check` already resolves (the
+# consumer-agnostic contract stays intact — the caller's `repo_root` remains
+# unused; this derives its own root from `params["memo"]`, not the caller's
+# worktree). See docs/decisions/DR-273-memo-transition-commit-ownership.md.
+#
+# Routed through `git_native.commit_authored_content` (DR-272 § 3, the
+# hash-object-populated private-index commit form C2 of
+# docs/plans/2026-08-06-writer-side-commit-ownership-lock-gap.md adds) rather
+# than `commit_scoped` — `commit_scoped`'s AGREE branch reads `path` off the
 # WORKTREE to decide what to stage, which is exactly the "commit whatever
+# happens to be on disk, not what this invocation authored" vector that plan
+# closes (Defect 1). `commit_authored_content` takes the bytes THIS
+# invocation's own `locked_rmw` call produced (or, on the resume branch
+# below, the SAME lock-held-read bytes already validated against the verb's
+# expected terminal state) as an explicit `content` parameter and never
+# re-reads `memo_path` off the worktree at all.
+# ---------------------------------------------------------------------------
 
 def _commit_terminal_write(
     memo_path: Path, git_root: Path, verb: str, content: str,
@@ -348,9 +376,25 @@ def _commit_terminal_write(
             f"commit failed: {commit_result.stderr}"
         )
 
+    # Release this session's claim over the path the commit just landed
+    # (`session/scope.py :: release_committed_claims`). `commit_authored_
+    # content` releases nothing itself -- the release is hand-wired per
+    # commit route, and this route had no wiring, so a transitioned memo
+    # left an `R`-less claim behind on every call.
+    #
     # GATED ON `attributed_session_id`, NOT ON THE ENV FALLBACK, and that is
+    # the point. `commit_authored_content` falls back to a blind env-var read
+    # when this is None, which is exactly the foreign-session-id exposure
+    # state/bug-backlog/2026-08-18-scoped-git-commit-stamps-a-foreign-
+    # session-id-8d21f0c4e7b9.yaml names. Stamping a trailer with a wrong id
     # is a mis-attribution; RELEASING A CLAIM under a wrong id would drop a
+    # claim that is not ours to drop, which is worse. So only the two verbs
+    # that carry a caller-supplied session id (`claim`/`resolve`) release
+    # here; the rest keep the pre-existing behaviour of releasing nothing.
+    #
     # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
+    # _release_committed_claims_step`): runs AFTER the commit has landed and
+    # cannot fail it -- the commit is already history by this line.
     if attributed_session_id:
         try:
             session_scope.release_committed_claims(
@@ -445,7 +489,21 @@ def _resume_probe_and_commit(
     return _attach_surface_advisory(reply, params, content, git_root)
 
 
+# ---------------------------------------------------------------------------
+# Dup-key guard (C5)
+#
+# Port of countStatusKeys from coordinator-content-repo coordinator/bin/memo-transition.js:136-143.
+# Boundary lookahead /^status:(?=[ \t]|\r?$)/mg — prevents status:open (no space) from
+# being counted, per the node oracle fix (code-reviewer slice A — F2).
+# Operates on fm_text ONLY (never on the whole document body).
+#
+# The `\r?` half (2026-07-28, matching frontmatter/primitives.py's key-resolution
+# rule) is what makes the guard CRLF-safe: without it a present-but-empty
+# `status:\r\n` in a Windows-authored memo is invisible to the counter, so the
 # duplicate-key guard silently UNDER-COUNTS — failing open on exactly the
+# corruption it exists to catch. No upstream LF-only normalization of memo text
+# exists to lean on.
+# ---------------------------------------------------------------------------
 
 _STATUS_KEY_RE = re.compile(r'^status:(?=[ \t]|\r?$)', re.MULTILINE)
 
@@ -606,7 +664,12 @@ def _normalize_block_scalar_summary(fm_text: str, memo: str) -> str:
 
 def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> str | None:
     text = fm_text if fm_text.endswith('\n') else fm_text + '\n'
+    # `\r?\n` at both line-terminator positions (2026-07-28): with a bare `\n`
+    # the span never matched a CRLF-authored memo, so the locator returned None
     # and the caller silently left an OVER-CAP summary on disk — a fail-open on
+    # the cap this path exists to enforce. The blank-continuation-line branch
+    # needs it too: `.*` absorbs a `\r` on a content line, but a blank `\r\n`
+    # line has no `.*` to absorb it.
     pattern = re.compile(
         r'^' + re.escape(key) + r':(?=[ \t]|\r?$)[ \t]*[|>][+\-0-9]*[ \t]*\r?\n'
         r'(?:(?:[ \t]+.*)?\r?\n)*',
@@ -643,7 +706,12 @@ def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
     if not at or not at.strip():
         return _err("claim requires --at <ISO timestamp>")
 
+    # Containment gate MUST fire before any frontmatter-primitive call (lesson: externally-triggered-ops-must-contain).
+    # Wrap in try/except so containment ValueError returns _err()
+    # (AC6 {exit_code:1} contract) instead of propagating through asyncio.to_thread to the IPC
     # BaseException handler which would emit a -32603 INTERNAL_ERROR with no result.exit_code.
+    # Capture git_root for use as locked_rmw repo_root to avoid
+    # lru_cache thrash (memo_path.parent varies per call; git_root is stable for the repo lifetime).
     try:
         memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
@@ -708,6 +776,9 @@ def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
+        # Memo deleted between is_file() check and lock
+        # acquisition (TOCTOU window); locked_rmw raises FileNotFoundError. Without this
+        # clause it escapes through asyncio.to_thread to the IPC dispatcher → -32603
         # INTERNAL_ERROR with no exit_code field (AC6/AC10 contract violation).
         return _err(f"memo not found: {memo_path}")
 
@@ -755,8 +826,15 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
 
+    # supersede_note/supersede_realized_by is a FOURTH, standalone shape — an
     # append-only correction of an ALREADY-actioned memo's disposition
+    # (distinct from --correct-realization: that path only ever moves
     # realized_by/decision_note under an UNCHANGED decision; this path
+    # records that the verdict itself was reversed, without touching the
+    # original decision/actioned_note/realized_by at all). Mutually exclusive
+    # with decision/actioned_note/superseded_by — it never sets a fresh
+    # disposition, only appends a supersession record to an existing one.
+    # See _handle_supersede / _apply_supersede_fields.
     supersede_note = params.get("supersede_note")
     supersede_realized_by = params.get("supersede_realized_by")
 
@@ -867,7 +945,7 @@ def _apply_realization_correction(fm_text: str, params: dict) -> str:
         base_note = unquote_yaml_scalar(read_fm_field(fm_text, "decision_note")) or ""
 
     ts = datetime.now(timezone.utc).isoformat()
-    if new_realized_by and new_realized_by == cur_realized_by:
+    if not new_realized_by or new_realized_by == cur_realized_by:
         clause = f"[correction {ts}: decision_note corrected]"
     else:
         clause = (
@@ -907,10 +985,34 @@ def _apply_note_correction(fm_text: str, params: dict) -> str:
     return fm_text
 
 
+# ---------------------------------------------------------------------------
+# supersede-disposition (--supersede-note/--supersede-realized-by) — the ONE
 # place a REVERSED verdict on an already-actioned memo is recorded. Distinct
 # from --correct-realization above: that path corrects EVIDENCE
 # (realized_by/decision_note) under an UNCHANGED decision, folded into
+# decision_note with no new key. This path records that the disposition
+# itself was reversed — a different verdict now governs — while leaving the
+# original decision/decision_note/realized_by/actioned_note untouched on
+# disk, so the original remains fully readable (append-only correction, not
+# an in-place amend).
+#
+# Spec: cross-repo/inbox/2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md
+# was actioned with a `negotiate` disposition (actioned_note) that was
+# reversed by PM ruling within the hour — the existing "cannot re-action"
+# refusal correctly protects the audit trail, but there was no legitimate
+# escape hatch to record the reversal at all. This is that hatch.
+#
+# Negative-spec: does NOT overwrite actioned_note/decision/decision_note/
+# realized_by — a memo already actioned once, then superseded, must not
 # read as a memo actioned once cleanly; the ORIGINAL disposition fields stay
+# exactly as they were written, and the new superseding_* fields are
+# anchored immediately after status (ahead of them) so a reader hits the
+# CURRENT truth first and the superseded original as history, not the
+# reverse. Does NOT relax _handle_already_actioned's existing fail-loud for
+# a bare re-action with a different disposition and no supersede/correction
+# flag — that refusal is unchanged and is exactly what protects the audit
+# trail this mechanism exists to extend, not bypass.
+# ---------------------------------------------------------------------------
 
 def _apply_supersede_fields(fm_text: str, note: str, realized_by: str, at: str) -> str:
     anchor = "status"
@@ -1144,7 +1246,16 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
 
         status = read_fm_field(split.fm_text, "status")
 
+        # Idempotency / correction / fail-loud: no-op when already at the exact
+        # target disposition; otherwise --correct-realization (unchanged decision:
+        # only) applies a narrow evidence correction, or the pre-existing
+        # re-action guard fires. Shared with resolve via _handle_already_actioned.
+        # Return old_text unchanged on no-op; locked_rmw detects byte-identity
+        # and skips the write. status == "superseded" takes the same branch as
+        # "actioned" — a memo already superseded, re-run with the SAME pointer,
         # is idempotent; a DIFFERENT pointer fails loud via the same
+        # already-actioned-with-a-different-disposition raise (no
+        # --correct-realization escape — that flag is decision-shape only).
         if params.get("supersede_note"):
             if status not in ("actioned", "superseded"):
                 raise MutateAbort(
@@ -1210,6 +1321,7 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
         )
     if distill_fate:
         # `\r?$` for the same reason as _STATUS_KEY_RE: a CRLF present-but-empty
+        # key must be counted, or this self-verify fails open.
         df_count = len(re.findall(r'^distill_fate:(?=[ \t]|\r?$)', written_split.fm_text, re.MULTILINE))
         if df_count != 1:
             return _err(

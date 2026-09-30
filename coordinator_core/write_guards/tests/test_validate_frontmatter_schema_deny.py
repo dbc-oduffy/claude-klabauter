@@ -37,6 +37,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import os
+
 import pytest
 
 import yaml
@@ -524,6 +526,51 @@ class TestLineageReachabilityUnconditionalDeny:
         )
         assert result is not None
         _assert_deny_shape(result)
+
+
+class TestLineageResolvesAgainstNestedFixtureRoot:
+    _FIXTURE_HANDOFFS = ("coordinator_core", "ops", "emit", "tests", "fixtures", "root", "state", "handoffs")
+
+    def _frontmatter(self, predecessor):
+        return (
+            "---\ntitle: t\ncreated: 2026-07-29\nbranch: main\nstatus: open\n"
+            f"predecessor: {predecessor}\nkind: session-handoff\n"
+            "category: infra\nsummary: a one-line summary\n---\nold body"
+        )
+
+    def _write_fixture(self, tmp_path, predecessor):
+        d = tmp_path.joinpath(*self._FIXTURE_HANDOFFS)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "alpha.md").write_text("---\ntitle: a\n---\n", encoding="utf-8")
+        fp = d / "beta.md"
+        fp.write_text(self._frontmatter(predecessor), encoding="utf-8")
+        return fp
+
+    def _edit(self, fp, tmp_path):
+        return guard.check(
+            _payload("Edit", str(fp), str(tmp_path), old_string="old body", new_string="new body")
+        )
+
+    def test_predecessor_present_in_fixture_root_is_not_denied(self, tmp_path):
+        fp = self._write_fixture(tmp_path, "state/handoffs/alpha.md")
+        result = self._edit(fp, tmp_path)
+        if result is not None:
+            hso = result["hookSpecificOutput"]
+            assert "permissionDecision" not in hso, hso
+
+    def test_predecessor_absent_from_fixture_root_still_denies(self, tmp_path):
+        fp = self._write_fixture(tmp_path, "state/handoffs/2099-01-01-never-existed.md")
+        result = self._edit(fp, tmp_path)
+        assert result is not None
+        assert "Lineage-reachability check failed" in _assert_deny_shape(result)
+
+    def test_lineage_root_for_non_fixture_path_is_repo_root(self):
+        assert guard._lineage_root_for("state/handoffs/x.md", "/r") == "/r"
+
+    def test_lineage_root_for_fixture_path_is_fixture_root(self):
+        rel = "coordinator_core/ops/emit/tests/fixtures/root/state/handoffs/x.md"
+        expected = os.path.join("/r", "coordinator_core", "ops", "emit", "tests", "fixtures", "root")
+        assert guard._lineage_root_for(rel, "/r") == expected
 
 
 class TestDenyForensicsCapture:

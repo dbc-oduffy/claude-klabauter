@@ -169,7 +169,12 @@ def main(argv: List[str]) -> int:
 
     shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True, copy_function=shutil.copy2)
 
+    # -------------------------------------------------------------------
+    # DR-276: declare every file the copytree above actually wrote under dst
+    # (a tree-copy writing many files declares inside the loop, per the
+    # sanctioned-mutating-CLIs seam). Declared AFTER the copy lands, never
     # before -- the contract is a report of what was ACTUALLY written.
+    # -------------------------------------------------------------------
     for dirpath, _dirnames, filenames in os.walk(dst):
         for name in filenames:
             declare_write(os.path.join(dirpath, name))

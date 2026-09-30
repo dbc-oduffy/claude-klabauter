@@ -59,6 +59,7 @@ def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.Compl
             **no_console_creationflags(),
         )
     return subprocess.run(
+        # popup-intentional-last-resort: shell=True spawns a cmd.exe
         # intermediary that CREATE_NO_WINDOW does not suppress; the
         # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
         command, shell=True, capture_output=True, text=True, timeout=timeout,

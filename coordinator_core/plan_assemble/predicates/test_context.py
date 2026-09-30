@@ -141,6 +141,8 @@ def test_cli_plan_and_sizing_object_absent_is_not_usage_error(
     _patch_content_root(monkeypatch, tmp_path)
     exit_code = _dispatch_brief(["--route", "plan"])
     # residue.brief may fail BUSINESS/TRANSPORT depending on the fixture
+    # content-root's (empty) residue corpus, but it must never be USAGE (2)
+    # purely because --plan/--sizing-object were omitted.
     assert exit_code == _PlanAssembleExitCode.BUSINESS
 
 

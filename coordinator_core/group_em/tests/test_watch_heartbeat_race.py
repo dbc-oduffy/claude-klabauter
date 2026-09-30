@@ -49,7 +49,10 @@ pytestmark = [pytest.mark.slow, pytest.mark.spawns_process]
 
 _FORCED_PAIRS = 20
 
+# The three real cadences the predecessor handoff records, in seconds. Named
 # here as PARAMETERS with the observed value beside them (gated exit
+# criterion "no-single-machine-assumptions") -- never baked into
+# `watch_heartbeat.py` itself, which this file does not touch.
 CADENCE_MONITOR_SECONDS = 18.0
 CADENCE_OBSERVED_SECONDS = 80.0
 CADENCE_CRON_SECONDS = 23 * 60.0
@@ -119,6 +122,11 @@ def _run_forced_pair(tmp_path: Path, pair_index: int) -> tuple[bool, bool, float
     wrote_b, elapsed_b = results.get(f"writer-b-{pair_index}", (False, 0.0))
     final_record = watch_heartbeat._read_record(watch_heartbeat.watch_path(repo_root))
     # A COLLISION is: both writers believed they wrote (both `stamp()` calls
+    # returned True, i.e. neither declined the other), yet only one writer's
+    # identity survives on disk and the OTHER's record -- and everything it
+    # would have traced -- is gone with no `prior_*` naming it, because both
+    # read the SAME pre-replacement record before either replaced it. This
+    # is exactly the defect the module docstring's "NO LOCK SPANS
     # READ-DECIDE-WRITE" note describes.
     both_believed_written = bool(wrote_a and wrote_b)
     surviving_writer = final_record.get("writer_session_id") if isinstance(final_record, dict) else None
@@ -148,7 +156,20 @@ def test_forced_simultaneous_two_writer_collision_rate_and_cost(tmp_path):
         assert isinstance(record, dict)
 
     # THE BARRIER FORCES BOTH CHILDREN TO START stamp() AT THE SAME INSTANT --
+    # it does NOT force both to land inside the read-decide-write window
+    # together, because the window itself is sub-millisecond and OS
+    # scheduling jitter after the barrier release routinely lets one writer
+    # finish its whole read-decide-write-replace before the other even opens
     # the file. When that happens `is_fresh_and_foreign` correctly DECLINES
+    # the second writer -- not a collision, a correct decline (the exact
+    # mechanism `test_a_fresh_foreign_record_is_declined_and_survives_
+    # unchanged` in test_watch_heartbeat.py pins). A genuine collision needs
+    # BOTH reads to land before EITHER write lands, which this measurement
+    # shows is the minority outcome even under maximal forcing -- that
+    # empirical split IS the number this row exists to produce, and it is
+    # recorded verbatim in the research doc rather than asserted to a fixed
+    # value here (real OS scheduling, not this file, decides the split on
+    # any given run).
     assert 0 <= collision_count <= both_written_count <= _FORCED_PAIRS
     avg_call_process_time = total_process_time / total_calls
     assert avg_call_process_time < 0.5

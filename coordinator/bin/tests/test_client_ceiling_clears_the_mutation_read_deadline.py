@@ -45,8 +45,13 @@ import cc_invoke as _mod  # noqa: E402  (import after path setup)
 from coordinator_core.invoke.__main__ import _dump_op_timeouts  # noqa: E402
 from coordinator_core.warm.client import _mutation_deadline_for  # noqa: E402
 
+#: Deliberately spans all three membership signals `ipc.is_ceremony_method` unions,
+#: because the client can only see one of them by itself:
+#:   - `ceremony.commit_v2` -- prefixed AND listed in the dump;
+#:   - `ceremony.scoped_git_commit` -- prefixed, NOT listed (the projection is driven
 #:     by `OP_KEY_SCOPE`, the dispatcher prefix-matches);
 #:   - `commit.exec_bit_change` -- listed, NOT prefixed (`_CEREMONY_PACKAGE_ALIASES`),
+#:     which a client-side prefix test calls an ordinary op. It commits.
 _CEREMONY_OPS = (
     "ceremony.commit_v2",
     "ceremony.scoped_git_commit",

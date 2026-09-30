@@ -447,8 +447,19 @@ class TestUnscannableSubtreeFailsClosed:
         )
 
 
+# ---------------------------------------------------------------------------
+# C6b — regression tests for PIN-1's `blocked_by_dependents` resolver
+# (coordinator_core/ops/handoff_children.py, authored by a peer chunk, C1).
+#
 # RED-BEFORE-GREEN: `blocked_by_dependents` does not exist on disk yet at the
+# time these tests were authored. Every test below imports it function-locally
+# (not at module scope) so that only THESE tests go red with ImportError, not
+# the whole file's collection — the pre-existing tests above, and the
 # `_DEFAULT_EDGE_KINDS` pin test below, must keep passing untouched.
+#
+# Spec: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § PIN-1
+# (chunk C6b's own dispatch brief).
+# ---------------------------------------------------------------------------
 
 
 def _write_handoff_fm(path: Path, fields: "dict[str, object]", body: str = "Body.\n") -> Path:

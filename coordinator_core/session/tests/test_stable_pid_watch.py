@@ -121,6 +121,12 @@ def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path):
 
 
 def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
+    # AC8/C4 (2026-08-22) originally pinned this via a bare `touched.txt`
+    # sibling. AC11 (2026-08-27) retires `_touch_record_family`'s legacy
+    # arm: `touch_record.discover_family` only recognizes the
+    # `touch-record.jsonl` dialect now, so a dir carrying ONLY the legacy
+    # file is no longer evidence a session "genuinely ran here" and falls
+    # back out of the denominator — the same "no file at all" shape the
     # sibling test below already covers. Flipped to STATUS_EMPTY/checked 0.
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
@@ -146,6 +152,24 @@ def test_dir_with_neither_meta_json_nor_any_file_is_not_counted(tmp_path):
 
 def test_dir_with_only_an_unrelated_file_without_meta_json_is_not_counted(tmp_path):
     # INVERTED 2026-08-26, deliberately, from
+    # `test_dir_with_unrelated_record_file_without_meta_json_counts_as_miss`.
+    # C5 (AC6) widened the key off the `touched.txt` literal onto "newest of
+    # ANY regular file" so a record-dialect rename could only DEFER this
+    # signal, never disable it. The rename-safety was right; "any regular
+    # file" was too wide, and the measurement is what settled it: an
+    # `overrides.log` and a `repo-identity-gate.log` are written by GUARDS,
+    # and a `write_bump_launch_cwd` by the SessionStart anchor — none of them
+    # by a session doing work, and all of them enough to hold a directory in
+    # the denominator forever. Three test-fixture dirs and every
+    # freshly-started session on the box were being counted as K-006
+    # exposure on exactly that basis.
+    #
+    # Rename-safety is preserved, not traded away: the key is now the touch
+    # record FAMILY via `touch_record.discover_family` (which follows the
+    # name, and picks up rotated generations too) plus its legacy
+    # `touched.txt` sibling — a widening of the literal, as AC6 asked for,
+    # onto the writer that actually owes `core.init` rather than onto every
+    # file in the directory.
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -202,7 +226,15 @@ def test_stale_touched_txt_without_meta_json_is_not_counted(tmp_path):
 
 
 def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path):
+    # Originally the other half of a pin that fed both dirs a bare
+    # `touched.txt` sibling and expected the fresh one alone to count.
+    # AC11 (2026-08-27) retires that legacy dialect from
+    # `_touch_record_family` entirely, so NEITHER dir (fossil or current)
+    # carries evidence `discover_family` recognizes any more -- both fall
+    # out of the denominator, same as the "no file at all" shape. Flipped
     # to STATUS_EMPTY/checked 0; the recency-scope behavior this test named
+    # is now exercised only by a `touch-record.jsonl`-bearing fixture
+    # elsewhere in this module.
     root = tmp_path / "coordinator-sessions"
     for name, age in (("fossil", _NO_META_RECENCY_SECONDS + 3600), ("current", 60)):
         sdir = root / name

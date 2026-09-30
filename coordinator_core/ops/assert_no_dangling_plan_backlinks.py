@@ -164,6 +164,11 @@ from coordinator_core.ops.spec_backlink_resolve import (
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
+# Generator-provenance declaration (generator_provenance.py). The --fix path
+# rewrites whichever tracked .md file anywhere in the repo still carries a
+# dangling spec_backlink citation after a plan archival move (repo-wide .md
+# scan, see `_iter_all_md_files`/git-ls-files-scoped candidate gathering
+# above) -- the file set is data-dependent, so declared MUTATES rather than
 # a fixed GENERATES artifact.
 MUTATES = ["**/*.md"]
 
@@ -184,7 +189,17 @@ _EXCLUDED_ROOT_PREFIXES = (
     "scratch/",
     "scratchpad/",
     "node_modules/",
+    # Received cross-repo memos are a peer's authored words delivered into this
+    # tree, not citations this repo writes. Same rationale as `archive/`: the
+    # artifact records what a sender said, so "fixing" an unqualified id inside
+    # one would falsify the record rather than repair a citation. A memo body is
+    # also un-actionable here by construction — the sender owns the text, and
+    # this repo has no authority to rewrite it.
+    #
     # NEGATIVE-SPEC: this scopes the gate to text this repo authors; it does NOT
+    # relax the citation rule. A bare foreign id in claude-klabauter-authored prose (a
+    # plan body, a wiki page, source) still fails, and must be repo-qualified
+    # per `docs/wiki/spec-backlink-convention.md`.
     "cross-repo/",
 )
 
@@ -534,6 +549,8 @@ def main(argv: List[str]) -> int:
     hits = _scan_dangling(root, mvpath, unreadable)
 
     # BEHAVIOUR CHANGE (2026-07-22, break-class fix): restores this AC9 gate's
+    # intended assertion — an incomplete scan can never be reported as "no
+    # dangling backlinks" (see _scan_dangling docstring).
     if unreadable:
         for rel_file in unreadable:
             print(f"UNSCANNABLE: {rel_file}", file=sys.stderr)
@@ -544,8 +561,12 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
+    # Dedup (review-integration P2): a citation still at docs/plans/<base> for
     # a plan that has since moved is DANGLING (via `hits`, remediation:
+    # --fix). Without this filter the SAME (rel_file, cited_path) pair would
     # also surface under UNGRANDFATHERED-PATH (path_ungrandfathered's
+    # basename-fallback HIT), with a conflicting "should be id-form"
+    # remediation -- one citation, one failure header.
     dangling_pairs = {(rel_file, match) for rel_file, match, _base, _dest in hits}
     path_ungrandfathered = [
         entry for entry in path_ungrandfathered

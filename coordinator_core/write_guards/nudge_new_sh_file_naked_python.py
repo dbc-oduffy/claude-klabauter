@@ -88,7 +88,9 @@ CLASS = "advisory"
 MATCHERS = ["Write"]
 PRIORITY = 160
 
+#: The two irreducible bash legs DoE doctrine names as physics, not
 #: preference -- see module docstring NAMED-EXCEPTION TABLE. Case-folded
+#: basename match, regardless of directory.
 _IRREDUCIBLE_SH_BASENAMES = frozenset(
     {
         "invoking-shell-bash4-probe.sh",
@@ -96,6 +98,7 @@ _IRREDUCIBLE_SH_BASENAMES = frozenset(
     }
 )
 
+#: Vendored/fixture path-segment carve-out -- case-insensitive, anchored to
 #: a full path segment (see module docstring CARVE-OUTS).
 _CARVEOUT_SEGMENTS = frozenset({"tests", "fixtures", "vendor", "node_modules"})
 

@@ -10,7 +10,13 @@ import pytest
 from coordinator_core.ops.detect_onboarding_offer import detect_onboarding_offer, main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns real git because the bash-oracle parity
+# contract (test-detect-onboarding-offer.sh) it ports depends on real repo state
+# (baseline commit presence) that `detect_onboarding_offer` reads via git plumbing --
+# no mock stands in for that. Each test builds its own tmp_path repo via
+# `_init_git_repo`, so there is no shared state to hoist to module scope. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -266,7 +272,12 @@ def test_main_never_fails_on_missing_plugin_root(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
+# ---------------------------------------------------------------------------
 # Fallback-branch reachability -- CLAUDE_KLABAUTER_ROOT resolution (2026-07-22 repoint:
+# coordinator_currency.py migrated out of plugin_root's lib/ into claude-klabauter's
+# own coordinator/lib/; the fallback branch must resolve it there, not
+# silently always miss and return "" regardless of actual drift).
+# ---------------------------------------------------------------------------
 
 
 def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path, monkeypatch):

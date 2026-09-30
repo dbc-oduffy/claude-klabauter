@@ -153,7 +153,16 @@ def _check_types(
             verdict=Verdict.FAIL,
             detail=detail_body,
         )
+    # rc == 2 (mypy's own "fatal error" exit code) or any other non-0/1 value
+    # -- the tool itself did not complete a real run (bad config, internal
+    # crash, or our own subprocess-layer failure, which `_run_mypy` surfaces
+    # as rc=-1, not rc=1 -- a timeout/OSError never lands in the rc==1
+    # branch above). This branch is the tool-broke case, reported as
     # UNAVAILABLE, never FAIL -- a broken tool run must never masquerade as
+    # "found type errors").
+    # Comment described
+    # a rc==1 subprocess-layer-failure path that cannot occur as written
+    # (_run_mypy returns -1, not 1, on timeout/OSError).
     last_err = err or out or f"mypy exited {rc} with no output"
     return DimensionResult(
         dimension="types",

@@ -491,7 +491,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        refused by `commit_paths` itself --
                                        it commits the WHOLE INDEX otherwise).
         deleted_paths (list[str], optional) -- repo-relative paths to record
-                                       as removed in this commit.
+                                       as removed in this commit. A path still
+                                       present in the worktree is refused.
+        untracked_paths (list[str], optional) -- repo-relative paths this
+                                       commit removes from HEAD and the index
+                                       while the worktree keeps the file
+                                       (`git rm --cached`). Declared, never
+                                       inferred here: the phantom-deletion
+                                       refusal on `deleted_paths` cannot tell
+                                       this apart from a stale shared index.
         message   (str, required)   -- the commit message.
         prefer_staged (list[str], optional) -- paths whose STAGED bytes are
                                        committed in preference to differing
@@ -591,6 +599,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(raw_deleted, list) or not all(isinstance(p, str) for p in raw_deleted):
         return _error("params.deleted_paths must be a list of strings")
 
+    raw_untracked = params.get("untracked_paths") or []
+    if not isinstance(raw_untracked, list) or not all(
+        isinstance(p, str) for p in raw_untracked
+    ):
+        return _error("params.untracked_paths must be a list of strings")
+
     message = params.get("message")
     if not isinstance(message, str) or not message.strip():
         return _error("params.message is required and must be a non-empty string")
@@ -627,10 +641,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
+    # An untracked path leaves HEAD like a deleted one, so every consumer
+    # below that asks "what did this commit touch" (claims, trailers, gates,
+    # the ledger) reads the union; only `commit_paths` tells them apart.
+    raw_removed = list(raw_deleted) + list(raw_untracked)
+
     # Filter FIRST, before anything else touching the guard-class-relay step
     # -- no path under `_GUARD_MODULE_DIR` means zero work below: no git
     # call, no object read, no AST parse (0.156 us / 0 spawns measured).
-    guard_paths = _guard_module_paths(raw_paths, raw_deleted)
+    guard_paths = _guard_module_paths(raw_paths, raw_removed)
     pre_commit_guard_sources = (
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
     )
@@ -639,13 +658,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # BEFORE commit_paths runs -- a live peer holding a named path is
     # reported, never refused (see `_peer_claim_warnings` docstring).
     peer_claim_warnings = _peer_claim_warnings(
-        worktree_root, list(raw_paths) + list(raw_deleted)
+        worktree_root, list(raw_paths) + raw_removed
     )
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
     # after the fact is not one. Contrast `_guard_class_relay_step` below,
     # which runs after and is forbidden from failing the commit.
-    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_deleted)
+    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_removed)
     if gate_refusal is not None:
         return _error(gate_refusal)
 
@@ -699,7 +718,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     message = apply_missing_trailers(
         message,
         worktree_root,
-        list(raw_paths) + list(raw_deleted),
+        list(raw_paths) + raw_removed,
         session_id_override=session_id_override,
     )
 
@@ -709,6 +728,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             raw_paths,
             message,
             deleted_paths=raw_deleted,
+            untracked_paths=raw_untracked,
             prefer_staged=raw_prefer_staged,
             prefer_deliberate_stage=raw_prefer_deliberate_stage,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
@@ -802,7 +822,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # write, so `no_delta` here holds only the ordinary "already at HEAD"
         # case.
         matched = list(outcome.no_delta)
-        declared = len(raw_paths) + len(raw_deleted)
+        declared = len(raw_paths) + len(raw_removed)
 
         if matched:
             paths = ", ".join(matched[:5])
@@ -841,7 +861,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # actually covered -- raw_paths + raw_deleted, including outcome.no_delta
     # members (the caller named them and their bytes are at HEAD).
     _release_committed_claims_step(
-        worktree_root, list(raw_paths) + list(raw_deleted)
+        worktree_root, list(raw_paths) + raw_removed
     )
 
     # Same post-commit region, same negative spec. This op is one of the only
@@ -864,7 +884,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     closes, reverts_sha = extract_closure_facts_from_text(message)
     record_ledger_entry(
         worktree_root,
-        list(raw_paths) + list(raw_deleted),
+        list(raw_paths) + raw_removed,
         outcome.sha,
         closes=closes,
         reverts_sha=reverts_sha,

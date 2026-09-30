@@ -58,6 +58,9 @@ _ELEVATED_SURFACES_KEY = "commit_ledger_elevated_surfaces"
 
 _DEFAULT_BASELINE_WEIGHT = 1.0
 
+#: Multiplier applied to the baseline weight when a path matches one of the
+#: repo's `commit_ledger_elevated_surfaces` globs. Scoped to THIS module's
+#: weighting mandate -- not exported, not a rename of brightline's
 #: anti-scoped `_PLANNING_LOC_WEIGHT`.
 _ELEVATED_SURFACE_WEIGHT = 2.0
 

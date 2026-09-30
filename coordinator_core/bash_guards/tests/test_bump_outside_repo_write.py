@@ -59,7 +59,24 @@ requires_powershell_grammar = pytest.mark.skipif(
     reason="PowerShell grammar package not installed; C8 declares it in pyproject.toml.",
 )
 
+#: C2/[P2] fix -- the six MSYS-round-trip tests below build a REAL git repo
 #: on disk and then address it through an MSYS-spelled ABSOLUTE path derived
+#: from that repo's own real, host-native drive letter (`_msys_form`, fixed
+#: per [P3] to fail loudly rather than fabricate one). A POSIX host's own
+#: filesystem paths carry no drive letter to encode, so there is no genuine
+#: MSYS spelling of a real POSIX path to round-trip through in the first
+#: place -- this is the same class of hardware-gated boundary
+#: `test_windows_platform_simulation.py::test_windows_path_resolve_is_
+#: hardware_gated` names for `pathlib.Path(...).resolve()`, not something a
+#: `_host_is_windows()`/`os.path`->`ntpath` seam can paper over when the
+#: underlying git-root resolution still has to walk a REAL filesystem.
+#: Skipped explicitly (never silently vacuous) on a non-native-Windows host;
+#: the underlying MSYS-decode fix itself (`translate_msys_path`/
+#: `resolve_relative`'s Windows branch) is proven host-independently below,
+#: via the SAME `_host_is_windows()` seam these six also force, by the
+#: `test_translate_msys_path_*`/`test_resolve_relative_*` tests further
+#: down -- see those for the deterministic, any-host proof this dispatch
+#: was asked to supply.
 requires_native_windows_filesystem = pytest.mark.skipif(
     os.name != "nt",
     reason=(
@@ -215,7 +232,14 @@ def _set_anchor(monkeypatch, env, session_id: str, extra: dict | None = None) ->
     `CLAUDE_PROJECT_DIR` is left unset throughout; `HOME` is still set (to an
     unrelated scratch dir) so `_anchor_is_under_claude_home` resolves to "not
     under" rather than fail-opening on an unresolvable home."""
+    # `sandbox_home`, not a bare HOME setenv: `_clean_bump_env` deletes HOME
     # *and* USERPROFILE, and on Windows `expanduser` reads USERPROFILE first --
+    # so HOME alone leaves `Path.home()` with nothing to read. `claude_config_dir()`
+    # then raises RuntimeError("Could not determine home directory") inside
+    # `resolve_plugin_root_loud`, and a guard-chain test here fails on a Windows
+    # host while passing on POSIX, where HOME alone IS what expanduser reads.
+    # The docstring above always intended a resolvable home; this delivers one on
+    # both platforms, and names the sandbox rather than inheriting conftest's.
     sandbox_home(monkeypatch, env["home"])
     for k, v in (extra or {}).items():
         monkeypatch.setenv(k, v)
@@ -395,7 +419,10 @@ def test_forward_slash_spelled_outside_target_message_has_no_backslash_effect_cl
     assert "in cwd)" not in reason
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-13 `/dev/null` redirect false-positive fix -- see
 # `_write_bump_sink_shapes._DEVNULL_TARGET`'s own docstring.
+# ---------------------------------------------------------------------------
 
 
 def test_devnull_redirect_does_not_bump(env, monkeypatch):
@@ -444,7 +471,16 @@ def test_powershell_dialect_declines_and_records_silent(env, monkeypatch):
     assert any(s.guard_name == "bump-outside-repo-write" for s in silences)
 
 
+# ---------------------------------------------------------------------------
+# Follow-up dispatch (2026-08-07, guard-dialect-coverage.md row 15): the
+# blanket PowerShell SILENT above is now real detection for the cmdlet-shaped
+# write table (`New-Item`/`Set-Content`/`Add-Content`/`Copy-Item`/
+# `Move-Item`/`Out-File`/`Tee-Object`) -- see `_write_bump_sink_shapes.
 # PS_WRITE_SINK_CMDLETS`. Every other PowerShell shape (a bare redirect, an
+# unrecognized cmdlet) still records SILENT, exercised by
+# `test_powershell_dialect_declines_and_records_silent` above (an `echo hi >
+# ...` redirect, which matches no cmdlet in this leg's table, unchanged).
+# ---------------------------------------------------------------------------
 
 
 @requires_powershell_grammar
@@ -930,7 +966,13 @@ def test_marker_for_a_different_session_does_not_clear_this_ones_bump(env, monke
     assert result is not None
 
 
+# ---------------------------------------------------------------------------
 # C5 -- destination-class axis wired through (always DESTINATION_FOREIGN in
+# practice: this guard's own predicate guarantees the target resolves to no
+# git repo, and a `publish.mirrors.*.path` entry is itself always a real
+# repo, so the two can never coincide). Classified explicitly via C1 rather
+# than hardcoded -- AC9 asserted first.
+# ---------------------------------------------------------------------------
 
 
 def test_destination_class_kwarg_is_passed_explicitly_as_foreign(env, monkeypatch):
@@ -1006,9 +1048,12 @@ def test_ac19_registration_attributes_pinned_not_left_to_default():
 
     # `fail_closed=False` -- the OPPOSITE of every neighbouring
     # CONFINEMENT_DENY entry: a crash in this guard must swallow to
+    # "allow", never route through the hard-deny crash path.
     assert entry.fail_closed is False
     # `band=ADVISORY_REWRITE`, NOT `CONFINEMENT_DENY` -- the blanket-disarm
     # marker can suppress every band except CONFINEMENT_DENY; registering a
+    # deliberately passable bump there would make it the LEAST passable
+    # guard in the suite.
     assert entry.band is dispatch.GuardBand.ADVISORY_REWRITE
     # Explicit, never the UNCLASSIFIED default.
     assert entry.advisory_value is not AdvisoryValue.UNCLASSIFIED
@@ -1037,10 +1082,23 @@ def test_ac20_write_sink_binary_set_is_pinned():
     )
 
 
+# ---------------------------------------------------------------------------
 # REGRESSION -- the confirmed live false positive: the harness-designated
+# per-session scratchpad is NOT covered by `tempfile.gettempdir()` alone on
+# macOS (`TMPDIR` resolves under `/var/folders/...`; the scratchpad lives
+# under `/private/tmp`). Uses a REAL session-start record so applicability is
+# genuinely True -- a test that passes only because applicability failed open
+# proves nothing (see this fix's own dispatch brief). MUST fail against the
+# pre-fix module (`_always_allowed_roots`'s single `tempfile.gettempdir()`
+# entry, no `/tmp` realpath candidate).
+# ---------------------------------------------------------------------------
 
 
 def test_regression_real_harness_scratchpad_shape_never_bumps(env, monkeypatch):
+    # Point the REAL `/tmp` candidate (via the testability seam) at a
+    # sentinel standing in for `/private/tmp` -- `gettempdir()` stays
+    # repointed to the fixture's OWN fake system temp (simulating the
+    # macOS `TMPDIR` divergence: gettempdir() and the scratchpad's real
     # root are two DIFFERENT directories, exactly like the live incident).
     real_tmp_stand_in = env["anchor"].parent / "private-tmp-stand-in"
     real_tmp_stand_in.mkdir()
@@ -1124,7 +1182,19 @@ def test_regression_symlinked_tmp_root_resolves_to_same_verdict_as_real(env, tmp
     assert result_link is None
 
 
+# ---------------------------------------------------------------------------
 # AC6 -- cross-repo `cwd` drift, applied to the OUTSIDE-repo surface (the
+# same scenario `test_bump_foreign_repo_write.py` [C3] pins for the
+# cross-repo surface, so the anchor fix is pinned on more than the one
+# surface the memo reproduced against). Drifts the live payload `cwd` ACROSS
+# a repo boundary -- into an unrelated FOREIGN repo, never merely a
+# subdirectory of the anchor repo (the `[subdir]` row in the plan's own
+# repro table already passed before this fix; the `[FOREIGN]` row is the
+# one this guard's own anchor resolution must now get right too). Uses a
+# REAL `write_session_start_record` so applicability is genuinely True, per
+# this plan's own repro methodology -- a test that passes only because
+# applicability failed open proves nothing.
+# ---------------------------------------------------------------------------
 
 
 def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_an_outside_repo_write(

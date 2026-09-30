@@ -126,7 +126,9 @@ class TestBrief:
     def test_node_ceremony_gate_self_satisfies_when_the_suite_is_absent(
         self, tmp_path, monkeypatch
     ):
+        # A repo that carries no plugin-ecosystem suite has nothing for this
         # gate to run; dispatching anyway is a MODULE_NOT_FOUND abort on the
+        # ceremony's FIRST hard gate, which wedges the whole run.
         self._stub_git(monkeypatch)
         assert not merge_assemble.node_ceremony_gate_entrypoint(tmp_path).exists()
         gate = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"][0]
@@ -362,6 +364,7 @@ class TestVersionBumpDecline:
         assert "version_bump_final" in report.get("declined_judgment_points", [])
         assert "version_bump_final" not in report.get("unresolved_judgment_points", [])
         # ship_verdict was never answered at all — it stays UNANSWERED, not
+        # conflated with the declined point.
         assert "ship_verdict" in report.get("unresolved_judgment_points", [])
 
     def test_bare_string_decline_normalizes_to_disposition_not_override(self, tmp_path, monkeypatch):
@@ -376,6 +379,10 @@ class TestVersionBumpDecline:
 
     def test_bare_decline_tuple_matches_declared_non_version_dispositions(self):
         # `_VERSION_BUMP_FINAL_BARE_
+        # DECLINE` against the point's own declared dispositions so a fourth
+        # non-d2-resolving disposition added to `version_bump_final` and
+        # forgotten here fails loud, instead of quietly falling through to
+        # the override path and being misdiagnosed as a bad tag shape.
         judgment_points = merge_assemble.build_judgment_points()
         point = next(jp for jp in judgment_points if jp["id"] == "version_bump_final")
         non_version_values = {
@@ -434,7 +441,9 @@ class TestApplyDispatchTable:
             )
 
         exit_code, report = merge_apply.apply(repo_root=tmp_path, force=True)
+        # d2/d4/d5 depend on judgment points with no `decisions` supplied,
         # so the run still reports HALTED_AT_JUDGMENT overall — but every
+        # OTHER directive (including the forced d0) still lands.
         assert exit_code == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert "d0" in report["landed"]
         assert "d1" in report["landed"]

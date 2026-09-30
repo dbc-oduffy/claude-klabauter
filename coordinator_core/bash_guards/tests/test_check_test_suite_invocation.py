@@ -333,7 +333,12 @@ def test_subagent_testpaths_ancestor_is_not_a_scope(repo, free_mutex, command):
     assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-14 correction: `-k`/scoping-flag laundering of a testpaths-root
+# positional (`pytest tests/ -k "expr"` still collects the whole suite to
 # deselect it -- `-k` filters SELECTION, never COLLECTION). See
+# `_classify_pytest`'s docstring and the module docstring's dated entry.
+# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "command",
@@ -584,7 +589,13 @@ def test_deny_omits_package_script_offer_for_non_package_manager(repo, free_mute
     assert "pnpm exec vitest run" not in reason
 
 
+# ---------------------------------------------------------------------------
 # tox/nox spelling-gap fix (2026-08-03) -- both `_RUNNER_PREFILTER_RE` and
+# `_classify_tokens` bypassed BOTH the identity leg and the grant leg for a
+# bare `tox`/`nox` invocation. Spec backlink: `_classify_tox_nox`'s own
+# docstring, and the module docstring's 2026-08-03 classifier-correction
+# note.
+# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "command",
@@ -885,7 +896,9 @@ def test_wrapper_leg_still_allows_a_legitimately_chained_wrap(grant_repo, free_m
     assert guard.check(_payload(cmd, grant_repo)) is None
 
 
+# ---------------------------------------------------------------------------
 # Identity keying: presence of the TOP-LEVEL agent_id, nothing else
+# ---------------------------------------------------------------------------
 
 def test_nested_tool_response_agent_id_is_not_an_identity(repo, free_mutex):
     """A nested ``tool_response.agent_id`` must not false-positive a main-loop
@@ -1081,57 +1094,47 @@ def test_matches_configured_cmd_containment_requires_all_configured_segments():
     assert result is None
 
 
-_MINIMAL_RESOLVER_SRC = '''\
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-
-@dataclass
-class ResolveResult:
-    stdout: str
-    returncode: int
-    stderr: str = ""
-
-
-def resolve_fast_test_cmd(repo_root):
-    return ResolveResult(stdout="python3 -m pytest -m 'not cadence'", returncode=0)
-
-
-def resolve_full_test_cmd(repo_root):
-    return ResolveResult(stdout="python3 -m pytest", returncode=0)
-'''
-
-
-def _write_minimal_resolver(repo_root):
-    bin_dir = Path(repo_root) / "coordinator" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    (bin_dir / "coordinator-resolve-validation-cmd.py").write_text(
-        _MINIMAL_RESOLVER_SRC, encoding="utf-8"
+def _write_local_md_cmds(repo_root):
+    (Path(repo_root) / "coordinator.local.md").write_text(
+        "---\n"
+        "fast_test_cmd: python3 -m pytest -m 'not cadence'\n"
+        "full_test_cmd: python3 -m pytest\n"
+        "---\n",
+        encoding="utf-8",
     )
 
 
-def test_configured_test_cmds_resolves_both_tiers_via_a_real_resolver_module(tmp_path):
-    _write_minimal_resolver(tmp_path)
+@pytest.fixture
+def _no_env_test_cmds(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+    monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+
+
+def test_configured_test_cmds_resolves_both_tiers_natively(tmp_path, _no_env_test_cmds):
+    _write_local_md_cmds(tmp_path)
     tiers = {entry.tier: entry.cmd for entry in guard._configured_test_cmds(str(tmp_path))}
     assert tiers["fast_test_cmd"] == "python3 -m pytest -m 'not cadence'"
     assert tiers["full_test_cmd"] == "python3 -m pytest"
 
 
-def test_configured_test_cmds_native_resolving_one_tier_still_gets_the_other_via_by_path(
-    tmp_path, monkeypatch
-):
-    """regression. A native leg that
-    resolves only ONE tier must not discard the by-path shim's coverage of
-    the other -- fallback is per-tier, not all-or-nothing."""
-    _write_minimal_resolver(tmp_path)
-    monkeypatch.setattr(
-        guard, "_configured_test_cmds_native",
-        lambda root: [guard.ConfiguredCmd("fast_test_cmd", "native fast cmd", 0)],
+def test_configured_test_cmds_ignores_a_planted_bin_resolver(tmp_path, _no_env_test_cmds):
+    _write_local_md_cmds(tmp_path)
+    bin_dir = Path(tmp_path) / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "coordinator-resolve-validation-cmd.py").write_text(
+        "class R:\n    stdout = 'planted divergent cmd'\n    returncode = 0\n"
+        "def resolve_fast_test_cmd(root):\n    return R()\n"
+        "def resolve_full_test_cmd(root):\n    return R()\n",
+        encoding="utf-8",
     )
-    tiers = {entry.tier: entry.cmd for entry in guard._configured_test_cmds(str(tmp_path))}
-    assert tiers["fast_test_cmd"] == "native fast cmd"
-    assert tiers["full_test_cmd"] == "python3 -m pytest"
+    cmds = [entry.cmd for entry in guard._configured_test_cmds(str(tmp_path))]
+    assert "planted divergent cmd" not in cmds
+    assert "python3 -m pytest" in cmds
+
+
+def test_configured_test_cmds_falsy_repo_root_returns_empty():
+    assert guard._configured_test_cmds(None) == []
+    assert guard._configured_test_cmds("") == []
 
 
 def test_configured_test_cmds_resolved_at_most_once_per_check_call(repo, free_mutex, monkeypatch):
@@ -1436,7 +1439,7 @@ class TestGrantLeg:
         assert "tier-u-grant-cli grant pm" in reason
 
     def test_real_resolver_module_configured_cmd_leg_resolves_via_real_module(
-        self, grant_repo, free_mutex
+        self, grant_repo, free_mutex, monkeypatch
     ):
         """Regression: with the sys.modules-registration bug present, a real
         resolver module (module-scope `@dataclass`, same as production)
@@ -1453,7 +1456,9 @@ class TestGrantLeg:
         unscoped has no reachable Tier F) rather than being silently
         allowed as Tier F. The original assertion (allowed, no denial)
         encoded the classify-by-key bug R1 closed."""
-        _write_minimal_resolver(grant_repo)
+        monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+        monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+        _write_local_md_cmds(grant_repo)
         fast_cmd = "python3 -m pytest -m 'not cadence'"
         out = guard.check(_payload(fast_cmd, grant_repo))
         assert out is not None
@@ -1741,7 +1746,18 @@ class TestR6DeclaredUnscopedFastTier:
         out = guard.check(
             _payload("with-suite-mutex -- " + chained, grant_repo)
         )
+        # Prefixing
+        # ONLY the first sub-command with ``with-suite-mutex --`` never wraps
+        # the second: bash parses the top-level ``&&`` as a command
+        # separator BEFORE with-suite-mutex ever sees any argv, and
+        # with-suite-mutex execs its ``--`` operand via a bare ``Popen``,
+        # never a shell that would re-interpret ``&&`` inside it -- so
+        # ``pnpm run test`` genuinely ran unwrapped, holding no mutex. That
         # is the exact WRAPPER-leg hazard the decoy-segment fix closes; a
+        # chained ``fast_test_cmd`` (already a DR-088 config violation per
+        # this test's own history) has no verbatim-chain form that
+        # legitimately satisfies the tightened WRAPPER leg, so this must now
+        # deny naming the still-unwrapped ``pnpm run test`` segment.
         reason = _reason(out)
         assert "Route this through the suite mutex" in reason
         assert "Detected: pnpm test" in reason
@@ -1936,7 +1952,10 @@ class TestConfiguredCmdReachability:
         _assert_allowed(guard.check(
             _payload(command, declared_repo, agent_id=_AGENT_ID)))
 
+    # -----------------------------------------------------------------------
     # Regression: a fast tier that STRICTLY NARROWS the full tier (the natural
+    # way to scope one -- append a path) must stay reachable as Tier F.
+    # -----------------------------------------------------------------------
 
     @pytest.fixture
     def narrowing_repo(self, tmp_path, monkeypatch):
@@ -2266,6 +2285,7 @@ def repo_with_test_dir(repo):
         "python3 -m pytest coordinator_core/frontmatter/tests/sub -q",
         ".venv/bin/python -m pytest coordinator_core/frontmatter/tests/sub -q",
         # -k narrows the selection but does not narrow the ARGUMENT: the
+        # ruling is directory-precision, stated literally.
         "pytest coordinator_core/frontmatter/tests/sub -k test_thing",
     ],
 )
@@ -2470,7 +2490,15 @@ def test_pytest_directory_args_glob_covering_a_directory_is_returned(repo_with_t
     ]
 
 
+# ---------------------------------------------------------------------------
+# Dynamic prefilter leg (2026-08-10): a repo whose configured test command
 # invokes a runner ``_RUNNER_PREFILTER_RE`` has never heard of must still be
+# gated, without a per-repo hand-patch to the static regex. Pins the real
+# fleet shapes named in the incident report (example-retrieval-repo-ue-addon's
+# ``bin/run-fast-tests.py``/``bin/run-full-test-suite.py --yes``, and
+# example-retrieval-repo's ``run_tier_tests.py``, whose static-regex token was removed
+# by this fix).
+# ---------------------------------------------------------------------------
 
 class TestDynamicPrefilterLeg:
 

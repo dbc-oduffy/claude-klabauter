@@ -46,6 +46,11 @@ _C2_TARGETS = (
     "coordinator/bin/regenerate-known-red-registry.py",
     "coordinator_core/contract/cockpit_schema/emit_schema.py",
 )
+# Members of `_C2_TARGETS` whose `GENERATES = []` is the accurate declaration:
+# the emitter writes no artifact claude-klabauter tracks (its output lands in a
+# caller-supplied directory in another repo). They stay in the sweep with no
+# verdict and no pairs; a fixed tracked artifact would owe a real declaration.
+_C2_DECLARED_EMPTY = frozenset({"coordinator_core/contract/cockpit_schema/emit_schema.py"})
 
 
 def _write(root: Path, rel_path: str, content: str) -> Path:
@@ -273,7 +278,10 @@ def test_real_tree_resolves_all_five_c2_declared_generators():
         matches = [r for r in records if r.generator == rel]
         assert len(matches) == 1
         assert matches[0].verdict is None, f"{rel} resolved with verdict {matches[0].verdict!r}"
-        assert len(matches[0].pairs) >= 1
+        if rel in _C2_DECLARED_EMPTY:
+            assert matches[0].pairs == ()
+        else:
+            assert len(matches[0].pairs) >= 1
 
 
 def test_real_tree_discovers_writers_outside_the_c2_five(tmp_path):
@@ -1322,7 +1330,10 @@ def test_regression_guard_five_declared_generators_and_canary_survive_narrowing(
         assert rel in by_name, f"{rel} missing from the real-tree sweep after R1-R6"
         record = by_name[rel]
         assert record.verdict is None, f"{rel} resolved with verdict {record.verdict!r}"
-        assert len(record.pairs) >= 1
+        if rel in _C2_DECLARED_EMPTY:
+            assert record.pairs == ()
+        else:
+            assert len(record.pairs) >= 1
 
     assert _CANARY in by_name, f"{_CANARY} vanished from the population -- narrowing regression"
     assert by_name[_CANARY].verdict == Verdict.WRITE_TARGET_UNRESOLVED
@@ -1397,6 +1408,9 @@ def test_c2_all_five_generators_declare_generates():
 
         assert generates != "__MALFORMED__", f"{rel}: GENERATES is not a literal"
         assert generates is not None, f"{rel}: no GENERATES declared (reads UNDECLARED)"
+        if rel in _C2_DECLARED_EMPTY:
+            assert generates == [], f"{rel}: declared-empty GENERATES is no longer []"
+            continue
         assert isinstance(generates, list) and len(generates) >= 1, (
             f"{rel}: GENERATES is not a non-empty list"
         )
@@ -1695,7 +1709,10 @@ def test_regression_guard_five_declared_generators_and_canary_unaffected_by_muta
     for rel in _C2_TARGETS:
         assert rel in by_name
         assert by_name[rel].verdict is None
-        assert len(by_name[rel].pairs) >= 1
+        if rel in _C2_DECLARED_EMPTY:
+            assert by_name[rel].pairs == ()
+        else:
+            assert len(by_name[rel].pairs) >= 1
         assert by_name[rel].verdict != Verdict.MUTATES_DECLARED
 
     assert _CANARY in by_name

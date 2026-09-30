@@ -41,6 +41,10 @@ _FRONTMATTER = (
 )
 
 # ORDERING-violating: a `backlogged` (defer) row precedes an `open` (do)
+# row. Legacy plan (no `grouping_approvals` key), so the grouping-approval
+# leg has nothing to say about this source — the violation is ordering
+# only. Byte-for-byte the same fixture shape as
+# coordinator_core/frontmatter/tests/test_plan_tasks_spine_sequence.py's
 # `_ORDERING_VIOLATING`.
 _ORDERING_VIOLATING = (
     "```yaml plan-tasks\n"
@@ -71,6 +75,9 @@ _CLEAN = (
 )
 
 # MULTI-DEFECT, ordering-VALID: two per-row shape defects (bad change_kind,
+# bad disposition), no ordering violation — isolates the per-row leg's
+# all-rows accumulation from the ordering leg the two guards now disagree
+# on declaring.
 _MULTI_DEFECT_ORDERING_VALID = (
     "```yaml plan-tasks\n"
     "- id: C1\n"
@@ -183,7 +190,11 @@ class TestSpineLegDeclarationDesyncRegression:
     edit beside a one-value code edit, never a silent desync.
     """
 
+    # name -> (legs, legs_out_of_band) this test EXPECTS that site to
+    # declare. `test_actual_declarations_match_expected` below captures what
     # each site ACTUALLY passes to the driver at call time (never read off
+    # source text) and compares against this map — so a change at any of
+    # the three call sites without a matching edit here fails loud.
     _EXPECTED = {
         "deny guard (_plan_tasks_spine_errors)": (
             ("integrity", "per_row"),

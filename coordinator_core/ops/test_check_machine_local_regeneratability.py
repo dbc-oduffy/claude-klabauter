@@ -300,7 +300,9 @@ schema = 1
     assert "repos.example-sim-repo" in err
 
 
+# ---------------------------------------------------------------------------
 # Missing HOME/CLAUDE_HOME/USERPROFILE — offer-shaped, exit 0, one stderr line
+# ---------------------------------------------------------------------------
 def test_unresolvable_home_exits_zero(capsys, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
@@ -376,7 +378,10 @@ def test_help_flag_prints_usage(capsys):
     assert "usage:" in captured.out
 
 
+# ---------------------------------------------------------------------------
+# AC8 (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md, chunk C6b):
 # repos.claude_klabauter joins COORDINATOR_OWNED_KEYS + the family-prefix arm.
+# ---------------------------------------------------------------------------
 def test_claude_klabauter_classified_no_warning(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(

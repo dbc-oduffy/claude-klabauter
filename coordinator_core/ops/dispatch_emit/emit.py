@@ -266,6 +266,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -276,7 +277,7 @@ from coordinator_core.attribution import strip_review_annotations
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
-from coordinator_core.ops._workflow_contract import Severity, run_checks
+from coordinator_core.ops._workflow_contract import Finding, Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
     commit_pathspec,
@@ -291,6 +292,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
     PREFIX_CLAIM_LABEL,
+    plan_deliverable_id as _plan_deliverable_id,
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import (
@@ -308,7 +310,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import completion_return_js, stage_schema_literal
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
-from coordinator_core.git.git_state import head_sha
+from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.executor_return_contract import (
     FOOTPRINT_CONSTRAINT_TEMPLATE,
     done_summary_constraint,
@@ -1213,6 +1215,11 @@ class PlanContext:
     #: preamble then says the anchor is undeclared rather than inventing one.
     #: See `_plan_context_preamble` for why an emitted script needs it at all.
     repo_root: Optional[str] = None
+    #: Directory holding the `claude` CLI when it lives off the standard system
+    #: PATH, resolved once at emit time by `_off_path_claude_dir`. `None` means
+    #: the CLI was not found or is already on a default PATH; the preamble then
+    #: omits the line rather than naming a guess.
+    claude_bin_dir: Optional[str] = None
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1242,6 +1249,45 @@ _REPO_ANCHOR_LINE = (
     "under some other repo with the same relative name is the wrong file, not "
     "a divergence to report."
 )
+
+#: Directories a dispatched executor's default PATH already carries. A `claude`
+#: found anywhere else is invisible to it: the binary is on the machine but
+#: "command not found" reads to the executor as "absent from the environment".
+_SYSTEM_PATH_DIRS = frozenset(
+    {"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin"}
+)
+
+#: Install prefixes probed when `claude` is not on the emitter's own PATH.
+_CLAUDE_INSTALL_PREFIXES = (
+    "/opt/node22/bin",
+    "~/.local/bin",
+    "~/.claude/local",
+    "/opt/homebrew/bin",
+)
+
+_CLAUDE_PATH_LINE = (
+    "claude CLI: at {dir}, off your default PATH; run `export PATH={dir}:$PATH` "
+    "before shelling out. `command not found` does not mean it is missing."
+)
+
+
+def _off_path_claude_dir() -> Optional[str]:
+    """Directory of the `claude` CLI when it sits outside `_SYSTEM_PATH_DIRS`,
+    else ``None``. Resolved at emit time because the emitter is the one party
+    that can see the binary and is already writing the brief; each executor
+    rediscovering it costs a wave.
+    """
+    found = shutil.which("claude")
+    if found is None:
+        found = shutil.which(
+            "claude",
+            path=os.pathsep.join(os.path.expanduser(d) for d in _CLAUDE_INSTALL_PREFIXES),
+        )
+    if found is None:
+        return None
+    directory = Path(found).parent.as_posix()
+    return None if directory in _SYSTEM_PATH_DIRS else directory
+
 
 #: The preflight runs first, so an unresolvable root halts the run before any
 #: executor spends time. Existence only, not path equality: `rev-parse`
@@ -1387,11 +1433,8 @@ _NEXT_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 # (`CLAUDE.md` § The brightline). Chosen generously enough to carry a real
 # title + goal + one paragraph without truncating the common case, while
 # still refusing an unbounded prose blob.
-_PLAN_CONTEXT_PREAMBLE_CHAR_CAP = 900
+_PLAN_CONTEXT_PREAMBLE_CHAR_CAP = 1050
 
-# The scaffolded sentinel `plan.schema.json` excludes from `deliverable_id`
-# by negative lookahead -- a plan still carrying it has no id yet.
-_DELIVERABLE_ID_PLACEHOLDER_PREFIX = "dlv-placeholder-replace-with"
 _TRUNCATION_SUFFIX = "…"
 
 
@@ -1502,6 +1545,7 @@ def derive_plan_context(
         problem_excerpt=problem_excerpt,
         exit_criterion=_prime_exit_criterion_statement(plan_text),
         repo_root=repo_root,
+        claude_bin_dir=_off_path_claude_dir(),
     )
 
 
@@ -1589,42 +1633,6 @@ def _prime_exit_criterion_falsifier(plan_text: str) -> Optional[dict]:
     }
 
 
-def _plan_deliverable_id(plan_text: str) -> Optional[str]:
-    """The plan's top-level frontmatter ``deliverable_id``, or ``None``.
-
-    Parses the frontmatter as YAML for the same reason
-    ``_prime_exit_criterion_statement`` does, and is fail-soft in every
-    direction: no frontmatter, unparseable YAML, a non-mapping document, an
-    absent, null, non-string, or empty ``deliverable_id`` all return
-    ``None``.
-
-    The scaffolded placeholder (``dlv-placeholder-replace-with-...``, which
-    ``plan.schema.json`` excludes by negative lookahead) is rejected too, as
-    is any value without the ``dlv-`` prefix that schema requires. A commit
-    prompt naming no id costs one hand-written ``disposition_ref``; a commit
-    prompt naming a placeholder stamps unrewritable shared history with an
-    id that joins to nothing.
-    """
-    split = split_frontmatter(plan_text)
-    if split is None:
-        return None
-    try:
-        doc = yaml.safe_load(split.fm_text)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(doc, dict):
-        return None
-    value = doc.get("deliverable_id")
-    if not isinstance(value, str):
-        return None
-    candidate = value.strip()
-    if not candidate.startswith("dlv-"):
-        return None
-    if candidate.startswith(_DELIVERABLE_ID_PLACEHOLDER_PREFIX):
-        return None
-    return candidate
-
-
 def _plan_id(plan_text: str) -> Optional[str]:
     """The plan's top-level frontmatter ``plan_id``, or ``None`` (fail-soft
     like ``_plan_deliverable_id``). ``review_stamp._resolve_terminal_commit``
@@ -1685,6 +1693,8 @@ def _plan_context_preamble(context: PlanContext) -> str:
     lines = []
     if context.repo_root:
         lines.append(_REPO_ANCHOR_LINE.format(root=context.repo_root))
+    if context.claude_bin_dir:
+        lines.append(_CLAUDE_PATH_LINE.format(dir=context.claude_bin_dir))
     lines.append(f"Plan: {context.title}")
     if context.goal:
         lines.append(f"Goal: {context.goal}")
@@ -1768,9 +1778,18 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
 
 
 #: The line an executor ends its reply with when a STOP RULE in its own spine
-#: row fired. Why a token is needed at all: `_run_row_helper_js`, which reads
-#: this token out of every row's reply.
+#: row fired -- the ONLY outcome that halts the emitted run. Why a token is
+#: needed at all: `_run_row_helper_js`, which reads this token out of every
+#: row's reply.
 _STOP_RULE_TOKEN = "STOP-RULE-FIRED"
+
+#: The two row outcomes that decided nothing and so halt nothing: a row its own
+#: gate withdrew, and a conditional row whose condition never armed. Distinct
+#: tokens from `_STOP_RULE_TOKEN` because a shared one halts waves that never
+#: depended on the row; `_run_row_helper_js` does not match either, and the
+#: reply and report still carry the line as the audit record.
+_WITHDRAWN_TOKEN = "ROW-WITHDRAWN"
+_VOID_TOKEN = "ROW-VOID"
 
 #: `_STOP_RULE_TOKEN` declared on a line of its own, matched against both a
 #: real newline and the backslash-n a JSON-stringified object reply carries.
@@ -1778,6 +1797,16 @@ _STOP_RULE_TOKEN = "STOP-RULE-FIRED"
 #: the token, so a substring test fails OPEN on an agent quoting it back.
 _STOP_RULE_JS_RE = (
     f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+)
+
+
+# Clones, venvs, wheels and exports an executor builds outside the repo
+# outlive it: dozens per run filled a cloud container's disk mid-run.
+_SCRATCH_HYGIENE_CLAUSE = (
+    "Scratch: anything you build outside the repo (a clone, venv, wheel, "
+    "export, tarball) goes under one directory named for this row, and you "
+    "delete that directory before you write your report. Reuse an existing "
+    "venv or clone rather than making another."
 )
 
 
@@ -1802,8 +1831,16 @@ def _stop_rule_clause() -> str:
         "before you changed anything is still DONE, not BLOCKED) and then "
         f"end your reply with one further line: `{_STOP_RULE_TOKEN}: "
         "<the rule, quoted, and what made it fire>`. The run commits this "
-        "wave and then halts; nothing after it is yours to start. Never "
-        "write that line for a rule that did not fire."
+        "wave and then halts; nothing after it is yours to start. Use that "
+        "line only when the measured condition refutes the premise the "
+        "FOLLOWING waves run on. Two outcomes are not a fired stop rule and "
+        "never take that line: a row its own gate withdrew (an arm the "
+        f"measurement did not select) ends with `{_WITHDRAWN_TOKEN}: "
+        "<the gate, quoted, and the measurement that withdrew the row>`; a "
+        "conditional row whose condition never armed (\"fires only if X "
+        f"failed\", X succeeded) ends with `{_VOID_TOKEN}: <the condition, "
+        "quoted, and why it did not hold>`. Both are DONE with nothing "
+        "changed, and the run continues past them."
     )
 
 
@@ -1959,6 +1996,7 @@ def _row_return_contract(
         )
     )
     parts.append(_stop_rule_clause())
+    parts.append(_SCRATCH_HYGIENE_CLAUSE)
     parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
 
@@ -2757,6 +2795,7 @@ def _terminal_commit_marker(
     deliverable_id: Optional[str],
     session_id: Optional[str],
     repo_root: Optional[str],
+    expected_branch: Optional[str] = None,
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
     (``commit_request.render_marker``) recording what this run promises
@@ -2790,6 +2829,7 @@ def _terminal_commit_marker(
             session_id=session_id,
             repo_root=repo_root,
             plan_path=plan_path,
+            expected_branch=expected_branch,
         )
     )
     if marker is None:
@@ -2856,6 +2896,8 @@ def compose_script(
     session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
+    script_path: Optional[str] = None,
+    expected_branch: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -2894,6 +2936,9 @@ def compose_script(
     -- the run's single terminal commit (``dispatch.terminal_commit``) is
     what now needs it. Resolved only in ``emit_script``; a plan declaring
     none emits a marker naming none, never a guessed or placeholder id.
+    ``expected_branch`` (``emit_script``'s zero-spawn ``head_branch`` read,
+    None when detached or unreadable) threads into the same marker; the
+    terminal commit refuses when HEAD is on another branch.
 
     ``preamble`` (optional) is a run-wide posture block forwarded to every
     row's prompt -- EXECUTOR prompts only, never the review/test phases,
@@ -3055,6 +3100,7 @@ def compose_script(
         deliverable_id=deliverable_id,
         session_id=session_id,
         repo_root=repo_anchor,
+        expected_branch=expected_branch,
     )
     if marker is not None:
         # Unindented: commit_request.parse_marker matches on line-start
@@ -3259,6 +3305,8 @@ def compose_script(
             falsifier_var=falsifier_var,
             review_vars=review_vars,
             has_commit_request=marker is not None,
+            script_path=script_path,
+            session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
         )
     )
 
@@ -3414,6 +3462,67 @@ def _check_fidelity_bar(plan_path: Path, repo_root: Optional[Path]) -> None:
         raise FidelityBarRefusalError(report["message"])
 
 
+#: ``change_kind`` values that edit something already in the tree. Absent
+#: ``writes:`` targets under these kinds are the surface-deleted-underneath-
+#: the-row signature. Every sibling in ``plan-tasks.schema.json``'s enum is
+#: left out on purpose: ``wiki-new`` creates by definition, ``verification``
+#: writes nothing, and ``test-edit``/``doc-edit`` rows routinely add a file.
+_ABSENT_EDIT_TARGET_KINDS = frozenset({"code-edit", "script-edit"})
+
+#: Finding code for ``find_absent_edit_targets``.
+ABSENT_EDIT_TARGET_CODE = "absent-edit-target"
+
+_GLOB_CHARS = frozenset("*?[")
+
+
+def find_absent_edit_targets(rows, repo_root: Optional[Path]) -> list:
+    """WARN findings for edit-kind rows whose declared ``writes:`` path is
+    absent from the tree.
+
+    A row authored before a later ruling deleted its file dispatches, runs a
+    full executor, and returns BLOCKED; the absence is knowable here from one
+    ``exists`` check per declared path. A heuristic, so it only ever warns:
+    a row that creates the file looks identical and must not be refused. It
+    names the row, path and ``change_kind`` and stops -- identifying the
+    successor surface is the executor's judgement, not the emitter's.
+
+    Only the first row (spine order) declaring a path is checked; a later row
+    editing what an earlier one creates is not evidence of a deleted surface.
+    Globs and directory-level ``writes_under:`` are not resolved. No-op when
+    ``repo_root`` is ``None``.
+    """
+    if repo_root is None:
+        return []
+    root = Path(repo_root)
+    seen: set = set()
+    findings = []
+    for row in rows:
+        writes = row.writes
+        if not isinstance(writes, list):
+            continue
+        for raw_path in writes:
+            if not isinstance(raw_path, str) or not raw_path or raw_path in seen:
+                continue
+            seen.add(raw_path)
+            if row.change_kind not in _ABSENT_EDIT_TARGET_KINDS:
+                continue
+            if _GLOB_CHARS.intersection(raw_path):
+                continue
+            if not (root / raw_path).exists():
+                findings.append(
+                    Finding(
+                        Severity.WARN,
+                        ABSENT_EDIT_TARGET_CODE,
+                        f"row {row.id!r} (change_kind {row.change_kind!r}) declares "
+                        f"writes: {raw_path!r}, which is absent from the tree -- "
+                        "either the row creates it or the surface was deleted "
+                        "since the row was authored (an edit needs something to "
+                        "edit); check before dispatching",
+                    )
+                )
+    return findings
+
+
 def emit_script(
     plan_path,
     *,
@@ -3425,8 +3534,15 @@ def emit_script(
     review_stage_schemas: Optional[dict] = None,
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
+    script_path: Optional[str] = None,
+    findings_out: Optional[list] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``findings_out``, when given, receives the emit-time WARN findings that
+    are about the plan rather than the composed script (see
+    ``find_absent_edit_targets``) -- an out-parameter like ``read_spine``'s
+    ``exclusions``, so the return type stays the script text.
 
     ``agent_type_host`` (S1-C5, docs/plans/2026-09-18-doe-holds-no-scripts.md)
     is the CALLER's already-resolved ``resolve_agent_type_host()`` value —
@@ -3525,8 +3641,10 @@ def emit_script(
     }
     check_unschedulable_rows(rows, raw_by_id)
 
-    check_cross_plan_write_overlap(plan_path, rows, repo_root)
+    check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root)
+    if findings_out is not None:
+        findings_out.extend(find_absent_edit_targets(rows, repo_root))
 
     waves = build_waves(rows)
 
@@ -3548,6 +3666,8 @@ def emit_script(
     # unresolvable or HEAD cannot be read; compose_script degrades to no
     # narration line rather than guessing a sha.
     run_base_sha = head_sha(repo_root) if repo_root is not None else None
+    observed_branch = head_branch(repo_root) if repo_root is not None else None
+    expected_branch = None if observed_branch in (None, "HEAD") else observed_branch
 
     return compose_script(
         waves,
@@ -3566,6 +3686,8 @@ def emit_script(
         session_id=session_id,
         agent_type_host=agent_type_host,
         preamble=preamble,
+        script_path=script_path,
+        expected_branch=expected_branch,
     )
 
 

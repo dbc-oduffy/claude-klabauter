@@ -59,16 +59,65 @@ import os
 import re
 from typing import List, Optional
 
+#: A `sed` edit-script operand -- `s/a/b/`, `s|a|b|g`, `y/abc/xyz/` -- shaped
 #: as COMMAND, DELIMITER, ..., same DELIMITER, optional trailing flag
+#: letters. `_iter_write_sink_candidates` yields this alongside the real
+#: file operand for any `sed -i '<script>' <file>` invocation (both are
+#: bare positional tokens once `-i` is present -- see
+#: `_write_bump_sink_shapes.extract_write_sink_targets_for_segment`'s own
+#: `sed` branch).
+#:
 #: WHY THIS FILTER IS LOAD-BEARING RATHER THAN TIDY -- measured 2026-08-30,
+#: because "it is not a path this session wrote to" is an aesthetic reason and
+#: the real one is worse. `claim_index.commit_set` does NOT filter claims by
+#: dirtiness, so a junk claim reaches `safe_paths` and lands in the commit
+#: pathspec. Probed on a scratch repo: `git add -- real.txt 's/a/b/'` exits
+#: 128 (`fatal: pathspec 's/a/b/' did not match any files`) and
+#: `git commit -m x -- real.txt 's/a/b/'` exits 1, with the real change NOT
+#: committed. One `sed -i` in a session would therefore destroy that
+#: session's entire commit -- strictly worse than the dropped-file bug this
+#: module exists to fix. Deleting this filter and letting
+#: `reconciliation.claimed_absent` name the junk afterwards was considered and
+#: is NOT viable for that reason.
+#:
+#: APPLIED ONLY WHEN THE HEAD VERB IS `sed`, and only together with
+#: a genuinely recurring delimiter -- see `_is_claimable_target`. This pattern ALONE is
+#: far too greedy in the one direction that must never be taken: judged
+#: against any token it rejected `state/e2e-probe-bash-write.txt` (leading
+#: `s`, a `t` recurring inside the trailing `.txt`, letters to the end), and
+#: by extension most of `state/*.txt`. A dropped claim is invisible -- the
+#: file simply fails to make the commit, which is the very bug this module
+#: exists to fix -- so the head-verb gate, not the pattern, is what makes
+#: this sound.
 _SED_SCRIPT_RE = re.compile(r"^[sy](.).*\1[a-zA-Z]*$")
 
 _UNEXPANDED_TOKEN_RE = re.compile(r"[$`]")
 
+#: A redirection operator that the shared tokenizer left as ONE token
+#: because the command wrote it with no space (`2>&1`, `2>/dev/null`) --
+#: `_write_bump_sink_shapes.extract_write_sink_targets_for_segment`'s own
 #: `_REDIRECT_OP_RE` only recognizes an operator and its target as TWO
+#: separate tokens, so a glued operator+target token never matches that
+#: regex and instead falls through to a binary's own positional-argument
+#: rule (`cp`/`mv`/`mkdir`/`tee`'s "last/every positional is a target"),
+#: which cannot tell a stray redirect from a real operand (issue #50). A
+#: real path never starts with a bare digit-then-`>` or `>` -- rejecting on
+#: that shape costs no legitimate target.
 _LEAKED_REDIRECT_RE = re.compile(r"^\d*>{1,2}")
 
+#: A heredoc opener -- `<<WORD`, `<<-WORD`, `<<'WORD'`, or a bare `<<`/`<<-`
+#: with nothing glued after it. `_command_tokenizer._strip_heredocs`
+#: deliberately leaves the opener in the token stream (it strips only the
+#: BODY), and `tokenize_full_command`'s `punctuation_chars=";&|"` excludes
+#: `<`, so whitespace alone decides whether the operator and its marker
+#: word glue into one token (`<<EOF`) or split into two (`<<` then `EOF`)
+#: -- the same split the `>`-direction guard family already documents
 #: (`dispatch_checks._BT_REDIRECTION_TOKEN_RE`'s own note). Either shape
+#: falls through to a binary's positional-argument rule exactly like the
+#: glued `>` case above: neither token starts with `-`, so `tee`/`cp`/`mv`/
+#: `mkdir`/`install`/`rsync` all read it as a real operand. A real path
+#: never starts with `<<` -- rejecting on that shape costs no legitimate
+#: target.
 _LEAKED_HEREDOC_OPENER_RE = re.compile(r"^<<-?")
 
 
@@ -177,11 +226,23 @@ def _rel_if_inside(resolved_target: str, root: str) -> Optional[str]:
 _SCRATCHPAD_SCRIPT_READ_CAP_BYTES = 65536
 
 
+#: `pythonX`, `pythonX.Y` basename shape -- `python3.11`, `python3`,
 #: `python2.7`. Checked ALONGSIDE (never instead of, never by editing)
 #: `_write_bump_sink_shapes._PYTHON_C_FLAG_INTERPRETERS`, which
+#: `bump_outside_repo_write` also consumes for the outside-repo question --
+#: the plan's Anti-scope fences that table, so a version-pinned interpreter
+#: is recognized locally, here, rather than by widening the shared set.
 _VERSIONED_PYTHON_BASENAME_RE = re.compile(r"^python[23]?(\.\d+)?$")
 
 #: Interpreter flags that consume a SEPARATE following token as their value
+#: rather than being a bare switch -- `python -X faulthandler script.py`
+#: presents two non-flag-looking tokens if this isn't accounted for, and the
+#: bare `len(positional) == 1` test then misses the script operand entirely
+#: (a silent drop, the exact bug class this module exists to fix). `-c` is
+#: handled separately above (it never reaches here, the segment is skipped
+#: outright). Kept to the flags actually documented to take a value with
+#: `python --help`; a flag not in this set is treated as unrecognized rather
+#: than guessed at, per the ambiguity rule below.
 _PYTHON_VALUE_TAKING_FLAGS = frozenset({"-W", "-X", "-Q"})
 
 
@@ -346,6 +407,18 @@ def _scratchpad_script_write_targets(cmd: str, root: str) -> List[str]:
 _READ_HEAD_VERBS = frozenset({"cat", "head", "tail", "sed", "less"})
 
 #: Flags that consume a SEPARATE following token as their value rather than
+#: being a bare switch, keyed PER VERB -- `head -n 5 a.py`/`tail -c 100
+#: a.py` both present a non-file-looking token immediately after the flag
+#: that a bare `startswith("-")` skip would otherwise leave as a stray
+#: positional. Deliberately NOT one set shared across every verb: `sed -n
+#: '1,40p' a.py` is the load-bearing counter-example -- `sed`'s `-n` is a
+#: BARE switch (suppress automatic printing), and `'1,40p'` is the edit
+#: script, an ordinary positional this function already drops via its own
+#: sed-specific rule below, not a flag value to be skipped. A verb absent
+#: from this map (`cat`, `less`, the common case) takes no value-taking
+#: flags at all. Kept to the flags actually documented to take a value; a
+#: flag not covered here is treated as a bare switch, per the
+#: under-claim-rather-than-guess rule this whole extractor follows.
 _READ_VALUE_TAKING_FLAGS_BY_VERB = {
     "head": frozenset({"-n", "-c"}),
     "tail": frozenset({"-n", "-c"}),
@@ -531,6 +604,7 @@ def record_write_claims(
                 rels.append(rel)
 
         # KIND_WRITE: every target reaching here came from a write-shaped
+        # command. This is the claim that SHOULD refuse a peer's commit.
         append_touch_claims(rels, session_id, root, kind=KIND_WRITE)
     except Exception:
         return

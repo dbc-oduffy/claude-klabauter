@@ -68,7 +68,7 @@ CALLER-OPT-IN, NOT A GLOBAL CARVE-OUT (state/bug-backlog/2026-09-06-quick-wrap-a
 brief-commits-while-every-sibling-brief-only-reads.yaml): `commit` defaults to `False`, so
 `brief()` called bare — the shape every sibling assembler's `brief()` has — stays genuinely
 read-only, matching `pickup-assemble brief`/`plan-assemble brief`/`sizing-assemble`/
-`merge_assemble.brief()`. Only the real close ceremony, `main()`'s `brief(commit=True)`
+merge-assemble's `brief()`. Only the real close ceremony, `main()`'s `brief(commit=True)`
 call reached through the `quick-wrap-assemble brief` CLI, opts in. This narrows the C5
 carve-out's blast radius to its one deliberate caller; it does not reverse or gate C5's own
 commit behaviour for that caller, which remains unconditional and prompt-free.

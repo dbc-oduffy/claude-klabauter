@@ -77,7 +77,36 @@ import sys
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
+# Accepted `kind` values for a genuine roadmap stub, at the session-state
+# parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
+# `spinoff-roadmap` (along with `spinoff-goal` and `spinoff-roadmap-creator`)
+# from `properties.kind.enum`, replacing it with `roadmap-baton` — the live
+# corpus and `coordinator/bin/coordinator-doc-new.py`'s scaffolder both emit
+# `kind: roadmap-baton` now. `spinoff-roadmap` stays accepted here because
+# `handoff-archived.schema.json` was deliberately WIDENED in the same 4.0.0
+# change to admit both vocabularies (the archived corpus permanently retains
+# the historical name), so an archived roadmap stub a session still holds a
+# claim on legitimately carries the retired spelling. Both values denote the
+# same "is this a roadmap stub" fact — accepting both preserves the AC1/AC4b
+# false-merge guard in full while matching the schema's actual accepted
+# vocabulary. Do NOT add `spinoff-goal`/`goal-seed`/`spinoff-roadmap-creator`/
+# `roadmap-seed` here — those are a different artifact class, not a roadmap
+# stub, and must keep failing the AC4b false-merge check.
+#
+# Sourced from `baton_class.kind_values_for_canonical("roadmap-baton")`
+# rather than a hand-paired literal — that accessor returns exactly
+# `["roadmap-baton", "spinoff-roadmap"]` (the only pre-rename alias whose
+# target is `roadmap-baton`), so this is the same membership, derived from
+# the single owning table instead of re-declaring the retired/successor
+# pair here. See `coordinator_core/frontmatter/baton_class.py`'s "Vocabulary
+# bridge" section and
+# `coordinator_core/tests/test_baton_class_is_the_only_membership_set.py`.
+#
+# This coupling is intended, made
 # explicit here rather than removed: a future `_PRE_RENAME_ALIASES` entry
+# targeting `roadmap-baton` widens this set automatically with no code change
+# at this call site, so `baton_class.py`'s own review discipline is now the
+# only gate on this membership.
 _ROADMAP_STUB_KINDS = frozenset(kind_values_for_canonical("roadmap-baton"))
 
 _SIZING_OBJECT_DOC_TYPE = "sizing-object"

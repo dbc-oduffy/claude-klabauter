@@ -214,7 +214,11 @@ def test_closure_fidelity_item_created_with_no_classification_defaults(repo_root
 
 
 def test_closure_fidelity_item_reached_only_via_membership_event_defaults(repo_root):
+    # The load-bearing case: an item with NO item_created event at all,
+    # reachable in the stream ONLY through an item_project_added event, and
+    # never classified. fold_closure_fidelity's totality must still seed it
     # to DEFAULT_CLOSURE_FIDELITY (D4) -- this is distinct from, and does
+    # not degrade to, "an item_created item with the field unset".
     emit_project_created("proj-alpha", name="Alpha", repo_root=repo_root)
     only_added = mint_item_id(
         "OnlyAdded", "no item_created, no classification ever", "2026-08-05T10:00:00.000000Z"
@@ -376,17 +380,30 @@ def test_ac16_reserved_project_id_addressable_with_no_item_folding_to_it(repo_ro
     folded = fold_membership(repo_root=repo_root)
     assert all(RESERVED_PROJECT_ID not in projects for projects in folded.values())
     # `assert RESERVED_PROJECT_ID ==
+    # "unassigned"` was a constant compared to its own literal (tautology,
+    # cannot fail) and did not probe AC16's actual claim. On re-check: a
     # `project_created` event for RESERVED_PROJECT_ID can never exist to be
     # looked up via `tracker_store.read_events` — creating one is REJECTED
+    # at construction time (see `test_tracker_entities.py`'s AC2 coverage,
+    # `reject_reserved_project`). The reserved row's "addressability" is by
+    # construction, not storage: it's a stable identity constant this
+    # module's fold emits directly, never something read back from the
+    # event stream. The assert above is this module's actual AC16-relevant
     # coverage: the fold never confuses RESERVED_PROJECT_ID with a real,
+    # stored edge, regardless of fold state.
 
 
 def test_ac16_reserved_project_id_addressable_when_an_item_does_fold_to_it(repo_root):
     item_id = _make_item(repo_root)
 
     folded = fold_membership(repo_root=repo_root)
+    # Dropped the tautological
     # `assert RESERVED_PROJECT_ID == "unassigned"`. Per the sibling test
     # above: a project_created event for RESERVED_PROJECT_ID can never
+    # exist (rejected at construction — test_tracker_entities.py AC2), so
+    # "addressability" here is by construction (a stable identity constant
+    # this fold emits directly), not a storage lookup this module could
+    # test. This test's actual AC16-relevant coverage: an item with zero
     # real edges folds to exactly {RESERVED_PROJECT_ID}, established below.
     assert folded[item_id] == {RESERVED_PROJECT_ID}
 
@@ -452,7 +469,9 @@ def test_ac9_retract_then_readd_of_same_triple_is_not_a_duplicate(repo_root):
     emit_item_person_added(item_id, "person-1", "assignee", repo_root=repo_root)
     emit_item_person_retracted(item_id, "person-1", "assignee", repo_root=repo_root)
 
+    # The triple is currently absent (retracted), so re-adding it is not a
     # duplicate — DEC-18's key rejects a CURRENTLY-present duplicate, not a
+    # historical one.
     emit_item_person_added(item_id, "person-1", "assignee", repo_root=repo_root)
 
     folded = fold_person_membership(repo_root=repo_root)

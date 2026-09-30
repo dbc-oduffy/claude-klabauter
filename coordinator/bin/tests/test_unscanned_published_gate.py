@@ -373,6 +373,7 @@ class TestUnscannedPublishedCheckDirect:
         section = {"file_surface": {"include_extensions": ["*.py"]}}
         repo_root = publish._dest_repo_root(target.dest_dir) or target.dest_dir
 
+        # Only "scrubbed.py" was actually visited this run -- the other file is
         # published (on disk) and ELIGIBLE (matches *.py) but was never recorded.
         visited_files_by_repo_root = {repo_root: {target.dest_dir / "scrubbed.py"}}
 

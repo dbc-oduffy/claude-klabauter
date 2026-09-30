@@ -41,6 +41,7 @@ from pathlib import Path
 
 from coordinator_core.ops.emit.context import EmitContext, _GIT_BACKED_SOURCE_KINDS
 
+# Path of the frozen lesson-summary producer, relative to the coordinator (meta-repo) root.
 # Mirrors bash "$COORDINATOR_ROOT/bin/lib/emit-lesson-summaries.py".
 _PRODUCER_REL = ("bin", "lib", "emit-lesson-summaries.py")
 
@@ -98,7 +99,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         cwd=str(ctx.repo_root),
     )
 
+    # The frozen producer predates ctx.provenance() and hardcodes source_kind="local_fs"
+    # while unconditionally populating ref={branch, sha} from the emitting repo's git state.
     # The D9/cockpit-contract invariant (context.py:_GIT_BACKED_SOURCE_KINDS) requires ref to
+    # be null for non-git-backed source kinds (local_fs, coordinator_artifact) — enforce it
+    # here since the producer itself cannot be edited (foreign/shared surface).
     for record in records:
         provenance = record.get("provenance") if isinstance(record, dict) else None
         if isinstance(provenance, dict) and "source_kind" in provenance:

@@ -24,6 +24,14 @@ import json
 from coordinator_core.invoke.__main__ import _dispatch_argv
 
 # THE `.buffer` LEG IS HERE BECAUSE TWO REVIEWERS DISAGREED ABOUT IT.
+# overengineering-reviewer had it dropped as covering no caller this diff
+# names; code-reviewer then named the shapes it does cover -- `io.StringIO`,
+# an embedding host's stream wrapper. It stays because the failure it guards
+# is not "a test asserts a hypothetical": a text stream standing in for
+# `sys.stdin` raises `AttributeError` at `.buffer`, which the read's own
+# `(OSError, UnicodeDecodeError)` catch does not cover, so it escapes as a
+# -32603 -- the same escape that made a warm-served `--params-file -` answer
+# -32004 in the first place. Reopening that class is what the leg costs.
 
 
 class _TextOnlyStdin:

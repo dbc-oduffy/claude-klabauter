@@ -123,6 +123,37 @@ class TestRealResiduePositiveCases:
         _advisory_text(result)
 
 
+class TestCensusStepsCanonicalHome:
+    """census-steps documents are tracked artifacts at the schema-declared
+    ``.coordinator-local/plan-sidecars/`` home; the scratch redirect is wrong
+    there and only there."""
+
+    @pytest.mark.parametrize(
+        "file_path",
+        [
+            ".coordinator-local/plan-sidecars/some-skill.census-steps.md",
+            "/repo/.coordinator-local/plan-sidecars/some-skill.census-steps.md",
+            ".coordinator-local/plan-sidecars/some-skill.census-steps.2026-08-13T20-10-01Z.md",
+        ],
+        ids=["relative", "absolute", "archival"],
+    )
+    def test_census_at_canonical_home_silent(self, file_path):
+        assert guard.check(_payload("Write", file_path)) is None
+
+    def test_census_at_legacy_root_still_advises(self):
+        result = guard.check(
+            _payload("Write", "state/plan-sidecars/some-skill.census-steps.md")
+        )
+        assert result is not None
+        assert "census-steps" in _advisory_text(result)
+
+    def test_other_non_row_39_lens_at_canonical_home_still_advises(self):
+        result = guard.check(
+            _payload("Write", ".coordinator-local/plan-sidecars/foo.staff-eng-review.md")
+        )
+        assert result is not None
+
+
 class TestRow39LegalLensesSilent:
     """AC3: all five row-39 lenses write silently -- zero false fires."""
 

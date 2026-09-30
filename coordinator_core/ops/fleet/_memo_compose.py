@@ -74,6 +74,7 @@ def body_opens_frontmatter(body: str) -> bool:
 
 _LOG = logging.getLogger(__name__)
 
+# Topic slug: filesystem-safe, no path-traversal chars.
 # Mirrors cross-repo-memo CLI _TOPIC_SLUG_RE exactly — enforces the same
 # YYYY-MM-DD-<topic>.md filename contract (5-lockstep-site invariant).
 _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
@@ -467,6 +468,8 @@ def _render_extra_field(key: str, value: Any) -> str:
     return f"{key}: {_yaml_scalar(value)}"
 
 
+# kind enum — re-exported from `memo_kinds`, which is import-free on purpose.
+# Kept as a module-level name because five call sites and several tests already
 # read `_memo_compose._VALID_KINDS`; the value is not defined here.
 _VALID_KINDS = _CANONICAL_VALID_KINDS
 
@@ -530,6 +533,8 @@ def _compose_memo(
         summary = derive_prose_summary(body)
     else:
         # Fail loud, never truncate an EXPLICITLY authored summary — this
+        # raise is the defense-in-depth backstop for a direct caller that
+        # bypasses the op's own send-time cap check.
         error = validate_explicit_summary("send_backstop", summary)
         if error:
             raise ValueError(error)

@@ -21,8 +21,22 @@ from coordinator_core.test_archive_stamp import _init_repo
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _OP_NAME = "handoff.archive_transition"
+# NO registry-presence skip here, deliberately. `handoff.archive_transition`
 # is in SUSPENDED_OPS and absent from the registry (kill ledger K-109/K-022),
+# and `test_supersede_archives_atomically.py` skips on that because it
+# dispatches THROUGH the registry. These tests do not: they call `_handler`
+# as a library import, which is the same surviving route the live path takes
+# (`baton_assemble.apply`'s d6 -> `housekeeping.cycle` ->
+# `handoff_archive_transition._handler`, see that handler's own "ROUTED
+# THROUGH `housekeeping.cycle`" note). Copying the sibling's guard here
+# disabled this entire file -- it reported "1 skipped" inside an otherwise
+# green summary while the behaviour it pins went unexercised, which is how
+# the first cut of this plan shipped a fix that did not fix the reported bug.
+#
 # Negative-spec: do NOT reinstate a `_OP_NAME not in _REGISTRY` skip. Registry
+# presence is not this file's reachability condition. If `_handler` itself is
+# ever deleted, the import at the top fails loudly, which is the correct
+# signal.
 
 
 def _run(coro):
@@ -247,6 +261,7 @@ def test_clause3_refuses_on_name_matched_not_identity_checked_edge(tmp_path):
     _init_repo(repo)
     _seed_predecessor(repo, "never-claimed.md", handoff_id="hnd-pred-abcdef")
     # Claimed, but its `predecessor:` names a DIFFERENT file — a name match
+    # to the candidate is never supplied, so the identity check fails.
     _seed_successor(
         repo, "unrelated-successor.md",
         predecessor="state/handoffs/some-other-parent.md",

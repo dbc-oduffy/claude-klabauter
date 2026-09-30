@@ -84,13 +84,22 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
+#: The full set of on-disk CLIs this module's `directives[]` may name
+#: (bareword, no `.py` suffix — the same shape `workstream_complete`'s own
 #: `CONSUMES_MANIFEST` uses). `stamp-run-complete` is deliberately NOT a
+#: member: it is an in-package `op:` handler
+#: (`coordinator_core.learn_lessons_pipeline.run_stamp.stamp_run_complete`),
+#: not a `coordinator/bin` script, so admitting it here would put a
+#: non-script into a manifest whose whole point is "every `cli` is a real,
+#: manifest-listed bin script" (see C4's body for the two closed dispatch
+#: tables this distinction feeds).
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "extract-lessons",
     "lessons-outbox-drain",
     "age-sweep-lessons",
 )
 
+#: The single `op:` verb this package's `directives[]` may name — see
 #: `CONSUMES_MANIFEST`'s docstring for why the run-stamp step is not a
 #: `CONSUMES_MANIFEST` member.
 STAMP_RUN_COMPLETE_OP = "stamp-run-complete"

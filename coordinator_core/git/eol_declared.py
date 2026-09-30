@@ -67,12 +67,19 @@ __all__ = [
 
 EXECUTABLE_SUFFIXES = (".cmd", ".ps1", ".sh", ".bat")
 
+#: The two endings a declaration can name that this module can verify and
+#: repair. `git ls-files --eol` also reports `none` (a file with no line
 #: terminator at all) and `mixed`; neither is a DECLARATION, they are
+#: observations, and neither appears on the left of this membership test.
 _REPAIRABLE_DECLARATIONS = ("lf", "crlf")
 
 _BYTES_FOR = {"lf": b"\n", "crlf": b"\r\n"}
 
+#: `i/<index-eol> w/<worktree-eol> attr/<attrs><TAB><path>`, per `git ls-files
 #: --eol`. The attribute field is space-padded and itself CONTAINS spaces
+#: (`text eol=crlf`), which is why the path is taken off the tab rather than
+#: off a field count. Under `-z` git NUL-terminates records and does NOT
+#: C-quote unusual paths, so `.*` is safe for the tail.
 _RECORD = re.compile(r"^i/(\S*)\s+w/(\S*)\s+attr/(.*?)\s*\t(.*)$", re.DOTALL)
 
 _DECLARED = re.compile(r"\beol=(\w+)")

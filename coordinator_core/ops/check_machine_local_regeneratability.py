@@ -131,9 +131,16 @@ from coordinator_core import _settings_home
 
 _PROG = "check-machine-local-regeneratability"
 
+# Coordinator-owned keys: the canonical set of keys expected classified in the
+# [regeneratability] table. Matched via _key_matches_regen_entry(): exact-string,
 # plus the two named family-prefix arms in FAMILY_PREFIX_ENTRIES below (plugin.mirrors
+# is a per-plugin namespace set via `machine-local set`); every other key requires an
+# exact match.
 # PROVENANCE ONLY — not load-bearing. Check 1 derives its key set from the
 # registry via `_declared_owned_keys`; see this module's docstring § SUPERSEDED
+# for why a hardcoded literal list cannot survive publication. Retained as the
+# bash parity artifact, so the verbatim-reproduction rule below governs this
+# list's fidelity to its oracle, NOT what the observer checks.
 COORDINATOR_OWNED_KEYS: List[str] = [
     "coordinator.python",
     "plugin.mirrors",
@@ -150,7 +157,12 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "repos.claude_klabauter",
 ]
 
+# Family-prefix match arms (AC8, docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md
+# chunk C6b): a bare family entry in [regeneratability] satisfies any dotted key that has
+# it as a strict dotted-prefix. Named and bounded — not a general glob (see module
+# docstring negative-spec). "engine.working_repos" is DoE-declared on their plane; claude-klabauter
 # only supplies the arm that can match it, not the key itself (COORDINATOR_OWNED_KEYS is
+# deliberately NOT extended with any engine.working_repos.* spelling).
 FAMILY_PREFIX_ENTRIES: List[str] = [
     "plugin.mirrors",
     "engine.working_repos",
@@ -282,7 +294,9 @@ def _flat_nondict_keys_from_file(path: Path) -> List[str]:
     return [k for k, v in data.items() if not isinstance(v, dict)]
 
 
+#: Namespaces whose declared keys this observer holds to the classification
 #: requirement. NAMESPACES, not key literals, because a namespace survives
+#: percolation and a codename does not — see `_declared_owned_keys`.
 COORDINATOR_OWNED_NAMESPACES: List[str] = [
     "coordinator",
     "plugin",
@@ -447,6 +461,8 @@ def main(argv: List[str]) -> int:
     machine_local_bin = Path(claude_dir) / "bin" / "machine-local"
     if os.name == "nt":
         # The bare shim is EXTENSION-LESS, so CreateProcess cannot exec it
+        # (WinError 193) — prefer the delivered .cmd sibling on Windows.
+        # Mirrors coordinator_core.install._shared.resolve_machine_local_cli.
         cmd_sibling = machine_local_bin.with_suffix(".cmd")
         if cmd_sibling.is_file():
             machine_local_bin = cmd_sibling

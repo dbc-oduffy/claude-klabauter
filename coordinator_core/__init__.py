@@ -22,7 +22,14 @@ from __future__ import annotations
 
 import importlib
 
+# Op-scope parity surface — re-exported for cross-repo contract consumers (e.g. DoE shim).
 # DR § AC-1b: importable as `from coordinator_core import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS`.
+# Sourced from the dependency-free op_scopes module (not coordinator_core.ipc) so that
+# `import coordinator_core` does not transitively pull in ipc.py's top-level `import asyncio` —
+# see coordinator_core/op_scopes.py module docstring for the full rationale. ipc.py still
+# re-exports the same names for existing `from coordinator_core.ipc import ...` call sites.
+# Kept EAGER (unlike the two lazy re-export groups below): ~0.1ms, dependency-free, and
+# deliberately not worth the __getattr__ indirection.
 from coordinator_core.op_scopes import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS  # noqa: F401
 
 __all__ = [

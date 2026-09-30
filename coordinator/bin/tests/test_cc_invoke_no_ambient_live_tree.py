@@ -52,7 +52,10 @@ import cc_invoke as _mod  # noqa: E402  (import after path setup)
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+# ---------------------------------------------------------------------------
 # Source-level guard — neither Rung 1 nor Rung 3 answers the DISPATCH
+# question directly any more; both must route through `_delegate_to_gate`.
+# ---------------------------------------------------------------------------
 
 
 def test_rung1_and_rung3_no_longer_return_their_candidate_directly():

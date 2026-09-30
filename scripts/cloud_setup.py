@@ -204,49 +204,6 @@ SESSION_ORIENTATION_RULE = "cloud-session-orientation.md"
 #: which can see its own environment, resolve it.
 SESSION_FOCUS_ENV = "EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO"
 
-#: The platform's own record of where each installed plugin lives.
-#: `<claude_home>/plugins/installed_plugins.json` is what every `claude`
-#: process reads to expand `${CLAUDE_PLUGIN_ROOT}` in a plugin's `hooks.json`.
-#: An `installPath` naming a directory that does not exist expands that
-#: variable to EMPTY, which disables the whole hook plane while every other
-#: surface — `settings.json`, the marketplace record, the plugin listing —
-#: still reports healthy.
-PLUGIN_RECORD_REL = ("plugins", "installed_plugins.json")
-
-#: Marker a resolvable plugin root must carry. Presence of the directory alone
-#: is not enough: a plugin root without its own manifest is not one.
-PLUGIN_MANIFEST_REL = (".claude-plugin", "plugin.json")
-
-#: The plugin's own hook manifest, relative to its install root. Where plugin-side
-#: hook delivery lives — and, on a healthy install, the ONLY place hooks are
-#: registered (see `assert_hook_plane_armed`).
-PLUGIN_HOOKS_REL = ("hooks", "hooks.json")
-
-#: A script file's recognized extensions inside a hook command or argument —
-#: the engine's own `guard_settings_integrity._SCRIPT_TOKEN_RE` set, re-stated
-#: because this module must not import `coordinator_core`. Checked against an
-#: already `shlex`-isolated piece (`_shlex_pieces`), not scanned with `\S*`
-#: over a raw multi-word string: a quoted path with an embedded space is one
-#: piece by then, and `\S*` cannot cross a space it might still contain
-#: (code-reviewer F2).
-_SCRIPT_EXTENSIONS = (".py", ".sh", ".mjs", ".js")
-
-
-def _script_tail(piece: str) -> str | None:
-    """The `<dir>/<file>` tail of `piece` if it names a script file, else None."""
-    normalized = piece.replace("\\", "/").strip("'\"")
-    if not normalized.endswith(_SCRIPT_EXTENSIONS):
-        return None
-    tail = "/".join(normalized.split("/")[-2:])
-    return tail or None
-
-
-#: The marketplace manifest, read for the marketplace's declared name. Both
-#: halves of the record's `<plugin>@<marketplace>` key are READ from the clone,
-#: never spelled here — a literal survives exactly until either is renamed and
-#: then registers a key nothing resolves while reporting success.
-MARKETPLACE_MANIFEST_REL = (".claude-plugin", "marketplace.json")
-
 #: The auto-compact window this script pins for a cloud container, in tokens.
 #:
 #: Compaction, not the handoff, is the continuity primitive in cloud: an
@@ -273,6 +230,14 @@ CLOUD_AUTO_COMPACT_WINDOW_TOKENS = 500_000
 #: `/autocompact` and the context UI read back — leaving it unset would make
 #: the UI misreport a window that is actually in force.
 AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
+#: Rung 1 of `dispatch_emit.emit.resolve_agent_type_host`. A cloud session's
+#: primary directory is `/home/user`, not a git repo, so rung 3 (the
+#: SessionStart head_at_start marker) never fires there and an unpinned first
+#: emission degrades every `coordinator:*` agentType to general-purpose. This
+#: script installs the plugin, so on this host those types always resolve.
+AGENT_TYPE_HOST_ENV = "COORDINATOR_AGENT_TYPE_HOST"
+AGENT_TYPE_HOST_VALUE = "coordinator"
 AUTO_COMPACT_WINDOW_SETTING = "autoCompactWindow"
 
 NETWORK_MAX_ATTEMPTS = 3
@@ -280,17 +245,10 @@ NETWORK_MAX_ATTEMPTS = 3
 #: installer's own internal pip ceiling so a wedged pip is reported by the layer
 #: that can name the package. A ceiling is not a budget.
 #:
-#: Raised 960 -> 2400 (PM direction, this session): example-retrieval-repo's `--cloud`
-#: mode (commit 879eb000) now performs the vendored scip builds AND the
-#: embed-model prefetch it used to skip, PLUS a full CPU-torch install —
-#: three steps this ceiling was never sized against. PM ruling was raise the
-#: ceiling, not drop a step to fit inside it: the cold cost of the new
-#: CPU-torch install is UNMEASURED as of this change (no example-retrieval-repo report
-#: exists yet), so 2400s is a considered-but-provisional headroom figure, not
-#: a measured one. Revisit downward once example-retrieval-repo reports its own cold
-#: `--cloud` install time; do not treat this number as load-bearing evidence
-#: of anything.
-RAG_INSTALL_TIMEOUT_S = 2400
+#: example-retrieval-repo's `--cloud` mode installs its READ profile only (no torch, no
+#: embed-model prefetch, no scip builds), so the cold install is base wheels
+#: plus LSP provisioning. The figure is provisional headroom, not a measurement.
+RAG_INSTALL_TIMEOUT_S = 960
 #: Foreground budget for the retrieval install. Past it the install is NOT
 #: killed for good: it is restarted detached (`RAG_INSTALL_DEFERRED_LOG`) and
 #: the rest of the pipeline proceeds, so the settings writes always land inside
@@ -322,10 +280,21 @@ STALE_PYTEST_TREE_AGE_S = 6 * 60 * 60
 UV_CACHE_CLEAN_TIMEOUT_S = 120
 
 
-def retrieval_search_roots() -> "list[Path]":
+#: Where the platform mounts the checkouts an operator selected for a session.
+#: `/root` is NOT one: it holds this script's own clones, whose keys are
+#: written by the trust-anchor step under their own names.
+SESSION_SOURCE_ROOTS: tuple[Path, ...] = (Path("/home/user"), Path("/workspace"))
+
+
+def session_source_roots() -> "list[Path]":
+    """The operator-selected mount roots, env override first."""
     override = (os.environ.get(RETRIEVAL_ROOT_ENV) or "").strip()
     roots = [Path(override)] if override else []
-    roots += [Path("/home/user"), Path("/workspace"), Path("/root"), Path.cwd()]
+    return roots + [r for r in SESSION_SOURCE_ROOTS if r not in roots]
+
+
+def retrieval_search_roots() -> "list[Path]":
+    roots = [*session_source_roots(), Path("/root"), Path.cwd()]
     seen: list[Path] = []
     for r in roots:
         if r not in seen:
@@ -355,6 +324,9 @@ class Report:
     #: were enumerated off, and which bare names were written vs. left alone
     #: because a non-sentinel file already owned that name.
     engine_cli_shims: dict | None = None
+    #: Verdict of `link_engine_cli_shims_onto_image_path`: the image-default-PATH
+    #: dir the shims were linked into, and which names were linked vs. left alone.
+    engine_cli_path_links: dict | None = None
     container_optin_requested: bool | None = None
     setup_exit_code: int | None = None
     plugin_settings: dict | None = None
@@ -427,6 +399,8 @@ class Report:
     #: up with a `prepare-commit-msg` hook file. See `install_hooks_fleet`.
     hooks_fleet: dict | None = None
     rag_install: dict | None = None
+    #: `deepen_shallow_checkouts`: per mounted shallow checkout, the detached fetch started.
+    history_deepen: dict | None = None
     #: Verdict of `land_example_retrieval_repo_repo_bundle`: per mounted repo, whether the
     #: published structural-index bundle was pulled before the daemon could be
     #: armed. Advisory only — a failure here is recorded, never raised; see
@@ -599,12 +573,10 @@ FRESH_ENGINE_CHECKOUT_NAME = "claude-klabauter"
 FRESH_ENGINE_CHECKOUT_PATH = f"/home/user/{FRESH_ENGINE_CHECKOUT_NAME}"  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 
 #: Directory the bare-name engine CLI shims are written into
-#: (`install_engine_cli_shims`). First entry on this container's own root
-#: PATH (verified against the image, not derived from `/etc/environment`,
-#: which does not carry it — a login-shell-only addition `resolve_session_path`
-#: already accounts for by searching this process' own PATH as a fallback
-#: rung), so a bare `coordinator-invoke` et al. resolves here before anything
-#: else on PATH.
+#: (`install_engine_cli_shims`). On this container's login-shell PATH but NOT
+#: on `/etc/environment`'s, so an agent shell can lack it: every shim is also
+#: linked into an image-default-PATH dir
+#: (`link_engine_cli_shims_onto_image_path`).
 SHIM_DIR = Path("/root/.local/bin")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 
 #: First line of every shim this script writes, so a re-run can tell its own
@@ -624,6 +596,13 @@ _SHIM_SENTINEL = "# cloud_setup.py: engine-cli-shim (auto-generated, do not hand
 #: once one is mounted — see that module's docstring for the freshness rule.
 #: claude-klabauter#67 (comments 5785027514, 5785078234).
 ENGINE_CURRENT_LINK = Path("/root/engine-current")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+
+#: The settings home every resolver falls back to when `COORDINATOR_SETTINGS_HOME`
+#: is absent (`machine_local_impl_resolve.settings_home`). Processes that do not
+#: inherit `settings.json`'s `env` block — workflow-dispatched agents among them —
+#: land here, so it must reach the same registry the exported var names; unlinked,
+#: their `repos.*` lookups read an empty registry and fail as "not set".
+DEFAULT_SETTINGS_HOME_LINK = Path("/root/.coordinator-claude-settings")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 
 
 def _create_engine_current_symlink() -> None:
@@ -657,6 +636,23 @@ def set_engine_env(report: Report) -> None:
     os.environ.update(engine_env)
     report.engine_root = engine_env["COORDINATOR_ENGINE_ROOT"]
     report.settings_home = engine_env["COORDINATOR_SETTINGS_HOME"]
+    _link_default_settings_home(Path(engine_env["COORDINATOR_SETTINGS_HOME"]))
+
+
+def _link_default_settings_home(target: Path) -> None:
+    """Point `DEFAULT_SETTINGS_HOME_LINK` at `target`, atomically and idempotently.
+
+    A real directory already there is an operator's own settings home and is
+    left untouched; only an absent path or an existing symlink is (re-)pointed.
+    """
+    link = DEFAULT_SETTINGS_HOME_LINK
+    if link.exists() and not link.is_symlink():
+        return
+    tmp = link.with_name(link.name + ".tmp")
+    if tmp.exists() or tmp.is_symlink():
+        tmp.unlink()
+    tmp.symlink_to(target, target_is_directory=True)
+    tmp.replace(link)
 
 
 def _engine_env() -> dict[str, str]:
@@ -822,6 +818,69 @@ def install_engine_cli_shims(report: Report) -> None:
         "written": written,
         "skipped_foreign": skipped_foreign,
     }
+
+
+#: A CLI the pre-boot verdict requires to resolve bare under the image default
+#: PATH, the PATH a grind agent's shell carries whatever the env-var box says.
+PATH_PROBE_CLI = "coordinator-invoke"
+
+
+def _image_path_link_dir() -> Path:
+    """The directory of the image default PATH the shims are linked into:
+    `/usr/local/bin` when the default carries it, else the first writable entry."""
+    entries = [e for e in _image_default_path().split(":") if e]
+    preferred = "/usr/local/bin"  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+    if preferred in entries:
+        return Path(preferred)
+    for entry in entries:
+        if os.path.isdir(entry) and os.access(entry, os.W_OK):
+            return Path(entry)
+    raise FileNotFoundError(f"no writable directory on the image default PATH {entries!r}")
+
+
+def link_engine_cli_shims_onto_image_path(report: Report) -> None:
+    """Symlink every shim `install_engine_cli_shims` wrote into a directory of
+    the image default PATH, then require `PATH_PROBE_CLI` to resolve there.
+
+    `SHIM_DIR` reaches a session's PATH only through the env-var box, which
+    does not reliably carry it: a grind agent's shell then resolves every
+    engine CLI to "command not found" and its commit stage is lost. The image
+    default PATH is what every shell gets, so a link there needs no PATH state.
+
+    A name that already exists at the link dir (an image binary, an operator's
+    file, a prior run's link) is left alone, never replaced. A no-op when
+    `install_engine_cli_shims` recorded nothing: that step's own failure is the
+    loud one. Raises when the probe CLI does not resolve under the image
+    default PATH, which `run_step` records into the pre-boot verdict.
+    """
+    shims = report.engine_cli_shims
+    if shims is None:
+        return
+    link_dir = _image_path_link_dir()
+    linked: list[str] = []
+    skipped_existing: list[str] = []
+    if link_dir.resolve() != SHIM_DIR.resolve():
+        for name in shims["written"]:
+            link = link_dir / name
+            if os.path.lexists(link):
+                skipped_existing.append(name)
+                continue
+            link.symlink_to(SHIM_DIR / name)
+            linked.append(name)
+    resolved = shutil.which(PATH_PROBE_CLI, path=_image_default_path())
+    report.engine_cli_path_links = {
+        "link_dir": str(link_dir),
+        "linked": linked,
+        "skipped_existing": skipped_existing,
+        "probe_cli": PATH_PROBE_CLI,
+        "probe_resolves_to": resolved,
+    }
+    if resolved is None:
+        raise RuntimeError(
+            f"`{PATH_PROBE_CLI}` does not resolve under the image default PATH "
+            f"({_image_default_path()}): grind agents cannot run engine CLIs. "
+            f"Link the shims in {SHIM_DIR} into {link_dir}."
+        )
 
 
 def seed_trust_anchor_keys(report: Report) -> None:
@@ -1053,7 +1112,7 @@ def assert_hook_plane_armed(report: Report) -> None:
 
     - At least one hook-delivery surface the runtime consults registers hooks:
       `settings.json`'s own `hooks` block, OR the coordinator plugin's
-      `hooks/hooks.json` (see `_plugin_hook_delivery`). The plugin surface is
+      `hooks/hooks.json` (see `hook_plane_verdict.plugin_hook_delivery`). The plugin surface is
       not a fallback, it is the NORMAL case (claude-klabauter#28). Double-fired
       entries are `drop_double_fired_settings_hooks`'s job, run after every
       writer and just before this; it either removes them or raises, so this
@@ -1069,217 +1128,48 @@ def assert_hook_plane_armed(report: Report) -> None:
     reads it as context. There is nothing this script can do to repair a hook
     plane the orchestrator did not wire; being loud is the whole remit.
     """
-    settings_path = _claude_home() / "settings.json"
-    settings: dict = {}
-    hook_event_count = 0
-    read_error = None
-    try:
-        loaded = json.loads(settings_path.read_text())
-        settings = loaded if isinstance(loaded, dict) else {}
-        hooks = settings.get("hooks") or {}
-        hook_event_count = len(hooks) if isinstance(hooks, (dict, list)) else 0
-    except Exception as e:  # noqa: BLE001 - an unreadable settings file is a verdict
-        read_error = f"{type(e).__name__}: {e}"
-    plugin = _plugin_hook_delivery(settings)
-    plugin.pop("_delivered", None)
-    settings_armed = hook_event_count > 0
-    if settings_armed and plugin["armed"]:
-        delivery = "both"
-    elif settings_armed:
-        delivery = "settings"
-    elif plugin["armed"]:
-        delivery = "plugin"
-    else:
-        delivery = "none"
-    hooks_present = delivery != "none"
-
-    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or ""
-    rungs: dict[str, str | None] = {}
-    if settings_home:
-        rungs["registry repos.content_root"] = _registry_value_or_none(
-            Path(settings_home) / "machine-local", "repos.content_root"
-        )
-        rungs[f"{settings_home}/machine-local/.coordinator-content-root"] = _first_line_or_none(
-            Path(settings_home) / "machine-local" / ".coordinator-content-root"
-        )
-    else:
-        rungs["registry repos.content_root"] = None
-        rungs["<settings-home>/machine-local/.coordinator-content-root"] = None
-    legacy = _claude_home() / ".coordinator-content-root"
-    rungs[str(legacy)] = _first_line_or_none(legacy)
-    content_root_resolves = any(value for value in rungs.values())
-
-    # A rung naming a root does not prove the root carries `coordinator/bin`
-    # (a flat doctrine mirror does not). Recorded, never raised: a bin-less
-    # mirror is legitimate, only worth naming.
-    resolved_content_root = next((value for value in rungs.values() if value), None)
-    content_root_bin_dir = str(Path(resolved_content_root) / "coordinator" / "bin") if resolved_content_root else None
-    content_root_bin_resolves = bool(content_root_bin_dir and Path(content_root_bin_dir).is_dir())
-
-    report.hook_plane = {
-        "settings_path": str(settings_path),
-        "hooks_registered": hooks_present,
-        "hook_delivery": delivery,
-        "hook_event_count": hook_event_count,
-        "settings_read_error": read_error,
-        "plugin_hooks": plugin,
-        "content_root_resolves": content_root_resolves,
-        "content_root_rungs": rungs,
-        "content_root_bin_dir": content_root_bin_dir,
-        "content_root_bin_resolves": content_root_bin_resolves,
-    }
-
-    problems: list[str] = []
-    if not hooks_present:
-        problems.append(
-            f"`hooks` in {settings_path} is empty"
-            + (f" ({read_error})" if read_error else "")
-            + f" and the coordinator plugin delivers none ({plugin['reason']})"
-        )
-    if not content_root_resolves:
-        problems.append("`.coordinator-content-root` resolves through no rung the no-launcher fences read")
+    hook_plane = _hook_plane_module()
+    report.hook_plane = hook_plane.derive_hook_plane(
+        claude_home=_claude_home(),
+        plugin_root=Path(CLONES["coordinator-claude"]["dest"]),
+        settings_home=os.environ.get("COORDINATOR_SETTINGS_HOME"),
+    )
+    problems = hook_plane.hook_plane_problems(report.hook_plane)
     if problems:
         raise RuntimeError("; ".join(problems))
 
 
-def _plugin_hook_delivery(settings: dict) -> dict:
-    """Whether the coordinator plugin's own hook manifest will deliver hooks to a
-    session launched here, read off disk the way the runtime reads it.
+_HOOK_PLANE_MODULE_REL = Path("coordinator_core") / "install" / "hook_plane_verdict.py"
+_hook_plane_cache: list = []
 
-    Three links, each one the runtime actually walks: the plugin is ENABLED in
-    `settings.json`'s `enabledPlugins`; `installed_plugins.json` records an
-    `installPath` for it (what `${CLAUDE_PLUGIN_ROOT}` expands to); and
-    `<installPath>/hooks/hooks.json` registers at least one event, with every
-    `${CLAUDE_PLUGIN_ROOT}`-relative file it names present. That last check is
-    what separates delivered from merely declared: each entry's bootstrap
-    fails OPEN on a missing script, so a manifest pointing at absent files is
-    exactly as silent as no manifest.
 
-    Re-implemented rather than importing the engine's
-    `detect_hook_delivery_duplication`, for `_claude_home`'s reason: this module
-    is dependency-free by design and must not import `coordinator_core`.
+def _hook_plane_module():
+    """The shared `coordinator_core/install/hook_plane_verdict.py`, loaded once by
+    file path (this script runs with no engine installed, so it cannot import it).
 
-    Never raises: every broken link is a recorded `reason`, `armed` False.
-    Also carries, under `_delivered` (a dict of sets, popped by
-    `drop_double_fired_settings_hooks` and never left on a value stored into the
-    JSON report), the per-event script identities the manifest actually
-    delivers. A script identity counts as delivered only when EVERY token
-    naming it is `${CLAUDE_PLUGIN_ROOT}`-prefixed — the same convention
-    `missing_files` existence-checks — so a hook this function never verified
-    exists can't stand in as the "still delivered" copy that licenses removing
-    the `settings.json` side (code-reviewer F1).
+    Probes the klabauter clone first, then this script's own checkout, which is
+    what the dev tree and the tests resolve. Raises RuntimeError naming both
+    paths when neither exists.
     """
-    result: dict = {
-        "armed": False,
-        "event_count": 0,
-        "missing_files": [],
-        "reason": "",
-        "_delivered": {},
-    }
-    delivered: dict[str, set[str]] = result["_delivered"]
-    try:
-        key = _plugin_record_key(Path(CLONES["coordinator-claude"]["dest"]))
-    except Exception as e:  # noqa: BLE001 - an unreadable clone manifest is a recorded miss
-        result["reason"] = f"plugin key unreadable: {type(e).__name__}: {e}"
-        return result
-    result["key"] = key
-    enabled = settings.get("enabledPlugins")
-    if not (isinstance(enabled, dict) and enabled.get(key) is True):
-        result["reason"] = f"{key} is not enabled in settings.json"
-        return result
-    try:
-        records = json.loads(
-            _claude_home().joinpath(*PLUGIN_RECORD_REL).read_text(encoding="utf-8")
-        )["plugins"][key]
-        if not isinstance(records, list):
-            raise TypeError(f"expected a list of plugin records, got {type(records).__name__}")
-        install_path = next(
-            r["installPath"] for r in records if isinstance(r, dict) and r.get("installPath")
-        )
-    except Exception as e:  # noqa: BLE001 - an absent record is a recorded miss
-        result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__}: {e})"
-        return result
-    result["install_path"] = install_path
-    manifest = Path(install_path).joinpath(*PLUGIN_HOOKS_REL)
-    try:
-        hooks = json.loads(manifest.read_text(encoding="utf-8")).get("hooks")
-    except Exception as e:  # noqa: BLE001 - an unreadable manifest is a recorded miss
-        result["reason"] = f"{manifest} unreadable: {type(e).__name__}"
-        return result
-    if not isinstance(hooks, dict) or not hooks:
-        result["reason"] = f"{manifest} registers no hook event"
-        return result
-    result["event_count"] = len(hooks)
-    referenced: set[str] = set()
-    for event, groups in hooks.items():
-        for group in groups if isinstance(groups, list) else []:
-            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
-                if not isinstance(hook, dict):
-                    continue
-                if hook.get("type") == "http":
-                    url = hook.get("url")
-                    if isinstance(url, str) and url:
-                        delivered.setdefault(event, set()).add(f"url:{url}")
-                    continue
-                args = hook.get("args") if isinstance(hook.get("args"), list) else []
-                ids: set[str] = set()
-                all_prefixed = True
-                for token in [hook.get("command"), *args]:
-                    if not isinstance(token, str):
-                        continue
-                    for piece in _shlex_pieces(token):
-                        normalized = piece.replace("\\", "/")
-                        prefixed = normalized.startswith("${CLAUDE_PLUGIN_ROOT}/")
-                        if prefixed:
-                            referenced.add(normalized[len("${CLAUDE_PLUGIN_ROOT}/"):])
-                        tail = _script_tail(normalized)
-                        if tail:
-                            ids.add(tail)
-                            all_prefixed = all_prefixed and prefixed
-                if ids and all_prefixed:
-                    delivered.setdefault(event, set()).update(ids)
-    missing = sorted(rel for rel in referenced if not Path(install_path, rel).is_file())
-    result["missing_files"] = missing
-    if missing:
-        result["reason"] = f"{manifest} names {len(missing)} absent file(s), e.g. {missing[0]}"
-        return result
-    result["armed"] = True
-    result["reason"] = f"{key} delivers {len(hooks)} hook event(s) from {manifest}"
-    return result
+    if _hook_plane_cache:
+        return _hook_plane_cache[0]
+    import importlib.util
 
-
-def _shlex_pieces(token: str) -> list[str]:
-    """`token` split on whitespace the way a shell would, so a quoted path
-    containing a space keeps its full tail instead of being cut at the space
-    (code-reviewer F2). Falls back to a plain whitespace split on anything
-    `shlex` can't parse (an unbalanced quote) rather than raising."""
-    try:
-        return shlex.split(token, posix=True)
-    except ValueError:
-        return token.split()
-
-
-def _hook_identities(hook: dict) -> set[str]:
-    """What a hook entry actually runs, independent of which surface registers it:
-    `url:<url>` for an http hook, else the `<dir>/<file>` tail of every script it
-    names. The tail, not the full path, because the two surfaces spell the root
-    differently — `${CLAUDE_PLUGIN_ROOT}` in the manifest, an env-var expression
-    or a baked path in `settings.json` — the same reason the engine's
-    `guard_settings_integrity._tail_key` compares tails.
-    """
-    if hook.get("type") == "http":
-        url = hook.get("url")
-        return {f"url:{url}"} if isinstance(url, str) and url else set()
-    args = hook.get("args") if isinstance(hook.get("args"), list) else []
-    identities: set[str] = set()
-    for token in [hook.get("command"), *args]:
-        if not isinstance(token, str):
+    candidates = [
+        Path(CLONES["klabauter"]["dest"]) / _HOOK_PLANE_MODULE_REL,
+        Path(__file__).resolve().parent.parent / _HOOK_PLANE_MODULE_REL,
+    ]
+    for path in candidates:
+        if not path.is_file():
             continue
-        for piece in _shlex_pieces(token):
-            tail = _script_tail(piece.replace("\\", "/"))
-            if tail:
-                identities.add(tail)
-    return identities
+        spec = importlib.util.spec_from_file_location("_cloud_setup_hook_plane_verdict", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _hook_plane_cache.append(module)
+        return module
+    raise RuntimeError("hook_plane_verdict.py not found at " + " or ".join(str(p) for p in candidates))
 
 
 def drop_double_fired_settings_hooks(report: Report) -> None:
@@ -1294,7 +1184,7 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
     names: two guard verdicts, two SessionStart injections, two writes of every
     side effect.
 
-    Removes only when the plugin is verified armed (`_plugin_hook_delivery`),
+    Removes only when the plugin is verified armed (`plugin_hook_delivery`),
     so a removed entry is always still delivered — never the last copy. Only
     exact duplicates go; every other entry, group, field and event is kept in
     the same walk, and a `hooks` block emptied by the removal is dropped.
@@ -1309,7 +1199,12 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
         return
     if not isinstance(settings, dict):
         raise ValueError(f"{settings_path} is not a JSON object")
-    plugin = _plugin_hook_delivery(settings)
+    hook_plane = _hook_plane_module()
+    plugin = hook_plane.plugin_hook_delivery(
+        settings,
+        claude_home=_claude_home(),
+        plugin_root=Path(CLONES["coordinator-claude"]["dest"]),
+    )
     delivered: dict[str, set[str]] = plugin.pop("_delivered", {})
     removed: list[str] = []
     if plugin["armed"] and isinstance(settings.get("hooks"), dict):
@@ -1322,7 +1217,7 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
                     continue
                 kept_hooks = []
                 for hook in group.get("hooks", []):
-                    ids = _hook_identities(hook) if isinstance(hook, dict) else set()
+                    ids = hook_plane.hook_identities(hook) if isinstance(hook, dict) else set()
                     if ids and ids <= delivered.get(event, set()):
                         removed.append(f"{event}: {', '.join(sorted(ids))}")
                         continue
@@ -1345,50 +1240,14 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
     _safe_print(f"[cloud_setup] removed {len(removed)} double-fired hook(s) from {settings_path}")
 
 
-def _registry_value_or_none(machine_local_dir: Path, key: str) -> str | None:
-    """One registry key's value, read with tomllib and no subprocess.
-
-    A flat `"<key>" = '<value>'` read, not a general TOML flattener: this script
-    is dependency-free by design (`coordinator_core` is not importable from the
-    ambient interpreter at the point this runs) and the keys it asks about are
-    written by `machine-local set` in exactly that quoted-dotted-key form.
-
-    `tomllib` is imported INSIDE the try, not at the top: it is stdlib only from
-    3.11, and an ImportError escaping here would make `assert_hook_plane_armed`
-    report an unresolvable `.coordinator-content-root` on a box whose registry is perfectly
-    fine — a false alarm on the one surface that exists to be believed. An
-    interpreter too old to read the registry means this rung says nothing, and
-    the two file rungs still answer.
-    """
-    for fname in ("registry.local.toml", "registry.toml"):
-        try:
-            import tomllib
-
-            data = tomllib.loads((machine_local_dir / fname).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - absent, unreadable, unparseable, or no tomllib
-            continue
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _first_line_or_none(path: Path) -> str | None:
-    """A pointer file's single line, or None when absent, unreadable, or blank."""
-    try:
-        return path.read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
 def run_claude_klabauter_setup(report: Report) -> None:
     """Run scripts/setup.py, passing the DR-411 container opt-in.
 
     Argv: --i-am-agent (suppress prompts), --coordinator-root <CLONES coordinator-claude
     dest>, --i-assert-no-other-consumer (the DR-411 opt-in; cloud_setup.py is the only
-    caller permitted to pass it), --with-test-deps (a cloud session's agents run the
-    documented test tiers, whose `-n`/`--timeout` flags exit 4 without the test extra's
-    plugins; setup.py derives that set from pyproject, so nothing is re-declared here).
+    caller permitted to pass it). The test extra is NOT installed at boot: a cloud boot
+    stays light, and setup.py's always-on test-tooling check prints the missing plugins
+    and the one install command, so the first agent to run tests is told what to add.
     No PIP_BREAK_SYSTEM_PACKAGES or any pip env var is set — the flag rides in argv only.
     """
     claude_klabauter_root = Path(CLONES["klabauter"]["dest"])
@@ -1401,7 +1260,6 @@ def run_claude_klabauter_setup(report: Report) -> None:
         "--coordinator-root",
         coordinator_root,
         "--i-assert-no-other-consumer",
-        "--with-test-deps",
     ]
     # `container_optin_requested` and `setup_exit_code` are two separate
     # first-hand facts, never conflated into one: this process knows it PASSED
@@ -1632,6 +1490,7 @@ def register_plugin_settings() -> None:
     # finds no launchers, and every fail-open hook (mise/pickup autofire) silently
     # no-ops (claude-klabauter#15).
     env_block.update(_engine_env())
+    env_block[AGENT_TYPE_HOST_ENV] = AGENT_TYPE_HOST_VALUE
     # Assigned, not defaulted: a stale value from an earlier run (or from an
     # image that seeded a different one) must be brought to the value this
     # script determined, or a re-run would report a window it is not pinning.
@@ -1747,27 +1606,6 @@ def verify_plugin_settings(report: Report) -> None:
     }
 
 
-def _plugin_record_key(plugin_root: Path) -> str:
-    """``<plugin>@<marketplace>``, both halves READ from the clone.
-
-    Neither half is spelled as a literal here. The record's key is what the
-    platform matches an enabled plugin against, and a hardcoded pair survives
-    exactly until either the plugin or the marketplace is renamed — after which
-    this writes a record keyed to a name nothing looks up, while every step
-    still reports OK. That is the same failure this whole pair of functions
-    exists to make loud, so it must not be reintroduced by the fix.
-    """
-    manifest = plugin_root.joinpath(*PLUGIN_MANIFEST_REL)
-    marketplace = plugin_root.joinpath(*MARKETPLACE_MANIFEST_REL)
-    plugin_name = json.loads(manifest.read_text(encoding="utf-8")).get("name")
-    marketplace_name = json.loads(marketplace.read_text(encoding="utf-8")).get("name")
-    if not isinstance(plugin_name, str) or not plugin_name:
-        raise ValueError(f"{manifest} declares no usable plugin name")
-    if not isinstance(marketplace_name, str) or not marketplace_name:
-        raise ValueError(f"{marketplace} declares no usable marketplace name")
-    return f"{plugin_name}@{marketplace_name}"
-
-
 def register_live_plugin_record() -> None:
     """Seed `<claude_home>/plugins/installed_plugins.json` with a record whose
     ``installPath`` IS the coordinator clone.
@@ -1804,8 +1642,9 @@ def register_live_plugin_record() -> None:
     survives a fix. Other plugins' records are never touched.
     """
     plugin_root = Path(CLONES["coordinator-claude"]["dest"])
-    key = _plugin_record_key(plugin_root)
-    record_path = _claude_home().joinpath(*PLUGIN_RECORD_REL)
+    hook_plane = _hook_plane_module()
+    key = hook_plane.plugin_record_key(plugin_root)
+    record_path = _claude_home().joinpath(*hook_plane.PLUGIN_RECORD_REL)
 
     data: dict = {}
     if record_path.exists():
@@ -1901,7 +1740,7 @@ def verify_plugin_install_path(report: Report) -> None:
     this process can resolve, so it falls through to the ordinary
     manifest-missing reason.
     """
-    record_path = _claude_home().joinpath(*PLUGIN_RECORD_REL)
+    record_path = _claude_home().joinpath(*_hook_plane_module().PLUGIN_RECORD_REL)
     result: dict = {
         "record_path": str(record_path),
         "expected_root": CLONES["coordinator-claude"]["dest"],
@@ -1937,7 +1776,7 @@ def verify_plugin_install_path(report: Report) -> None:
             }
             if isinstance(path, str) and path:
                 root = Path(path)
-                manifest_path = root.joinpath(*PLUGIN_MANIFEST_REL)
+                manifest_path = root.joinpath(*_hook_plane_module().PLUGIN_MANIFEST_REL)
                 entry["manifest_path"] = str(manifest_path)
                 entry["path_exists"] = root.is_dir()
                 try:
@@ -1947,7 +1786,7 @@ def verify_plugin_install_path(report: Report) -> None:
                     pass
 
                 if entry["path_exists"] and not entry["manifest_readable"]:
-                    marketplace_path = root.joinpath(*MARKETPLACE_MANIFEST_REL)
+                    marketplace_path = root.joinpath(*_hook_plane_module().MARKETPLACE_MANIFEST_REL)
                     plugin_name = key.split("@", 1)[0]
                     source = (
                         _resolve_marketplace_plugin_source(marketplace_path, plugin_name)
@@ -1955,7 +1794,7 @@ def verify_plugin_install_path(report: Report) -> None:
                         else None
                     )
                     if source:
-                        sub_manifest = root.joinpath(source, *PLUGIN_MANIFEST_REL)
+                        sub_manifest = root.joinpath(source, *_hook_plane_module().PLUGIN_MANIFEST_REL)
                         entry["marketplace_source"] = source
                         entry["manifest_path"] = str(sub_manifest)
                         try:
@@ -2357,6 +2196,71 @@ def _machine_local_argv() -> list[str]:
     )
 
 
+def sibling_repo_key(dirname: str) -> str:
+    """Fleet convention: ``repos.<name, '-' as '_', lowercased>``."""
+    return "repos." + dirname.replace("-", "_").lower()
+
+
+def mounted_sibling_checkouts() -> "dict[str, Path]":
+    """Every git checkout directly under a session source root, keyed by its
+    fleet registry key. First root wins on a name collision."""
+    found: dict[str, Path] = {}
+    for root in session_source_roots():
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.startswith(".") or not child.is_dir() or not (child / ".git").exists():
+                continue
+            found.setdefault(sibling_repo_key(child.name), child)
+    return found
+
+
+def register_mounted_sibling_keys(report: Report) -> None:
+    """Register ``repos.<name>`` for each mounted sibling checkout, so memo
+    routing and ``repos.<key>`` resolution reach every repo on the box.
+
+    Never overwrites: a key already set (by an earlier step or the operator)
+    keeps its value, and a path another key already names is not given a second
+    identity (a publish mirror mounted as a sibling stays a mirror). Partial-
+    tolerant and never raises: a sibling key is a convenience, and one refused
+    write must not fail the retrieval-key step that follows.
+    """
+    try:
+        argv = _machine_local_argv()
+    except Exception as exc:  # noqa: BLE001 — recorded, never fatal
+        report.machine_local_keys.setdefault("repos.*siblings", f"skipped: {exc}")
+        return
+    claimed = {str(v) for v in report.machine_local_keys.values()}
+
+    def _ml(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [*argv, *args],
+            capture_output=True,
+            text=True,
+            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    for key, path in mounted_sibling_checkouts().items():
+        # The served plugin mirror is a publish target, never a memo receiver.
+        if path.name == "coordinator-claude":
+            continue
+        if key in report.machine_local_keys or key in MACHINE_LOCAL_REPO_KEYS.values() or str(path) in claimed:
+            continue
+        existing = _ml("get", key)
+        if existing.returncode == 0 and existing.stdout.strip():
+            report.machine_local_keys[key] = existing.stdout.strip()
+            continue
+        result = _ml("set", key, str(path))
+        report.machine_local_keys[key] = (
+            str(path) if result.returncode == 0
+            else f"failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+
+
 def register_machine_local_repo_keys(report: Report) -> None:
     """Write ``repos.project_rag`` and ``repos.project_rag_ue_addon`` into the
     machine-local registry, so a session resolves either checkout by key rather
@@ -2377,6 +2281,7 @@ def register_machine_local_repo_keys(report: Report) -> None:
     The registry lives under COORDINATOR_SETTINGS_HOME, which `set_engine_env`
     put in this process' environment — the child inherits it.
     """
+    register_mounted_sibling_keys(report)
     if retrieval_half_skipped(report):
         print("[cloud_setup] registry keys: skipped — retrieval half not installed.")
         return
@@ -2715,6 +2620,47 @@ def _defer_rag_install(argv: list[str], report: Report) -> None:
     )
 
 
+#: History the mounted checkouts are deepened to. The platform mounts them shallow, so an
+#: executor verifying an older SHA (`priorShippedIn`, a git-history test) finds no object and
+#: reports the checkout as broken. Bounded by date, not unshallowed: a full fetch of a
+#: 26k-commit repo is the unbounded transfer this bound exists to refuse.
+HISTORY_DEEPEN_DAYS = 180
+HISTORY_DEEPEN_LOG = Path("/root/history-deepen.log")
+
+
+def deepen_shallow_checkouts(report: Report) -> None:
+    """Start one detached `git fetch --shallow-since` per mounted SHALLOW checkout.
+
+    Shallowness is read off `.git/shallow` (no spawn). The fetch is a remote round trip, so it
+    runs in the background and never holds boot; a failure lands in the log only. Checkouts
+    this script clones itself (`CLONES`) are left alone — they are engine/plugin mirrors, not
+    work targets.
+    """
+    own = {Path(c["dest"]).resolve() for c in CLONES.values()}
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - HISTORY_DEEPEN_DAYS * 86400))
+    started: dict = {}
+    for root in session_source_roots():
+        try:
+            children = sorted(root.iterdir()) if root.is_dir() else []
+        except OSError:
+            continue
+        for cand in children:
+            if not (cand / ".git" / "shallow").is_file() or cand.resolve() in own:
+                continue
+            HISTORY_DEEPEN_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(HISTORY_DEEPEN_LOG, "ab") as log:
+                proc = subprocess.Popen(
+                    ["git", "-C", str(cand), "fetch", "--quiet", f"--shallow-since={since}", "origin"],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            started[str(cand)] = {"pid": proc.pid, "since": since}
+    report.history_deepen = {"started": started, "log": str(HISTORY_DEEPEN_LOG)}
+
+
 def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     """Run example-retrieval-repo's installer in ITS cloud pre-boot mode.
 
@@ -2723,13 +2669,12 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     — every skip cloud mode performs is that mode's own decision, and
     re-asserting one here would create a second place to keep in step.
 
-    STALE AS OF example-retrieval-repo commit 879eb000, corrected here: cloud mode used
-    to skip the vendored scip builds and the embed-model prefetch; it no
-    longer does — ``--cloud`` now performs BOTH of those, plus a full
-    CPU-torch install, none of which this module's own RAG_INSTALL_TIMEOUT_S
-    ceiling had measured cold-cost evidence for at the time of that change
-    (see that constant's own comment). The per-OS persistent service remains
-    that mode's own skip; this module still asserts nothing about it.
+    ``--cloud`` installs example-retrieval-repo's READ profile: enough to query pre-built
+    indexes and embeddings pulled down to the box. The write profile (torch,
+    embed-model prefetch, scip builds) and the test extra are left out; a write
+    or test entry point run without them names the missing packages and the
+    install command. The per-OS persistent service is also that mode's own
+    skip; this module asserts nothing about either.
 
     Addons install INSIDE this call, never as a step of this module: the
     ``--cloud`` install runs each addon's own declared cloud pre-boot step,
@@ -3147,7 +3092,8 @@ def _connect_helper_source(url: str, start_argv: list[str] | None) -> str:
 
     Self-contained, like `_shim_source`: Claude Code runs it standalone, so
     every value is a literal interpolated here. With ``start_argv`` None (the
-    checkout is not resolved yet) it only probes and prints ``{}``.
+    checkout is not resolved yet) it only probes and prints ``{}``; so does an
+    argv whose script (``argv[1]``) is not on disk when the helper runs.
 
     Traps the generated script guards:
       - stdout carries exactly ``{}``. The daemon child gets no inherited
@@ -3182,7 +3128,9 @@ def _connect_helper_source(url: str, start_argv: list[str] | None) -> str:
         "    except OSError:\n"
         "        return False\n"
         "\n"
-        "if START_ARGV and not port_open():\n"
+        "# The pre-boot argv names the deterministic clone path before any clone\n"
+        "# exists; until that file lands the helper stays probe-only.\n"
+        "if START_ARGV and os.path.isfile(START_ARGV[1]) and not port_open():\n"
         "    try:\n"
         "        with open(LOG, 'ab') as log:\n"
         "            subprocess.Popen(START_ARGV, stdin=subprocess.DEVNULL, stdout=log,\n"
@@ -3220,9 +3168,11 @@ def register_retrieval_mcp_entry(report: Report) -> None:
     few refused retries, and nothing this module spawns survives the snapshot
     (module docstring, fact 1). So the entry carries a ``headersHelper``:
     Claude Code runs it in the session container before connecting, and it
-    starts the daemon there (example-retrieval-repo#96). This step writes a probe-only
-    helper; `arm_retrieval_connect_helper` bakes in the start argv once the
-    checkout is installed. The entry stays ``type: http`` (PM ruling).
+    starts the daemon there (example-retrieval-repo#96). This step arms the helper with
+    `_preboot_start_argv` — the deterministic clone path, guarded at helper run
+    time by the script's existence — because the harness connects once, and a
+    probe-only helper at that moment means no example-retrieval-repo tools all session.
+    `arm_retrieval_connect_helper` re-bakes the argv from the resolved checkout. The entry stays ``type: http`` (PM ruling).
 
     So this runs BEFORE the clone steps and independently of whether they
     succeed. An environment whose private checkout could not be fetched still
@@ -3230,7 +3180,13 @@ def register_retrieval_mcp_entry(report: Report) -> None:
 
     Merged, never replaced: Claude Code may have written this file already.
     """
-    _write_connect_helper(None, RETRIEVAL_MCP_DEFAULT_URL)
+    start_argv = _preboot_start_argv()
+    _write_connect_helper(start_argv, RETRIEVAL_MCP_DEFAULT_URL)
+    report.connect_helper = {
+        "path": str(_connect_helper_path()),
+        "start_argv": start_argv,
+        "url": RETRIEVAL_MCP_DEFAULT_URL,
+    }
     entry = {
         "type": "http",
         "url": RETRIEVAL_MCP_DEFAULT_URL,
@@ -3241,6 +3197,28 @@ def register_retrieval_mcp_entry(report: Report) -> None:
     if read_error:
         report.mcp_entry_written["read_error"] = read_error
     print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
+
+
+def _preboot_start_argv() -> list[str]:
+    """The daemon-start argv written before any checkout is resolved.
+
+    Points at the clone path `locate_or_clone_repo` lands under the first
+    session source root, against the single mounted checkout if there is one,
+    else example-retrieval-repo itself. Filesystem reads only: this runs on the setup hot
+    path.
+    """
+    clone = SESSION_SOURCE_ROOTS[0] / RETRIEVAL_REPO_SLUG
+    ensure = clone / f"{RETRIEVAL_MODULE_PREFIX}_scripts" / f"ensure_{RETRIEVAL_MODULE_PREFIX}_server.py"
+    project_root = clone
+    for root in retrieval_search_roots():
+        if not root.is_dir():
+            continue
+        checkouts = [c for c in sorted(root.iterdir()) if c.is_dir() and (c / ".git").exists()]
+        if checkouts:
+            if len(checkouts) == 1:
+                project_root = checkouts[0]
+            break
+    return [sys.executable, str(ensure), "--project-root", str(project_root)]
 
 
 def _connect_helper_command() -> str:
@@ -3504,17 +3482,12 @@ def _hook_plane_status_line(report: Report) -> str:
     (the probe never ran) reports UNARMED with an `unknown` delivery surface
     rather than silently omitting the line.
     """
-    hook_plane = report.hook_plane or {}
-    delivery = hook_plane.get("hook_delivery", "unknown")
-    commit_hook_missing = _commit_hook_step_failed(report)
-    armed = bool(
-        report.hook_plane
-        and hook_plane.get("hooks_registered")
-        and hook_plane.get("content_root_resolves")
-        and not commit_hook_missing
-    )
-    suffix = "; commit hook: MISSING" if commit_hook_missing else ""
-    return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery}{suffix})"
+    try:
+        module = _hook_plane_module()
+    except RuntimeError:
+        return "HOOK PLANE: UNARMED (delivery: unknown)"
+    extra = "commit hook: MISSING" if _commit_hook_step_failed(report) else None
+    return module.hook_plane_status_line(report.hook_plane, extra_failure=extra)
 
 
 #: `run_step` name of the git-hook install step. The session-hook probe above
@@ -4001,7 +3974,7 @@ def pin_hook_interpreter(report: Report) -> None:
     verdict: dict = {"interpreter": interpreter, "rewritten": {}}
     report.hook_interpreter = verdict
     targets = [
-        Path(CLONES["coordinator-claude"]["dest"]).joinpath(*PLUGIN_HOOKS_REL),
+        Path(CLONES["coordinator-claude"]["dest"]).joinpath(*_hook_plane_module().PLUGIN_HOOKS_REL),
         _claude_home() / "settings.json",
     ]
     for path in targets:
@@ -4111,7 +4084,15 @@ def _write_report_best_effort(report: Report) -> None:
         print(f"[cloud_setup] could not write install report: {e}")
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    # Takes no arguments. Any argument, `--help` included, must not fall through to
+    # a full provisioning run: that mutates hooks, settings and installs on a
+    # live session whose operator only asked what the script does.
+    args = argv or []
+    if args:
+        print(__doc__ if args[0] in ("-h", "--help") else
+              f"[cloud_setup] takes no arguments; refusing {args!r} (see --help)")
+        return 0 if args[0] in ("-h", "--help") else 2
     ok, reason = host_precondition_met()
     if not ok:
         print(f"[cloud_setup] refusing: {reason}")
@@ -4140,6 +4121,11 @@ def main() -> int:
     run_step("clone klabauter", lambda: clone_repo("klabauter"), report)
     run_step("set engine env", lambda: set_engine_env(report), report)
     run_step("install engine CLI shims", lambda: install_engine_cli_shims(report), report)
+    run_step(
+        "link engine CLI shims onto image PATH",
+        lambda: link_engine_cli_shims_onto_image_path(report),
+        report,
+    )
     # BEFORE scripts/setup.py, not after: setup.py's own install-health phase
     # trust-checks the plugin root this script hands it against these exact
     # registry keys, and refuses fail-loud when they resolve empty. See
@@ -4182,6 +4168,7 @@ def main() -> int:
     # AFTER repo-key registration, not before: the fleet installer enumerates
     # registered `repos.*` keys, so running it earlier heals nothing.
     run_step("install git hooks fleet", lambda: install_hooks_fleet(report), report)
+    run_step("deepen shallow checkouts", lambda: deepen_shallow_checkouts(report), report)
     run_step(
         "register publish mirror keys",
         lambda: register_publish_mirror_keys(report),
@@ -4234,4 +4221,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

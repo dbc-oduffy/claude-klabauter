@@ -152,6 +152,8 @@ def test_revoke_restores_the_unbounded_grant_and_is_idempotent(granted_session) 
 @pytest.mark.parametrize(
     "bad",
     # abs-path-ok: these are REJECTION INPUTS, not paths this test resolves.
+    # The whole assertion is that write_tier_u_grant_scope refuses them, so
+    # they must stay literal absolute spellings -- one POSIX, one Windows.
     ["/abs/path", "C:/abs/path", "..", "../escape", "a/../../escape", "", "   "],
     ids=["posix-abs", "windows-abs", "dotdot", "leading-dotdot", "embedded-dotdot",
          "empty", "whitespace"],

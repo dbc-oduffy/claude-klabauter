@@ -111,11 +111,13 @@ _PROBES: Dict[str, Callable[[], Dict[str, Any]]] = {
 
 _BENIGN: Dict[str, Callable[[], Dict[str, Any]]] = {
     # "list" is not in `_DENY_SUBCOMMANDS` -- allowed under both the
+    # tokenized pass and the legacy scanner.
     "block_stash_destruction": lambda: _payload_dict("git stash list"),
     "block_subagent_stash_creation": lambda: _payload_dict(
         "git stash list", agent_id="deadbeef0123"
     ),
     # "list" is in `_ALLOW_SUBCOMMANDS` explicitly (the cleanup-reachability
+    # carve-out the module docstring names) -- allowed under both paths.
     "block_worktree_creation": lambda: _payload_dict("git worktree list"),
     "block_subagent_destructive_action": lambda: _payload_dict(
         "git status", agent_id="deadbeef0123", agent_type="coordinator:executor"

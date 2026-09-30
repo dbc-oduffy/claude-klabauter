@@ -189,6 +189,7 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         self.assertEqual(err, "")
 
     def test_failed_critical_present_still_exits_zero_render_is_not_a_gate(self) -> None:
+        # This CLI is a renderer, not the exit predicate — failed_critical is
         # the hard-exit-1 partition for the CEREMONY, not for this reader.
         receipt = _receipt(
             {

@@ -99,7 +99,11 @@ def cs_timeout(
         )
         return result.returncode
     except subprocess.TimeoutExpired:
+        # subprocess.run() already sent kill()/TerminateProcess() to the
+        # child on timeout before raising — matches the bash oracle's
         # SIGTERM-then-SIGKILL Branch B behavior in spirit (a hard kill, not
+        # graceful), modulo the D-state caveat above (neither implementation
+        # can force-terminate an uninterruptible-I/O process).
         return 124
     except FileNotFoundError as exc:
         print(f"cs_timeout: command not found: {exc}", file=sys.stderr)

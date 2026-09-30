@@ -112,8 +112,41 @@ LOCAL_PLUMBING_BUDGET_SECS: float = 2.0
 REMOTE_BUDGET_SECS: float = 30.0
 
 #: THE TERM THAT MAKES THE TWO ABOVE ENFORCEABLE, and the one number here
+#: that is not a budget.
+#:
+#: `subprocess.run(timeout=)` bounds WALL CLOCK. Both budgets above are
+#: PROCESS time, which is the only axis `CLAUDE.md` § brightline permits a
+#: conclusion to rest on. On this box those two axes differ by two orders of
+#: magnitude, and NOT because anything is slow: 50-70 concurrent sessions is
+#: the design condition, so a spawn waits to be scheduled before it runs.
+#: Measured 2026-08-21 by the G1 session over plain `subprocess.run`, 60
+#: samples per leg, process time via
+#: `benchmarks/process_time.py :: batched_process_time_ms`:
+#:
+#:     leg                                  process    p50 wall  p95 wall  max wall
+#:     git --version                          33.6ms      1,462     2,891     4,588
+#:     git -C <mirror> rev-parse --show-toplevel 33.6ms     847     2,907     4,065
+#:     git -C <mirror> status --porcelain    190.6ms        791     2,524     2,841
+#:
+#: A bare `git --version` therefore breaches a 2.0s WALL bound in more than
+#: 5% of spawns. This module shipped exactly that defect: it used the 2.0
+#: budget as the wall-clock argument and clamped it with `min()` so no caller
+#: could widen it, which handed every migrating call site a >5% false-timeout
+#: rate -- and `GitResult.timed_out` feeds callers that pick a commit
 #: MECHANISM from it (`git.divergence.DivergenceCheckFailed`), where peer
+#: load would have read as "we could not tell". Found empirically by G1, not
+#: by inspection: `test_percolate_round_dest_paths_exist ::
+#: test_mixed_batch_with_worktree_fast_path_and_git_probe_combined` went red
+#: under a concurrent suite and green in isolation.
+#:
 #: ADDITIVE, not a multiplier: the delay is a roughly fixed per-spawn cost of
+#: sharing the box, not a scaling of the work. 10.0 is ~2.2x the worst wall
+#: sample observed (4,588ms). Kept as its OWN named term rather than folded
+#: into a bigger literal so that the budgets above stay citable, stay
+#: ratchetable, and keep biting on a real regression -- a single fat number
+#: would hide a leg that got 5x slower inside headroom meant for scheduling.
+#: This is the load norm made visible, and it is the one constant here whose
+#: growth means the BOX changed rather than our code. Ratchets DOWN only.
 _SPAWN_SCHEDULING_HEADROOM_SECS: float = 10.0
 
 class GitResult(NamedTuple):
@@ -328,11 +361,53 @@ def run_git(
         }
 
     # The brightline's second axis, FALLBACK ONLY. `spawn_counter`'s audit hook
+    # counts the `subprocess.run` below along with every other spawn in the
+    # process, so bumping here unconditionally would double every git call. This
+    # site survives for the interpreter that refused the hook: it keeps the
+    # git-spawn count that was the counter's whole coverage before the hook
+    # existed, rather than dropping to silence. Bumped BEFORE the spawn, not
+    # after: process creation is the cost being counted, and a `git` that raises
+    # still paid it — counting only on the success path would hide exactly the
+    # timeouts worth finding.
     if not spawn_counter.audit_hook_installed():
         spawn_counter.bump()
 
     # HAND-ROLLED OVER `Popen`, deliberately -- and this comment used to say
+    # the exact opposite, for a reason that was half right.
+    #
+    # What it said: "`subprocess.run`'s own timeout path kills the child and
+    # -- on Windows -- re-drains it with a second `communicate()` before
+    # re-raising, and `Popen.__exit__` then closes every pipe." Every clause
+    # of that is TRUE (`Lib/subprocess.py:556`, under `if _mswindows:`). The
+    # conclusion drawn from it was wrong: that second `communicate()` takes
+    # NO timeout. Windows accumulates output on reader threads and drains
+    # them by joining, so if a reader never reaches EOF the join never
+    # returns -- and `kill()` does not close a pipe whose write end a
+    # grandchild inherited. `run()` therefore hangs FOREVER on the very path
+    # that exists to enforce the bound, and `timeout=` becomes advisory on
+    # the platform this repo calls first-class.
+    #
     # MEASURED, not reasoned: caught live 2026-08-31 with
+    # `faulthandler.dump_traceback_later(60)`, main thread parked at
+    # `subprocess.py:556` beneath `subagent_sandbox.engine ::
+    # _resolve_git_root_uncached` (`timeout=2.0`) on the PreToolUse(Bash)
+    # chain. An external `timeout 600` could not reap it either: SIGTERM
+    # cannot land while the main thread sits in `Thread.join()`. Intermittent
+    # -- it depends on whether the spawned `git` left an inherited handle
+    # open, not on anything here.
+    # -> state/bug-backlog/2026-08-31-subprocess-run-s-timeout-does-not-bound-466bceff0ba5.yaml
+    #
+    # The pipe-leak hazard the old comment raised is real and is answered
+    # HERE rather than by delegating: `Popen` is used as a context manager,
+    # so `__exit__` closes stdin/stdout/stderr on every path including the
+    # timeout one, and the kill leg never re-reads. A timed-out git call
+    # discards whatever the dead child wrote -- the caller gets
+    # `timed_out=True` and no bytes, which is what every branch reading this
+    # result already does with a timeout.
+    # `mode_kwargs` was built for `subprocess.run`, whose `input=` has no
+    # `Popen` equivalent: fed stdin becomes `stdin=PIPE` at construction plus
+    # the bytes at `communicate`. Split here rather than reshaping the block
+    # above, so the mode/DEVNULL reasoning it carries stays in one place.
     fed_input = mode_kwargs.pop("input", None)
     if fed_input is not None:
         mode_kwargs["stdin"] = subprocess.PIPE

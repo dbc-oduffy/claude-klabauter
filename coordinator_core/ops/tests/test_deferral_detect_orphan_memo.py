@@ -390,7 +390,14 @@ class TestHandlerWiring:
         assert result["state"] == "orphans_found"
 
 
+# ---------------------------------------------------------------------------
+# Unscannable owning-artifact directory — silent-success guard
+# (silent-enumeration audit). Path.glob() silently swallows PermissionError
+# even on a flat, non-recursive pattern (empirically re-verified: a
+# chmod-000 dir yields an empty iterator from glob(), no exception) — a
+# dropped owning dir must not read as "this memo has no owning artifact"
 # (a false ORPHANED verdict); it must downgrade to "indeterminate".
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(

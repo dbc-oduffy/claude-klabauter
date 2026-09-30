@@ -105,7 +105,10 @@ class TestMintRefusal(unittest.TestCase):
                 )
 
     def test_hnd_cmp_mint_refuses_on_placeholder(self):
+        # pln- was removed from
         # the guard (never in gate_eval._HANDOFF_ID_PATTERN's blast radius; guarding
+        # it broke the D3 "plan_id always present, never null" contract). hnd-/cmp-
+        # now route through the shared _mint_artifact_id_from_title wrapper (F2).
         for title in _PLACEHOLDER_TITLES:
             with self.subTest(title=title):
                 self.assertIsNone(
@@ -136,7 +139,10 @@ class TestMintRefusal(unittest.TestCase):
         minted_dlv = _MOD._mint_deliverable_id_from_title(title, "handoff")
         self.assertIsNotNone(minted_dlv)
         self.assertTrue(minted_dlv.startswith("dlv-"))
+        # Deliberately NOT asserting "placeholder" is absent from the id: this
+        # title contains the word, so the correct id does too. What must be absent
         # is the SCAFFOLD SENTINEL's slug -- the `placeholder-replace-with-` shape
+        # that only a defaulted title produces.
         self.assertNotIn("placeholder-replace-with", minted_dlv.lower())
 
     def test_carry_path_unaffected_by_placeholder_title(self):
@@ -148,7 +154,17 @@ class TestMintRefusal(unittest.TestCase):
 
 class TestFalseClearMechanism(unittest.TestCase):
     def test_resolver_refuses_a_placeholder_id(self):
+        # Originally this pinned the DEFECT's premise -- that the polluted id MATCHED
+        # gate_eval's pattern and so resolved-and-cleared a blocked_by. That premise
+        # is now false by construction: review finding (code-reviewer 913d6318/F1 and
+        # fad4c85d/F1) established the schema narrow alone did NOT close the class,
+        # because gate_eval reads frontmatter straight off disk and never validates,
         # so _HANDOFF_ID_PATTERN itself was tightened to match.
+        #
+        # Flipped rather than deleted: the assertion that the resolver REFUSES a
+        # placeholder id is the regression guard for that fix, and it fails loudly if
+        # anyone widens the pattern back. Deleting it would have removed the only
+        # direct pin on the mechanism this whole change exists to close.
         polluted = "hnd-placeholder-replace-with-one-l-5f04ba"
         self.assertIsNone(
             _HANDOFF_ID_PATTERN.match(polluted),

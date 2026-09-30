@@ -1327,7 +1327,7 @@ def test_ac6_ac8_refused_candidate_contributes_no_path_advanced_still_commits_ex
 def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_code(
     tmp_path, monkeypatch
 ):
-    """AC8: when the follow-up commit itself fails (`commit_scoped` returns
+    """AC8: when the follow-up commit itself fails (`commit_paths` raises
     `ok=False`), the cascade surfaces `result["commit_error"]` with the
     failure text -- and `exit_code` is untouched, staying keyed off
     `advanced` alone (a commit failure never overrides the advanced-artifact
@@ -1366,12 +1366,12 @@ def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_c
 
     head_before = _head_sha(repo)
 
-    from coordinator_core.ops.ceremony.git_native import GitResult
+    from coordinator_core.git.commit import CommitRefused
 
-    def _fake_commit_scoped(paths, msg_path, worktree_root):
-        return GitResult(returncode=1, stdout="", stderr="simulated commit failure")
+    def _fake_commit_paths(repo, paths, message, **kwargs):
+        raise CommitRefused("simulated commit failure")
 
-    monkeypatch.setattr(cascade_mod, "commit_scoped", _fake_commit_scoped)
+    monkeypatch.setattr(cascade_mod, "commit_paths", _fake_commit_paths)
 
     result = _run(
         {
@@ -1435,14 +1435,12 @@ def test_c3_landed_commit_with_nonempty_stderr_surfaces_commit_notice(
     _git(repo, "add", str(handoff.relative_to(repo)))
     _git(repo, "commit", "-m", "add handoff")
 
-    from coordinator_core.ops.ceremony.git_native import GitResult
-
-    def _fake_commit_scoped(paths, msg_path, worktree_root):
-        return GitResult(
-            returncode=0, stdout="", stderr="worktree edits to feature.txt were NOT included"
-        )
-
-    monkeypatch.setattr(cascade_mod, "commit_scoped", _fake_commit_scoped)
+    notice = "worktree edits to feature.txt were NOT included"
+    monkeypatch.setattr(
+        cascade_mod,
+        "_commit_mutated_paths",
+        lambda paths, root, did: (None, notice),
+    )
 
     result = _run(
         {
@@ -1456,7 +1454,7 @@ def test_c3_landed_commit_with_nonempty_stderr_surfaces_commit_notice(
     assert result["exit_code"] == 0
     assert len(result["advanced"]) == 1
     assert "commit_error" not in result
-    assert result["commit_notice"] == "worktree edits to feature.txt were NOT included"
+    assert result["commit_notice"] == notice
 
 
 def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path, monkeypatch):
@@ -1508,3 +1506,24 @@ def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path, m
     assert len(result["advanced"]) == 1
     assert "commit_error" not in result
     assert "commit_notice" not in result
+
+
+def test_commit_mutated_paths_leaves_index_agreeing_with_head(tmp_path):
+    from coordinator_core.ops.ceremony.tests.test_commit_leaves_index_agreeing_with_head import (
+        assert_commit_leaves_index_agreeing_with_head,
+    )
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    target = repo / "state" / "handoffs" / "h.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("body\n", encoding="utf-8")
+    rel = "state/handoffs/h.md"
+
+    def commit_fn():
+        err, notice = cascade_mod._commit_mutated_paths([rel], repo, "dlv-idx-000")
+        assert err is None and notice is None
+
+    assert_commit_leaves_index_agreeing_with_head(
+        repo, commit_fn, [rel], peer_path="peer.txt"
+    )

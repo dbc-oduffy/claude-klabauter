@@ -172,6 +172,7 @@ def _restructure_sync(
     ]
 
     # Classify ALL steps before mutating ANYTHING — an error state on either
+    # step aborts the whole invocation with zero writes from this call.
     states = {}
     for step_name, src, dest in steps:
         state = _classify_step(src, dest)

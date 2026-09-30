@@ -73,6 +73,7 @@ __all__ = [
 
 _SIGNATURE = b"DIRC"
 _SUPPORTED_VERSIONS = (2, 3)
+#: ctime(8) mtime(8) dev(4) ino(4) mode(4) uid(4) gid(4) size(4) sha1(20)
 #: flags(2) = 62, EXCLUDING the optional v3 extended-flags halfword --
 #: identical layout to `git_state._ENTRY_FIXED_LEN`.
 _ENTRY_FIXED_LEN = 62

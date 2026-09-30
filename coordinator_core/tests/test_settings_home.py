@@ -30,6 +30,8 @@ from coordinator_core._settings_home import (
     machine_local_dir,
     native_path_form,
     normalize_native_path,
+    doubled_claude_home_parent,
+    is_doubled_claude_home,
     reject_doubled_claude_home,
     settings_home,
 )
@@ -403,6 +405,32 @@ def test_reject_doubled_claude_home_rejects_a_dot_claude_leaf(raw):
 )
 def test_reject_doubled_claude_home_passes_every_legitimate_value(raw):
     reject_doubled_claude_home("CLAUDE_HOME", raw)
+
+
+@pytest.mark.parametrize(
+    "raw,parent",
+    [
+        ("/srv/oper/.claude", "/srv/oper"),
+        ("/srv/oper/.claude/", "/srv/oper"),
+        ("/srv/oper/.CLAUDE", "/srv/oper"),
+        (r"C:\Users\oper\.claude", r"C:\Users\oper"),
+        ("/.claude", "/"),
+    ],
+)
+def test_doubled_claude_home_predicate_agrees_with_the_raising_form(raw, parent):
+    assert is_doubled_claude_home(raw)
+    assert doubled_claude_home_parent(raw) == parent
+    with pytest.raises(ValueError):
+        reject_doubled_claude_home("CLAUDE_HOME", raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "/srv/oper", "/srv/oper/", "/srv/.claude-backup", "/srv/claude", "/"],
+)
+def test_doubled_claude_home_predicate_passes_every_legitimate_value(raw):
+    assert not is_doubled_claude_home(raw)
+    assert doubled_claude_home_parent(raw) is None
 
 
 def test_home_dir_rejects_doubled_claude_home(tmp_path, monkeypatch):

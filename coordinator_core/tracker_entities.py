@@ -223,7 +223,13 @@ def mint_item_id(
             "YYYY-MM-DD date — cannot mint an item id from it"
         )
     date_part = created_at[:10].replace("-", "")
+    # Re-strip after the 32-char re-truncation (mirrors machine_slug's own
+    # collapse-then-strip pattern): _slug_from_title already stripped its
+    # OWN leading/trailing '-', but this module's second, tighter
     # truncation to _ITEM_ID_SLUG_MAX can re-expose a '-' at the new
+    # boundary (Review: code-reviewer c2a5a195 Finding 1 — a title whose
+    # slug places a '-' at/near index 32 minted a doubled/trailing hyphen
+    # that the charset check never caught, since '-' is itself allowed).
     slug = _slug_from_title(title)[:_ITEM_ID_SLUG_MAX].strip("-")
     if not slug:
         raise TrackerEntityError(
@@ -682,7 +688,17 @@ def emit_item_person_retracted(
     )
 
 
+# --- C2: person emission — emitters, alias-collision refusal, merge
+# idempotency and cycle guard (DEC-40/DEC-42/DEC-43/DEC-44) ---
+#
+# All three write-time guards below scan `tracker_store.read_events`
+# directly, never `tracker_projection`'s folds — `tracker_projection`
 # already imports `RESERVED_PROJECT_ID` from this module, so the reverse
+# edge is a circular import, not a style preference. This mirrors
+# `_require_local_item`/`_item_person_edge_present`'s existing precedent in
+# this same module. The C3 fold (`fold_person_registry`/`resolve_person`)
+# does not exist yet and, when it lands, will live in `tracker_projection` —
+# it is never imported from here.
 
 
 def _alias_owner(

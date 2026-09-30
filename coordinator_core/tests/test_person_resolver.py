@@ -182,7 +182,15 @@ def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
+# person_resolver's casefold
+# set is a second, hardcoded decision independent of
+# tracker_entities.normalize_alias's namespace split; nothing enforced the
+# two stayed in agreement, and F1 (github_id.casefold(), since removed) is a
+# demonstrated instance of them silently diverging. This test asserts
 # agreement per-key, driven off ALIAS_BUNDLE_KEYS so a future namespace
+# addition is covered automatically. Intentionally NOT a shared-helper
+# extraction — a loudly-failing coupling test is the scoped fix; unifying
+# the implementations is out of remit here.
 def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monkeypatch):
     mixed = "Mixed-CaseValue"
     _write_hosts_yml(tmp_path, mixed)
@@ -272,6 +280,9 @@ def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
     assert calls["count"] == 5
 
 
+# C1: contributor_slug pinned vectors, verified against example-cockpit-repo's own
+# TypeScript (`src/lib/identity/contributor-id.ts`, their commit
+# `e3d5726bd021b5ffe97b4148ad93ceba9ec95b8d`) via `npx tsx`, 2026-08-19.
 # <!-- VERBATIM: these are measured values, not illustrative ones. -->
 @pytest.mark.parametrize(
     "database_id,expected_slug",

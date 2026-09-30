@@ -89,7 +89,18 @@ def _row_reference(row: Any) -> str:
     return str(getattr(row, "id", ""))
 
 
+# --- open_spine_row_worklist -------------------------------------------
+#
+# `OpenSpineRowGate.verdict` (directives_spine_worklist.py) is
+# already a total three-way read: `applicable` / `not-applicable` /
 # `indeterminate`. This reader TRANSLATES that existing verdict; it does
+# not re-derive a status the gate already computed.
+#
+# Mapping (deliberate, not a rename): the gate's `applicable` means "spine
+# resolved, at least one row open" — that is unfinished, owned work, so it
+# maps to this module's `open`, not to a bare passthrough of the word
+# `applicable`. `not-applicable` and `indeterminate` pass through as-is;
+# both vocabularies already use those exact words for the same meaning.
 
 _OPEN_SPINE_ROW_WORKLIST_MAPPING: dict[str, str] = {
     "applicable": "open",
@@ -158,7 +169,16 @@ def _completeness_item_field(item: Any, field: str) -> str:
     return str(getattr(item, field, ""))
 
 
+# --- completeness_checklist ----------------------------------------------
+#
+# Post-C0, `CompletenessChecklistGate.verdict` (directives_session_hygiene.py,
+#) is already the same total four-way read the gate itself
+# computes: `not-applicable` / `indeterminate` / `clean` / `open`. This
 # reader TRANSLATES that existing verdict; it does not re-derive a status
+# the gate already computed, and it never falls back to the three-way
+# vocabulary this plan's own body cites — that citation is stale (see this
+# module's own header note and C0's live docstring, both read at execution
+# time).
 
 _COMPLETENESS_CHECKLIST_MAPPING: dict[str, str] = {
     "not-applicable": "not-applicable",
@@ -304,7 +324,19 @@ def review_scale(payload: Mapping[str, Any]) -> GateReading:
     return _unrecognised_value("review_scale", "resolved", resolved)
 
 
+# --- C2: composition -------------------------------------------------------
+#
+# Spec backlink: pln-one-completion-verdict-for-wor-ea96e2, chunk C2.
+#
+# The census/verdict axis is computed over exactly FOUR of the five
+# readings — `completeness_checklist`, `open_spine_row_worklist`,
+# `consumed_handoff_completeness`, `landed_reconciliation`. `review_scale`
+# answers a different question (F5: how much review a close owes, never
+# "is there outstanding completeness work" — see that reader's own
 # CALLER CONTRACT paragraph above) and is carried in `readings[]` for
+# narration and may still contribute `residue[]`, but never touches
+# `verdict`, `indeterminate_gates[]`, `clean_count`, or
+# `not_applicable_count`.
 
 _CENSUS_GATE_NAMES: tuple[str, ...] = (
     "completeness_checklist",

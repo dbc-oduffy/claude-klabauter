@@ -102,6 +102,68 @@ class TestSharedResolver:
         assert first == second == third is None
         assert spawn_calls == []
 
+    @pytest.mark.parametrize(
+        "form",
+        [
+            lambda cwd: _git_repo_root.show_prefix(cwd),
+            lambda cwd: _git_repo_root.is_inside_work_tree(cwd),
+        ],
+        ids=["show_prefix", "is_inside_work_tree"],
+    )
+    def test_spawning_forms_memoize_success_so_repeat_calls_spawn_once(
+        self, scratch_repo, monkeypatch, form
+    ):
+        spawn_calls = []
+        real_spawn = _git_repo_root._spawn_rev_parse
+
+        def _counting_spawn(args, cwd):
+            spawn_calls.append((tuple(args), cwd))
+            return real_spawn(args, cwd)
+
+        monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", _counting_spawn)
+
+        first = form(str(scratch_repo))
+        second = form(str(scratch_repo))
+        third = form(str(scratch_repo))
+
+        assert first == second == third
+        assert len(spawn_calls) == 1
+
+    def test_successful_empty_show_prefix_is_memoized_not_treated_as_failure(
+        self, scratch_repo, monkeypatch
+    ):
+        spawn_calls = []
+        real_spawn = _git_repo_root._spawn_rev_parse
+
+        def _counting_spawn(args, cwd):
+            spawn_calls.append(tuple(args))
+            return real_spawn(args, cwd)
+
+        monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", _counting_spawn)
+
+        assert _git_repo_root.show_prefix(str(scratch_repo)) == ""
+        assert _git_repo_root.show_prefix(str(scratch_repo)) == ""
+        assert len(spawn_calls) == 1
+
+    def test_failed_spawn_is_never_memoized_so_a_later_success_is_seen(
+        self, scratch_repo, monkeypatch
+    ):
+        real_spawn = _git_repo_root._spawn_rev_parse
+        outcomes = []
+
+        def _failing_spawn(args, cwd):
+            outcomes.append("failed")
+            return False, None
+
+        monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", _failing_spawn)
+        assert _git_repo_root.show_prefix(str(scratch_repo)) is None
+        assert _git_repo_root.show_prefix(str(scratch_repo)) is None
+        assert outcomes == ["failed", "failed"]
+        assert _git_repo_root._spawn_memo == {}
+
+        monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", real_spawn)
+        assert _git_repo_root.show_prefix(str(scratch_repo)) == ""
+
 
 class TestMigratedGuardVerdictsUnchanged:
     def test_doctrine_guard_git_root_resolves_inside_scratch_repo(self, scratch_repo, monkeypatch):

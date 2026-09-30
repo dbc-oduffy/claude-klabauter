@@ -37,7 +37,11 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.review_trail import reviewed_set as rs
 from coordinator_core.win_portability import no_console_creationflags
 
+#: High-water mark for `fold_in`'s subprocess count on a single resolvable
+#: record: one `git rev-list --all --parents` (reach-set build) + one
 #: `git rev-parse --verify` PER DISTINCT endpoint token (2 for a two-
+#: endpoint range) + one `git rev-list <range>` (range materialization)
+#: = 4. May be lowered freely; raising it requires editing this constant.
 _SPAWN_HIGH_WATER = {
     "fold_in_single_record": 4,
 }

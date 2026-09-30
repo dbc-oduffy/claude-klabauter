@@ -76,7 +76,7 @@ from typing import Any, Optional
 from functools import lru_cache
 
 from coordinator_core import session_attribution
-from coordinator_core.coverage import _get_handoff_consumed_by
+from coordinator_core.coverage import _get_handoff_claimed_by
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, get_op_handler
 from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.ops.session_commits import (
@@ -1035,7 +1035,7 @@ def _sanitize_consumed_handoffs(
          is the 2026-07-13 foreign-repo-bleed defense and stays absolute.
       2. Existence — the path must exist on disk. Also never bypassable.
       3. Ownership — the handoff's own frontmatter ``consumed_by`` must equal sid
-         (anchored via _get_handoff_consumed_by), so a temporally-adjacent peer's
+         (anchored via _get_handoff_claimed_by), so a temporally-adjacent peer's
          in-repo handoff is never mis-stamped as this session's predecessor.
          ``operator_asserted=True`` (env-override callers ONLY — see
          coordinator_core.ops.ceremony.wsc_disposition's escalate-only override
@@ -1069,7 +1069,7 @@ def _sanitize_consumed_handoffs(
         if hf_in_repo is None or not hf_in_repo.exists():
             rejected.append(path)
             continue
-        owned = _get_handoff_consumed_by(str(hf_in_repo)) == sid
+        owned = _get_handoff_claimed_by(str(hf_in_repo)) == sid
         if not owned and not operator_asserted:
             rejected.append(path)
             continue

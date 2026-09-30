@@ -73,7 +73,15 @@ def detect_class_transition(
     return (old_cls, new_cls)
 
 
+# ---------------------------------------------------------------------------
+# Emission (C3) — compose and stage a memo announcing one detected transition.
+#
+# Deliberately calls the registered `memo.draft` / `memo.compose` op
 # functions IN-PROCESS (plain Python import + call), never the
+# `cross-repo-memo` CLI — a subprocess on the commit path is brightline-
+# forbidden (claude-klabauter CLAUDE.md § The brightline). `detect_class_transition`
+# above stays pure; this is the module's separate, additive emission surface.
+# ---------------------------------------------------------------------------
 
 import re as _re
 

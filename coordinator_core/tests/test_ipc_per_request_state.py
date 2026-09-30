@@ -154,7 +154,9 @@ def test_declared_writes_var_reset_after_dispatch_completes():
     )
 
 
+# ---------------------------------------------------------------------------
 # Defect 2 — DISPATCH_TIMEOUT_SECS resolved per-request, not at import
+# ---------------------------------------------------------------------------
 
 def test_resolve_dispatch_timeout_secs_reads_env_live(monkeypatch):
     """`_resolve_dispatch_timeout_secs()` picks up a live env-var change on
@@ -198,7 +200,9 @@ def test_resolve_dispatch_timeout_secs_ignores_unparsable_env(monkeypatch):
     assert ipc._resolve_dispatch_timeout_secs() == ipc.DISPATCH_TIMEOUT_SECS
 
 
+# ---------------------------------------------------------------------------
 # Defect 2, continued — _OP_TIMEOUT_OVERRIDES stays live after the change
+# ---------------------------------------------------------------------------
 
 def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch):
     """An `_OP_TIMEOUT_OVERRIDES` row keeps resolving to its table value
@@ -265,11 +269,27 @@ def test_timeout_high_water_table_covers_every_override():
     )
 
 
+# ---------------------------------------------------------------------------
+# The global knob is narrow-only — the half of the ratchet that was vacuous.
+#
 # The two ratchet tests above sweep `_OP_TIMEOUT_OVERRIDES`, which is empty and
+# has been since DEC-2. They pass by iterating nothing. That is not a latent
+# guard waiting for a row: it is a guard aimed at the surface nobody uses, while
 # the surface everybody uses -- `COORDINATOR_DISPATCH_TIMEOUT_SECS`, re-read live
+# on every request, effective with no restart, settable from any sibling repo --
 # carried no ceiling at all. `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` was obeyed
+# immediately, and the ratchet above had nothing to say about it.
+#
+# The tests below put the knob itself under the ratchet. Same rule as every other
+# budget here: it may be LOWERED freely, and raising it is an edit to a pinned
+# literal that a reviewer reads as the argument it is.
+# ---------------------------------------------------------------------------
 
+#: The built-in default's high-water mark, as an independent second literal --
 #: deliberately NOT `ipc.DISPATCH_TIMEOUT_SECS`, since importing the value under
+#: test would make this file agree with any number whatsoever. Lowering the engine
+#: default below this is permitted and needs no edit here; raising it above 30s
+#: fails the suite.
 _GLOBAL_TIMEOUT_HIGH_WATER_SECS = 30.0
 
 

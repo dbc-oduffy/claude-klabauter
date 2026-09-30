@@ -28,6 +28,7 @@ _JSON_SCHEMA_OBJ = {
     },
 }
 
+# A minimal legacy-YAML-dialect schema object (no `_isJsonSchema` stamp) —
 # mirrors _LEGACY_BUG_SCHEMA in test_schema_validate.py.
 _LEGACY_SCHEMA_OBJ = {
     'schema': 'fixture-legacy-schema',
@@ -122,6 +123,8 @@ class TestValidateFrontmatterObjLegacyYamlDialect:
 class TestValidateFrontmatterObjUnstampedSchemaDispatch:
 
     # _JSON_SCHEMA_OBJ minus the load-time stamp — e.g. what
+    # json.loads(json.dumps(schema)) yields from a corpus that never went
+    # through load_schemas, or what a caller filtering allOf branches holds.
     _UNSTAMPED_JSON_SCHEMA_OBJ = {
         k: v for k, v in _JSON_SCHEMA_OBJ.items() if k != '_isJsonSchema'
     }
@@ -185,6 +188,9 @@ class TestValidateFrontmatterObjNeverRaises:
 
     def test_no_recognizable_shape_returns_error_result_not_unconditional_pass(self):
         # A dict matching neither dialect's tells is REJECTED, not dispatched
+        # into the legacy branch (whose "no required block" == "everything
+        # passes" negative-spec would return {'ok': True} for any document).
+        # Fail-closed on an undecidable schema; see _classify_schema_dialect.
         result = validate_frontmatter_obj({'anything': 'goes'}, {'no_recognizable_shape': True})
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'

@@ -897,7 +897,16 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
 # `JUDGMENT_POINT_BUILDERS` deliberately -- see that tuple's own docstring
 
 
+#: Plain-language reason strings for every join-provenance value the
+#: `close_out_and_stamp._determine_shipped` oracle can report OTHER than
+#: `"joined"` -- deliberately a LOCAL mirror of that module's own
 #: `_JOIN_PROVENANCE_REASON` mapping (this module's negative-spec forbids
+#: importing/reading/calling git-adjacent machinery from `close_out_and_
+#: stamp.py`; these are the four literal provenance-value strings that
+#: module's own docstring documents as its stable contract, not live code
+#: this module reaches into). Used by `build_no_commit_row_disposition_
+#: judgment_point` to reframe its own `evidence` text when the join itself
+#: -- not the underlying work -- is why a row reads as no-covering-commit.
 _JOIN_PROVENANCE_UNATTRIBUTABLE_REASON = {
     "no_join_key": (
         "the governing plan's own frontmatter carries no deliverable_id: "
@@ -996,7 +1005,15 @@ def build_no_commit_row_disposition_judgment_point(
     )
 
 
+#: Every builder in this module, in census emission order (lessons/plan ->
+#: completion -> memo/scratch -> session hygiene -> review -> commit/tail).
+#: `__init__.py` (C3) imports this tuple to populate `judgment_points[]`
+#: alongside the two pre-existing standing points it already builds
+#: directly. Exactly 29 entries -- kept in sync with this module's own
+#: docstring roster; a mismatch here is an authoring bug, not a intentional
+#: subset. `build_no_commit_row_disposition_judgment_point` (C13, a later
 #: plan) is DELIBERATELY excluded -- see its own docstring's section
+#: banner for why.
 JUDGMENT_POINT_BUILDERS: tuple[Callable[[], dict[str, Any]], ...] = (
     build_lesson_worth_capturing_judgment_point,
     build_lesson_scope_classification_judgment_point,

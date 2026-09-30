@@ -127,10 +127,18 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
             distinct registered `repos.*` key.
     """
     normalized = to.strip().lower()
+    # Tracks which central id the redirect
+    # branch actually resolved against, so note-selection below checks the
     # RESOLVED id, not the caller's original `to`/`normalized`.
     redirected_central_id: Optional[str] = None
+    # Cache the manifest read here so the
     # UNRESOLVED branch below reuses it when the redirect branch already
+    # read it, instead of re-opening/re-parsing the manifest a second time
+    # in the same call. Lazily bound (not read unconditionally at function
     # top) so the common MATCH/MISMATCH path — which needs central_ids in
+    # neither branch — pays for zero manifest reads, same as before this
+    # fix; this function is the hot-path compute core a 1098ms->2.5ms
+    # optimization was built around.
     central_ids: Optional[set[str]] = None
     redirect_aliases = read_redirect_aliases()
     if normalized in redirect_aliases:
@@ -139,7 +147,9 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
             redirected_central_id = sorted(central_ids)[0]
             _, to_root, all_repos = resolve_receiver_inbox(redirected_central_id)
         else:
+            # No central ids declared in the manifest at all — nothing to
             # redirect to; degrade cleanly to UNRESOLVED rather than crash
+            # on an empty sorted()[0].
             to_root = None
             all_repos = read_registry_repos()
     else:
@@ -207,6 +217,7 @@ def format_addressee_message(
         )
         return "\n".join(lines), ADDRESSEE_EXIT_MISMATCH
     # UNRESOLVED (or any other/unexpected verdict string — treat as
+    # unresolved rather than silently falling through as a MATCH).
     lines.append(
         f"verdict: receiver '{to_val}' does not resolve to a known repo on "
         f"this machine"

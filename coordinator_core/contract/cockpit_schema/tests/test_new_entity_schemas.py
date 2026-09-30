@@ -163,7 +163,9 @@ def test_tracker_summary_d9_nullable_field_omitted_entirely_rejected():
     assert not zod_safe_parse_ok(TrackerSummary, bad)
 
 
+# ===========================================================================
 # HealthStatusSummary — AXIS DISTINCTION: status (lifecycle) vs health (posture)
+# ===========================================================================
 
 HEALTH_VALID = {
     "repo": ".example-doctrine-mirror-repo",

@@ -181,7 +181,19 @@ _REVIEW_INTEGRATOR_TYPE = "coordinator:review-integrator"
 
 _ARCHIVE_RE = re.compile(r"(^|/)archive/")
 
+#: Reference hook — daily-summaries dated-file carve-out.
+#: The optional ``.observer`` segment (2026-08-07 widening) admits the
+#: strategic-observer sidecar that /workday-complete Step 7 dispatches a
 #: SUBAGENT to write. Without it the ceremony and this guard were jointly
+#: unsatisfiable: the observer's only specified output path is under
+#: ``archive/``, so the guard hard-denied every well-behaved observer, and the
+#: strategic-observer trail sat empty from 2026-07-23 onward across at least
+#: two repos -- silently, because /workweek-complete Step 9's arch-pass
+#: skip-condition reads an empty trail as "no architectural risk".
+#: Deliberately narrow: a single literal segment on an already-carved-out
+#: dated path, not a general subagent exemption. The guard's wrap-up
+#: self-log backstop purpose is unchanged -- a ceremony-specified sidecar is
+#: not the over-eager-self-log class it exists to stop.
 _DAILY_SUMMARY_RE = re.compile(
     r"(^|/)archive/daily-summaries/[0-9]{4}-[0-9]{2}-[0-9]{2}"
     r"(-[a-z0-9][a-z0-9-]*)?(\.observer)?\.md$"
@@ -191,7 +203,12 @@ _COMPLETED_RE = re.compile(
     r"(^|/)archive/completed/[0-9]{4}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}-.+\.md$"
 )
 
+#: week-changelogs carve-out (2026-08-06 widening; see module docstring):
+#: a dated directory containing either a dated daily block (case-mixed
 #: machine/variant suffix permitted, unlike ``_DAILY_SUMMARY_RE``, per the
+#: on-disk ``2026-07-03-Machine-b-backfill.md`` shape) or a week rollup.
+#: Deliberately does NOT match ``HEADER.priorities.<hash>.md`` -- that
+#: artifact arrives by ``mv``, which this guard's tool-name gate never sees.
 _WEEK_CHANGELOG_RE = re.compile(
     r"(^|/)archive/week-changelogs/[0-9]{4}-[0-9]{2}-[0-9]{2}/"
     r"([0-9]{4}-[0-9]{2}-[0-9]{2}(-[A-Za-z0-9][A-Za-z0-9-]*)?"
@@ -256,7 +273,11 @@ def _write_block_log(
         )
 
 
+#: A denied write shaped like a plausible wrap-up self-log: directly under
+#: ``archive/`` itself, or under ``archive/daily-summaries/`` but missing
 #: ``_DAILY_SUMMARY_RE`` (e.g. wrong date shape). Anything else denied
+#: under ``archive/`` is a different subtree entirely and MUST NOT be told
+#: to file itself as a daily summary -- see ``_deny_reason``.
 _DAILY_SUMMARY_SHAPED_RE = re.compile(
     r"(^|/)archive/(daily-summaries/)?[^/]*$"
 )
@@ -353,7 +374,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     git_root = _resolve_git_root(payload.get("cwd"))
 
+    # review-integrator allow-condition (2026-08-03 widening -- see module
+    # docstring). Asymmetric fail-open discipline, deliberately: a failed or
+    # missing back-pointer lookup returns "" here, which does NOT match
     # _REVIEW_INTEGRATOR_TYPE and therefore falls through to the deny path
+    # below -- it must NOT allow, or this would reopen the naming-dependent
+    # hole this same widening closed.
     if agent_id and git_root:
         subagent_type = _read_backpointer_subagent_type(git_root, agent_id)
         if subagent_type == _REVIEW_INTEGRATOR_TYPE:

@@ -41,7 +41,10 @@ COMMIT_SURFACE_FILES = {
         "named in the pre-revision scope and still live at HEAD (473 lines).",
 }
 
+# Every OTHER non-test .py module under coordinator_core/git/ and coordinator_core/ops/ceremony/ at
 # HEAD (2026-09-10 census), each with a one-line reason it is not in COMMIT_SURFACE_FILES. This is
+# the constant that makes the curated roster honest and the drift test (C1) possible: a module in
+# neither constant is a narration holder nobody classified.
 EXCLUDED_MODULES = {
     "coordinator_core/git/__init__.py":
         "package marker; not a narration holder.",

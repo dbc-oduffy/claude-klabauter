@@ -23,7 +23,16 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
+    # This file exercises
+    # session_live/claim_holder_live, which route through liveness's
+    # per-process registry-snapshot memoization
+    # (liveness_mod._cached_registry_lookup). Only
+    # coordinator_core/session/tests/test_liveness.py reset that cache;
+    # left unreset here, whichever test in a shared pytest worker process
     # first populates it (including one in a DIFFERENT file) leaks its
+    # snapshot into every later session_live/claim_holder_live call in this
+    # file, silently masking a monkeypatched registry_dir(). Reset before
+    # AND after each test so cross-file ordering never matters.
     liveness_mod._registry_snapshot_cache = None
     yield
     liveness_mod._registry_snapshot_cache = None

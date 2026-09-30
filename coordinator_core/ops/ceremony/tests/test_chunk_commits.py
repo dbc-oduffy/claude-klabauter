@@ -9,7 +9,11 @@ import pytest
 from coordinator_core.ops.ceremony import chunk_commits
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -90,6 +94,7 @@ def test_subject_filter_rejects_body_line_match(tmp_path):
 def test_anchor_excludes_commits_before_add_commit(tmp_path):
     repo = _init_repo(tmp_path)
     # A DIFFERENT plan's C1 chunk lands FIRST, entirely before our plan's own
+    # add-commit — outside our plan's range by construction.
     foreign_sha = _touch_commit(
         repo, "src/foreign.py", "pass\n", "C1: foreign plan's own chunk"
     )

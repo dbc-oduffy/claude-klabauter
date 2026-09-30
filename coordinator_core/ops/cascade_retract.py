@@ -128,8 +128,18 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _SUBPROCESS_TIMEOUT_SEC = 15
 
+#: The exact field set `deliverable_cascade.py` (frontmatter depth) and
+#: `cascade_baton_rows.py` (row depth) ever write. See module docstring
 #: § BYTE-ATTRIBUTABLE. Deliberately the union of `deliverable_cascade._advance_one`'s
+#: two frontmatter fields (`advanced_by`/`advanced_at`, plus the ship-mutate's own
 #: `deployment_state`/`shipped_in`) and `cascade_baton_rows._ROW_STAMP_LINE_RE`'s
+#: four row fields — never widened independently of those two writers.
+#:
+#: Review: coordinator:code-reviewer — content-only, this regex cannot tell
+#: "this line's field name happens to match" from "this is the specific
+#: field the cascade wrote". It is now ONLY the first gate; every row-depth
+#: match is additionally position-correlated against this candidate's own
+#: row provenance in `_divergence_reason` below before being accepted.
 _CASCADE_FIELD_LINE_RE = re.compile(
     r"^[ \t]*(deployment_state|shipped_in|shipped_in_kind|disposition(?:_ref|_detail)?"
     r"|advanced_by|advanced_at):[ \t]"
@@ -137,6 +147,9 @@ _CASCADE_FIELD_LINE_RE = re.compile(
 
 #: Row-depth-only subset of `_CASCADE_FIELD_LINE_RE` — mirrors
 #: `cascade_baton_rows._ROW_STAMP_LINE_RE` exactly. A line matching this is
+#: ambiguous between frontmatter and row depth by field name alone
+#: (`advanced_by`/`advanced_at` are written at BOTH depths); position
+#: inside a `## Tasks` row span is what disambiguates it, not the name.
 _ROW_DEPTH_FIELD_LINE_RE = re.compile(
     r"^[ \t]*(disposition(?:_ref|_detail)?|advanced_by|advanced_at):[ \t]"
 )
@@ -340,7 +353,9 @@ def _retract_one(
     return bool(_state["applied"]), _state["message"]
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("deliverable.cascade_retract")

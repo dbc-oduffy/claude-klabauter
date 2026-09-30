@@ -164,7 +164,14 @@ _TIMEOUT_SECS = 2.0
 _MemoEntry = Tuple[Optional[str], Optional[str], Optional[str]]
 _memo: Dict[str, _MemoEntry] = {}
 
+# (resolved-cwd, form) -> spawned value, for the forms that always spawn
+# (`--show-prefix`, `--absolute-git-dir`, `--is-inside-work-tree`) or that
+# fall back to a spawn when the walk finds nothing. Kept separate from
+# `_memo` because those forms have no walk-derived value to key off. Values
 # are never `None` -- only a SUCCESSFUL spawn is memoized here (see
+# `_spawn_cached`), and a successful spawn's value is always a `str` (the
+# empty string included); a genuine failure is never written to this dict
+# at all, so the type is `str`, not `Optional[str]`.
 _spawn_memo: Dict[Tuple[str, str], str] = {}
 
 def clear_memo() -> None:
@@ -240,6 +247,11 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
     the split would serve.
     """
     # Function-local: this is the spawn FALLBACK — the walk answers the ordinary
+    # case without it, so on the common path `subprocess` and its ~10 transitive
+    # modules (select/selectors/signal/threading/locale/math) never load. This
+    # module sits on `coordinator_core.ipc`'s cold-start path, measured against a
+    # module-count ceiling in
+    # `coordinator_core/benchmarks/import-budget-manifest.json`. Do not hoist.
     import subprocess
 
     try:
@@ -265,7 +277,12 @@ def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
     if entry is None:
         found = _walk_for_repo(Path(resolved))
         if found is None:
+            # Deliberately NOT stored in `_memo` -- see "Negative caching"
+            # in the module docstring. A "no `.git` entry found" outcome is
             # not repo IDENTITY, it is the absence of one, and can flip to
+            # present at any time (e.g. `git init` runs at `resolved` after
+            # this call). Caching it would poison every subsequent call at
+            # this cwd for the rest of the process.
             return resolved, (None, None, None)
         kind, found_path = found
         if kind == "bare":
@@ -287,6 +304,10 @@ def _spawn_cached(resolved: str, form: str, args: list) -> Optional[str]:
     succeeded, value = _spawn_rev_parse(args, resolved)
     if succeeded:
         # Only a SUCCESSFUL spawn is memoized -- see "Negative caching" in
+        # the module docstring. Both callers of this helper spawn
+        # unconditionally, so a memoized failure would outlive a `git init`
+        # at the same cwd. A successful spawn with empty output (e.g.
+        # `--show-prefix` at the toplevel) is still memoized here.
         _spawn_memo[key] = value
     return value
 

@@ -30,6 +30,7 @@ def memory_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return mem
 
 
@@ -145,7 +146,11 @@ class TestShrinkTowardComplianceCarveOut:
             _edit_payload(str(target), old="y" * 2100, new="y" * 2100 + "z" * 500)
         )
         assert result is not None
+        # DR-345 flips this guard hard-deny; the previous negative assertion
         # here pinned the ADVISORY shape on purpose (see the DR-277-flip
+        # comment this replaces). Per spec
+        # state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md, a
+        # deny is now the correct, intended result.
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
@@ -372,3 +377,51 @@ class TestByteDenyNamesWhereTheBytesAre:
             assert "stale fact, then doctrine dup, then oldest" in reason
             assert "auto-trim" in reason
             assert len(reason.encode()) <= 220
+
+
+class TestClaudeHomeConventionA:
+    @staticmethod
+    def _isolate(monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CLAUDE_HOME", raising=False)
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        return home
+
+    @staticmethod
+    def _big(root):
+        mem = root / "projects" / "-p" / "memory"
+        mem.mkdir(parents=True)
+        return guard.check(_write_payload(str(mem / "MEMORY.md"), "x" * 2500))
+
+    def test_claude_home_governs_dot_claude_projects(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        parent = tmp_path / "ch"
+        parent.mkdir()
+        monkeypatch.setenv("CLAUDE_HOME", str(parent))
+        assert self._big(parent / ".claude") is not None
+
+    def test_claude_home_direct_projects_not_governed(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        parent = tmp_path / "ch"
+        parent.mkdir()
+        monkeypatch.setenv("CLAUDE_HOME", str(parent))
+        assert self._big(parent) is None
+
+    def test_claude_config_dir_governs_projects(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+        assert self._big(cfg) is not None
+
+    @pytest.mark.parametrize("bad", ["relative/dir", "SUFFIX"])
+    def test_bad_claude_home_does_not_raise_and_keeps_home_roots(self, monkeypatch, tmp_path, bad):
+        home = self._isolate(monkeypatch, tmp_path)
+        value = str(tmp_path / "x" / ".claude") if bad == "SUFFIX" else bad
+        monkeypatch.setenv("CLAUDE_HOME", value)
+        roots = guard._guarded_project_roots()
+        assert home / ".claude" / "projects" in roots
+        assert self._big(home / ".claude") is not None

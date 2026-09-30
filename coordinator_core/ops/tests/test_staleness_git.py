@@ -116,7 +116,10 @@ def test_unresolvable_since_point_is_indeterminate_never_fresh(tmp_path):
 
     rng = commits_touching_since(repo, ["src.py"], "not-a-timestamp-or-sha")
 
+    # Plain `git log --since=<garbage>` would silently ignore an
+    # unparseable date and match every commit (a masked false-STALE, the
     # ALWAYS-0-adjacent failure mode this module exists to close) — the
+    # module must reject the shape itself rather than trust git's leniency.
     assert rng.indeterminate is True
     assert verdict_from_range(rng) == Verdict.INDETERMINATE
 

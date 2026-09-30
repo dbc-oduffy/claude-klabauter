@@ -13,7 +13,7 @@
       {"kind": "literal", "line": "deployment_state: awaiting_gate"},
       {"kind": "literal", "line": "category: roadmap"},
       {"kind": "value", "key": "summary", "field": "placeholder_summary", "quote": true},
-      {"kind": "literal", "line": "authoring_session: PLACEHOLDER"},
+      {"kind": "optional_omit", "key": "authoring_session", "field": "authoring_session", "quote": true},
       {"kind": "literal", "line": "workstream: PLACEHOLDER  # replace with roadmap short prefix slug"},
       {"kind": "present_as_null", "key": "deliverable_id", "field": "deliverable_id", "quote": true},
       {"kind": "present_as_null", "key": "initiative", "field": "initiative", "quote": true, "suffix": "  # FK to state/initiatives/<id>.yaml; null when no named initiative"},
@@ -41,6 +41,10 @@
       "## Acceptance criteria",
       "",
       "<!-- Checklist the picking-up EM gates completion against. -->",
+      "<!-- `- [ ]`/`- [x]` checkboxes only — the consumed-handoff completeness -->",
+      "<!-- gate counts boxes and reads a prose list as indeterminate. -->",
+      "",
+      "- [ ] ",
       "",
       "## Recommended next steps for the picking-up EM",
       "",
@@ -52,8 +56,11 @@
       "",
       "## Session Ledger",
       "",
-      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line per closing ceremony. -->",
       "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      "<!-- N is an integer COUNT of dispatches, NOT a duration: Nd = agent dispatches, -->",
+      "<!-- No = opus dispatches. e.g. `3d / 1o`. A row written as days (`0.3d`) does not -->",
+      "<!-- parse, and a chain whose rows do not parse silently renders as ZERO effort. -->",
       ""
     ]}
   ]

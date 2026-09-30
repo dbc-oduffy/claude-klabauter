@@ -162,13 +162,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0 if result["ok"] else 1
 
 
+# ---------------------------------------------------------------------------
+# Dual registration — "schema.describe" / "schema.validate" ops.
+#
+# Same implementation as the argv contract above (_cmd_describe/_cmd_validate
 # -> schema_validate.describe()/validate()), a DIFFERENT front door: the
 # JSON-RPC envelope (register_op dispatch, coordinator_core/ipc.py:828) rather
+# than this module's own argv/stdout/exit-code contract. Both ops are
 # COMPUTE_ONLY (read-only: schema_validate.describe()/validate() only read the
+# vendored coordinator_core/frontmatter/schemas/ tree; neither writes any
+# file, issues any git command, or mutates coordinator substrate).
+#
+# Registration classification: coordinator_core/authz/classification.py
 # OP_CLASSIFICATION requires a "schema.describe": OpClass.COMPUTE_ONLY and
 # "schema.validate": OpClass.COMPUTE_ONLY entry (DR-208 "new ops default to
 # MUTATING until a reviewer affirms COMPUTE_ONLY") plus a
+# coordinator_core/ops/__init__.py eager-import-list entry (or
 # coordinator_core/ipc.py::_OP_KEY_SCOPE) to wire the eager (non-lazy)
+# dispatch path fully — both are OUT OF SCOPE for this module by chunk-file-
+# scope restriction; see the chunk report for the flagged follow-up.
+# ---------------------------------------------------------------------------
 
 @register_op("schema.describe")
 async def _op_schema_describe(params: dict, repo_root: Optional[Path] = None) -> dict:

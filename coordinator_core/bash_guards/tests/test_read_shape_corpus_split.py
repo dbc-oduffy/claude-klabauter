@@ -129,6 +129,12 @@ class TestMeasureSplit:
         assert report.corpus_size == 5
         assert report.read_shaped_count == 3
         # `cat a.txt` counts as ANSWERED here, and that is the point of AC7 rather than an
+        # accident of ordering. C5 landed in the same wave as C1 but ahead of C3, so when
+        # this case was written no read shape was wired into `plan_for` yet and every one
+        # of them bucketed as `not_yet_implemented`. Once C3 wired recognition, the split
+        # started reporting what is actually served -- which is the measurement AC7 asks
+        # for. Pinning the pre-C3 numbers here would have made this test assert the
+        # absence of the feature the plan exists to add.
         assert report.answered_count == 1
         assert report.remainder_count == 2
         assert report.cause_counts.get("not_yet_implemented", 0) == 0

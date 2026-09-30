@@ -5,6 +5,10 @@ from pathlib import Path
 
 from coordinator_core.claude_md_budget import DEV_REPO_SENTINEL, HARD_LIMIT_BYTES
 from coordinator_core.write_guards import check_claude_md_size as guard
+from coordinator_core.write_guards._guard_level import (
+    DOCTRINE_SURFACE_ADVISORY,
+    doctrine_surface_advisory,
+)
 
 
 def _init_git_dir(root: Path) -> None:
@@ -54,7 +58,7 @@ class TestFlatHardLimitStillApplies:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 10))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
 
 class TestAudienceManifestWidensGovernance:
@@ -125,7 +129,7 @@ class TestRatchetWatermarkEnforced:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 100))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
     def test_growing_past_armed_watermark_denied_even_under_hard_limit(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -145,7 +149,7 @@ class TestRatchetWatermarkEnforced:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 6000))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
     def test_shrinking_under_armed_watermark_allowed(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -153,10 +157,15 @@ class TestRatchetWatermarkEnforced:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 100))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
     def test_malformed_watermark_does_not_deny_and_names_ledger_path(self, tmp_path, capsys):
+        # Fix for the wedge-with-no-escape-hatch defect: a malformed ledger
+        # is auxiliary-bookkeeping corruption, not a statement about
+        # whether THIS edit is legitimate -- this module carries zero
         # COORDINATOR_OVERRIDE_* keys, so a hard deny here had no
+        # in-harness way out. The ratchet leg now fails OPEN (unarmed),
+        # surfacing the malformed ledger path via stderr instead.
         target = self._governed_target(tmp_path)
         ledger_dir = tmp_path / "state" / "audits"
         ledger_dir.mkdir(parents=True)
@@ -165,12 +174,14 @@ class TestRatchetWatermarkEnforced:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 10))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
         err = capsys.readouterr().err
         assert str(ledger_path) in err
 
     def test_malformed_watermark_hard_limit_breach_still_denies(self, tmp_path):
+        # Regression: the malformed-ledger fail-open must not swallow the
         # OTHER, unrelated deny leg -- an actual HARD_LIMIT_BYTES breach
+        # still denies exactly as before.
         target = self._governed_target(tmp_path)
         ledger_dir = tmp_path / "state" / "audits"
         ledger_dir.mkdir(parents=True)
@@ -193,7 +204,7 @@ class TestRatchetWatermarkEnforced:
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 7000))
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
     def test_over_watermark_growth_is_still_denied(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -228,9 +239,11 @@ class TestRatchetWatermarkEnforced:
             )
         )
 
-        assert result is None
+        assert result == doctrine_surface_advisory()
 
     def test_genuine_ratchet_failure_still_denies(self, tmp_path):
+        # Regression: a well-formed watermark whose ratchet check genuinely
+        # fails (growth past the recorded watermark) still denies exactly
         # as before -- only the PARSE-FAILURE branch changed.
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
@@ -241,3 +254,15 @@ class TestRatchetWatermarkEnforced:
         out = result["hookSpecificOutput"]
         assert "permissionDecision" not in out
         assert "6000" in out["additionalContext"]
+
+
+class TestDoctrineSurfaceAdvisoryParity:
+    def test_within_budget_governed_edit_carries_the_shared_advisory(self, tmp_path):
+        _init_git_dir(tmp_path)
+        (tmp_path / DEV_REPO_SENTINEL).write_text("")
+        target = tmp_path / "coordinator" / "CLAUDE.md"
+        target.parent.mkdir(parents=True)
+
+        result = guard.check(_write_payload("Write", str(target), content="short"))
+
+        assert result["hookSpecificOutput"]["additionalContext"] == DOCTRINE_SURFACE_ADVISORY

@@ -184,14 +184,30 @@ def _supplemental_roots(config_path: str) -> List[str]:
 
 def resolve_roots() -> List[str]:
     claude_home = _claude_home()
+    # Settings-home-first resolution, mirroring `coordinator_core.bare_forwarder.
+    # forward`'s two-rung ordering: try `<settings-home>/bin/machine-local`
+    # first, fall back to the legacy `<claude_home>/bin/machine-local` rung.
+    # (Deliberately NOT `_settings_home.resolve_machine_local_cli`'s PATH-first
+    # ladder -- a bare `shutil.which("machine-local")` would resolve whatever
+    # is on the CALLING PROCESS's PATH, which on an operator box commonly
     # includes the real settings-home bin dir regardless of which CLAUDE_HOME/
     # COORDINATOR_SETTINGS_HOME a caller or test has pointed elsewhere; the two
+    # explicit rungs below are both env-derived and therefore respect a
     # sandboxed CLAUDE_HOME/COORDINATOR_SETTINGS_HOME the way PATH does not.)
+    #
+    # This module previously hand-rolled a SINGLE-rung probe against ONLY the
+    # legacy `<claude_home>/bin/machine-local` location, which `~/.claude/bin`'s
+    # 2026-07-28 retirement left permanently unable to find a settings-home-
+    # installed CLI. That silently degraded to "no machine-local" on any box
+    # installed post-migration, skipping `_registry_roots()` entirely and
+    # reporting only `claude_home` as if no peers were registered at all --
+    # dbc-oduffy/claude-klabauter#38.
     machine_local_name = "machine-local"
     settings_home_candidate = os.path.join(str(settings_home()), "bin", machine_local_name)
     legacy_candidate = os.path.join(claude_home, "bin", machine_local_name)
     if os.name == "nt":
         # The bare shim is EXTENSION-LESS, so CreateProcess cannot exec it
+        # (WinError 193) — prefer the delivered .cmd sibling on Windows.
         settings_home_candidate = settings_home_candidate + ".cmd"
         legacy_candidate = legacy_candidate + ".cmd"
     if os.path.isfile(settings_home_candidate) and is_executable(settings_home_candidate):

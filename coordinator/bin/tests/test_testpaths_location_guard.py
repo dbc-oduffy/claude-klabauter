@@ -123,7 +123,20 @@ _TEST_SHAPES = ("test_*.py", "*.test.py", "test-*.py", "*_test.py")
 
 _EXCLUDED_DIR_NAMES = {"scratchpad"}
 
+# ---------------------------------------------------------------------------
 # _OUTSIDE_TESTPATHS_EXEMPT — test-shaped files that legitimately live outside
+# every `testpaths` root. Every entry is ONE repo-root-relative file path plus
+# the specific reason THAT file must stay unreachable by both tiers. Globs,
+# directory prefixes and "known offenders" buckets are forbidden.
+#
+# It is currently EMPTY, and that is load-bearing rather than incidental: the
+# 2026-07-28 whole-tree sweep verified zero dotted `*.test.py`, zero dashed
+# `test-*.py`, zero trailing `*_test.py`, and — after admitting `bin` and
+# `scripts` — zero `test_*.py` outside `testpaths`. If clearing a failure here
+# needs an entry, prefer widening `testpaths` (the fix the two 2026-07-28
+# admits took) or deleting the file. Reach for an entry only when neither is
+# right, and say why in the value.
+# ---------------------------------------------------------------------------
 _OUTSIDE_TESTPATHS_EXEMPT: dict[str, str] = {}
 
 

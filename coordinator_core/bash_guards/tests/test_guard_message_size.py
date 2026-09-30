@@ -249,9 +249,17 @@ def _ceil_to_5(value: float) -> int:
 
 JITTER_ALLOWANCE_BYTES = max(5, _ceil_to_5(2.1618))
 
+#: Live-measured baseline, this tree, this host, re-measured at C10
+#: (docs/plans/2026-09-22-spawn-budget-and-census.md, fire HEAD 32aacc6a73,
 #: default-TMPDIR run) as `_ceil_to_5(live_mean) + JITTER_ALLOWANCE_BYTES` --
+#: see module docstring's "Known limitation" note on cross-host/checkout
 #: jitter, which `JITTER_ALLOWANCE_BYTES` now absorbs explicitly (measured,
+#: not guessed) on top of `_ceil_to_5`'s per-band rounding.
+#: A future chunk that genuinely trims a band's prose must lower the
+#: matching entry here by hand (mirroring `test_operator_override_note_
 #: retains_affordances._MAX_BYTES`'s own manually-ratcheted-down precedent)
+#: -- this dict does not self-update, by design (a ratchet that rewrites
+#: its own ceiling on every green run is not a ratchet).
 RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # Trimmed this dispatch: destructive-git-revert's whole-tree checkout/
     # restore copy shortened to clear the leg-1 per-cell cap -- live
@@ -353,7 +361,11 @@ def test_leg3_baseline_is_not_slack(measured_corpus):
     assert not violations, "leg-3 baseline is slack, not ratchet -- lower by hand:\n%s" % "\n".join(violations)
 
 
+# ---------------------------------------------------------------------------
+# AC2 -- dead-entry enforcement over `guard_message_exemptions.
 # GUARD_MESSAGE_EXEMPTIONS`. A lookup over the SAME cells `measured_corpus`
+# already fires once (`_measure_all_cells`), not a second firing path.
+# ---------------------------------------------------------------------------
 
 
 def _stale_exemptions(
@@ -542,6 +554,11 @@ def test_ac9_measured_wallclock_runtime_reported(measured_corpus):
     )
 
 
+#: Roughly 1.5x this corpus's own live-measured pooled total (~59.3KB across
+#: 70 speaker cells at authoring time) -- a generous, coarse guard-rail
+#: against a runaway population bug (e.g. a row registered twice), not a
+#: precision budget. The three legs above are the precision gates; this is
+#: a defense-in-depth sanity check in the same inline-constant-with-a-
 #: justifying-docstring style as `claude_md_budget.SOFT_LIMIT_BYTES`/
 #: `HARD_LIMIT_BYTES`, `test_operator_override_note_retains_affordances.
 #: _MAX_BYTES`, and `guard_memory_store_cap.MAX_MEMORY_MD_BYTES`.

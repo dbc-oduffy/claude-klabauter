@@ -256,9 +256,16 @@ def test_main_no_roots_present_returns_exit_0_silent(monkeypatch: pytest.MonkeyP
     assert captured.out == ""
 
 
+# ---------------------------------------------------------------------------
 # _resolve_roots — §4a CLAUDE_HOME convention + settings-home dual-read lane
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the scan.py/sentinel.py reader/writer divergence:
 # scan.py used to derive its roots from bare Path.home(), ignoring CLAUDE_HOME
+# entirely, while sentinel.py (the sibling writer) honoured it via
+# _resolve_claude_home. See docs/decisions — DR-072 (settings-home dual-read)
 # and machine-local-registry.md §4a (CLAUDE_HOME is a $HOME substitute, not
+# the .claude dir itself).
 
 
 def test_resolve_roots_honours_claude_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

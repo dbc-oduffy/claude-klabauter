@@ -32,7 +32,15 @@ from coordinator_core.ops.discover_working_repos import (
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# Declared, not excused: this file spawns a real git process because
+# `_is_git_root`/discovery under test detect real `.git` directory presence
+# and real repo state across a tiered filesystem walk -- no mock stands in
+# for real repo-root detection. Each test builds its own repo at a distinct
+# path shape (tier A/B, nested, decoded-name edges), so `_init_git_repo` is
+# not hoisted to module scope -- per-test isolation. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -239,6 +247,7 @@ class TestTierAEndToEnd:
         (projects_dir / "X--coordinator-content-repo").mkdir(parents=True)
 
         # COORDINATOR_TIER_A_FS_ROOT test seam: point existence probes at a
+        # real fixture tree holding the matching (lowercased) directory.
         fs_root = tmp_path / "fsroot"
         (fs_root / "coordinator-content-repo").mkdir(parents=True)
 

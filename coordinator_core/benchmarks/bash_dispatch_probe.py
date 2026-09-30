@@ -99,7 +99,11 @@ corpus row corresponds to which AC."""
 
 
 #: A payload whose `tool_name` is not in `_tool_names.COMMAND_TOOL_NAMES`,
+#: so `evaluate_payload_json`'s own C1 master gate (dispatch.py's own
 #: "union check against the DECLARED-matchers set") returns before the
+#: guard chain is even built -- the "chain that spawns nothing" floor leg
+#: AC2 asks for: dispatcher call overhead over the bare interpreter +
+#: import closure, with the guard chain itself never entered.
 _INERT_PAYLOAD: Dict[str, Any] = _payload("Write", "n/a", "bash-dispatch-probe-inert")
 
 

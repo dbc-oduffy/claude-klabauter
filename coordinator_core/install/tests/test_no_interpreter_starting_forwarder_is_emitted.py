@@ -75,6 +75,8 @@ def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
 
 def _skip_if_no_prebuilt() -> None:
     # Skipping here drops the guard's entire BEHAVIORAL leg on a
+    # platform/checkout with no committed prebuilt door, leaving only leg 1's
+    # structural (hasattr) coverage in place.
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 

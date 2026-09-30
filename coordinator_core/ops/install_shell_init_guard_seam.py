@@ -1,6 +1,6 @@
 """
-coordinator_core.ops.install_shell_init_guard_seam — DoE-owned rc-eval seam
-for claude-klabauter's stdout-emitter shell-init resource-cap guard (DR-047 split).
+coordinator_core.ops.install_shell_init_guard_seam — rc-eval seam (claude-klabauter-resident;
+install step invoked from DoE's install.md) for claude-klabauter's stdout-emitter shell-init resource-cap guard (DR-047 split).
 
 Port source: coordinator/commands/install.md (coordinator-content-repo repo) Step 3.5b.1,
 the two literal bash fences at lines 932 and 950 of the source doc.
@@ -236,7 +236,9 @@ def main(argv: List[str]) -> int:
         print(f"shell_init_guard: failed ({exc})")
         return 1
 
+    # DR-276: declared AFTER the write lands, matching the append-integrator-
     # dispositions reference — the contract is a report of what was ACTUALLY
+    # written, not of an intended surface.
     declare_write(rc_path)
 
     print(f"shell_init_guard: installed ({rc_path}{_shell_coverage_note()})")

@@ -224,7 +224,10 @@ class Worktree:
     path: str
     branch: str
     locked: bool = False
+    #: Raw text after "locked" in `git worktree list --porcelain` (empty
+    #: string when locked with no reason, or not locked at all). Captured
     #: and surfaced as-is — see module docstring's KNOWN STRUCTURAL GAP note
+    #: for why this is never parsed for meaning.
     lock_reason: str = ""
 
 
@@ -605,7 +608,17 @@ def _sweep_one(
         )
 
     if state == "commits-clean":
+        # active_branch is guaranteed non-empty here: reap is forced False by
+        # main() under detached HEAD (where active_branch is empty), so this
+        # branch only ever executes when active_branch is non-empty. Invariant
+        # depends on that guard ordering in main() — do not reorder it.
+        #
+        # ONE ranged cherry-pick (`active_branch..tip_sha`) replaces the old
+        # per-commit loop — see `_cherry_pick_range`'s docstring for the
         # REFUTED `_KNOWN_SITES` disposition this batches. `commits` is still
+        # fetched (one spawn) purely to report `picked=X/Y` and to locate the
+        # conflicting sha's position on failure; it is never looped for a
+        # per-item spawn.
         commits = _commit_list_reverse(wt.path, active_branch)
         pick_failed = ""
         picked = len(commits)
@@ -691,7 +704,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     compare_ref = active_branch or _head_sha(repo_root)
 
+    # Whole-pass peer-liveness gate (S1b): a live PEER coordinator session
+    # (this session's own id subtracted) might have an in-flight background
+    # Agent dispatch, so a refused/unknown verdict blocks reaping EVERY
     # worktree this pass — see module docstring's KNOWN STRUCTURAL GAP note
+    # for why this is whole-pass rather than per-worktree. Only computed when
+    # reap is still requested post detached-HEAD clamp above; a plain scan
+    # never touches anything, so it never needs a gate.
     reap_block_detail: Optional[str] = None
     if reap:
         verdict = history_rewrite_verdict(cwd=str(repo_root))

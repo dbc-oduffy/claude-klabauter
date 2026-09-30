@@ -200,7 +200,18 @@ def _main_worktree_root_for_directive() -> str:
         return "."
 
 
+# AC10 fix (2026-07-25 conformance-test sweep): `workday-complete-step2_5-
 # dirty-tree` was a CONSUMES_MANIFEST entry with no directive anywhere ever
+# naming it, AND `jp_step2_5_dirty_tree_ambiguous` was unconditionally
+# emitted every run (gating `d_step3_consolidate` behind an EM ask even on
+# a clean tree) — the manifest/emission contract test this AC required
+# caught both. Fixed by giving Step 2.5 the same "compute the real
+# condition, emit only when it's live" shape as C4's day-goal judgment
+# point: a directive that always runs the script's own auto-disposition
+# (clear-wins committed/gitignored unconditionally, same as the pre-
+# conversion skill body), plus a read-only DRY-RUN probe here that decides
+# whether ambiguous/source-tree paths remain and therefore whether the ask
+# is even live.
 def _compute_dirty_tree_verdict() -> dict[str, Any]:
     """Read-only probe of Step 2.5's typed, mutation-free classification
     (`coordinator_core.ops.workday_complete_step2_5_dirty_tree.
@@ -428,6 +439,17 @@ def _build_directives(
             "d_step3_5_backfill_anchor_a0",
             cli="workday-complete-backfill-anchor",
             # `run` declares a REQUIRED `root` positional (bin's
+            # `_cmd_run` parser) — omitting it always exited 2
+            # ("the following arguments are required: root"), so Phase-A0
+            # backfill anchoring never ran. `_main_worktree_root_for_directive`
+            # resolves the MAIN worktree root (never `Path.cwd()`/
+            # `--show-toplevel`) so this directive's write leg matches every
+            # other ceremony read/write pairing in this module.
+            # `--allow-empty`: `stdin_from` below already proves the scan
+            # landed this pass, so empty gap rows here genuinely mean a gapless
+            # window. Without the flag the CLI now refuses empty stdin rather
+            # than exiting 0 having anchored nothing — the silent-success shape
+            # this whole leg was reported for.
             args=["run", _main_worktree_root_for_directive(), "--allow-empty"],
             stdin_from="d_step3_5_backfill_scan",
         ),

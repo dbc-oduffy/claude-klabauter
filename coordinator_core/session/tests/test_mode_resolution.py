@@ -371,13 +371,26 @@ class TestJobModeRegistryInvariant:
         _validate_registry(ok_registry)
 
 
+# --- job_mode resolution cost: AC-9, process time and spawn count only ------
+#
+# See baton AC-9 ("resolution costs no interpreter start on a hot path and
+# stays under the brightline") and this plan's C2 row: the pre-existing
+# "0.038 ms, zero spawns" figure describes `env_locality.py`'s OWN ladder,
 # not this FORWARDING_SET + MODE_KEYS read, so it does not discharge AC-9 for
+# the path this chunk adds -- measured here, directly, against the same
+# `benchmarks.process_time.batched_process_time_ms` primitive
+# `test_touch_record_perf.py` uses, per DR-344 vocabulary (process time and
+# spawn count, never wall clock).
 
 
 #: The one bar (DR-344). `SUSPENSION_BAR_MS` (2000ms) is which-to-switch-off
+#: -first, never a target, and never cited here in its place.
 _BRIGHTLINE_MS = 500.0
 
 
+#: Iterations of `resolve_mode("job_mode", ...)` inside one spawned driver --
+#: amortises the interpreter-start floor across enough real work that the
+#: import-only baseline's own noise does not dominate the delta (same
 #: reasoning `test_touch_record_perf.py::_APPENDS_PER_DRIVER` states).
 _JOB_MODE_CALLS_PER_DRIVER = 2000
 

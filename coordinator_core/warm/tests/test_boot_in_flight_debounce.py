@@ -128,6 +128,8 @@ def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path):
     )
 
     # Proceeding past an expired claim RESTARTS the window rather than leaving
+    # the claim permanently expired: a permanent herd is not a fix for a
+    # permanent block.
     assert breadcrumb.try_claim_boot(lock_path, now=past + 0.01) is False
 
 

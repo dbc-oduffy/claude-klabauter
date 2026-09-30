@@ -176,6 +176,8 @@ def completion_return_js(
     falsifier_var: Optional[str],
     review_vars: Optional[dict],
     has_commit_request: bool,
+    script_path: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -280,9 +282,16 @@ def completion_return_js(
             )
         else:
             inline_review_expr = "null"
+        # `script_path`/`session_id` make the params `dispatch.terminal_commit`
+        # takes verbatim; either is omitted, never emitted null, when unknown.
+        # A row a halt kept from starting never landed either: terminal_commit
+        # stamps every row NOT named here as coded.
         params_expr = (
-            "{ incomplete_chunks: " + RUNTIME_VARS[0] + ", "
-            "inline_review: " + inline_review_expr
+            "{ incomplete_chunks: [...new Set([..." + RUNTIME_VARS[0]
+            + ", ..." + RUNTIME_VARS[3] + "])], "
+            + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
+            + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
+            + "inline_review: " + inline_review_expr
             + " }"
         )
     else:

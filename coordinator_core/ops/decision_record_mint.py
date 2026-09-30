@@ -285,7 +285,9 @@ def release_dr_id(worktree_root: Path, number: int) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handlers
+# ---------------------------------------------------------------------------
 
 
 @register_op("decision_record.mint_id")

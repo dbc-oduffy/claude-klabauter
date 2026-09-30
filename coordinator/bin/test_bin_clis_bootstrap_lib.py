@@ -161,14 +161,8 @@ _SCAN_ROOTS = (
 #: Every reason names either "target carries no `import lib`" or "target is
 #: not a coordinator/bin script", plus the target it is talking about.
 _EXEMPT: dict[tuple[str, str], str] = {
-    ("coordinator_core/bash_guards/check_test_suite_invocation.py", "_configured_test_cmds"): (
-        "target carries no `import lib` (coordinator/bin/coordinator-resolve-validation-cmd.py)"
-    ),
     ("coordinator_core/hooks/project_orientation.py", "_load_tier_last_run_module"): (
         "target carries no `import lib` (coordinator/bin/tier-last-run.py)"
-    ),
-    ("coordinator_core/install/fleet_env.py", "_load_c1_resolver"): (
-        "target carries no `import lib` (coordinator/bin/fleet-env.py)"
     ),
     ("coordinator_core/ops/fleet_machinery_sweep.py", "_load_rename_with_retry"): (
         "target carries no `import lib` (coordinator/bin/publish.py)"

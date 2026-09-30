@@ -220,6 +220,8 @@ class TestCommandReallyInvokes:
             (r"C:\Program Files\Git\bin\git.exe stash", True),
             ("C:/Program Files/Git/bin/git.exe stash", True),
             # Negative control: a basename that merely CONTAINS "git" must
+            # never be treated as `git` -- exact-basename normalization only,
+            # never substring matching.
             ("gitk stash", False),
             ("git-foo stash", False),
             ("legit stash", False),

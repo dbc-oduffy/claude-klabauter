@@ -134,6 +134,9 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "normalize-claimed-frontmatter"
 
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# main() rewrites whichever tracked handoff/plan/decision/review files
+# currently carry a <!-- consumed: --> body marker -- a data-dependent subset
 # of TYPE_TO_GLOB's directories, not a fixed artifact list.
 MUTATES = [
     "state/handoffs/*.md",
@@ -144,9 +147,13 @@ MUTATES = [
 ]
 
 
+# shipped_in shape guard: DR-096 (coordinator-content-repo 2026-07-26 ruling) retires this
+# module's own bespoke copy of the value grammar in favor of the single choke
 # point's -- `coordinator_core.shipped_in_tokens._SHA_HEX_RE` /
 # `_NO_COMMIT_TOKEN_RE` (the same shape `stamp_shipped_in` validates a `sha`
+# override against). Accepts a bare hex SHA (7-64 chars) OR the sanctioned
 # substantively-shipped-no-commit:<YYYY-MM-DD> token. Whole-value match via
+# `.fullmatch` below -- no accept-anything-after-the-colon.
 
 TYPE_TO_GLOB: Dict[str, object] = {
     "handoff": ["state/handoffs", "archive/handoffs"],
@@ -368,6 +375,8 @@ def main(argv: List[str]) -> int:
     results: List[Dict[str, object]] = []
     exit_code = 0
 
+    # Collect every (type, dir) pair up front so the tracked-files lookup
+    # below can batch across all of them in one `git ls-files` call instead
     # of one call per TYPE_TO_GLOB directory.
     type_dirs: List[Tuple[str, str]] = []
     for type_ in opts.types:
@@ -397,7 +406,9 @@ def main(argv: List[str]) -> int:
             if not opts.dry_run:
                 with open(file, "w", encoding="utf-8", newline="") as f:
                     f.write(out["rebuilt"])  # type: ignore[arg-type]
+                # DR-276: declared AFTER the write lands, never before —
                 # the contract is a report of what was ACTUALLY written,
+                # not of an intended surface.
                 declare_write(file)
 
     if not results:

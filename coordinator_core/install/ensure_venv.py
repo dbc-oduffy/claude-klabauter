@@ -179,6 +179,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core._settings_home import is_doubled_claude_home
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock
 from coordinator_core.trusted_root_guard import coordinator_trusted_root_guard
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -202,15 +203,46 @@ _NETWORK_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: Single source of truth for the venv's non-editable pip deps and the
+#: matching health-probe import names — ``_install_deps`` and
+#: ``_venv_healthy`` both derive from these two tuples so the installed dep
+#: set and the acceptance oracle cannot drift apart (a venv missing a dep the
+#: oracle doesn't probe for silently passes health and never rebuilds).
+#: ``coordinator_whoami`` is installed separately (editable, from
+#: ``whoami_pkg``) but probed here alongside the pip-installed deps.
+#:
 #: ``PyYAML`` is declared here EXPLICITLY even though ``coordinator_whoami``'s
+#: own ``pyproject.toml`` already floors PyYAML at 6.0 as a transitive dep
+#: (so ``pip install -e {whoami_pkg}/`` already pulls it in today) — several
+#: coordinator-claude hook scripts (``enforce-agent-dispatch-mode.py``,
+#: ``handoff-segment-inject.py``, ``_oss_operative_strings.py``) ``import
+#: yaml`` at module level and run under this venv's interpreter on every hook
+#: fire (``_hook_venv_inject.py``), so this is a genuine first-class,
+#: hook-path dependency of THIS venv, not an incidental transitive of
+#: whoami's own needs — it must survive independently of whoami's declared
 #: deps ever changing. ``jsonschema``/``rfc3339-validator`` stay UNDECLARED
+#: here on purpose: nothing outside ``coordinator_whoami`` imports them
+#: directly on the hook path (checked: no hook script does), so they remain
+#: genuinely transitive and need no probe of their own.
 _VENV_PIP_DEPS = ("pydantic>=2", "psutil>=5.9", "PyYAML>=6.0")
 _VENV_IMPORT_PROBES = ("coordinator_whoami", "pydantic", "psutil", "yaml")
 
+#: Single source of truth for the machine-local registry key `_set_pin`
+#: writes and `_clear_dangling_pin` deletes -- both read this constant
 #: rather than restating the literal, and `WRITE_SURFACE` below declares
+#: against it too, so all three cannot drift apart independently.
 _PIN_KEY = "coordinator.python"
 
+#: Single source of truth for the machine-local registry key that names
+#: this venv's own interpreter -- `_set_pin` writes it unconditionally at
+#: every success leg and `_clear_dangling_pin` deletes it, both reading this
 #: constant rather than restating the literal, and `WRITE_SURFACE` below
+#: declares against it too, so all three cannot drift apart independently.
+#: Additive split from `_PIN_KEY` (docs/plans/2026-08-10-reconcile-the-
+#: coordinator-python-pin-contracts.md): `_PIN_KEY` is the operator's
+#: general-purpose interpreter pin (read by `pyresolve.resolve_python_bin`);
+#: this key is the narrower "which interpreter is THIS venv" pointer that
+#: `ensure_venv` genuinely owns and may always overwrite.
 _WHOAMI_PIN_KEY = "coordinator.whoami_python"
 
 _VENV_TREE_CLAUSE_INDEX = 0
@@ -228,7 +260,12 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="ensure-venv",
     source_module="coordinator_core.install.ensure_venv",
     clauses=(
+        # clauses[0] -- the venv tree itself. `ensure_coordinator_venv` creates
+        # (`_create_venv`) and pip-populates (`_install_deps`) a virtualenv
+        # rooted at `<settings_home>/.coordinator-venv/`; its contents depend
         # on what gets installed (`_VENV_PIP_DEPS` plus the editable
+        # `coordinator_whoami` package), so this is SHAPED -- a discovery
+        # mechanism naming the tree, not an enumerated site-packages listing.
         ShapedClause(
             discovered_by="ensure_coordinator_venv (settings_home_path / '.coordinator-venv')",
             entry_template=WriteSurfaceEntry(
@@ -736,9 +773,7 @@ def _ensure_coordinator_venv_impl(
     coordinator_trusted_root_guard(mode="fail-loud", root=str(plugin_root), site=site)
 
     # CLAUDE_HOME /.claude-suffix guard (fail loud) — doubled-path precondition.
-    # Separator-agnostic: a Windows CLAUDE_HOME arrives backslash-separated
-    claude_home_norm = claude_home.replace("\\", "/") if claude_home else claude_home
-    if claude_home_norm and claude_home_norm.rstrip("/").endswith("/.claude"):
+    if claude_home and is_doubled_claude_home(claude_home):
         raise EnsureVenvError(
             f"[ensure-coordinator-venv] FATAL: CLAUDE_HOME='{claude_home}' ends in '/.claude'.\n"
             "  CLAUDE_HOME is a $HOME substitute, NOT the .claude directory itself — the settings\n"

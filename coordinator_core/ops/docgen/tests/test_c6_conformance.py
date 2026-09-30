@@ -232,7 +232,8 @@ def _build_specs() -> dict[str, dict]:
             "--deliverable-id", DELIVERABLE_ID, "--initiative", INITIATIVE,
         ],
         "values": _handoff_family_values(
-            "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)"
+            "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)",
+            authoring_session=_resolved_authoring_session(),
         ),
     }
 
@@ -264,6 +265,7 @@ def _build_specs() -> dict[str, dict]:
             "created": REDACT_INPUT,
             "branch": BRANCH,
             "gate_dependency": "conformance-subsystem gate",
+            "authoring_session": _resolved_authoring_session(),
             "placeholder_summary": "PLACEHOLDER — replace with one-line vision-slice summary (≤140 chars)",
             "goals": ["goal-one", "goal-two"],
             "handoff_id": REDACT_INPUT,
@@ -281,6 +283,7 @@ def _build_specs() -> dict[str, dict]:
             "created": REDACT_INPUT,
             "branch": BRANCH,
             "gate_dependency": "conformance-subsystem gate",
+            "authoring_session": _resolved_authoring_session(),
             "placeholder_summary": "PLACEHOLDER — replace with one-line capability-arc summary (≤140 chars)",
             "deliverable_id": DELIVERABLE_ID,
             "initiative": INITIATIVE,
@@ -296,6 +299,7 @@ def _build_specs() -> dict[str, dict]:
             "--type", "roadmap-baton", "--title", TITLE, "--branch", BRANCH,
             "--roadmap-id", _roadmap_id, "--stub-id", _stub_id,
             "--deliverable-id", DELIVERABLE_ID, "--initiative", INITIATIVE,
+            "--no-sizing-object",
         ],
         "values": {
             "title": TITLE,
@@ -317,6 +321,7 @@ def _build_specs() -> dict[str, dict]:
         "cli": [
             "--type", "plan", "--title", TITLE, "--branch", BRANCH,
             "--deliverable-id", DELIVERABLE_ID, "--initiative", INITIATIVE,
+            "--no-sizing-object",
         ],
         "values": {
             "title": TITLE,
@@ -430,9 +435,10 @@ def _build_specs() -> dict[str, dict]:
         "cli": [
             "--type", "memo", "--title", TITLE,
             "--to", "conformance-receiver-em", "--topic", "conformance-topic",
-            "--from-repo", "conformance-sender-em",
+            "--from-repo", "conformance-sender-em", "--kind", "fyi",
         ],
         "values": {
+            "kind": "fyi",
             "title": TITLE,
             "from_id": "conformance-sender-em",
             "to": "conformance-receiver-em",

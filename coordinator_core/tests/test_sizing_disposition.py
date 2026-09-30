@@ -234,7 +234,15 @@ def test_every_null_sentinel_spelling_is_an_absent_governing_plan(tmp_path: Path
     assert verdict["value"] == "unsized"
 
 
+# ---------------------------------------------------------------------------
+# sizing_object / governing_plan — Path.__truediv__ does not confine to root
+#
 # `root / sizing_ref` is not a containment check: an ABSOLUTE `sizing_ref`
+# replaces `root` outright, and a `..`-laden relative one walks past it.
+# Either shape lets `sizing_object`/`governing_plan` name ANY file that
+# happens to exist on disk -- not a sizing artifact at all -- and still earn
+# `sized`/`execution`.
+# ---------------------------------------------------------------------------
 
 
 def test_absolute_sizing_object_does_not_escape_root(tmp_path: Path) -> None:

@@ -163,7 +163,13 @@ def test_revert_of_untracked_commit_yields_no_revert_row(tmp_path: Path) -> None
     assert records == [], f"reverted sha matches no closure row; expected no rows: {records!r}"
 
 
+# NOTE test_pair_walk_stride_matches_widened_three_field_format (formerly here, AC5/G13) was
+# DELETED (2026-08-23, C2 test-retirement pass): it pinned the git-log NUL-delimited pair-walk
+# stride and the ``i += 3`` correction over a fake ``subprocess.run`` stdout -- both artifacts
 # of the retired git-log scan mechanism (no ``_LOG_FORMAT``, no pair-walk, no fake-stdout
+# parsing exist in collect() any more). The malformed-sha-quarantine property it also touched
+# survives and stays covered: test_malformed_sha_shape_is_quarantined_not_emitted in
+# test_commit_closures_from_ledger.py.
 
 
 def test_revert_arm_adds_no_second_subprocess_call(tmp_path: Path) -> None:

@@ -12,7 +12,17 @@ import pytest
 
 from coordinator_core.claim_state import ClaimState
 
+# Declared, not excused: this file spawns a real git process because the properties
+# under test are real merge-base/log/commit-trailer plumbing (session-id resolution
+# against actual git history, Detector B's git-provenance leg) that no mock stands in
+# for. 33 call sites build their own repo via `_init_repo_with_history`, each inside
+# its own test's `with tempfile.TemporaryDirectory()` block, then layer test-specific
+# commits/trailers on top -- not hoisted to a shared fixture, mirroring the
+# per-test-isolation lesson in test_verify_shipped.py's docstring (many of these tests
+# add distinct session/commit trailers that would collide if a repo were reused). The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not
+# the route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -236,6 +246,10 @@ class TestPrimaryScan(unittest.TestCase):
             self.assertEqual(wsc.primary_consumed_handoff_paths(repo, "sid-123"), [])
 
     # --- HOLDER-MISMATCH PARTITION (2026-08-26) -------------------------
+    # `resolve_claim_state` is stubbed rather than driven through a real
+    # ledger: these cases turn entirely on the ClaimState fields the scan
+    # partitions on, and building a live-holder claim dir would test
+    # `claim_state.py`'s own resolution instead of this partition.
 
     def _scan_with_states(self, states):
         import tempfile
@@ -383,6 +397,8 @@ class TestResolveCrashRecovery(unittest.TestCase):
         result, status = wsc._resolve_crash_recovery(
             [(handoff, "dead-sid")], ["coordinator/bin/foo.py"], self.repo_root, diagnostics
         )
+        # _resolve_crash_recovery normalizes an absolute hit to repo-relative
+        # (mirroring the ported bash's normalize-to-repo-relative step) —
         # every downstream consumer expects WSC_CONSUMED_HANDOFF repo-relative.
         self.assertEqual(result, "h1.md")
         self.assertEqual(status, "crash-recovery")
@@ -846,6 +862,13 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-07-01_other.md"
             # claimed_by names a DIFFERENT session than the one committing —
+            # this is the restoration-commit spoof shape the guard exists for.
+            # Needs real --- frontmatter fences: _foreign_consumer_guard reads
+            # claimed_by via handoff_lifecycle.claim_holder -> _fm_field, which
+            # only scans between a `---`/`---` fence pair (unlike detector_a's
+            # own whole-text regex) — an unfenced body reads back "" and the
+            # guard silently no-ops, which is exactly what happened here before
+            # this fix (disposition came back chain-terminal, not single-session).
             handoff.write_text("---\nclaimed_by: sid-other-session\npredecessor: some-sha\n---\nbody\n")
             _git(repo, "add", "archive/handoffs/2026-07-01_other.md")
             _commit_with_session_trailer(repo, "sid-restorer", "restore handoff")
@@ -1565,6 +1588,10 @@ class TestMemoPredecessorLeg(unittest.TestCase):
                 result.diagnostics,
             )
             # AC3's operator-facing REQUIREMENT survives its literal wording:
+            # the session still learns it archived a handoff and that the
+            # coverage gate is skipped, restated against the outcome that
+            # actually resolved. Negative-spec: this WARN is not optional
+            # decoration — it is the only signal a session in this shape gets.
             self.assertTrue(
                 any(
                     "archived a handoff this run" in d and "resolved memo-predecessor" in d
@@ -1658,6 +1685,7 @@ class TestMemoPredecessorLeg(unittest.TestCase):
                 result.detection["memo_path"],
                 "cross-repo/archive/2026-07-17-roadmap-sat-02-pickup.md",
             )
+            # AC4: Detector C's own status/match_facts ride onto the
             # memo-predecessor detection record as DIAGNOSTICS ONLY.
             self.assertEqual(result.detection["detector_c_status"], "crash-recovery")
             self.assertEqual(result.detection["matched_scope_entry_count"], 1)

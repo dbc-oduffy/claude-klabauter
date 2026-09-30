@@ -115,7 +115,12 @@ from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards import guard_inprocess_search as _gis
 
 
+# ---------------------------------------------------------------------------
+# (a) The declaration surface -- a registry table keyed by emitter, per the
 # EM decision (2026-08-01, execute-plan) realizing "each emitter DECLARES
+# its class" this way rather than by editing call sites across the emitter
+# modules. A NEW emitter is expected to add its own row here.
+# ---------------------------------------------------------------------------
 
 
 class FiringClass(enum.Enum):
@@ -129,6 +134,10 @@ class EmitterSpec:
     name: str
     cls: FiringClass
     #: ASK-class only. False marks a DECLARED, reviewed policy exemption
+    #: ("no alternative because none applies") -- never set to silence a
+    #: real prose-only-ask defect ("no alternative because none was
+    #: written"). Meaningless for REPORT rows (repetition is the axis that
+    #: matters there, not alternative presence).
     alternative_required: bool = True
     notes: str = ""
 
@@ -221,8 +230,15 @@ def evaluate_ask_hso(hso: Optional[Dict[str, Any]], *, alternative_required: boo
         reasons.append("alternative-shaped cue phrase present but unclassifiable: %s" % exc)
         alts = []
 
+    # Axis B (a withheld/offered override incantation) is orthogonal to
     # Axis A and never satisfies it on its own -- an OVERRIDE-kind
+    # extraction is a bypass, not an offered course of action, so it is
+    # excluded here. Without this exclusion, item 1's pre-fix message
+    # (which names no genuine alternative but DOES embed its
     # `COORDINATOR_ALLOW_MULTIPROBE_BANNER` override note) would have
+    # wrongly graded as satisfying Axis A -- exactly the "syntactically
+    # compliant, substantively nonsense" shape the plan's own Problem
+    # section names.
     non_override_alts = [a for a in alts if a.kind is not altlive.AlternativeKind.OVERRIDE]
 
     if alternative_required and not non_override_alts and not has_updated_input:
@@ -305,8 +321,10 @@ def _trigger_approval_sentinel_still_violates() -> bool:
     return evaluate_ask_hso(hso, alternative_required=spec.alternative_required).violated
 
 
+#: One hermetic, re-runnable "does this emitter still violate its declared
 #: class" callable per ``REGISTRY`` row -- the ratchet's live-fire half.
 #: Every ``REGISTRY`` key MUST appear here (checked by the gate) so a new
+#: registry row can never silently escape ratchet coverage.
 LIVE_VIOLATION_CHECKS: Dict[str, Callable[[], bool]] = {
     "check_multiprobe_banner_rewrite": _trigger_multiprobe_banner_still_violates,
     "guard_inprocess_search": _trigger_inprocess_search_still_violates,
@@ -316,6 +334,18 @@ LIVE_VIOLATION_CHECKS: Dict[str, Callable[[], bool]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# (e) The ratchet -- monotone and self-liquidating. Every fix chunk in this
+# plan (C1a, C2, C3, C4, C5, C7) landed BEFORE this chunk was authored (the
+# EM's deliberate sequencing decision, execute-plan Execution Notes): the
+# known-violations list below is authored against the CURRENT, post-fix
+# corpus, so it is empty by construction -- not amnesty, correctness. Both
+# ratchet gaps the plan names are still closed structurally: (a) a fixed
+# emitter re-listed here would fail the gate until delisted (see
+# ``test_known_violations_still_violate`` in the test module, which
 # iterates this exact set and re-fires each via ``LIVE_VIOLATION_CHECKS``);
+# (b) the set's membership COUNT is asserted so growth is a visible diff,
+# never a silent append.
+# ---------------------------------------------------------------------------
 
 KNOWN_VIOLATIONS: frozenset = frozenset()

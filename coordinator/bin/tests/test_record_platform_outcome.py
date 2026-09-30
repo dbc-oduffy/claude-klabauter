@@ -42,7 +42,17 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
+# ---------------------------------------------------------------------------
+# Path setup — locate the CLI, its lib deps, and the schema relative to this
+# test file.
+# test file: coordinator/bin/tests/test_record_platform_outcome.py
+# CLI:       coordinator/bin/record-platform-outcome
+# schema:    coordinator/schemas/platform-outcome.schema.json — schemas/ is
 #            CONTRACT and, per DR-047, stayed in coordinator-content-repo when bin/ moved
+#            here (see coordinator_registry.py's own layout-tolerant comment).
+#            Resolved below via the already-imported coordinator_registry
+#            module rather than re-implementing its rung order.
+# ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _COORDINATOR_DIR = _BIN_DIR.parent
@@ -63,7 +73,11 @@ def _load_cli(path: Path, module_name: str):
 
 _cli = _load_cli(_CLI_PATH, "record_platform_outcome")
 
+# coordinator_registry is now import-time-resolvable (repo split, 4f74656c):
+# loading the CLI above pulled it into sys.modules already having walked its
 # own CONTENT_ROOT/REPO_CONTENT_ROOT/machine-local rungs against this process's
+# ambient env, so reuse its resolved manifest path rather than re-deriving
+# the schemas/ location — the real schemas dir is wherever that landed.
 _REAL_MANIFEST_PATH = Path(sys.modules["coordinator_registry"]._MANIFEST_PATH)
 _REAL_SCHEMAS_DIR = _REAL_MANIFEST_PATH.parent
 _SCHEMA_PATH = _REAL_SCHEMAS_DIR / "platform-outcome.schema.json"
@@ -145,6 +159,10 @@ def _setup_surface(tmp_path):
     # _run_cli() points CONTENT_ROOT at surface_root, which coordinator_registry's
     # own import-time manifest bootstrap also reads (CONTENT_ROOT wins over the
     # ambient REPO_CONTENT_ROOT alias by design — same precedence as content_root()).
+    # A scratch stand-in for "the DoE/coordinator repo" must therefore carry
+    # the schemas/ manifest too, or the CLI subprocess dies at import with an
+    # install-integrity FileNotFoundError before ever reaching the surface
+    # logic under test.
     schemas_dir = Path(surface_root) / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
     shutil.copy(_REAL_MANIFEST_PATH, schemas_dir / _REAL_MANIFEST_PATH.name)
@@ -155,6 +173,7 @@ def _run_cli(surface_root, *, surface: str, command: str, exit_code: int) -> sub
     env = dict(os.environ)
     env["CONTENT_ROOT"] = surface_root
     env["COORDINATOR_MACHINE"] = "test-machine"
+    # Isolate the machine-local registry rung so a real developer machine's
     # coordinator.machine_slug can never leak in and override COORDINATOR_MACHINE
     # (it wouldn't — COORDINATOR_MACHINE wins rung 1 — but keep the env clean).
     env.pop("MACHINE_LOCAL_IMPL", None)
@@ -245,15 +264,22 @@ def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
     env = dict(os.environ)
     env.pop("CONTENT_ROOT", None)
     # REPO_CONTENT_ROOT is the ambient alias content_root() also checks (d5e22cb2) —
+    # left set, it resolves the real coordinator-content-repo clone regardless of the
     # MACHINE_LOCAL_IMPL stub below, defeating the "fully unresolvable" premise
+    # this test exists to cover.
     env.pop("REPO_CONTENT_ROOT", None)
     stub = str(tmp_path / "_machine_local_stub.py")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")
     env["MACHINE_LOCAL_IMPL"] = stub
     # CLAUDE_HOME must also be isolated: content_root()'s codename-free rungs
+    # (`.coordinator-content-root` pointer file, marketplace-cache, flat plugin layout) all
+    # derive their candidate paths from claude_home() independent of the
     # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
+    # ~/.claude/.coordinator-content-root (or <settings-home>/machine-local/.coordinator-content-root)
+    # resolves the real coordinator-content-repo clone and defeats the "fully unresolvable"
     # premise this test exists to cover, exactly like the REPO_CONTENT_ROOT
+    # leak the comment above already guards against.
     env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
     # COORDINATOR_SETTINGS_HOME wins settings_home()'s FIRST rung, ahead of
     # CLAUDE_HOME entirely — an ambient value (present in every real

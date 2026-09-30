@@ -667,11 +667,6 @@ class TestRollupSentence:
             print("advances initiative Widget Rollout (d-001)")
             return 0
 
-        # Isolate the in-process fallback branch — force the PATH-first shim
-        # rung to report absent, so this test exercises ONLY the in-process
-        # call (the PATH-first branch itself is covered separately below by
-        # test_path_first_shim_preferred_over_in_process).
-        monkeypatch.setattr(m.shutil, "which", lambda name: None)
         monkeypatch.setattr(m._render_rollup_mod, "main", _fake_render_main)
 
         rc, out, _ = _run(
@@ -691,7 +686,6 @@ class TestRollupSentence:
 
     def test_render_failure_never_aborts_write(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        monkeypatch.setattr(m.shutil, "which", lambda name: None)
         plans_dir = repo / "docs" / "plans"
         plans_dir.mkdir(parents=True)
         (plans_dir / "2026-07-06-my-plan.md").write_text(
@@ -716,57 +710,6 @@ class TestRollupSentence:
         )
         assert rc == 0
         assert Path(out.strip()).is_file()
-
-    def test_path_first_shim_preferred_over_in_process(self, tmp_path, monkeypatch):
-        """Oracle parity: PATH-first `command -v coordinator-render-rollup.sh`
-        wins over the in-process call — preserves DoE's own test-shim
-        mechanism (Test A relies on exactly this: a stub executable
-        PATH-prepended ahead of the real sibling).
-
-        Port of: test-complete-entry-rollup.sh (DoE 432e3285, 2026-07-22)
-        """
-        repo = _make_repo(tmp_path)
-        plans_dir = repo / "docs" / "plans"
-        plans_dir.mkdir(parents=True)
-        (plans_dir / "2026-07-06-my-plan.md").write_text(
-            '---\ndeliverable_id: "d-001"\n---\n# Plan\n', encoding="utf-8"
-        )
-
-        shim = tmp_path / "coordinator-render-rollup.sh"
-        shim.write_text(
-            "#!/usr/bin/env bash\necho 'advances initiative Shimmed Initiative (d-001)'\n",
-            encoding="utf-8",
-        )
-        shim.chmod(0o755)
-
-        # `_which_render_rollup_shim`
-        # delegates to `coordinator_core.launchable.which_path_ordered`, which walks
-        # `os.environ["PATH"]` directly rather than calling `shutil.which` (that's the
-        # whole point of the fix: `shutil.which` never finds a `.sh`-suffixed name on
-        # Windows). Monkeypatching `shutil.which` no longer intercepts the lookup;
-        # prepend the shim's directory onto the real `PATH` instead, matching how a
-        # test actually stages this shim in production.
-        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
-
-        def _should_not_be_called(argv):
-            raise AssertionError("in-process render module must not be called when a PATH shim exists")
-
-        monkeypatch.setattr(m._render_rollup_mod, "main", _should_not_be_called)
-
-        rc, out, _ = _run(
-            [
-                "--sid",
-                "session-abcdef",
-                "--disposition",
-                "single-session",
-                "--governing-plan-slug",
-                "2026-07-06-my-plan",
-            ],
-            cwd=repo,
-        )
-        assert rc == 0
-        text = Path(out.strip()).read_text(encoding="utf-8")
-        assert "advances initiative Shimmed Initiative (d-001)" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +947,20 @@ class _RecordingGitRunner:
         return self.rc, self.out, self.err
 
 
+class _PathspecAwareRunner:
+    """Answers the `--grep` own-walk and the `--`-pathspec peer walk with
+    different output; records every call."""
+
+    def __init__(self, own: str, scoped: str):
+        self.own = own
+        self.scoped = scoped
+        self.calls: list = []
+
+    def __call__(self, argv, cwd):
+        self.calls.append((list(argv), cwd))
+        return 0, (self.scoped if "--" in argv else self.own), ""
+
+
 # A sid shape valid under BOTH this module's own `_SID_RE`
 # (`[A-Za-z0-9._-]+`) and `chain_attribution._UUID_RE`
 # (hex-and-hyphen-only) — `_resolve_session_commits` degrades to `[]` on a
@@ -1065,6 +1022,123 @@ class TestResolveSessionCommits:
         # else _resolve_session_commits(...)` branch — the computed walk is
         # never invoked at all, not merely overridden after the fact.
         assert fake.calls == []
+
+    def test_peer_commit_touching_plan_scope_warns_and_stays_out_of_commits(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        fake = _PathspecAwareRunner(own="ownsha00\n", scoped="ownsha00\npeersha11\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        commits = m._resolve_session_commits(
+            str(repo), _HEX_SID, "2026-09-01", frozenset({"docs/plans/my-plan.md"})
+        )
+
+        assert commits == ["ownsha00"]
+        err = capsys.readouterr().err
+        assert "WARN" in err and "peersha1" in err and "ownsha00" not in err
+
+    def test_no_peer_in_scope_emits_no_warn(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        fake = _PathspecAwareRunner(own="ownsha00\n", scoped="ownsha00\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        commits = m._resolve_session_commits(
+            str(repo), _HEX_SID, "2026-09-01", frozenset({"docs/plans/my-plan.md"})
+        )
+
+        assert commits == ["ownsha00"]
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_empty_scope_spawns_only_the_grep_walk(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        fake = _PathspecAwareRunner(own="ownsha00\n", scoped="peersha11\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        assert m._resolve_session_commits(str(repo), _HEX_SID, "2026-09-01") == ["ownsha00"]
+        assert len(fake.calls) == 1
+
+    def test_spawns_are_constant_and_none_diffs_every_commit(self, tmp_path, monkeypatch):
+        """Process-time pin: a diff-producing flag makes `git log` tree-diff every
+        commit in the window (0.6 s for one day of a 38k-commit repo, over the
+        500 ms bar). The walks are the `--grep` one and a pathspec-limited one."""
+        repo = _make_repo(tmp_path)
+        fake = _PathspecAwareRunner(own="ownsha00\n", scoped="peersha11\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        m._resolve_session_commits(
+            str(repo), _HEX_SID, "2026-09-01",
+            frozenset({"docs/plans/my-plan.md", "state/handoffs/h.md"}),
+        )
+
+        assert len(fake.calls) == 2
+        diff_flags = {"--name-only", "--name-status", "--stat", "--numstat", "--raw", "-p", "--patch"}
+        for argv, _cwd in fake.calls:
+            assert not diff_flags & set(argv), argv
+        scoped_argv = fake.calls[1][0]
+        sep = scoped_argv.index("--")
+        assert scoped_argv[sep + 1:] == [
+            ":(literal)docs/plans/my-plan.md",
+            ":(literal)state/handoffs/h.md",
+        ]
+
+    def test_entry_scope_paths_normalises_plan_and_handoff(self, tmp_path):
+        repo = str(tmp_path)
+        abs_handoff = os.path.join(repo, "state", "handoffs", "h.md")
+        scope = m._entry_scope_paths(repo, "my-plan", abs_handoff)
+        assert scope == frozenset({"docs/plans/my-plan.md", "state/handoffs/h.md"})
+        assert m._entry_scope_paths(repo, "", "") == frozenset()
+
+    def test_end_to_end_real_git_warns_on_peer_commit_of_plan(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "docs" / "plans").mkdir(parents=True)
+        plan = repo / "docs" / "plans" / "my-plan.md"
+        plan.write_text("---\ntitle: T\n---\n", encoding="utf-8")
+        _git(["add", "."], repo)
+        _git(["commit", "-q", "-m", "peer commits our work\n\nSession-Id: 11111111-2222"], repo)
+        (repo / "own.txt").write_text("x", encoding="utf-8")
+        _git(["add", "."], repo)
+        _git(["commit", "-q", "-m", f"own\n\nSession-Id: {_HEX_SID}"], repo)
+
+        rc, out, err = _run(
+            ["--sid", _HEX_SID, "--disposition", "single-session", "--governing-plan-slug", "my-plan"],
+            cwd=repo,
+        )
+
+        assert rc == 0
+        assert "WARN" in err
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert text.count('  - "') == 1
+
+    def test_both_walks_stay_under_the_500ms_process_bar_on_a_large_history(self, tmp_path):
+        resource = pytest.importorskip("resource")
+        repo = _make_repo(tmp_path)
+        stream = []
+        for i in range(1, 3001):
+            files = "".join(
+                f"M 100644 inline d{(i + k) % 40}/f{(i * 7 + k) % 50}.txt\n"
+                f"data 5\nv{i % 10}-{k}\n"
+                for k in range(4)
+            )
+            msg = f"c{i}\n\nSession-Id: 22222222-{i % 7:04d}\n"
+            stream.append(
+                f"commit refs/heads/main\ncommitter T <t@e.com> {1790000000 + i} +0000\n"
+                f"data {len(msg)}\n{msg}\n{files}"
+            )
+        subprocess.run(
+            ["git", "fast-import", "--quiet"],
+            cwd=str(repo), input="".join(stream), text=True, check=True,
+            **no_console_creationflags(),
+        )
+        scope = frozenset({"d1/f1.txt", "d2/f2.txt"})
+
+        def cpu() -> float:
+            r = resource.getrusage(resource.RUSAGE_CHILDREN)
+            return r.ru_utime + r.ru_stime
+
+        before = cpu()
+        m._resolve_session_commits(str(repo), "22222222-0003", "1970-01-01", scope)
+        assert cpu() - before < 0.5
 
     def test_since_window_equals_created_date_on_live_close(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

@@ -10,8 +10,21 @@ import pytest
 from coordinator_core.ops.emit.validate import ValidationError, validate_array
 
 
+# ---------------------------------------------------------------------------
+# Canonical sample provenance envelope
+#
+# Uses source_kind="local_fs" so ref MUST be null (ProvenanceEnvelope D9
+# bidirectional invariant: local_fs → ref=null, git-backed → ref non-null).
+#
+# Latent-bug fix (2026-07-21, in-process-validation cutover): `entity_anchor` was missing
 # from this fixture. It has been a REQUIRED (present-as-null) ProvenanceEnvelope field since
+# the v2.17.0 re-vendor (see validate.py's _provenance_shape_is_valid docstring, "Finding 1"),
+# but this fixture predates that and was never caught because the node/Zod validator this
 # suite called was already dead on every real invocation (ERR_MODULE_NOT_FOUND) — every test
+# using this fixture silently skipped via `requires_dag_validator` instead of running. Now
+# that validation runs in-process and for real, the omission surfaces as a genuine schema
+# violation on every test below. Fixed here rather than in validate.py or the schema.
+# ---------------------------------------------------------------------------
 
 _SAMPLE_PROVENANCE: Dict[str, Any] = {
     "source_kind": "local_fs",

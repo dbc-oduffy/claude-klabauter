@@ -68,6 +68,7 @@ def _compose(**overrides):
         run_dir=Path("state/queue-grind/fixture/run-1"),
         appetite=appetite,
         agent_type_host=None,
+        queue_dirs=["state/bug-backlog"],
     )
 
 
@@ -135,14 +136,15 @@ def test_lock_invariant_acquire_all_or_nothing_release_precedes_reacquire():
 
 
 def test_commit_mutex_key_serialises_every_commit_call():
-    """The single `_commitCall(row)` INVOCATION (per-row, plus the two
-    ledger-only invocations) sits inside a `@commit`-keyed `withLock` --
+    """The single `_commitCall(row)` INVOCATION sits inside a
+    `@commit`-keyed `withLock` --
     the composed prompt DEFINITION itself (which also contains the words
     "You are the committer for") is not a call site and is excluded from
     this check."""
     script = _compose()
     assert "await withLock(['@commit'], async () => _commitCall(row));" in script
-    assert script.count("lockKeys = ['@commit'].concat(") == 2  # batch-end + drain ledger-only commits
+    # ledgers are swept, never committed: no ledger-only commit exists
+    assert "lockKeys = ['@commit'].concat(" not in script
 
 
 def test_commit_composer_definitions_are_never_invoked_outside_a_commit_lock():
@@ -152,16 +154,22 @@ def test_commit_composer_definitions_are_never_invoked_outside_a_commit_lock():
         assert preceding.rfind("await withLock(['@commit']") != -1
 
 
-def test_ledger_only_commit_acquires_ledger_key_per_staged_file():
+def test_ledger_settle_only_inside_the_commit_composer_after_its_commit():
     script = _compose()
-    assert "lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`))" in script
-
-
-def test_ledger_files_staged_only_inside_commit_composer_calls():
-    script = _compose()
+    assert "_ledgerPathFor" not in script
     for m in re.finditer(r"grind-row settle", script):
-        window = script[max(0, m.start() - 400) : m.start()]
+        window = script[max(0, m.start() - 2000) : m.start()]
         assert "You are the committer" in window
+        assert "Once the commit lands" in script[m.start() - 200 : m.start()]
+
+
+def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
+    script = _compose()
+    drain = script[script.index("async function _drainSweep()"):]
+    drain = drain[: drain.index("\n}\n")]
+    assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --queue state/bug-backlog --repo-root ' + (REPO_ROOT)" in drain
+    assert "commit_v2" not in drain
+    assert "await _drainSweep();" in script
 
 
 def test_no_git_mv_stash_add_dash_a():
@@ -274,7 +282,7 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
     script = _compose()
     assert "(row.declaredFiles).join(', ')" in script
     assert "(row.touchedFiles).join(', ')" in script
-    assert "(row.removedFiles.concat([_ledgerPathFor(row.rowId)])).join(', ')" in script
+    assert "(row.removedFiles).join(', ')" in script
     # no literal manifest row path inside a "stage exactly"/"you hold the
     # lock on" clause -- those clauses interpolate a live expression now.
     for m in re.finditer(r"Stage exactly this touched list: \[", script):
@@ -852,7 +860,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert "Pass this JSON on stdin, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
+    assert "passing this JSON on stdin, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",
@@ -868,20 +876,13 @@ def test_batch_helpers_receive_a_batches_entry_never_batch_state():
     import re
     script = _compose()
     helpers = re.findall(r"function (\w+)\(batch\)", script)
-    assert {"_pendingRow", "_batchDone", "_batchUnsettledRows"} <= set(helpers)
+    assert {"_pendingRow", "_batchDone"} <= set(helpers)
     for name in helpers:
         for arg in re.findall(rf"\b{name}\(([^()]*(?:\([^()]*\)[^()]*)*)\)", script):
             if arg == "batch":
                 continue
             assert arg.startswith("BATCHES.find("), f"{name}({arg})"
     assert "batchState.rows" not in script
-
-
-def test_finish_batch_renders_unsettled_rows_from_the_batches_entry():
-    script = _compose()
-    finish = script[script.index("async function _finishBatch"):]
-    finish = finish[: finish.index("\n}\n")]
-    assert "_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))" in finish
 
 
 # ---------------------------------------------------------------------------
@@ -950,12 +951,11 @@ def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
     worker = script[script.index("async function _runBatchWorker"): script.index("async function runGrind")]
     assert "try {" in worker
     assert "} catch (err) {" in worker
-    assert "await _finishBatch(batchState);" in worker
-    # the catch and the finish/HANDBACK path are both reached -- the catch
-    # is not itself inside the try it guards, and _finishBatch sits after
+    # the catch and the post-batch cleanup are both reached -- the catch
+    # is not itself inside the try it guards, and the cleanup sits after
     # the try/catch, not inside it.
     catch_idx = worker.index("} catch (err) {")
-    finish_idx = worker.index("await _finishBatch(batchState);")
+    finish_idx = worker.index("delete _admitted[batchState.id];")
     assert catch_idx < finish_idx
 
 
@@ -1317,3 +1317,59 @@ def test_golden_resize_call_site_ordered_before_first_dispatch_row_call():
     resize_agent_idx = script.index("label: 'resize'")
     dispatch_row_call_idx = script.index("await _dispatchRow(")
     assert resize_agent_idx < dispatch_row_call_idx
+
+
+@pytest.mark.parametrize(
+    "path,escapes",
+    [
+        ("/abs/sibling/f.py", True),
+        ("C:/x/f.py", True),
+        ("C:\\x\\f.py", True),
+        ("//server/share/f.py", True),
+        ("..\\sibling\\f.py", True),
+        ("../sibling/f.py", True),
+        ("a/../../f.py", True),
+        ("a/b/../f.py", False),
+        ("./a/f.py", False),
+        ("coordinator_core/f.py", False),
+    ],
+)
+def test_out_of_root_paths_classifier(path, escapes):
+    assert gc._out_of_root_paths([path]) == ([path] if escapes else [])
+
+
+def test_fix_exit_out_of_root_path_hands_back_needs_judgment_without_verify_or_commit():
+    seen = []
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: (seen.append("fix"), {"outcome": "done", "touched_files": ["/sib/repo/f.py"]})[1],
+        "verify": lambda rid: (seen.append("verify"), {"outcome": "pass"})[1],
+        "commit": lambda rid: (seen.append("commit"), {"outcome": "committed"})[1],
+    }
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    assert seen == ["fix"]
+    hb = [h for h in result["handed_back"] if h["type"] == "needs-judgment"]
+    assert len(hb) == 1 and "/sib/repo/f.py" in str(hb[0])
+
+
+def test_fix_exit_in_root_path_routes_unchanged():
+    seen = []
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: (seen.append("fix"), {"outcome": "done", "touched_files": ["a/f.py"]})[1],
+        "verify": lambda rid: (seen.append("verify"), {"outcome": "pass"})[1],
+        "commit": lambda rid: (seen.append("commit"), {"outcome": "committed"})[1],
+    }
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    assert "verify" in seen
+    assert not any(h["type"] == "needs-judgment" for h in result["handed_back"])
+
+
+def test_fixstage_script_carries_out_of_root_check_before_follow_edge():
+    script = _compose()
+    assert "function _outOfRootPaths(paths)" in script
+    fix_fn = script[script.index("async function _fixStage"): script.index("async function _verifyStage")]
+    assert fix_fn.index("_outOfRootPaths(") < fix_fn.index("followEdge(")
+    assert "outside repo_root" in fix_fn

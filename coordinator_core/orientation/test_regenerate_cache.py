@@ -821,14 +821,14 @@ def _write_fixture_transcript(project_dir: Path, name: str, repo_cwd: str, other
 
 def _seed_fixture_projects_root(tmp_path: Path, repo: Path, monkeypatch) -> Path:
     """Build a fake `<claude-home>/projects/<encoded-repo>/` directory holding one
-    fixture transcript, and point `hook_cancellation_signal.home_dir` at it."""
+    fixture transcript, and point `hook_cancellation_signal.claude_config_dir` at it."""
     claude_home = tmp_path / "fake-claude-home"
     encoded = _hcs._encode_project_dir_name(repo)
     project_dir = claude_home / ".claude" / "projects" / encoded
     project_dir.mkdir(parents=True)
     other_cwd = str(repo) + "-sibling"
     _write_fixture_transcript(project_dir, "session-1.jsonl", str(repo), other_cwd)
-    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+    monkeypatch.setattr(_hcs, "claude_config_dir", lambda: claude_home / ".claude")
     return project_dir
 
 
@@ -846,7 +846,7 @@ def test_scan_hook_cancellation_rate_matches_known_fixture_count(tmp_path, monke
 def test_scan_hook_cancellation_rate_missing_project_dir_yields_no_signal(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     claude_home = tmp_path / "fake-claude-home-empty"
-    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+    monkeypatch.setattr(_hcs, "claude_config_dir", lambda: claude_home / ".claude")
 
     result = _hcs.scan_hook_cancellation_rate(repo)
 
@@ -858,7 +858,7 @@ def test_scan_hook_cancellation_rate_missing_project_dir_yields_no_signal(tmp_pa
 def test_emit_hook_cancellation_rate_omitted_when_no_denominator(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     claude_home = tmp_path / "fake-claude-home-empty"
-    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+    monkeypatch.setattr(_hcs, "claude_config_dir", lambda: claude_home / ".claude")
 
     assert mod.emit_hook_cancellation_rate(repo) == ""
 

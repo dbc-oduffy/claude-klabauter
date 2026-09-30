@@ -102,7 +102,11 @@ class UnsupportedRecordTypeError(ValueError):
         )
 
 
+# Synthetic types (`handoff-ledger`, `research-claim`) yield N records per
+# source FILE — `records_query._collect_files` is never called for them (see
 # `_SYNTHETIC_TYPES`'s own docstring); there is no one-file-one-record glob
+# for this module to walk, so they are excluded from the supported set rather
+# than silently mishandled.
 _UNSUPPORTED_HISTORY_TYPES: frozenset[str] = records_query._SYNTHETIC_TYPES
 
 
@@ -210,9 +214,32 @@ def untracked_record_paths(
     return frozenset(known_files) - frozenset(tracked_paths)
 
 
+# --------------------------------------------------------------------------
+# C1c — field policy per record type.
+# --------------------------------------------------------------------------
+#
 # Data only, selecting which frontmatter fields are of INTEREST for a given
+# type — never whether transitions are emitted at all, which stays uniform
+# across every type per C1b's extractor. No branch here suppresses a real
+# transition: a type absent from this table (or a field absent from its
+# tuple) still has its transitions extracted by `derive_type_history`; this
+# table exists for callers that want to narrow a report to the fields that
+# matter for a type, not for the extractor itself.
+#
+# Measured on this corpus 2026-08-20 (pairing `-`/`+` within a commit,
+# comment-stripped, wipe commits excluded, per C1b), ACROSS ALL HISTORY:
+# `sizing-object` shows 319 real transitions and `decision` shows 14. This
 # surface reports the CURRENT-RECORDS-ONLY subset, so the sizing figure it
+# returns is ~202, not ~319 -- 114 belong to paths archived out of
+# `state/sizings/`. Two scopes, two numbers, both correct; see the
 # CURRENT-RECORDS-ONLY SCOPE note in the module docstring. `decision` is 14
+# under both scopes. Earlier drafts cited 315 for the all-history sizing
+# count with no scope qualifier; 319 is the re-measured value — `proposed->accepted` x9,
+# `accepted->superseded` x3, `superseded->accepted` x1, `draft->proposed` x1.
+# The asymmetry is a volume fact (14 vs 315), not a presence fact — a
+# type-policy branch that suppressed `decision` `status` transitions would
+# discard exactly the 3 supersession events the source memo asked for, so no
+# such branch exists here or anywhere else in this module.
 _FIELD_POLICY: dict[str, tuple[str, ...]] = {
     "sizing-object": ("status",),
     "decision": ("status", "supersedes", "superseded_by"),
@@ -231,6 +258,10 @@ def fields_of_interest(record_type: str) -> tuple[str, ...]:
 
 
 # `_COMMIT_SEP`/`_FIELD_SEP` are the actual bytes git EMITS for `%x00`/`%x01`
+# in its own placeholder syntax — used to split the captured OUTPUT. The
+# `--format=` argv string passed TO git must instead spell those placeholders
+# out literally (`%x00`, not a raw NUL byte, which `CreateProcess` rejects as
+# an embedded null in an argv element).
 _COMMIT_SEP = "\x00"
 _FIELD_SEP = "\x01"
 _LOG_FORMAT = "%x00%H%x01%an%x01%aI"

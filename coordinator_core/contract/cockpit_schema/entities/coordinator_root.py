@@ -29,7 +29,9 @@ from coordinator_core.contract.cockpit_schema.common import (
 )
 from coordinator_core.contract.cockpit_schema.provenance import ContentHash, ProvenanceEnvelope
 
+# Zod `z.number().int()` emits JSON Schema `integer` bounded to JS
 # Number.MIN_SAFE_INTEGER/MAX_SAFE_INTEGER — reproduced here so
+# model_json_schema() byte-matches the committed schema's `minimum`/`maximum`.
 SafeInt = Annotated[int, Field(ge=-9007199254740991, le=9007199254740991)]
 
 

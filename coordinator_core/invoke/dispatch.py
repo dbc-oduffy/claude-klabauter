@@ -50,7 +50,9 @@ __all__ = [
 ]
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC error helper
+# ---------------------------------------------------------------------------
 
 def jsonrpc_error(code: int, message: str, id_=None) -> dict:
     """Return a JSON-RPC 2.0 error envelope.

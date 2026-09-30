@@ -155,10 +155,23 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
+#: This reader's own cadence identity — one of the five surface-identity
 #: cadences `coordinator_core.test_backlog_grind_assemble._CADENCES`
+#: enumerates. `collect()` below is a no-op ReaderResult for every other
+#: cadence string; the seam (C3) never branches on cadence itself.
 _CADENCE = "bug-blitz"
 
+#: The standing commit-readiness judgment-point id every bug-blitz commit
+#: directive this surface's runtime builds must `depends_on` — see the
+#: module docstring's review-gate risk constraint. Public and documented
+#: (no leading underscore) because `apply.py`'s `_build_wave_path_directives`
+#: reaches across the module boundary to wire the same gate onto its own
+#: CLI-driven `--wave-path` commit path — cross-module use, not an
+#: internal-only implementation detail.
 #: Review: code-reviewer — F4: was module-private (`_COMMIT_READINESS_JP_ID`)
+#: with no `__all__`/docstring export; `apply.py` reached across the module
+#: boundary into it anyway, so a future rename here would silently break
+#: that caller with no ImportError. Promoted to a public name.
 COMMIT_READINESS_JP_ID = "j-bug-blitz-commit-readiness"
 
 _DISK_FIRST_VERIFICATION_PREAMBLE = (

@@ -8,6 +8,7 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections.rollups import collect
 
 # completion glob is 'archive/completed/*/*.md' (records_query._TYPE_TO_GLOB) — one
+# wildcard subdirectory level, delimited YAML frontmatter.
 _COMPLETED_DIR = "archive/completed/2026-03"
 
 

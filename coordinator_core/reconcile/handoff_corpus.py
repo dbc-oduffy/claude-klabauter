@@ -142,6 +142,10 @@ def _collect_all_handoffs_for_gate_index(
     return all_handoffs, scan_errors
 
 
+#: Bytes of a candidate file's HEAD read before falling back to a full read.
+#: Measured against the live 1165-record corpus (dispatch brief, C2): 72-82ms
+#: to build the index at this size vs. 1005ms for the equivalent full-YAML
+#: index, with `missing_ids=0, extra_ids=0, path_mismatch=0` — 8192/16384
 #: produce IDENTICAL output, so this is the measured floor, not a guess.
 _BLOCKER_INDEX_HEAD_BYTES = 4096
 

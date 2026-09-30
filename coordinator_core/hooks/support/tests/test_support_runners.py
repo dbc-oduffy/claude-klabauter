@@ -253,6 +253,7 @@ class TestGuardRunner:
     def test_real_guard_registry_is_empty(self):
         assert guard_runner_contract.ENROLLED_GUARD_MODULES
         # No live REAL_GUARD_REGISTRY symbol is asserted non-empty: it is
+        # deliberately empty in this chunk.
 
 
 class TestGuardScopeDescriptor:

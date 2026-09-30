@@ -297,6 +297,10 @@ def no_console_creationflags() -> dict:
     import subprocess
 
     # getattr with a fallback, not a bare attribute access: CREATE_NO_WINDOW
+    # only exists on subprocess when the REAL host is Windows. _is_windows()
+    # is this module's documented monkeypatch seam (see its own docstring),
+    # so a test exercising this branch on a real POSIX host must not raise
+    # AttributeError reaching for a Windows-only constant that isn't there.
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
@@ -345,7 +349,12 @@ def leaf_spawn_creationflags() -> dict:
 
     import subprocess
 
+    # getattr with a fallback, not a bare attribute access -- same
+    # monkeypatch-seam reason `no_console_creationflags()` documents:
     # `DETACHED_PROCESS` only exists on `subprocess` when the REAL host is
+    # Windows, and `_is_windows()` is this module's documented patchable
+    # seam, so a test exercising this branch on a real POSIX host must not
+    # raise `AttributeError` reaching for a Windows-only constant.
     return {"creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)}
 
 
@@ -508,8 +517,16 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
     ):
         run_kwargs["text"] = True
 
+    # Console suppression, chosen from what the stdio wiring above actually
+    # settled on, and never overriding a caller who asked for creationflags of
+    # its own. The two helpers are not interchangeable here: with at least one
     # of stdin/stdout/stderr set, CPython sets STARTF_USESTDHANDLES and the
+    # flag alone is safe; with NONE set, the child would bind its handles to
     # the window-less console CREATE_NO_WINDOW allocates and its output would
+    # be lost — which is the exact defect this function exists to prevent, so
+    # that branch takes the passthrough helper instead. Gates:
+    # `coordinator_core/tests/test_no_bare_hot_path_spawn.py` and
+    # `test_no_output_swallowing_no_console_spawn.py`.
     if "creationflags" not in run_kwargs:
         wires_stdio = any(
             key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")
@@ -524,6 +541,10 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
                 run_kwargs.setdefault(key, value)
 
     # RESIDUAL ARM, closed 2026-08-25. Reached when the caller wires no stdio at
+    # all AND `no_console_passthrough_kwargs()` contributed no fds either, which
+    # happens precisely when `sys.stdout`/`sys.stderr` are themselves fileno-less
+    # — the capture-buffer caller `workday_complete.apply._invoke_cli_main`
+    # creates exactly that. `run_kwargs` then carries `creationflags` and no
     # stream key, so CPython omits `STARTF_USESTDHANDLES` and the child's output
     if "creationflags" in run_kwargs and not any(
         key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")

@@ -271,6 +271,14 @@ from coordinator_core.ceremony_common.cli_rejection import (
     describe_exit_class,
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
+from coordinator_core.git.commit import CommitRefused, _index_key
+from coordinator_core.git.content_hash import content_matches_index_sha
+from coordinator_core.git.divergence import _run_git
+from coordinator_core.git.git_index import IndexParseError as _IndexStatParseError
+from coordinator_core.git.git_index import scoped_status as _scoped_worktree_status
+from coordinator_core.git.git_state import IndexParseError as _IndexParseError
+from coordinator_core.git.git_state import head_blobs as _head_blobs
+from coordinator_core.git.git_state import read_index as _read_index
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
 from coordinator_core.telemetry.composition_record import (
@@ -1228,8 +1236,30 @@ def _resolve_close_commit_kwargs(
     }
 
 
+#: `_check_completion_entry_landed` states that mean the completion entry is
+#: not durably committed. `unverified` is deliberately absent.
+_ENTRY_NOT_LANDED_STATES = frozenset({"untracked", "uncommitted", "dirty"})
+
+
+def _completion_entry_stage_path(
+    worktree_root: "Union[Path, str]", entry_path: Optional[str]
+) -> Optional[str]:
+    """The repo-relative, forward-slash spelling of the completion entry
+    `d-complete-entry` printed, or `None` when there is no entry or it lies
+    outside the repository (nothing this commit may stage)."""
+    if not entry_path:
+        return None
+    try:
+        return _index_key(Path(worktree_root), entry_path)
+    except (CommitRefused, OSError):
+        return None
+
+
 def _run_close_commit_tail(
-    worktree_root: "Union[Path, str]", decisions: dict[str, Any], sid: Optional[str]
+    worktree_root: "Union[Path, str]",
+    decisions: dict[str, Any],
+    sid: Optional[str],
+    completion_entry_path: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Invokes `directives_commit_tail.run_close_commit_and_release_claims`
     -- never bare `run_close_commit`, which releases neither claim (see that
@@ -1255,6 +1285,16 @@ def _run_close_commit_tail(
     frame."""
     kwargs = _resolve_close_commit_kwargs(decisions, sid)
     if kwargs is not None:
+        # THE CEREMONY'S OWN ARTIFACT RIDES ITS OWN COMMIT, unconditionally.
+        # The entry is authored by a sibling directive in this same pass, so
+        # no caller has reason to name it in `decisions["stage_paths"]`, and
+        # the tail's other sources never sweep it: left out, the pass exits 0
+        # with the completion record an untracked worktree file.
+        entry_rel = _completion_entry_stage_path(worktree_root, completion_entry_path)
+        if entry_rel is not None:
+            existing = list(kwargs.get("stage_paths") or ())
+            if entry_rel not in {str(p).replace("\\", "/") for p in existing}:
+                kwargs["stage_paths"] = existing + [entry_rel]
         # C2 (docs/plans/2026-08-30-the-close-ships-the-baton-it-closed.md):
         # ship-stamp the session's own delivered batons BEFORE the commit
         # call (constraint (b) — a pathspec commit re-reads the tree at
@@ -1426,6 +1466,61 @@ def _run_close_commit_tail(
         "skipped": list(close_outcome.skipped_paths),
         "diagnostics": list(close_outcome.diagnostics),
     }
+    return report
+
+
+def _check_completion_entry_landed(
+    worktree_root: "Union[Path, str]", entry_path: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """Post-commit assertion that the completion entry this pass produced is
+    tracked in HEAD and its worktree bytes match it. Zero git spawns.
+
+    Returns `None` when the pass produced no entry. Otherwise
+    `{"path", "state"}` with `state` one of `landed`, `untracked` (not in the
+    index), `uncommitted` (staged, absent from HEAD), `dirty` (tracked, but
+    index or worktree differs from HEAD), or `unverified` (the index, HEAD or
+    worktree could not be read, or the byte comparison declined). Only
+    `untracked`/`uncommitted`/`dirty` are failures -- a check that cannot
+    answer must not turn a landed close red.
+
+    "Clean" compares worktree to index by stat, settled by
+    `content_matches_index_sha` for a stat mismatch, and index to HEAD by
+    `(mode, sha)`: two hops, because HEAD is the only durable side."""
+    rel = _completion_entry_stage_path(worktree_root, entry_path)
+    if rel is None:
+        return None
+    root = Path(worktree_root)
+    report = {"path": rel, "state": "unverified"}
+    try:
+        index_entry = _read_index(root, fresh=True).get(rel)
+        head_entry = _head_blobs(root, [rel]).get(rel)
+        if index_entry is None:
+            report["state"] = "untracked" if (root / rel).exists() else "unverified"
+            return report
+        if head_entry is None:
+            report["state"] = "uncommitted"
+            return report
+        if (index_entry.mode, index_entry.sha) != head_entry:
+            report["state"] = "dirty"
+            return report
+        verdict = _scoped_worktree_status(root, [rel]).get(rel)
+        if verdict == "candidate":
+            matches = content_matches_index_sha(root, rel, index_entry.sha)
+            if matches is not None:
+                verdict = "clean" if matches else "dirty"
+            else:
+                # The normalizer declined (filters or attributes in play): one
+                # scoped `git status` for this one path, the same escape hatch
+                # `divergence.diverging_paths` keeps, rather than a
+                # silently-unverified dirty entry.
+                rc, out = _run_git(["status", "--porcelain", "--", rel], cwd=str(root))
+                verdict = None if rc != 0 else ("dirty" if out.strip() else "clean")
+        if verdict == "clean":
+            report["state"] = "landed"
+        elif verdict in ("dirty", "deleted"):
+            report["state"] = "dirty"
+    except (OSError, ValueError, _IndexParseError, _IndexStatParseError):
+        pass
     return report
 
 
@@ -1699,7 +1794,10 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         # unconditional claim-release ruling.
         worktree_root = envelope.get("artifact", {}).get("path")
         if worktree_root:
-            close_commit_report = _run_close_commit_tail(worktree_root, effective_decisions, sid)
+            completion_entry_path = report.get("completion_entry_path")
+            close_commit_report = _run_close_commit_tail(
+                worktree_root, effective_decisions, sid, completion_entry_path
+            )
             if close_commit_report is not None:
                 report["close_commit"] = close_commit_report
                 if close_commit_report.get("commit_failed") and exit_code == int(
@@ -1714,11 +1812,24 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # both.
             fold_report = _run_completion_entry_fold(
                 worktree_root,
-                report.get("completion_entry_path"),
+                completion_entry_path,
                 (close_commit_report or {}).get("committed_sha"),
             )
             if fold_report is not None:
                 report["completion_entry_fold"] = fold_report
+
+            # Asserted AFTER the fold, which rewrites the entry and lands its
+            # own follow-up commit: only then is "tracked and clean" final. An
+            # entry that is not is a close whose central artifact is one
+            # `git clean` from gone, so it is never exit 0. PARTIAL_MUTATION
+            # because the pass wrote the entry and did not land it.
+            landing = _check_completion_entry_landed(worktree_root, completion_entry_path)
+            if landing is not None:
+                report["completion_entry_landing"] = landing
+                if landing["state"] in _ENTRY_NOT_LANDED_STATES and exit_code == int(
+                    WorkstreamApplyExitCode.SUCCESS
+                ):
+                    exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
 
             # C4b (2026-08-25): the push leg `run_close_commit` itself never
             # attempts (push_mode=PUSH_MODE_NEVER, hard constraints 5/6) --

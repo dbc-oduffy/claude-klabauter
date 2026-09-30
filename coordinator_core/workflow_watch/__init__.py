@@ -12,7 +12,15 @@ from coordinator_core.workflow_watch.terminal import TerminalWatcher
 
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 
+# The wall-clock cap this watcher enforces on itself, independent of any
+# timeout_ms a model may have retyped into the Monitor call that launched
+# it (see the plan's persistent-arming bullet and prime_exit_criterion).
+# Matches the spike's own 30-minute measurement window above.
+#
 # DEFAULT_CAP_MS is this same bound in milliseconds, DERIVED from the seconds
+# value rather than restated, so the two cannot drift apart. The units are not
+# interchangeable and the split is not cosmetic: this module's `--cap` argv is
+# in SECONDS, while the `timeout_ms` the PostToolUse advisory (C4) emits into a
 # Monitor call is in MILLISECONDS. C4 imports DEFAULT_CAP_MS for the Monitor
 # field and DEFAULT_CAP_SECONDS for the `--cap` it writes into the command line.
 DEFAULT_CAP_SECONDS = 30 * 60

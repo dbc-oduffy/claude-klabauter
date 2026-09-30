@@ -329,11 +329,34 @@ _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
     "foreign_commit_count",
 )
 # D1: additive/backward-compat top-level fields — NOT in _REQUIRED_TOP_FIELDS.
+# A receipt with and without an optional field both validate; when present, it
+# is still type-checked below (mirrors op_tail.failed_critical's graceful-absent-
+# but-typed-when-present posture, documented just below).
+# `sid` (review-integrator 2026-07-08 Finding 5) is additive for the same reason:
+# legacy/pre-Finding-5 receipts never carried it and must still validate clean.
+# `scoping_method` / `foreign_commit_count` (C2, wsc concurrent-tree race fix)
+# are additive for the same reason: pre-C2 receipts never carried them and must
 # still validate clean.  scoping_method is enum-checked (VALID_SCOPING_METHODS)
+# only when present; foreign_commit_count is int-checked only when present.
 
 _REQUIRED_OP_TAIL_FIELDS: tuple[str, ...] = ("phase", "acted", "skipped", "failed")
+# `failed_critical` is intentionally ABSENT from
 # _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-C3 receipts (external tooling,
+# hand-crafted dicts, phase-1 receipts produced before C3 landed).  However,
+# failed_critical is load-bearing for the C3(C) exit predicate — a receipt that passes
+# validate() but omits failed_critical will silently prevent C3(C) from ever firing
+# (op_tail.get("failed_critical") returns None → bool(None) = False).
+# Constraint: make_empty_op_tail() and compute_op_tail() always include failed_critical;
+# external producers must also include it for C3(C) to function correctly.
+# See test_phase2_receipt_schema_valid for the positive assertion that the emitted
+# receipt always carries failed_critical as a list.
+#
+# `unknown` follows the identical posture: intentionally ABSENT from
 # _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-existing receipts that never
+# carried it — a receipt with and without `unknown` both validate.  Unlike
+# failed_critical, `unknown` feeds no exit predicate; its absence changes no runtime
+# behavior, only legibility.  make_empty_op_tail() and compute_op_tail() always
+# include it.
 
 _NODE_TYPE_REQUIRED: dict[str, tuple[str, ...]] = {
     "D": ("id", "type", "resolving_op", "evidence", "tail_step"),
@@ -372,6 +395,7 @@ def validate(receipt: dict[str, Any]) -> list[str]:
     if not isinstance(top_phase, str) or not top_phase:
         errors.append("phase must be a non-empty string")
     # VALID_PHASES_TOP was defined but never enforced;
+    # a receipt with phase="garbage" previously passed validation silently.
     elif top_phase not in VALID_PHASES_TOP:
         errors.append(f"phase {top_phase!r} not in {VALID_PHASES_TOP}")
 

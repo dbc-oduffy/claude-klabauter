@@ -52,6 +52,21 @@ sys.modules[_spec.name] = resolve_claude_klabauter
 _spec.loader.exec_module(resolve_claude_klabauter)
 
 
+@pytest.fixture(autouse=True)
+def _engine_root_env_rungs_unset(monkeypatch):
+    """Rung 0 of the ladder (``COORDINATOR_ENGINE_ROOT``) outranks the registry
+    and the sentinel, so a session env that exports it (cloud:
+    ``/root/engine-current``) answers before any fixture registry is read.
+    Tests here that exercise a lower rung start with both override vars unset.
+
+    The module under test is loaded from this checkout, so its last-resort
+    self-located rung would always name the checkout and answer for every
+    fixture that expects a raise or a registry-resolved root; it is stubbed out."""
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_SOURCE_ROOT", raising=False)
+    monkeypatch.setattr(resolve_claude_klabauter, "_self_located_root", lambda: None)
+
+
 def _make_claude_klabauter_fixture(root: Path, sentinel_executable: bool = True) -> None:
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
@@ -456,16 +471,6 @@ def _resolve_installed_shim_path() -> Path:
 _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
 
 
-@pytest.mark.skipif(
-    not (_INSTALLED_SHIM_PATH.name and _INSTALLED_SHIM_PATH.is_file()),
-    reason=(
-        "no installed <settings-home>/bin/_resolve_claude_klabauter.py found on this machine "
-        "(no coordinator:install run, or COORDINATOR_SETTINGS_HOME/CLAUDE_HOME/HOME "
-        "all unset) — the source-tree leg above still runs unconditionally"
-    ),
-)
-
-
 # ---------------------------------------------------------------------------
 # DR-132 two-tier ladder — `resolve_claude_klabauter_root_with_class()`. Mirrors
 # coordinator-content-repo `coordinator/hooks/scripts/_engine_root.py`'s
@@ -694,6 +699,14 @@ def test_unstamped_published_root_is_denied(tmp_path: Path, monkeypatch):
         resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
 
 
+@pytest.mark.skipif(
+    not (_INSTALLED_SHIM_PATH.name and _INSTALLED_SHIM_PATH.is_file()),
+    reason=(
+        "no installed <settings-home>/bin/_resolve_claude_klabauter.py found on this machine "
+        "(no coordinator:install run, or COORDINATOR_SETTINGS_HOME/CLAUDE_HOME/HOME "
+        "all unset) — the source-tree leg above still runs unconditionally"
+    ),
+)
 def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_path: Path):
     """Same bootstrap-independence property as the source-tree test above,
     but against the artifact production actually runs: the copy installed

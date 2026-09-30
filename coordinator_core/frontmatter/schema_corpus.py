@@ -63,6 +63,11 @@ from pathlib import Path
 from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 
 #: Repo-root sentinel marking a coordinator-content-repo AUTHORING checkout. Coordinator-content-repo's
+#: own `CLAUDE.md` names it the dev-vs-OSS discriminant fleet-wide and pins it
+#: to the REPO root, one level above a private layout's `coordinator/` content
+#: root; `scripts/cloud_setup.py :: locate_doe_authoring_tree` detects a mounted
+#: authoring tree by this same name. Spelled here rather than imported because
+#: that script is an installer, not an importable engine module.
 DEV_REPO_SENTINEL = ".coordinator-dev-repo"
 
 

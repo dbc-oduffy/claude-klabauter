@@ -259,7 +259,9 @@ class TestConsumeRoundTripOneShot:
             _cleanup_sentinel(sid, guard_name)
 
 
+# ---------------------------------------------------------------------------
 # Subset invariant: every _GRANTABLE_GUARDS member is actually consumable
+# ---------------------------------------------------------------------------
 
 
 class TestGrantableGuardsSubsetInvariant:
@@ -323,4 +325,17 @@ class TestAC14SubagentCommitNeverComposesWithGrant:
 
 
 # AC-7 WITHDRAWN, 2026-08-13 — its test lived here and was removed with it.
+# It pinned "a grant never clears `_check_claim_conflicts`'s `unanswerable`
+# leg". That function was DELETED outright by
+# `docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-that-rejects-it.md`
+# (PM-authorized): a path-touch claim is a swimlane courtesy, not a safety
+# mechanism, so the whole hard-deny goes rather than being narrowed. There is no
+# longer an `unanswerable` leg for a grant to clear, so the invariant is moot by
+# construction — the same reasoning that withdrew this plan's C10. Removed rather
+# than left xfailing: a permanently-xfailing test that also spawns would need
+# spawn-ratchet admission to pin behaviour that no longer exists.
+#
+# AC-14 is NOT affected and its test remains below/above: that one pins
+# `block_subagent_commit.py` refusing a subagent commit even with a live
+# sentinel, which is independent of the deleted gate.
 

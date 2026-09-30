@@ -198,6 +198,7 @@ _CLAIM_TOKEN_RE = re.compile(
 )
 
 #: A module-level ``WRITE_SURFACE = ...`` / ``WRITE_SURFACE: ... = ...``
+#: declaration, scoped by the caller to ``coordinator_core/install/`` only.
 _WRITE_SURFACE_RE = re.compile(rb"^WRITE_SURFACE\s*[:=]", re.M)
 
 _CATEGORIES = frozenset(
@@ -221,11 +222,78 @@ _RULE_SEAM_MODULES = frozenset(
 
 #: The install-prefix a module must sit under for the ``WRITE_SURFACE`` rule
 #: to apply. A module outside this prefix that declares ``WRITE_SURFACE`` is
+#: NOT rule-covered — see the module docstring.
 _INSTALL_PREFIX = "coordinator_core/install/"
 
+#: ============================================================================
+#: The register. Seeded from state/audits/2026-09-11-state-writer-census.md
+#: (C3) at this chunk's commit — 281 modules total: 3 rule-covered
 #: (seam/primitive), 15 rule-covered (WRITE_SURFACE/install), and 263 with an
+#: explicit register entry below (47 claims-explicitly, 28 outside-repo, 3
+#: git-internal, 129 in-repo-non-state, 56 to-fix; 0 ignored-target at this
+#: commit — no census row needed it). First re-run of the scan at this
+#: chunk's commit reconciled with C3's ref: no new member landed since C3, so
+#: this register and ceiling are C3's table verbatim.
+#: C5 (migration batch A) moved coordinator_core/ops/goal_append.py's state
+#: write onto the seam (session/claimed_write.py::append_claimed_line); the
+#: module's raw-write bytes are gone, so it no longer matches the scan
+#: vocabulary at all and its entry/ceiling membership are deleted rather than
+#: recategorized — 262 explicit entries, 55 to-fix, population 280.
+#: C6 (migration batch B) moved
+#: coordinator_core/bash_guards/block_subagent_destructive_action.py's
+#: `_log_fail_open` append onto the seam (session/claimed_write.py::
+#: append_claimed_line, entry wrapped once at bash_guards/dispatch.py::main
+#: via cli_entry.recording_declared_writes). The module keeps a residual raw
+#: write (`_rotate_fail_open_log_if_oversized`'s `os.replace(` rotation of
+#: the same settings-home-rooted log), so per this batch's body its entry is
 #: RECATEGORIZED (never deleted) to the residual's own category —
+#: outside-repo, matching `_alternative_liveness.py`'s identical
+#: settings-home-rotation shape — rather than swapped to a category that
+#: describes the seam write: 262 explicit entries, 54 to-fix.
+#: C6 also moved
+#: coordinator_core/write_guards/validate_frontmatter_schema_deny.py's
+#: `_capture_guard_forensics` write onto the seam
+#: (session/claimed_write.py::replace_text, entry wrapped once at
+#: write_guards/engine.py::evaluate_payload_json via cli_entry.
+#: recording_declared_writes -- the one entry both `__main__.main()` and the
+#: out-of-repo PreToolUse dispatchers converge on). No residual raw-write
+#: bytes remain, so its entry/ceiling membership are deleted rather than
+#: recategorized: 261 explicit entries, 53 to-fix, population 280.
+#: C7 (migration batch C: every other package's to-fix writers onto the
+#: seam) moved ten modules' state writes onto the seam
+#: (session/claimed_write.py::append_claimed_line/replace_text/
+#: create_exclusive) — coordinator_core/backlog_grind_assemble/apply.py,
+#: coordinator_core/distill/wiki_log_migrate.py,
+#: coordinator_core/engine_provenance_counter.py,
+#: coordinator_core/fact_contract_gate/engine_gap_ratchet.py,
+#: coordinator_core/group_em/send_pass.py,
+#: coordinator_core/roadmap/blitz_land.py,
+#: coordinator_core/telemetry/cost_census.py,
+#: coordinator_core/tracker_store.py, and
+#: coordinator_core/workstream_complete/directives_commit_tail.py — plus
+#: coordinator_core/baton_assemble/__init__.py, whose only "raw-write"
+#: bytes were two docstring mentions of `open(out_path, "w", ...)` (a scan
+#: false positive, not a real write site); all ten no longer match the scan
+#: vocabulary and their entries/ceiling membership are deleted. Eight more
 #: to-fix members held no actual `state/` write and are RECATEGORIZED
+#: (never deleted) to the category their real write target names:
+#: coordinator_core/ceremony_common/_phantom_sweep_providers.py and
+#: coordinator_core/percolate/engine.py + percolate/inject.py write only
+#: under a tmp_path fixture / the percolate publish destination tree (never
+#: a tracked path in this repo) — outside-repo;
+#: coordinator_core/commit_ledger/store.py writes to
+#: <git-common-dir>/coordinator-sessions/.commit-ledger/, and
+#: coordinator_core/contract/emit_memo_schema.py,
+#: coordinator_core/frontmatter/author_dependence.py, and
+#: coordinator_core/orientation/expired_grant_signal.py write a generated
+#: schema file, a committed golden fixture, and a best-effort
+#: .coordinator-local/cache/ index respectively — none of these five is
+#: `state/`, so in-repo-non-state; coordinator_core/session/claims.py's
+#: claim-directory bookkeeping is session-internal (routing it through the
+#: seam would recurse through the very claim machinery the seam feeds, per
+#: this batch's row body) — git-internal. Population unchanged by a
+#: recategorization: 251 explicit entries, 35 to-fix, population 270.
+#: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/hooks/flag_em_poll_in_flight.py': ('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
@@ -499,7 +567,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/workstream_complete/directives_lessons_plan.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _spool_body_to_file'),
     'coordinator_core/workstream_complete/directives_review.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: record_gate_memo'),
     'coordinator_core/write_guards/block_subagent_archive_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_block_log'),
-    'coordinator_core/write_guards/block_subagent_plan_body_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_block_log, _write_hook_emit_log'),
+    'coordinator_core/write_guards/block_subagent_plan_body_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_block_log'),
     'coordinator_core/write_guards/guard_concrete_path_citations.py': ('git-internal', 'raw-write site within 3 lines of a coordinator-sessions/meta.json reference'),
     'coordinator_core/write_guards/guard_doctrine_surface_edits.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_repo_identity_advisory_log'),
 }

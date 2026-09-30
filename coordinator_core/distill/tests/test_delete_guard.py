@@ -30,8 +30,18 @@ from coordinator_core.win_portability import no_console_creationflags
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 
+# Declared, not excused: the `git_repo` fixture and `_commit_dated` spawn real git
+# because the properties under test are real git object resolution --
+# `resolve_realized_by`/`_git_objects_exist` dispatch through `git cat-file` against
+# real full/short SHAs (the scientific-notation-coercion hazard needs a real
+# resolvable object, not a mock), and `check_distill_fate`'s absent-fate branch reads
 # real `git log`-derived commit dates to compare against DISTILL_FATE_STAMPING_CUTOVER.
+# `git_repo` stays function-scoped (default fixture scope) because
+# `test_distill_fate_absent_real_file_no_git_history_blocks_retain` and its siblings
+# add distinct uncommitted/differently-dated files per test that must not leak between
 # tests sharing a repo. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -188,6 +198,8 @@ def test_commitment_closure_missing_status_field_fails_closed(tmp_path: Path):
 
 def test_commitment_closure_matches_bare_filename_across_inbox_archive_sweep(tmp_path: Path):
     # Ledger entries cite memos by their DELIVERY path (cross-repo/inbox/...);
+    # an actioned candidate has been swept to cross-repo/archive/ under the same
+    # filename. The filename leg of reference detection must bridge that.
     _write_commitment(
         tmp_path,
         "2026-07-01-inbox-cited-entry.yaml",
@@ -357,7 +369,9 @@ def _commit_dated(repo_root: Path, filename: str, content: str, date: str) -> Pa
 
 
 def test_distill_fate_absent_predates_cutover_blocks_retain(git_repo: Path):
+    # Ruling (b), the safety-floor fix: an absent-fate memo whose git-history
     # actioned date predates DISTILL_FATE_STAMPING_CUTOVER must RETAIN, never
+    # be silently delete-eligible.
     path = _commit_dated(git_repo, "pre-stamp-memo.md", "status: actioned\n", "2026-07-01")
     result = check_distill_fate("status: actioned\n", path, git_repo)
     assert result.passed is False
@@ -381,7 +395,14 @@ def test_distill_fate_absent_undeterminable_blocks(tmp_path: Path):
 
 
 def test_distill_fate_absent_real_file_no_git_history_blocks_retain(git_repo: Path):
+    # A real, on-disk file inside a
+    # WORKING git repo (git log succeeds, returncode 0) but with ZERO commit
     # history for that exact path is the `_UNTRACKED` fast-path. This must
+    # fail-closed (retain), not PASS: a shallow clone, a `git gc` after a
+    # rebase/squash, or a sparse/filtered checkout can each produce this exact
+    # signature for a genuinely old, fully-committed memo, indistinguishable
+    # from "never committed" to `_candidate_actioned_date`. No prior fixture
+    # exercised this — every `git_repo` fixture use committed the file first.
     path = git_repo / "never-committed-memo.md"
     path.write_text("status: actioned\n", encoding="utf-8")
     result = check_distill_fate("status: actioned\n", path, git_repo)
@@ -512,6 +533,10 @@ def test_commitment_inline_with_docs_citation_passes(tmp_path: Path):
     wiki_dir = tmp_path / "docs" / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     # Cite the BASENAME only, not the full repo-relative path: harvest-provenance
+    # matches needle-OR-basename, but a full-path citation here would also trip
+    # check_active_reference (same needle, same docs/ scope) as "still
+    # referenced" and block the candidate for an unrelated reason — this test
+    # isolates harvest-provenance's own pass condition.
     (wiki_dir / "landing-notes.md").write_text(
         "Landed per committed-memo-cited.md\n",
         encoding="utf-8",
@@ -679,6 +704,8 @@ def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path
     )
 
     # A docs/ note references a DIFFERENT file that happens to share the bare
+    # filename "candidate.md" in an unrelated directory — a bare-filename needle
+    # would false-positive-match this; a repo-relative needle correctly does not.
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "note.md").write_text(
         "see some/other/unrelated/candidate.md for context\n", encoding="utf-8"
@@ -692,6 +719,11 @@ def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path
 @_requires_rg
 def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_path: Path):
     # SECURITY-ADJACENT regression, companion to the repo-relative needle test above.
+    # In-repo documents spell their references with '/'. A native-separator needle would read
+    # "cross-repo\\archive\\candidate.md" on Windows, match NOTHING against the forward-slash
+    # citation below, and report a still-referenced artifact as delete-eligible — the guard
+    # failing OPEN. Pins that a live citation of the candidate's own repo-relative posix path
+    # is seen on every platform, for a candidate whose path has separators in it.
     candidate_dir = tmp_path / "cross-repo" / "archive"
     candidate_dir.mkdir(parents=True)
     handoff = candidate_dir / "candidate.md"
@@ -738,7 +770,16 @@ def test_evaluate_candidate_needle_shape_is_posix_on_every_platform(monkeypatch,
     assert not any("\\" in needle for needle in seen)
 
 
+# ---------------------------------------------------------------------------
+# Guard 3 / Guard 7 read the SAME provenance block two opposite ways
+#
+# Guard 3 (active-reference) excludes it: a tombstone is not a dependency, so the artifact
 # is deletable. Guard 7 (harvest-provenance) REQUIRES it: a tombstone is proof the content
+# reached a durable location. Both readings must be implemented; when Guard 7 silently
+# inherited Guard 3's exclusion through their shared callee, it lost its own evidence and
+# the DR-111 self-pinning defect relocated from one guard to the other for the `commitment`
+# class (fail-closed -- permanently undeletable, not wrongly deleted).
+# ---------------------------------------------------------------------------
 
 @_requires_rg
 def test_guard7_counts_provenance_block_as_durable_capture_proof(tmp_path: Path):
@@ -781,7 +822,9 @@ def test_guard3_excludes_the_same_block_guard7_requires(tmp_path: Path):
 def test_guard7_basename_collision_in_unrelated_provenance_block_does_not_pass(
     tmp_path: Path,
 ):
+    # 2026-08-29 code-review Finding 1: the basename fallback must NOT match inside a
     # provenance block belonging to a DIFFERENT harvested artifact that merely shares this
+    # candidate's filename. Only a full-path citation inside a provenance block counts.
     wiki = tmp_path / "docs" / "wiki"
     wiki.mkdir(parents=True)
     (wiki / "guide.md").write_text(

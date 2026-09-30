@@ -107,6 +107,26 @@ than re-deriving a parallel judgment of "is this translatable":
     with that capability a fully generic per-item body has no safe
     translation without re-implementing a shell interpreter.
 
+  - LABEL_OR_EXIT_ECHO -> no seam consulted (no BX-16 rewrite exists for
+    it); `_generic_advisory` on every platform, no deny leg (DR-280).
+
+DECISION RECORD -- LABEL_OR_EXIT_ECHO (docs/plans/2026-09-11-the-spawn-
+guard-bans-the-pipes-and-bless.md). This is the ONE exception to the
+precedence-winner rule above: the shape is seated LAST in the classifier's
+precedence tuple and keyed on MEMBERSHIP (`classification.has_shape`), evaluated after the
+primary dispatch in `check()`. AC-7 still holds because the echo line is
+appended to the primary verdict's envelope AFTER the primary's own
+description, or stands alone when no verdict fired -- it never replaces or
+rewrites what the primary guard said, and never reads another guard's
+output. One predicate, one branch; there is no seat-dependent table. A
+fifth shape was taken over a per-command-line spawn count because the count
+would re-base the four existing verdicts (a different, larger baton). The
+shape joins the subagent spawn-shapes deny vocabulary in opt-in hosts
+(`guard_host_subagent_bash_spawn_shapes` classifies through the same
+function and is unchanged). PowerShell leg: deliberately absent from
+`_DETECTOR_TABLE[POWERSHELL]` (as WHILE_READ_LOOP is); `Write-Host` is not
+`echo`, so an in decision would need a forked predicate.
+
 Consume, don't rebuild: this module does not re-parse `find -exec` or
 `head`/`tail` argument grammar itself. It classifies the shape, calls the
 one seam check that shape's rewrite lives in, and only shapes the platform
@@ -170,27 +190,84 @@ from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 
+#: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
+#: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing here.
 CLASS = "hard-deny"
+#: WIDENED (C6, pln-the-shape-classifier-reaches-a-e743e5 § D6, PM ruling
+#: 2026-08-18). The prior hold here named two conditions: DR-280's rewrite
+#: landing, and `state/bash-guards/known-red.json`'s three
+#: `TestVerbatimHeadTailAlternativeIsRealAndEquivalent` `pending_fix` cells
+#: clearing. DR-280 landed (`b1e2bc932` / `62f66c01a`); the red cells have
+#: NOT cleared -- the PM ruled to widen ahead of that second precondition
+#: anyway, accepting the five-cell debt (across this file and
+#: `guard_multiprobe_banner.py`) explicitly (AC17) rather than leave this
 #: guard -- the only in-repo consumer of `FOR_LOOP`/`WHILE_READ_LOOP`/
 #: `HEAD_TAIL_PLUMBING`/`FIND_EXEC_XARGS` -- unreachable on a PowerShell
 #: payload. Reference by DIRECT IDENTITY, never a copy or re-wrap --
+#: `test_tool_name_membership.py` asserts `is`.
 _GUARD_NAME = "guard_plumbing_and_loops"
 
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
+#: This guard's OWN escape hatch -- suppresses BOTH shapes' policy outright,
+#: read inline at `check()` call time only (F2 discipline -- never hoisted
+#: to module scope). Distinct from the underlying seam checks' own
 #: `COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING` / `COORDINATOR_ALLOW_FIND_EXEC`
+#: (which this module also implicitly honors -- see module docstring).
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS"
 
 _EVENT_NAME = "PreToolUse"
 
 #: FOR-LOOP GENERIC FALLBACK -- DECIDED EXPLICITLY, NOT AN OMISSION
+#: (worklist Row P4, `state/audits/2026-07-29-guard-module-ladder-
+#: worklist.md`, coordinator-content-repo repo; `docs/plans/2026-07-29-bash-guard-
+#: consolidated-execution.md` row M10 item 2). This bare-glob for-loop
 #: branch is ARCHITECTURALLY CAPPED at an every-platform advisory carrying
+#: a generic (non-command-specific) skeleton -- a recorded stop, not a
+#: promotable rung-C-to-B gap left unaddressed by accident:
+#:
+#:   1. `check_find_exec_rewrite`'s only confirmed-outlet path
+#:      (`_seam_confirmed_rewrite`) requires the WHOLE command to be exactly
+#:      one segment whose first token is literally `find` (see this
 #:      module's own docstring, "FOR_LOOP's leg of AC-5 is, ARCHITECTURALLY,
+#:      advisory-only on every platform"). A for-loop's own first token is
+#:      always `for`, never `find`, and a genuine `for ... do ... done` body
+#:      is inherently multi-segment from its own internal `;`s/newlines --
+#:      so NO for-loop, translatable exec verb or not, can ever reach that
+#:      seam's confirmed-rewrite branch. This is a structural fact about the
+#:      seam this guard consumes, not something this guard's own message
+#:      wording could fix.
+#:   2. Promoting this branch to a genuine per-command rewrite (rather than
+#:      a fixed skeleton) needs a NEW `_shape_classifier` capability this
+#:      package does not have today: structurally extracting the loop
+#:      variable, the item list, and the body from a `for ... do ... done`
+#:      construct -- `_detect_for_loop` only detects that one is PRESENT
+#:      (`do`/`done` tokens exist), it does not parse its parts. Building
+#:      that classifier is real, separate work, not a message-text fix, and
+#:      is out of this row's scope.
+#:   3. Even with that classifier in hand, a GENERIC body's per-item work is
+#:      arbitrary shell (unknown variable expansions, quoting, exit-status
 #:      handling) -- unlike `check_find_exec_rewrite`'s narrow, ENUMERATED
+#:      verb translation (rm/cat/wc -l only), there is no safe, general
+#:      translation of "whatever the body does" into Python without
+#:      re-implementing a shell interpreter. A "run the body verbatim per
+#:      item via a subprocess" alternative (the same verbatim-reuse pattern
+#:      `_verbatim_head_tail_alternative` uses for the head/tail branch)
+#:      would still fork once per iteration -- exactly the cost this guard
+#:      exists to remove -- so it would not be a real improvement over the
+#:      status quo, only a different-looking non-improvement; it is
+#:      deliberately NOT implemented here for that reason.
+#:
 #: DECISION: stays at rung C -- a generic, every-platform-advisory
+#: skeleton -- until a `_shape_classifier` for-loop-structure capability
+#: exists AND a translator for at least a small enumerated set of common
+#: per-item verbs is built on top of it (the same shape
+#: `check_find_exec_rewrite`'s own enumerated rm/cat/wc -l translation
+#: already takes for its narrower shape). No such capability exists in this
+#: package as of this decision, so no attempt is made to fake one here.
 _FOR_LOOP_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
 
 
@@ -203,6 +280,9 @@ def _for_loop_generic_example() -> str:
 
 #: WHILE-READ LOOP -- always a `_generic_advisory` (no seam to consult, see
 #: module docstring's WHILE_READ_LOOP paragraph). The example reads the item
+#: list in-process instead of spawning a shell `while read` loop, the same
+#: honest outlet `_for_loop_generic_example` offers for its own shape --
+#: no auto-rewrite outlet is synthesized here either (plan Out of scope).
 _WHILE_READ_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
 
 
@@ -214,8 +294,60 @@ def _while_read_generic_example() -> str:
     )
 
 
+#: LABEL_OR_EXIT_ECHO -- advisory text leads with the alternative. `echo` is
+#: a shell builtin, so no spawn saving is claimed: the cost is output that
+#: carries no information the tool result lacks.
+_LABEL_ECHO_GENERIC_SUMMARY = (
+    "the Read/Grep tools (no shell at all), or one python3 process that "
+    "prints the labelled facts in-process"
+)
+_LABEL_ECHO_APPENDED_LINE = (
+    "Echo cost: the label/exit-code echo adds output, not information -- the "
+    "tool result already reports exit status. Read/Grep, or one python3 "
+    "process printing the labelled facts, replaces it."
+)
+
+
+def _label_echo_generic_example() -> str:
+    return (
+        "%s -c 'import os; print(\"cwd:\", os.getcwd())'  # labelled facts "
+        "in-process; the exit code is already in the tool result" % _pl_python3_invocation()
+    )
+
+
+def _verdict_label_echo(
+    cmd: str, payload: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Stand-alone advisory for a command whose only match is
+    LABEL_OR_EXIT_ECHO. No seam is consulted: no BX-16 rewrite exists."""
+    return _generic_advisory(
+        "label-or-exit-echo",
+        cmd,
+        _LABEL_ECHO_GENERIC_SUMMARY,
+        _label_echo_generic_example(),
+        payload,
+        finding="prints a label or exit code the tool result already carries",
+    )
+
+
+def _append_echo_line(envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """Append the echo-cost line after a blank line, so it sits outside the
+    primary's `Example:` cue window."""
+    hso = envelope.get("hookSpecificOutput")
+    if isinstance(hso, dict) and isinstance(hso.get("additionalContext"), str):
+        hso["additionalContext"] += "\n" + _LABEL_ECHO_APPENDED_LINE + "\n"
+    return envelope
+
+
 #: PIPELINE_FOREACH_OBJECT -- PowerShell-only, no bash analogue (D2, C3 of
+#: pln-the-shape-classifier-reaches-a-e743e5). A `ForEach-Object`/`%` block
 #: spawns once PER PIPELINE OBJECT when its body calls a native executable
+#: -- the same fork-per-iteration cost `_for_loop_generic_example` addresses
+#: for a bash/pwsh `for`/`foreach` loop, so it gets the identical remedy
+#: shape: collapse the per-item spawn into one in-process python3 call over
+#: the whole collection, rather than one call per object flowing through
+#: the pipeline. No seam exists to consult here (no bash rewrite to reuse,
+#: no sibling BX-16 check) -- always the generic, every-platform advisory.
 _PIPELINE_FOREACH_OBJECT_SUMMARY = (
     "a single in-process python3 call over the whole collection, zero per-item forks"
 )
@@ -253,18 +385,23 @@ def _outlet_from_seam_result(
 
 
 def _generic_advisory(
-    shape_label: str, cmd: str, summary: str, example: str, payload: Optional[Dict[str, Any]]
+    shape_label: str,
+    cmd: str,
+    summary: str,
+    example: str,
+    payload: Optional[Dict[str, Any]],
+    finding: str = "spawns a subprocess per iteration/pipe stage",
 ) -> Dict[str, Any]:
     cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
     context = (
-        "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command spawns a "
-        "subprocess per iteration/pipe stage.\n\n"
+        "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command %s.\n\n"
         "  %s  %s\n\n"
         "Use instead: %s\n"
         "  Example:  %s\n"
         "  %s\n"
         % (
             shape_label,
+            finding,
             COMMAND_LINE_LABEL,
             cmd_safe,
             summary,
@@ -419,8 +556,13 @@ def _verdict_for_loop(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     summary, example = _outlet_from_seam_result(seam_result, payload)
+    # DR-280 (2026-08-07): the deny leg is retired -- always render the
+    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
+    # own docstring for why. (In practice this branch is also unreachable
     # per this module's own "FOR_LOOP's leg of AC-5" note above -- no
     # FOR_LOOP-classified command can ever produce a seam-confirmed
+    # rewrite -- but the fixed argument stays as defense-in-depth against
+    # that structural fact changing.)
     return platform_verdict_for_shape(
         "for-loop-wrapping-find-exec",
         cmd,
@@ -548,7 +690,10 @@ def _verdict_powershell(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     if primary.shape is Shape.PIPELINE_FOREACH_OBJECT:
+        # New member (D2) -- no bash analogue, no seam to consult. Same
         # remedy shape as FOR_LOOP: the per-item spawn inside the
+        # `ForEach-Object`/`%` block collapses into one in-process call over
+        # the whole collection.
         return _generic_advisory(
             "pipeline-foreach-object",
             cmd,
@@ -557,6 +702,7 @@ def _verdict_powershell(
             payload,
         )
     # WHILE_READ_LOOP is deliberately absent from the classifier's POWERSHELL
+    # table (AC8) -- no PowerShell idiom exists, so `primary.shape` can never
     # be WHILE_READ_LOOP here; no branch is needed or possible for it.
     _record_powershell_non_verdict(
         "matched a shape with no PowerShell-leg advisory of its own"
@@ -625,10 +771,16 @@ def check(
     if primary is None:
         return None
 
+    verdict: Optional[Dict[str, Any]] = None
     if primary.shape is Shape.HEAD_TAIL_PLUMBING:
-        return _verdict_head_tail(cmd, session_id, host_is_windows, payload)
-    if primary.shape is Shape.FOR_LOOP:
-        return _verdict_for_loop(cmd, session_id, host_is_windows, payload)
-    if primary.shape is Shape.WHILE_READ_LOOP:
-        return _verdict_while_read(cmd, session_id, host_is_windows, payload)
-    return None
+        verdict = _verdict_head_tail(cmd, session_id, host_is_windows, payload)
+    elif primary.shape is Shape.FOR_LOOP:
+        verdict = _verdict_for_loop(cmd, session_id, host_is_windows, payload)
+    elif primary.shape is Shape.WHILE_READ_LOOP:
+        verdict = _verdict_while_read(cmd, session_id, host_is_windows, payload)
+
+    if not classification.has_shape(Shape.LABEL_OR_EXIT_ECHO):
+        return verdict
+    if verdict is not None:
+        return _append_echo_line(verdict)
+    return _verdict_label_echo(cmd, payload)

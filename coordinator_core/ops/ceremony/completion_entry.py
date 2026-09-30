@@ -91,6 +91,8 @@ _COMPLETION_BODY_SENTINEL_START = "<!-- ONE paragraph"
 _CHAIN_TERMINAL_FALSE_TOKEN = "false"
 
 # The scaffold emits authored_by as a COMMENTED-OUT placeholder line (not a live YAML
+# key) -- primitives.py's key-line helpers do not apply, so this fill matches the full
+# commented line directly, scoped to the parsed frontmatter text only.
 _AUTHORED_BY_PLACEHOLDER_RE = re.compile(r"^# authored_by: PLACEHOLDER.*$", re.MULTILINE)
 
 

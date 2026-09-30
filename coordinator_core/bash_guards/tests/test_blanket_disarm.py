@@ -416,6 +416,9 @@ class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
         assert bd.disarm_status(EM_PAYLOAD).active is True
 
         # Marker is UNCHANGED on disk (same stat key) -- only wall-clock
+        # time has moved past Expires. The old (session_id, is_em)-only
+        # cache key would replay the still-True verdict forever within this
+        # process; the fix must re-check expires_at live on every call.
         later = bd._evaluate(
             now + expires_in + timedelta(seconds=1), session_id="", is_em=True, home=bd.settings_home()
         )

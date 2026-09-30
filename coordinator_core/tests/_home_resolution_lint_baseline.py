@@ -32,9 +32,10 @@ these numbers are a snapshot, not re-derived automatically):
     (trusted_root_guard.py) whose Windows-safety is already proven by a
     separate mechanism -- see the note directly above
     FORWARD_SLASH_BASELINE's definition)
-  - BARE_OR_BASELINE (CLAUDE_HOME/HOME `or`-chain, no USERPROFILE rung): 4
+  - BARE_OR_BASELINE (CLAUDE_HOME/HOME `or`-chain, no USERPROFILE rung): 3
     (2026-07-29: was 18; 13 fixed. 2026-08-01: wsc_commit.py pruned, the site
-    is gone. The 4 remaining are confirmed AST-window false positives -- see
+    is gone. Four optional-extra-root sites migrated to Convention A and were
+    retired. The 3 remaining are confirmed AST-window false positives -- see
     the note directly above BARE_OR_BASELINE's definition)
 
 Total: 93 known sites (across 4 rules; the 5th shape -- lying docstrings --
@@ -119,29 +120,6 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         "coordinator/bin/count-distill-backlog.py",
         57,
         'claude_home_env = os.environ.get("CLAUDE_HOME")',
-    ),
-    # Shape A -- an OPTIONAL EXTRA root, not a resolution chain: a lone
-    # `os.environ.get("CLAUDE_HOME", "")` / `os.environ.get("HOME", "")`
-    # whose result, if non-empty, is APPENDED to a list already populated
-    (
-        "coordinator_core/ops/check_auto_memory_drained.py",
-        180,
-        'claude_home = os.environ.get("CLAUDE_HOME", "")',
-    ),
-    (
-        "coordinator_core/write_guards/block_derived_global_doctrine_write.py",
-        194,
-        'claude_home = os.environ.get("CLAUDE_HOME", "")',
-    ),
-    (
-        "coordinator_core/write_guards/block_home_dir_memo_delivery.py",
-        128,
-        'claude_home = os.environ.get("CLAUDE_HOME", "")',
-    ),
-    (
-        "coordinator_core/write_guards/guard_memory_store_cap.py",
-        167,
-        'claude_home = os.environ.get("CLAUDE_HOME", "")',
     ),
     # integration note -- that `claude_home` feeds a USERPROFILE-guarded
     # line above (a local var, not a nearby comment mentioning USERPROFILE,

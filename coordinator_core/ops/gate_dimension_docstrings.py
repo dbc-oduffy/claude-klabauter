@@ -259,7 +259,10 @@ def _check_docstrings(
         interrogate_tool.path, existing_paths, fail_under, repo_root_str
     )
 
+    # Tool-broke case for either tool (neither 0 nor 1) -- reported as
     # UNAVAILABLE, never FAIL, mirroring gate_dimension_types._check_types'
+    # rc==2 handling: a broken tool run must never masquerade as "found a
+    # docstring gap".
     if ruff_rc not in (0, 1):
         last_err = ruff_err or ruff_out or f"ruff exited {ruff_rc} with no output"
         return DimensionResult(

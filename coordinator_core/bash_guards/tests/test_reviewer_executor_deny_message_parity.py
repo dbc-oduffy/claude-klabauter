@@ -129,7 +129,20 @@ class TestCodeReviewerDenyMessageByteParity:
         assert reason == _EXPECTED_REVIEWER_DENY_MESSAGE
 
 
+# ---------------------------------------------------------------------------
+# Executor deny-message content -- RETIRED 2026-08-03 (DR-125,
+# docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md,
+# chunk C2). ``coordinator:executor`` was removed from
 # ``_helpers._CONFINED_FINDINGS_AGENTS``, the SOLE gate this guard consults
+# to decide whether to evaluate a payload at all -- ``guard.check`` now
+# returns ``None`` (allow) unconditionally for any ``coordinator:executor``
+# payload, so the executor-framed deny-message content this class used to
+# pin (no "review-findings" pin, no findings-agent framing, no "dispatch a
+# separate executor" advice, names what it can run) can never render again
+# through this guard: there is no longer a deny envelope to read a reason
+# off. ``TestCodeReviewerDenyMessageByteParity`` above is unaffected and
+# remains the byte-identical pin for the type that stays confined.
+# ---------------------------------------------------------------------------
 
 
 class TestExecutorNoLongerConfinedByThisGuard:
@@ -143,7 +156,19 @@ class TestExecutorNoLongerConfinedByThisGuard:
         assert _verdict(guard.check(_payload(cmd, _REVIEWER_TYPE))) == "deny"
 
 
+# ---------------------------------------------------------------------------
+# Verdict-invariance table -- resolving deny-message TEXT per-effective_type
+# must never itself change the allow/deny VERDICT for either confined type.
+#
+# Executor column updated 2026-08-03 (DR-125, chunk C2): with
 # ``coordinator:executor`` removed from ``_CONFINED_FINDINGS_AGENTS``, this
+# guard (the ONLY thing this table calls -- ``guard.check``, not the full
+# multi-guard pipeline) no-ops unconditionally for executor payloads, so
+# every row that used to deny for executor solely via THIS guard's own
+# confinement now allows. The code-reviewer column is the AC4 load-bearing
+# check: byte-identical to its pre-edit values, proving code-reviewer's own
+# confinement behaviour is untouched by this narrowing.
+# ---------------------------------------------------------------------------
 
 _VERDICT_TABLE = [
     ("git status", "allow", "allow"),

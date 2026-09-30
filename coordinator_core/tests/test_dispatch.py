@@ -92,7 +92,9 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
         assert received == fake_common_dir
 
 
+# ---------------------------------------------------------------------------
 # emit ops return INVALID_PARAMS (-32602) when _origin_worktree absent
+# ---------------------------------------------------------------------------
 
 class TestEmitOpsFailLoudWithoutOriginWorktree:
     """Dispatch layer returns INVALID_PARAMS (-32602) when _origin_worktree is absent.

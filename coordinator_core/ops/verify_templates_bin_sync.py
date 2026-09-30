@@ -123,8 +123,12 @@ _PAIRS: List[Tuple[str, str]] = [
     ("claude-machine-local.sh", "claude-machine-local.sh"),
     ("claude-machine-local.ps1", "claude-machine-local.ps1"),
     # _machine_local.py's canonical source is the TEMPLATE, same as every
+    # other pair now that --fix copies template -> live uniformly -- see
+    # module negative-spec (the old live-canonical special case is retired).
     ("_machine_local.py", "_machine_local.py"),
+    # resolve-coordinator-clone: position-independent shim, byte-identical
     # live<->template by design (it never reads its own BASH_SOURCE). Both
+    # copies are authored identical.
     ("resolve-coordinator-clone", "resolve-coordinator-clone"),
 ]
 
@@ -181,7 +185,17 @@ def main(argv: List[str]) -> int:
     live_bin = _resolve_live_bin_dir()
 
     # An absent templates ROOT is a distinct fact from a per-file TMPL_MISSING
+    # and must not be indistinguishable from it: "this one template hasn't
+    # been authored yet" (per-file, graceful) vs. "the entire templates root
+    # is absent, so nothing was compared" (root-level, almost always a
+    # misresolved plugin_root). Hard-fail BEFORE the per-file loop, in BOTH
+    # modes — including --fix. A --fix run against an absent root does not
+    # repair drift; every pair under a bogus/absent root would spuriously
     # read as TMPL_MISSING (now permanently unfixable — see the per-pair
+    # loop below), masking the real problem (a misresolved plugin_root)
+    # behind five unrelated-looking failures. Bootstrapping a genuinely-new
+    # templates root is a deliberate human `mkdir`, not a side effect of
+    # running this gate.
     if not os.path.isdir(templates_bin):
         print(
             f"TEMPLATES_ROOT_MISSING {templates_bin} (templates root does not exist — "
@@ -208,9 +222,14 @@ def main(argv: List[str]) -> int:
 
         if not live_exists:
             # LIVE_MISSING: template exists, live absent — FIXABLE (the
+            # template is canonical, so --fix installs the live copy from
+            # it). Only branch that creates a directory, and only inside
+            # --fix: the live bin dir itself may not exist yet.
             if mode == "--fix":
                 Path(live_bin).mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(tmpl_path, live_path)
+                # DR-276: declared AFTER the copy lands, matching the
+                # append-integrator-dispositions reference — a report of
                 # what was ACTUALLY written, not an intended surface.
                 declare_write(live_path)
                 print(f"INSTALLED    {live_name} ← templates/bin/{tmpl_name}")

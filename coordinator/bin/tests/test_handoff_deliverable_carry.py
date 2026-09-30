@@ -39,8 +39,15 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: `test_cli_subprocess_*` and the other CLI-invoking
+# cases below spawn a real `sys.executable` child running
+# handoff-deliverable-carry.py because the property under test is the
 # real CLI's stdout/exit-code contract (the `DLVR_ID=`/`INITIATIVE_ID=`
+# eval-consumable assignment lines, and the dropped/divergent-join exit
+# codes) -- no in-process call observes that subprocess-boundary contract.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

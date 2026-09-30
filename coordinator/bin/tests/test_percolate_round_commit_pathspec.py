@@ -69,7 +69,15 @@ def _seen_from_change_lines(dest: "str", change_lines) -> dict:
     return seen
 
 
+# ---------------------------------------------------------------------------
+# Pathspec pre-filtering (docs/plans/2026-08-14-the-publish-round-commits-
+# the-names-it-a.md follow-up): the 100-declined-path deadlock. Fix 2 drops
+# two knowable-before-committing benign-decline classes from the derived
+# pathspec so `scoped-git-commit` is never asked to land a path that cannot.
 # `_filter_commit_pathspec` itself is UNCHANGED by chunk C4 -- only its
+# caller (`_pathspec_from_manifest`, not exercised directly here per this
+# file's own Anti-scope, "do not re-run a real publish to test") changed.
+# ---------------------------------------------------------------------------
 
 
 def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
@@ -286,6 +294,13 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
     assert result.stdout.strip() == pathspec[0]
 
     # Pins the actual regression: an ABSOLUTE pathspec entry still scopes
+    # `git ls-files --deleted` to the right file (git accepts an absolute
+    # pathspec argument fine), but the reported match is ALWAYS CWD-relative
+    # -- never byte-equal to the absolute input that named it. This is
+    # exactly why `commit_pipeline.explicit_stage`'s `p in worktree_deleted`
+    # containment check (comparing its caller's own pathspec string against
+    # this CWD-relative output set) can never succeed for an absolute `p`,
+    # regardless of whether the file is genuinely, unambiguously deleted.
     absolute_form = str(target_file)
     result_absolute = _git_run(
         ["git", "-C", str(repo_root), "ls-files", "--deleted", "--", absolute_form]

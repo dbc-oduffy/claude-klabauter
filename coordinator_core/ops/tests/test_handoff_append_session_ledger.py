@@ -150,7 +150,7 @@ class HappyPathTest(unittest.TestCase):
 
             recs = parse_session_ledgers(new_text)
             self.assertEqual(len(recs), 1)
-            self.assertEqual(recs[0]["session_id"], _AUTHOR_SESSION[-6:])
+            self.assertEqual(recs[0]["session_id"], _AUTHOR_SESSION[:6])
             self.assertEqual(recs[0]["agent_dispatches"], "0")
             self.assertEqual(recs[0]["opus_dispatches"], "0")
 
@@ -203,7 +203,7 @@ class IdempotenceTest(unittest.TestCase):
 
             second = _call(
                 repo,
-                {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "Second"},
+                {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "First"},
             )
 
             self.assertEqual(second["exit_code"], 1)
@@ -211,6 +211,21 @@ class IdempotenceTest(unittest.TestCase):
             self.assertIn("already exists", second["error"])
             after = hpath.read_text(encoding="utf-8")
             self.assertEqual(before, after)
+
+    def test_distinct_summary_for_same_session_is_a_different_row(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+
+            for summary in ("First", "Second"):
+                result = _call(
+                    repo,
+                    {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": summary},
+                )
+                self.assertEqual(result["exit_code"], 0, result)
+
+            recs = parse_session_ledgers(hpath.read_text(encoding="utf-8"))
+            self.assertEqual(len(recs), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +345,7 @@ class BackfillCountsTest(unittest.TestCase):
             self.assertEqual(result["ledger_session_id"], _FOREIGN_SESSION)
 
             recs = parse_session_ledgers(hpath.read_text(encoding="utf-8"))
-            self.assertEqual(recs[0]["session_id"], _FOREIGN_SESSION[-6:])
+            self.assertEqual(recs[0]["session_id"], _FOREIGN_SESSION[:6])
             self.assertEqual(recs[0]["agent_dispatches"], "15")
             self.assertEqual(recs[0]["opus_dispatches"], "2")
 

@@ -243,6 +243,8 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
     )
 
     # CLI exit-code contract: assert-empty is FAIL-LOUD (non-zero on FAIL), the
+    # deliberate opposite of learn-lessons-roots.py's always-exit-0 convention — this
+    # divergence is the entire point of the subcommand (see module docstring).
     drain.resolve_roots = lambda: fixture_roots
     exit_pass = drain.main(["assert-empty", str(self_root)])
     assert exit_pass == 0, f"main(assert-empty, all empty) expected exit 0, got {exit_pass}"

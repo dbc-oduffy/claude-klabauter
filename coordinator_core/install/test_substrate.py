@@ -1349,12 +1349,11 @@ def test_resolve_hook_python_bin_surfaces_resolution_error(monkeypatch, capsys):
 
 # --- C13: forwarder-set gap closed -----------------------------------------
 #
-# docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C13. The four
+# docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C13. The three
 # names the chunk's delta-measure found genuinely missing from the publish
-# allowlist (`measure-amplification-discriminator`, `publish_refusal_record`,
-# `query-work-state`, and `classify-resolver-callers` -- the fourth, added by
-# EM ruling 2026-08-19 after C7 landed that CLI post-dating this chunk body's
-# last write) must resolve identically through BOTH surfaces this chunk
+# allowlist (`measure-amplification-discriminator`, `query-work-state`, and
+# `classify-resolver-callers` -- the last, added by EM ruling 2026-08-19 after
+# C7 landed that CLI post-dating this chunk body's last write) must resolve identically through BOTH surfaces this chunk
 # touches:
 #   - `_derive_agent_helper_target_map` (this module) -- the live-tree
 #     installed-name -> on-disk-target map `exec_cli`'s published-vs-live
@@ -1364,12 +1363,11 @@ def test_resolve_hook_python_bin_surfaces_resolution_error(monkeypatch, capsys):
 #     `publish.py`/`substrate.py` consult (neither carries one itself; see
 #     the chunk body's WHERE-THE-INCLUSION-LIST correction).
 #
-# Regression guard: a future rename/removal of any of the four that is not
+# Regression guard: a future rename/removal of any of the three that is not
 # mirrored in the allowlist should fail this test rather than silently
 # reintroduce the exec_cli-fallback-dependent gap C13 closed.
 _C13_MEASURED_GAP_NAMES = (
     "measure-amplification-discriminator",
-    "publish_refusal_record",
     "query-work-state",
     "classify-resolver-callers",
 )

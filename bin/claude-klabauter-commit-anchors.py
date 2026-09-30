@@ -98,8 +98,16 @@ def _git_common_dir(repo_root: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Session ID resolution
 # Precedence:  COORDINATOR_SESSION_ID → CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID
+# (KS-6, 2026-08-07 — widened to match the canonical
 # coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder; this script
+# runs in coordinator-content-repo's git-hook context and invokes claude-klabauter only via the
+# subprocess command entrypoint, so it keeps a hand-mirrored env-var-only
+# copy rather than importing coordinator_core directly — a change to the
+# canonical ladder must be mirrored here too.)
+# ---------------------------------------------------------------------------
 
 
 def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = None) -> Optional[str]:

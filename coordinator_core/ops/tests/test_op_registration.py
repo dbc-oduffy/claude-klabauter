@@ -72,8 +72,14 @@ import coordinator_core.ipc as ipc
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.benchmarks.budget import resolve_budget
 
+# The original 5 cartography.* ops carried by this file's classification (b)
+# and registered (a) checks — cartography.stack / cartography.count_references
 # are DELIBERATELY excluded here: their absence from authz/classification.py
+# is a separately tracked, deliberately-waived debt item
+# (state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-
+# 52137f1ff6b9.yaml, via authz/registration_quad.py's
 # _KNOWN_UNCLASSIFIED_OPS_DEBT) — folding them into _ALL_OPS here would make
+# test_op_is_classified_compute_only fail on an out-of-scope waiver.
 _CARTOGRAPHY_OPS = (
     "cartography.tree",
     "cartography.file_index",
@@ -87,19 +93,33 @@ _ALL_OPS = _CARTOGRAPHY_OPS + (
     "workflow.scaffold",
     "deferral.detect_orphan_memo",
     "deferral.detect_partial_strangle",
+    # freshness.commit_delta — C4 (docs/plans/2026-09-10-cartography-churn-producer-
+    # and-staleness-registrations.md), the op C3 wired across all five registration
     # surfaces. Folded into _ALL_OPS so (a) registered, (b) COMPUTE_ONLY, and
+    # (d) budget-manifest checks below cover it for free; its "show_top" scope (not
+    # "none"/"common_dir") gets its own dedicated assertion below, matching the
+    # per-scope-value precedent every other non-"none" op in this file already sets.
     "freshness.commit_delta",
 )
 
 # Derived from the authoritative wire-registration source (ipc.OP_KEY_SCOPE,
 # itself sourced from op_scopes._OP_KEY_SCOPE) rather than a hardcoded tuple —
 # a new cartography.* op lands in OP_KEY_SCOPE the same commit it's wired, so
+# this set can't silently drift stale the way the hand-maintained
 # _CARTOGRAPHY_OPS literal above did (defect: cartography.stack /
+# cartography.count_references were registered and scoped but absent from
+# this file's hardcoded op tuple, leaving them with no budget-manifest gate
+# coverage at all — the fix targets the budget-manifest gate specifically;
+# see the classification note above for why they stay out of _ALL_OPS).
 _CARTOGRAPHY_OPS_REGISTERED = tuple(
     sorted(op for op in ipc.OP_KEY_SCOPE if op.startswith("cartography."))
 )
 
+# The budget-manifest gate's op set: every _ALL_OPS entry, plus any
 # cartography.* op wired into OP_KEY_SCOPE that _ALL_OPS doesn't already
+# cover (currently cartography.stack / cartography.count_references) — this
+# is what makes a future cartography op's budget-manifest omission fail loud
+# without also pulling it into the classification/registered checks above.
 _BUDGET_MANIFEST_OPS = _ALL_OPS + tuple(
     sorted(set(_CARTOGRAPHY_OPS_REGISTERED) - set(_CARTOGRAPHY_OPS))
 )
@@ -143,12 +163,20 @@ def test_op_is_registered(op_key):
     assert callable(handler)
 
 
+# ---------------------------------------------------------------------------
 # (b) classification — every op is COMPUTE_ONLY
+# ---------------------------------------------------------------------------
 
 
 # cartography.symbols is DELIBERATELY MUTATING, not an omission: DR-228 § D6's
+# scratch-tier write (params["emit"] writes
+# <target_root>/state/scratch/cartography-symbols/<run_id>/symbols.json),
+# classified 2026-08-20 with the full DR-208 five-question affirmation recorded
 # inline in authz/classification.py. This row asserted COMPUTE_ONLY for every
+# _ALL_OPS entry and so went red the moment that decision landed — the test was
+# the stale side, never the classification. Excluded here and pinned by its own
 # positive twin below, so a silent flip back to COMPUTE_ONLY degrades loudly
+# rather than passing unnoticed.
 _MUTATING_OPS = ("cartography.symbols",)
 _COMPUTE_ONLY_OPS = tuple(op for op in _ALL_OPS if op not in _MUTATING_OPS)
 
@@ -171,8 +199,11 @@ def test_op_is_classified_compute_only(op_key):
     )
 
 
+# ---------------------------------------------------------------------------
 # (c) _OP_KEY_SCOPE — the wire-registration gate
+#     (lesson 2026-07-06-compute-only-op-registration-needs-an-op: an op
 #     absent from _OP_KEY_SCOPE silently degrades to central scope)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("op_key", _CARTOGRAPHY_OPS_REGISTERED)
@@ -275,10 +306,17 @@ def test_freshness_commit_delta_has_show_top_scope():
     )
 
 
+# ---------------------------------------------------------------------------
 # (d) budget-manifest.json — a COMPUTE_ONLY entry per op, at the manifest
+# default UNLESS an AC8 justified override applies (AST-heavy / whole-repo-walk
+# members measured to legitimately exceed the default — see
 # benchmarks/PHASE-0-MEASUREMENTS.md § "AC8 cartography overrides").
+# ---------------------------------------------------------------------------
 
 # AC8 justified overrides (measured min exceeds the 70ms COMPUTE_ONLY default's
+# tolerance band): cartography.tree (whole-repo git ls-files walk + per-file
+# read for loc), cartography.edges (AST-heavy per-file import/call-graph
+# extraction). memo.triage and the remaining cartography ops stay on default.
 _BUDGET_OVERRIDES = {
     "cartography.tree": 105,
     "cartography.edges": 89,
@@ -302,7 +340,11 @@ def test_op_has_budget_manifest_entry(op_key):
     assert budget["tolerance"] == {"kind": "relative", "value": 0.2}
 
 
+# ---------------------------------------------------------------------------
+# (e) command-type dispatch_message smoke — memo.triage end-to-end via the
 #     REAL registry + REAL _OP_KEY_SCOPE (no temp-patching), proving the wire
+#     registration itself, not just the handler in isolation.
+# ---------------------------------------------------------------------------
 
 
 def test_memo_triage_dispatch_message_smoke(tmp_path, monkeypatch):
@@ -405,11 +447,55 @@ def test_workflow_validate_dispatch_message_smoke(tmp_path):
     assert result["error_count"] == 0
 
 
+# ---------------------------------------------------------------------------
+# (i) import-order regression — deliverable.cascade_retract must register
+#     regardless of which of its two mutually-adjacent modules a caller
+#     happens to import first.
+#
+#     Defect (2026-08-06, C1): coordinator_core/ops/cascade_retract.py used
+#     to import `_find_row_spans_in_plan` from
+#     coordinator_core.execute_plan_assemble.close_out_and_stamp, which
+#     itself imports six coordinator_core.ops.* modules at top level.
+#     Importing close_out_and_stamp FIRST (standalone, before anything else
+#     has touched coordinator_core.ops) makes its own
+#     `from coordinator_core.ops.ceremony import git_native` line trigger a
+#     NESTED full `coordinator_core.ops` package init (coordinator_core.ops
+#     hadn't been touched yet) while close_out_and_stamp itself is still
+#     mid-body -- so that nested init's own eager-import of cascade_retract
+#     fails with "cannot import name '...' from partially initialized
 #     module", and ops/__init__.py's registration loop SWALLOWS that
+#     ImportError (prints + continues) rather than raising, so
+#     "deliverable.cascade_retract" silently failed to land in
 #     coordinator_core.ipc._REGISTRY -- with no subsequent explicit
+#     re-import of cascade_retract to self-heal it (this is the shape a
+#     real server startup's bare `import coordinator_core.ops` hits, not the
+#     self-healing shape a script that later re-imports cascade_retract
+#     explicitly would get).
+#
 #     Fix: `_find_row_spans_in_plan`/`_find_row_spans`/`_ROW_START_RE` moved
+#     to the leaf module coordinator_core.execute_plan_assemble.row_spans,
+#     which imports nothing from coordinator_core.ops (directly or
+#     transitively) -- both close_out_and_stamp and cascade_retract import
+#     from that leaf instead of from each other.
+#
+#     This MUST run in a fresh subprocess per order: pytest's own collection
+#     has already imported both modules (and all of coordinator_core.ops)
+#     into this process's sys.modules by the time any test body runs, so an
+#     in-process import-order test would prove nothing.
 #     LAZY-PACKAGE ARMING (2026-08-23): coordinator_core.ops was converted to
+#     lazy registration on 2026-08-22 -- its own module docstring states the
+#     bare package NEVER populates the op-registry. These probes were written
+#     against the prior contract, where package init ran the registration walk
+#     itself, and went red the moment that contract was retired: they were
+#     asserting eager registration in a package that is deliberately not
+#     eager. They are NOT force-importing to dodge the import-cliff budget --
+#     _eager_import_all() is the escape hatch ops/__init__.py exposes for
+#     exactly this "rare full-registration need", and it is what ipc.py's own
 #     registry-miss SAFE FALLBACK reaches. It still swallows a per-module
+#     ImportError (prints + continues), so a reintroduced cycle still drops
+#     the op key and this probe still bites -- the regression these probes
+#     exist to catch is preserved, only its arming is now explicit.
+# ---------------------------------------------------------------------------
 
 _IMPORT_ORDER_PROBE = """
 import sys

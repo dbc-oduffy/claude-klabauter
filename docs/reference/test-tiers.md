@@ -75,6 +75,12 @@ both halves move together. With psutil, a 4-core/15GB container asks for 4 and i
 it absent, the same container asks for 8 and is capped to 4 — over-subscribed 2x, and the residual
 is the fallback's, not the ceiling's.
 
+**Measured on the cloud image:** psutil 7.2.2 imports (Python 3.11.15, pytest-xdist 3.8.0), reporting
+`psutil.cpu_count(logical=False)` = 4 and `psutil.cpu_count()` = 4 — no SMT, so physical equals
+logical — on 15.7 GB. `derive_worker_cap` derives 2. The psutil-absent branch is not the live case
+there; if a future image drops psutil, `default_physical_cores()`'s logical fallback is
+`cloud-em-01`'s to fix, not the ceiling's.
+
 The halving is not a fudge factor: this tier spawns subprocesses per worker (several live
 processes per xdist worker), so one worker per core oversubscribes the CPU several-fold — the
 suite's own behaviour, and therefore true on every platform. `--maxprocesses` is a `min()`, so
@@ -122,6 +128,15 @@ verbatim, as unauthorized Tier-U. Root cause: a marker-filter deselect expressio
 unscoped by `_tier_for_cfg_match`, discharged via `coordinator.local.md`'s R6
 `fast_tier_unscoped_reason`. The wrapped-invocation repro for this was lost/untested at close —
 treat that gap as open if you're relying on the wrapped form, not just the bare one.
+
+## Who runs a full or broad suite
+
+Only the EM. A dispatched subagent never does, nor any subagent of a cloud EM: a dispatch or a
+plan step is not assent, whatever it says. A session the PM addresses directly as EM is the EM,
+whatever brief started it. On a local box the EM runs it under a live `tier-u-grant-cli` grant,
+because peers share the box. In a cloud session the box is the session's own, so the run is the
+EM's call and needs no grant. The guard does not yet see the cloud case; see
+`state/improvement-queue/2026-09-30-tier-u-guard-has-no-cloud-em-carve-out.yaml`.
 
 ## A green suite re-run is not new evidence
 

@@ -227,6 +227,7 @@ def test_an_unclassified_connect_error_goes_cold_LOUDLY(
     noisy = capsys.readouterr().err
     assert "too many open files" in noisy
 
+    # The contrast, in the same test so neither half can rot alone: a
     # CLASSIFIED outcome takes the same cold exit without the diagnostic.
     def _raise_refused(endpoint):
         raise ConnectionRefusedError(errno.ECONNREFUSED, "connection refused")

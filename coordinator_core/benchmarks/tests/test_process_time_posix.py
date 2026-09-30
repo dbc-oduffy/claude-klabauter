@@ -288,12 +288,21 @@ def test_deep_chain_count_is_exactly_prime_eleven(chain_script):
     )
 
 
+# ---------------------------------------------------------------------------
 # AC6 -- the ESRCH seam. NOTE_TRACK is off-limits (C1); a reaped/nonexistent
+# pid drives the same registration-rejection path.
+# ---------------------------------------------------------------------------
 
 
 def test_registering_a_reaped_pid_raises_rather_than_reporting_one_process(monkeypatch):
     _require_darwin()
+    # Darwin-only site (_require_darwin() above; os.waitpid is POSIX-only), so
+    # the splat is inert AT RUNTIME -- review: coordinatorcode-reviewer
     # .ad915a07f1fc080c3 Finding 4, declined. It is not inert to the STANDING
+    # GATE: `test_no_bare_test_tree_spawn` walks the test tree by AST and knows
+    # nothing about platform guards, so deleting the splat reads as a bare
+    # spawn and trips it. Teaching that gate to evaluate `_require_darwin()`
+    # reachability, for one site, costs more than a no-op mapping does.
     proc = subprocess.Popen(["/bin/sh", "-c", "true"], **no_console_passthrough_kwargs())
     reaped_pid = proc.pid
     os.waitpid(reaped_pid, 0)

@@ -155,6 +155,8 @@ def authorship_verdict(start_pid: Optional[int] = None) -> AuthorshipVerdict:
     if _IS_WINDOWS:
         return AuthorshipVerdict(Verdict.UNRESOLVED, reason)
 
+    # POSIX draws the clean/ambiguous line Windows does not: a climb that
+    # reaches the TOP of the process tree with no harness ancestor found
     # (walk-miss:no-parent) is a COMPLETED climb and the only clean HUMAN
     if reason == "walk-miss:no-parent":
         return AuthorshipVerdict(Verdict.HUMAN, reason)

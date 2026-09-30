@@ -10,6 +10,10 @@ commit (D3, ``dispatch.terminal_commit``, built in C10): which chunks
 landed which paths, under which own-report-claimed prefixes, and which
 report file each chunk's own-prefix claim list lives in.
 
+``CommitRequest.expected_branch``: branch the run promised to commit onto;
+null = no promise. Trap: optional forever — pre-field v1 markers exist on
+disk, so ``parse_marker`` reads it with ``payload.get``.
+
 This module is pure — no I/O, no subprocess, no filesystem read — so C10
 and C12 can both build against it without pulling in the emitter or the
 terminal-commit op.
@@ -25,6 +29,51 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Optional
+
+import yaml
+
+from coordinator_core.frontmatter.primitives import split_frontmatter
+
+# The scaffolded sentinel `plan.schema.json` excludes from `deliverable_id`
+# by negative lookahead -- a plan still carrying it has no id yet.
+_DELIVERABLE_ID_PLACEHOLDER_PREFIX = "dlv-placeholder-replace-with"
+
+
+def valid_deliverable_id(value: object) -> Optional[str]:
+    """The stripped ``value`` when it is a ``dlv-``-prefixed string that is
+    not the scaffolded placeholder, else ``None``."""
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate.startswith("dlv-"):
+        return None
+    if candidate.startswith(_DELIVERABLE_ID_PLACEHOLDER_PREFIX):
+        return None
+    return candidate
+
+
+def plan_deliverable_id(plan_text: str) -> Optional[str]:
+    """The plan's top-level frontmatter ``deliverable_id`` when valid, or
+    ``None``.
+
+    Fail-soft in every direction: no frontmatter, unparseable YAML, a
+    non-mapping document, or an absent, null, non-string, empty,
+    non-``dlv-`` or placeholder id all return ``None``. A commit prompt
+    naming no id costs one hand-written ``disposition_ref``; one naming a
+    placeholder stamps unrewritable shared history with an id that joins to
+    nothing.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    return valid_deliverable_id(doc.get("deliverable_id"))
+
 
 # The label an executor report uses to list files it created under a
 # declared prefix surface — the terminal commit (D3) trusts only files a
@@ -75,6 +124,7 @@ class CommitRequest:
     session_id: Optional[str] = None
     repo_root: Optional[str] = None
     plan_path: Optional[str] = None
+    expected_branch: Optional[str] = None
     version: int = 1
 
 
@@ -121,6 +171,7 @@ def render_marker(req: CommitRequest) -> Optional[str]:
         "session_id": req.session_id,
         "repo_root": req.repo_root,
         "plan_path": req.plan_path,
+        "expected_branch": req.expected_branch,
     }
     body = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return f"{MARKER_PREFIX}{body}"
@@ -163,6 +214,7 @@ def parse_marker(script_text: str) -> Optional[CommitRequest]:
             session_id=payload["session_id"],
             repo_root=payload["repo_root"],
             plan_path=payload["plan_path"],
+            expected_branch=payload.get("expected_branch"),
             version=payload["version"],
         )
     except (KeyError, TypeError) as exc:

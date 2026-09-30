@@ -161,8 +161,13 @@ from coordinator_core.ops.session.guard_settings_integrity import (
 
 _COORDINATOR_PLUGIN_PREFIX = "coordinator@"
 
+# Marker re-arm window: the marker this probe writes (see `_render...` below,
+# schema shared with `guard_settings_integrity._read_kill_switch_marker`)
 # expires quickly on purpose -- this marker records a DETECTED BREAKAGE, not
+# an operator's deliberate long-lived opt-out, so it should escalate back to
 # the loud MALFORMED-adjacent "EXPIRED" banner soon if nobody has looked at
+# it, rather than sitting silent behind the one-line not-expired router for
+# months the way an operator-armed marker legitimately can.
 _REARM_EXPIRY_DAYS = 7
 
 _SENTINEL_NAME = ".coordinator-content-root-last-seen"
@@ -300,9 +305,22 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
         content_root = os.environ.get(COORDINATOR_CONTENT_ROOT_ENV_KEY, "")
         is_empty = not content_root or not os.path.isdir(content_root)
 
+        # Classify BEFORE writing the sentinel, not after. `resolved_ok=false`
         # is the EXPECTED steady state on a `--plugin-dir` or marketplace-live
+        # machine (see the two carve-outs below), so a sentinel carrying only
+        # that line reads as a fault on a perfectly healthy box — it has
+        # already cost one investigation that got as far as auditing a
+        # stood-down kill-switch marker before the carve-outs explained it.
         # The sentinel is a human-facing breadcrumb; recording the RESOLUTION
         # without the CLASSIFICATION is what made it misleading.
+        #
+        # Both discriminators are the same cheap probes the carve-outs run
+        # (`is_inline_install`: a `.coordinator-content-root` read plus one live `isdir`;
+        # `_is_marketplace_install_live`: the harness's own installed-plugins
+        # registry plus a stat) — computed once here and REUSED below, never
+        # called twice, so this preserves the module's no-subprocess
+        # "cheap by construction" contract. Neither runs at all when the
+        # content root resolved, which is the majority path.
         inline_install = is_inline_install(resolved_config_dir) if is_empty else False
         marketplace_live = (
             _is_marketplace_install_live(resolved_config_dir)
@@ -329,12 +347,49 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
         if not is_empty:
             return ""
 
+        # Discriminator: an inline (`--plugin-dir`) dev install serves hook
         # delivery live from its clone (`${CLAUDE_PLUGIN_ROOT}`/CLAUDE_PLUGIN_ROOT
+        # resolution) and never touches `gen_settings_hooks`/
         # COORDINATOR_CONTENT_ROOT at all — an empty/unresolvable content root
         # on such a machine is the EXPECTED healthy shape (see
+        # `gen_settings_hooks.generate()`'s own "skipped (plugin delivery
+        # already live)" early-return), not a broken one. Reuses
+        # `guard_settings_integrity.is_inline_install` verbatim — the SAME
+        # carve-out that module's own clobber lens and reconciliation lens
+        # already apply twice for `--plugin-dir` machines, not a third
+        # independently-derived check.
+        #
+        # NARROW carve-out, not a general disarm: `is_inline_install` is a
+        # LIVE existence probe — it re-verifies `<content-root>/coordinator`
+        # exists on disk RIGHT NOW, not merely that a `.coordinator-content-root` file was
+        # once written. A machine whose actual coordinator clone has since
+        # been destroyed (the true-positive shape this probe exists to
+        # catch — see this dispatch's report for the confirmed 2026-07-31
+        # incident) still fails this check and falls through to the arm
+        # path below; a stale `.coordinator-content-root` pointer to a now-missing directory
+        # does NOT get read as "healthy".
+        #
+        # Deliberately NOT `gen_settings_hooks.positive_marker_path()`
         # (`.coordinator-hooks-enabled`): that marker's PRESENCE means the
         # OPPOSITE of what's needed here — it records that a machine has
+        # opted INTO settings.json-baked hook generation, i.e. that it DOES
         # depend on COORDINATOR_CONTENT_ROOT resolving. Treating its
+        # presence as "safe to suppress" would misclassify exactly the
+        # true-positive shape (a previously-generating machine whose content
+        # root just broke).
+        #
+        # Deliberately NOT `guard_settings_integrity._plugin_side_reachable`/
+        # `detect_hook_delivery_duplication`: both call
+        # `resolve_content_root()`, whose dev/passthrough registry rungs can
+        # shell out to `machine-local get` on a cache miss — the exact
+        # subprocess-per-SessionStart cost this module's own docstring rules
+        # out (see "Cheap by construction" above).
+        #
+        # This check covers the inline `--plugin-dir` shape ONLY. A pure
+        # OSS/marketplace install carries no `.coordinator-content-root` at all and is
+        # covered by `_is_marketplace_install_live` immediately below —
+        # the two branches are disjoint by construction, and the OSS one
+        # is the majority shape, so neither may be dropped as redundant.
         if inline_install:
             return ""
 

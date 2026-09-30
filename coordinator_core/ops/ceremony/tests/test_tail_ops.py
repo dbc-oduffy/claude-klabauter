@@ -320,7 +320,11 @@ def test_unregistered_op_key_is_clean_failure(tmp_path):
     assert result["failed"] == ["fleet.does_not_exist: fleet.does_not_exist not registered"]
 
 
+# ---------------------------------------------------------------------------
 # refresh_roadmap_callout (STEP_2_75, C9 wiring-gap fix; its former
+# render_handoff_tracker sibling was retired 2026-08-14, see
+# docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md C2)
+# ---------------------------------------------------------------------------
 
 
 def test_refresh_roadmap_callout_no_consumed_handoffs_is_clean_skip(tmp_path):

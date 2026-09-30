@@ -1930,14 +1930,26 @@ def _write_holder_meta(repo: Path, sid: str, meta: dict) -> Path:
 
 
 def _write_touched(repo: Path, sid: str, lines: list[str]) -> Path:
-    """Writes `<sessions-dir>/<sid>/touched.txt` — the claim_index substrate
+    """Writes `<sessions-dir>/<sid>/touch-record.jsonl` — the claim_index substrate
     `_claim_scope_overlap` now joins against, replacing this test class's
-    old transcript-`recent_paths` fixtures. Line format mirrors
-    `coordinator_core/session/tests/test_claim_neighbours.py`'s own
-    `_touch_line` helper: `"<verb> <iso-ts> <path>"`."""
+    old transcript-`recent_paths` fixtures. Lines are `"<verb> <iso-ts>
+    <path>"` (`_touch_line`), appended through `touch_record.append_event`
+    exactly as `test_claim_neighbours.py::_session_touched` does."""
+    from coordinator_core.session import scope, touch_record
+
     sdir = repo / ".git" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "touched.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    sink = str(sdir / scope._TOUCH_RECORD_FILENAME)
+    for line in lines:
+        verb, ts, path = scope.parse_touch_event(line)
+        touch_record.append_event(
+            sink,
+            session_id=sid,
+            agent_id=None,
+            verb=verb,
+            path=path,
+            timestamp=ts.timestamp() if ts is not None else None,
+        )
     return sdir
 
 
@@ -2161,8 +2173,12 @@ class TestHolderEvidence:
         assert grant["verdict"] == "denied"
         assert grant["holder_live"] is True
         assert grant["holder"] == "peer-sid"
-        assert grant["liveness_basis"] is None
-        assert grant["last_activity_age_sec"] is None
+
+        from coordinator_core.session.holder_evidence import holder_evidence
+
+        evidence = holder_evidence("peer-sid", repo, want_activity=True)
+        assert evidence["liveness_basis"] is None
+        assert evidence["last_activity_age_sec"] is None
 
     def test_corrupt_meta_json_sets_evidence_error_verdict_unchanged(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
@@ -2268,13 +2284,13 @@ class TestHolderEvidence:
         resolved_empty = holder_evidence("s-any", repo, scope=[], want_activity=True)
         assert resolved_empty["scope_overlap"] is False
 
-    def test_artifact_path_bridges_a_handoff_via_deliverable_id(self, tmp_path, monkeypatch):
+    def test_artifact_path_bridges_a_handoff_via_governing_plan_stamp(self, tmp_path, monkeypatch):
         """AC2 via holder_evidence's `artifact_path` shape: a handoff
         declares no `scope:` of its own — the caller passing `artifact_path`
         (its own claimed handoff) routes `scope_overlap` through
-        `claim_neighbours.find_neighbours()`, which bridges via
-        `deliverable_id` to the plan carrying the same id and uses THAT
-        plan's `scope:`. This is the exact case that read `None` for every
+        `claim_neighbours.find_neighbours()`, which bridges via the
+        handoff's `governing_plan:` stamp to that plan and uses ITS
+        `scope:`. This is the exact case that read `None` for every
         handoff before C3 (module docstring) — a live claimant of the
         bridged path now reads `True`."""
         repo = tmp_path / "repo"
@@ -2284,14 +2300,13 @@ class TestHolderEvidence:
         (plan_dir / "bridge-plan.md").write_text(
             "---\n"
             "title: bridge plan\n"
-            "deliverable_id: dlv-shared-thing-abc123\n"
             "scope:\n"
             "  - state/handoffs/touched.md\n"
             "---\n\n# Plan\n",
             encoding="utf-8",
         )
         handoff_path = _seed_handoff_with_fields(
-            repo, "bridge-handoff.md", 'deliverable_id: "dlv-shared-thing-abc123"\n'
+            repo, "bridge-handoff.md", "governing_plan: docs/plans/bridge-plan.md\n"
         )
         _write_holder_meta(repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()})
         _write_touched(repo, "peer-sid", [_touch_line("T", "state/handoffs/touched.md")])
@@ -4856,6 +4871,53 @@ class TestSplitArtifactArgsBraceExpansion:
             "C:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-content-repo-em-"
             "your-44-is-right-my-8-was-wrong-and-correction-2-does-not-hold.md",
         ]
+
+
+class TestBraceExpansionFanOutCap:
+    """Both `split_artifact_args` copies (pickup_assemble for apply/drop,
+    pickup_brief for brief_multi) cap total expansion and fail loud."""
+
+    @pytest.mark.parametrize("mod", [pa, pb])
+    def test_multi_brace_over_cap_raises(self, mod):
+        raw = "p-{a,b,c,d}-{a,b,c,d}-{a,b,c,d}-{a,b,c,d}.md"  # 4^4 = 256
+        with pytest.raises(mod.ArtifactFanOutError):
+            mod.split_artifact_args(raw)
+
+    @pytest.mark.parametrize("mod", [pa, pb])
+    def test_cap_aborts_before_materialising_full_product(self, mod):
+        raw = "x" + "{a,b,c,d,e,f,g,h,i,j}" * 30  # 10^30 if expanded
+        with pytest.raises(mod.ArtifactFanOutError):
+            mod.split_artifact_args(raw)
+
+    @pytest.mark.parametrize("mod", [pa, pb])
+    def test_total_across_and_segments_is_capped(self, mod):
+        seg = "d/{" + ",".join(f"f{i}" for i in range(40)) + "}.md"
+        assert len(mod.split_artifact_args(seg)) == 40
+        with pytest.raises(mod.ArtifactFanOutError):
+            mod.split_artifact_args(f"{seg} AND {seg}")
+
+    @pytest.mark.parametrize("mod", [pa, pb])
+    def test_exactly_at_cap_is_allowed(self, mod):
+        n = mod.MAX_EXPANDED_ARTIFACTS
+        seg = "d/{" + ",".join(f"f{i}" for i in range(n)) + "}.md"
+        assert len(mod.split_artifact_args(seg)) == n
+
+    def test_brief_cli_over_cap_exits_usage_without_briefing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+        calls = []
+        monkeypatch.setattr(pb, "brief", lambda *a, **k: calls.append(a))
+
+        rc = pb.main(["brief", "p-{a,b,c,d}-{a,b,c,d}-{a,b,c,d}-{a,b,c,d}.md"])
+
+        captured = capsys.readouterr()
+        assert rc == pb.EXIT_USAGE
+        assert calls == []
+        assert captured.out == ""
+        assert "expands to more than" in captured.err
 
 
 

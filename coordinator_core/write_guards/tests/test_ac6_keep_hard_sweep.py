@@ -59,8 +59,23 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BASELINE = "6277a0550"
 
+# AC6 asks "did the CENSUS touch a keep-hard guard?", not "did anyone touch
 # it on this shared branch?". A plain _BASELINE..HEAD range sweep catches
+# every commit landed by every concurrent session sharing this tree over
+# that window -- including unrelated plans' chunks -- and goes red on any of
+# them touching a keep-hard module's path for reasons that have nothing to
+# do with the census. (Observed: 50fb58816, "C9b: import diet on nine
 # write_guards modules", a pure import-deferral from the UNRELATED
+# 2026-08-06-windows-hot-path-less-work-per-interpreter.md plan, touched
+# guard_doctrine_surface_edits.py and made a naive range sweep fail here.)
+#
+# So: identify the census's OWN commits by their recorded `disposition_ref`
+# shas on this plan's spine (docs/plans/2026-08-06-apply-guard-class-census.md,
+# `- id: C<n>` entries), not by a subject-line pattern or a raw range. Diff
+# each keep-hard module against ONLY that fixed commit set. A future reader
+# tempted to simplify this back to a plain range sweep: don't -- that
+# reintroduces false reds from any other session's concurrent, unrelated
+# commits on this same branch.
 _CENSUS_COMMITS = (
     "f3ca180e6",
     "679ea50f0",
@@ -96,6 +111,8 @@ _WRITE_KEEP_HARD = {
 }
 
 # --- bash_guards: (band, fail_closed, advisory_value); NO_CONTENT_DIFF for
+# every entry except the two named message-text exceptions, and the
+# EM-ruled destructive-action module (class-stability only, diff allowed).
 _BASH_KEEP_HARD_NO_DIFF = {
     "block_subagent_commit.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_stash_destruction.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),

@@ -81,6 +81,7 @@ def resolve(
     with open(log_file, encoding="utf-8") as fh:
         content = fh.read()
 
+    # wc -l semantics: count newline characters, not "lines" in the Pythonic
     # sense — a file with N newline-terminated lines has TOTAL_LINES == N.
     total_lines = content.count("\n")
     if line_number > total_lines:

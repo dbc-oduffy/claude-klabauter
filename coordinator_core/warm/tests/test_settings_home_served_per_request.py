@@ -91,8 +91,14 @@ def test_no_caller_at_all_is_unaffected(monkeypatch, tmp_path):
     assert result["result"] == ambient_home
 
 
+# ---------------------------------------------------------------------------
 # VERIFY-AT-ENTRY (plan § C1's own contract, landing in C2's file because the
+# machinery is `server.py`'s). The borrow's `finally` restore covers every
+# reader that lives and dies inside the task; it does not cover one that
 # OUTLIVES the task boundary, nor a restore that never runs at all. A pooled
+# worker is REUSED, so a leaked home is inherited by whichever caller lands on
+# it next -- silently, in the direction that disarms guards.
+# ---------------------------------------------------------------------------
 
 
 def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tmp_path):

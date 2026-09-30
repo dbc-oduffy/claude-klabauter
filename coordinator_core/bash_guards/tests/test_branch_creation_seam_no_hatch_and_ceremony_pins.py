@@ -51,10 +51,16 @@ def _advisory_ctx(out):
     return hso["additionalContext"]
 
 
+# ---------------------------------------------------------------------------
+# AC3 helpers -- see TestAC3NoHatch.test_override_key_absent_from_guard_
+# module_source for why these two checks replace a single raw substring
 # scan (that scan tripped on a REQUIRED negative-spec docstring paragraph;
+# see docstring on the test method itself).
+# ---------------------------------------------------------------------------
 
 #: A hatch-shaped env-var key: COORDINATOR_(ALLOW|OVERRIDE|DISABLE)_<rest>.
 #: Matches the retired COORDINATOR_OVERRIDE_BRANCH and any future sibling
+#: of the same shape.
 _HATCH_KEY_RE = re.compile(r"COORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+")
 
 
@@ -191,6 +197,10 @@ def _hazard_repo_by_default(monkeypatch):
 
 class TestAC3NoHatch:
     # C1 flipped CONFINEMENT_DENY -> ADVISORY_REWRITE in 2ac049c5b (C14b,
+    # per DR-277 "guards are advisory by default"); these two tests still
+    # pin AC3's real guarantee -- the retired env-prefix hatch does not let
+    # a caller escape the guard's notice -- now expressed against the
+    # advisory envelope instead of a deny.
     def test_env_prefix_override_still_advises(self):
         out = c1.check(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
         _advisory_ctx(out)
@@ -322,7 +332,9 @@ class TestAC5CeremonyNonRegression:
         assert c1.check(_payload("git checkout -b work/some-host/2026-08-01")) is None
 
 
+# ---------------------------------------------------------------------------
 # AC9 -- no branch-DATE-vs-current-date COMPARISON in C1 specifically.
+# ---------------------------------------------------------------------------
 
 
 class TestAC9NoDateComparisonInC1:

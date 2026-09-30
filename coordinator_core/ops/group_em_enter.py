@@ -432,6 +432,12 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     nomination_value = nomination_outcome[0]
 
     # ORDER IS LOAD-BEARING: Group-EM, then roster, then digest. A REFUSED Group-EM --
+    # `claimed` false, whether the incumbent is live or dead -- stops here, before the
+    # roster leg even runs, not just before the digest. `send_pass.build_send_digest`
+    # arms each emitted peer's cooldown as it emits; a session with no standing to hold
+    # the Group-EM must not burn that throttle state on peers it had no right to offer.
+    # Roster and digest are reported ABSENT with a reason, distinguishable from "ran and
+    # found nothing" -- never an empty list, never a partially-built digest.
     group_em_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
 
     if group_em_refused:

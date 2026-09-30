@@ -29,7 +29,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+# The racer HOLDS after acquiring. A winner that exits immediately would be a
 # CONFIRMED-DEAD holder, and the next racer would correctly take the lock
+# over -- which is the crash-recovery path, not the race the guarantee is
+# about. Every racer must be alive at once for this to test atomicity.
 _RACER = textwrap.dedent(
     """
     import json, sys, time
@@ -65,7 +68,9 @@ class TestKeying:
 
 class TestAcquireRelease:
     def test_first_acquire_wins_second_loses(self, repo):
+        # A LIVE holder pid: this process's own. A fabricated pid reads as
         # CONFIRMED-DEAD and is correctly taken over, which would test the
+        # crash path instead of the mutex.
         live = os.getpid()
         first = lock.acquire(repo, session_id="a", pid=live)
         assert first.acquired

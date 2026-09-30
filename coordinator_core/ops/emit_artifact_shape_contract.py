@@ -391,10 +391,15 @@ CONTRACT_VERSION = "12.0.0"
 
 GENERATES = []
 
+# Env var read by main() to locate the coordinator-content-repo coordinator/ root (schemas/ input,
+# artifact-shape-contract/ default output). Set by the DoE-side polyglot trampoline,
+# which computes this from its own __file__ location (bin/../ = coordinator/) before
 # calling main(argv) — mirrors how the JS oracle derives COORDINATOR from __dirname.
 COORDINATOR_ROOT_ENV = "EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT"
 
+# Output-dir override env var — literal name preserved from the JS oracle
 # (schema.js line 56: ARTIFACT_CONTRACT_OUT_DIR) so existing test tooling that sets
+# this var to redirect output to a tmp dir keeps working unchanged.
 OUT_DIR_ENV = "ARTIFACT_CONTRACT_OUT_DIR"
 
 
@@ -525,8 +530,33 @@ def schema_to_json_schema(schema_name: str, schema: dict, src_file: str) -> dict
     return json_schema
 
 
+# ---------------------------------------------------------------------------
+# Cross-type liveness mapping (first-class contract data)
+# ---------------------------------------------------------------------------
 # Transcribed verbatim from schema.js LIVENESS_MAPPING (lines 241-408), itself
+# transcribed from bin/query-records.js liveness() + canonical-artifact-shapes.md
+# § The Cross-Type Liveness Predicate. This is the forward seam for tc-5: example-retrieval-repo
+# derives its LIVE/BLOCKED/DONE derivation FROM this published mapping — it does NOT
+# re-read query-records.js.
+#
+# C8b dedup (2026-07-27, plan-line-item-resolution-model): this table used to be a
+# second hand-maintained copy of the SAME per-status LIVE/BLOCKED/DONE answers that
+# coordinator_core.ops.records_query.liveness() computes at runtime — the "verbatim
+# transcribed from ... liveness()" note above is the tell that it was always meant
+# to follow that function, not drift independently alongside it. The per-status
+# "mapping"/"axes" leaf VALUES below are now derived by calling ``liveness()``
+# directly (via ``_derive_status_mapping``/``_derive_axis_mapping`` below) rather
+# than re-typed as literals, so the two representations cannot silently disagree
+# again. Direction chosen deliberately: this contract-emitter module imports FROM
+# records_query (the runtime engine, and the historically-original source per the
+# transcription note above), not the reverse — records_query is a leaner,
+# lower-level module (no schema-loading/JSON-Schema-translation machinery) and
+# stays free of any dependency on this publishing/emission surface.
 # The richer per-type STRUCTURE (combination_rule, axis/axes, note, default,
+# spec references) stays hand-authored here — only the leaf status→result
+# answers are mechanically derived; declarative shape and code-branch shape are
+# different questions than the values a set of test inputs would reproduce.
+# ---------------------------------------------------------------------------
 
 
 def _derive_status_mapping(record_type: str, statuses: List[str]) -> dict:
@@ -537,9 +567,18 @@ def _derive_axis_mapping(record_type: str, field: str, values: List[str]) -> dic
     return {value: _records_liveness({field: value}, record_type) for value in values}
 
 
+# Explicit display-order tuples for the handoff axes (status, deployment_state).
 # HANDOFF_TERMINAL_STATUS / HANDOFF_TERMINAL_DEPLOYMENT (lifecycle_constants,
+# the SSOT) are unordered frozensets, but this contract is a vendored,
+# byte-identity-checked artifact (DoE's test_artifact_shape_contract_freshness.py
+# regenerates and diffs against a committed bundle) — a `sorted()` derivation
+# would silently reorder consumer-facing bytes on any future Python/hash-seed
+# change with no version bump. Order is therefore hand-authored here once, and
+# checked against the SSOT below rather than trusted to stay in sync silently.
 _HANDOFF_STATUS_DISPLAY_ORDER: tuple[str, ...] = ("claimed", "consumed", "superseded")
 
+# deployment_state's display order additionally carries the three live
+# (non-terminal) values, which have no SSOT constant — only the terminal tail
 # is checked against HANDOFF_TERMINAL_DEPLOYMENT.
 _HANDOFF_DEPLOYMENT_LIVE_DISPLAY_ORDER: tuple[str, ...] = ("awaiting_gate", "ready_to_fire", "in_flight")
 _HANDOFF_DEPLOYMENT_TERMINAL_DISPLAY_ORDER: tuple[str, ...] = ("shipped", "continued", "closed", "abandoned")
@@ -623,7 +662,14 @@ LIVENESS_MAPPING: dict = {
             "combination_rule": "single-axis",
             "axis": "status",
             "note": "deployment_state is IGNORED for plan (plans have no deployment_state).",
+            # Derived like its single-axis siblings below (2026-07-27, superseding the
+            # prior literal-dict holdout): coordinator-content-repo coordinator/tests/
+            # test_plan_status_enum_parity.py now cross-checks this mapping's KEYS
+            # against plan.schema.json's status enum by importing this module and
             # reading LIVENESS_MAPPING directly (value-based), rather than
+            # regex-parsing a literal mapping block from this file's source text —
+            # so a derived-call shape here no longer breaks that cross-repo parity
+            # check the way a bare regex match on a literal dict would have.
             "mapping": _derive_status_mapping(
                 "plan",
                 ["draft", "reviewed", "approved", "blocked", "executing", "landed", "implemented", "closed_partial", "deferred", "abandoned", "superseded"],
@@ -703,7 +749,19 @@ LIVENESS_MAPPING: dict = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Injected sub-shapes (NOT schemas/*.yaml|*.schema.json artifact types)
+# ---------------------------------------------------------------------------
+# Reusable cross-cutting shapes that emitted fleet records EMBED (via $ref), as
+# opposed to the artifact TYPES generated from schemas/. Coordinator owns the
+# canonical shape (ratified tri-plane boundary: contract-lives-in-coordinator
+# polarity) and publishes it here for the fleet to vendor; coordinator itself
+# writes no files of this shape, so it is NOT a schemas/ entry and is NOT
+# counted in schema_count. PascalCase key distinguishes sub-shapes from the
 # kebab-case artifact types. Transcribed verbatim from schema.js SUB_SHAPES
+# (lines 423-556).
+# Spec backlink: cross-repo/inbox/2026-07-03-add-provenance-envelope-to-artifact-contract.md
+# ---------------------------------------------------------------------------
 
 SUB_SHAPES: dict = {
     "ProvenanceEnvelope": {
@@ -737,7 +795,10 @@ SUB_SHAPES: dict = {
                                 "type": "object",
                                 "properties": {
                                     "stream": {"type": "string"},
+                                    # SafeInt bounds, as the cockpit envelope
+                                    # emits them (Zod z.number().int() clamps to
                                     # JS MIN/MAX_SAFE_INTEGER). Parity is byte-
+                                    # equal, so these must be carried here too.
                                     "change": {
                                         "type": "integer",
                                         "minimum": -9007199254740991,
@@ -823,6 +884,7 @@ SUB_SHAPES: dict = {
             },
             {
                 # (iv) well-formedness guard, UNCONDITIONAL on repo (2026-07-14 hardening): a
+                # present entity_anchor must have non-empty kind AND value, regardless of repo.
                 "if": {
                     "properties": {"entity_anchor": {"type": "object"}},
                     "required": ["entity_anchor"],
@@ -990,8 +1052,11 @@ def _emit(coordinator_root: str) -> int:
             return 1
     defs.update(copy.deepcopy(SUB_SHAPES))
 
+    # Rewrite $id-style cross-schema $refs into their bundled #/$defs/<name> location
     # now that the full registered-name set (artifact types + hoisted + SUB_SHAPES)
+    # is known. Must run after both merges above — a ref naming a hoisted-only or
     # SUB_SHAPES-only def would false-negative as "unregistered" if run earlier.
+    # shell-doc-ok: quotes real JSON-Schema `$id`/`$defs`/`$ref` pointer syntax.
     ref_rewrite_error = _rewrite_cross_schema_refs(defs)
     if ref_rewrite_error is not None:
         print(
@@ -1018,6 +1083,7 @@ def _emit(coordinator_root: str) -> int:
     out_file = os.path.join(out_dir, "artifact-shape-contract.schema.json")
     with open(out_file, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n")
+    # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(out_file)
 

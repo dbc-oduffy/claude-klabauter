@@ -599,7 +599,15 @@ def test_cross_repo_boolop_or_str_path_home_is_exempt(tmp_path):
     assert engine.find_bare_home_or_chains() == []
 
 
+# ---------------------------------------------------------------------------
+# C5 -- `rung_order`: subsequence test against the master ordering
 # CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home(). Ladder-kind-agnostic --
+# no fixture here branches on bootstrap-vs-contents kind before scoring
+# order. Spec: `docs/plans/2026-08-07-home-resolution-gate-family-reference-
+# rule.md`, `## Tasks` / `- id: C5`; transcribed from
+# `coordinator-content-repo@coordinator/docs/wiki/portability-gates-spec.md` spec_version
+# 1.3.0 Home-resolution gate family (read at `coordinator-content-repo@9e0fb5c44`).
+# ---------------------------------------------------------------------------
 
 
 def test_rung_order_transposed_rungs_is_reported(tmp_path):
@@ -1084,7 +1092,17 @@ def test_rung_order_cross_branch_ladder_splice_false_positive_known_gap(tmp_path
     assert len(findings) == 1
 
 
+# ---------------------------------------------------------------------------
+# C3 -- example-game-repo form 2: probe-then-guard functions. Spec:
+# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C3 /
+# AC3. Reduced (not verbatim -- no live read access to
+# example-game-workbench-repo from this session) reconstruction of example-game-repo's
+# `scripts/_setup_routing.py::_claude_home` per the plan's own C-pre census
+# description (task C3 body, and the "Gap 1 and Gap 2 reproduce" table): a
 # single-level `claude_home = os.environ.get('CLAUDE_HOME', ...)` probe,
+# then `if claude_home:` with a multi-statement body ending in a valued
+# `return`, then a post-guard rung two statements past the guard.
+# ---------------------------------------------------------------------------
 
 
 def test_c3_probe_then_guard_relaxed_body_is_clean_for_bare_or(tmp_path):

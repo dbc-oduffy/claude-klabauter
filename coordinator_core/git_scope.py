@@ -95,13 +95,26 @@ REPO_SCOPING_ENV_VARS = (
 )
 
 #: Tri-state probe verdicts. PROBE_NO and PROBE_UNKNOWN are DIFFERENT claims and
+#: must never render as the same sentence: NO asserts the target answered and
+#: the answer was negative; UNKNOWN asserts only that this process failed to
+#: find out, and says nothing whatever about the target.
 PROBE_YES = "yes"
 PROBE_NO = "no"
 PROBE_UNKNOWN = "unknown"
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+#: The single dial for every probe in this module, and the only one — no caller
+#: passes a `timeout=`. Every call here is a local object-database read against
+#: an already-resolved path, measured at 26.9ms for `git -C <repo> rev-parse
+#: HEAD` on the reference box (DR-344 § 4), so 2.0 is the same clamp value
 #: `ipc.py :: CEREMONY_BUDGET_SECS` holds an entire op to. A probe that cannot
+#: answer a local object-database question inside a whole ceremony's budget is
+#: an UNKNOWN, not something to wait on.
+#:
+#: Negative-spec: this number may be lowered, never raised (DR-349 § 3). A site
+#: that cannot live inside it is a defect report about that site, not a case for
+#: widening the dial for every other caller.
 FOREIGN_REPO_GIT_TIMEOUT_SECONDS = 2.0
 
 _UNUSABLE_REASON_MEMO: "dict[tuple[str, int], Optional[str]]" = {}

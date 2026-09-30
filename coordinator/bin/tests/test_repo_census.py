@@ -111,6 +111,7 @@ def test_cross_reference_counts_distinct_files():
         data = json.loads(out)
         xref = {row["module"]: row for row in data["cross_references"]["python"]}
         # pkg.util is referenced from 2 DISTINCT files (main.py, other.py) even
+        # though main.py imports it twice (line-count 3 in the edges table).
         entry = xref.get("pkg.util")
         assert entry is not None, "pkg.util missing from cross-references: {}".format(xref)
         assert entry["referencing_files"] == 2, "expected 2 distinct referencing files, got {}".format(entry["referencing_files"])

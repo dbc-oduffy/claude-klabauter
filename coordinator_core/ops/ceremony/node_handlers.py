@@ -97,7 +97,25 @@ STEP_3_5B = "step_3.5b"
 STEP_4A = "step_4a"
 STEP_4B = "step_4b"
 
+# ---------------------------------------------------------------------------
+# Node-type classification — canonical map for the wsc ceremony
+# ---------------------------------------------------------------------------
+# Source: node-map § Step-by-Step Node-Type Table + Count Summary (corrected).
+# 39 D / 8 J / 1 F / 1 B / 0 X = 49 pipeline steps.
+#
+# STEP_2B/STEP_4B reclassified F->D 2026-09-20 (bug-blitz audit of
+# state/bug-backlog/2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml):
+# grep across coordinator_core found no wsc_commit transcriber for either
+# step_id outside this module — same disk-first / no-fill-target shape
 # STEP_1B/STEP_2_4B had before their Option B reclassification (memo
+# 2026-07-08). STEP_2B's own slot description ("plan doc is updated in
+# place") already named the disk-first authorship; STEP_4B's narrative is
+# likewise EM-authored straight to disk with no op-side payload consumer.
+#
+# Negative-spec: step_4c is documented in the node-map table as a J-labelled
+# meta-step that describes the EM's flag-severity-triage practice (CLAUDE.md
+# § Flag Severity), but it is NOT counted in the 49 pipeline steps and is NOT
+# emitted as a pipeline node.  Do NOT add it here.
 
 _STEP_NODE_TYPES: dict[str, str] = {
     STEP_0:       "D",
@@ -202,7 +220,19 @@ J_QUESTIONS: dict[str, str] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# F-slot corpus (1 authoring slot)
+# ---------------------------------------------------------------------------
+# Slot descriptions sourced from node-map § Step-by-Step Node-Type Table.
+# filled="" until the EM authors the prose during the EM turn.
+#
+# These are irreducible EM prose slots — no bounded-choice framing applies.
+# The handler DOES NOT author prose (anti-scope).
+#
+# Negative-spec: STEP_2B/STEP_4B are NOT here — reclassified F→D (see
 # _STEP_NODE_TYPES comment above). Both are disk-first EM authorship with no
+# wsc_commit transcriber; re-adding either here without a real op-side fill
+# target reopens the silent-drop shape the reclassification closed.
 
 F_SLOTS: dict[str, str] = {
     STEP_2_6_6C: (
@@ -216,7 +246,11 @@ F_SLOTS: dict[str, str] = {
 X_MISSING_SIGNALS: dict[str, str] = {
 }
 
+# ---------------------------------------------------------------------------
 # STEP_2_65B bulk-eligibility classifier (C2)
+# ---------------------------------------------------------------------------
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2
+#   § C2 / AC4a — PM ruling (2026-07-26) on the bulk no-action-needed fast path.
 
 
 TargetResolution = Optional[str]

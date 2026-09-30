@@ -62,6 +62,7 @@ def test_pinned_hosts_tracks_the_published_url():
         "attacker.test:58894",
         "evil.com",
         # A BARE IP LITERAL. webpack-dev-server's CVE-2025-30360 accepted any
+        # IP-literal as "local", which an attacker's own IP satisfies.
         "10.0.0.5:58894",
         "127.0.0.1",
         "127.0.0.1:58894.evil.com",

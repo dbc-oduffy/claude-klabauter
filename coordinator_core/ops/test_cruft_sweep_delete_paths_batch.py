@@ -79,6 +79,8 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
     assert len(calls) == 2
     assert calls[0][0] == cruft_sweep._DELETE_BATCH_CHUNK_SIZE
     assert calls[1][0] == 3
+    # Every chunk's timeout is the SAME flat bound regardless of how many
+    # targets it carries -- the DR-349 fix. A per-item multiplier here
     # (`_DELETE_TIMEOUT_SECS * len(chunk)`) would make these two differ.
     assert calls[0][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)
     assert calls[1][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)

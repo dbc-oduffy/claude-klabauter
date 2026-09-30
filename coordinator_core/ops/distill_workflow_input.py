@@ -55,6 +55,7 @@ __all__ = [
 ]
 
 #: Required top-level fields of the CONSUMER (Workflow script) input shape —
+#: the drift-detection reference this module's contract test asserts against.
 CONSUMER_TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "runId",
     "repoRoot",

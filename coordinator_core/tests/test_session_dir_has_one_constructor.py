@@ -58,7 +58,7 @@ literal-named sibling that is not a session:
     All three key a directory on a session id and none of them is a session;
     minting a ``meta.json`` for any of them would be the inverse defect.
   - a deeper path under an already-existing session dir (``<hub>/<sid>/
-    hook-emits``) — its parent's existence is the caller's problem and is
+    <subdir>``) — its parent's existence is the caller's problem and is
     guarded at that caller, not here.
 """
 

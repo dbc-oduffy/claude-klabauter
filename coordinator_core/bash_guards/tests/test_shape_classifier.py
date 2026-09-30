@@ -104,12 +104,17 @@ class TestPrecedence:
         assert result.primary.shape is Shape.GREP_VIA_BASH
 
         residue_shapes = [m.shape for m in result.residue]
-        assert residue_shapes == [Shape.MULTI_PROBE_BANNER, Shape.HEAD_TAIL_PLUMBING]
+        assert residue_shapes == [
+            Shape.MULTI_PROBE_BANNER,
+            Shape.HEAD_TAIL_PLUMBING,
+            Shape.LABEL_OR_EXIT_ECHO,
+        ]
 
         assert result.matched_shapes == (
             Shape.GREP_VIA_BASH,
             Shape.MULTI_PROBE_BANNER,
             Shape.HEAD_TAIL_PLUMBING,
+            Shape.LABEL_OR_EXIT_ECHO,
         )
 
     def test_find_exec_and_grep_both_present_as_separate_segments_grep_wins(
@@ -124,6 +129,10 @@ class TestPrecedence:
 
     def test_xargs_invoked_grep_is_find_exec_xargs_not_grep_via_bash(self) -> None:
         # `grep` here is xargs's ARGUMENT, not a top-level invoked segment
+        # (tokens[0] of that segment is `xargs`) -- this is the find-
+        # exec/xargs shape (3.5% of the corpus), a distinct habit from a
+        # directly-invoked `grep` segment, and the classifier must not
+        # conflate the two.
         result = classify_command("find . -type f | xargs grep -l TODO")
         assert result.matched_shapes == (Shape.FIND_EXEC_XARGS,)
 
@@ -136,6 +145,7 @@ class TestPrecedence:
             Shape.PIPELINE_FOREACH_OBJECT,
             Shape.WHILE_READ_LOOP,
             Shape.FIND_EXEC_XARGS,
+            Shape.LABEL_OR_EXIT_ECHO,
         )
 
     def test_for_loop_and_while_read_both_present_for_loop_wins(self) -> None:
@@ -169,6 +179,7 @@ class TestEachShapeInIsolation:
         assert result.matched_shapes == (Shape.GREP_VIA_BASH,)
 
     def test_multi_probe_banner_needs_at_least_three_segments(self) -> None:
+        # Banner label plus exactly one probe -- NOT the multi-probe shape
         # (see _MIN_BANNER_SEGMENTS docstring).
         result = classify_command('echo "=== status ==="; git status')
         assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
@@ -429,6 +440,7 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == ()
 
     def test_bare_write_host_no_probe_sequence_does_not_match(self) -> None:
+        # A lone banner call is not banner-shaped -- the shape requires N
         # probe segments (`_MIN_BANNER_SEGMENTS`).
         result = classify_command("Write-Host 'hello'", dialect=Dialect.POWERSHELL)
         assert result.matched_shapes == ()
@@ -452,6 +464,7 @@ class TestPowerShellShapeSet:
         )
         assert result.matched_shapes == ()
 
+    # -- Finding 2 fix: in-process ForEach-Object block content must not
     # -- false-positive as PIPELINE_FOREACH_OBJECT (D3) -----------------
 
     def test_foreach_object_block_write_host_only_does_not_match(self) -> None:
@@ -524,12 +537,15 @@ class TestPowerShellShapeSet:
     def test_while_read_loop_has_no_powershell_detector(self) -> None:
         # PowerShell has no `while read` idiom -- WHILE_READ_LOOP is not a
         # member of the POWERSHELL table entry at all (see the table's own
+        # comment). A pwsh-flavoured attempt at the bash spelling must not
+        # accidentally match either.
         result = classify_command(
             "while ($true) { $x = Read-Host; git log -1 $x }",
             dialect=Dialect.POWERSHELL,
         )
         assert not result.has_shape(Shape.WHILE_READ_LOOP)
 
+    # -- AC12: the three reused binary-identity detectors, regression- ---
     # -- tested explicitly under dialect=POWERSHELL ----------------------
 
     def test_grep_via_bash_detector_reused_unchanged_under_powershell_dialect(
@@ -637,4 +653,51 @@ class TestDialectParameter:
         )
         # C2 fills the POWERSHELL table entry -- this now classifies for
         # real (PIPELINE_FOREACH_OBJECT), which is itself further proof the
+        # posix tokenizer was never invoked to produce it.
         assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+
+class TestLabelOrExitEcho:
+    _SHAPE = Shape.LABEL_OR_EXIT_ECHO
+
+    def _matches(self, cmd: str) -> bool:
+        return classify_command(cmd).has_shape(self._SHAPE)
+
+    def test_label_without_equals_marker(self) -> None:
+        assert self._matches('echo "---" && ls -la state/')
+
+    def test_prose_label(self) -> None:
+        assert self._matches('echo "Session info:" && env')
+
+    def test_label_beside_real_work_where_banner_is_silent(self) -> None:
+        cmd = "f=a.md; sed -n 1,80p $f | cut -c1-900; echo =====; sed -n 130,200p $f"
+        assert self._matches(cmd)
+
+    def test_exit_readout(self) -> None:
+        assert self._matches("python3 run.py; echo EXIT=$?")
+        assert self._matches("git merge-base --is-ancestor a HEAD; echo $?; git status")
+
+    def test_seated_last(self) -> None:
+        result = classify_command("curl -s x | grep y; echo rc=$?")
+        assert result.matched_shapes[-1] is self._SHAPE
+        assert result.primary.shape is Shape.GREP_VIA_BASH
+
+    def test_redirect_is_silent(self) -> None:
+        assert not self._matches("echo x > f; ls")
+        assert not self._matches("git status; echo x >> f")
+
+    def test_pipe_source_is_silent(self) -> None:
+        assert not self._matches("echo x | git apply")
+
+    def test_lone_echo_is_silent(self) -> None:
+        assert not self._matches("echo hi")
+
+    def test_value_print_is_silent(self) -> None:
+        assert not self._matches("f=$(git ls-files); echo $f; pytest -q $f")
+
+    def test_echo_in_heredoc_body_is_silent(self) -> None:
+        assert not self._matches("cat > s.sh <<EOF\necho a\nls\nEOF")
+
+    def test_powershell_dialect_is_silent(self) -> None:
+        result = classify_command('echo "---"; Get-ChildItem', dialect=Dialect.POWERSHELL)
+        assert not result.has_shape(self._SHAPE)

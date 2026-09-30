@@ -79,6 +79,37 @@ def test_collect_ancestor_pids_empty_when_psutil_missing(monkeypatch):
     assert orphan_reaper.collect_ancestor_pids(os.getpid()) == set()
 
 
+def test_collect_ancestor_pids_fails_closed_on_psutil_error(monkeypatch):
+    def _boom(pid):
+        raise psutil.AccessDenied(pid)
+
+    monkeypatch.setattr(orphan_reaper.psutil, "Process", _boom)
+    with pytest.raises(psutil.Error):
+        orphan_reaper.collect_ancestor_pids(os.getpid())
+
+
+def test_find_orphans_propagates_ancestor_scan_failure(monkeypatch):
+    def _boom(pid):
+        raise psutil.AccessDenied(pid)
+
+    monkeypatch.setattr(orphan_reaper, "collect_ancestor_pids", _boom)
+    with pytest.raises(psutil.Error):
+        orphan_reaper.find_orphans("/tmp/pytest-1", os.getpid(), 0.0, None)
+
+
+def test_sessionfinish_aborts_reap_when_ancestor_scan_fails(monkeypatch):
+    def _boom(pid):
+        raise psutil.AccessDenied(pid)
+
+    reaped_calls = []
+    monkeypatch.setattr(orphan_reaper, "collect_ancestor_pids", _boom)
+    monkeypatch.setattr(orphan_reaper, "reap_processes", lambda procs: reaped_calls.append(procs) or [])
+    factory = types.SimpleNamespace(_basetemp="/tmp/pytest-1")
+    session = types.SimpleNamespace(config=types.SimpleNamespace(_tmp_path_factory=factory))
+    orphan_reaper.pytest_sessionfinish(session, exitstatus=0)
+    assert reaped_calls == []
+
+
 def test_find_orphans_empty_when_psutil_missing(monkeypatch):
     monkeypatch.setattr(orphan_reaper, "psutil", None)
     assert orphan_reaper.find_orphans("/tmp/pytest-1", os.getpid(), 0.0, None) == []
@@ -87,6 +118,50 @@ def test_find_orphans_empty_when_psutil_missing(monkeypatch):
 def test_reap_processes_empty_when_psutil_missing(monkeypatch):
     monkeypatch.setattr(orphan_reaper, "psutil", None)
     assert orphan_reaper.reap_processes([]) == []
+
+
+class _StubbornProc:
+    """Ignores terminate/kill with AccessDenied and never dies."""
+
+    pid = 999_999_991
+
+    def cmdline(self):
+        return ["stubborn"]
+
+    def terminate(self):
+        raise psutil.AccessDenied(self.pid)
+
+    def kill(self):
+        raise psutil.AccessDenied(self.pid)
+
+
+def test_reap_processes_omits_procs_still_alive_after_kill(monkeypatch):
+    stubborn = _StubbornProc()
+    monkeypatch.setattr(
+        orphan_reaper.psutil, "wait_procs", lambda procs, timeout=None: ([], list(procs))
+    )
+    assert orphan_reaper.reap_processes([stubborn]) == []
+
+
+def test_reap_processes_reports_only_confirmed_gone(monkeypatch):
+    class _Dies:
+        pid = 999_999_992
+
+        def cmdline(self):
+            return ["dies"]
+
+        def terminate(self):
+            pass
+
+    dies, stubborn = _Dies(), _StubbornProc()
+
+    def _wait(procs, timeout=None):
+        if dies in procs:
+            return [dies], [stubborn]
+        return [], list(procs)
+
+    monkeypatch.setattr(orphan_reaper.psutil, "wait_procs", _wait)
+    assert orphan_reaper.reap_processes([dies, stubborn]) == [(dies.pid, ["dies"])]
 
 
 def test_find_orphans_excludes_self_and_ancestors(monkeypatch):

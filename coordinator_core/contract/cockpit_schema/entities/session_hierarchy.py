@@ -71,7 +71,21 @@ class SessionHierarchy(BaseModel):
     linked_handoffs: list[str] | None
 
     created_by_session: str | None
+    # ccos-3 provenance completeness. 'complete' when derive bridge
+    # (consumed_by) is present; 'unknown' otherwise. KEPT separate from
+    # `completeness` for the shared `get_provenance_completeness()` resolver
+    # in `bin/lib/provenance.py:21-43`.
+    #
     # NEGATIVE SPEC — why these fields are nullable here but REQUIRED in
+    # FileAttribution: SessionHierarchy records may be ingested from older
+    # projector versions that did not populate
+    # system.provenance_completeness / system.completeness (older-projector
+    # ingest path). null = "field was absent in the source record" (distinct
+    # from 'unknown' which means "derivation was attempted but
+    # inconclusive"). FileAttribution is derived at emit time from current
+    # ledger rows and always has these fields set — never an
+    # older-projector issue — so null is semantically impossible and the
+    # field is correctly required there.
     provenance_completeness: SessionHierarchyProvenanceCompleteness | None
     capture_source: str | None
     completeness: HierarchyCompleteness | None

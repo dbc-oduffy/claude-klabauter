@@ -3,9 +3,8 @@
 Purpose: pins the C2 contract this module exists to guarantee -- every
 emitted figure carries exactly one confidence label, `benchmark`/`test`
 origin rows and the two named fixture ops never enter a figure, an
-under-powered bucket reports `unadjudicated` rather than a verdict, and the
-two-route rule convicts on the worse route while a SPAWNS-UNKNOWN figure
-never convicts alone. See coordinator_core/telemetry/op_adjudication.py's
+under-powered bucket reports `unadjudicated` rather than a verdict, and
+routes are never collapsed into one figure. See coordinator_core/telemetry/op_adjudication.py's
 own module docstring for the citations behind each of these.
 
 Spec backlink: state/dispatch-briefs/2026-08-29-a-zero-is-under-one-tick-not-unmeasured/C2.md
@@ -154,7 +153,7 @@ def test_candidate_shards_skips_shards_older_than_window_start(tmp_path):
     assert kept == [new]
 
 
-def test_two_route_rule_convicts_on_worse_route(tmp_path):
+def test_routes_are_never_collapsed_into_one_figure(tmp_path):
     n = adj.MIN_N
     rows = (
         [_row("dual.op", 50.0, route="warm_server", spawns=0)] * n
@@ -163,24 +162,20 @@ def test_two_route_rule_convicts_on_worse_route(tmp_path):
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
     figures = adj.adjudicate(sink_paths=[path])
-    verdicts = adj.op_verdicts(figures)
-    verdict = verdicts["dual.op"]
-    assert verdict["verdict"] == "adjudicated"
-    assert verdict["worst_route"] == "in_process"
-    assert verdict["p95_ms"] == 800.0
-    assert set(verdict["routes_considered"]) == {"warm_server", "in_process"}
+    by_route = {f["route"]: f for f in figures if f["op"] == "dual.op"}
+    assert set(by_route) == {"warm_server", "in_process"}
+    assert by_route["in_process"]["p95_ms"] == 800.0
+    assert by_route["warm_server"]["p95_ms"] == 50.0
+    assert all(f["verdict"] == "adjudicated" for f in by_route.values())
 
 
-def test_spawns_unknown_never_convicts_alone(tmp_path):
+def test_spawns_unknown_figure_keeps_its_label_and_p95(tmp_path):
     n = adj.MIN_N
     rows = [_row("unknown.op", 900.0, route="warm_server", spawns=...)] * n
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
     figures = adj.adjudicate(sink_paths=[path])
-    verdicts = adj.op_verdicts(figures)
-    verdict = verdicts["unknown.op"]
-    assert verdict["verdict"] == "insufficient_confidence"
-    assert verdict["p95_ms"] is None
+    assert len(figures) == 1
     assert figures[0]["confidence"] == adj.CONFIDENCE_SPAWNS_UNKNOWN
     assert figures[0]["p95_ms"] == 900.0
 

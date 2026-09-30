@@ -162,8 +162,20 @@ from .handoff_columns import (
 
 _REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
 
+# DR-084 P4 transitional ingest tolerance (module docstring) — old->new legacy tolerance,
+# restored 2026-07-23. Old-vocabulary ``status``/``deployment_state`` values are coerced UP to
+# the NEW wire vocabulary here; new-vocabulary values pass through untouched (absent from these
 # maps). ``_STATUS_RECOGNIZED``/``_DEPLOYMENT_RECOGNIZED`` are the union of old-and-new legal
+# values for each axis — a value outside that union is neither, and is per-record quarantined
+# into ``malformed`` (2026-08-08), not raised. These records arrive from a corpus this repo does
+# not own — a sibling repo authors handoffs into a shared vocabulary — so a whole-emit hard-abort
+# gives one foreign artifact's unrecognized value fleet-wide blast radius over an unrelated
+# ceremony (every other workstream's cadence step wedged by one record it has no stake in).
+# ``superseded`` is the already-retired handoff status (2026-06-26); it maps to ``claimed``
+# under the new vocabulary for the same reason it mapped to ``consumed`` under the old one —
+# a superseded handoff is no longer "in play" (see ``HandoffStatus`` docstring, contract), and
 # this mapping is a SEPARATE, permanently-grandfathered axis, not part of the transitional
+# old->new tolerance described above.
 _STATUS_OLD_TO_NEW = {"active": "open", "consumed": "claimed", "superseded": "claimed"}
 _STATUS_RECOGNIZED = {"active", "consumed", "superseded", "open", "claimed"}
 # _DEPLOYMENT_RECOGNIZED moved to handoff_columns.py (C1) — imported above.
@@ -325,7 +337,21 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
     _human_axis_on = human_axis_vendored()
 
+    # baton_class.py's `_load_mapping`
+    # deliberately re-reads+re-parses the vendored schema on every call and its own
+    # docstring tells a tight-loop caller to cache at its own boundary instead of
+    # asking the module to cache silently. `kind` is drawn from a small, bounded
+    # vocabulary (HandoffKind literal, ~9 values), so caching by `kind` here collapses
     # this loop's cost to at most one schema read per DISTINCT kind for the whole
+    # `collect()` call, not one read+parse per handoff record.
+    #
+    # `baton_class()` can raise
+    # `BatonClassSchemaError` (missing/corrupt/unparseable vendored schema). Every other
+    # failure mode in this file degrades rather than aborting (`_query_records` broad-
+    # excepts to `[]`; per-record contract violations are quarantined into `malformed`),
+    # so a schema-read failure here degrades every record's `baton_class` to `None` for
+    # this emit run instead of hard-crashing `collect()` — and is reported once as a
+    # `malformed` diagnostic below (fail-open, but the degrade is observable, not silent).
     _baton_class_cache: dict[str, Optional[str]] = {}
     _baton_class_schema_error: Optional[str] = None
 
@@ -449,7 +475,13 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "producer": _jq_or(fm.get("producer"), None),
             "_shipped_in_sha": shipped_sha_raw,
         }
+        # Human axis (C9), activation-gated (module docstring). `human_assignee`,
         # `human_claimant`, and `human_owner` are OPTIONAL nullable HandoffSummary
+        # fields (entities/summaries.py) — while the switch is off, the keys never
+        # reach this dict at all (the model's own default=None supplies them for
+        # validation below), so the post-model_dump pop further down and this
+        # omission agree on one shape: no new key on the wire until cockpit has
+        # vendored it.
         if _human_axis_on:
             record["human_assignee"] = _jq_or(fm.get("human_assignee"), None)
             record["human_claimant"] = _jq_or(fm.get("human_claimant"), None)
@@ -506,7 +538,10 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         r["pm_priority_origin"] = origin
         r["pm_priority_source_id"] = resolved.get("source_id") if origin == "inherited" else None
 
+    # Dangling-target detection: a ledger entry (target_kind: handoff) whose target_id
     # matches no emitted handoff_id is a REPORTED diagnostic, not a silently-carried or
+    # record-shaped value — the ledger holds assignments for targets defined elsewhere,
+    # never a second work registry (chunk brief, PART 2).
     for target_id, entry in ledger_entries.items():
         if not isinstance(entry, dict) or entry.get("target_kind") != "handoff":
             continue

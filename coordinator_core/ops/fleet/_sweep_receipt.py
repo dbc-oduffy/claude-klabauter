@@ -61,6 +61,7 @@ __all__ = ["record_sweep_outcome", "receipt_path", "OUTCOMES"]
 OUTCOMES = ("applied", "nothing-to-do", "skipped-gated", "skipped-contended", "failed")
 
 #: Tail retained when the file passes _MAX_BYTES. Small: the question is "is it
+#: working now", and the answer is always in the last few lines per sweep.
 _MAX_BYTES = 256 * 1024
 _KEEP_BYTES = 64 * 1024
 

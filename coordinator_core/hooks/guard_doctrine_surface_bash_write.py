@@ -116,10 +116,22 @@ def _governed_identifiers() -> "list[str]":
 _GOVERNED_IDENTIFIERS = _governed_identifiers()
 
 #: Case-folded mirror of `_GOVERNED_IDENTIFIERS` -- both macOS and Windows
+#: are case-insensitive-filesystem-by-default, so `claude.md` names the same
 #: governed file as `CLAUDE.md` on either platform. The case-SENSITIVE list
+#: above is kept for diagnostics; the membership TEST itself runs
+#: case-folded.
 _GOVERNED_IDENTIFIERS_LOWER = tuple(identifier.lower() for identifier in _GOVERNED_IDENTIFIERS)
 
 #: Path-segment-boundary-anchored mirror of `_GOVERNED_IDENTIFIERS_LOWER` --
+#: see `_mentions_governed_identifier`. A governed identifier may
+#: legitimately sit adjacent to a quote, `/`, `\`, whitespace, `=`, `(`, a
+#: backtick, `;`, `>`, or string-start/end -- none of those are word
+#: characters, so a lookbehind/lookahead excluding `[A-Za-z0-9]` on either
+#: side accepts all of them while rejecting a longer basename that merely
+#: ends/starts with the same characters (`dotclaude.md` contains
+#: `claude.md` as a raw substring, but the character immediately before the
+#: match is `t`, a word character, so the anchored pattern does not match
+#: it).
 _GOVERNED_IDENTIFIER_PATTERNS = tuple(
     re.compile(r"(?<![A-Za-z0-9])" + re.escape(identifier) + r"(?![A-Za-z0-9])")
     for identifier in _GOVERNED_IDENTIFIERS_LOWER
@@ -138,6 +150,8 @@ _TEE_RE = re.compile(r"\btee\b")
 _SED_INPLACE_RE = re.compile(r"\bsed\b.{0,120}?(-i\b|--in-place\b)", re.DOTALL)
 _PERL_INPLACE_RE = re.compile(r"\bperl\b.{0,120}?-i\b", re.DOTALL)
 #: A copying/truncating command name counts only in COMMAND POSITION -- at the
+#: start of the segment or right after a shell operator -- never as a word
+#: inside a path operand.
 _CP_MV_RE = re.compile(
     r"(?:^|[|&;(]|\|\||&&)\s*(?:\w+=\S*\s+)*(?:sudo\s+|command\s+|env\s+)*"
     r"\b(cp|mv|install|dd|truncate)\b"
@@ -249,7 +263,11 @@ def _names_governed_identifier(text: str) -> bool:
     return any(pattern.search(lowered) for pattern in _GOVERNED_IDENTIFIER_PATTERNS)
 
 
+#: Markers that can actually EXECUTE arbitrary code inside a segment. A
 #: strict subset of `_INDIRECTION_PATTERNS` -- deliberately excludes bare
+#: command substitution, which cannot write a file except by way of one of
+#: the markers scanned for here or a redirect (`_has_write_marker` catches
+#: that independently). Used only by the point-7 git carve-out.
 _CODE_EXECUTION_PATTERNS = (
     _INTERPRETER_RE,
     _SHELL_DASH_C_RE,
@@ -496,7 +514,10 @@ def _git_subcommand(segment: str) -> "str | None":
     return None
 
 
+#: Basenames of the `ceremony.scoped_git_commit` wrapper family -- see
 #: module docstring point 7's "SCOPED-COMMIT WRAPPER RECOGNITION". Exact-
+#: match only, never a substring or prefix test: a lookalike name
+#: (`my-scoped-git-commit-wrapper`) must NOT inherit the exemption.
 _COMMIT_WRAPPER_BASENAMES = frozenset(
     {
         "scoped-git-commit",
@@ -813,7 +834,15 @@ def is_denied_bash_write(cmd: str) -> bool:
 
     segments = _split_top_level_segments(cmd)
 
+    # Point 4's assignment-indirection scan is a shell-only concept.
+    # Scanning it over the RAW segments misfires on a heredoc BODY -- a
+    # Python source line like `add = """... CLAUDE.md ..."""` inside
+    # `python3 - <<'PY' ... PY` is data on stdin, never shell-parsed, but
     # `_ASSIGN_RE` matches its `add =` prefix as though it were a live
+    # `NAME=value` shell assignment. Heredoc-stripping this scan (and only
+    # this scan) removes that false trigger while leaving point 3's
+    # per-segment loop below -- which still runs over the RAW, unstripped
+    # segments -- fully able to catch a REAL write inside a heredoc body.
     stripped_cmd = _strip_heredoc_bodies(cmd)
     stripped_segments = _split_top_level_segments(stripped_cmd)
     if _has_var_assignment_indirection(

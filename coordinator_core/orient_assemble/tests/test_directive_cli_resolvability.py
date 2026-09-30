@@ -14,7 +14,10 @@ from coordinator_core.orient_assemble import (
 )
 from coordinator_core.orient_assemble.readers_clean_ops import ReaderResult
 
+#: This module's own directory is coordinator_core/orient_assemble/tests/,
+#: so parents[3] is the claude-klabauter repo root (mirrors the parents[2] convention
 #: each reader module's own _SOURCE_PATH uses, one level deeper here since
+#: this file lives in a tests/ subpackage of orient_assemble).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _AGENT_BIN = _REPO_ROOT / "coordinator" / "bin"
 

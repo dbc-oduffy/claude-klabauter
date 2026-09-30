@@ -48,8 +48,18 @@ class Finding:
     line: Optional[int] = None
 
 
+# ---------------------------------------------------------------------------
+# Scrubber (the Staff Engineer F1) — string / template-literal / comment masking
+# ---------------------------------------------------------------------------
+#
 # A minimal, pure-Python, JS-AWARE-BUT-NOT-A-PARSER state machine: it tracks
+# only "am I currently inside a string / template-literal / comment span" and
 # replaces the CONTENTS of each such span with a neutral placeholder
+# character, preserving every newline (so line numbers reported against the
+# scrubbed text still line up with the original script) and preserving the
+# delimiters themselves (so a subsequent check can still see e.g. a `` ` ``
+# opened-and-not-closed shape if that ever matters). This is NOT a JS parser:
+# it does not build an AST or understand statements, only span membership.
 
 
 def scrub(script: str) -> str:
@@ -268,7 +278,30 @@ def check_meta_required_fields(block: str) -> List[Finding]:
 
 
 _PHASE_CALL = re.compile(r"\bphase\s*\(\s*['\"]([^'\"]*)['\"]")
+# Escape-aware, and aware that `phases:` has TWO shipped shapes. A bare quote-pair
+# scan ("any quote to the next quote") pairs an ESCAPED quote inside a `detail:`
+# string with the wrong partner, and every entry after it shifts by one -- so a phase
+# plainly present is reported as undeclared and fragments of prose are reported as
+# declared titles. A script survives that only by carrying an even number of escaped
+# quotes, which is luck, not a property.
+#
+# A per-array-element
 # regex pass (`_META_PHASES_TITLE.finditer(body)` gated by a blanket "if titles: return
+# titles") is the same failure class one layer down: (1) it is all-or-nothing across the
+# WHOLE array, so one object-form entry silently drops every bare-string sibling
+# (Finding 1); (2) it only recognizes `'...'`/`"..."`, so a backtick title is invisible
+# and the bare-string fallback re-admits `detail:` prose as a title (Finding 2); (3) it
+# is a `finditer` over raw text with no comment-stripping and no string-context
+# tracking, so a `title:`-shaped fragment inside a `//` comment, or nested inside a
+# `detail:` string quoted with the OTHER quote character, reads as a genuinely declared
+# title (Finding 3) -- the exact permissive-superset risk this module's own comment
+# above (and the commit this PR follows up on) names. `_scan_meta_phases_body` below
+# replaces both regexes with a single depth- and quote-aware walk: only a string
+# immediately anchored on `title:` is ever read as a title (any of the three quote
+# styles), only a genuinely top-level (object-depth-0) string is ever read as a bare
+# entry, and comment content plus non-title string content is walked over as opaque
+# bytes rather than re-offered to a second regex pass -- so a `title:`-shaped substring
+# that is not real top-level code is structurally unreachable, not merely unmatched.
 _JS_STRING_ESCAPE = re.compile(r"\\(.)")
 _TITLE_KEY_TAIL = re.compile(r"\btitle\s*:\s*\Z")
 _AGENT_OPTIONS_PHASE = re.compile(r"\bphase\s*:\s*['\"]([^'\"]*)['\"]")
@@ -478,13 +511,38 @@ def _find_matching_paren(scrubbed: str, open_paren_idx: int) -> int:
     return n
 
 
+def _has_top_level_option_key(args: str, key: str) -> bool:
+    """True only when `key:` sits in an object literal passed directly to the
+    call whose `(` opens `args` — paren depth 1, brace depth 1, bracket depth 0.
+    `args` must be scrubbed text."""
+    pattern = re.compile(r"\b" + re.escape(key) + r"\s*:")
+    paren = brace = bracket = 0
+    for i, ch in enumerate(args):
+        if ch == "(":
+            paren += 1
+        elif ch == ")":
+            paren -= 1
+        elif ch == "{":
+            brace += 1
+        elif ch == "}":
+            brace -= 1
+        elif ch == "[":
+            bracket += 1
+        elif ch == "]":
+            bracket -= 1
+        elif paren == 1 and brace == 1 and bracket == 0 and pattern.match(args, i):
+            if i == 0 or not (args[i - 1].isalnum() or args[i - 1] in "_$"):
+                return True
+    return False
+
+
 def check_model_default(scrubbed: str) -> List[Finding]:
     findings: List[Finding] = []
     for m in _AGENT_CALL_SITE.finditer(scrubbed):
         open_paren = m.end() - 1
         close_paren = _find_matching_paren(scrubbed, open_paren)
         args = scrubbed[open_paren:close_paren]
-        if not re.search(r"\bmodel\s*:", args):
+        if not _has_top_level_option_key(args, "model"):
             line = scrubbed.count("\n", 0, m.start()) + 1
             findings.append(
                 Finding(
@@ -522,7 +580,10 @@ def run_checks(script: str) -> List[Finding]:
     """
     scrubbed = scrub(script)
     block = extract_meta_block(script)
+    # check_meta_pure_literal/check_meta_required_fields
     # must consume the SCRUBBED meta block, not raw text, per F1's mandate: a conformant
+    # description string whose VALUE contains a call-shape token (e.g. "rank them (top 10)")
+    # was false-positiving as a meta-impure-call ERROR because the raw block still exposes
     # the string CONTENTS the check's regexes match against.
     scrubbed_block = extract_meta_block(scrubbed) if block is not None else None
 

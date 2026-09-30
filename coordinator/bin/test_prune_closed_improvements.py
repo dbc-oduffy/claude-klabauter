@@ -271,7 +271,12 @@ def test_discovery_failure_is_non_blocking():
         _fail("discovery failure: WARN on stderr", f"stderr: {err!r}")
 
 
+# ===========================================================================
+# F9 fix, primary regression case: a per-item error in the ACT call's
+# response (e.g. one entry lost the batch commit to `cannot lock ref 'HEAD'`
 # while the rest landed) is named AND makes the process exit NON-ZERO --
+# never swallowed into a WARN-only exit 0.
+# ===========================================================================
 def test_partial_act_failure_is_named_and_nonzero():
     mod = _load_module()
 

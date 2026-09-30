@@ -75,6 +75,8 @@ from coordinator_core.roadmap.prep_gate import (
 #: silently dropped from a batch.
 
 #: Exit codes, one per verdict plus usage. ``EXIT_REFUSED`` is reserved and
+#: currently unreachable (nothing in ``prep_gate.py`` produces ``REFUSED`` — see
+#: that module's own docstring), kept named so no future producer's mapping shifts.
 EXIT_PREPPED = 0
 EXIT_NOT_PREPPED = 1
 EXIT_REFUSED = 2

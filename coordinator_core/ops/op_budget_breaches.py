@@ -112,10 +112,23 @@ __all__ = [
     "headline_for",
 ]
 
+#: Bound on rows read from the current generation. Same number and same
 #: discipline as `op_census_report.MAX_TELEMETRY_ROWS`, restated rather than
+#: imported: importing it would drag this telemetry-only op's import graph
+#: through `module_summary`/`line_count`/`spawn_bearing_ops` for one integer.
+#: `coordinator_core.telemetry.tests.test_breach_summary` asserts the two
+#: numbers still agree.
 MAX_TELEMETRY_ROWS = 200_000
 
 #: The bound that actually bites. `MAX_TELEMETRY_ROWS` sits at 200,000
+#: against a live generation of ~47,000 rows, so it bounds nothing today and
+#: the parse cost tracks sink growth instead — measured 140-219ms over the
+#: whole current generation on 2026-08-21, already brushing DR-344's 200ms
+#: per-process bar and rising as peers appended during the session. 6MB of
+#: tail is ~21,000 rows and roughly a day of traffic at this box's load norm,
+#: parses in well under half that budget, and stays flat as the sink grows.
+#: Recency is what a breach view needs: the newest rows carry the trend, and
+#: `source.head_truncated` says plainly when older ones went unread.
 MAX_TAIL_BYTES = 6 * 1024 * 1024
 
 DEFAULT_TOP_N = 20
@@ -131,17 +144,81 @@ MAX_HEADLINE_BYTES = 220
 
 _OP_TRUNC_MARKER = "~"
 
+#: What `trend` reads when the generation was read from the tail and older
+#: rows in it went unread. `_trend` splits the rows IT WAS GIVEN into two
+#: halves, so on a truncated read both halves sit inside the tail and a rise
+#: that happened before the window is not merely unmeasured — it is invisible,
+#: and the surviving rows can be genuinely flat against each other. The
+#: direction is then unsupported in the one way that matters: it reads "flat"
+#: for an op that is getting worse.
+#:
+#: Observed, not hypothesised. `ceremony.scoped_git_commit` reported "flat"
+#: off a 6MB tail of a 14.8MB generation with 78.6MB of rotated history never
+#: read, while a full-generation read showed hourly p50 going 3-8s to 85.4s on
+#: the same day (claude-klabauter-84, session 6d3e6581, 2026-08-21).
+#:
 #: This is `TREND_MIN_ATTEMPTS_PER_HALF`'s rule applied to the other axis:
+#: that constant refuses a direction when a half-window holds too FEW rows,
+#: and this refuses one when the window itself is a fraction of the
+#: generation. Both say "insufficient", never "flat" — reading "flat" off a
+#: sample that cannot support it is the false-pass `op_census.timing`'s
+#: three-state rule forbids.
+#:
+#: Negative-spec: this does NOT widen the read. Reading the whole corpus to
+#: earn a trend would put 90+MB behind a 500ms op, which is the trade DR-344
+#: refuses. The op stays cheap and stops claiming what a cheap read cannot
+#: support; an unqualified direction is the thing being deleted here, not the
+#: bound that made it unqualified.
 TREND_WINDOW_LIMITED = "window_limited"
 
+#: Minimum completed-and-all--32601 attempts before a "dead dial" is reported.
+#: Measured spread, not a guess: the motivating leak (`session.warm_start`,
+#: gravestoned twice, a SessionStart hook still dialling it) logged 73
 #: METHOD_NOT_FOUND completions over 33 hours; every other -32601-only op
+#: measured on this repo's current generation on 2026-08-30 (a human mistyping
+#: an op name at a CLI, or a test fixture dialling a name that never existed)
+#: topped out at 2. 10 sits with wide headroom above the human-typo ceiling and
+#: wide headroom below the machine-loop floor.
+#:
+#: Applied per op, summed across every caller — a leak split between two
+#: callers (e.g. a pool dispatcher and a CLI invoker) is still caught; see
+#: `dead_dial_findings`'s accumulator, keyed by `op` alone.
+#:
+#: Scope, stated plainly: this is a threshold on ONE bounded-tail read
 #: (`MAX_TAIL_BYTES`, current generation only — see module docstring's
+#: negative-spec), never on an op's true lifetime attempt count.
+#: `op_census.breaches` does not accumulate across generations or across
+#: separate invocations — doing so would mean a second sink read, which the
+#: negative-spec rules out and which would put a multi-generation parse (tens
+#: of MB) over DR-344's 500ms bar. At this sink's measured growth
+#: (`telemetry/log_rotation.py`, ~7.3MB/day against a 6MB tail), the real
+#: detection window is ~20 hours, not "a generation" and not "per-op
+#: lifetime". Reaching 10 inside that window needs a leak sustaining roughly
+#: >=0.5 dials/hour — both known leaks clear it comfortably (`session.
+#: warm_start` ~2.2/h, `ops.list` ~3.4/h), and a hook firing per session start
+#: on a ~50-session box clears it easily too.
+#:
+#: Accepted limit, not a bug: a leak slower than ~0.5/hour, or one that ends
+#: near a rotation boundary before accumulating 10 completions in a single
+#: tail window, will not fire here. Catching that shape would require reading
+#: rotated history, which this op deliberately does not do (see module
+#: docstring's negative-spec and the plan's Out of scope). A caller that needs
+#: to catch a slower leak is expected to poll `op_census.breaches`
+#: repeatedly and read this threshold as "10 in one window", never "10 ever".
 DEAD_DIAL_MIN_ATTEMPTS = 10
 
+#: Caller-module prefix excluded from dead-dial detection entirely — a test
+#: suite dialling a nonexistent op on purpose (`no.such.op`,
+#: `test.this_op_does_not_exist_anywhere`) is not a caller that needs fixing.
+#: The `caller` field is what separates a hook looping in production from a
 #: test fixture exercising the METHOD_NOT_FOUND path deliberately.
 TEST_CALLER_PREFIX = "coordinator_core.tests."
 
 #: `dead_dials.ledger_status` values. `LEDGER_ABSENT` is a distinguishable
+#: result from "the ledger was read and nothing qualified" — the published
+#: mirror ships `coordinator_core/` without claude-klabauter's `state/` corpus (see
+#: `kill_ledger_inventory`'s own docstring), and rendering that as an empty
+#: `findings` list would turn a published mirror into a silent all-clear.
 DEAD_DIAL_LEDGER_OK = "ok"
 DEAD_DIAL_LEDGER_ABSENT = "absent"
 

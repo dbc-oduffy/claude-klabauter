@@ -77,7 +77,12 @@ def _run_main_capturing(mod, argv=None, fake_route_mutation=None, fake_route=Non
     return rc, out.getvalue(), err.getvalue()
 
 
+# ===========================================================================
 # Regression: DETERMINATE-PARTIAL ACT response (exit_code=2, populated acted[])
+# must report the TRUE archived count via a WARN, not "not archived (transport
+# error)" for the whole batch. Pins the route()-not-route_mutation() fix on the
+# ACT call.
+# ===========================================================================
 def test_act_partial_success_reports_true_count():
     mod = _load_module()
 

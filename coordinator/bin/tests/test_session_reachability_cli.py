@@ -355,7 +355,10 @@ def test_transport_failure_maps_to_exit_3(stub_import_modules, monkeypatch):
 
 
 def test_resolve_address_runtime_raise_maps_to_exit_3(stub_import_modules, capsys):
+    # A runtime raise from the wrapped resolve_address call (e.g. a
+    # harness_registry.snapshot() I/O error) is a state the module header's
     # exit-code table names exhaustively as _TRANSPORT_FAIL -- never an
+    # uncaught traceback exiting 1 where JSON was promised on stdout.
     def _raise(sid):
         raise OSError("registry directory unreadable")
 

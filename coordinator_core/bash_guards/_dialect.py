@@ -202,8 +202,25 @@ class Dialect(Enum):
     POWERSHELL = "powershell"
 
 
+#: The one recognized carry path (AC2): `payload["tool_name"]` -> `Dialect`.
+#: `"PowerShell"` IS live as of 2026-08-07: the conversion plan named below
+#: landed its C1/C2/C3, so a `PowerShell` `tool_name` now clears the master
 #: gate and reaches every guard whose own `MATCHERS` declares it. This entry
+#: is no longer forward-declared -- it carries real traffic. Absent from this
+#: table == unrecognized == `None`, never a bash default (Anti-scope: "do not
+#: let an absent dialect default to bash silently").
+#:
 #: SUPERSEDED 2026-08-07 -- this comment previously read that `"PowerShell"`
+#: was "NOT yet emitted by any tool-name site in this repo", naming
+#: `docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md` as
+#: what would change that. It did. The stale sentence is recorded here rather
+#: than silently dropped because it was scoped to *guard payloads inside this
+#: repo* and was read once, the same day, as a claim about *harness
+#: transcripts* -- which it never was, and which measurement refutes outright
+#: (1,753 of 9,665 shell-tool invocations across 1,476 local transcripts
+#: arrive as `PowerShell`). If you are reaching for this comment as evidence
+#: that some surface never sees PowerShell, it does not say that and never
+#: did.
 _TOOL_NAME_TO_DIALECT = {
     "Bash": Dialect.BASH,
     "PowerShell": Dialect.POWERSHELL,
@@ -225,11 +242,41 @@ _ATOMIC_ARGUMENT_NODE_TYPES = frozenset({
 _parser_cache = None
 
 
+# ---------------------------------------------------------------------------
 # DURABLE ImportError OBSERVABILITY (OBSERVABILITY ONLY -- it never changes
+# an allow/deny verdict). Mirrors `block_subagent_destructive_action.py`'s
 # `_FAIL_OPEN_LOG_RELPATH` / `_log_fail_open` precedent: settings-home-
+# rooted (machine-scoped, like that log -- this is about the INSTALL, not
+# any one target repo), best-effort append, NEVER raises. A separate file
+# from that guard's own log (not folded in) for the same reason that log
+# gives for staying separate from ITS sibling: different grammar/verbs, a
+# different failure class (grammar-package absence vs. identity-resolution
+# fail-open).
+#
+# Deliberately NOT gated behind `_parser_cache` for de-duplication: unlike
+# the SUCCESS path (`_parser()` sets `_parser_cache` once and reuses it),
+# an ImportError is raised BEFORE `_parser_cache` is ever assigned, so this
+# branch re-raises and re-enters on every single PowerShell-dialect call for
+# the life of the process, not once (verified by reading `_parser()` below --
+# do not assume otherwise). Left unbounded per-call would make a broken
+# install's log grow once per PowerShell command.
+#
 # GATED BY GUARD IDENTITY, NOT BY PROCESS (Y3 fix,
+# state/debt-backlog/2026-09-01-the-dialect-degrade-row-names-one-guard-
+# a2f800037e9e.yaml, defect one). The prior single `bool` gate capped the
+# durable row to whichever guard happened to hit the ImportError branch
+# FIRST in a process -- a second, different guard degrading in the same
+# process was silently dropped, so the record under-reported without
+# saying so (one-guard-degraded and first-of-several-degraded rendered
 # identically). `_LOGGED_PARSER_UNAVAILABLE_GUARDS` tracks which GUARD
+# NAMES have already been recorded this process: a dispatch that runs many
 # guards over one PowerShell command still writes one row per DISTINCT
+# guard (bounded by the guard roster's own size, ~54, not by call volume),
+# while the SAME guard calling in on every subsequent command -- the
+# actual hot-path repetition -- still costs nothing beyond the first call,
+# identical to the old gate's cost on that axis. The FIRST occurrence per
+# guard is still never lost.
+# ---------------------------------------------------------------------------
 _DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH = ("state", "dialect-parser-unavailable.log")
 _LOGGED_PARSER_UNAVAILABLE_GUARDS: set = set()
 
@@ -335,7 +382,12 @@ def dialect_parser_unavailable_log_path() -> Path:
     return _dialect_parser_unavailable_log_path()
 
 
+#: Windows-only: suppress the console-window flash a subprocess spawn would
+#: otherwise cause when this module is invoked from a non-interactive
+#: install/doctor path. `getattr(..., 0)` makes this a no-op on POSIX,
 #: matching `scripts/setup.py`'s own `_NO_CONSOLE` precedent (not imported
+#: from there -- that module is the installer's own entry point, not a
+#: dependency this package should carry).
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
@@ -490,14 +542,23 @@ def tokenize_command(
     return None
 
 
+#: `Start-Process`'s two recognized aliases (`saps` -- the built-in cmdlet
+#: alias -- and `start`, a cmd.exe-compatibility alias PowerShell also
+#: registers). Matched case-insensitively (see `expand_start_process_
+#: invocations`'s own lower-casing) since PowerShell cmdlet/alias names are
 #: case-insensitive by language design, same convention `_RUNNER_PREFILTER_RE`
+#: already documents for `Invoke-Pester`.
 _START_PROCESS_NAMES = frozenset({"start-process", "saps", "start"})
 
 _ARGUMENT_LIST_FLAGS = frozenset({"-argumentlist", "-args"})
 
 _FILE_PATH_FLAGS = frozenset({"-filepath"})
 
+#: Separator/statement-boundary tokens this walk must stop consuming
+#: argument-list elements at -- the SAME punctuation
 #: `_command_tokenizer._SEPARATOR_TOKEN_RE` already treats as always-separate
+#: (this module's own "Output shape" section names `;`/`&` as the two forms a
+#: PowerShell statement boundary is emitted as).
 _STATEMENT_BOUNDARY_TOKENS = frozenset({";", "&", "|"})
 
 
@@ -685,7 +746,11 @@ def expand_start_process_invocations(tokens: List[str]) -> List[str]:
                     if elem == ",":
                         j += 1
                         continue
+                    # A bare `-Flag`-shaped element with no quoting at all is
                     # a DIFFERENT Start-Process parameter beginning after an
+                    # unquoted/unterminated argument-list value this walk
+                    # cannot resolve as a literal -- stop consuming rather
+                    # than swallowing an unrelated flag as an argv element.
                     if elem.startswith("-") and elem[:1] not in ("'", '"'):
                         break
                     unquoted = _strip_ps_quotes(elem)

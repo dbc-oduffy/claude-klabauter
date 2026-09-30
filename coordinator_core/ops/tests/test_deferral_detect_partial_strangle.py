@@ -144,6 +144,9 @@ class TestClassifyPartialStranglesFindings:
 
     def test_verb_absent_from_shipped_native_op_never_counted_shipped(self):
         # "list" has no shipped_native_op entry at all in DR210_MANIFEST_ENTRY —
+        # shipped_check is only ever consulted for verbs WITH a declared shipped path
+        # ("send" here), and "list" must never land in the shipped set regardless of
+        # what shipped_check would otherwise say.
         seen_paths = []
 
         def _shipped_check(path):
@@ -185,6 +188,7 @@ class TestClassifyPartialStranglesFindings:
             ),
         )
         # "compose" is UNPLANNED here (planned_check returns None for it) so the finding
+        # still fires, but the planned segment names the covering plan.
         assert "via 2026-07-21-memo-tool-rebuild-full-ownership" in result["offer"]
         finding = result["findings"][0]
         assert set(finding["planned"]) == {"list", "draft"}
@@ -677,7 +681,15 @@ def test_handler_scan_incomplete_false_on_clean_scan(tmp_path):
     assert result["scan_errors"] == []
 
 
+# ---------------------------------------------------------------------------
+# Unscannable docs/plans/ — silent-enumeration audit for the planned-evidence
+# scan (Review: code-reviewer Finding 1). `_planned_check` previously used
+# `Path.glob("*.md")`, which silently swallows `PermissionError` while walking
+# — an unreadable docs/plans/ read as "no plan mentions this verb", which
+# INVERTS the detector's three-state contract: a scan-degraded verb reads as
 # a confident UNPLANNED finding instead of an indeterminate one. Mirrors the
+# docs/decisions/ round-trip tests above.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(

@@ -272,8 +272,20 @@ def _reap_probe_session_dir():
     if probe_dir.is_dir():
         shutil.rmtree(probe_dir, ignore_errors=True)
 
+# ---------------------------------------------------------------------------
+# The predicate -- platform-independent, regex-only (see module docstring).
+#
 # SSOT reuse, not a second definition (module docstring's "RELATIONSHIP TO
 # check_posix_exec_assumptions"): `_TIER_D_CROSS_PATH_PATTERNS` already
+# encodes this project's one definition of "looks like a cross-machine
+# path" for `/Users/<name>/`, `/home/<name>/`, drive-letter, and UNC forms
+# -- including the deliberate single-letter-URL-scheme false-positive fix
+# recorded on that constant's own definition (`s://` must not match). Those
+# patterns are `^`-anchored (correct for matching a WHOLE ast.Constant
+# string); this module instead scans free-form rendered PROSE, where the
+# offending path sits mid-string (e.g. "-- full list: /Users/..."), so each
+# pattern's anchor is stripped and recompiled unanchored below rather than
+# hand-copying new regex bodies that could drift from the shared source.
 def _unanchor(pattern: re.Pattern) -> re.Pattern:
     body = pattern.pattern.lstrip("^")
     if body == r"\\\\":
@@ -286,8 +298,20 @@ _ABS_PATH_PATTERNS: Tuple[re.Pattern, ...] = tuple(
 ) + (
     re.compile(r"/var/[^\s\"'`]+"),
     re.compile(r"/tmp/[^\s\"'`]+"),
+    # The Windows half of this module's stated predicate, which was ABSENT
+    # while the docstring claimed it twice ("drive-letter, and UNC forms";
+    # "Matches ... Windows (`C:\...`, `C:/...`, UNC `\\server\share\...`)
     # forms unconditionally"). `_TIER_D_CROSS_PATH_PATTERNS` carries exactly
+    # two patterns at HEAD -- `^/Users/<x>/` and `^/home/<x>/` -- so a
+    # Windows-shaped leak in a rendered guard message passed this suite in
+    # silence, on every host, which is the precise failure mode the module
+    # exists to make impossible. Sourced from `_path_shape_regexes.
     # WIN_DRIVE_RE` (the same SSOT `guard_foreign_platform_paths` and
+    # `guard_concrete_path_citations` read) rather than a fourth hand-rolled
+    # drive-letter regex: its lookbehind is what keeps `https://` from
+    # matching as drive `s:`, and a copy here would drift off that fix.
+    # Measured before landing: adds zero findings to the current corpus, so
+    # it closes a hole rather than widening a red.
     re.compile(WIN_DRIVE_RE.pattern + r"[^\s\"'`]*"),
     re.compile(r"\\\\[A-Za-z0-9_.-]+\\[^\s\"'`]+"),
 )

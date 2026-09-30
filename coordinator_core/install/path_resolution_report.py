@@ -72,7 +72,10 @@ from pathlib import Path
 
 _ENTRYPOINTS: "tuple[str, ...]" = ("coordinator-invoke", "coordinator-cockpit-emit-schema")
 
+# Harmless, side-effect-free flags per entrypoint -- prove the resolved
 # binary actually EXECUTES (not just that a name resolves to a path), per
+# the plan's "resolve AND execute" acceptance criterion. Neither flag
+# dispatches an op, writes a file, or spawns a further subprocess.
 _EXEC_PROOF_ARGS: "dict[str, tuple[str, ...]]" = {
     "coordinator-invoke": ("--dump-op-timeouts",),
     "coordinator-cockpit-emit-schema": ("--help",),

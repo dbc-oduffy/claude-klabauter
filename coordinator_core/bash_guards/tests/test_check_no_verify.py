@@ -216,7 +216,12 @@ class TestBypassRegexFallbackReachedAndDenies:
 
     def test_over_ceiling_command_with_late_marker_still_denied(self):
         # Past _MAX_TOKENIZABLE_COMMAND_CHARS (65536), _bt_tokenize_full_
+        # command also returns None -- same fallback, different trigger.
+        # The `;` boundaries keep the payload segment-splittable so the
         # bounded `_BYPASS_HEAD_RE` anchor can still find the git head; a
+        # ceiling-busting payload with NO segment boundary before the git
+        # head would defeat the anchor and is a separate, narrower gap
+        # (leftmost-head-only reach), not this finding's contract.
         verb = "co" + "mmit"
         cmd = ("a;" * 32774) + "git " + verb + " --no-verify"
         assert len(cmd) > 65536

@@ -95,6 +95,7 @@ _SCOPE_REQUIRED: tuple[str, ...] = (
 _GUARD_RECEIPT_REQUIRED: tuple[str, ...] = ("guard", "verdict", "evidence")
 
 #: Required per-file disposal-row fields (retention_reason is OPTIONAL — present
+#: only on retained/non-eligible rows; log_row is always present, possibly "").
 _DISPOSAL_ROW_REQUIRED: tuple[str, ...] = (
     "path",
     "artifact_class",
@@ -109,6 +110,7 @@ _SCAN_STATS_REQUIRED: tuple[str, ...] = (
     "retained_count",
 )
 
+#: Required top-level fields for a disposal-manifest (BEFORE stamping — the
 #: STAMP_FIELDS group is additive, written later by distill.stamp_disposal).
 _DISPOSAL_REQUIRED: tuple[str, ...] = (
     "schema_version",

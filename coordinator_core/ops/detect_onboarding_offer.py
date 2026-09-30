@@ -103,7 +103,15 @@ def _is_distribution_repo(repo_root: str) -> bool:
 
 
 def _is_onboarded(repo_root: str) -> bool:
+    # `state/workstreams/` alone is
+    # empirically unsound: it is created lazily by queue_append.py on first
+    # workstream event and no install/scaffold path provisions it, so 11 of
+    # 12 currently-onboarded sibling repos in the fleet have no
     # state/workstreams/ dir and would flip to UNONBOARDED. `archive/` is
+    # present on all of them (verified against the fleet) and is already the
+    # pre-existing arm of completion_archive_predicate below, so matching it
+    # here makes the two predicates genuinely identical instead of merely
+    # claimed-equivalent -- also closes the P2 drift gap.
     return os.path.isdir(os.path.join(repo_root, "archive")) or os.path.isdir(
         os.path.join(repo_root, "state", "workstreams")
     )
@@ -152,7 +160,23 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
             )
         return ""
 
+    # Probe script not found or not executable -- fall back to a direct
+    # coordinator_currency_probe call, mirroring the bash oracle's fallback
+    # branch (which sourced lib/coordinator_currency.py directly). First honour
+    # source_is_live: if plugin_root is nested under repo_root/plugins/, the
+    # repo being checked IS the coordinator source -- no stamp is expected.
+    #
+    # NOTE (mirrors bash oracle's C2 comment): this source_is_live check is a
     # DISTINCT concept from a "meta-repo" check -- it asks "is the coordinator
+    # plugin co-located with the repo being checked?" (plugin path inside
+    # repo/plugins/), not "is the repo's git root the claude-home dir?".
+    #
+    # coordinator_currency.py lives in claude-klabauter's own coordinator/lib/ (it
+    # migrated out of the DoE plugin_root tree during the executable-surface
+    # relocation), not under plugin_root -- resolve it off the claude-klabauter root
+    # via the canonical resolver, never plugin_root, so this branch stays
+    # reachable instead of silently always missing the file and returning ""
+    # regardless of actual drift.
     try:
         claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:

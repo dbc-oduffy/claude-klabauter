@@ -69,7 +69,10 @@ try:
         DESTINATION_PUBLISH,
     )
 except ImportError:
+    # C2 (destination-axis constants on _write_bump_message) has not landed
     # yet in this working tree -- see module docstring, "EXPECTED RED
+    # PENDING {C3, C4, C5}". Sentinels keep this file collectible; the
+    # actual assertions below (not this import) are what carries the red.
     DESTINATION_PUBLISH = "__DESTINATION_PUBLISH_NOT_YET_LANDED__"
     DESTINATION_FOREIGN = "__DESTINATION_FOREIGN_NOT_YET_LANDED__"
 
@@ -241,7 +244,16 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
     )
 
 
+# ---------------------------------------------------------------------------
 # Lessons-outbox parity -- a SEPARATE, focused test rather than a fourth
+# `_build_case` row. `_build_case`'s shared assertions (`bash_result is not
+# None`, `tool_result is not None`) assume every row BUMPS; the
+# lessons-outbox case is the opposite shape (both surfaces must stay
+# SILENT), so contorting the shared row-builder/assertion block to also
+# express "silent" would blur, not share, the fixture. See dispatch brief:
+# "if it does not [accommodate cleanly], add a separate focused parity test
+# rather than contorting the builder."
+# ---------------------------------------------------------------------------
 
 
 def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
@@ -282,7 +294,22 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     assert tool_result is None, "tool surface bumped on a foreign-repo state/lessons-outbox write"
 
 
+# ---------------------------------------------------------------------------
+# AC7 -- the `~/.claude` destination class C1 (docs/plans/2026-08-10-carve-
+# claude-out-and-close-the-backslash-bypass.md) introduced via
 # `target_is_under_claude_home`. A SEPARATE, focused test rather than a
+# fourth `_build_case` row, for the same reason the lessons-outbox case
+# above is separate: every `_build_case` row assumes the target BUMPS, but
+# `~/.claude` is the opposite shape -- both surfaces must stay SILENT (no
+# `permissionDecision` envelope at all), so there is no `destination_class`
+# value to compare the way AC8 compares one. The parity this test enforces
+# is therefore "identical silence, not merely `is not None`" -- both
+# surfaces are exercised against the SAME `~/.claude` target and BOTH must
+# return `None`, which is the same substance AC8's cross-surface comparison
+# has for a class that fires (a divergence here would show up as one
+# surface returning an envelope and the other staying silent, exactly the
+# shape `b280d1116` fixed on the firing classes).
+# ---------------------------------------------------------------------------
 
 
 def _init_claude_home_repo(home: Path) -> Path:
@@ -380,6 +407,9 @@ def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, mon
     session_start.write_session_start_record(session_id, launch_cwd=str(anchor))
 
     # HOME injected to a DIFFERENT directory than the one `claude_home` was
+    # built under -- `target_is_under_claude_home` must now resolve `False`
+    # everywhere, since none of the three checkers' `os.environ` disagrees
+    # with any other's.
     monkeypatch.setenv("HOME", str(other_home))
 
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True

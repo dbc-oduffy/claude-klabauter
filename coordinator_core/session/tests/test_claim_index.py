@@ -115,7 +115,10 @@ def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
     assert result["partial-wr"] == []
 
 
+# ---------------------------------------------------------------------------
 # unconditional rebuild -- lookup() must see an append to an EXISTING
+# claimant's touched.txt, not just a brand-new session dir landing
+# ---------------------------------------------------------------------------
 
 
 def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
@@ -158,7 +161,12 @@ def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_p
     assert result.abort_cause is None
 
 
+# ---------------------------------------------------------------------------
+# An I/O error reading a claim
+# source (as opposed to that source genuinely not existing) must surface as
 # UNANSWERABLE, never silently collapse to "unclaimed" -- that is the one
+# answer that authorizes a write.
+# ---------------------------------------------------------------------------
 
 
 def test_lookup_permission_error_scanning_sessions_dir_is_unanswerable(
@@ -982,7 +990,10 @@ def test_ac18_lookup_cap_withheld_returns_unanswerable_never_empty(tmp_path, mon
 
     assert result.complete is False
     assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+    # sess-a sorts first and is consumed before the deadline trips; sess-b
+    # is never reached -- its resolved-known claim (`foo.py`) is NOT
     # downgraded to UNANSWERABLE by the abort (a peer claim the walk DID
+    # reach is a fact the abort does not undo), while the path the walk
     # never reached comes back UNANSWERABLE, never a silent `[]`.
     assert result["foo.py"] == ["sess-a"]
     assert result["bar.py"] == [claim_index.UNANSWERABLE]
@@ -1106,6 +1117,13 @@ def _write_rebuild_floor_driver(driver_path: Path) -> None:
 
 
 #: THE LIVE CORPUS, MEASURED 2026-08-27 -- not a chosen width.
+#: `.git/coordinator-sessions/` on this box, read through
+#: `_enumerate_claim_sinks` itself (session dirs plus `.agents/`), after
+#: 43.7 days of accumulation with NO retention prune of claimant dirs.
+#: Re-measure with the probe recorded in
+#: docs/research/spike-verdicts/2026-08-27-corpus-c-is-wrong-on-both-axes-
+#: and-the-fingerprint-prize-collapses-at-real-width.md before changing any
+#: figure below; none of them is an estimate.
 _MEASURED_CANDIDATE_DIRS = 491
 _MEASURED_CLAIMANTS = 270
 _MEASURED_EVENTS = 2561
@@ -1116,6 +1134,11 @@ _MEASURED_DEPTH_P99 = 70
 _MEASURED_DEPTH_MAX = 169
 
 #: THE PROJECTION, and the one judgement call in this fixture: one year of
+#: the SAME measured accumulation rate. Claimant directories are never
+#: pruned (no retention mechanism exists -- see the problem doc's Item 0),
+#: so the corpus grows monotonically and the only free variable is the
+#: horizon. One year is stated, not derived; every other number here is
+#: measured and scales from it.
 _PROJECTION_HORIZON_DAYS = 365.0
 _PROJECTION_FACTOR = _PROJECTION_HORIZON_DAYS / _MEASURED_WINDOW_DAYS
 _PROJECTED_CLAIMANTS = round(_MEASURED_CLAIMANTS * _PROJECTION_FACTOR)
@@ -1123,10 +1146,22 @@ _PROJECTED_EMPTY_DIRS = (
     round(_MEASURED_CANDIDATE_DIRS * _PROJECTION_FACTOR) - _PROJECTED_CLAIMANTS
 )
 
+#: CORPUS C (50 peers x 5000 lines, and C0's 541.48ms against it) IS
+#: RETIRED as a width, 2026-08-27, by measurement and NOT to make anything
+#: green. Its constants are deleted rather than left unreferenced: it was
 #: wrong on BOTH axes in OPPOSITE directions -- 5.2x UNDER on claimant
+#: count (the axis the pre-parse floor scales with) and 35x OVER on
+#: per-claimant depth -- and its 5000-line single sink is a shape no live
 #: writer can emit, since `MAX_RECORD_BYTES` is 256KiB at a measured 197.5
+#: bytes/event, so rotation fires near 1327 events per generation. Do not
+#: reinstate it as a comparison baseline; a retired width is not a datum.
+#:
 #: `rebuild()` over the corpus that ACTUALLY exists today, cap lifted,
+#: process time, two independent runs: 61.458ms both times -- 12.3% of the
+#: brightline, `complete=True`, no cap abort. There is no LIVE breach at
 #: this site. The gate below asserts against the PROJECTED width instead,
+#: which is the honest question: does a year of unpruned accumulation
+#: breach the bar.
 _MEASURED_TODAY_MS = 61.458
 _BRIGHTLINE_MS = 500.0
 
@@ -1265,6 +1300,25 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     )
     print(detail)
     # DIFFERENTIAL, not absolute -- for the same reason `rebuild_only_ms`
+    # subtracts the floor rather than asserting against the total. Measured
+    # 2026-09-01: a driver whose entire body is `print('x')`, importing no
+    # coordinator module and calling no `rebuild()`, also reports
+    # `procs_per_call=2.0` through this harness on Windows. The absolute
+    # `== 1.0` form therefore priced the HARNESS, not the code under test,
+    # and could not pass on this box whatever `rebuild()` did -- a live gate
+    # red for a reason no change to `claim_index` could ever clear.
+    #
+    # What the assertion is actually for survives intact and is what is
+    # asserted here: `rebuild()` must spawn NO subprocess BEYOND what
+    # importing its own module graph already costs. The floor driver is
+    # byte-identical to the real one above its `rebuild()` call (see
+    # `_write_rebuild_floor_driver`'s negative spec), so any excess is
+    # `rebuild()`'s and nothing else's. Independently corroborated the same
+    # day by instrumenting `subprocess.run` across a live `rebuild()` over a
+    # synthetic 30-session / 600-event corpus: zero calls.
+    #
+    # procs_per_call moves in exact 1/k steps under a job object -- no noise
+    # for a tolerance to absorb; do not widen `abs=0.01`.
     assert procs_excess == pytest.approx(0.0, abs=0.01), (
         f"a pure-Python rebuild driver must spawn no subprocess of its own "
         f"BEYOND its import floor: driver={result['procs_per_call']} "

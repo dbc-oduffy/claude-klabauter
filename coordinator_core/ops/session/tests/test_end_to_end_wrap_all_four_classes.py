@@ -200,7 +200,10 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
             f"not survive to a committable state: git status:\n{after}"
         )
 
+    # -----------------------------------------------------------------
     # THE NEGATIVE HALF: the live peer's artifact is untouched — still
+    # dirty (never swept), never committed by this session's wrap.
+    # -----------------------------------------------------------------
     assert peer_rel in after, (
         "a live peer's artifact was swept by this session's wrap — exactly "
         f"the cross-session-sweep incident this plan exists to prevent:\n{after}"

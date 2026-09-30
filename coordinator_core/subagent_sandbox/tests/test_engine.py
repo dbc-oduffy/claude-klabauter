@@ -21,7 +21,12 @@ REPORT_SIDECAR_TYPE = "coordinator:executor"
 BARE_HEX_AGENT_ID = "abc123def4567890"
 NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
 # What NAMED_AGENT_ID resolves to once a session_id of "em-session-1" is in
+# hand: `<name>@session-<session_id[:8]>`, the key form `.agents/` is named by.
+# Derived via the real builder (not a hand-typed literal) so a future grammar
+# change desyncs this assertion loudly instead of silently going stale.
 NAMED_CANONICAL_AGENT_ID = session_identity.build_canonical_agent_id("ReviewBot", "em-session-1"[:8])
+#: EM-side canonical teammate id — the shape a NAMED dispatch actually presents
+#: and the shape `.agents/<agent_id>/` is keyed by. Grammar taken from the three
 #: writers that mint it (track_dispatched_agents._TEAMMATE_AGENT_RE and the two
 #: _TEAMMATE_CANONICAL_RE copies), not from observed samples.
 CANONICAL_TEAMMATE_AGENT_ID = "c7-agent-probe@session-2c79e462"
@@ -199,7 +204,10 @@ def test_canonical_agent_id_grammar_matches_the_minters() -> None:
         engine._TEAMMATE_CANONICAL_RE.pattern
         == track_touched_files._TEAMMATE_CANONICAL_RE.pattern
     )
+    # _subagent_identity's copy adds named capture groups, so its .pattern
+    # string differs by construction -- compare behaviour, both directions, so
     # a copy growing STRICTER than the built id is caught too, not only a laxer
+    # one (the one-directional check this replaces could not see that).
     built = _subagent_identity._cs_build_canonical_agent_id("c7-agent-probe", "2c79e462")
     assert engine._TEAMMATE_CANONICAL_RE.fullmatch(built)
     assert _subagent_identity._TEAMMATE_CANONICAL_RE.fullmatch(built)
@@ -596,7 +604,9 @@ def test_load_policy_absent_file_bash_policy_empty(git_repo: Path) -> None:
     assert policy.bash_policy == {}
 
 
+# ---------------------------------------------------------------------------
 # _resolve_default_policy_path (CLAUDE_PLUGIN_ROOT best-effort default fallback)
+# ---------------------------------------------------------------------------
 
 def test_resolve_default_policy_path_env_absent_none(
     monkeypatch: pytest.MonkeyPatch,

@@ -414,15 +414,18 @@ _WRITE_OVERLAP_INVENTORY = textwrap.dedent(
 )
 
 
-def test_write_overlap_edge_is_dropped_non_overlapping_edge_survives():
+def test_write_overlap_edge_is_kept_alongside_non_overlapping_edge():
     rows = im.parse_chunk_table(_WRITE_OVERLAP_INVENTORY)
     minted = im.mint_rows(rows)
     by_id = {row["id"]: row for row in minted}
 
-    # C2 shares fixture_shared.py with C1 -- the C1 edge is dropped.
-    assert "depends_on" not in by_id["C2"]
+    # C2 shares fixture_shared.py with C1 -- a depends_on reader must still
+    # see the edge; overlap never drops it.
+    assert by_id["C2"]["depends_on"] == [
+        {"chunk": "C1", "gate_kind": "output-consumption-runtime"}
+    ]
 
-    # C3 shares nothing with C1 -- the edge survives.
+    # C3 shares nothing with C1 -- the declared edge survives too.
     assert by_id["C3"]["depends_on"] == [
         {"chunk": "C1", "gate_kind": "output-consumption-runtime"}
     ]
@@ -783,6 +786,37 @@ def test_plan_sourced_inventory_row_expands_into_its_plan_chunk_dag(tmp_path):
         "P1.A1",
         "P1.A2",
     }
+
+
+def test_plan_sourced_expanded_rows_name_their_source_plan(tmp_path):
+    # emit's `_row_source_plan` keys `_rowPlan` on the body's leading
+    # `Spec: <plan> (<id>)` line; an expanded row missing it turns a
+    # plan-scoped stop rule into a whole-run halt.
+    from coordinator_core.ops.dispatch_emit.emit import _ROW_SPEC_PLAN_RE
+
+    inventory_path = _write_two_plan_inventory(tmp_path)
+    plan_a = tmp_path / "docs" / "plans" / "fixture-plan-a.md"
+    plan_a.write_text(
+        _TWO_CHUNK_PLAN_FIXTURE.replace(
+            "  title: First A step\n",
+            "  title: First A step\n  body: |\n    Do the first step.\n",
+        ),
+        encoding="utf-8",
+    )
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+    by_id = {row["id"]: row for row in minted}
+
+    expected = {
+        "P1.A1": "docs/plans/fixture-plan-a.md",
+        "P1.A2": "docs/plans/fixture-plan-a.md",
+        "P2.B1": "docs/plans/fixture-plan-b.md",
+    }
+    for row_id, plan in expected.items():
+        match = _ROW_SPEC_PLAN_RE.match(by_id[row_id]["body"].splitlines()[0])
+        assert match is not None, row_id
+        assert match.group(1) == plan
+    assert "Do the first step." in by_id["P1.A1"]["body"]
 
 
 def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path):

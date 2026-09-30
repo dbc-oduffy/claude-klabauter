@@ -130,6 +130,9 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
             abs_cn = cn
         else:
             # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH
+            # (e.g. a drive-root `git_root` of `C:\`) survives the latter and
+            # composes a double-slash prefix below (see the matching note on
+            # `expected_prefix`).
             abs_cn = git_root.rstrip("/\\") + "/" + cn
         try:
             abs_cn_canon = casefold_path(str(Path(abs_cn).resolve(strict=False)))
@@ -223,9 +226,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 continue
             candidate_disk = Path(cn) if Path(cn).is_absolute() else (base_dir / cn)
             # A record that does not exist yet is being AUTHORED, not
+            # hand-edited — out of scope (negative-spec above).
             if not candidate_disk.is_file():
                 continue
+            # A Write's pre-image is needed to detect
             # a phase-field DELETION (new content omits phase: entirely), not
+            # just a phase-value change. Read failures fail open (no
+            # pre_image), consistent with this guard's fail-open discipline.
             pre_image: Optional[str] = None
             if tool_name == "Write":
                 try:

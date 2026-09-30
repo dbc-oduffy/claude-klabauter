@@ -202,7 +202,11 @@ _FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json")
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
+# Single-flight lock — same stale-lock tolerance rationale as
 # archive_terminal_handoffs._SWEEP_LOCK_STALE_S: sized generously above this
+# op's own <500ms budget so a live, merely-slow invocation is never mistaken
+# for stale, while a crashed holder self-heals rather than wedging every
+# future sweep.
 _SWEEP_LOCK_STALE_S = 120.0
 
 

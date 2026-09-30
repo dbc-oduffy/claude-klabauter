@@ -450,6 +450,13 @@ def test_caller_read_deadline_bounds_a_compute_only_read(
     assert time.monotonic() - t0 < client.READ_DEADLINE_SECS
 
 
+# --- delivered mutations never go cold and never re-send -------------------
+# The 2026-08-19 defect: a `git commit` outran the 2s liveness deadline, the
+# client went cold, and the cold engine re-ran the op -- committing nothing,
+# because the warm server (still finishing) had already committed the paths.
+# The operator was told "no commit landed" about a commit that existed under a
+# token the second execution had never minted. Evidence: peer session
+# 30008a4b, commits e527554b8 / b330d767d. These pin the invariant that closes
 # it: once a MUTATING request is DELIVERED, no re-send and no cold fallback.
 
 _MUTATING_MSG = {

@@ -277,6 +277,8 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     assert fname_b not in anchored
     assert fname_d not in anchored
 
+    # A third heal is a genuine no-op with zero spawns. Patched by hand
+    # (not via `monkeypatch`) so restoring it does not also undo the
     # COORDINATOR_SETTINGS_HOME env-var patch this test still needs below.
     def _forbidden(*a, **k):
         raise AssertionError("no git subprocess expected on a converged heal")

@@ -241,7 +241,19 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
     assert by_branch.get("work/test/cleanmerged", {}).get("severity", "OK") == "OK"
 
 
+# ---------------------------------------------------------------------------
+# Amplification-gate deliverable: `main`'s per-branch ahead-count
+# (`git rev-list --count main..tip`) and per-branch PR lookup (`gh pr list
+# --head <branch>`) are now each folded into ONE batched call outside the
+# per-branch loop (`git for-each-ref --format=%(ahead-behind:<main>)` and one
+# unscoped `gh pr list --json ...,headRefName`) — see the amplification gate
+# keys ('main', '_git') / ('main', '_run') in
 # coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py::_KNOWN_SITES.
+# This pins PROCESS COUNT DOES NOT GROW WITH N: each batch primitive must
+# fire exactly once for the whole sweep, whatever the branch count, mirroring
+# test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+# test_process_count_does_not_grow_with_the_set.
+# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
@@ -284,7 +296,13 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# Faithful oracle-bug repro: current-branch `"* "` marker is not stripped by
+# the bash-equivalent regex, so a qualifying branch that is ALSO the checked-
+# out HEAD is silently dropped from seen_branches. See module docstring
 # negative-spec. NOT a fix target — this is a NEGATIVE-SPEC regression test:
+# if this starts passing (branch appears), the faithful-repro contract broke.
+# ---------------------------------------------------------------------------
 
 
 def test_current_branch_dropped_oracle_bug(tmp_path, monkeypatch, capsys):
@@ -299,7 +317,19 @@ def test_current_branch_dropped_oracle_bug(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
+# ---------------------------------------------------------------------------
+# --severity-min filtering and --format text, positive (populated) cases.
+#
+# Ported from coordinator/tests/plugin-ecosystem/orphan-sweep.test.js:
+#   "--severity-min critical suppresses WARNING entries" (its :303) and
+#   "text format emits readable lines" (its :323) — the two JS-suite
+#   assertions NOT already covered above by test_end_to_end_critical_warning_ok
+#   (which only ever calls main() with --severity-min ok) or
+#   test_current_branch_dropped_oracle_bug (--format text but always-empty
+#   output, so it never exercises the per-severity line-prefix contract).
+# See module docstring: byte-parity verified against this same JS suite
 # during the 2026-07-17 BIG_PORT port.
+# ---------------------------------------------------------------------------
 
 
 def _plant_critical_and_warning_branches(tmp_path: Path, monkeypatch) -> tuple[Path, str]:
@@ -509,7 +539,11 @@ def test_verify_commit_in_review_window_outside_range(tmp_path):
     assert verify_commit_in_review_window(root, lower, upper, cwd=repo) == {"in_window": False}
 
 
+# ---------------------------------------------------------------------------
+# Registered handler surface (async register_op wrappers) — same fixtures,
 # invoked through the JSON-RPC-shaped entry points via asyncio.run, matching
+# this repo's existing async-handler test convention.
+# ---------------------------------------------------------------------------
 
 
 def test_compute_descendant_tip_handler(tmp_path):
@@ -714,8 +748,14 @@ def test_missing_batch_line_falls_through_to_existing_now_default(tmp_path, monk
     assert per_branch_ct == [], "expected the batch-hit/missing-line path, not the per-branch fallback"
 
 
+# ---------------------------------------------------------------------------
 # The CRITICAL classification must be clearable by its own remedy. `gh pr list`
 # orders newest-first, so reading a list POSITION (`prs[-1]`) selected the
+# oldest of the five most recent PRs: a fresh PR opened to track the commits
+# that outlived an already-merged one prepends to the list and was never the
+# element read, leaving the sweep reporting the long-merged PR forever. Pins
+# selection by `number`, not position.
+# ---------------------------------------------------------------------------
 
 
 def _write_multi_pr_gh_stub(bin_dir: Path, pr_map: dict) -> None:

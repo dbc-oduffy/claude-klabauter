@@ -532,7 +532,12 @@ def _detect_cycle(
     def visit(node: str) -> None:
         color[node] = GRAY
         path.append(node)
+        # sorted(): preds[node] is a set, and Python's set iteration order
+        # for str elements depends on per-process hash randomization
         # (PYTHONHASHSEED) — without a deterministic visit order, WHICH
+        # predecessor is visited first (and so which cycle path/member
+        # ordering ends up in the raised message) could vary run to run,
+        # even though whether a cycle exists is itself deterministic.
         for pred in sorted(preds[node]):
             if pred == node:
                 raise WaveCycleError(

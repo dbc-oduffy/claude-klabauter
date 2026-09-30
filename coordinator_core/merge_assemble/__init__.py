@@ -371,7 +371,13 @@ def build_judgment_points(
 _CEREMONY_NAME = "merging-to-main"
 
 #: Stored VERBATIM in the grant record's `note` (`write_tier_u_grant` never
+#: normalizes it), so an auditor reading a live grant can tell what minted
+#: it. Under `/workweek-complete` Step 16's nested invocation this write
 #: REPLACES workweek's grant (one grant file per session); the guard then
+#: resolves the nesting correctly — this ceremony's handback matches and
+#: fires, and workweek's outer handback finds nothing of its own and
+#: no-ops. Both of workweek's Tier-U consumers fire before Step 16, so
+#: nothing downstream of the replacement needs the outer grant.
 _TIER_U_GRANT_NOTE = (
     "implicit ceremony grant: /merging-to-main — minted after the node "
     "ceremony gate, handed back at d_grant_handback once the post-merge "

@@ -100,6 +100,8 @@ def test_deadline_stops_starting_new_attempts_once_budget_spent(_no_real_sleep, 
     )
 
     assert result is None
+    # The deadline was already spent after attempt 1 finished, so no
+    # second or third attempt is started — without the deadline this would
     # be `_GIT_RETRY_ATTEMPTS` (3).
     assert len(attempts) == 1
 

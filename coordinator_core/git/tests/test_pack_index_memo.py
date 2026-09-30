@@ -90,7 +90,14 @@ def test_rewritten_pack_index_invalidates_the_memo(tmp_path: Path) -> None:
     assert original is not None
     original_shas = original.shas
 
+    # Add a second commit and re-repack -- git repack -ad against the same
+    # repo produces a NEW pack (new content, new sha-derived filename), but
+    # to prove the memo keys off the FILE the caller is asking about (not
     # something derived once and cached forever) we overwrite the ORIGINAL
+    # idx_path in place with the new index bytes, simulating a pack
+    # rewritten at a stable path (git repack -adk without pruning old names
+    # is one real-world path to this; the point under test is the memo, not
+    # git's own naming scheme).
     (tmp_path / "second.md").write_text("second\n", encoding="utf-8")
     _git("add", "-A", cwd=tmp_path)
     _git("commit", "-qm", "second", cwd=tmp_path)

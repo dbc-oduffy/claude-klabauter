@@ -183,11 +183,12 @@ COHORT: dict[str, tuple[bool, str]] = {
         "ops eager-import sweep. Same shape as check_em_environment.",
     ),
     "coordinator_core/write_guards/block_subagent_plan_body_write.py": (
-        True,
-        "Cold-only: the read is in `_write_hook_emit_log`, reached only from "
-        "`check(payload)`, which `preuse-write-dispatch.py` calls through "
-        "`write_guards.engine.evaluate_payload_json` in the hook's own process. That "
-        "engine registers no op. The backlog's 'likely cold-only' guess holds here.",
+        False,
+        "Hook-process-only today, but pinned read-free rather than cold-only: the "
+        "module's sole session-identity env read lived in a diagnostic emit probe "
+        "that is deleted, and the guard takes identity from the payload's "
+        "`session_id`. The read must not return; a ladder walk here would resolve "
+        "the spawner's identity if the guard were ever reached from a warm op.",
     ),
     "coordinator_core/install/forwarder_self_heal.py": (
         True,

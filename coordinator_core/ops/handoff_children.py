@@ -159,18 +159,35 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
 # Default edge-kinds set — mirrors EDGE_KINDS_CSV in the bash veneer (:44).
 # Derived from dag.ARCHIVAL_EDGE_KINDS (the SSOT) rather than restated —
+# see coordinator_core/tests/test_dag_edge_kind_ssot.py for the drift guard.
+# ---------------------------------------------------------------------------
 _DEFAULT_EDGE_KINDS: Set[str] = set(ARCHIVAL_EDGE_KINDS)
 
 #: Conclusion-shaped counterpart to `_DEFAULT_EDGE_KINDS`, for a caller asking
+#: "may THIS workstream conclude?" rather than "is it safe to archive THIS
 #: node?". `_DEFAULT_EDGE_KINDS` (all three edge kinds) is correct for the
 #: ARCHIVAL question; it is WRONG for the CONCLUSION question — see
 #: `dag.ARCHIVAL_EDGE_KINDS` / `dag.CONTINUATION_EDGE_KINDS` for the full
+#: rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
+#: example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
+#:
 #: `_DEFAULT_EDGE_KINDS` itself stays UNWIDENED — archival callers depend on
+#: it and `TestBlockedByDependentsPinnedFunctionUnchanged.
+#: test_default_edge_kinds_unwidened` pins it. Every conclusion-shaped caller
+#: must pass THIS constant explicitly via the `edge_kinds` param.
+#:
+#: A wire-shaped CSV string, deterministically ordered (sorted — set iteration
+#: order must never leak into a wire value) and derived from
 #: `dag.CONTINUATION_EDGE_KINDS`, the SSOT. `coordinator_core/workstream_
+#: complete/__init__.py` keeps its OWN local duplicate of this exact CSV
 #: string (`_LEG_B_EDGE_KINDS`) ON PURPOSE — see that module's own comment for
+#: why (a measured, not assumed, cold-invocation import-cost decision), and
+#: `coordinator_core/tests/test_dag_edge_kind_ssot.py` for the drift guard
 #: that keeps it, this constant, and `coverage._CONTINUATION_EDGE_KINDS` in
+#: sync.
 CONCLUSION_EDGE_KINDS = ",".join(sorted(CONTINUATION_EDGE_KINDS))
 
 

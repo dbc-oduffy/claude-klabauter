@@ -133,6 +133,8 @@ class TestCheckFiveForeignHunk:
         (tmp_path / "foo.txt").write_text("this session's own content\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
         # Record a fingerprint for content DIFFERENT from what is on disk and
+        # staged now -- the foreign-edit shape: this session's own last
+        # recorded write no longer matches disk-now.
         _claim(root, sid, "foo.txt", content_hash="0" * 64)
 
         result = dispatch_checks.check_validate_commit(

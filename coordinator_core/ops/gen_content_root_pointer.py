@@ -426,7 +426,12 @@ def main(argv: List[str]) -> int:
     if refusal:
         print(f"{_PROG}: refusing to write {pointer_file}: {refusal}", file=sys.stderr)
         if not os.environ.get("PYTEST_CURRENT_TEST"):
+            # A REAL install reaching this is nearly always an accident — an
             # ambient COORDINATOR_DISABLE_MACHINE_MUTATION left exported by a
+            # prior debug session or a wrapping harness. `run_required_py` treats
+            # rc 0 as success, so a one-line stderr note inside a "required"
+            # phase is exactly the thing an operator scrolls past. Say it loudly
+            # on STDOUT, where the Phase-7 status table is read.
             print(
                 f"{_PROG}: WARNING — the .coordinator-content-root pointer was NOT written. "
                 f"Unset {_MUTATION_DISABLE_ENV} and re-run if that was not "

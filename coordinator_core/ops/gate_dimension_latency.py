@@ -72,6 +72,7 @@ from coordinator_core.authz.classification import OpClass
 from coordinator_core.benchmarks import baseline_store
 from coordinator_core.benchmarks import budget as budget_mod
 from coordinator_core.benchmarks import gate as gate_mod
+from coordinator_core.benchmarks.record import compose_machine_id
 from coordinator_core.ops.gate_validate_invocable import (
     DimensionResult,
     Verdict,
@@ -198,7 +199,7 @@ def _op_class_for(op_key: str, inventory: Optional[list[dict]] = None) -> Option
 
 def _latest_record_for(op_key: str):
     latest = None
-    for record in baseline_store.query(op=op_key):
+    for record in baseline_store.query(op=op_key, machine=compose_machine_id()):
         latest = record
     return latest
 

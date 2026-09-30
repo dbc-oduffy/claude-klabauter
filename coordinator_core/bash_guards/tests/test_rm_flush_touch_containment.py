@@ -152,7 +152,11 @@ class TestDotDotNormalizesBackInsideIsRecorded:
     def test_dot_dot_path_normalizing_inside_root_is_recorded(
         self, tmp_path, monkeypatch
     ):
+        # A target spelled with a `..` segment
+        # that normalizes back inside `root` (e.g. `root/sub/../file.txt`)
         # must still be RECORDED: it is in-repo once normalized, and
+        # `_is_within` normpaths before comparing, so this is not the
+        # out-of-repo shape this gate exists to reject.
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()

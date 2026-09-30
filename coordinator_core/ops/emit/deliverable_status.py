@@ -106,8 +106,42 @@ def _compute_map(
     follow-on, not an implied completion.
     """
     pairs: list[tuple[str, str]] = []
+    # Group-level liveness partition (sedge-03 Resolution 2 Step A). Per-group data needed
+    # to detect a live-carrier-less `continued` handoff group, computed with zero extra
+    # filesystem I/O: `provenance.path`'s already-present `archive/` vs `state/` prefix.
+    # `has_live_carrier` answers "does any live artifact carry THIS canonical id" — this
+    # single per-canonical-id test covers BOTH measured failure shapes without needing to
+    # follow `continued_into` at all: Shape A (successor exists live but under a
     # DIFFERENT deliverable_id — the id does not carry forward, so this group's own
+    # `has_live_carrier` is correctly False even though the chain itself continues live
+    # elsewhere, under a different group) and Shape B (`continued_into` dangles — no live
+    # record anywhere, so `has_live_carrier` is trivially False). Cross-referencing
+    # `continued_into` against `envelope["handoffs"]`'s live `provenance.path` values (an
+    # in-memory set lookup, free, no extra I/O) was evaluated as an alternative signal but
+    # is redundant with — and, used as a gate, would wrongly rescue Shape A from bridging,
+    # since its `continued_into` DOES resolve to a live path (just under a different id).
+    # The named soundness caveat therefore lands on `has_live_carrier` itself, not a
+    # `continued_into` lookup: `has_live_carrier` is computed strictly from the RECORDS
+    # actually present in this emission's own arrays, so a successor that legitimately
+    # carries the SAME canonical id forward but was, for whatever reason, not collected
+    # into this run's `handoffs`/`plans`/`roadmaps` arrays would false-negative (bridge a
+    # group that has live work the collector simply didn't see this run) — a named,
+    # accepted gap, not a silent one; `plan`/`roadmap` rows are ipso facto live per
     # `_TYPE_TO_GLOB`.
+    #
+    # Named, accepted gap (sedge-03 s1 review, mixed-membership groups): `all_continued`
+    # requires EVERY handoff member of a canonical group to be `continued` before the
+    # group is bridge-eligible. A group mixing `continued` with `closed`/`abandoned`
+    # handoffs, with zero live carriers, has no live carrier by every measure the bridge
+    # cares about, yet `all_continued` is False for it (one non-`continued` member breaks
+    # the AND-chain) — so it is never bridged and never lands in `bridged_ids`. Its emitted
+    # *status* still lands on "in-progress" via the ordinary max-score path (not all
+    # phases are abandoned), so the value is accidentally correct, but the zombie goes
+    # unmarked in `bridged_ids`. Deliberately NOT widened here: whether the intended bridge
+    # scope is "any live-carrier-less group" or "only uniformly-continued groups" is a
+    # spec-precision question this stub does not settle, and widening `all_continued`
+    # would change emitted values for other group shapes on a bilateral-contract surface.
+    # Surfaced to the PM separately rather than resolved by silent widening.
     has_live_carrier: dict[str, bool] = {}
     all_continued: dict[str, bool] = {}
 
@@ -147,7 +181,14 @@ def _compute_map(
 
     dlv_map: dict[str, str] = {}
     for dlv_id, phases in groups.items():
+        # Bridge (sedge-03, Resolution 2 Step A): a group whose every handoff member is
+        # `continued`, with no live carrier of any kind (no live handoff, plan, or
+        # roadmap row) under this canonical id. Covers both measured failure shapes (see
+        # the `has_live_carrier` comment above). Named bridge value `in-progress` (per the
         # OVERVIEW's Bridge sub-section) — the only frozen `DeliverableStatus` member that
+        # does not misstate "not stopped" or "not shipped". `shipped_sha` still wins over
+        # the bridge (matches `_handoff_phase`'s own shipped_sha-first precedence). Not a
+        # final shape: retirement AC5 below.
         is_bridged = (
             all_continued.get(dlv_id, False)
             and not has_live_carrier.get(dlv_id, False)

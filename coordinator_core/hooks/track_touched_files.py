@@ -89,16 +89,51 @@ from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.session import touch_record
 from coordinator_core.session.scope import normalize_touch_path
 
+# C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+# its-writers.md): the SAME filename session/scope.py's `touch()` (C4) and
+# `self_claim` (C6) already write, so every writer of a session- or
+# agent-keyed claim lands in ONE dialect, ONE file, per sink --
+# `touch_record.project_live_claims` is the one seam that reads all three.
 # Mirrors `session/scope.py`'s own (module-private) `_TOUCH_RECORD_FILENAME`
+# literal; not re-imported because that name is private to that module and
+# this hook owns its own copy of the literal it must match.
 _TOUCH_RECORD_FILENAME = "touch-record.jsonl"
 
+# ---------------------------------------------------------------------------
+# D6 — per-target-file asyncio.Lock registry.
+#
+# The engine is a per-repo singleton shared by concurrent sessions. Two sessions
+# returning simultaneously can invoke this op concurrently — both dispatch
+# asyncio.to_thread() tasks that touch the same touch-record.jsonl sink. Process-
 # isolation (which serialises the source bash hook's concurrent O_APPEND writes) is
+# absent in-engine. An asyncio.Lock per target file serialises concurrent
+# in-engine invocations targeting the same sink (C7: no longer a read-check-then-
+# append cycle — touch_record.append_event's single atomic append needs no
+# application-level lock of its own; this lock predates that flip and is kept
+# unchanged — see the block comment above `_append_touch_record`).
+#
+# Lazily created on first access; accessed ONLY from the event loop (async handler),
+# so no cross-thread contention on the dict itself.
+# ---------------------------------------------------------------------------
 _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 
 # Bound _FILE_LOCKS growth. The engine may run for a full
+# workday; sessions archive but locks were never evicted, accumulating O(sessions×agents)
+# entries indefinitely. Two-tier eviction: (1) on new-path creation, sweep entries whose
+# parent directory no longer exists (session archived → dir gone — cheap isdir check);
+# (2) hard cap via oldest-entry eviction if the stale sweep wasn't sufficient.
+#
 # HELD-AWARE (docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md
+# § C9). The prior eviction policy (FIFO pop, no `.locked()` check) could evict a lock
+# a peer dispatch currently holds (`async with lock:` in progress in `_handler`). After
+# eviction, `_get_lock` creates a FRESH `asyncio.Lock()` for the same path on the next
 # call, so the held peer and the new caller serialise on TWO DIFFERENT lock objects for
+# the SAME path — i.e. they do not serialise at all, defeating D6's entire purpose. This
+# is a policy redesign, not a trigger tweak: both the stale sweep and the hard-cap
+# eviction below now consult `lock.locked()` and NEVER remove an entry whose lock is
+# currently held, regardless of table size. If every entry is held when the cap is
 # reached, growing past `_MAX_FILE_LOCKS` is the correct behaviour — not evicting a held
+# lock.
 _MAX_FILE_LOCKS = 256
 
 
@@ -140,7 +175,21 @@ def _get_lock(path: str) -> "asyncio.Lock":
     return _FILE_LOCKS[path]
 
 
+# ---------------------------------------------------------------------------
+# Agent-id resolution — Port of: coordinator-session.sh::resolve_subagent_identity
+# (DoE e34f2484, 2026-07-22)
+#
+# Three resolution paths (including the C10 named-teammate
+# extension; docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C10):
+#   (a) Bare hex  ^[a-f0-9]{12,}$  — unnamed agent; return unchanged.
+#   (b) Named teammate  ^a(.+)-[a-f0-9]{16}$  — extract name, build canonical id
+#       via cs_build_canonical_agent_id equivalent: "<name>@session-<short>".
+#   (c) Unrecognised shape — return "" (fail-closed; agent-keyed write skipped).
+# ---------------------------------------------------------------------------
+#: Already-canonical teammate shape, matching _subagent_identity's
 #: _TEAMMATE_CANONICAL_RE. A subagent-context PostToolUse fire can carry the
+#: agent_id in this form too (not just the raw a<name>-16hex shape below) —
+#: see the (d) branch's docstring note.
 _TEAMMATE_CANONICAL_RE = re.compile(r"^[A-Za-z0-9_.-]+@session-[a-z0-9-]+$")
 
 
@@ -156,7 +205,14 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
             return f"{name}@session-{short}"
         return ""
 
+    # (d) Already-canonical <name>@session-<short> — rebuild against the LIVE
+    # session_id rather than trusting the embedded short verbatim. The harness
+    # stamps that short once at team creation and never refreshes it across
+    # /clear, resume, compact, or fork, so a verbatim id here would key a
     # DIFFERENT .agents/<id>/ directory than the one branch (b) above (and
+    # track_dispatched_agents, once normalized) uses for the same teammate.
+    # See coordinator_core.write_guards._subagent_identity.
+    # normalize_teammate_agent_id for the full mechanism.
     if _TEAMMATE_CANONICAL_RE.match(agent_id):
         from coordinator_core.write_guards._subagent_identity import (
             normalize_teammate_agent_id,
@@ -167,9 +223,23 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# C7 (the writer flip, part two): both appends below now route through
+# ``touch_record.append_event`` -> ``atomic_append.append_line`` -- the same
+# single-write-syscall primitive session/scope.py::touch (C4) and self_claim
+# (C6) already use. No read-modify-write, no `locked_rmw`: that primitive's
+# own negative-spec (touch_record.py module docstring) forbids `locked_rmw`
+# on this append path -- the serialisation it bought was never cross-session,
+# only within one session's own file, and atomic_append already gives O(1)
 # cross-process safety without it (POSIX real O_APPEND kernel atomicity;
 # Windows FILE_APPEND_DATA via CreateFileW -- see atomic_append.py's own
+# negative-spec for the live-reproduced data-loss bug that backs this). The
 # per-file asyncio.Lock (D6, ``_get_lock``/``_FILE_LOCKS`` above) is KEPT
+# unchanged around each call: it still serialises concurrent in-engine
+# invocations targeting the same sink, and removing it is out of this
+# chunk's scope (external coverage in
+# coordinator_core/tests/test_hooks_bookkeeping.py drives it directly).
+# ---------------------------------------------------------------------------
 
 
 def _append_touch_record(
@@ -188,6 +258,11 @@ def _append_touch_record(
             path=path,
             content_hash=content_hash,
             # KIND_WRITE unconditionally: this hook is PostToolUse on
+            # Edit/Write/MultiEdit/NotebookEdit and fires on nothing else (see
+            # the module docstring's input contract), so every event it records
+            # is a mutation by construction. No branch is needed and none should
+            # be added -- a `kind` that varied here would mean the hook had
+            # started firing on a tool it does not own.
             kind=touch_record.KIND_WRITE,
         )
     except (touch_record.LineTooLong, touch_record.OutOfWorktreePath):
@@ -408,7 +483,19 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not file_path_norm:
         return no_advisory()
 
+    # --- C12 (plan 2026-08-27-a-pathspec-is-not-a-scope): fingerprint the
+    # file this tool call just wrote, so a later commit-time comparator (C11)
+    # has a recorded hash to check disk-now against. The hook already stats
+    # the file it is recording (normalize_touch_path's own resolution above);
+    # this adds one read, not a walk -- ~0.148ms/file, in-process, zero
+    # spawns (touch_record.compute_content_hash's own docstring). Computed
     # against the ABSOLUTE path (worktree root + repo-relative norm form):
+    # compute_content_hash takes whatever path it is given literally and
+    # never resolves against a cwd of its own. A ``None`` result (file
+    # deleted between the tool's write and this read, a permission race) is
+    # passed straight through to ``append_event`` unchanged -- omitted from
+    # the encoded line, never guessed at (see ``compute_content_hash``'s own
+    # degrade contract).
     _content_hash = await asyncio.to_thread(
         touch_record.compute_content_hash,
         os.path.join(_worktree_root, file_path_norm),
@@ -439,14 +526,60 @@ async def _handler(params: dict, repo_root=None) -> dict:
                 _write_backpointer_sync,
             )
 
+            # Piece 2 — Workflow-internal agent-spawn attribution (2026-08-03,
+            # docs/plans/2026-08-03-scope-guard-peer-claim-release.md § C7).
+            #
+            # A Workflow-internal `agent()` spawn never fires the Agent-tool-matched
+            # track_dispatched_agents hook, so the fallback below (which attributes
+            # ownership to `session_id`, the firing session) is the only writer that
             # ever runs for it — and `session_id` there is the SUBAGENT's own distinct
+            # id, not the dispatching EM's (see the branch (b) rationale below), so a
+            # Workflow-internal spawn's agent dir still ends up ownerless in practice.
+            #
             # CLAUDE_CODE_SESSION_ID is inherited by this hook's own process from its
+            # Workflow-internal parent — probe-confirmed (Workflow run
             # `wf_b7ef5d89-7ca`, single `env` read) to equal the DISPATCHING EM's
+            # session id, byte-identical, for the Workflow-internal spawn shape (not
+            # merely the Agent-tool shape it was previously documented for). Advisory
+            # attribution ONLY — every other consumer deliberately distrusts
             # CLAUDE_CODE_SESSION_ID as a subagent-vs-EM discriminator (see
+            # `nudge_unrouted_sizing._is_subagent_session` and
+            # `runtime-tripwire-em-check.py`'s docstring); attribution-when-absent is
+            # the one thing it is good for here.
+            #
+            # Fails closed on all four fronts — this arm can WIDEN `my_scope`:
+            #   - env unset/empty -> skip (nothing to attribute).
+            #   - env == session_id -> that IS the firing session (this hook's own
+            #     session_id param), not a distinct dispatching parent; writing it
+            #     would misattribute the firing session's own work to itself.
+            #   - existing non-empty back-pointer -> never overwritten; the writer
+            #     below is the idempotent (non-empty-file-wins) shared helper, so a
+            #     real dispatch-time record always wins over this advisory write.
+            #   - OSError -> swallowed inside `_write_backpointer_sync` itself; this
+            #     call never raises, matching this hook's fail-open contract.
+            #   - warm-served dispatch -> the canonical resolver, never a raw env
             #     read. This handler is a REGISTERED op (`hooks.track_touched_files`),
+            #     so it can execute inside a resident warm server whose own
+            #     environment names whoever SPAWNED that server rather than the
+            #     session on whose behalf it is serving. A raw env read there yields
             #     a STRANGER's id, which fails the `!= session_id` test above and so
+            #     gets WRITTEN as this agent dir's owner back-pointer -- the one
+            #     outcome this arm's fail-closed conditions exist to prevent.
+            #     `resolve_current_session_id` reads the per-request identity binding
+            #     first and lands on exactly the value this site wants: the id the
+            #     hook's own (cold) process resolved before the call crossed the wire.
+            #     Deliberate widening: the resolver's ladder also consults
             #     `COORDINATOR_SESSION_ID`/`CLAUDE_SESSION_ID` ahead of
             #     `CLAUDE_CODE_SESSION_ID`. Accepted rather than special-cased -- this
+            #     write is advisory and idempotent (a real dispatch-time record always
+            #     wins), and an identity ladder that disagrees with the canonical one
+            #     is the defect class this whole seam is being swept for.
+            # Function-local: this hooks module is eagerly imported by the
+            # hooks package sweep. Imported directly from session.core rather
+            # than through ops.session_context (2026-08-22, § C2) so this
+            # hook's cost no longer depends on whether the invoking process
+            # armed lazy ops — ops.session_context is a thin delegate to the
+            # same core.resolve_session_id (KS-6, 2026-08-07), nothing lost.
             from coordinator_core.session.core import resolve_session_id
 
             _em_session_id = resolve_session_id() or ""
@@ -476,5 +609,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     _content_hash,
                 )
 
+    # Note: meta.json last_activity is NOT updated here (costs ~36ms on Windows;
+    # matches sh:225-226). Activity is updated by cs_touch at commit time.
     # The record's CREATION is a different question and IS this hook's job --
+    # see _ensure_session_record_sync above. Creation once per session, on
+    # absence; refresh never. Do not read this note as an argument against the
+    # former: it prices a per-call read-modify-write, not a one-time create.
     return no_advisory()

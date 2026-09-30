@@ -272,7 +272,14 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_offers_a_path_forward(self):
+        # test_block_approval_sentinel_creation.py::
+        # test_indirection_deny_names_the_guard_and_offers_a_path_forward)
+        # -- was pinning a verbatim substring of the shared
         # `_sentinel_creation_guard.INDIRECTION_REMEDY` constant, which
+        # cannot catch a regression where the recommended route becomes
+        # something this guard itself denies. Structural check instead:
+        # extract the recommended command from the message and assert this
+        # same guard allows it.
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "machine-local set coordinator.guard_level warn" in reason

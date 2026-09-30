@@ -167,7 +167,10 @@ from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards.dispatch import GuardBand
 
+#: The cap on a guard's OWN prose, measured with the mandatory
+#: `operator_override_note` tail already subtracted by identity -- NOT
 #: 2x220. See module docstring NEGATIVE SPEC above; every AC and every
+#: downstream consumer names this constant, none restates the number.
 MESSAGE_PROSE_CAP_BYTES = 220
 
 _PROSE_FIELDS: Tuple[str, ...] = ("additionalContext", "permissionDecisionReason")
@@ -269,7 +272,18 @@ def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     return merged
 
 
+#: Review: coordinator:code-reviewer (Finding 1, guard-message-size-
+#: discipline) -- a diagnostic-echo line (what was denied) is not an
+#: offered alternative and must never be exempted from the prose cap
+#: merely because it sits inside an indented cue-window run. Mirrors
+#: `_alternative_liveness`'s own raw-indented-line skip-list
+#: (`candidate.startswith(("Subagent:", "Command:", "Denied:", "Reason:"))`,
+#: `_alternative_liveness.py`), extended with `"Detected:"` for the same
+#: reason the reviewer named: `check_test_suite_invocation.py`'s
+#: `Detected: %s` lines describe the triggering input, not an alternative.
 #: The `Command:` entry is built from the shared `_helpers.COMMAND_LINE_LABEL`
+#: constant rather than a hand-typed literal -- see that constant's own
+#: docstring for why it is shared across three sites.
 _DIAGNOSTIC_LINE_PREFIXES: Tuple[str, ...] = ("Subagent:", COMMAND_LINE_LABEL, "Denied:", "Reason:", "Detected:")
 
 
@@ -417,12 +431,28 @@ def _data_block_bytes(text: str) -> int:
     return total
 
 
+#: The ONE non-empty fixed string `operator_override_note` renders for a
 #: POSITIVELY-RESOLVED-EM audience, regardless of `env_var`/
 #: `reason_placeholder` -- see that function's own docstring, "RESHAPED
 #: AGAIN 2026-08-11" (second reshape) and "AUDIENCE-GATED, 2026-08-13"
 #: (tasks/guard-messages-keys/DECISIONS.md D1/D2). The 2026-08-11 reshape
+#: stopped interpolating the guard's own env-var name into its output at
 #: all, so there is no per-guard ARGUMENT to recover from rendered text for
+#: the EM-audience render; the 2026-08-13 audience gate ADDED a second,
+#: empty-string render for every non-EM audience (the exact regression this
+#: module's cap accounting must not choke on -- an empty tail is simply
+#: absent from any rendered text, so `_tail_bytes` below still finds nothing
+#: to exempt there, which is already correct). This constant therefore
+#: fixes ONE deliberately-constructed, well-formed EM-shaped envelope
+#: (`session_id` present, no `agent_id`/`subagent_type` legs) so
+#: `operator_override_note` resolves its EM branch and this module can
 #: still identify that one non-empty tail BY IDENTITY wherever it appears
+#: in EM-audience-rendered text -- still a LIVE render of the real builder,
+#: never a hand-copied transcription of its prose. Computed once at import
+#: time (never per measurement) because, for a FIXED audience, the builder
+#: is a pure zero-argument-dependent constant; measurement itself does not
+#: know or care which audience originally rendered the text it is capping,
+#: it only needs to recognize the tail's one possible non-empty shape.
 _OVERRIDE_NOTE_TAIL = operator_override_note(
     "", payload={"session_id": "message-size-measurement"}, git_root=None
 )
@@ -493,8 +523,27 @@ def _resolve_relayed_role_append() -> str:
 
 
 #: Resolved ONCE AT IMPORT, exactly as `_OVERRIDE_NOTE_TAIL` above is, and
+#: for a sharper reason than symmetry.
+#:
+#: The loader resolves through `claude_config_dir()`, which reads the
 #: `CLAUDE_CONFIG_DIR` environment variable -- and this corpus's own fixtures
+#: monkeypatch that variable to a scratch directory while a row fires
+#: (`guard_message_corpus.py`'s per-cell `MonkeyPatch` scope). A lazily-cached
+#: resolution therefore latches whatever the environment happened to say at
+#: the first `measure_envelope` call in the process: resolve during a patched
+#: row and the constant is `""` for the entire run, silently charging the
+#: relayed document as prose again. That is not hypothetical -- it is how the
+#: first version of this constant was written, and it measured correctly in a
+#: two-file run and wrongly in the full suite, which is the worst possible
+#: shape for a measurement bug (order-dependent, green in the narrow run a
+#: reviewer would repeat).
+#:
+#: Import time is the one moment that cannot be inside a fixture's patch:
 #: pytest imports every test module during COLLECTION, before any test body
+#: runs. The ~430ms `cater_subagent_start` import is paid once per process,
+#: and no production module imports `_message_size` (grep-verified: every
+#: reference outside this package's tests is a comment), so nothing on a
+#: dispatch hot path pays it at all.
 _RELAYED_ROLE_APPEND: str = _resolve_relayed_role_append()
 
 

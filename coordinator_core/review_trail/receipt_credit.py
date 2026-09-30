@@ -83,8 +83,8 @@ reads the same block to answer a DIFFERENT question — "did a review run for
 THIS session inside its baton claim window", one session, no commits. This
 module answers "which of THESE commits are covered", many sessions, and needs
 the per-commit clock comparison that gate has no use for. The two overlap on
-the counting-receipt predicate only; see `state/improvement-queue/` for the
-filed de-duplication.
+the counting-receipt predicate only, and both call it here
+(`_matching_reviewer_receipt`, `_receipt_counts`).
 
 Cost: zero added subprocesses. The commit date and `Session-Id` trailer ride
 along in a `git log` the caller already spawns, and the receipt read is a
@@ -205,6 +205,30 @@ def _bare_agent_type(agent_type: object) -> Optional[str]:
     if not isinstance(agent_type, str):
         return None
     return agent_type.rpartition(":")[2] if ":" in agent_type else agent_type
+
+
+def _matching_reviewer_receipt(
+    frontmatter: Dict, session_id: str, vocabulary: Iterable[str]
+) -> Optional[Dict]:
+    """The `review_receipt:` block of `frontmatter` iff it is a session-
+    matching reviewer receipt whose namespace-stripped `agent_type` is in
+    `vocabulary`, else None. The one spelling of the structural half of the
+    counting-receipt predicate; the content half is `_receipt_counts`.
+
+    `vocabulary` is the caller's question, not this predicate's: commit
+    credit passes `reviewer_vocabulary.DELEGATE_REVIEWERS`, the close-time
+    gate passes `CLOSE_RECEIPT_REVIEWERS` (a superset). Admitting a new
+    reviewer type is an edit to that module, and reaches both callers here.
+    """
+    receipt = frontmatter.get(_RECEIPT_KEY)
+    if not isinstance(receipt, dict):
+        return None
+    if receipt.get("session_id") != session_id:
+        return None
+    bare = _bare_agent_type(receipt.get("agent_type"))
+    if bare is None or bare not in vocabulary:
+        return None
+    return receipt
 
 
 @dataclass(frozen=True)
@@ -341,14 +365,12 @@ def _counting_receipt_stamps(
     `parsed_sidecars` (this session's sidecars, already parsed once across
     every extant share-root directory), oldest-first.
 
-    A receipt counts on the same conditions
-    `workstream_complete._compute_review_receipt_gate` applies, minus its
-    baton claim window (which is a property of a close ceremony, not of a
-    commit): the block exists, its `session_id` matches, its
-    namespace-stripped `agent_type` names a
-    `reviewer_vocabulary.DELEGATE_REVIEWERS` member, and `_receipt_counts`
-    (the completion/content predicate this module now applies in place of a
-    bare body-blank check) is True.
+    A receipt counts on the predicate
+    `workstream_complete._compute_review_receipt_gate` shares via
+    `_matching_reviewer_receipt` + `_receipt_counts`, minus its baton claim
+    window (a property of a close ceremony, not of a commit) and with the
+    commit-credit vocabulary `reviewer_vocabulary.DELEGATE_REVIEWERS` in
+    place of the gate's `CLOSE_RECEIPT_REVIEWERS`.
 
     Never raises. An unreadable sidecar, undecodable bytes, or a frontmatter
     block that will not parse was already skipped when `parsed_sidecars` was
@@ -358,14 +380,8 @@ def _counting_receipt_stamps(
 
     stamps: List[datetime] = []
     for frontmatter, text in parsed_sidecars:
-        receipt = frontmatter.get(_RECEIPT_KEY)
-        if not isinstance(receipt, dict):
-            continue
-        if receipt.get("session_id") != session_id:
-            continue
-
-        bare = _bare_agent_type(receipt.get("agent_type"))
-        if bare is None or bare not in DELEGATE_REVIEWERS:
+        receipt = _matching_reviewer_receipt(frontmatter, session_id, DELEGATE_REVIEWERS)
+        if receipt is None:
             continue
 
         if not _receipt_counts(frontmatter, text, session_id, summary):

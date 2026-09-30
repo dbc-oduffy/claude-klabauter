@@ -70,6 +70,12 @@ def test_fast_path_diverged_batch_issues_no_cacheinfo_fanout(tmp_path, monkeypat
         assert _committed_content_at_head(repo, f"file_{i:03d}.txt") == f"STAGED {i}\n"
 
     # The invariant is NO PER-PATH FAN-OUT, which is not the same as zero
+    # `--cacheinfo` calls and was written as if it were. Bound 6 (this
+    # function's post-landing shared-index refresh, added after this test)
+    # legitimately issues ONE batched `update-index --add` carrying every
+    # committed path on repeated `--cacheinfo` flags -- 25 paths, one spawn.
+    # Asserting `== []` failed on that batch while a genuine 25-spawn
+    # regression and a correct 1-spawn refresh were indistinguishable to it.
     cacheinfo_calls = [a for a in argvs if len(a) > 1 and a[0] == "update-index" and "--cacheinfo" in a]
     assert len(cacheinfo_calls) <= 1, (
         "fast (spine-rewrite) path must never fan `update-index --cacheinfo` "
@@ -174,7 +180,10 @@ def test_staged_deletion_is_actually_removed_not_resurrected(tmp_path):
     result = git_native._commit_scoped_private_index(["doomed.txt"], [], msg_file, repo)
 
     assert result.ok, result.stderr
+    # `git show --name-only` (the `_committed_files_at_head` helper) lists
+    # every path the commit's DIFF touched -- a deletion legitimately
     # appears there too, so tree PRESENCE is checked directly via `ls-tree`
+    # instead.
     ls_tree = _git(["ls-tree", "HEAD", "--", "doomed.txt"], repo).stdout
     assert ls_tree == "", f"doomed.txt must not exist in the new HEAD tree: {ls_tree!r}"
     show = subprocess.run(

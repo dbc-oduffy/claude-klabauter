@@ -115,6 +115,7 @@
 #                                  `exec claude`; exits 0 instead. Testing seam for exercising
 #                                  clone resolution without launching the real binary.
 
+import ntpath
 import os
 import shutil
 import subprocess
@@ -131,7 +132,7 @@ def _is_console_python_basename(path: str) -> bool:
     installed STANDALONE and cannot import a sibling lib (see
     `_machine_local_argv`'s docstring, same constraint, same reason).
     """
-    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    stem = ntpath.splitext(ntpath.basename(path))[0].lower()
     return stem.startswith("python") and not stem.startswith("pythonw")
 
 
@@ -229,9 +230,7 @@ def _resolve_claude_bin() -> str | None:
     extension-only default.
 
     This is the SAME PATH/PATHEXT walk as
-    `coordinator_core.launchable.which_path_ordered` (used by
-    `coordinator_core.ops.coordinator_complete_entry._which_render_rollup_shim`
-    for the identical CPython gap). Not delegated to that shared helper here
+    `coordinator_core.launchable.which_path_ordered`. Not delegated to that shared helper here
     because this file is installed STANDALONE (see `_machine_local_argv`
     above) and cannot import `coordinator_core` — genuinely can't be the same
     *callable*. Kept as a deliberate, explicitly-linked duplicate instead: a

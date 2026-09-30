@@ -197,6 +197,9 @@ _DENY_SUBCOMMANDS = frozenset({"drop", "clear"})
 _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 
 #: A bare leading `VAR=value` shell assignment token (`GIT_TRACE=1 git stash
+#: drop`) -- `_strip_leading_subshell_and_env` only peels a literal `env` word
+#: prefix, not a bare assignment, so command-position resolution needs its own
+#: skip for the assignment-prefix shape.
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 _PASSTHROUGH_WRAPPERS = frozenset(
@@ -277,7 +280,12 @@ def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
         if not working:
             continue
 
+        # `sh -c 'git stash drop'` tokenizes its quoted payload as ONE shlex
+        # word, so the head is the interpreter and the segment would be
+        # skipped while the wrapped command drops for real. Unwrap and recurse
+        # into the SAME `_evaluate` on the nested payload text.
         # `_BUNDLED_C_FLAG_RE` matches bundled short flags (`-ic`, `-ci`) too,
+        # which an exact `"-c" in working[1:]` test misses.
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
             c_flag_positions = [
@@ -305,9 +313,15 @@ def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
         if subcmd != "stash":
             continue
 
+        # `remaining[0]`, never a flag-skipping scan -- see module docstring
         # "CLASSIFICATION IS `remaining[0]`". 2026-08-23 fix (same
         # UNSCOPED-STASH GAP shape as the sibling create-side guards, see
+        # `_strip_leading_redirection_tokens`'s docstring): this module never
+        # applied the strip, so `git stash 2>&1 drop` displaced `remaining[0]`
+        # to `"2>&1"`, `_classify_stash_subcommand` allowed it as an
         # unrecognized token (this module's own DELIBERATE ALLOW-LIST), and
+        # the irrecoverable `drop`/`clear` this guard exists to catch sailed
+        # through.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
         verdict = classify(second)
@@ -429,7 +443,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
+    # Heredoc bodies are stdin DATA, not shell command text. The deny-reason
     # display below still uses the ORIGINAL `cmd` so the operator sees what
+    # they actually ran. `_strip_heredoc_bodies` matches bash `<<`-shaped
+    # syntax only -- a no-op on PowerShell text carrying no such marker.
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
     if not _STASH_WORD_RE.search(cmd_for_classification):
@@ -452,6 +469,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 #: `apply`-ONLY -- see module docstring "APPLY ADVISORY LEG" (below,
+#: appended 2026-08-30). Never `pop`: `pop` is the EM's own sanctioned
+#: restore path (see "WHY DROP/CLEAR AND NOT POP/APPLY" above) and a
+#: successful pop already shows the operator their content landed in the
+#: tree, so there is nothing left to nudge. `apply` is the shape the
+#: incident this leg answers actually used -- an unmodified stack position
+#: checked for a clean return, read as "nothing unique in the stash",
+#: which `apply` cannot tell you (see `_advisory_reason` below).
 _ADVISORY_APPLY_KIND = "git stash apply"
 
 

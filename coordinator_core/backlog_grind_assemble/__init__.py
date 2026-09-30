@@ -115,6 +115,8 @@ from coordinator_core.contract.decision_object.envelope import (
 )
 from coordinator_core.resolution.facade import resolve_operator_config
 
+#: The five mirror-surface cadences `backlog-grind-assemble brief` accepts.
+#: Cadence names WHICH surface is asking, not a severity/depth knob (D-2) —
 #: see the module docstring for the `orient_assemble.CADENCES` naming
 #: reuse. Order matches `_READER_MODULES` below 1:1.
 CADENCES: tuple[str, ...] = (
@@ -285,8 +287,12 @@ def _main_mint_run_id(rest: list[str]) -> int:
             )
             return EXIT_OK
 
+    # This branch and the
     # unrecognized-cadence branch above both exit EXIT_USAGE (AC5), but now
+    # print distinct messages so an operator can tell a typo from a real
     # cadence nothing mints for yet. The `cadence not in CADENCES` check is
+    # a cadence-vocabulary fact `main()` already tests elsewhere in this
+    # file, not a run-id-shape fact — stays on the AC7-opaque side.
     print(
         "backlog-grind-assemble: no reader claims mint-run-id for cadence "
         f"{cadence!r}",

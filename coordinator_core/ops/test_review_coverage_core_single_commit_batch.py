@@ -157,3 +157,43 @@ def test_only_the_single_commit_shape_is_recognised():
     assert not m.match("abc1234..abc1234")
     assert not m.match("abc1234~2..abc1234")
     assert not m.match("origin/main..HEAD")
+
+
+def test_an_abbreviated_sha_resolves_to_the_full_sha_in_the_mapping(repo):
+    sha = _commit(repo, "abbr.txt")
+    short = sha[:9]
+    rng = f"{short}~1..{short}"
+
+    memo = rcc._batch_single_commit_segments([rng], cwd=str(repo))
+
+    assert memo[rng][0] == {sha}, "the mapping must carry %H, never the abbreviation"
+
+
+def test_an_ambiguous_abbreviation_falls_back_to_the_per_range_path(monkeypatch):
+    a = "abcdef1" + "0" * 33
+    b = "abcdef1" + "1" * 33
+    lone = "1234567" + "2" * 33
+
+    def _fake_run(cmd, cwd=None, stdin_text=None):
+        if cmd[1] == "cat-file":
+            return 0, "\n".join(f"{s} commit" for s in (a, b, lone)), ""
+        return 0, "\n".join(f"{s}\x1f{'9' * 40}" for s in (a, b, lone)), ""
+
+    monkeypatch.setattr(rcc, "_run", _fake_run)
+    ambiguous = "abcdef1~1..abcdef1"
+    exact = f"{a}~1..{a}"
+    unique = "1234567~1..1234567"
+
+    memo = rcc._batch_single_commit_segments([ambiguous, exact, unique], cwd=".")
+
+    assert ambiguous not in memo, "git rejects an ambiguous abbreviation; the batch must not pick one"
+    assert memo[exact][0] == {a}
+    assert memo[unique][0] == {lone}
+
+
+def test_each_record_is_classified_once(repo, capsys):
+    records = [("p.json", {"scope_kind": "diff", "sha_range": "abc..def;x", "verdict": "ok"})]
+
+    rcc.build_segments(records, "skip", cwd=str(repo))
+
+    assert capsys.readouterr().err.count("unsafe sha_range") == 1

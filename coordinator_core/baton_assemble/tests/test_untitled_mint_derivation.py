@@ -15,7 +15,11 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -122,6 +126,7 @@ class TestSessionSizingDerivation(_GitRepoFixture):
 
     def test_different_session_sizing_not_picked(self) -> None:
         # negative: a sizing authored by a DIFFERENT session must not
+        # be picked up by this session's derivation.
         other_session = "22222222-2222-2222-2222-222222222222"
         self._commit_sizing("2026-08-10-someone-elses-sizing.yaml", other_session)
         self._set_session_env(

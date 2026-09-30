@@ -69,9 +69,9 @@ def _read_version(plugin_json: Path) -> Optional[str]:
     Python (a strictly more correct superset of both, same observable result
     on well-formed plugin.json)."""
     try:
-        data = json.loads(plugin_json.read_text())
-    except (OSError, json.JSONDecodeError):
-        print(f"skip: _read_version: data = json.loads(plugin_json.read_text()) failed: {sys.exc_info()[1]}", file=sys.stderr)
+        data = json.loads(plugin_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        print(f"skip: _read_version: reading plugin.json failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
     version = data.get("version")
     if not isinstance(version, str) or not version:
@@ -103,7 +103,7 @@ def _sync_plugin(name: str, source_dir: Path, cache_dir: Path) -> str:
         cache_target.mkdir(parents=True, exist_ok=True)
 
     orphaned_at_path = cache_target / ".orphaned_at"
-    orphaned_at = orphaned_at_path.read_text() if orphaned_at_path.is_file() else None
+    orphaned_at = orphaned_at_path.read_text(encoding="utf-8") if orphaned_at_path.is_file() else None
 
     # Safety guard (issue #13): never rm -rf an empty path or a path outside
     # the expected plugins cache root.
@@ -132,7 +132,7 @@ def _sync_plugin(name: str, source_dir: Path, cache_dir: Path) -> str:
     shutil.copytree(src, cache_target, dirs_exist_ok=True)
 
     if orphaned_at is not None:
-        orphaned_at_path.write_text(orphaned_at, newline="\n")
+        orphaned_at_path.write_text(orphaned_at, encoding="utf-8", newline="\n")
 
     file_count = sum(1 for p in cache_target.rglob("*") if p.is_file())
     lines.append(f"  SYNC: {name} ({version}) — {file_count} files")

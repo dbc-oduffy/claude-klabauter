@@ -547,23 +547,23 @@ def test_peer_claim_perturbation_resolvable_then_broken_never_commits(
 ).stdout
     assert "state/subagent-share/livepeer/peerfile.md" in status
 
-    # -- broken leg: livepeer's touched.txt becomes unreadable --
-    # The read seam moved with the 2026-08-21 rebuild: ownership now comes
-    # from `claim_index`, whose reader reports unreadability as a
-    # `(lines, ok)` pair and never goes through `pathlib.Path.read_text`.
-    # Patched at the old seam this leg established no degradation at all and
-    # asserted the wrong half of its own contrast.
-    peer_touched = os.path.join(
-        session_core.session_dir("livepeer", cwd=str(repo)), "touched.txt"
+    # -- broken leg: livepeer's claim record becomes unreadable --
+    # Ownership reads claims through `claim_index._read_stream_claims(sink)
+    # -> (claims, content_read_ok)`, never `pathlib.Path.read_text`. Blind on
+    # the peer's session DIRECTORY rather than a filename: the sink's name is
+    # the record dialect's, and a name match that misses patches nothing,
+    # leaving the precondition unestablished.
+    blinded_dir = os.path.normcase(
+        session_core.session_dir("livepeer", cwd=str(repo))
     )
-    real_reader = claim_index._read_lines_discard_torn_tail
+    real_reader = claim_index._read_stream_claims
 
-    def _unreadable(path):
-        if os.path.normcase(str(path)) == os.path.normcase(peer_touched):
-            return [], False
-        return real_reader(path)
+    def _unreadable(sink_path):
+        if os.path.normcase(str(sink_path)).startswith(blinded_dir):
+            return {}, False
+        return real_reader(sink_path)
 
-    monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
+    monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
     rc2, out2, err2 = _run_port(repo, [], capsys)
     assert rc2 == 2

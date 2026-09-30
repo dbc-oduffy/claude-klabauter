@@ -13,7 +13,10 @@ from coordinator_core.ops.ceremony.consumed_handoff_stamp import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real git, per the docstring above. Same tiering rationale as the sibling
+# `test_consumed_handoff_stamp_claim_release.py`; the spawn ratchet's
 # `_BASELINE` is shrink-only and explicitly not the route for a new file
+# (coordinator_core/tests/test_no_new_spawning_tests.py Rule 2).
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SID = "11111111-2222-3333-4444-555555555555"

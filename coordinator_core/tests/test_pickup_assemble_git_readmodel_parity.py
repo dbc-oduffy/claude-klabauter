@@ -152,7 +152,26 @@ def test_hash_object_stdin_matches_known_git_value(claude_klabauter_root):
     assert pa._git_hash_object_stdin("hello world\n", claude_klabauter_root) == "3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
 
 
+# ---------------------------------------------------------------------------
+# `_find_stamp_commit` (`gates.execution_stamp_match` history-walk) — pins
+# it against real `git log -1 --follow -S<needle>`, NOT the in-process
+# `_in_process_pickaxe` read-model it used to route through. That
+# reimplementation's own negative-spec comment (module docstring) used to
+# call the gap "narrow... a renamed-then-edited file's pre-rename history
+# is invisible" — this fixture has NO rename at all and still diverges: a
+# merge commit `M` that resolves to (is tree-identical to) its first
 # parent `C1` on the needle's path is real git's TREESAME-to-a-parent case
+# under default merge simplification, so `git log -S` walks straight past
+# `M` into `C1` (where the needle was actually introduced). The read-
+# model's `_in_process_pickaxe` has no such simplification — it loops over
+# `M`'s parents in order and returns `M` itself the moment ANY parent's
+# needle count differs (here, the second parent `B1`, which never carried
+# the needle), even though the FIRST parent already accounts for `M`'s own
+# content. Reproduces the stamp-integrity investigation's Root cause B,
+# Case 2 (`tasks/mise-findings/stamp-integrity.md`, coordinator-content-repo) end to end
+# through the real `_find_stamp_commit` entry point, not just the inner
+# walk.
+# ---------------------------------------------------------------------------
 
 
 def _merge_treesame_to_first_parent_fixture(root: Path) -> tuple[str, str, str]:
@@ -282,7 +301,13 @@ def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root
     assert len(pack_bytes) > 1_000_000, "fixture pack too small to make the regression observable"
 
     offset = min(pidx.offsets)
+    # No eviction needed: `_read_pack_object_at` is called here directly and
+    # is itself uncached, so this always exercises a real decompress. The
     # by-sha cache (`git_objects._OBJECT_CACHE`) sits a layer above and is
+    # not on this call path. This used to evict a per-(pack, offset) cache
+    # that no longer exists; the stale reference made the whole test error
+    # out rather than run, which is how the pack-read cost below went
+    # unguarded long enough to be rediscovered on 2026-08-26.
 
     max_slice_len = 0
     real_memoryview = memoryview

@@ -153,7 +153,9 @@ def test_unknown_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "unknown argument" in err
 
 
+# 11. Production meta-repo topology — HOME on /c/, scope-repo as C:/ drive form,
 #     registry source_path on a DIFFERENT drive (X:). Meta-repo check-all must
+#     still emit the cross-drive row.
 def test_production_metarepo_cross_drive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)

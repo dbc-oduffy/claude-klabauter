@@ -119,6 +119,30 @@ def test_late_landing_commit_folds_into_entry_commits_list(monkeypatch, tmp_path
     assert landed_sha in committed_text
 
 
+def test_completion_fold_commit_leaves_index_agreeing_with_head(monkeypatch, tmp_path):
+    from .test_commit_leaves_index_agreeing_with_head import (
+        assert_commit_leaves_index_agreeing_with_head,
+    )
+
+    root = real_git_repo(tmp_path)
+    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
+    entry_rel = "archive/completed/2026-08/entry.md"
+    _write_completion_entry(root, entry_rel)
+    (root / "some-file.txt").write_text("work\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "the late-landing session commit"], root)
+    landed_sha = _git(["rev-parse", "HEAD"], root).stdout.strip()
+
+    def _commit() -> None:
+        outcome = _run_tail(root, entry_rel, landed_sha)
+        assert outcome.completion_entry_fold_result["failed"] == []
+        assert outcome.completion_entry_fold_result["acted"] == [entry_rel]
+
+    assert_commit_leaves_index_agreeing_with_head(
+        root, _commit, [entry_rel], peer_path="peer-unrelated.txt"
+    )
+
+
 def test_placeholder_comment_form_is_handled(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)

@@ -183,6 +183,11 @@ def _prefer_platform_install_paths(
     if not installed:
         return pending
     # Keyed off the installPath's BASENAME, not the plugin name: `repos.*`
+    # keys are derived from repo basenames, and a plugin's declared name is
+    # routinely not its clone's directory name (the `coordinator` plugin
+    # lives in a `coordinator-claude` clone -- exactly the pair that broke
+    # on the reporting box). Matching on the name would have missed the only
+    # case this exists for.
     by_key = {}
     for path in installed.values():
         k = _derive_key(os.path.basename(path.replace("\\", "/").rstrip("/")))

@@ -1063,7 +1063,15 @@ def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypat
     assert seen != [str(_os.getpid())]
 
 
+# ---------------------------------------------------------------------------
+# Accept-and-queue (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md
+# § C5, AC7/AC8): `_enqueue_connection` claims the in-flight slot at ENQUEUE,
 # then hands `io` to one `queue.Queue` a fixed `WORKER_POOL_SIZE` pool of
+# worker threads (`_worker_loop`) drains -- dispatch concurrency is bounded
+# independently of how fast connections are accepted, and a drain must wait
+# for accepted-but-not-yet-dispatched work, never merely for the workers
+# that happen to be busy right now.
+# ---------------------------------------------------------------------------
 
 
 def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():

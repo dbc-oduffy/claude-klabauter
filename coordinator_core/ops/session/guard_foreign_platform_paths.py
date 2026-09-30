@@ -111,8 +111,16 @@ _POSIX_ROOT_RE = re.compile(r'(?<![A-Za-z0-9_./\\:-])/[A-Za-z0-9_][^\s"\']*')
 _ENV_VAR_WIN_RE = re.compile(r"\$env:[A-Za-z_][A-Za-z0-9_]*", re.IGNORECASE)
 _DOLLAR_IDENTIFIER_RE = re.compile(r"\$(\{)?([A-Za-z_][A-Za-z0-9_]*)")
 
+# PowerShell's OWN automatic-variable vocabulary -- a bare "$LastExitCode",
+# "$_", "$true" etc. inside a PowerShell command is NATIVE syntax on a
+# Windows host, not a foreign POSIX env-var read. This is shell-syntax
 # awareness (same category as `_POSIX_ROOT_RE` excluding "//host/share" UNC
+# and "scheme://" forms), never a hardcoded PROJECT variable name -- this
+# set is PowerShell's own reserved vocabulary, stable across any script that
+# uses it, and matches exactly the automatic variable `wrap_hook_command_
 # guarded()`'s own Windows branch emits ("exit $LASTEXITCODE"). Case-
+# insensitive, matching PowerShell's own case-insensitivity on variable
+# names. Source: `about_Automatic_Variables` (PowerShell reference).
 _POWERSHELL_AUTOMATIC_VARS = frozenset(
     v.lower()
     for v in (
@@ -158,15 +166,65 @@ _POWERSHELL_AUTOMATIC_VARS = frozenset(
 _DOEROOT_NAME = ".coordinator-content-root"
 _LEGACY_DOEROOT_NAME = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
+# --- Prose-scan shapes (CLAUDE.md / CLAUDE.local.md) -------------------------
+#
+# The two path-shape regexes above answer "is this a path shaped for the
+# other platform" -- sufficient for settings.json, where every string in the
+# tree is either machine-executable or a title/description that never
+# mentions a path at all. Free-form doctrine prose is different: it
 # LEGITIMATELY discusses paths, including the exact shape this guard exists
+# to catch, as illustration of why paths must not be hardcoded (see this
 # guard's own originating incident writeup). A bare `_WIN_DRIVE_RE`/
 # `_POSIX_ROOT_RE` scan over prose fires on its own remedy text -- e.g.
+# `~/.claude/CLAUDE.local.md`'s sibling-repo-map section reads "(`C:\` on
+# Windows-native, `/x/` under WSL/Git-Bash, `~/X/` on macOS)". That bare-root
+# mention has no trailing segment and correctly stays quiet under the
 # structural rule below; a NEIGHBORING sentence in the same file naming a
+# per-machine directory DOES carry a trailing segment and correctly fires --
+# it is a genuine location claim, not illustration, and needs the
+# `foreign-path-ok` marker rather than a heuristic exemption.
+#
 # The discriminator used here is STRUCTURAL, not a naming-convention guess: a
+# matched root is escalated to a finding whenever it is followed by AT LEAST
+# ONE path segment, hyphenated or not -- naming a segment is what makes the
+# text an assertion about WHERE something lives. A bare root mention with no
+# trailing segment is platform illustration, not a location claim, and stays
+# quiet.
+#
+# An earlier revision of this heuristic escalated only when the trailing
+# segment contained a hyphen or underscore, on the theory that this fleet's
+# repo names are always hyphenated/snake_case. That theory was false on the
+# corpus it was built to protect: two real fleet repos with single-word,
+# hyphen-free names were among the leaked lines this guard exists to catch,
+# and the segment-shape heuristic missed them -- roughly a third of its own
+# class -- while its own docstring called that gap unlikely. A structural
+# "any segment fires" rule has no such blind spot; it can only over-fire on
+# a genuine illustrative mention, which the explicit escape hatch below
+# exists to handle deliberately rather than the guard silently guessing
+# forever.
+#
+# The explicit escape hatch is a per-line allow-marker
+# (`<!-- foreign-path-ok: <reason> -->`): an author who KNOWS a line is
+# illustrative, not asserting a location, can mark it once, deliberately,
+# reviewably.
+# The TOKEN is the marker, not the comment wrapper around it. Markdown carries
+# `<!-- foreign-path-ok: ... -->`, but the same judgement has to be expressible
+# in a .py docstring, a .toml sample, a Windows .cmd `rem`, or a PowerShell `#`
+# line -- and a marker syntax that only one file type can spell is a marker that
+# silently fails everywhere else. Matching the bare token keeps one vocabulary
+# across every surface an author might have to mark.
+# Both spellings are honored, in both directions. The sibling
+# `guard_concrete_path_citations` introduced `abs-path-ok:` for the same
+# judgement -- "a human looked at this line and decided the literal path is
+# the point." Recognizing only the older token here would make every marker
+# written for the newer guard invisible to this one, which is the same
+# silent-void failure in mirror image. One decision, one annotation, both
+# guards.
 _ALLOW_MARKER_RE = re.compile(r"(?:foreign-path-ok|abs-path-ok)\s*:", re.IGNORECASE)
 
 _PROSE_STOP_CHARS = "`'\"),;"
 # Reuses the shared `WIN_DRIVE_RE` pattern text (not a second copy of the
+# URL-safe lookbehind) with a trailing capture group for the segment.
 _SEGMENT_AFTER_WIN_DRIVE_RE = re.compile(
     _WIN_DRIVE_RE.pattern + r"([^\s" + re.escape(_PROSE_STOP_CHARS) + r"]*)"
 )

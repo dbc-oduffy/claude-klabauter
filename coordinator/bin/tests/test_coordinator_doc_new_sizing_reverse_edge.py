@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import importlib.machinery
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -511,6 +512,131 @@ class FullCliReverseEdgeFanOutExplicitDeliverableIdWinsTest(unittest.TestCase):
             self.assertIn('deliverable_id: "dlv-explicit-cccccc"', second_plan_text)
 
 
+class PlanCarryPrefersCitedSizingOverHeldBatonTest(unittest.TestCase):
+    """`--type plan` carries the cited sizing object's own `deliverable_id`
+    ahead of the session-held roadmap baton's.
+
+    A novel ask is sized through the lobby into its own freshly-minted
+    deliverable; the roadmap baton the session happens to hold is ambient
+    state and says nothing about what this plan is for. Before the fix the
+    held baton's id won and the plan silently joined the wrong spine.
+    """
+
+    _SESSION = "held-baton-vs-cited-sizing"
+    _BATON_ID = "dlv-held-baton-parent-aaaaaa"
+    _SIZING_ID = "dlv-sizing-own-minted-bbbbbb"
+
+    def _hold_roadmap_baton(self, repo: Path) -> None:
+        handoffs = repo / "state" / "handoffs"
+        handoffs.mkdir(parents=True)
+        basename = "2026-09-06-held-baton.md"
+        (handoffs / basename).write_text(
+            "---\nstub_id: held-baton\n"
+            f'deliverable_id: "{self._BATON_ID}"\n'
+            "kind: roadmap-baton\n---\n# body\n",
+            encoding="utf-8",
+        )
+        claim = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claim.mkdir(parents=True)
+        (claim / "session_id").write_text(f"{self._SESSION}\n", encoding="utf-8")
+        (claim / "pid").write_text("999999\n", encoding="utf-8")
+        (claim / "claimed_at").write_text("2026-09-06T00:00:00Z\n", encoding="utf-8")
+
+    def _plan(self, repo: Path, sizing_rel: str, *extra: str) -> tuple[subprocess.CompletedProcess, Path]:
+        out = repo / "docs" / "plans" / "2026-09-06-novel-work.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "DELIVERABLE_ID"):
+            env.pop(var, None)
+        env["CLAUDE_CODE_SESSION_ID"] = self._SESSION
+        result = subprocess.run(
+            [
+                sys.executable, str(_CLI_PATH), "--type", "plan",
+                "--title", "Novel work plan",
+                "--sizing-object", sizing_rel,
+                "--out", str(out), *extra,
+            ],
+            cwd=str(repo), env=env, capture_output=True, text=True,
+            timeout=60, **_NO_CONSOLE,
+        )
+        return result, out
+
+    def _write_sizing(self, repo: Path, deliverable_id: str | None) -> str:
+        rel = "state/sizings/2026-09-06-novel-work.yaml"
+        (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+        id_line = f'deliverable_id: "{deliverable_id}"\n' if deliverable_id else ""
+        (repo / rel).write_text(
+            _MINIMAL_SIZING_KEYS + id_line + "status: sized\nplan: null\n",
+            encoding="utf-8",
+        )
+        return rel
+
+    def test_cited_sizing_id_outranks_the_held_baton(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            self._hold_roadmap_baton(repo)
+            sizing_rel = self._write_sizing(repo, self._SIZING_ID)
+            result, out = self._plan(repo, sizing_rel)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = out.read_text(encoding="utf-8")
+            self.assertIn(f'deliverable_id: "{self._SIZING_ID}"', text)
+            self.assertNotIn(self._BATON_ID, text)
+            self.assertNotIn("session-state parent tier", result.stderr)
+
+    def test_scaffolded_sizing_id_outranks_the_held_baton(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            self._hold_roadmap_baton(repo)
+            sizing_rel = "state/sizings/2026-09-06-novel-work.yaml"
+            (repo / "state" / "sizings").mkdir(parents=True)
+            env = dict(os.environ)
+            for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "DELIVERABLE_ID"):
+                env.pop(var, None)
+            env["CLAUDE_CODE_SESSION_ID"] = self._SESSION
+            scaffold = subprocess.run(
+                [
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    "--title", "Novel work sizing",
+                    "--out", str(repo / sizing_rel),
+                ],
+                cwd=str(repo), env=env, capture_output=True, text=True,
+                timeout=60, **_NO_CONSOLE,
+            )
+            self.assertEqual(scaffold.returncode, 0, scaffold.stderr)
+            sizing_id = yaml.safe_load((repo / sizing_rel).read_text(encoding="utf-8"))["deliverable_id"]
+            self.assertTrue(sizing_id, "fixture precondition: the sizing minted its own id")
+            self.assertNotEqual(sizing_id, self._BATON_ID)
+
+            result, out = self._plan(repo, sizing_rel)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = out.read_text(encoding="utf-8")
+            self.assertIn(f'deliverable_id: "{sizing_id}"', text)
+            self.assertNotIn(self._BATON_ID, text)
+
+    def test_held_baton_still_carries_when_the_cited_sizing_has_no_id(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            self._hold_roadmap_baton(repo)
+            sizing_rel = self._write_sizing(repo, None)
+            result, out = self._plan(repo, sizing_rel)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                f'deliverable_id: "{self._BATON_ID}"', out.read_text(encoding="utf-8"),
+            )
+
+    def test_fan_out_skips_the_sizing_rung_and_keeps_the_baton_fallback(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            self._hold_roadmap_baton(repo)
+            sizing_rel = self._write_sizing(repo, self._SIZING_ID)
+            (repo / "state" / "sizings" / "2026-09-06-novel-work.yaml").write_text(
+                _MINIMAL_SIZING_KEYS
+                + f'deliverable_id: "{self._SIZING_ID}"\n'
+                + "status: routed\nplan: docs/plans/2026-09-06-first-plan.md\n",
+                encoding="utf-8",
+            )
+            result, out = self._plan(repo, sizing_rel, "--fan-out")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = out.read_text(encoding="utf-8")
+            self.assertNotIn(self._SIZING_ID, text)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -520,7 +646,7 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
 
     The reverse edge is a SECOND file this CLI writes, outside the
     Edit/Write hot path that fires `hooks.track_touched_files`. Undeclared,
-    it carried no `touched.txt` claim at all, so
+    it carried no touch-record claim at all, so
     `session.scope.compute_scope` saw it only through the Step-2 mtime
     fallback, routed it to `mtime_only`, and Step 4(c) withheld it from
     `my_scope` -- `safe-commit-offer` then reported "nothing to commit" over
@@ -533,10 +659,23 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
     """
 
     def _touched_lines(self, repo: Path, sid: str) -> list[str]:
-        touched = repo / ".git" / "coordinator-sessions" / sid / "touched.txt"
-        if not touched.is_file():
+        """Paths the session holds a live claim on, from its touch record.
+
+        Reads `touch-record.jsonl` (the DR-276 recorder's sink, one JSON event
+        per line: verb `T` claims a path, `R` releases it). The legacy flat
+        `touched.txt` is no longer written on this path, so reading it always
+        yields an empty claim set.
+        """
+        record = repo / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+        if not record.is_file():
             return []
-        return [ln for ln in touched.read_text(encoding="utf-8").splitlines() if ln]
+        held: dict[str, bool] = {}
+        for ln in record.read_text(encoding="utf-8").splitlines():
+            if not ln.strip():
+                continue
+            event = json.loads(ln)
+            held[event["path"]] = event["verb"] == "T"
+        return [path for path, live in held.items() if live]
 
     def _scaffold_sizing(self, repo: Path, sizing_rel: str) -> None:
         """Produce the cited sizing through the CLI's own `--type

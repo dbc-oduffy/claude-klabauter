@@ -47,14 +47,14 @@ Graceful degradation: any failure inside `evaluate_payload_json` fails OPEN
 by a guard-chain defect, mirroring the DoE dispatcher's own fail-open
 philosophy for engine-resolution failure (which cannot occur here) and
 `preuse_write_dispatch`'s identical contract for its own chain. Open does NOT
-mean silent: a chain failure (e.g. `ipc.py`'s "Missing required routing key
-... requires _origin_worktree" when a Bash call's cwd resolves outside every
-registered worktree — state/bug-backlog/2026-09-23-pretooluse-bash-guard-
-fails-to-evaluate-0abe3f44d9d8.yaml) is surfaced via `allow_advisory` rather
-than swallowed into `no_advisory()`. The two are NOT interchangeable: a guard
-that could not run and a guard that ran and had nothing to say are different
-facts, and collapsing them let the guard silently stop firing on every
-outside-a-worktree Bash call with no trace anywhere.
+mean silent: a chain failure is surfaced via `allow_advisory` rather than
+swallowed into `no_advisory()`. The two are NOT interchangeable: a guard that
+could not run and a guard that ran and had nothing to say are different facts.
+
+A Bash call whose cwd is outside every git worktree is NOT a chain failure:
+`ipc.py :: _NEVER_DENY_ON_MISSING_KEY_OPS` degrades this op's routing key to
+`repo_root=None` and the chain evaluates the payload normally. Pinned through
+the whole door by `hooks/tests/test_preuse_bash_dispatch_outside_worktree.py`.
 
 Negative-spec:
     Does NOT resolve a sibling engine checkout, place anything on

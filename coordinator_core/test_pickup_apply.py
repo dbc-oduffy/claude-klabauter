@@ -133,9 +133,9 @@ def _seed_memo(repo: Path, name: str) -> Path:
 
 def _write_foreign_fresh_claim(repo: Path, class_: str, basename: str, foreign_sid: str) -> None:
     """Fabricates a claim dir held by a session id nobody has registered as
-    live and with a just-now `claimed_at` — compute_claim_grant's row 4 (not
-    live, inside the settling window) resolves this to `verdict: denied`
-    without this test needing a real second live session."""
+    live and with a just-now `claimed_at`. Not-live is `granted-with-warning`
+    (compute_claim_grant row 4, age never read); pair with
+    `_register_live_session` for a `denied` verdict."""
     claim_dir = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "pid").write_text("999999\n", encoding="utf-8")
@@ -287,6 +287,7 @@ class TestExitCodeContract:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
+        _register_live_session(repo, "some-other-session")
         _write_foreign_fresh_claim(repo, "handoff", "h1.md", foreign_sid="some-other-session")
 
         exit_code, report = pa_apply.apply(
@@ -307,12 +308,10 @@ class TestExitCodeContract:
         durable stamp, `judgment_points: []` too (`gates.liveness_signal`
         never fires off a claim-dir-only lock). That combination lands in
         `apply()`'s early check (no judgment_points, non-OK brief exit, no
-        directives) -- unlike `test_claim_denied` above, whose NOT-live
-        holder never reaches this branch at all (`compute_claim_gate`
-        reports `holder: None` for a not-live claim, so the stand-down's
-        `claim["holder"] is not None` guard never fires and the run instead
-        reaches `_execute_directives`' own pre-loop `claim_grant` gate
-        unchanged). This case was unasserted before the memo/handoff parity
+        directives) -- the same denial `test_claim_denied` above asserts;
+        the pre-loop `claim_grant` gate in `_execute_directives` is covered
+        by the stale-compute race test in
+        `TestRevalidateAtDispatchGeneralRule`. This case was unasserted before the memo/handoff parity
         fix (cross-repo/inbox/2026-08-17-coordinator-content-repo-em-memo-claim-fires-
         after-the-em-can-already-act.md) -- that silence is why the early
         check's coarsening (treating a genuine denial as "brief did not
@@ -775,6 +774,7 @@ class TestRevalidateAtDispatchGeneralRule:
         }
         monkeypatch.setattr(pa_apply, "brief", lambda *a, **kw: BriefResult(stale_clear_decision, _BRIEF_OK))
 
+        _register_live_session(repo, "peer-claimed-after-compute")
         _write_foreign_fresh_claim(repo, "handoff", "h1.md", foreign_sid="peer-claimed-after-compute")
 
         exit_code, report = pa_apply.apply(
@@ -1766,7 +1766,9 @@ class TestGateRecheckOrderingBeforeClaim:
         assert report["landed"] == ["d1"]
         assert "d-gate-recheck" not in report["landed"]
         assert "d2" not in report["landed"]
-        assert "jgate" in report["unresolved_judgment_points"]
+        # An answered-and-declining point is `declined`, not `unresolved`.
+        assert "jgate" in report["declined_judgment_points"]
+        assert "jgate" not in report["unresolved_judgment_points"]
         text = hp.read_text(encoding="utf-8")
         assert "deployment_state: awaiting_gate" in text
 

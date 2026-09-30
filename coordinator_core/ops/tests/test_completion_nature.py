@@ -180,7 +180,9 @@ def test_infra_skills_setup_path():
     assert _run(paths, []) == "infra"
 
 
+# ---------------------------------------------------------------------------
 # (e) env override — COMPLETION_NATURE bypasses all heuristics
+# ---------------------------------------------------------------------------
 
 
 def test_env_override_returns_verbatim():

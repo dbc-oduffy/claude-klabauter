@@ -68,6 +68,14 @@ from coordinator_core.win_portability import no_console_creationflags
 TASK_NAME = "CoordinatorHostSampler"
 
 # Mirrors coordinator_core.telemetry.host_sampler._DEFAULT_INTERVAL_SECS
+# (1200s == 20 minutes -- PM ruling 2026-08-16, superseding the original
+# 120s/2min figure; see that module's docstring "Cadence arithmetic" for
+# the tradeoff arithmetic). Kept as an independent literal rather than an
+# import of that module's private constant -- this is an OS-scheduler
+# cadence declaration, not a runtime read of the sampler's own tuning, and
+# the two are allowed to drift apart if a future change retunes one without
+# the other (an explicit rebuild record either way, per that module's own
+# ratchet doctrine).
 _INTERVAL_MINUTES = 20
 
 _IS_WINDOWS = os.name == "nt" or sys.platform == "win32"

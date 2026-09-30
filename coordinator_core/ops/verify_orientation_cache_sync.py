@@ -109,13 +109,31 @@ _WORKSTREAM_RE = re.compile(r"^[0-9]+\. [A-Za-z]")
 _PINBOARD_RE = re.compile(r"^- [0-9]{4}-[0-9]{2}-[0-9]{2} [a-z0-9-]+: .{1,120}$")
 _AUTOPUSH_RE = re.compile(r"^- ⚠ [0-9]+ unpushed commit")
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
+# Purpose-map pointer shape (C6): every bullet in Wiki/Architecture
+# atlas/Fast test/Audits & censuses is "- `<path>` — <prose>" or
+# "- <label>: `<cmd>`" — a bounded bullet line, never a bare number. This is
+# intentionally loose: the writer's own negative-spec (no counts) is enforced
+# by code review of `regenerate_cache.py`'s emit_* probes, not by a regex here
 # trying to prove a NEGATIVE (the absence of a digit run would also reject a
+# legitimate path segment or command flag that happens to contain one).
 _POINTER_RE = re.compile(r"^- .+$")
 
 # WORKSTREAM_BODY_CAP, LINE_CEILING, and WORKSTREAM_MAX are imported above
+# from the writer (coordinator_core.orientation.regenerate_cache), not
+# redeclared here — that module is the single source of truth for every
 # bound that actually constrains what the writer produces (see LINE_CEILING's
+# own docstring for the 2026-07-28 reconciliation this replaces: this module
 # used to independently declare a stale `_LINE_CEILING = 35`, checked
+# post-hoc only, that silently disagreed with the writer's own byte budget).
+#
 # _PINBOARD_MAX / _AUTOPUSH_MAX / _TRUST_CAVEATS_MAX stay declared HERE, not
+# moved: none of them corresponds to a number the writer itself enforces or
+# could drift against. The writer's Pinboard/Auto-push-health sections are
+# structurally single-line by construction (`_first_line`, a scalar return
+# type) rather than parameterized by a count constant, and Trust caveats
+# never emits more than one line today — these three are pure shape/count
+# assertions this verifier makes about the artifact, with no writer-side
+# counterpart to reconcile against.
 _PINBOARD_MAX = 1
 _AUTOPUSH_MAX = 1
 _TRUST_CAVEATS_MAX = 5
@@ -218,6 +236,8 @@ def _check_workstreams(lines: List[str]) -> List[str]:
         if not _WORKSTREAM_RE.match(line):
             violations.append(f"workstream line fails name-only regex: '{line}'")
         if len(line) > WORKSTREAM_BODY_CAP:
+            # Message now cites the enforced
+            # constant instead of a hardcoded "80-char" that had drifted from
             # WORKSTREAM_BODY_CAP=84.
             violations.append(f"workstream line exceeds {WORKSTREAM_BODY_CAP}-char body cap: '{line}'")
     if len(ws_lines) > WORKSTREAM_MAX:

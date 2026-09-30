@@ -10,11 +10,15 @@ machinery handoffs/memos need).
 Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-implemented --plan <path>
     plan-status-transition stamp-implemented --plan <path> --override-reason "<why>"
+    plan-status-transition stamp-implemented --plan <path> --falsifier-verdict pass \\
+        --falsifier-output "<observation>" --prose "<observation tied to the criterion, naming HEAD sha>"
     plan-status-transition stamp-superseded --plan <path> --by <successor-plan-path>
     plan-status-transition stamp-reopened --plan <path> --reason "<why>"
     plan-status-transition stamp-blocked --plan <path> --reason "<why>"
     plan-status-transition stamp-unblocked --plan <path>
     plan-status-transition stamp-abandoned --plan <path> --reason "<why>"
+    plan-status-transition stamp-landed --plan <path> --reason "<why>"
+    plan-status-transition stamp-deferred --plan <path> --reason "<why>"
 
 ``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
 stamps-implemented-without-reading-the-ac-table.md): an explicit,
@@ -299,11 +303,13 @@ from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
     read_fm_field_unquoted,
+    read_fm_nested_field,
     rebuild,
     remove_fm_field,
     replace_fm_field,
     split_frontmatter,
     unquote_yaml_scalar,
+    write_fm_nested_field,
 )
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import git_native
@@ -391,7 +397,10 @@ _CLOSE_OUT_PARTIAL_FIELD = "close_out_last_partial"
 
 
 class _Opts:
-    __slots__ = ("verb", "plan", "by", "override_reason", "reason", "findings")
+    __slots__ = (
+        "verb", "plan", "by", "override_reason", "reason", "findings",
+        "falsifier_verdict", "falsifier_output", "prose",
+    )
 
     def __init__(
         self,
@@ -401,7 +410,13 @@ class _Opts:
         override_reason: Optional[str] = None,
         reason: Optional[str] = None,
         findings: Optional[str] = None,
+        falsifier_verdict: Optional[str] = None,
+        falsifier_output: Optional[str] = None,
+        prose: Optional[str] = None,
     ) -> None:
+        self.falsifier_verdict = falsifier_verdict
+        self.falsifier_output = falsifier_output
+        self.prose = prose
         self.verb = verb
         self.plan = plan
         self.by = by
@@ -412,6 +427,19 @@ class _Opts:
 
 class _CliError(Exception):
     """Raised for any fail-loud CLI condition; carries the message to print on stderr."""
+
+
+#: The `stamp-implemented`-only flags that record `exit_criterion_met` (see
+#: `_exit_criterion_met_block`). Parsed generically like `--by`/`--reason`;
+#: `main()` rejects them out-of-verb.
+_EXIT_CRITERION_FLAGS = {
+    "--falsifier-verdict": "falsifier_verdict",
+    "--falsifier-output": "falsifier_output",
+    "--prose": "prose",
+}
+
+#: `plan.schema.json` `exit_criterion_met.falsifier_output.maxLength`.
+_FALSIFIER_OUTPUT_MAX = 4096
 
 
 def _parse_args(argv: List[str]) -> _Opts:
@@ -475,6 +503,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.findings = argv[i]
+        elif a in _EXIT_CRITERION_FLAGS:
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            setattr(opts, _EXIT_CRITERION_FLAGS[a], argv[i])
         else:
             raise _CliError(f"unknown argument: {a}")
         i += 1
@@ -1291,6 +1324,55 @@ def _resolve_worktree_root_and_check_containment(
     return worktree_root, git_common_dir, None
 
 
+def _exit_criterion_record_error(opts: _Opts) -> Optional[str]:
+    """Why the `--falsifier-*`/`--prose` flags cannot record `exit_criterion_met`,
+    or None when they are absent (nothing to record) or well-formed.
+
+    The verb records a caller-supplied, already-judged observation and never
+    runs the falsifier itself; only a `pass` verdict is recordable, because a
+    `fail` cannot reach `implemented` through the goal gate anyway.
+    """
+    given = (opts.falsifier_verdict, opts.falsifier_output, opts.prose)
+    if all(v is None for v in given):
+        return None
+    if any(v is None or not v.strip() for v in given):
+        return (
+            "recording exit_criterion_met needs all of --falsifier-verdict, "
+            "--falsifier-output and --prose, each non-empty"
+        )
+    if opts.falsifier_verdict != "pass":
+        return (
+            "--falsifier-verdict must be 'pass': a failing observation cannot "
+            "stamp implemented"
+        )
+    if len(opts.falsifier_output) > _FALSIFIER_OUTPUT_MAX:
+        return (
+            f"--falsifier-output exceeds {_FALSIFIER_OUTPUT_MAX} chars: narrow "
+            "the observation, never truncate the record"
+        )
+    return None
+
+
+def _exit_criterion_met_block(opts: _Opts) -> str:
+    """The indented YAML body of `exit_criterion_met` for a passing, asserted run."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.session.core import attributable_session_id
+
+    record = {
+        "asserted": True,
+        "asserted_by": attributable_session_id() or "unknown-session",
+        "asserted_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "falsifier_output": opts.falsifier_output,
+        "falsifier_verdict": "pass",
+        "prose": opts.prose,
+    }
+    dumped = yaml.safe_dump(
+        record, default_flow_style=False, sort_keys=False, allow_unicode=True, width=10**6
+    )
+    return "".join("  " + line + "\n" for line in dumped.splitlines())
+
+
 def _stamp_implemented(opts: _Opts) -> int:
     """Perform the stamp-implemented verb; returns the exit code.
 
@@ -1325,6 +1407,10 @@ def _stamp_implemented(opts: _Opts) -> int:
     """
     if not opts.plan:
         print(f"{_PROG}: stamp-implemented requires --plan <path>", file=sys.stderr)
+        return 1
+    record_error = _exit_criterion_record_error(opts)
+    if record_error is not None:
+        print(f"{_PROG}: {record_error}", file=sys.stderr)
         return 1
     # `--override-reason` (2026-08-10) fails loud on an EMPTY reason (flag
     # given with a blank/whitespace-only value) the same way `--by` fails
@@ -1527,13 +1613,37 @@ def _stamp_implemented(opts: _Opts) -> int:
         # `--dry-run` scratch copy, or any plan outside a git worktree):
         # close-out has already evaluated this exact text, and the gate's
         # own helpers fail toward not refusing on anything they cannot read.
+        # Recording (`--falsifier-*`): a plan with no spine has no close-out
+        # row to carry `exit_criterion_met`, and the gate below refuses its
+        # absence, so a landed spineless plan could never stamp. The record
+        # lands in the same write as the flip and the gate judges the text WITH
+        # it, so a refused stamp leaves nothing behind. An existing record
+        # stands: overwriting a prior observation is never this flag's job.
+        recorded_fm = split.fm_text
+        gate_text = text
+        if opts.falsifier_verdict is not None:
+            if read_fm_nested_field(split.fm_text, "prime_exit_criterion") is None:
+                raise MutateAbort(
+                    f"{_PROG}: {opts.plan} declares no prime_exit_criterion; "
+                    "there is no criterion to record an observation against"
+                )
+            if read_fm_field(split.fm_text, "exit_criterion_met") is not None:
+                raise MutateAbort(
+                    f"{_PROG}: {opts.plan} already carries exit_criterion_met -- "
+                    "the existing record stands; drop --falsifier-*/--prose"
+                )
+            recorded_fm = write_fm_nested_field(
+                split.fm_text, "exit_criterion_met", _exit_criterion_met_block(opts)
+            )
+            gate_text = rebuild(split, recorded_fm)
+
         if worktree_root is not None:
             from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
                 _evaluate_goal_falsifier_gate,
                 _goal_refusal_next_move,
             )
 
-            goal_gate = _evaluate_goal_falsifier_gate(text, worktree_root)
+            goal_gate = _evaluate_goal_falsifier_gate(gate_text, worktree_root)
             if goal_gate is not None and goal_gate.get("refused"):
                 body_sha = canonical_body_sha(text)
                 raise MutateAbort(
@@ -1564,7 +1674,7 @@ def _stamp_implemented(opts: _Opts) -> int:
                     f"{_PROG}: refusing to stamp implemented: {opts.plan}: {review_refusal}"
                 )
 
-        fm_text = replace_fm_field(split.fm_text, "status", "implemented")
+        fm_text = replace_fm_field(recorded_fm, "status", "implemented")
 
         # Completeness-verdict override (2026-08-10): record WHO overrode
         # the AC-open-rows advisory (`_ac_open_rows_warning` below) and WHY,
@@ -2783,6 +2893,158 @@ def _stamp_abandoned(opts: _Opts) -> int:
     return 0
 
 
+# Stand-down verbs: the honest exits from `executing` for a session that ends
+# with work still open. `executing` is the liveness signal pickup, the cadence
+# promoters and the claim machinery read, so a plan whose session has stood
+# down must be able to leave it without asserting delivery (`stamp-implemented`
+# is gated on a passing exit criterion). verb -> (target status, legal sources).
+# `abandoned` is deliberately absent: `_stamp_abandoned` refuses work in flight.
+_STANDDOWN_VERBS = {
+    "stamp-landed": ("landed", frozenset({"executing"})),
+    "stamp-deferred": ("deferred", frozenset({"executing", "landed"})),
+}
+
+
+def _stamp_standdown(opts: _Opts) -> int:
+    """Perform `stamp-landed` / `stamp-deferred`; returns the exit code.
+
+    `stamp-landed`: executing -> landed. Every chunk's code is on the branch but
+    a spine row is undisposed; `landed` is non-terminal and re-enters
+    `stamp-implemented` later. `stamp-deferred`: executing|landed -> deferred.
+    Remaining work is paused pending another workstream (frozen, resumable by
+    a human judgment call only).
+
+    Both require a non-blank `--reason`, written as `status_reason` (the durable
+    record of the stand-down). Neither asserts completeness, so neither fires
+    `_run_cascade`. Same shared machinery as `_stamp_abandoned`; typed by a
+    human/EM only, never reachable from a sweep, cascade or ceremony tail.
+    """
+    verb = opts.verb or ""
+    target, sources = _STANDDOWN_VERBS[verb]
+    if not opts.plan:
+        print(f"{_PROG}: {verb} requires --plan <path>", file=sys.stderr)
+        return 1
+    if not opts.reason or not opts.reason.strip():
+        print(
+            f"{_PROG}: {verb} requires --reason \"<why>\" "
+            f"(state WHY this plan is standing down at {target} -- no bare/blank reason)",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+    plan_display: str = opts.plan
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir, refusal = _resolve_worktree_root_and_check_containment(
+        plan_path, plan_display
+    )
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    reason_value = opts.reason
+    _state: dict = {"prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = _read_and_normalize_status(split.fm_text, plan_display)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+        _state["prior_status"] = status
+
+        if status not in sources:
+            expected = ", ".join(sorted(sources))
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\" -- {verb} "
+                f"refuses this source (expected one of: {expected})"
+            )
+
+        fm_text = replace_fm_field(split.fm_text, "status", target)
+        if read_fm_field(fm_text, "status_reason") is not None:
+            fm_text = replace_fm_field(fm_text, "status_reason", reason_value)
+        else:
+            fm_text = insert_fm_field(fm_text, "status_reason", reason_value, after_key="status")
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        with open(plan_path, "w", encoding="utf-8", newline="") as f:
+            f.write(new_text)
+        written_text = new_text
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> {target} "
+                f"(reason: {reason_value}) on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → {target} "
+        f"(reason: {reason_value})"
+    )
+    return 0
+
+
 def _stamp_rung(
     opts: _Opts, verb: str, target_status: str, allow_landed_reentry: bool = False
 ) -> int:
@@ -3265,6 +3527,17 @@ def main(argv: List[str]) -> int:
         print(f"{_PROG}: {exc}", file=sys.stderr)
         return 1
 
+    if opts.verb != "stamp-implemented" and any(
+        getattr(opts, attr) is not None for attr in _EXIT_CRITERION_FLAGS.values()
+    ):
+        print(
+            f"{_PROG}: {opts.verb} does not accept --falsifier-verdict/"
+            "--falsifier-output/--prose (they record exit_criterion_met for "
+            "stamp-implemented only)",
+            file=sys.stderr,
+        )
+        return 1
+
     if opts.verb == "stamp-implemented":
         if opts.by is not None:
             # Hardening (latent, not live -- see module docstring/dispatch
@@ -3418,6 +3691,20 @@ def main(argv: List[str]) -> int:
             return 1
         return _stamp_abandoned(opts)
 
+    if opts.verb in _STANDDOWN_VERBS:
+        for flag, name in (
+            (opts.by, "--by"),
+            (opts.override_reason, "--override-reason"),
+            (opts.findings, "--findings"),
+        ):
+            if flag is not None:
+                print(
+                    f"{_PROG}: {opts.verb} does not accept {name} (use --reason)",
+                    file=sys.stderr,
+                )
+                return 1
+        return _stamp_standdown(opts)
+
     if opts.verb in ("stamp-reviewed", "stamp-approved", "stamp-executing"):
         # AC3: none of the three rung-advance verbs assert completeness, so
         # none may claim to override a completeness verdict -- symmetric
@@ -3471,7 +3758,8 @@ def main(argv: List[str]) -> int:
     print(
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
         "stamp-superseded, stamp-reopened, stamp-reviewed, stamp-approved, stamp-executing, "
-        "stamp-review-verified, stamp-blocked, stamp-unblocked, stamp-abandoned",
+        "stamp-review-verified, stamp-blocked, stamp-unblocked, stamp-abandoned, "
+        "stamp-landed, stamp-deferred",
         file=sys.stderr,
     )
     return 1

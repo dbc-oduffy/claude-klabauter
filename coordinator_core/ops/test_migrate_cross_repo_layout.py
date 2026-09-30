@@ -234,7 +234,11 @@ def test_no_op_when_nothing_to_migrate(tmp_path, capsys):
     assert "no-op" in out
 
 
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
 # test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_cross_repo_layout.py::main -> _move_one)
+# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):

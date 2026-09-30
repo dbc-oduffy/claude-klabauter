@@ -820,6 +820,7 @@ def commit_paths(
     *,
     repo_root: Union[str, Path, None] = None,
     deleted_paths: Sequence[str] = (),
+    untracked_paths: Sequence[str] = (),
     supplied_blobs: Optional[Mapping[str, str]] = None,
     prefer_staged: Sequence[str] = (),
     prefer_deliberate_stage: bool = False,
@@ -829,6 +830,13 @@ def commit_paths(
     declared_reverts: Sequence[str] = (),
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
+
+    `untracked_paths` names files this commit removes from HEAD and the index
+    while the worktree keeps them (`git rm --cached`). It is the only way to
+    say so: `deleted_paths` refuses a path still on disk, because a declared
+    deletion of a present file is also what a stale shared index produces
+    (see PHANTOM DELETION below) and the two cannot be told apart by state.
+    A member HEAD never carried is refused as a phantom deletion.
 
     Raises `CommitRefused` without writing anything on: an empty pathspec (an
     empty pathspec to `git commit` commits the WHOLE INDEX, so it is refused
@@ -908,7 +916,8 @@ def commit_paths(
 
     path_list = [_index_key(root, p) for p in paths]
     delete_list = [_index_key(root, p) for p in deleted_paths]
-    if not path_list and not delete_list:
+    untrack_list = [_index_key(root, p) for p in untracked_paths]
+    if not path_list and not delete_list and not untrack_list:
         raise CommitRefused(
             "empty pathspec -- refused, never defaulted: an empty pathspec "
             "commits the whole index rather than nothing"
@@ -938,8 +947,9 @@ def commit_paths(
     # `directives_commit_tail.py`), and the one that derived from HEAD
     # membership alone (`memo_send.py`) was declaring a deletion it could not
     # know had happened -- fixed at its own site rather than tolerated here.
-    # An untrack-but-keep ("git rm --cached") has no caller and gets no
-    # parameter: add one when a caller needs it, and name it there.
+    # An untrack-but-keep ("git rm --cached") is byte-identical to that stale
+    # shape, so it is never inferred here: the caller says `untracked_paths`,
+    # which skips this refusal for exactly the paths it names.
     #
     # One `exists()` per DECLARED deletion, never per path in the pathspec:
     # an ordinary commit declares none and pays nothing.
@@ -1011,7 +1021,7 @@ def commit_paths(
     from coordinator_core.git import action_guard
 
     action_guard.assert_pathspec_shape_permitted(
-        path_list + delete_list, False, str(root)
+        path_list + delete_list + untrack_list, False, str(root)
     )
 
     # MID-SEQUENCE REFUSAL, and it has to sit HERE -- before the index read,
@@ -1060,8 +1070,9 @@ def commit_paths(
 
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
     delete_set = set(delete_list)
+    untrack_set = set(untrack_list)
     for p in path_list:
-        if p in delete_set:
+        if p in delete_set or p in untrack_set:
             # DECLARED DELETION WINS over the content read, and it has to win
             # HERE rather than at the `assembled` write below: a path named in
             # BOTH argument lists is how a caller says "this member of my
@@ -1157,7 +1168,7 @@ def commit_paths(
             assembled[p] = (mode, blob)
             index_updates[p] = (mode, blob)
 
-    for p in delete_list:
+    for p in delete_list + untrack_list:
         assembled[p] = _ABSENT
         index_updates[p] = index_write.ABSENT
 
@@ -1231,11 +1242,14 @@ def commit_paths(
     # 2026-08-31-four-bug-blitz-commits-deleted-five-file-6216c89502b9.
     # yaml`): a genuine, HEAD-tracked deletion -- `delete_list` minus the
     # phantom members just split into `phantom_deletions` above -- whose
-    # message never says so. Reuses the spine walk just finished rather than
+    # message never says so (an untrack removes the path from HEAD all the
+    # same). Reuses the spine walk just finished rather than
     # probing again: zero added spawns, zero added reads. Sits before any
     # tree or commit object is written, same as every other refusal on this
     # route.
-    genuine_deletions = [p for p in delete_list if p not in phantom_deletions]
+    genuine_deletions = [
+        p for p in delete_list + untrack_list if p not in phantom_deletions
+    ]
     action_guard.assert_no_undeclared_staged_deletion(genuine_deletions, message)
 
     # PHANTOM DELETION (§ Design item 1): a `deleted_paths` member HEAD never

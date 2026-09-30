@@ -13,7 +13,10 @@ from coordinator_core.frontmatter.schema_validate import describe, load_schemas,
 
 _SCHEMA_NAMES = ["improvement-queue", "debt-backlog", "bug-backlog"]
 
+# Hardcoded required-key baselines — sourced from reading the schema YAML files
+# on disk as of the ccos-3 authoring pass. These are the authoritative sets;
 # the test asserts BYTE-IDENTICAL membership so that future accidental additions
+# to required: are caught immediately.
 _REQUIRED_KEYS_BASELINE: dict[str, frozenset[str]] = {
     "improvement-queue": frozenset({
         "created", "title", "body", "status", "surface",

@@ -32,6 +32,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
 
 # Portable Windows console-suppression flag — resolves to CREATE_NO_WINDOW
+# (0x08000000) on Windows and 0 (no-op) on macOS/Linux.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -45,7 +46,10 @@ def _make_env() -> dict[str, str]:
 
 
 def _invoke(*args: str) -> subprocess.CompletedProcess:
-    cmd = [sys.executable, "-m", "coordinator_core.invoke", *args]
+    # This repo is the unstamped dev tree, so every dispatching call needs the
+    # stamp-gate carve-out; mirrors test_invoke_main.py::_invoke. The DR-279
+    # refusal fires before the gate and is unaffected by the flag.
+    cmd = [sys.executable, "-m", "coordinator_core.invoke", *args, "--allow-unstamped-dispatch"]
     return subprocess.run(
         cmd,
         capture_output=True,

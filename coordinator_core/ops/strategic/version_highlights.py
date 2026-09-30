@@ -4,8 +4,9 @@ coordinator_core.ops.strategic.version_highlights — Track A: version_highlight
 Purpose: derives the `version_highlights[]` field of the strategic self-description draft
 from repo history. Signal readers, in priority order:
 
-  1. **Tagged repo** — `git tag` present -> `git log <last-tag>..HEAD` for the highlight
-     window; label/date derive from the most recent tag (and its tagger/commit date).
+  1. **Tagged repo** — `git tag` present -> the most recent tag's annotation body (when the
+     tag is annotated) followed by `git log <last-tag>..HEAD` subjects for the highlight
+     window; label/date derive from the most recent tag (and its commit date).
   2. **Tag-less repo (claude-klabauter's own path — 0 git tags verified)** — read
      `state/week-changelog/*.md` (pre-summarized daily/weekly bullets, the PREFERRED source)
      over a bounded recent window (most recent N daily files); label/date derive from the
@@ -47,6 +48,8 @@ _SUBPROCESS_TIMEOUT = 15
 # Bounded recent window when falling back to week-changelog files or raw git log.
 _CHANGELOG_WINDOW_FILES = 10
 _GITLOG_FALLBACK_LIMIT = 20
+_TAG_BODY_LINE_CAP = 10
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 _DAILY_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)\.md$")
 _HEADER_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s+—\s+(.+?)\s*$")
@@ -161,15 +164,44 @@ def _tag_date(repo_root: Path, tag: str) -> str | None:
     return date_str or None
 
 
+def _tag_annotation_bullets(repo_root: Path, tag: str) -> list[str]:
+    """Return the annotated tag's message as bullets; [] for a lightweight tag or on failure.
+
+    `%(contents)` on a lightweight tag yields the tagged commit's message, which the log
+    window already covers, so `%(objecttype)` gates on `tag` (annotated) first.
+    """
+    out = _run_git(
+        repo_root,
+        ["tag", "-l", "--format=%(objecttype)%0a%(contents)", tag],
+    )
+    if not out:
+        return []
+    kind, _, body = out.partition("\n")
+    if kind.strip() != "tag":
+        return []
+    bullets = []
+    for line in body.splitlines():
+        line = _LIST_MARKER_RE.sub("", line.strip())
+        if line and not line.startswith("-----BEGIN PGP SIGNATURE"):
+            bullets.append(line)
+        elif line:
+            break
+    return bullets[:_TAG_BODY_LINE_CAP]
+
+
 def _derive_from_tags(repo_root: Path, latest_tag: str) -> list[dict]:
-    """Track A signal (1): git log since the last tag, labeled/dated from the tag itself."""
+    """Track A signal (1): tag annotation body plus git log since the last tag.
+
+    Labeled/dated from the tag itself; annotation bullets lead because they are the
+    human-written release notes.
+    """
     log_out = _run_git(
         repo_root,
         ["log", f"{latest_tag}..HEAD", "--format=%s", f"-{_GITLOG_FALLBACK_LIMIT}"],
     )
-    bullets = []
+    bullets = _tag_annotation_bullets(repo_root, latest_tag)
     if log_out:
-        bullets = [line.strip() for line in log_out.splitlines() if line.strip()]
+        bullets += [line.strip() for line in log_out.splitlines() if line.strip()]
 
     date = _tag_date(repo_root, latest_tag)
     if date is None:
@@ -177,7 +209,7 @@ def _derive_from_tags(repo_root: Path, latest_tag: str) -> list[dict]:
         # rather than emit a highlight with a missing required "date" field.
         return []
     if not bullets:
-        # Tag exists, no commits since -> nothing to highlight for this window.
+        # Lightweight tag (or empty annotation) with no commits since -> nothing to highlight.
         return []
 
     return [

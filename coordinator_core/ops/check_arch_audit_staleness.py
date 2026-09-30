@@ -170,6 +170,8 @@ def _compute_staleness(ledger_path: Path, today: Optional[date] = None) -> str:
         last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
     except ValueError:
         # Shape matched YYYY-MM-DD but the calendar date itself is invalid
+        # (e.g. 2026-13-45) — mirrors the bash oracle's `date -j`/`date -d`
+        # parse failure branch.
         return "UNKNOWN"
 
     if today is None:

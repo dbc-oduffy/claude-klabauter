@@ -49,3 +49,29 @@ def test_derive_plan_context_carries_the_root_through():
     context = derive_plan_context("# t\n", fallback_title="t", repo_root="/repo")
     assert context.repo_root == "/repo"
     assert derive_plan_context("# t\n", fallback_title="t").repo_root is None
+
+
+def test_an_off_path_claude_is_named_in_the_brief(monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import emit
+
+    binary = tmp_path / "claude"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    context = derive_plan_context("# t\n", fallback_title="t", repo_root="/repo")
+    assert context.claude_bin_dir == tmp_path.as_posix()
+    prompt = _row_prompt(_row(), "docs/plans/p.md", context)
+    assert f"claude CLI: at {tmp_path.as_posix()}" in prompt
+    assert "does not mean it is missing" in prompt
+    assert emit._off_path_claude_dir() == tmp_path.as_posix()
+
+
+def test_a_claude_on_a_system_path_or_absent_adds_no_line(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import emit
+
+    monkeypatch.setattr(emit.shutil, "which", lambda *a, **k: "/usr/local/bin/claude")
+    assert emit._off_path_claude_dir() is None
+    monkeypatch.setattr(emit.shutil, "which", lambda *a, **k: None)
+    assert emit._off_path_claude_dir() is None
+    prompt = _row_prompt(_row(), "docs/plans/p.md", _context("/repo"))
+    assert "claude CLI:" not in prompt

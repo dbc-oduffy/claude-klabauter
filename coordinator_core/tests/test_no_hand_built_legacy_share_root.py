@@ -46,8 +46,11 @@ _LEGACY_SEGMENTS = ("state", "subagent-share")
 
 _EXEMPT = {
     # The OWNER of both spellings. `LEGACY_SHARE_RELDIR` and
+    # `legacy_share_root` are the one place the retired root is named.
     "coordinator_core/session/machinery_paths.py",
     # Extracts historical `state/subagent-share/` CITATIONS out of prose for
+    # the pre-rewrite audit — the legacy root is its subject matter, not its
+    # resolution target.
     "coordinator_core/ops/extract_cited_sidecars.py",
     "coordinator_core/ops/fleet_machinery_sweep.py",
     "coordinator_core/ops/review_brightline_gate.py",

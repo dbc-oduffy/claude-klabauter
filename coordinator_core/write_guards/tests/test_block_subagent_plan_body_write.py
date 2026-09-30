@@ -96,7 +96,6 @@ class TestExecutorRegexWidening:
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/problems/2026-07-24-x.md")
 
         payload = _payload(tmp_path, "docs/problems/2026-07-24-x.md")
@@ -113,7 +112,6 @@ class TestExecutorRegexWidening:
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/problems/2026-07-24-x.md")
 
         payload = _payload(tmp_path, "docs\\problems\\2026-07-24-x.md")
@@ -181,7 +179,6 @@ class TestExecutorRegexWidening:
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/2026-07-24-x.md")
 
         payload = _payload(tmp_path, "pkg/tests/docs/plans/2026-07-24-x.md")
@@ -195,7 +192,6 @@ class TestExecutorRegexWidening:
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/2026-07-24-x.md")
 
         payload = _payload(tmp_path, "docs/plans/2026-07-24-x.md")
@@ -343,7 +339,6 @@ class TestUnenumeratedTypeNarrowing:
             guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/2026-08-10-x.md")
 
         payload = _payload(tmp_path, "docs/plans/2026-08-10-x.md")
@@ -396,7 +391,6 @@ class TestInventedKindDenyReachableWithoutSidecar:
             guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
 
         payload = _payload(tmp_path, "docs/plans/2026-08-18-x.md")
         result = guard.check(payload)
@@ -413,7 +407,6 @@ class TestInventedKindDenyReachableWithoutSidecar:
             guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
-        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
         _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/some-other-plan.md")
 
         payload = _payload(tmp_path, "docs/plans/wholly-unrelated.md")
@@ -515,58 +508,3 @@ class TestAmbiguousBranchMessageNamesIdentifyingDetail:
         assert "probe2-teammate@session-3819c0e9" in reason
         assert "ambiguous agent identity" in reason
 
-
-class TestHookEmitLogSessionResolution:
-    """`_write_hook_emit_log` buckets its line by the CANONICAL env ladder.
-
-    Negative spec: reading `CLAUDE_SESSION_ID` alone is the break-class defect
-    `coordinator_core.session.core.SESSION_ENV_PRECEDENCE`'s own docstring
-    records (slice D, F1) -- a guard walking a subset of the chain its op walks
-    disagrees with that op. A cloud session sets only `CLAUDE_CODE_SESSION_ID`,
-    so a single-spelling read sends every cloud emit to the `no-session`
-    bucket, losing attribution on the one platform that cannot be re-run.
-    """
-
-    def _armed(self, tmp_path, monkeypatch, sid: str):
-        git_dir = tmp_path / ".git"
-        (git_dir / "coordinator-sessions" / sid).mkdir(parents=True)
-        monkeypatch.setattr(guard, "_resolve_git_dir", lambda _cwd: str(git_dir))
-        for name in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
-            monkeypatch.delenv(name, raising=False)
-        return git_dir
-
-    def test_a_cloud_session_id_is_not_bucketed_as_no_session(self, tmp_path, monkeypatch):
-        sid = "863331b0-d278-5ae9-8d0f-9c0ab350de8c"
-        git_dir = self._armed(tmp_path, monkeypatch, sid)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
-
-        guard._write_hook_emit_log(str(tmp_path), "probe")
-
-        assert (git_dir / "coordinator-sessions" / sid / "hook-emits").is_dir()
-        assert not (git_dir / "coordinator-sessions" / "no-session").exists()
-
-    def test_the_desktop_spelling_still_resolves(self, tmp_path, monkeypatch):
-        sid = "11111111-2222-3333-4444-555555555555"
-        git_dir = self._armed(tmp_path, monkeypatch, sid)
-        monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
-
-        guard._write_hook_emit_log(str(tmp_path), "probe")
-
-        assert (git_dir / "coordinator-sessions" / sid / "hook-emits").is_dir()
-
-    def test_the_explicit_override_outranks_the_platform_spelling(self, tmp_path, monkeypatch):
-        sid = "99999999-8888-7777-6666-555555555555"
-        git_dir = self._armed(tmp_path, monkeypatch, sid)
-        monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "863331b0-d278-5ae9-8d0f-9c0ab350de8c")
-
-        guard._write_hook_emit_log(str(tmp_path), "probe")
-
-        assert (git_dir / "coordinator-sessions" / sid / "hook-emits").is_dir()
-
-    def test_no_session_id_at_all_still_buckets_to_no_session(self, tmp_path, monkeypatch):
-        git_dir = self._armed(tmp_path, monkeypatch, "unused")
-
-        guard._write_hook_emit_log(str(tmp_path), "probe")
-
-        assert (git_dir / "coordinator-sessions" / "no-session" / "hook-emits").is_dir()

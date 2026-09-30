@@ -356,6 +356,13 @@ def _git(args: "List[str]", cwd: Path) -> subprocess.CompletedProcess:
         encoding="utf-8",
         check=True,
         # ONE creationflags source, not two. `_CREATIONFLAGS` IS
+        # `no_console_creationflags()` (gate_dimension_review.py:122), so
+        # spreading both passed the same keyword twice. On POSIX both spread
+        # to `{}` and the duplicate is invisible; on Windows they carry
+        # `creationflags` and every test using this helper died with
+        # `TypeError: subprocess.run() got multiple values for keyword
+        # argument 'creationflags'` -- a Windows-only red in a repo where
+        # Windows is first-class.
         **gate_dimension_review._CREATIONFLAGS,
     )
 
@@ -452,7 +459,22 @@ def test_seam_run_dimension_uses_registered_review_check(monkeypatch) -> None:
     assert result.verdict is Verdict.PASS
 
 
+# ---------------------------------------------------------------------------
+# Second credit source: the reviewer sidecar receipt.
+#
+# These tests exist because the FIRST source went stale silently. The
+# reviewed-set store is fed only by `state/review-trail/*.json` folded at
+# write time, and that corpus froze when `review_trail.write` lost its last
+# production call site (DR-372, DR-374). Measured in this clone 2026-08-28:
+# the store's newest covered commit sat 486 commits behind HEAD and none of
+# the last 400 commits were members, so this dimension returned FAIL for
+# every recent chain whether or not review had happened.
+#
 # The failure being repaired is a STUCK NEGATIVE, which is why both
+# directions are pinned below. A suite asserting only that unreviewed work
+# still FAILs would pass identically against a credit source that reads
+# nothing at all -- i.e. against the bug.
+# ---------------------------------------------------------------------------
 
 _SESSION = "11112222-3333-4444-5555-666677778888"
 _FSEP = gate_dimension_review._HEADER_FIELD_SEP

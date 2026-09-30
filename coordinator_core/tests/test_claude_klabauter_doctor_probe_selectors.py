@@ -560,6 +560,7 @@ class TestDoctorProbeSelectors:
         )
 
 
+# Manifest ids with required=true, derived (never hardcoded) — same negative
 # spec as _IMPLEMENTED_IDS/_TRIAGE_IDS above.
 _REQUIRED_IDS = frozenset(p["id"] for p in _manifest_probes() if p.get("required", True))
 
@@ -896,6 +897,8 @@ class TestPythonVersionBrokenEnvelope:
             pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
 
         mod._TOMLLIB_AVAILABLE = False
+        # Also patch mod.tomllib to match the non-step-zero
+        # variant; without this, real tomllib is still bound and step-zero code that calls
         # tomllib.loads() directly can succeed even though _TOMLLIB_AVAILABLE is False.
         mod.tomllib = None
 

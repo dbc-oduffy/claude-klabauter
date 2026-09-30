@@ -54,7 +54,14 @@ def test_empty_string_session_id_also_carries_no_identity():
     assert _caller_of(frame)["session_id"] is None
 
 
+#: The two `CallerContext` fields that do NOT ride inside the `_caller`
+#: object `hook_http.build_request` serialises, per that dataclass's own
+#: docstring: `settings_home` rides its own top-level `_settings_home` wire
+#: field (`warm/settings_home_claim.py`), and `env` is joined onto the
 #: object SERVER-SIDE by `warm.server._serve_line` via `merge_env_axis`
+#: after `resolve_caller_context` already ran -- neither producer leg
+#: (`hook_http.build_request`, `client.py`) has a value to put there at
+#: build time, so both stay unset on the wire object this test reads.
 _CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT = frozenset({"settings_home", "env"})
 
 
@@ -104,7 +111,18 @@ def test_caller_stamp_does_not_disturb_the_engine_token_contract():
     assert _caller_of(frame)["session_id"] == "sess-1"
 
 
+# ---------------------------------------------------------------------------
+# C1b -- both the named-pipe/door leg's client widens to the full `_caller`
+# identity SET (`warm.caller_context.CallerContext`, serialised directly),
+# and `_serve_line` reads only `_caller` now (no `_session_id` alias).
+#
 # NEGATIVE SPEC. This section does not touch the HTTP leg's own tests above
+# (C1a's own wire shape, unmodified) and does not assert on `door.c` --
+# there is no Python harness in this suite that builds and runs the native
+# door; the door-side change is pinned by its own source comments and by
+# this module's identical wire shape on the Python leg, per the plan body's
+# "both legs widen ... as one top-level `_caller` object".
+# ---------------------------------------------------------------------------
 
 from coordinator_core.warm import client as _warm_client
 from coordinator_core.warm import server as _warm_server

@@ -89,7 +89,12 @@ from coordinator_core.ops.queue_family import load_family_records
 
 __all__ = ["ReaderResult", "collect"]
 
+#: the one cadence this reader self-gates on — the seam calls every reader
+#: unconditionally for every cadence and trusts each to self-gate (mirrors
+#: `orient_assemble.readers_health_reaper`'s day-cadence-only gating, one
+#: layer up: there the gate is a cadence VALUE test, here it is a cadence
 #: IDENTITY test, since this reader owns exactly one of backlog-grind's five
+#: mirror surfaces rather than a severity-tuned subset of a shared one).
 _CADENCE = "debt-triage"
 
 

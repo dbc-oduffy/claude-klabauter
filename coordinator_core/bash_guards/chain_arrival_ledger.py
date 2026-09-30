@@ -93,7 +93,11 @@ _LEDGER_FILENAME = "chain-arrival-ledger.jsonl"
 
 _ROTATE_MAX_BYTES = 512 * 1024
 
+#: Fixed number of rotated generations kept alongside the live file
+#: (``chain-arrival-ledger.jsonl.1`` .. ``.<N>``). Bounded from birth -- total
+#: disk footprint per session directory is capped at
 #: ``(_ROTATE_GENERATIONS + 1) * _ROTATE_MAX_BYTES`` regardless of how long a
+#: session lives or how many calls it makes.
 _ROTATE_GENERATIONS = 3
 
 _LEDGER_RELPATH = ("state", "chain-arrival-ledger")

@@ -115,7 +115,35 @@ from coordinator_core.ops.ceremony.housekeeping_liveness import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 
+# Import side-effect only: trigger each reused op module's @register_op(...) decorator so
+# get_op_handler(...) below resolves via a direct registry hit rather than its lazy-import
+# fallback (get_op_handler() self-resolves a MISS since 2026-07-25, so this pre-import is
+# belt-and-braces, not strictly required for correctness) -- mirrors the
 # "# noqa: F401 -- trigger registration" idiom used at every call site
+# in the OLD wsc_commit.py). The three fleet archive ops (archive_plans/archive_handoffs/
+# archive_actioned_memos) are NOT imported here for registration any more (C2) -- nothing in
+# this module calls them in-process. The terminal-handoff sweep's live call site
+# (`commit_pipeline.py`'s `_run_in_plane_archive_sweep`, C4) imports
+# `archive_terminal_handoffs.plan_sweep`/`.apply_sweep` directly rather than through this
+# module's registry-handler resolution -- it composes those two pure functions, never the
+# registered `fleet.archive_completed_handoffs` op handler itself.
+#
+# coverage.gate (coordinator_core.ops.coverage_gate) is deliberately NOT
+# pre-imported here any more (K-001, state/kill-ledger.md): the close path no
+# longer calls this op in-process -- see the retired `run_coverage_gate`
+# below this module's own history. The op still exists as mint-only
+# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
+# (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
+# it in its own process.
+#
+# review_trail_write (coordinator_core.ops.review_trail_write) is likewise not
+# pre-imported here -- its in-process wiring was removed 2026-08-23 (PM ruling,
+# kill review_trail.write) and this module still performs no call against it.
+# The op itself was later readmitted from suspension by the 2026-08-23 PM
+# ruling and IS registered (coordinator_core/ops/__init__.py registers
+# "review_trail.write") -- it was never deleted outright; see the
+# "review_trail.write" residue comment below for what this module used to
+# wire against it and why re-wiring is a separate decision from readmission.
 
 _LOG = logging.getLogger(__name__)
 
@@ -194,7 +222,16 @@ async def _run_fleet_op_by_key(op_key: str, op_label: str, common_dir: Path) -> 
 
 
 # fire_archive_sweeps_detached and _ARCHIVE_SWEEP_SCRIPTS were DELETED here (C4,
+# docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4) -- the
+# detached on-disk-script archival shape they implemented is replaced by an in-plane
+# fold-in of plan_sweep/apply_sweep's own moved src/dst paths into the ceremony's own
+# commit_paths (`commit_pipeline.run_commit_pipeline`'s `_run_in_plane_archive_sweep`),
+# never a spawned child racing the parent's own commit. See that module for the live
+# call site; this module registers no call site of its own for it any more.
+# ---------------------------------------------------------------------------
+# refresh-roadmap-callout -- disposable sibling render
 # (STEP_2_75, C9 wiring-gap fix, 2026-07-22 -- see wsc_tail.py module docstring)
+# ---------------------------------------------------------------------------
 
 #: Native-port op label (not a JSON-RPC op key -- never goes through get_op_handler),
 #: mirroring the OLD wsc_commit.py's ``_OP_ROADMAP_CALLOUT``.
@@ -293,6 +330,9 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
             failed.append(f"{OP_ROADMAP_CALLOUT}: {reason}")
 
     # Success-path-only liveness stamp (ROADMAP_CALLOUT): only when at least one
+    # consumed handoff's roadmap callout was actually refreshed this pass --
+    # an all-skipped loop (no roadmap_id anywhere, or every callout already
+    # up-to-date) or an all-failed loop must NOT read as "the class ran".
     if acted:
         stamp_liveness(str(worktree_root), _HL_ROADMAP_CALLOUT)
 
@@ -302,7 +342,10 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
     }
 
 
+# ---------------------------------------------------------------------------
+# fire_tracker_and_roadmap_detached: refresh_roadmap_callout is fired as a
 # DETACHED CLI spawn rather than run in the BLOCKING wsc_tail.py pre-commit path.
+# ---------------------------------------------------------------------------
 
 _ROADMAP_CALLOUT_CLI_SCRIPT = "refresh-roadmap-callout.py"
 

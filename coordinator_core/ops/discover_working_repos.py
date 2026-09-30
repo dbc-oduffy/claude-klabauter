@@ -373,6 +373,10 @@ def discover_repo_paths() -> List[str]:
     a5_out = list(a5_out) + _cwd_repo()
 
     # Tier A.5 always runs ALONGSIDE the first non-empty tier (A or B). Its
+    # purpose is to close gaps in Tier A — an operator may have registered a
+    # sibling repo in registry.local.toml but lack an activity record for
+    # it, so a strict stop-at-first-non-empty A would mask the registered
+    # repo. Merge + dedup.
     mirror_keys = _publish_mirror_keys()
 
     if a_out:

@@ -22,6 +22,7 @@ def test_raised_exit_2_with_argparse_stderr_classifies_argv_rejected():
 
 def test_returned_exit_2_classifies_returned_even_with_argparse_shaped_stderr():
     # main() RETURNING 2 is never argv_rejected, regardless of stderr shape —
+    # `raised` is one of the three required conditions, not incidental.
     assert (
         classify_cli_exit(raised=False, code=2, stderr_text=_ARGPARSE_STDERR)
         is CliExitClass.RETURNED

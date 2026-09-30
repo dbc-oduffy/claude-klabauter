@@ -303,13 +303,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator/bin/publish_refusal_record.py writes through an unresolved path expression and declares no GENERATES",
-    "generator": "coordinator/bin/publish_refusal_record.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
-  },
-  {
     "detail": "coordinator/bin/record-platform-outcome.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator/bin/record-platform-outcome.py",
     "mutates": [],

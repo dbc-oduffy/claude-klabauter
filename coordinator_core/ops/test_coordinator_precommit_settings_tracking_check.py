@@ -112,6 +112,13 @@ def test_override_bypasses_the_new_markers_too(tmp_path):
 
 
 # --- 2026-08-11: glob lens (`_TRACKED_SIDECAR_GLOBS`) coverage --------------
+#
+# Reproduces the five paths from the coordinator-content-repo cross-repo memo
+# (2026-08-11-coordinator-content-repo-em-two-gaps-that-let-machine-local-files-stay-tracked.md
+# § "1.") that were tracked in a live `~/.claude` while this guard's original
+# exact-basename lens ran clean — three of them byte-identical to files the
+# exact lens DOES protect, the other two plugin-manifest snapshots nested
+# alongside them in the same backup directory.
 
 _GLOB_EVIDENCE_PATHS = (
     "settings.json.bak-2026-08-07-dead-hooks",

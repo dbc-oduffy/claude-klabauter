@@ -158,7 +158,10 @@ from coordinator_core.session_ledger.aggregate_chain_loe import (
     unparseable_ledger_rows,
 )
 
+# Any level-2 ATX heading — the block-boundary detector every write-time/
+# detection site in this family uses (mirrors `aggregate_chain_loe.
 # _ANY_HEADING_RE`, not imported since that name is that module's own
+# private block-scanning detail; this is the identical one-line grammar).
 _ANY_HEADING_RE = re.compile(r"^## ")
 
 _MAX_CONTEXT_EXPANSION_LINES = 30
@@ -466,7 +469,20 @@ async def _handler(
         dispatch_source = "agents_file"
     elif session_id_override:
         # THE ABSENCE-IS-A-REAL-ZERO RULE DOES NOT REACH THE OVERRIDE BRANCH.
+        # It is sound only because the normal path is invoked BY the live
+        # session it appends a row FOR (module docstring's "Nd / No"). Supply
+        # `session_id` and that premise inverts: the row is FOR a session that
+        # died on another host or died with its hub, so its
         # `dispatched-agents.txt` is absent BY CONSTRUCTION and the recovery
+        # path writes `XS | 0d / 0o` not sometimes but always. Measured in
+        # example-store-repo 2026-09-02: session ...203689 backfilled as 0d / 0o with
+        # 15 agent sidecars (2 opus) on disk, `compute_tshirt(15, 2, None)` = M.
+        # It is worse than one wrong row -- `aggregate_chain_loe` sums these,
+        # a `0d / 0o` row parses perfectly, and the session renders as no
+        # effort at all, which is the silent zero the ledger's own inline
+        # comment warns about, reached through `exit_code: 0`. And the row is
+        # unrepairable here: the duplicate guard below refuses a second append
+        # for the same sid6.
         return _err(
             f"session_id override {session_id!r} names a session with no "
             f"dispatched-agents.txt on this host, so its dispatch counts are "

@@ -13,6 +13,7 @@ Cases named by the plan spine row C7:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -347,6 +348,9 @@ class TestReadOnlyTrackedP4ignore:
         p4ignore = tmp_path / ".p4ignore"
         p4ignore.write_text("*.uasset\n", encoding="utf-8")
         p4ignore.chmod(0o444)
+        if os.access(p4ignore, os.W_OK):
+            p4ignore.chmod(0o644)
+            pytest.skip("mode 0o444 does not block writes here (root); read-only refusal is unobservable")
         recorded: dict = {}
         self._patch(monkeypatch, str(tmp_path), recorded)
         try:

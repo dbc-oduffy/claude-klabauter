@@ -93,7 +93,10 @@ logger = logging.getLogger(__name__)
 _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
 
+# The only <repo>: qualifier resolve() accepts.
 # Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
+# side ever produces; a queried_id carrying any OTHER qualifier is refused
+# as a typed miss rather than silently routed to the coordinator-content-repo peer index.
 _RECOGNIZED_PEER_REPO = "coordinator-content-repo"
 
 
@@ -157,12 +160,28 @@ class _BacklinkIndex:
         self.plan_id_to_paths: Dict[str, List[str]] = {}
         self.deliverable_id_to_paths: Dict[str, List[str]] = {}
         self.path_to_ids: Dict[str, Dict[str, Optional[str]]] = {}
+        # basename (with .md extension, e.g. "2026-07-10-qsub-01-....md") ->
+        # [abs path, ...]. The join key `assert_no_dangling_plan_backlinks.py`
+        # already uses (`os.path.basename(rel)`) to match a citation's dated
+        # filename against its archived twin -- reused here verbatim (not
+        # re-derived as a looser stem/slug match) so a cited docs/plans/<x>.md
+        # whose record now lives at archive/specs/<YYYY-MM>/<x>.md still
+        # resolves, and the converse (an archive-path citation whose record
+        # has moved back to docs/plans/) resolves too. Only populated for
+        # records carrying at least one real id, mirroring `path_to_ids`.
+        # More than one path sharing a basename is the existing typed
         # AMBIGUITY outcome, never a silent pick.
         self.basename_to_paths: Dict[str, List[str]] = {}
 
     def _add(self, plan_id: Optional[str], deliverable_id: Optional[str], path: str) -> None:
         if plan_id is not None:
+            # list-valued like deliverable_id_to_paths,
+            # not a single str with last-write-wins. plan_id is documented as
+            # per-file identity, never shared, but a genuine duplicate/copy-
             # pasted plan_id must surface as a typed AMBIGUITY in resolve_id(),
+            # not silently resolve to whichever path an unordered directory
+            # traversal happens to visit last — refuse rather than guess,
+            # matching deliverable_id's own collision handling.
             self.plan_id_to_paths.setdefault(plan_id, []).append(path)
         if deliverable_id is not None:
             self.deliverable_id_to_paths.setdefault(deliverable_id, []).append(path)
@@ -409,7 +428,9 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
     return resolve_id(local_index, queried_id)
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handlers
+# ---------------------------------------------------------------------------
 
 
 @register_op("spec_backlink.resolve")

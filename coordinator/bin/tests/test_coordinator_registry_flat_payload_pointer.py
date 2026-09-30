@@ -14,7 +14,16 @@ if _LIB_DIR not in sys.path:
 
 import coordinator_registry as reg  # noqa: E402
 
+#: The payload's flat `lib/` ships `read_content_root_pointer.py` AND its sibling
+#: `settings_home.py` — verified against both publish mirrors (claude-klabauter,
+#: coordinator-claude). Both must be staged into the fixture: the helper resolves
+#: settings-home by importing `settings_home` from its OWN directory
+#: (`Path(__file__).resolve().parent`), so a fixture holding only the helper makes
+#: `_resolve_settings_home()` return "" and silently demotes the read to the
 #: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` rung — which on a configured
+#: dev box resolves the real DoE root and fails this assertion, and on an
+#: unconfigured box resolves "" and fails it differently. Negative spec: staging
+#: the helper alone does not reproduce the payload layout.
 _REAL_LIB_DIR = os.path.join(os.path.dirname(_BIN_DIR), "lib")
 _REAL_HELPER_SRCS = (
     os.path.join(_REAL_LIB_DIR, "read_content_root_pointer.py"),
@@ -61,6 +70,9 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
         )
         # CLAUDE_HOME is pinned into the fixture alongside settings-home so the
         # helper's LEGACY rung (`${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`) can
+        # only ever resolve inside this tmpdir. Without it the assertion below
+        # is a read of whatever the developer's own box has configured, and the
+        # test passes or fails on machine state rather than on the code it pins.
         claude_home = os.path.join(self._tmp, "claude-home")
         os.makedirs(os.path.join(claude_home, ".claude"))
 

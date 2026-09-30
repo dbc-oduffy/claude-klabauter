@@ -62,7 +62,11 @@ class TestReachableOutcome:
 
 class TestRefWideningLoop:
     def test_widens_past_six_hex_chars_on_prefix_collision(self, monkeypatch):
+        # Replaces a probe-and-`pytest.skip`
+        # search for a real sha256 collision with a monkeypatched
         # `_full_hash12` carrying a HARDCODED 6-hex-prefix collision, so the
+        # widening branch is deterministically exercised on every run and
+        # this test can never silently skip.
         full_a = "aaaaaa000000"
         full_b = "aaaaaa111111"
         monkeypatch.setattr(
@@ -185,7 +189,10 @@ class TestOwnSession:
     def test_socket_env_match_classifies_own_session_when_self_record_declines(
         self, monkeypatch
     ):
+        # Regression test for the measured defect: self_record() declines
         # (e.g. CLAUDE_PID env-miss:name-mismatch on a correct pid) but the
+        # socket env var matches the resolved record's own socket -- must
+        # still classify own_session, not silently degrade to reachable.
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock"),
         }
@@ -524,7 +531,10 @@ class TestFallbackChannel:
     def test_absent_cwd_never_crashes_and_defaults_to_memo_channel(
         self, monkeypatch, tmp_path
     ):
+        # An unconfirmed location must not be read as "same tree" -- a
         # wrong PEER_NOTICE pointer sends the reader down a channel that
+        # structurally cannot deliver, worse than the collapsed-reason
+        # defect this field exists to close.
         this_repo = tmp_path / "this-repo"
         this_repo.mkdir()
         snap = {
@@ -542,6 +552,7 @@ class TestFallbackChannel:
         self, monkeypatch, tmp_path
     ):
         # NO_LIVE_RECORD: there is no target to compare a working tree
+        # against at all -- not this field's arm, no fallback_channel.
         snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -638,6 +649,8 @@ class TestWarmServedOwnSession:
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         # The spawner's own ambient CLAUDE_PID still resolves via
+        # self_record() -- a real, correctly pid-keyed match, just for the
+        # wrong session.
         monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
 
         with session_core.warm_served_request(True):

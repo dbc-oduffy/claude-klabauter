@@ -47,7 +47,12 @@ from coordinator_core.bash_guards.tests.guard_message_capture import (
     capture_one_guard,
 )
 
+#: The exemption manifest. Keyed `(guard_name, input_id)`, value a WRITTEN
+#: prose reason -- never a bare `True`/placeholder string. Ships empty; see
+#: module docstring. `input_id` is a caller-chosen short label identifying
+#: which corpus cell (e.g. a C3 corpus row, or a fixture in
 #: `_EXEMPTION_FIXTURES` below) the exemption covers -- it is not itself
+#: interpreted by this module beyond dead-entry lookup.
 GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
     ("guard-repo-setup-claude-home-refusal", "guard-repo-setup-claude-home-refusal-fire"): (
         "this text is byte-pinned to coordinator-content-repo's cold `guard-repo-setup-"
@@ -365,8 +370,16 @@ def _block_subagent_destructive_action_fire_fixture() -> Tuple[str, str, str, Di
     return cmd, session_id, cwd, payload, False
 
 
+#: Fixture-builders for `test_exemption_cells_still_exceed_cap`'s live
+#: re-measurement, owned alongside the manifest (never imported from a
+#: sibling corpus module, so this file's dead-entry enforcement never
+#: depends on another chunk's shape). Keyed identically to
 #: `GUARD_MESSAGE_EXEMPTIONS`; value a zero-arg callable returning
+#: `(cmd, session_id, cwd, payload, host_is_windows)` -- the exact
+#: positional/keyword shape `guard_message_capture.capture_one_guard`
 #: takes. An entry in `GUARD_MESSAGE_EXEMPTIONS` with no matching fixture
+#: here fails `test_exemption_cells_still_exceed_cap` loud, by design: a
+#: reason with no reproducible cell to check is not a verifiable exemption.
 _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dict[str, Any], bool]]] = {
     (
         "guard-doctrine-surface-bash-write",
@@ -403,11 +416,20 @@ _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dic
 }
 
 
+#: Re-measurement lookup for the eight `directory:hooks`-band exemptions
+#: above (composed-dispatcher / context-injection cells). Unlike
 #: `_EXEMPTION_FIXTURES` above -- independently-authored fixtures re-fired
+#: through `capture_one_guard`, bash_guards' native-band capture seam --
+#: each of these entries' whole written reason IS "this cell is C3's own
 #: `HOOK_ROWS` row for this exact (guard, row_id), re-fired and measured
+#: exactly as `test_leg1_ceiling_per_band` already fires it." Re-deriving
+#: an independent fixture here would not verify that claim; it would
 #: verify a DIFFERENT, hand-authored cell that happens to resemble it. So
 #: this lookup keys directly into `guard_message_corpus.HOOK_ROWS` rather
+#: than owning a duplicate fixture -- the one deliberate exception to
 #: `_EXEMPTION_FIXTURES`'s own "never imported from a sibling corpus
+#: module" rule, because for THESE entries the sibling corpus row is the
+#: evidence, not a shape to be independently reproduced.
 _HOOK_EXEMPTION_ROWS: Dict[Tuple[str, str], "guard_message_corpus.HookRow"] = {
     (row.guard, row.row_id): row
     for row in guard_message_corpus.HOOK_ROWS
@@ -438,8 +460,12 @@ def _live_guard_names() -> set:
 
 def test_exemption_guards_are_currently_registered():
     live_names = _live_guard_names()
+    #: `directory:hooks`-band entries name a hooks module, never a
+    #: `dispatch.GuardEntry.name` -- `_live_guard_names` reads only
+    #: `dispatch._build_guard_chain`'s bash_guards registrations, so those
     #: keys are checked for liveness against `_HOOK_EXEMPTION_ROWS`
     #: (itself keyed off `guard_message_corpus.HOOK_ROWS`, C3's own live
+    #: hooks-row registry) instead, below.
     hook_exempted = {guard_name for guard_name, _ in _HOOK_EXEMPTION_ROWS}
     stale = {
         guard_name

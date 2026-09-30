@@ -118,7 +118,15 @@ CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 140
 
+#: STEMS+GLOBS — transcribed verbatim (order and wording) from
+#: docs/wiki/coordinator-tripwires.md § tasks-state-folder-split's
+#: "Always-on `state/` substrate (enumerated allowlist)" line. Each entry is
+#: (label-as-written-in-the-wiki, is_directory_form, is_category_word).
+#: is_directory_form mirrors the wiki's own trailing "/" spelling for
+#: directory surfaces; is_category_word marks the three tokens (trackers,
+#: queues, ledgers) that are generic category words rather than literal
 #: on-disk basenames — see module docstring "DETECTION" for the distinct
+#: matching rule each class gets.
 _SURFACE_TOKENS: Tuple[Tuple[str, bool, bool], ...] = (
     ("orientation_cache", False, False),
     ("lessons", False, False),
@@ -143,6 +151,8 @@ _CATEGORY_SINGULAR = {
     "ledgers": "ledger",
 }
 
+#: ``tasks/<sid>/`` per-session completeness-checklist mirror exemption —
+#: session ids in this repo are hex-and-hyphen, >= 8 characters (see module
 #: docstring EXEMPTION).
 _SESSION_ID_RE = re.compile(r"^[0-9a-f-]{8,}$", re.IGNORECASE)
 

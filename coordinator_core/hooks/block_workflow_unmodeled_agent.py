@@ -102,7 +102,9 @@ _IDENTIFIER_CHARS = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
 # Doctrine-plane asset resolution — see module docstring "ADAPTATION".
+# ---------------------------------------------------------------------------
 
 
 def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:

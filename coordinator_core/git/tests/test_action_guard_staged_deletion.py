@@ -114,3 +114,24 @@ def test_zero_new_process_spawns_for_the_refused_call(repo, monkeypatch):
         "subprocess.run -- assert_no_undeclared_staged_deletion must be a "
         "pure in-process predicate"
     )
+
+
+def test_an_untrack_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo):
+    before = _head(repo)
+
+    with pytest.raises(CommitDeniedByActionGuard) as excinfo:
+        gcommit.commit_paths(
+            repo, [], "fix: unrelated subject", untracked_paths=["gone.txt"]
+        )
+
+    assert "UNDECLARED STAGED DELETION" in str(excinfo.value)
+    assert _head(repo) == before
+
+
+def test_an_untrack_whose_message_names_it_commits(repo):
+    out = gcommit.commit_paths(
+        repo, [], "untrack gone.txt, keep it on disk", untracked_paths=["gone.txt"]
+    )
+
+    assert out.sha
+    assert (repo / "gone.txt").exists()

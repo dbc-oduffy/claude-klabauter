@@ -134,7 +134,9 @@ def test_declared_installer_resolves_a_present_script(tmp_path):
     assert contract == {"check_only_flag": "--check"}
 
 
+# ---------------------------------------------------------------------------
 # --check-only uses the DECLARED flag, never an assumed spelling (Finding 2c)
+# ---------------------------------------------------------------------------
 
 
 def test_check_only_uses_declared_flag_spelling(tmp_path, monkeypatch):

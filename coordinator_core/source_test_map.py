@@ -46,6 +46,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.diff_scoped_tests import _read_testpaths
 
+#: This repo's test-file convention (basename only), matching
 #: `diff_scoped_tests._TEST_FILE_RE`.
 _TEST_FILE_RE = re.compile(r"^test_(.+)\.py$")
 

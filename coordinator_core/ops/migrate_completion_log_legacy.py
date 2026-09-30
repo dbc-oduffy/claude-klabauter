@@ -207,7 +207,10 @@ def main(argv: List[str]) -> int:
         for src in to_move:
             filename = os.path.basename(src)
             dst = os.path.join(legacy_dir, filename)
+            # DR-276: declared AFTER the move lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an
+            # intended surface. `dst` is the final destination `git mv`
+            # rewrote src into, never the pre-move src path.
             declare_write(dst)
             moved += 1
     else:

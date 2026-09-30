@@ -138,17 +138,43 @@ from coordinator_core.bash_guards._verdict import record_silent
 
 _GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
+#: PowerShell-only verb spellings this guard's Rule 1 (`_remove_arg_denies`)
 #: must ALSO recognize under `Dialect.POWERSHELL`, per
+#: `docs/reference/guard-dialect-coverage.md` row 26: `rm` already fires
+#: unaided because it is a real PowerShell alias (C3's alias-collision
 #: finding) -- `_REMOVE_ARG_COMMANDS` below is unchanged and still matches
+#: it once the tokens themselves are dialect-correct. `unlink` has NO
+#: PowerShell equivalent at all, so this set names the cmdlet/alias
+#: spellings that actually remove a file by positional argument in
+#: PowerShell -- `Remove-Item` (full cmdlet name), `ri`/`rd`/`del` (its
+#: built-in aliases). Compared case-insensitively, same as
 #: `_REMOVE_ARG_COMMANDS`, via `_normalize_executable_basename`'s own
+#: lower-casing.
 _REMOVE_ARG_COMMANDS_POWERSHELL = frozenset({"remove-item", "ri", "rd", "del"})
 
+#: Reason-kind for the one `_tokenize_full_command` failure this module treats
 #: as DENY rather than ADVISORY: the command is past the shared tokenizer's
 #: DoS ceiling (`_command_tokenizer._MAX_TOKENIZABLE_COMMAND_CHARS`) AND names
+#: the sentinel filename in its raw text.
+#:
+#: The two failure causes are NOT symmetric and this module deliberately
+#: separates them. An unterminated quote is an ordinary typo shape that a
 #: person hits by accident, and demoting it to ADVISORY is this module's
+#: stated posture (see "POSTURE" in the module docstring) -- that behavior is
+#: unchanged. Being past the ceiling is not a typo: the largest command-shaped
+#: string this project has ever needed to classify is ~8 KB, so a command
+#: eight times that size which also names the sentinel is not a shape any
 #: honest caller produces, and leaving it at ADVISORY (which renders as
+#: `permissionDecision: allow`) would mean a padded `rm <sentinel>` walks
+#: through the guard the padding was added to defeat.
+#:
 #: Scoped to the OVER-CEILING cause on purpose: every verdict below the
+#: ceiling is bit-identical to what this module returned before the ceiling
+#: existed.
 #: A ``%s`` TEMPLATE, not a finished string -- interpolate
+#: ``self.target_basename`` at every use, the way every other reason in this
+#: module does. A static "naming the sentinel" dropped the one fact the deny
+#: text exists to carry: WHICH sentinel.
 _REASON_OVER_CEILING = "command past the tokenizer size ceiling, naming %s"
 
 _REMOVE_ARG_COMMANDS = frozenset({"rm", "unlink"})
@@ -226,8 +252,12 @@ class SentinelRemovalDetector:
         dialect-correct (guard-dialect-coverage.md row 26)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if dialect is Dialect.POWERSHELL:
+            # `unlink` is a bash-only spelling with no PowerShell alias --
+            # it does not resolve to any real command in PowerShell, so
             # `_REMOVE_ARG_COMMANDS` (bash's `{"rm", "unlink"}`) must NOT be
+            # used verbatim here. `rm` carries over unaided (real alias
             # collision); `_REMOVE_ARG_COMMANDS_POWERSHELL` names the
+            # PowerShell-only spellings (guard-dialect-coverage.md row 26).
             allowed = {"rm"} | _REMOVE_ARG_COMMANDS_POWERSHELL
         else:
             allowed = _REMOVE_ARG_COMMANDS
@@ -338,9 +368,15 @@ class SentinelRemovalDetector:
             return True
         return False
 
+    # -----------------------------------------------------------------
     # INDIRECTION-WRAPPER PASS -- mirrors `SentinelCreationDetector`'s own
+    # pass structurally (same primitives), but every terminal "cannot
     # examine this payload" branch below resolves to ADVISORY here instead
+    # of the sibling's DENY (module docstring "POSTURE"). A genuine direct
+    # match found by recursing INTO an examinable payload still returns
     # `REASON_DIRECT` (deny) -- only genuinely opaque wrappers get the
+    # weaker verdict.
+    # -----------------------------------------------------------------
 
     def _classify_payload(self, payload: str, depth: int) -> Optional[Tuple[str, str]]:
         tokens = _tokenize_full_command(payload)

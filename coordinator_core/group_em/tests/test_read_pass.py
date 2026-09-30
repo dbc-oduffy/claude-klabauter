@@ -159,7 +159,11 @@ def test_missing_stamped_at_fails_closed_not_a_candidate():
     assert verdict["candidate"] is False
 
 
+# ---------------------------------------------------------------------------
 # defect 4 -- a frozen PRODUCING reader verdict must not silently hide a
+# stopped peer from the roster (state/dispatch-briefs/2026-08-31-the-group-
+# em-tick-carries-standing-obligations/C7.md)
+# ---------------------------------------------------------------------------
 
 
 def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable():
@@ -304,7 +308,9 @@ def test_classify_fallback_status_user_line_still_producing(tmp_path):
     assert state == read_pass.STATE_PRODUCING
 
 
+# ---------------------------------------------------------------------------
 # PRODUCING peers are never candidates, on either leg
+# ---------------------------------------------------------------------------
 
 
 def test_producing_peer_excluded_on_reader_leg():
@@ -404,6 +410,10 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
     ) as fake_build_roster:
         agents = read_pass.fetch_live_agents(REPO_ROOT)
     # BOTH REFUSALS DEFAULT OFF, asserted rather than omitted. The two flags
+    # (added 2026-09-01 for `watch.gone`, which cannot tell an unreadable
+    # registry from an empty one) are forwarded on every call, so this pin
+    # would break silently if a future edit flipped a default and turned every
+    # existing caller's quiet `[]` into a raise.
     fake_build_roster.assert_called_once_with(
         repo_root=REPO_ROOT, raise_on_failure=False, raise_on_empty_snapshot=False
     )

@@ -31,6 +31,18 @@ _spec.loader.exec_module(resolve_claude_klabauter)
 
 _FIXTURE_TARGET_NAME = "fixture-cli"
 
+#: The remediation `exec_cli` emits on its two 127 paths. Asserted by name so
+#: the three call sites cannot drift apart from each other — they did drift
+#: from the SHIPPED text, which is the defect this constant closes: they went
+#: on asserting the retired "re-run coordinator:install" long after the string
+#: became "run python3 <engine-clone>/scripts/setup.py", and neither red was
+#: visible on the fast tier because this whole module is `cadence`-marked.
+#:
+#: The code is the correct side of that drift, not the tests. A forwarder that
+#: cannot resolve its target fails before any session exists — the operator is
+#: at a cold terminal, and a slash command names a remedy that cannot run.
+#: That is claude-klabauter's cold-path rule (CLAUDE.md § Runtime conventions); the
+#: mechanical guard for it, `coordinator/tests/test_cold_path_remediation_is_runnable.py`,
 #: enumerates its subjects in `COLD_PATH_MODULES` — and `_resolve_claude_klabauter.py`
 _REMEDIATION_TEXT = "scripts/setup.py to repair the plugin tree"
 
@@ -73,7 +85,10 @@ def _write_sentinel(coord_bin: Path) -> None:
     sentinel.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     sentinel.chmod(0o755)
     if os.name == "nt":
+        # `_resolve_claude_klabauter.py`'s Windows-side executability probe is
         # PATHEXT-based, not stat-mode-based (NTFS has no exec bit for
+        # os.chmod to set) — mirror the real on-disk archive-stamp-cli's
+        # `.cmd` companion, matching test_forwarder_trust_guard.py's fixture.
         (coord_bin / "archive-stamp-cli.cmd").write_text("@echo SENTINEL\r\n", encoding="utf-8")
 
 
@@ -134,8 +149,15 @@ def _invoke_posix_subprocess(
     env = dict(os.environ)
     env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
     # Rung 0 of `_resolve_claude_klabauter_root`'s ladder reads COORDINATOR_ENGINE_ROOT
+    # directly, ahead of and independent of the settings-home override above
+    # -- a real session env that exports it (as this box's does, pointed at
+    # the actual klabauter checkout) hijacks every case here to that real
+    # root instead of the tmp fixture tree, uniformly returning 127 ("fixture
+    # -cli is missing") regardless of what each test's own tmp fixture set
     # up. MACHINE_LOCAL_REGISTRY_DIR would similarly bypass the tmp
+    # settings-home's machine-local/ wholesale (`_ml_dir`'s own override,
     # read ahead of COORDINATOR_SETTINGS_HOME); stripped for the same
+    # hermeticity reason even though this box does not currently export it.
     env.pop("COORDINATOR_ENGINE_ROOT", None)
     env.pop("MACHINE_LOCAL_REGISTRY_DIR", None)
 

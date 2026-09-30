@@ -160,6 +160,28 @@ _INDETERMINATE_DIVERGENCE_OFFER = (
     "change so staged and worktree agree, and the question stops mattering.\n\n"
     "{override_note}"
 )
+#: Emitted when EVERY path the trailing pathspec covers is an index-only removal
+#: (`git rm --cached`, file kept on disk) and nothing else diverges. The generic
+#: offer's remedies all assume staged content to preserve; here the staged side
+#: is a deletion, and a bare no-pathspec commit is the one form that commits it.
+#: Exit code proves nothing (the wrong form also exits 0), so the offer ends on
+#: the `ls-files --error-unmatch` check that does.
+_INDEX_ONLY_REMOVAL_OFFER = (
+    "OFFER: this `git commit` has a trailing `--` pathspec covering {paths}, all "
+    "staged as an INDEX-ONLY removal (`git rm --cached`) with the file still on "
+    "disk. A trailing pathspec reads the worktree, so it re-`add`s the file and "
+    "silently reverts the untrack -- exit 0, subject line claiming the opposite "
+    "(SC-DR-015).\n\n"
+    "Commit the index as staged instead: `git diff --cached --name-only` to "
+    "confirm only your paths are staged, then `git commit -m ...` with no "
+    "pathspec. If a peer's files are staged too, isolate the commit in a private "
+    "GIT_INDEX_FILE (read-tree HEAD, `git rm --cached -- {paths}`, write-tree + "
+    "commit-tree) rather than the shared index.\n\n"
+    "Verify afterwards: `git ls-files --error-unmatch -- {paths}` must exit "
+    "non-zero. Exit 0 means the path is still tracked, whatever the commit "
+    "reported.\n\n"
+    "{override_note}"
+)
 from coordinator_core.git.run import run_git
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
@@ -1042,6 +1064,14 @@ def check_staged_pathspec_divergence(
     if _override("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE"):
         _log_pathspec_divergence_override(cmd, cwd, session_id)
         return None
+
+    if untracked_removed and not diverging:
+        return _INDEX_ONLY_REMOVAL_OFFER.format(
+            paths=", ".join(untracked_removed),
+            override_note=operator_override_note(
+                "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", payload=payload
+            ),
+        )
 
     untrack_note = ""
     if untracked_removed:

@@ -9,7 +9,11 @@ import pytest
 import coordinator_core.pickup_brief as pa
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: this file spawns a real process (git) because
+# `brief()` reads real git state (tree quiescence, claim resolution) that no
 # fixture stands in for. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for a new file —
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,

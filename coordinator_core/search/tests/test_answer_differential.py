@@ -14,6 +14,7 @@ what these tests exist to catch.
 from __future__ import annotations
 
 import os
+import re
 import textwrap
 
 import pytest
@@ -59,6 +60,8 @@ FIXTURE_FILES = {
     "overlap.txt": "l1\nl2 zeta\nl3 zeta\nl4\n",
 }
 
+_RECURSIVE_HEAD = re.compile(r"(grep -r.*?) \| head -(\d+)")
+
 CASES = [
     ("grep -n alpha notes.md", False),
     ("grep -rn alpha .", True),
@@ -83,7 +86,10 @@ CASES = [
     ("grep -n -A1 zeta adjacent.txt", False),
     ("grep -n -A1 -B1 zeta overlap.txt", False),
     ("grep -n alpha alpha.py beta.py", False),
+    # B1 (2026-08-06 architecture-survey digest #1): a shell glob operand reaches this
     # seam UNEXPANDED, and was previously scanned as a literal filename -- yielding an
+    # authoritative "(no matches)" for a search that never ran. Differential by
+    # construction: the real command's shell expands the glob, ours must agree.
     ("grep -n alpha *.py", False),
     ("grep -n check *.py", False),
     ("grep -n alpha nested/*.txt", False),
@@ -123,7 +129,17 @@ def test_answer_matches_real_command(cmd, recursive, tree):
     if ours is None:
         pytest.skip("declined -- the real command runs unchanged, which is correct")
     _rc, theirs = _real(cmd, tree)
-    if recursive:
+    head = _RECURSIVE_HEAD.fullmatch(cmd)
+    if recursive and head:
+        # Recursive grep emits in readdir order, which is filesystem-defined, so which
+        # N lines `head -N` keeps is not deterministic. The contract is: N lines, each
+        # one the real command would have produced.
+        _rc, full = _real(head.group(1), tree)
+        assert len(ours) == min(int(head.group(2)), len(full)) and set(ours) <= set(full), (
+            "in-process answer disagrees with real command\n"
+            "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, full)
+        )
+    elif recursive:
         assert sorted(ours) == sorted(theirs), (
             "in-process answer disagrees with real command\n"
             "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, theirs)

@@ -71,12 +71,14 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
+from coordinator_core.ops.dispatch_emit import pm_adjudication
 from coordinator_core.ops.dispatch_emit.emit import _meta_block
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
@@ -135,6 +137,32 @@ def _triage_node_id(profile: Profile) -> str:
         if node.kind == "triage":
             return node_id
     raise ValueError("profile graph has no triage node")
+
+def _out_of_root_paths(paths: Optional[Sequence[str]]) -> list[str]:
+    """Paths that lexically escape the repo root: absolute, or `..` below depth 0.
+
+    Pure string walk, no filesystem access. Twin: ``_outOfRootPaths`` in
+    ``_ROUTING_HELPERS`` -- keep the two in lockstep.
+    """
+    out: list[str] = []
+    for p in paths or []:
+        s = str(p).replace("\\", "/")
+        if s.startswith("/") or re.match(r"^[A-Za-z]:/", s):
+            out.append(p)
+            continue
+        depth = 0
+        for seg in s.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                depth -= 1
+                if depth < 0:
+                    out.append(p)
+                    break
+            else:
+                depth += 1
+    return out
+
 
 def route_after_triage(
     routing: Mapping[str, dict], triage_node_id: str, verdict: str, tshirt_size: Optional[str], tradeoff: str
@@ -372,6 +400,11 @@ def run_admission(
             row.touched_files = list(row.touched_files) + [item.get("new_path", "")]
             action = follow_edge(routing, row.node, "confirmed", row)
             _apply_route(row, action, "refute-close confirmed")
+            # Parity with the rendered
+            # `.mjs`'s inline archive-move-commit branch: a confirmed-close
+            # row whose route is a direct handback (no explicit `commit`
+            # node between it and its terminal type) is committed here,
+            # inline, and its successful commit is recorded in `settled` --
             # never silently dropped from `HANDBACK.settled`/`_counts`.
             if action[0] == "handback":
                 commit_result = _record_call("commit", row.row_id) or {}
@@ -429,6 +462,15 @@ def run_admission(
                 row.widened = True
                 return
             _handback(row, "widen-exhausted", "second NEEDS_WIDER_SCOPE")
+            return
+        escaped = _out_of_root_paths(list(result.get("touched_files") or []) + list(result.get("created_files") or []))
+        if escaped:
+            _handback(
+                row,
+                "needs-judgment",
+                "fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): "
+                + ", ".join(escaped),
+            )
             return
         row.fix_node = prior_node
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"fix outcome {outcome!r}")
@@ -507,7 +549,10 @@ def run_admission(
         if max_agent_calls is not None and len(call_log) >= max_agent_calls:
             exhausted = True
             break
+        # Parity with the rendered `.mjs`'s
         # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
+        # budget.total/remaining() below): halts admission once the next
+        # batch's reserve would carry cumulative spend past it.
         if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
             exhausted = True
             break
@@ -554,7 +599,15 @@ def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tu
         size = max(1, int(size))
         for i in range(0, len(entries), size):
             chunk = entries[i : i + size]
+            # `-`, not `:` -- this id is embedded verbatim as a
+            # `records/<batch-id>.json` filename in the composed triage and
+            # verify-op stage prompts (grind_stages.py::compose_triage_call,
+            # compose_verify_op_call). `:` is NTFS-illegal (the write guard's
+            # own `block_illegal_filename` denies it, per
             # coordinator_core/bash_guards/_helpers.py::_ILLEGAL_CHARS_ORDER)
+            # and is never parsed back out (grind_rows.py::_extract_batch_rows
+            # matches the id by exact string equality), so the separator
+            # carries no meaning worth an NTFS-illegal char.
             batches.append((f"{key}-b{i // size}", chunk))
     return batches
 
@@ -601,6 +654,19 @@ _MUTEX_HELPERS = (
 _ROUTING_HELPERS = (
     "const _TSHIRT_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];\n"
     "function _tshirtRank(size) { const i = _TSHIRT_ORDER.indexOf(size || 'XS'); return i < 0 ? 0 : i; }\n"
+    "function _outOfRootPaths(paths) {\n"
+    "  const out = [];\n"
+    "  for (const p of (paths || [])) {\n"
+    "    const s = String(p).replace(/\\\\/g, '/');\n"
+    "    if (s.startsWith('/') || /^[A-Za-z]:\\//.test(s)) { out.push(p); continue; }\n"
+    "    let depth = 0;\n"
+    "    for (const seg of s.split('/')) {\n"
+    "      if (seg === '' || seg === '.') continue;\n"
+    "      if (seg === '..') { depth -= 1; if (depth < 0) { out.push(p); break; } } else { depth += 1; }\n"
+    "    }\n"
+    "  }\n"
+    "  return out;\n"
+    "}\n"
     "function routeAfterTriage(verdict, size, tradeoff) {\n"
     "  if (_tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK) return { kind: 'handback', value: 'baton' };\n"
     "  if (tradeoff) return { kind: 'handback', value: 'needs-judgment' };\n"
@@ -658,52 +724,26 @@ def _indent_block(text: str, indent: str) -> str:
     return indent + f"\n{indent}".join(text.splitlines())
 
 
-def _ledger_commit_block(
-    fn_signature: str,
-    *,
-    unsettled_expr: str,
-    is_drain: bool,
-    profile_name: str,
-    agent_type_host: Optional[str],
-) -> str:
-    label = "commit-ledger:drain" if is_drain else "commit-ledger:batch"
-    raw = stages.compose_commit_ledger_only_call(
-        label=label,
+def _drain_sweep_block(*, profile_name: str, queue_dirs: Sequence[str], agent_type_host: Optional[str]) -> str:
+    raw = stages.compose_ledger_sweep_call(
+        label="ledger-sweep:drain",
         phase_title="Grind",
         profile=profile_name,
-        unsettled_row_ids_js="unsettledPaths",
+        queue_dirs=queue_dirs,
         run_id_js="RUN_ID",
-        is_drain=is_drain,
-        record_js="JSON.stringify(_runCostRecord())" if is_drain else None,
-        repo_root=".",
+        record_js="JSON.stringify(_runCostRecord())",
         agent_type_host=agent_type_host,
     )
-    run_record_note = ""
-    if is_drain:
-        run_record_note = (
-            "\n    _handBack(RUN_ID, 'commit-failed', "
-            f"`drain commit did not land; run-cost record not written: "
-            f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json`);"
-        )
-    call_block = (
-        "  const result = await withLock(lockKeys, async () => {\n"
-        + _indent_block(_capture(raw, "commit"), "    ")
-        + "\n  });\n"
-        "  if (result.outcome === 'commit-failed') {\n"
-        "    for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land -- settle ledgers with grind-row sweep; never commit them'); }"
-        + run_record_note + "\n"
-        "  } else {\n"
-        "    for (const r of unsettled) { _ledgerCommitted.add(r); }\n"
-        "  }"
-    )
-    guarded_call = call_block if is_drain else ("  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }")
     body = (
-        f"  const unsettled = {unsettled_expr};\n"
-        "  const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));\n"
-        "  const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));\n"
-        f"{guarded_call}\n"
+        _capture(raw, "ledger-sweep", tail=(
+            "  if (_result.outcome !== 'swept') {\n"
+            "    _handBack(RUN_ID, 'stage-dead', "
+            f"`drain sweep did not complete; run-cost record may be missing: "
+            f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json` + _commitReason(_result));\n"
+            "  }"
+        ))
     )
-    return f"async function {fn_signature} {{\n{body}}}"
+    return f"async function _drainSweep() {{\n{body}\n}}"
 
 
 def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tuple[str, Optional[str]]:
@@ -714,12 +754,15 @@ def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tupl
         return "op", mode.get("op")
     return (mode or "agent"), None
 
+#: Fail-fast check on the fire-time ``args`` before any agent spends a token. A
 #: missing arg, or a ``run_stamp`` without the leading ``YYYYMMDD`` that
+#: ``grind-row close`` dates rows from, otherwise surfaces rows later as one
 #: ``carries no YYYYMMDD date`` refusal per close. The emitter prints the
+#: well-formed call.
 _FIRE_ARGS_CHECK = (
-    "if (!args || !args.run_stamp || !args.script_path || !args.profile_dir"
+    "if (!args || !args.run_stamp || !args.script_path || !args.profile_dir || !args.repo_root"
     " || !/^\\d{8}/.test(String(args.run_stamp).replace(/-/g, ''))) {"
-    " throw new Error('queue-grind fire args: need {run_stamp, script_path, profile_dir},"
+    " throw new Error('queue-grind fire args: need {run_stamp, script_path, profile_dir, repo_root},"
     " run_stamp starting YYYYMMDD (e.g. 20260922T221000Z); got '"
     " + JSON.stringify(args ?? null)"
     " + '. Re-fire with the Workflow call emit-dispatch-workflow printed.'); }"
@@ -735,6 +778,8 @@ def compose_grind_script(
     appetite: str = "standard",
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
+    queue_dirs: Sequence[str] = (),
+    commit_trailers: Sequence[str] = (),
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -744,11 +789,20 @@ def compose_grind_script(
     in-script (no ``lock`` global is assumed).
 
     Fire-time ``args`` contract (the launcher supplies these; the script
-    bakes none of them, so its bytes never vary with the emitting host):
+    bakes none of them, so its bytes never vary with the emitting host
+    except through ``commit_trailers``, an explicit emit-time input):
     ``run_stamp`` (run id and the only timestamp), ``script_path`` (this
     script's path, which ``grind-row check --manifest`` reads) and
     ``profile_dir`` (the profile directory, which may live in another repo
-    per DR-404's DoE-owned profiles).
+    per DR-404's DoE-owned profiles) and ``repo_root`` (the absolute repo
+    the manifest was emitted against, binding every stage's cwd and commit).
+
+    ``queue_dirs`` are the repo-relative queue dirs the manifest was
+    selected from -- the full set, since the drain's ledger sweep reads a
+    queue left out as closed and settles its live rows' ledgers.
+
+    ``commit_trailers`` are host-required trailer lines passed verbatim to
+    the commit stage's prompt; empty leaves the prompt unchanged.
 
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
@@ -817,12 +871,20 @@ def compose_grind_script(
     lines.append(f"const RESERVE = {batch_reserve(reserve_batch_size)};")
     lines.append(f"const MAX_AGENT_CALLS = {json.dumps(max_agent_calls)};")
     lines.append(f"const BUDGET_TOKENS = {json.dumps(budget_tokens)};")
+    # the guard MUST run before any `const ... = args.*` read below --
+    # `args` is a fire-time global the Workflow runner supplies, absent
+    # entirely on a bare `Workflow({scriptPath})` fire with no `args`. A
+    # read ahead of this check throws a raw `TypeError: Cannot read
     # properties of undefined` instead of `_FIRE_ARGS_CHECK`'s named,
+    # actionable refusal -- exactly the defect this ordering fixes.
     lines.append(_FIRE_ARGS_CHECK)
     lines.append(f"const RUN_ID = args.run_stamp;")
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
     lines.append("const PROFILE_DIR = args.profile_dir;")
+    # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
+    # firing session's ambient cwd.
+    lines.append("const REPO_ROOT = args.repo_root;")
     preamble_expr: Optional[str] = None
     if preamble:
         lines.append(f"const PREAMBLE = {_js_string_literal(preamble)};")
@@ -834,9 +896,6 @@ def compose_grind_script(
     lines.append(f"const MANIFEST_DIGEST = {_js_string_literal(manifest.digest)};")
     lines.append("const TRIAGE_DEPTH_BY_KEY = " + json.dumps(triage_depth_by_key, sort_keys=True) + ";")
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
-    lines.append(
-        "function _ledgerPathFor(rowId) { return `state/queue-grind/${PROFILE_NAME}/${rowId}.jsonl`; }"
-    )
 
     lines.append("let _callCount = 0;")
     lines.append("const _agentCallsByStageKind = {};")
@@ -848,7 +907,6 @@ def compose_grind_script(
     lines.append("let _exhausted = false;")
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
-    lines.append("const _ledgerCommitted = new Set();")
     lines.append("const _byRefuteOrigin = {};")
     lines.append(
         "function _bumpRefuteOrigin(origin, key) {\n"
@@ -871,13 +929,16 @@ def compose_grind_script(
         "}"
     )
 
+    # ONE composed call site per stage kind (verify: one per mode) --
+    # row/batch-count-independent. Each function takes the live row/batch
+    # object and interpolates its runtime fields via grind_stages' `*_js`
     # params; per-batch-key variation reads TRIAGE_DEPTH_BY_KEY/VERIFY_SPEC.
     triage_raw = stages.compose_triage_call(
         label="triage", phase_title="Grind", run_dir=run_dir_s, profile=profile.name,
         verdicts=profile.verdicts,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
-        agent_type_host=agent_type_host, repo_root=".", preamble_expr=preamble_expr,
+        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     lines.append(
         "async function _triageCall(batchId, batchKey, rowIds) {\n"
@@ -896,7 +957,7 @@ def compose_grind_script(
         label="resize", phase_title="Grind", profile=profile.name,
         rows_js="JSON.stringify(rowsData)", run_id_js="RUN_ID",
         fix_verdict=resize_fix_verdict, close_verdict=resize_close_verdict,
-        agent_type_host=agent_type_host, repo_root=".", preamble_expr=preamble_expr,
+        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     lines.append(
         "async function _resizeCall(rowIds) {\n"
@@ -913,7 +974,7 @@ def compose_grind_script(
             label="close", phase_title="Grind", profile=profile.name,
             profile_dir_js="PROFILE_DIR",
             proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host,
-            repo_root=".", preamble_expr=preamble_expr,
+            preamble_expr=preamble_expr,
         )
         lines.append(
             "async function _closeCall(proposals) {\n" + _indent_block(_capture(close_raw, "refute-close"), "  ") + "\n}"
@@ -970,8 +1031,8 @@ def compose_grind_script(
     commit_raw = stages.compose_commit_call(
         label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
         outcome_js="row.lastOutcome || 'settled'",
-        touched_files_js="row.touchedFiles", removed_files_js="row.removedFiles.concat([_ledgerPathFor(row.rowId)])",
-        repo_root=".", agent_type_host=agent_type_host,
+        touched_files_js="row.touchedFiles", removed_files_js="row.removedFiles",
+        agent_type_host=agent_type_host, trailers=commit_trailers,
     )
     lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")
 
@@ -1006,9 +1067,7 @@ def compose_grind_script(
         "  for (const r of batch.rows) { const row = _rows[r]; if (!row.done && row.node) return r; }\n"
         "  return null;\n"
         "}\n"
-        "function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }\n"
-        "function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && "
-        "!_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r) && !_rows[r].closeResult); }"
+        "function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }"
     )
 
     lines.append(
@@ -1098,7 +1157,7 @@ def compose_grind_script(
         "    if (route.kind === 'handback') {\n"
         "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
         "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\" + _commitReason(_cresult) + ' -- settle ledgers with grind-row sweep; never commit them'); }\n"
-        "      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); "
+        "      else { row.sha = _cresult.sha || ''; "
         "_settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }\n"
         "    }\n"
         "  }\n"
@@ -1152,6 +1211,8 @@ def compose_grind_script(
         "    if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }\n"
         "    row.done = true; _handBack(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
+        "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
+        "  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
         "  row.fixNode = _priorNode;\n"
         "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
         "}"
@@ -1202,26 +1263,8 @@ def compose_grind_script(
     )
 
     lines.append(
-        _ledger_commit_block(
-            "_finishBatch(batchState)",
-            unsettled_expr="_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))",
-            is_drain=False,
-            profile_name=profile.name,
-            agent_type_host=agent_type_host,
-        )
+        _drain_sweep_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host)
     )
-    lines.append(
-        _ledger_commit_block(
-            "_drainCommit()",
-            unsettled_expr="Object.values(_rows).filter((r) => r.done && "
-            "!_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId) && "
-            "!r.closeResult).map((r) => r.rowId)",
-            is_drain=True,
-            profile_name=profile.name,
-            agent_type_host=agent_type_host,
-        )
-    )
-
     lines.append(
         "const _admitted = {};\n"
         "const _queue = BATCHES.map((b) => b.id);\n"
@@ -1244,7 +1287,6 @@ def compose_grind_script(
         "      if (!_rows[r].done) { _rows[r].done = true; _handBack(r, 'stage-dead', `batch worker threw: ${_msg}`); }\n"
         "    }\n"
         "  }\n"
-        "  await _finishBatch(batchState);\n"
         "  delete _admitted[batchState.id];\n"
         "}\n"
         "async function runGrind() {\n"
@@ -1273,10 +1315,13 @@ def compose_grind_script(
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
         "_handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
         "  }\n"
-        "  await _drainCommit();\n"
+        "  await _drainSweep();\n"
         "}\n"
         "await runGrind();"
     )
+
+    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host))
+    lines.append("await _adjudicatePmBound();")
 
     lines.append(
         "const HANDBACK = {\n"

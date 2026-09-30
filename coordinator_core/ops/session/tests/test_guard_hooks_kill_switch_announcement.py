@@ -69,7 +69,11 @@ def test_marker_absent_is_quiet(tmp_path):
     assert gsi.evaluate_hooks_kill_switch_announcement(config_dir) == ""
 
 
+# ---------------------------------------------------------------------------
+# Loud while armed, not yet expired -- property 1 + property 4 (route vs
+# answer): the ROUTINE (boot) rendering collapses to one router line; the
 # ON-DEMAND rendering keeps the full pre-2026-07-30 body.
+# ---------------------------------------------------------------------------
 
 
 def test_armed_not_expired_routine_is_one_router_line(tmp_path):
@@ -194,7 +198,11 @@ def test_undecodable_marker_is_malformed_not_fatal(tmp_path):
     assert "MALFORMED" in banner
 
 
+# ---------------------------------------------------------------------------
 # Double-fire status is folded into the FULL-DETAIL banner honestly (reuses
+# the existing detector, never a second resolver). The routine router line
+# never carries this detail -- it only names the command that does.
+# ---------------------------------------------------------------------------
 
 
 def _arm_double_fire_fixture(tmp_path, monkeypatch):
@@ -276,7 +284,13 @@ def test_evaluate_never_writes_anything(tmp_path, monkeypatch):
     assert settings_path.read_bytes() == settings_before
 
 
+# ---------------------------------------------------------------------------
+# The router line names an invocable surface -- prove it actually resolves,
+# not merely that the string looks plausible. Runs the exact command
 # `_KS_DETAIL_COMMAND` embeds (module var, not re-typed here) as a real
+# subprocess against the `session.guard_hooks_kill_switch_detail` op,
+# end-to-end through `coordinator_core.invoke`'s CLI dispatcher.
+# ---------------------------------------------------------------------------
 
 
 def test_router_line_command_actually_resolves(tmp_path):
@@ -294,11 +308,20 @@ def test_router_line_command_actually_resolves(tmp_path):
     _write_marker(config_dir, f"Since: 2026-07-14\nExpires: {future}\n")
 
     # The command _KS_DETAIL_COMMAND embeds, split into argv (no shell
+    # parsing involved -- proves the op resolves, not that a shell string
+    # happens to look right).
     assert gsi._KS_DETAIL_COMMAND == (
         "python3 -m coordinator_core.invoke session.guard_hooks_kill_switch_detail --bare"
     )
+    # `--allow-unstamped-dispatch` is added HERE, to the test's own argv, and
     # deliberately NOT to `_KS_DETAIL_COMMAND` asserted above -- that string is
     # what an operator is told to run, and they run it against a PUBLISHED
+    # engine where the build stamp exists. This tree is a source checkout, so
+    # the engine refuses the dispatch outright ("engine root ... has no build
+    # stamp -- not a published engine ... or pass --allow-unstamped-dispatch
+    # for deliberate manual testing"), which is precisely what this is. Without
+    # the flag the test fails on the tree it runs in rather than on whether the
+    # op resolves, which is the only thing it is asking.
     argv = [
         sys.executable, "-m", "coordinator_core.invoke",
         "session.guard_hooks_kill_switch_detail", "--bare",

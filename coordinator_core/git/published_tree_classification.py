@@ -26,6 +26,7 @@ _ROWS: Tuple[Tuple[str, str], ...] = (
     ("claude-klabauter-coordinator-bin", "coordinator/bin"),
 )
 
+#: Field index of the allowlist CSV in a `publish-targets.portable` row --
 #: duplicates the generator's `_ALLOWLIST_FIELD`.
 _ALLOWLIST_FIELD = 6
 

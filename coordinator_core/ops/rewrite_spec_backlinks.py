@@ -57,7 +57,17 @@ PathLike = Union[str, Path]
 
 _PEER_REPO_NAME = "coordinator-content-repo"
 
+# Resolver contract (C1, coordinator_core.ops.spec_backlink_resolve): a
+# callable taking the cited docs/plans/...md path and returning a
+# JSON-serializable dict with an "outcome" key of "hit" / "miss" /
+# "ambiguity" (case-insensitive on read here -- the stub-based unit tests in
 # this file's test module pin uppercase "HIT"/"MISS"/"AMBIGUITY" values, C1's
+# real resolver emits lowercase; both must keep working unchanged). On a hit
+# the dict also carries "plan_id" and "deliverable_id" (either may be
+# None/absent -- "real" means present, non-None, and non-empty after
+# stripping). C1's real values already carry their own `pln-`/`dlv-` prefix
+# on disk (e.g. `plan_id: "pln-foo-451b3e"`) -- `_emit_id` below must not
+# double-prefix.
 Resolver = Callable[[str], Dict[str, object]]
 
 

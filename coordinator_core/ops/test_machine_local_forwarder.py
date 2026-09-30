@@ -61,7 +61,12 @@ def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     # `home_dir()`'s fallback is `Path.home()`, which reads USERPROFILE on
+    # Windows and ignores HOME entirely (`_settings_home.py`'s own
     # `home_dir` docstring: "already honours USERPROFILE" -- HOME is a
+    # POSIX-only rung there). Setting env HOME alone leaves this test
+    # resolving against the real machine's actual home dir on Windows, not
+    # tmp_path. Patch the resolver `forward` actually calls so the fallback
+    # is exercised identically on every platform.
     monkeypatch.setattr("coordinator_core.bare_forwarder.home_dir", lambda: tmp_path)
     real = tmp_path / ".claude" / "bin" / "machine-local"
     real.parent.mkdir(parents=True)

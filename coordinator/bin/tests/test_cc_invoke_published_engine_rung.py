@@ -177,7 +177,14 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
         with (
             unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": "/from/env"}, clear=False),
             unittest.mock.patch("subprocess.run") as mock_run,
+            # Rung 1 delegates to the real gate, which reads
             # COORDINATOR_ENGINE_ROOT back unchanged when set. Forcing the
+            # same-tree branch keeps that real ordinary-import path
+            # deterministic regardless of whatever `sys.modules
+            # ["coordinator_core"]` state a peer test in this file (or the
+            # repo-root conftest's eager import) left cached — this test is
+            # about the no-new-spawn contract, not about which
+            # `_delegate_to_gate` branch is taken.
             unittest.mock.patch.object(
                 _engine_bootstrap_mod, "_is_same_tree_as_canonical", return_value=True
             ),
@@ -463,7 +470,10 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
                     clear=False,
                 ),
                 unittest.mock.patch("subprocess.run") as mock_run,
+                # See test_rung1_env_var_no_spawn's identical note: rung 1
+                # delegates to the real gate (which reads
                 # COORDINATOR_ENGINE_ROOT back unchanged), and forcing the
+                # same-tree branch keeps that deterministic across run order.
                 unittest.mock.patch.object(
                     _engine_bootstrap_mod, "_is_same_tree_as_canonical", return_value=True
                 ),

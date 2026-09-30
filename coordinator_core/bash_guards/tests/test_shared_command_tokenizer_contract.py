@@ -141,11 +141,16 @@ class TestReturnShapes:
         assert neb("git.exe. ") == "git"
         assert neb(r"C:\Program Files\Git\bin\git.exe.") == "git"
         # Must not over-broaden: a trailing dot/space on a DIFFERENT
+        # basename still doesn't collapse into "git".
         assert neb("gitk.") == "gitk"
         assert neb("mygit ") == "mygit"
 
     def test_normalize_executable_basename_preserves_all_dot_source_tokens(self):
         # Regression guard: a token that is ENTIRELY dots/spaces (POSIX `.`
+        # dot-source, `..` parent-dir) must survive intact -- these are
+        # meaningful shell tokens in their own right, not OS-normalization
+        # noise on a real filename. Caught while landing the trailing-dot
+        # strip above: it silently emptied `.` and broke
         # `block_subagent_destructive_action.py`'s `_SOURCE_VERBS` check.
         neb = _command_tokenizer.normalize_executable_basename
         assert neb(".") == "."
@@ -245,7 +250,14 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
         assert m._token_matches_binary("GIT.EXE", "git")
 
     def test_reviewer_allowlist_recognizes_coordinator_doc_new_cmd(self):
+        # coordinator-doc-new.cmd is ALSO a real, on-disk generated launcher
+        # twin (coordinator/bin/coordinator-doc-new.py.cmd). Before this fix,
         # this was a Windows-usability defect in the OPPOSITE direction from
+        # the git.exe/coordinator-safe-commit.cmd bypasses: the Tier B
+        # scaffolder-allow gate (_first_token_is_allowlisted_binary) would
+        # have wrongly DENIED the ordinary Windows invocation of a
+        # legitimately-allowed tool, not admitted something that should be
+        # denied.
         from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as m
 
         assert m._token_matches_binary("coordinator-doc-new.cmd", "coordinator-doc-new")

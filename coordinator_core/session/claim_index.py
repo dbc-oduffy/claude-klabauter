@@ -176,21 +176,75 @@ from coordinator_core.session import core, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
 #: C4 (AC18) — re-keyed from a wall-clock cap to a PROCESS-TIME cap. The
+#: original ``time.monotonic()`` deadline fires under ordinary machine load
+#: (50-70 concurrent sessions is this repo's load norm, not the peak — see
+#: CLAUDE.md § Load norm) even when THIS rebuild's own CPU cost is trivial —
+#: a wall-clock cap conflates "this walk is slow" with "the box is busy",
+#: and this repo's own rule is that wall clock measures peer load, never
+#: cost. ``time.process_time()`` only advances while this process is
+#: actually executing, so a scheduler-preempted rebuild on a loaded box no
 #: longer degrades to UNANSWERABLE purely because of contention it did not
+#: cause. Renamed 2026-08-27 (docs/problems/2026-08-27-the-touched-record-
+#: workstream-leaves-one-lever-and-nine-tails.md, Item 3) from
 #: ``REBUILD_WALL_CLOCK_CAP_SECS`` — that name asserted the opposite of what
+#: this constant is read against; the CODE was already correct (see AC18
+#: above), only the name lied. Do NOT reinstate C0's 541.48ms / 50-peers-x-
+#: 5000-lines figure as this cap's justification: that width was retired
+#: 2026-08-27 on measurement (the live corpus is 270 claimants at a median
+#: of 5 events, and the 541ms was a capped call timing this very cap). The
+#: cap exists for an unbounded corpus, not for that number.
 REBUILD_PROCESS_TIME_CAP_SECS = 0.5
 
 UNANSWERABLE = "__UNANSWERABLE__"
 
 #: ABORT-CAUSE CARRIER (C1, docs/plans/2026-08-11-claim-index-abort-cause-and-
+#: cli-blindness.md). Plain string constants on ``_IndexState.abort_cause`` /
+#: ``_LookupResult.abort_cause``, not an ``enum.Enum``. Chosen over an enum
+#: because every existing consumer of this module treats ``_LookupResult``
 #: as ``UNANSWERABLE``-flavored dict-plus-``complete`` (a plain str/bool
+#: pair, per that class's own docstring) and a CLI (``session-claim-cli``)
+#: is the only other reader added by this plan chunk — it just needs a
+#: printable token, not a type to branch on. A plain module-level string
+#: constant is import-free for that CLI (no ``from claim_index import
+#: AbortCause`` enum dependency) and trivially ``==``-comparable in a test
+#: without an import of the enum member. ``None`` means "not aborted" —
+#: distinct from any of the three string causes below, so
+#: ``abort_cause is None`` doubles as the completeness check without
+#: re-reading ``.complete``.
 ABORT_CAUSE_EMPTY_BASE = "empty_base"
 ABORT_CAUSE_CAP_EXCEEDED = "cap_exceeded"
 ABORT_CAUSE_IO_ERROR = "io_error"
 
 _AGENTS_SUBDIR = ".agents"
+#: C4 — the substrate this module walks flips from the bash-dialect
+#: ``touched.txt`` to C3's self-describing record. AC7: this module reads
+#: the SAME seam ``scope.compute_scope`` reads (``touch_record``'s family +
+#: decode primitives), with no independent path-construction or line-dialect
+#: parsing of its own left in this file.
+#:
 #: NEGATIVE SPEC — what a path's ABSENCE from this index does NOT mean
+#: (2026-08-26, ``state/audits/2026-08-26-touch-ledger-coverage-and-the-
+#: published-dialect-split.md``). Absence is NOT evidence that no session
+#: authored the path. This module reads ONE dialect, and since the compat
+#: union came out (2026-08-26) so does every claim reader in this package —
+#: a pre-cutover ``touched.txt`` is no longer a claim surface anywhere,
+#: having been drained (``legacy_touch_corpus_migrate``, verified by both
+#: ``legacy_touch_corpus_drain_check`` and the content-level
+#: ``legacy_touch_corpus_straggler_check``) with no writer left that can
+#: recreate one. ``bash_guards/dispatch_checks.py`` keeps its own union; it
+#: is an advisory guard, not a claim authority. Two live classes of
+#: authored-but-absent path remain: any file written by a shell redirect,
+#: heredoc, or spawned third-party CLI, which no writer observes at all;
+#: and — whenever the mirror is percolated with a reader ahead of its
+#: writer — every Edit/Write-authored path in the fleet. That second class
+#: was live for hours on 2026-08-26 and produced a fully-populated
+#: ``complete: True`` answer while omitting the caller's own work. Do NOT
+#: read a missing entry as "unclaimed"; read it as "this index cannot say".
+#:
+#: AC7, 2026-08-27: the filename is no longer spelled here. It is
 #: ``touch_record.RECORD_FILENAME``, and the sink is built by
+#: ``touch_record.sink_path``. The negative spec above is what this name
+#: still carries; the literal it used to hold belongs to the record module.
 _TOUCHED_FILENAME = touch_record.RECORD_FILENAME
 
 
@@ -357,8 +411,15 @@ class _IndexState:
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
     recorded_name: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
 
+    #: path -> {claimant_sid: kind}, populated on TOUCH and popped on RELEASE
+    #: exactly as ``recorded_name`` above. The value is ``TouchEvent.kind``
     #: (``touch_record.KIND_WRITE`` / ``KIND_READ``); a claimant whose line
+    #: carries no kind -- every line written before 2026-09-20, and any channel
+    #: that cannot tell -- is ABSENT here rather than defaulted, because a
+    #: guessed kind is worse than a visible unknown. Consumers deciding whether
+    #: a hold blocks must route through ``touch_record.kind_blocks_a_peer_commit``
     #: rather than comparing to ``KIND_READ`` themselves, so absent keeps
+    #: meaning "blocks" in exactly one place.
     recorded_kind: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
     agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
         default_factory=dict

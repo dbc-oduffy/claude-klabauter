@@ -255,7 +255,13 @@ def main(argv: List[str]) -> int:
         remaining = total - _MAX_ENTRIES
         print(f"({remaining} more — see {inbox_dir} for full list)")
 
+    # One footer line naming the close command, printed once regardless of
+    # how many memos qualified — NOT one command per memo (that would be up
     # to _MAX_ENTRIES-plus-remainder lines of noise on a boot-hot-path
+    # surface). Mirrors the outbox surfacer's "→ <verbs>" action-line
+    # convention (workday_start_cross_repo_memo_outbox_surface.py) but named
+    # once at the bottom rather than per-entry, since closing is a single
+    # command applied per memo path, not a set of bare verbs.
     print("  → close one: archive-stamp-cli resolve-memo <memo_path> [disposition-flags]")
 
     return 0

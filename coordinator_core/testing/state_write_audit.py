@@ -94,6 +94,7 @@ __all__ = ["classify_event", "pytest_addoption", "pytest_configure", "pytest_unc
 _WRITE_MODE_CHARS = frozenset({"w", "a", "x", "+"})
 
 #: `os.open`'s write-implying flag bits. `O_RDONLY` is 0 and is deliberately
+#: absent — a flags value with none of these bits set is a read.
 _WRITE_O_FLAG_BITS = (
     os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
 )

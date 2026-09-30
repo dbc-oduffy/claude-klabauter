@@ -19,7 +19,12 @@ _LOG = logging.getLogger(__name__)
 
 _GIT_TIMEOUT_SECONDS = 15
 
+# Fixed search order — first match wins. All three are relative to the
+# resolved worktree root (see module docstring). LIFTED (2026-07-28) to
 # coordinator_core.ops.fleet._common.ARCHIVE_ROOT_SUBDIRS — this module was
+# the one-and-only definition before handoff_archive_transition.py needed the
+# same set for its mode="supersede" containment widening; aliased under the
+# original private name so nothing else in this module has to change.
 _ARCHIVE_SUBDIRS = ARCHIVE_ROOT_SUBDIRS
 
 

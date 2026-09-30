@@ -147,6 +147,12 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 47 -- unique within the HARD-DENY phase (46 and 50 taken by
+#: this module's grant-adjacent neighbours,
+#: ``block_subagent_grant_record_write`` (46) and
+#: ``block_consumed_handoff_edit`` (50)). Slotting immediately after 46
+#: keeps the two grant-write-channel legs co-located in evaluation order;
+#: the phase runs first-non-None-wins, so relative order among
+#: non-overlapping-path guards has no behavioral effect — grouping only.
 PRIORITY = 47
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}

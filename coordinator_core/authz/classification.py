@@ -1638,6 +1638,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # dry_run plans and reports only; mutates nothing.
     # Spec: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md § C5
     "memo.heal_inbox": OpClass.MUTATING,
+    # memo.correct_note — MUTATING: rewrites a memo's note field and commits the memo
+    # path (memo_transition._commit_terminal_write). Spec: ops/memo_correct_note.py.
+    "memo.correct_note": OpClass.MUTATING,
     # deliverable.rollup — COMPUTE_ONLY: scans docs/plans/*.md, state/handoffs/*.md, and
     # archive/handoffs/**/*.md frontmatter for artifacts whose deliverable_id FK equals the
     # queried value, unions their non-null initiative FKs, and resolves each to its
@@ -3306,6 +3309,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_divergence_report": OpClass.COMPUTE_ONLY,
+    "goal.kr2_two_repo_rate": OpClass.COMPUTE_ONLY,
     # ceremony.chunk_commits — COMPUTE_ONLY: pure git-log read (resolve_chunk_commits
     # composes git_native.log_diff_filter + a range `git log` call; no write_text/
     # locked_rmw/unlink anywhere in coordinator_core/ops/ceremony/chunk_commits.py,

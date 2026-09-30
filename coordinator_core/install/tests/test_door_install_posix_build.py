@@ -81,7 +81,19 @@ def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
     command = result.advisory.split(marker, 1)[1].strip()
     tokens = command.split()
 
+    # Leading `KEY=VALUE` tokens are shell env assignments, not argv. The
     # advisory carries `PYTHONPATH=<engine root>` because the module route
+    # alone is not enough: a bare `python3 -m coordinator_core.warm.door.
+    # build_posix` dies on `ModuleNotFoundError: No module named
+    # 'coordinator_core'` unless the engine root is importable, and an operator
+    # reading this advisory is by definition not sitting inside the engine tree.
+    #
+    # Honouring the prefix here rather than asserting it away is the point. This
+    # test's whole job is "the command AS WRITTEN runs", and the previous
+    # version modelled a command as bare argv -- so it asserted `argv[0] ==
+    # "python3"`, could not express an env prefix, and went red the moment the
+    # advisory was fixed to actually work. A test that cannot represent the
+    # correct answer will keep reporting the fix as the failure.
     env_prefix: "dict[str, str]" = {}
     while tokens and "=" in tokens[0] and not tokens[0].startswith("-"):
         key, _, value = tokens[0].partition("=")
@@ -106,7 +118,18 @@ def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
         timeout=60,
         cwd=str(tmp_path),
         # Run the command's own SHAPE -- `PYTHONPATH=<root> python3 -m ...` --
+        # rather than a bare argv, because running it without the prefix is what
+        # the operator never does and what let this check pass on a command that
+        # could not work.
+        #
         # The PYTHONPATH value is swapped to the real engine root for the
+        # execution leg only. `engine_root` above is a stamped tmp_path skeleton
+        # with no `coordinator_core/warm/` in it, so the advisory's literal value
+        # is right for the assertion (it must name the root it was given) and
+        # useless for actually importing the module. The two legs check
+        # different things: the assertion above proves the advisory names the
+        # right root, this proves the command FORM resolves when the root is
+        # genuine. `cwd=tmp_path` keeps the repo from being importable by
         # accident, so PYTHONPATH is the only thing that can resolve it.
         env={
             **os.environ,

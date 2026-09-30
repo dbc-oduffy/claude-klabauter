@@ -320,7 +320,9 @@ def _dispatch_brief(rest: list[str]) -> int:
     return _PlanAssembleExitCode.SUCCESS
 
 
+#: Known subcommand tokens -> handler. `brief` is also reachable via
 #: FALLTHROUGH (see `main`) so it does not strictly need to appear here,
+#: but registering it keeps this the one place a new subcommand is added.
 _SUBCOMMANDS = {
     "brief": _dispatch_brief,
 }

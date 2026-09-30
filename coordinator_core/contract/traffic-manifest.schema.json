@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/traffic-manifest.schema.json",
+  "title": "Invocation-traffic manifest",
+  "description": "One per-machine rollup of invocation traffic, carrying two legs: engine_served (ops that reached coordinator_core, measured from op-latency.jsonl) and resident_bash (~/.claude-resident entry-points, pending B-β). Both legs slot into one shape so the resident leg fills in with no schema bump. Spec: coordinator_core/contract/traffic-manifest-producer-contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "machine", "source", "excluded", "legs"],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp of the rollup."
+    },
+    "machine": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hostname of the machine whose sink was rolled up. The sink is per-machine; counts are not comparable across machines without this key."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sink", "generations", "rows_scanned", "rows_truncated", "window"],
+      "properties": {
+        "sink": { "const": "op-latency.jsonl" },
+        "generations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of sink files read (live file plus rotated generations)."
+        },
+        "rows_scanned": { "type": "integer", "minimum": 0 },
+        "rows_truncated": {
+          "type": "boolean",
+          "description": "True when the scan stopped at the reader's row cap; counts are then a lower bound."
+        },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["t_first", "t_last"],
+          "properties": {
+            "t_first": { "type": ["number", "null"], "description": "Epoch seconds of the earliest row scanned; null when no row was scanned." },
+            "t_last": { "type": ["number", "null"], "description": "Epoch seconds of the latest row scanned; null when no row was scanned." }
+          }
+        }
+      }
+    },
+    "excluded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["non_complete_kinds", "non_production_origins"],
+      "properties": {
+        "non_complete_kinds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Rows skipped because their kind was not complete (started, process_time, composition, ...)."
+        },
+        "non_production_origins": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Complete rows skipped because their origin is test or benchmark."
+        }
+      }
+    },
+    "legs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine_served", "resident_bash"],
+      "properties": {
+        "engine_served": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "total", "ops"],
+          "properties": {
+            "status": { "const": "measured" },
+            "total": { "type": "integer", "minimum": 0 },
+            "ops": {
+              "type": "object",
+              "description": "Keyed by op key. Open map; each value is closed.",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["count", "by_origin", "by_caller", "errors"],
+                "properties": {
+                  "count": { "type": "integer", "minimum": 0 },
+                  "by_origin": {
+                    "type": "object",
+                    "additionalProperties": { "type": "integer", "minimum": 0 }
+                  },
+                  "by_caller": {
+                    "type": "object",
+                    "description": "A row with no caller is keyed \"null\".",
+                    "additionalProperties": { "type": "integer", "minimum": 0 }
+                  },
+                  "errors": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "resident_bash": {
+          "oneOf": [
+            {
+              "title": "pending",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "blocked_on", "total", "entry_points"],
+              "properties": {
+                "status": { "const": "pending" },
+                "blocked_on": { "type": "string", "minLength": 1 },
+                "total": { "type": "null" },
+                "entry_points": { "type": "null" }
+              }
+            },
+            {
+              "title": "measured",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "total", "entry_points"],
+              "properties": {
+                "status": { "const": "measured" },
+                "total": { "type": "integer", "minimum": 0 },
+                "entry_points": {
+                  "type": "object",
+                  "description": "Keyed by resident entry-point path. Open map; each value is closed.",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["count"],
+                    "properties": {
+                      "count": { "type": "integer", "minimum": 0 }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

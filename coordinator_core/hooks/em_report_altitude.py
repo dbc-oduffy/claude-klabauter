@@ -136,7 +136,11 @@ def _word_count(text: str) -> int:
     return len(_strip_excluded(text).split())
 
 
+# Extensions this fleet actually writes source/doc files in. A recognized
+# extension is one of the two ways a token can qualify as a genuine
 # file:line citation (see _FILE_LINE_RE below) — kept as a named constant,
+# not inlined into the regex, so the list is editable without re-reading a
+# regex. Not exhaustive by design; widen it here if a new language lands.
 _SOURCE_FILE_EXTENSIONS = (
     "py", "js", "ts", "tsx", "jsx", "sh", "md", "json", "yaml", "yml",
     "toml", "cpp", "h", "hpp", "rs", "go", "sql",

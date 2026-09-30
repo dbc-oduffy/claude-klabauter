@@ -121,11 +121,21 @@ from coordinator_core.contract.apply_base import assert_dispatchable
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
 
+# ---------------------------------------------------------------------------
 # Exit-code contract (apply-side, 0-4) — SEPARATE from `brief.WorkdayExitCode`
+# (0-3). computed-skills.md § Exit-code contract for a mutating half requires
+# each half to pin its own enumeration; this one is never reused by brief().
+# Built from the shared `ceremony_common.apply_halt` ladder (C2h) so this
+# module's numbering can never independently drift from
+# `workweek_complete.apply`'s own.
+# ---------------------------------------------------------------------------
 WorkdayApplyExitCode = build_ceremony_halt_exit_codes("WorkdayApplyExitCode")
 
 
+#: THE closed dispatch table (security-load-bearing — see module docstring).
 #: Every key is a literal member of `brief.CONSUMES_MANIFEST`, written here
+#: by hand; every value is this module's own fixed, `Path(__file__)`-relative
+#: script location under `coordinator/bin/`. Never mutated at runtime.
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 _CLI_DISPATCH: dict[str, Path] = {
@@ -365,7 +375,16 @@ def _execute_directives(
 
     try:
         for directive in directives:
+            # An `already_satisfied` directive ran in an earlier pass and hits
+            # `continue` below without ever dispatching, so its verb name is
+            # never resolved by the main loop either. Admission-checking it here
+            # would refuse the WHOLE run over a name that cannot dispatch --
+            # a false refusal on a replayed directive whose verb has since left
             # `ASSEMBLER_DISPATCHABLE` (slice-B review finding 1, 2026-08-20).
+            # A gate-blocked directive is deliberately NOT skipped: it is still
+            # a live member of this run's list and dispatches the moment its
+            # gate resolves, so an un-admitted verb there is a structurally
+            # invalid list, which is exactly what this pre-pass exists to catch.
             if directive.get("already_satisfied"):
                 continue
             _resolve_cli(directive["cli"])

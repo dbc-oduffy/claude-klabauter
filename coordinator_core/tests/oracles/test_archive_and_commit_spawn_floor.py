@@ -1,58 +1,31 @@
-"""Oracle for the `archive_and_commit` git-mv exemption's spawn FLOOR
-(`coordinator_core/ops/fleet/_common.py::archive_and_commit::create_subprocess_exec`).
+"""Oracle for the `archive_and_commit` spawn FLOOR
+(`coordinator_core/ops/fleet/_common.py::archive_and_commit`).
 
-The 2026-08-19 amplification burn-down batched two of this function's four per-Move
-spawns (drift-check `git diff --name-only`, op-authored-content restage `git add`) into
-one call each, ahead of the per-Move loop -- see `tasks/amp-census/fix-fleet-archive.md`
-and the "Batched drift check + batched restage" comment block in `_common.py` above the
-loop. `git mv` (and its failure-path `git reset`) stay genuinely per-Move on
-failure-isolation grounds, so the exemption register key survives -- but nothing pinned
-the FLOOR the batching bought, which is the whole point of doing it: a later edit could
-silently reintroduce a per-Move drift or restage spawn and nothing would go red.
+The floor is independent of the move count M. The archival seam renames in process
+(`os.replace`), builds the `{path: (mode, sha) | _ABSENT}` tree-delta in process, and
+lands it through `_commit_via_head_spine` (locked ref CAS, no git process). Two spawns
+survive, each one call per batch regardless of M:
 
-THE CONSTANT, verified against the CURRENT source rather than trusted from the fix
-report (which undercounted it by one): for a batch with at least one non-restage Move
-and at least one restage_src Move, no failures, `archive_and_commit` issues exactly
+  * `git hash-object -w --stdin-paths` -- ONE batched call over the `restage_src=True`
+    subset, issued through git_native's `subprocess.run` (`_hash_object_stdin_paths`,
+    offloaded with `asyncio.to_thread`). Not issued at all when no Move opts into
+    restage_src.
+  * `_resync_main_index_for_moves`'s single `git restore --staged` -- issued through
+    `asyncio.create_subprocess_exec`, one call over every acted src/dst.
 
-    M + 6
+So the pinned totals (asyncio + `subprocess.run`, counted together) are:
 
-`asyncio.create_subprocess_exec` calls, where M is the move count and the constant-6
-overhead is:
-  1. `git read-tree HEAD`                          -- seed the private index
-  2. `git diff --name-only -- <plain srcs>`         -- ONE call, batched drift check
-  3. `git add -- <restage srcs>`                    -- ONE call, batched restage
-  4. `git write-tree`                               -- `_empty_private_index_breach`,
-                                                        unconditional pre-commit refusal
-                                                        check. THE FIX REPORT'S OWN "C=5"
-                                                        FIGURE OMITTED THIS SPAWN entirely
-                                                        -- it is a real, unconditional
-                                                        call on every commit path, not a
-                                                        failure-path extra. Read directly
-                                                        off `_common.py::archive_and_commit`
-                                                        (the `index_breach = await
-                                                        _empty_private_index_breach(...)`
-                                                        line runs before every commit
-                                                        attempt) rather than off the report.
-  5. `git -c commit.gpgsign=false commit -m <subj>` -- the batch commit
-  6. `_resync_main_index_for_moves`'s single `git restore --staged` call (via the
-     default `_update_index_with_retry` `run_git`, one attempt on the success path)
+    all-plain batch          -> 1   (resync only)
+    any batch with restage   -> 2   (hash-object + resync)
 
-`git mv` contributes exactly M of the total and is excluded from the constant --
-pinning it at M (not M-1 or M+1) is itself part of what this oracle proves: `git mv`
-must stay genuinely per-item, one call per Move, no more and no less.
-
-When the batch is not mixed (all-plain or all-restage), the constant drops by one
-(the drift-check or restage-add call is skipped outright, not run with an empty
-pathspec) -- see `test_all_plain_batch_drops_the_restage_constant` and
-`test_all_restage_batch_drops_the_diff_constant`. The mixed-batch M+6 floor is the
-one the team-lead brief asked this oracle to pin, since it is the shape that exercises
-every constant-overhead spawn in one call.
+A per-Move drift-check, restage, `git mv`, or staging spawn creeping back in makes the
+total scale with M and fails here. Both counters are needed: an asyncio-only count
+misses the hash-object call, which runs on the `subprocess.run` path.
 
 Real git throughout (Governed real-git pattern, state/audits/2026-08-07-spawn-heavy-
-test-excision-ledger.md): a mocked git has no index to seed/diff/restore against, and
-this oracle's whole claim is about the ACTUAL spawn count `archive_and_commit` issues
-against a real repo, not a description of it. Every fixture lives under pytest's own
-`tmp_path`; nothing here touches the shared working tree.
+test-excision-ledger.md): a mocked git has no HEAD tree to read or blob to hash, and
+this oracle's claim is about the ACTUAL spawn count against a real repo. Every fixture
+lives under pytest's own `tmp_path`; nothing here touches the shared working tree.
 """
 
 from __future__ import annotations
@@ -89,26 +62,30 @@ def _init_repo(root: Path) -> None:
 
 
 def _make_total_spawn_counter():
-    """Build (total, counting_spawn): counting_spawn wraps the REAL
-    asyncio.create_subprocess_exec and counts EVERY call regardless of argv -- this
-    oracle's claim is about the total spawn count, not any one call's shape (that finer
-    per-key claim is `test_archive_and_commit_batched_drift_and_restage.py`'s job).
+    """Build (total, async_spawn, sync_run): the two wrappers around the REAL
+    `asyncio.create_subprocess_exec` and `subprocess.run` both increment `total[0]`,
+    counting every call regardless of argv -- this oracle's claim is the total spawn
+    count, not any one call's shape (the finer per-key claim is
+    `test_archive_and_commit_batched_drift_and_restage.py`'s job).
 
-    Bare `async def` closure, not a callable class -- `patch("asyncio.
+    `async_spawn` is a bare `async def` closure, not a callable class -- `patch("asyncio.
     create_subprocess_exec", side_effect=...)` installs an AsyncMock whose side_effect
     dispatch requires `inspect.iscoroutinefunction`, which a class's `async def
-    __call__` fails (verified in the sibling module: the class-based counter left the
-    returned coroutine un-awaited). See that module's `_make_spawn_counter` docstring
-    for the full failure signature.
+    __call__` fails (the returned coroutine is left un-awaited).
     """
-    real = asyncio.create_subprocess_exec
+    real_async = asyncio.create_subprocess_exec
+    real_run = subprocess.run
     total = [0]
 
-    async def counting_spawn(*argv, **kwargs):
+    async def async_spawn(*argv, **kwargs):
         total[0] += 1
-        return await real(*argv, **kwargs)
+        return await real_async(*argv, **kwargs)
 
-    return total, counting_spawn
+    def sync_run(*args, **kwargs):
+        total[0] += 1
+        return real_run(*args, **kwargs)
+
+    return total, async_spawn, sync_run
 
 
 def _seed_moves(root: Path, n_plain: int, n_restage: int) -> list[Move]:
@@ -160,14 +137,16 @@ def _seed_moves(root: Path, n_plain: int, n_restage: int) -> list[Move]:
 
 
 def _run_mixed_batch(tmp_path: Path, n_plain: int, n_restage: int) -> int:
-    """Seed and archive a mixed batch of `n_plain` + `n_restage` Moves against a fresh
-    throwaway repo, returning the total `asyncio.create_subprocess_exec` call count."""
+    """Seed and archive a batch of `n_plain` + `n_restage` Moves against a fresh
+    throwaway repo, returning the total spawn count (`asyncio.create_subprocess_exec`
+    plus `subprocess.run`) issued by `archive_and_commit` alone."""
     root = tmp_path / "repo"
     _init_repo(root)
     moves = _seed_moves(root, n_plain, n_restage)
 
-    total, counting_spawn = _make_total_spawn_counter()
-    with patch("asyncio.create_subprocess_exec", side_effect=counting_spawn):
+    total, async_spawn, sync_run = _make_total_spawn_counter()
+    with patch("asyncio.create_subprocess_exec", side_effect=async_spawn), \
+            patch("subprocess.run", side_effect=sync_run):
         acted, failed = asyncio.run(
             archive_and_commit(
                 worktree_root=root, moves=moves, subject="fleet: floor-oracle archive",
@@ -181,61 +160,47 @@ def _run_mixed_batch(tmp_path: Path, n_plain: int, n_restage: int) -> int:
 
 
 @pytest.mark.parametrize("n_plain,n_restage", [(2, 1), (4, 2)])
-def test_mixed_batch_spawns_exactly_m_plus_six(tmp_path: Path, n_plain: int, n_restage: int) -> None:
-    """The floor: a mixed batch (both a plain and a restage_src Move present) issues
-    exactly M + 6 spawns. Two (n_plain, n_restage) pairs at different M -- (2, 1) giving
-    M=3, and (4, 2) giving M=6 -- prove the constant-6 overhead does NOT scale with M:
-    if a per-Move drift or restage spawn crept back in, the larger pair's actual count
-    would diverge further from its own `M + 6` prediction than the smaller pair's does
-    (the extra spawns scale with M, the floor does not), and this assertion would catch
-    it on whichever pair exercises the regressed path."""
-    m = n_plain + n_restage
+def test_mixed_batch_spawns_a_constant_two(tmp_path: Path, n_plain: int, n_restage: int) -> None:
+    """A mixed batch issues exactly 2 spawns -- batched hash-object + resync -- at both
+    M=3 and M=6. Two sizes prove the floor does not scale with M: a reintroduced
+    per-Move spawn would make the larger pair diverge further from 2 than the smaller."""
     total = _run_mixed_batch(tmp_path, n_plain, n_restage)
-    assert total == m + 6, (
+    assert total == 2, (
         f"archive_and_commit issued {total} spawns for a mixed batch of {n_plain} plain + "
-        f"{n_restage} restage_src move(s) (M={m}) -- the pinned floor is M + 6 (read-tree, "
-        "batched diff, batched add, write-tree, commit, resync); a count that no longer "
-        "matches means either a per-Move drift/restage spawn reappeared in the loop or one "
-        "of the six constant-overhead calls changed shape. Re-verify against "
-        "_common.py::archive_and_commit rather than this comment."
+        f"{n_restage} restage_src move(s) (M={n_plain + n_restage}) -- the pinned floor is 2 "
+        "(one batched hash-object, one resync); a larger count means a per-Move or staging "
+        "spawn reappeared. Re-verify against _common.py::archive_and_commit."
     )
 
 
-def test_all_plain_batch_drops_the_restage_constant(tmp_path: Path) -> None:
-    """No restage_src Move in the batch -> the batched `git add` is skipped outright
-    (not run with an empty pathspec) -- the floor drops to M + 5."""
+def test_all_plain_batch_spawns_only_the_resync(tmp_path: Path) -> None:
+    """No restage_src Move -> `_hash_object_stdin_paths` is skipped outright (not run
+    with an empty path list); the resync is the only spawn."""
     n_plain = 3
     total = _run_mixed_batch(tmp_path, n_plain, 0)
-    assert total == n_plain + 5, (
-        f"an all-plain batch of {n_plain} move(s) issued {total} spawns -- expected "
-        f"{n_plain + 5} (M + 5: read-tree, diff, write-tree, commit, resync -- no restage "
-        "add call at all when no Move opts into restage_src)"
+    assert total == 1, (
+        f"an all-plain batch of {n_plain} move(s) issued {total} spawns -- expected 1 "
+        "(the resync `git restore --staged`; no hash-object call when no Move opts into "
+        "restage_src)"
     )
 
 
-def test_all_restage_batch_drops_the_diff_constant(tmp_path: Path) -> None:
-    """No plain (non-restage_src) Move in the batch -> the batched drift-check `git
-    diff` is skipped outright -- the floor drops to M + 5, the mirror case of the test
-    above."""
+def test_all_restage_batch_spawns_hash_object_and_resync(tmp_path: Path) -> None:
+    """Every Move restage_src -> still ONE batched hash-object plus the resync, not one
+    hash-object per Move."""
     n_restage = 3
     total = _run_mixed_batch(tmp_path, 0, n_restage)
-    assert total == n_restage + 5, (
-        f"an all-restage batch of {n_restage} move(s) issued {total} spawns -- expected "
-        f"{n_restage + 5} (M + 5: read-tree, add, write-tree, commit, resync -- no drift "
-        "diff call at all when every Move opts into restage_src)"
+    assert total == 2, (
+        f"an all-restage batch of {n_restage} move(s) issued {total} spawns -- expected 2 "
+        "(one batched hash-object over all restage dsts, one resync)"
     )
 
 
 def test_oracle_is_not_vacuous_against_a_simulated_per_move_regression(tmp_path: Path) -> None:
-    """Proof the M + 6 assertion above can actually fail: replay the same mixed-batch
-    scenario as `test_mixed_batch_spawns_exactly_m_plus_six`, but inject one EXTRA real
-    spawn per plain Move immediately after the batched drift-check call returns -- the
-    exact shape a regression back to "one drift-check spawn per non-restage Move" would
-    add on top of (not instead of) the still-present batched call, e.g. a half-finished
-    revert that re-added the per-Move check without removing the pre-loop batch. If the
-    M + 6 assertion could not distinguish this from the real batched floor, it would be
-    worthless; it cannot -- the injected total diverges from M + 6 and the same equality
-    check this module asserts elsewhere raises AssertionError here."""
+    """Proof the floor assertion can fail: replay the mixed-batch scenario but inject one
+    EXTRA real spawn per Move immediately after the resync call -- the shape a regression
+    back to per-Move git calls would add. The injected total diverges from 2 and the same
+    equality check this module asserts elsewhere raises AssertionError."""
     n_plain, n_restage = 2, 1
     m = n_plain + n_restage
     root = tmp_path / "repo"
@@ -243,16 +208,14 @@ def test_oracle_is_not_vacuous_against_a_simulated_per_move_regression(tmp_path:
     moves = _seed_moves(root, n_plain, n_restage)
 
     real = asyncio.create_subprocess_exec
+    real_run = subprocess.run
     total = [0]
 
     async def regressed_spawn(*argv, **kwargs):
         total[0] += 1
         proc = await real(*argv, **kwargs)
-        if len(argv) >= 3 and argv[:3] == ("git", "diff", "--name-only"):
-            # Simulate a reintroduced per-Move drift-check spawn: one extra real
-            # (harmless, read-only) git call for every plain Move in the batch, run
-            # immediately after the legitimate batched call this test also counts.
-            for _ in range(n_plain):
+        if argv[:3] == ("git", "restore", "--staged"):
+            for _ in range(m):
                 total[0] += 1
                 await real(
                     "git", "status", "--porcelain",
@@ -261,7 +224,12 @@ def test_oracle_is_not_vacuous_against_a_simulated_per_move_regression(tmp_path:
                 )
         return proc
 
-    with patch("asyncio.create_subprocess_exec", side_effect=regressed_spawn):
+    def counted_run(*args, **kwargs):
+        total[0] += 1
+        return real_run(*args, **kwargs)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=regressed_spawn), \
+            patch("subprocess.run", side_effect=counted_run):
         acted, failed = asyncio.run(
             archive_and_commit(
                 worktree_root=root, moves=moves, subject="fleet: floor-oracle regression probe",
@@ -269,9 +237,7 @@ def test_oracle_is_not_vacuous_against_a_simulated_per_move_regression(tmp_path:
         )
     assert failed == []
     assert len(acted) == m
+    assert total[0] == 2 + m, "fixture must have injected exactly one extra spawn per Move"
 
     with pytest.raises(AssertionError):
-        assert total[0] == m + 6, (
-            f"archive_and_commit issued {total[0]} spawns for a mixed batch of {n_plain} plain + "
-            f"{n_restage} restage_src move(s) (M={m}) -- the pinned floor is M + 6"
-        )
+        assert total[0] == 2

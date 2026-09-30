@@ -175,7 +175,10 @@ UNDECLARED = _Undeclared()
 NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
 
 # The schema's COMPLETE enum -- the closed values plus `open`. Named
+# separately because the two sets answer different questions, and conflating
+# them is what let an unrecognized value dispatch: membership in
 # NON_DISPATCHABLE_DISPOSITIONS answers "is this row done", while membership
+# here answers "is this a disposition at all".
 KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
 
 _GATE_BLOCKS_AC_CLOSURE = "ac-closure"
@@ -609,7 +612,10 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         row_id = raw.get("id")
         writes = raw.get("writes")
         if writes is None:
+            # Absent key AND present-but-empty value (`writes:` with no
             # scalar/list, or `writes: null`) both collapse to UNDECLARED —
+            # AC2 admits exactly two states, never a third (see module
+            # docstring point 1).
             writes = UNDECLARED
         elif not isinstance(writes, list):
             raise InvalidFieldTypeError(

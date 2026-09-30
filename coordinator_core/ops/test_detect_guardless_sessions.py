@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import ntpath
+import types
 
 import psutil
 import pytest
@@ -67,6 +69,12 @@ def test_is_guarded_false_when_substring_only_not_a_flag(monkeypatch):
 
 
 def test_is_guarded_uses_resolved_coordinator_plugin_dir_when_available(monkeypatch):
+    # The probe is Windows-only; the fixture paths are Windows-shaped, so pin
+    # ntpath semantics (case-fold, separator normalisation) on any host.
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.os",
+        types.SimpleNamespace(path=ntpath),
+    )
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
         lambda: "p:\\content-root\\coordinator",

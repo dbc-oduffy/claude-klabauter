@@ -187,7 +187,15 @@ class TestReadFmField:
         assert read_fm_field(fm, 'initiative') == ''
 
 
+# ---------------------------------------------------------------------------
+# Empty-value reads must not cross the line boundary (break-class, 2026-07-28)
+#
+# The pre-fix pattern padded with `\s*`, and `\s` matches a newline — so a
+# present-but-empty key walked past its own line break and returned the
 # FOLLOWING line's content. The pre-existing empty-value cases above hid it by
+# putting the empty key on the LAST line, where there is no following line to
+# steal. Every case here therefore has a populated line after the empty key.
+# ---------------------------------------------------------------------------
 
 class TestEmptyValueDoesNotCrossLineBoundary:
     def test_empty_key_does_not_read_following_line(self):
@@ -1202,6 +1210,7 @@ class TestAppendBlockingNote:
         result = _append_blocking_note(fm, 'retired note', 'status')
         assert result.count('blocking_notes:') == 1
         assert read_fm_field_unquoted(result, 'blocking_notes') == 'retired note'
+        # Latent-bug guard: read_fm_field's \s* crosses the newline, so a naive
         # read/replace on an empty key overwrites the FOLLOWING line.
         assert 'status: open' in result, 'the adjacent field must survive untouched'
 
@@ -1238,8 +1247,23 @@ class TestAppendBlockingNote:
         assert yaml.safe_load(result)['blocking_notes'] == 'retired note'
 
 
+# ---------------------------------------------------------------------------
+# CRLF present-but-empty key resolution (2026-07-28) — the residual the
+# \s*-crosses-newline fix deliberately left open.
+#
+# The boundary lookahead was `(?=[ \t]|$)`, which rejects the `\r` of a
+# CRLF-authored `key:\r\n`: the char after the colon is neither `[ \t]` nor a
 # MULTILINE `$`. Such a key resolved as ABSENT rather than empty. The lookahead
 # is shared VERBATIM by five key-resolution patterns — read_fm_field,
+# replace_fm_field, remove_fm_field, _fm_key_line_pattern, and
+# insert_fm_field's anchor — so it was widened to `(?=[ \t]|\r?$)` in all five
+# at once. Fixing only the reader would have been worse than the gap: reads
+# would succeed where the matching write silently no-ops.
+#
+# Every case below is parametrized over BOTH line endings and asserts LF/CRLF
+# PARITY rather than one ending in isolation — a per-ending assertion is what
+# let the gap survive the original fix. Windows is first-class here.
+# ---------------------------------------------------------------------------
 
 _EOLS = [
     pytest.param('\n', id='LF'),
@@ -1331,7 +1355,13 @@ class TestCRLFPresentButEmptyKey:
         assert result == _fm(eol, 'title: T', 'other: v', 'newk: nv')
 
     # -- insert_fm_field append path: line-ending DETECTION (2026-07-28) -----
+    #
+    # The multi-line cases above pass either way: their `\r\n` survives the
+    # rstrip() that the detection used to run on, because an interior line
+    # break is left behind. A document whose ONLY `\r\n` is its terminator has
+    # no such survivor — rstrip() eats it, the doc is misdetected as LF, and
     # `trimmed + eol` then rewrites the EXISTING line's ending too. These
+    # cases pin the single-line and terminator-only shapes specifically.
 
     @pytest.mark.parametrize('eol', _EOLS)
     def test_insert_append_preserves_single_line_document_ending(self, eol):
@@ -1521,8 +1551,14 @@ class TestCRLFPresentButEmptyKey:
         assert read_fm_nested_field(fm, 'status') is None
 
 
+# ---------------------------------------------------------------------------
 # _append_blocking_note after the _EMPTY_BLOCKING_NOTES_RE branch was removed
+# (2026-07-28). Both justifications for that private line-anchored regex died
+# with the CRLF widening above: the bare-empty key is no longer invisible to
+# the readers, and duplicate-key prevention was always discharged by the
+# `is None` test rather than by the regex. Removing it additionally stopped it
 # BYPASSING replace_fm_field's nested-block guard.
+# ---------------------------------------------------------------------------
 
 class TestAppendBlockingNoteWithoutTheEmptyKeyRegex:
 

@@ -11,7 +11,14 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
+# Declared, not excused: this file spawns real git because the property under test
+# is `Resolves:` trailer parsing off REAL commit metadata (`git log`/`git show`
+# trailer extraction), which no mock stands in for -- the bash-oracle parity
+# contract (parse-resolves-trailer.test.sh) it ports requires it. The `git_repo`
+# fixture is per-test (function-scoped), and mutation (commit-per-case) needs that
 # isolation, so it is not hoisted to module scope. The spawn ratchet's `_BASELINE`
+# is shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 

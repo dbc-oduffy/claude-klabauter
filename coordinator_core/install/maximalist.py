@@ -162,7 +162,7 @@ if not sys.path or sys.path[0] != _EXPECTED_REPO_ROOT:
         sys.path.remove(_EXPECTED_REPO_ROOT)
     sys.path.insert(0, _EXPECTED_REPO_ROOT)
 
-from coordinator_core._settings_home import native_path_form
+from coordinator_core._settings_home import native_path_form, settings_home
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
 
@@ -673,7 +673,6 @@ def _compileall_interpreters(allow_venv_fallback: bool = False) -> List[str]:
     if base_py:
         interpreters.append(base_py)
     if allow_venv_fallback:
-        from coordinator_core._settings_home import settings_home
         from coordinator_core.install.ensure_venv import venv_python_path
 
         venv_py = venv_python_path(settings_home() / ".coordinator-venv")
@@ -1265,11 +1264,10 @@ def _install_claude_author_wrapper(
     silently leaving a half-published wrapper is not an acceptable
     degradation.
 
-    Negative-spec: do NOT resolve the symlink target via PATH lookup or via
-    ``coordinator_core._settings_home.settings_home()`` -- both would
-    re-derive a value the caller already computed and risk drifting from the
-    F2 PATH-prepend's own resolution the moment ``COORDINATOR_SETTINGS_HOME``
-    is overridden.
+    Negative-spec: do NOT resolve the symlink target via PATH lookup or by
+    re-calling ``settings_home()`` here -- the caller already derived
+    ``settings_bin`` from it, and a second derivation is a second chance to
+    drift from the F2 PATH prepend.
     """
     orch.phase_header("claude-author wrapper install (Step 3.5b -- ~/.local/bin/claude-author)")
     wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])
@@ -1569,10 +1567,11 @@ def _run_body(
         return substrate_rc
 
     # -- F2 -- prepend the just-installed bin dirs to THIS process's PATH --
-    settings_bin = os.path.join(
-        env.get("COORDINATOR_SETTINGS_HOME") or os.path.join(claude_home_dir, ".coordinator-claude-settings"),
-        "bin",
-    )
+    # The ONE canonical resolver, not a recomputation from `claude_home_dir`:
+    # substrate's bin_dst and install_health_run's bareword-PATH check resolve
+    # through `settings_home()` too, so the claude-author symlink target, this
+    # PATH prepend, and the health assertion cannot name different directories.
+    settings_bin = str(settings_home() / "bin")
     claude_bin = os.path.join(claude_home_dir, ".claude", "bin")
     path_parts = env.get("PATH", "").split(os.pathsep)
     for b in (claude_bin, settings_bin):
@@ -1966,7 +1965,6 @@ def _run_body(
             "(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4)."
         )
     else:
-        from coordinator_core._settings_home import settings_home  # local import: avoid import cost on --help
         from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
 
         try:

@@ -231,37 +231,148 @@ from coordinator_core.write_guards._case_fold_path import casefold_path
 
 _DASH_C_ATTACHED_RE = re.compile(r"^-C(.+)$")
 
+#: `--git-dir`/`--work-tree` attached (`--git-dir=<dir>`) forms -- the CLI
 #: twins of the `GIT_DIR`/`GIT_WORK_TREE` env vars below. Real `git`
+#: recognises both the `=`-attached and separate-token spellings for each;
+#: both are handled in `_git_subcommand_and_target_cwd`.
 _DASH_GIT_DIR_ATTACHED_RE = re.compile(r"^--git-dir=(.+)$")
 _DASH_WORK_TREE_ATTACHED_RE = re.compile(r"^--work-tree=(.+)$")
 
+#: `git -c <name>=<value>` -- attached (`-c<name>=<value>`, no space) and
+#: separate-token (`-c <name>=<value>`, the common spelling) forms, the
+#: SAME two shapes `-C` already gets. Review finding (2026-08-06): before
+#: this fix, `-c` fell into the generic `tok.startswith("-")` skip branch
+#: below, which consumes ONLY the `-c` token itself and never the following
+#: `name=value` payload -- so that payload was misread as the git
 #: SUBCOMMAND (an over-block/misclassification bug independent of
+#: `core.worktree`) while `git -c core.worktree=<foreign> <verb> ...`'s real
+#: target-relocating value was silently dropped entirely (the security
+#: evasion: `target_cwd` stayed at the session's own anchor, so the
+#: same-repo check passed and the guard allowed a write real `git` performs
+#: against the foreign work tree named by `core.worktree`).
 _DASH_C_LOWER_ATTACHED_RE = re.compile(r"^-c(.+)$")
 
+#: `-c core.worktree=<dir>` is the ONLY `-c`-settable config key this
+#: module found that relocates where a write lands (checked: `core.gitdir`
+#: is not a real git config key -- there is no config-file equivalent of
+#: `--git-dir`/`GIT_DIR`, only the CLI flag and env var, both already
+#: handled above; `core.bare` marks a repo bare, it does not redirect a
+#: target directory; `safe.directory` gates whether git will operate in a
+#: directory at all, it does not name a write target). Real git's own docs
 #: (`git-config(1)`, `core.worktree`): "The `GIT_WORK_TREE` environment
+#: variable and the `--work-tree` command-line option can override this
 #: configuration variable" -- i.e. `--work-tree` > `GIT_WORK_TREE` >
+#: `core.worktree` (config, including `-c`-supplied), the precedence this
+#: module's `cli_config_worktree` tier below is ordered to match.
 _CORE_WORKTREE_CONFIG_RE = re.compile(r"^core\.worktree=(.*)$", re.IGNORECASE)
 
 #: Other git global options that take a MANDATORY value and support both
+#: the attached (`--flag=value`) and separate-token (`--flag value`)
+#: spellings, per `git(1)`'s own OPTIONS section -- none of these redirect
+#: a write target (`--namespace`/`--super-prefix` affect ref namespacing
+#: and submodule recursion display only; `--config-env=<name>=<envvar>`
+#: supplies a config value indirectly via an environment variable this
+#: module does not attempt to resolve, since doing so correctly would
+#: require re-deriving arbitrary env-var indirection -- out of scope, same
+#: as the pre-existing "override values are never shell-expanded"
+#: limitation this module already carries for `-C $VAR`/`GIT_DIR="$VAR"`).
+#: Still MUST be skipped as a two-token unit here, or their mandatory value
+#: leaks into the subcommand slot exactly like the `-c` bug above.
 #: `--exec-path` is DELIBERATELY excluded -- `git(1)` documents it as
 #: `--exec-path[=<path>]`, an OPTIONAL argument, which git's own
+#: parse-options convention only ever accepts in the attached `=`-joined
+#: form (never a separate token) -- so it already round-trips correctly
+#: through the generic `tok.startswith("-")` skip branch below and adding
+#: it here would wrongly swallow the NEXT real token whenever `--exec-path`
+#: is used bare (no value).
 _CONFIG_ENV_ATTACHED_RE = re.compile(r"^--config-env=(.+)$")
 _NAMESPACE_ATTACHED_RE = re.compile(r"^--namespace=(.+)$")
 _SUPER_PREFIX_ATTACHED_RE = re.compile(r"^--super-prefix=(.+)$")
 
 _ENV_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
+#: THE EVASION THIS MODULE CLOSES (found 2026-08-06, live dispatch
+#: incident): `GIT_DIR=<foreign>/.git git cat-file -t HEAD` -- and, by the
+#: identical hole, `GIT_DIR=<foreign>/.git git commit ...` -- reached a
+#: foreign repo while every candidate-extraction path above (`-C`, `cd &&`)
+#: kept computing the target purely from the session's `cwd`. `git` itself
 #: honours `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` (env) and
+#: `--git-dir=`/`--work-tree=` (CLI, which additionally override the env
 #: forms) REGARDLESS of `cwd` -- a command that never `cd`s and never
+#: passes `-C` can still operate on an entirely different repo through
+#: either spelling. `_command_tokenizer.resolve_command_positions` already
+#: peels a leading `GIT_DIR=...` (or an `env GIT_DIR=... git ...` wrapper)
+#: off the front of `rc.tokens` when resolving the command HEAD (correctly
+#: recognising the invoked binary is `git`) -- but it does not, and by its
+#: own docstring's design should not, interpret what that assignment MEANS
+#: for a target-repo resolution; that interpretation is this guard's job,
+#: and until this fix it was never done. `rc.raw_tokens` still carries the
+#: peeled assignment verbatim (see `ResolvedCommand.raw_tokens`'s own
+#: docstring, "WITHOUT also inheriting..." -- the exact seam this reuses),
+#: so no second tokenization pass is needed to recover it.
 _GIT_DIR_ENV_NAMES = ("GIT_DIR", "GIT_COMMON_DIR")
 _WORK_TREE_ENV_NAME = "GIT_WORK_TREE"
 
+#: The git subcommands that MUTATE a repository -- this guard's own
+#: bump-by-membership set, deliberately NOT the inverse of
 #: `block_reviewer_bash_outside_allowlist._GIT_READONLY_SUBCOMMANDS`.
+#:
 #: That constant is a deny-by-omission CONFINEMENT allowlist: it answers
+#: "may a confined reviewer agent run this?", where an unrecognised verb
+#: must deny. Reusing it inverted here answered a different question --
+#: "is this a write?" -- with the same eight names, so every read-only verb
+#: git ships outside `show`/`diff`/`log`/`status`/`blame`/`ls-files`/
+#: `rev-parse`/`describe` (`merge-base`, `cat-file`, `branch --show-current`,
+#: `rev-list`, `for-each-ref`, `ls-tree`, `shortlog`, ...) was billed as an
+#: attempted foreign-repo WRITE and bumped. Reading a sibling tree is the
+#: substrate of cross-repo work, not an edge case: this fleet's own doctrine
+#: tells an EM to verify a peer's cited commits before actioning a memo, and
+#: a bump on that read teaches every operator that the correct response to
+#: this guard is to push past it -- which is how a speed bump stops working
+#: (see this module's own § Design posture: "a bump that misfires on
+#: legitimate work gets disabled").
+#:
+#: Membership therefore replaces non-membership: an UNKNOWN verb does not
+#: bump, matching this module's fail-open posture everywhere else, and a
+#: read-only verb git adds in some future release cannot regress this.
 #: `fetch` is a DUAL-MODE member (see `_fetch_is_read` below): a bare
+#: `git fetch <remote>` writes only remote-tracking refs and objects in the
+#: target's gitdir, never its worktree, index, branches or HEAD, and is the
+#: first step of read-only cross-repo verification -- but `git fetch
+#: <remote> <src>:<dst>` writes directly to the local ref named by `<dst>`,
+#: exactly the "never...branches" case this guard exists to catch. A blanket
+#: exclusion here would let a colon-refspec-destination fetch reach a
+#: foreign repo's local branch pointer unbumped.
+#:
 #: A DUAL-MODE verb -- one whose read and write spellings differ only by
+#: flag or sub-word (`branch --show-current` vs `branch -d`, `stash list` vs
+#: `stash`) -- is listed here AND carries an entry in
 #: `_DUAL_MODE_READ_PREDICATES` below, which vetoes the bump for its
+#: recognised read spellings only. Membership here is the default; the
+#: predicate is the narrowing.
+#: Review finding (classifier-first-pass, P3): three plumbing write-verbs
+#: were absent from this membership set and so never bumped at all --
+#: `hash-object` (writes an object into the target's object database, but
+#: ONLY with `-w`; without it the command just prints a hash and is a
+#: read -- dual-mode, see `_hash_object_is_read`), `pack-refs` (always
+#: writes -- no read spelling), and `symbolic-ref` (dual-mode: `git
+#: symbolic-ref HEAD` reads a ref, `git symbolic-ref HEAD refs/heads/x`
+#: reassigns one, `--delete`/`-d` deletes -- see `_symbolic_ref_is_read`).
+#: Added here; each dual-mode verb also gets a
 #: `_DUAL_MODE_READ_PREDICATES` entry below.
+#:
+#: The reviewer also asked this module to consider `write-tree`,
+#: `commit-tree`, `mktree`, `mktag`, `unpack-objects`, `index-pack`,
+#: `prune-packed`, `fast-import`. Deliberately NOT added: every one of
+#: these is a plumbing command an interactive agent shell essentially
+#: never invokes directly against a sibling repo (they are git-internal
+#: primitives real porcelain calls under the hood, not commands a session
+#: types), so the cost of enumerating them (more surface for this
+#: predicate to get wrong) is not paid back by a realistic bump they would
+#: catch -- the same "unlikely-to-invoke plumbing" reasoning the P3
+#: finding itself named for the still-omitted verbs. If one of these shows
+#: up in a live incident, it should be added then, named the same way this
+#: comment names its own additions.
 _GIT_WRITE_SUBCOMMANDS = frozenset(
     {
         "add",
@@ -469,6 +580,7 @@ _CONFIG_READ_FLAGS = frozenset(
 )
 
 #: `git config` flags taking a MANDATORY separate-token value that would
+#: otherwise be miscounted as a name/value positional by `_positionals`.
 _CONFIG_VALUE_TAKING = ("--file", "-f", "--blob", "--type", "-t", "--default")
 
 _CONFIG_WRITE_SUBWORDS = frozenset(
@@ -602,6 +714,15 @@ def _symbolic_ref_is_read(args: List[str]) -> bool:
 
 
 #: Dual-mode verbs: in `_GIT_WRITE_SUBCOMMANDS` by default, vetoed by these
+#: predicates for their recognised READ spellings.
+#:
+#: Closing the residual the first pass left open (coordinator-content-repo memo,
+#: 2026-08-12; the sender named `git branch --show-current` as one of three
+#: commands the misfiring bump cost them, and listing the dual-mode verbs
+#: wholesale kept that one bumping). Every predicate fails toward WRITE on
+#: anything it does not recognise, so the narrowing can only remove false
+#: bumps, never add a missed one: an unparsed flag bundle, an unknown
+#: sub-word, or a spelling git adds later all land back on the bump side.
 _DUAL_MODE_READ_PREDICATES = {
     "apply": _apply_is_read,
     "bisect": _bisect_is_read,
@@ -710,7 +831,12 @@ def _same_repo_root(path_a: str, path_b: str) -> bool:
     return _same_tree(path_a, path_b)
 
 
+#: Adjacent, case-folded directory-path pair this predicate keys on -- mirrors
 #: `bump_out_of_repo_tool_write._LESSONS_OUTBOX_SEGMENTS` exactly (same two
+#: literal segments, same reasoning) so the two surfaces cannot silently
+#: drift on what "lessons-outbox" means path-shape-wise. Deliberately the two
+#: literal segments only, never a broader `cross-repo/` prefix -- see
+#: `_target_is_lessons_outbox_write`'s own docstring, "DO NOT WIDEN".
 _LESSONS_OUTBOX_SEGMENTS = ("state", "lessons-outbox")
 
 
@@ -1315,8 +1441,17 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
     return machinery_paths.share_dir(git_root, session_id)
 
 
+# ---------------------------------------------------------------------------
 # The shared per-candidate JUDGMENT (AC9 -- the thing this leg must NOT
+# re-derive, only feed). Factored out of `check_bump_foreign_repo_write`'s
+# own loop body so the Bash and PowerShell legs share one verdict predicate
 # and can only ever differ in how a candidate `target_dir` is EXTRACTED --
+# see this guard's own dialect-gate comment below and the sibling
+# `bump_outside_repo_write.py` for why that split matters: this guard's own
+# defining predicate (a candidate resolving to SOME OTHER git root) lives
+# entirely in this function, unchanged by which dialect found the
+# candidate.
+# ---------------------------------------------------------------------------
 
 
 def _evaluate_foreign_repo_candidate(
@@ -1376,8 +1511,13 @@ def _evaluate_foreign_repo_candidate(
         return None
 
     # Lessons-outbox exemption -- a DIFFERENT axis from the AC5
+    # cross-repo-memo carve-out (checked by the caller before this
     # function ever runs). This exemption matches on DESTINATION PATH
+    # SHAPE, and can only be evaluated once a candidate's `target_gitdir`
     # is known to be non-`None`. It also sits per-CANDIDATE rather than
+    # per-command: a compound command could write both an ordinary
+    # foreign-repo target and a lessons-outbox one, and only the latter
+    # should be silenced.
     if _target_is_lessons_outbox_write(target_dir):
         return None
 
@@ -1391,8 +1531,50 @@ def _evaluate_foreign_repo_candidate(
         return None
 
     # _deny(message)`. The AC14 SAME-REPO comparison above already
+    # answers its own question from `target_gitdir` alone and never reads
+    # this variable.
+    #
+    # Because a wrong answer here degrades a LABEL, never a verdict, this
     # is the "MISS-MODE CALLERS ONLY" shape `resolve_git_root_cheap`
+    # documents for itself -- but this does NOT call that walker: its
+    # `os.path.exists` climb skips symlink resolution, which THAT
     # docstring names this module's SAME-REPO comparison (a different
+    # site, above) as the caller that must never risk. `show_toplevel`
+    # below is a different, symlink-safe walker
+    # (`coordinator_core.git.repo_root`, already the delegate `write_
+    # guards._repo_root` uses for the identical reason): its cwd
+    # resolution runs `Path.resolve()`, matching real `git rev-parse
+    # --show-toplevel`'s own symlink handling. It also costs nothing
+    # incremental here -- `resolve_gitdir(probe_dir)` above already
+    # populated that module's shared per-cwd memo with the toplevel
+    # alongside the gitdir from the SAME walk, so this is a dict lookup,
+    # not a second climb.
+    #
+    # Four gitdir shapes, decided:
+    #   - ordinary repo (`<root>/.git` a directory) -- the walk finds it
+    #     at the first ancestor of `probe_dir` that has one and returns
+    #     that ancestor. Correct.
+    #   - linked worktree (`<worktree>/.git` a FILE naming `<main>/.git/
+    #     worktrees/<name>`) -- the walk stops at the FIRST `.git` entry
+    #     it meets, which is the worktree's OWN `.git` file, so it
+    #     returns the worktree's own root -- matching real `git rev-parse
+    #     --show-toplevel` run from inside that worktree, never the main
+    #     checkout's root.
+    #   - submodule (gitdir at `<super>/.git/modules/<name>`) -- same
+    #     walk, same reasoning: stops at the submodule's own `.git` file
+    #     and returns the submodule's own root, not the superproject's.
+    #   - separated gitdir / `GIT_DIR` naming a directory OUTSIDE any
+    #     worktree -- by the time `probe_dir` reaches this function,
+    #     `_git_subcommand_and_target_cwd`'s own `_worktree_root_for_
+    #     gitdir_override` has already turned a `.git`-suffixed override
+    #     into its PARENT (an ordinary worktree root, the first case
+    #     above). A non-`.git`-suffixed override (a bare-style separate
+    #     gitdir with no worktree binding) is left as typed, so the walk
+    #     lands ON the gitdir itself, which presents `HEAD`/`objects`/
+    #     `refs` exactly like a bare repo and correctly resolves to no
+    #     toplevel (`None`) -- degrading, below, to the pre-existing
+    #     `target_dir` fallback rather than asserting a worktree root
+    #     that does not exist for this shape.
     probe_root = _show_toplevel(probe_dir)
 
     if anchor_has_repo:
@@ -1405,8 +1587,16 @@ def _evaluate_foreign_repo_candidate(
             return None
         marker_probe = probe_dir
     else:
+        # § No-repo anchor branch -- the session itself owns no repo. A
         # REGISTERED target still bumps unconditionally, as it always has
+        # (per § Where the bump does not fire). Narrow (PM ruling
         # 2026-08-10): an UNREGISTERED target now ALSO bumps unless it
+        # sits at or under the session's own anchor SUBTREE -- see
+        # `anchor_subtree_contains`'s own docstring for why this branch
+        # (target already confirmed to resolve to a real gitdir, above) is
+        # exactly the shape Narrow can site a clearable marker for. The
+        # marker falls back to the TARGET's own gitdir either way (see
+        # module docstring for why).
         own_repo_cwd_gitdir = own_repo_write_gitdir(cwd, payload, env=env)
         own_repo_cwd_common_cf = (
             _common_dir_cf_from_gitdir(own_repo_cwd_gitdir)
@@ -1424,11 +1614,49 @@ def _evaluate_foreign_repo_candidate(
             str(target_gitdir), env=env
         ) and anchor_subtree_contains(anchor, target_dir):
             return None
+        # `probe_dir`, not `target_dir` -- same latent-bug fix as
+        # above: `resolve_git_root`/`bump_is_cleared` also shell out
         # with this as `cwd`, which requires an EXISTING directory.
         marker_probe = probe_dir
 
     # TWO ROOTS, NEVER CONFLATED (AC7 fix, 2026-08-11, bug
+    # `2026-08-11-a-dispatched-coordinator-executor-is-den`; call-site count
+    # corrected 2026-08-11, review finding P3). `marker_probe_root` is the
+    # TARGET's own resolved root -- correct for WHERE the marker file lives
+    # (`marker_probe`/`marker_gitdir` below) and for the `target_repo_label`
+    # display string, since both name the target. It is WRONG for `bump_is_
+    # cleared`'s `git_root=`, both `effective_session_id` calls, and
+    # `resolve_agent_class`'s own internal `resolve_effective_types` lookup
+    # below (FOUR call sites total): all of them resolve the EM-inheritance
+    # back-pointer at `<git_root>/.git/coordinator-sessions/.agents/
+    # <agent_id>/em-session-id.txt`, which only ever exists in the SESSION's
+    # own repo (written by `session-start-write-bump-anchor.py` against the
+    # session's own anchor). Resolved against the target root instead (the
+    # pre-fix behaviour), that lookup silently misses, `effective_session_id`
+    # falls back to the subagent's OWN `session_id`, and a dispatched
+    # subagent re-bumps despite its EM having cleared the target -- the
+    # exact defect this fix closes. `anchor_root` (the caller's `resolve_
+    # git_root(anchor)`, the SAME resolution `check_bump_foreign_repo_write`
+    # already performs for `anchor_common_cf`) is the correct root for all
+    # four: it is the session's own repo regardless of which foreign target
+    # this candidate names. Falls back to a fresh `resolve_git_root(marker_
+    # probe)` only when the caller could not resolve an anchor root at all
+    # (`anchor_root` is `None`) -- matching this function's own fail-open
+    # posture rather than raising or silently using an empty string.
+    #
     # SHORT-CIRCUITED, not merely named as a fallback (2026-08-21, this
+    # spawn-removal pass): the dominant case -- an anchor with its own repo,
+    # i.e. every deny path these tests exercise -- has `anchor_root is not
+    # None`, so `resolve_git_root(marker_probe)` is now skipped entirely
+    # rather than computed-and-discarded. Before `probe_root` (above) moved
+    # off `resolve_git_root`, this call was a coincidental CACHE HIT on the
+    # same `marker_probe`-equals-`probe_dir` cwd `probe_root` had just
+    # spawned for -- "free" only because that spawn ran first in this same
+    # function. Removing that spawn without also removing this call would
+    # have relocated it here instead of eliminating it (measured: it did,
+    # before this short-circuit was added -- the deny-path budget stayed at
+    # two). The `anchor_root is None` branch (a repo-less anchor) still
+    # spawns when reached; that path is outside this budget's dominant case.
     session_root_for_marker = (
         anchor_root if anchor_root is not None else resolve_git_root(marker_probe)
     )
@@ -1439,7 +1667,13 @@ def _evaluate_foreign_repo_candidate(
 
     marker_gitdir = resolve_gitdir(marker_probe)
     if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+        # Cannot compose a clear line without a gitdir, OR the target
         # gitdir exists but is not writable/readable (STAFF-ENG F0, AC5)
+        # -- fail open on the WRITE axis in BOTH cases: allow, rather
+        # than print a message the reader can never satisfy. See
+        # `_write_bump_marker.marker_gitdir_is_writable`'s own docstring
+        # -- a read-only target `.git` (a mirror synced under another
+        # uid) takes the identical disposition as an unresolvable one.
         return None
 
     agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, session_root_for_marker)
@@ -1453,7 +1687,13 @@ def _evaluate_foreign_repo_candidate(
     target_repo_label = probe_root or target_dir
     session_repo_label = resolve_git_root(anchor) or anchor
 
+    # C1 -- classify the target as a registered PUBLISH destination or
+    # an ordinary FOREIGN source repo (§ Design's three-class table;
     # OUTSIDE_ANY_REPO is never reached here, since this guard only ever
+    # sees a resolved `target_gitdir` -- that predicate is C5's). Closed-
+    # set membership decides the verdict; `owner` is context only for
+    # C2's copy, never gating (see `target_is_publish_destination`'s own
+    # docstring).
     destination_class = (
         DESTINATION_PUBLISH
         if target_is_publish_destination(target_repo_label, env=env)
@@ -1465,7 +1705,22 @@ def _evaluate_foreign_repo_candidate(
         else ""
     )
 
+    # Finding #3 -- `cwd=anchor`, NOT the live payload `cwd`: the live
+    # `cwd` is (in this guard's own canonical scenario) the FOREIGN
+    # target repo, which would land this observability log in the very
+    # repo the guard is bumping the write away from. This binds the LOG
+    # ONLY, never the marker -- the two are different in kind. The
     # OPERATOR writes the marker via a deliberate `touch` (an
+    # affirmative clear act the operator chooses to perform against a
+    # specific target -- see C3, `marker_probe = probe_dir` above,
+    # narrowed per-(session, target) rather than per-session); the
+    # GUARD writes this observability log unbidden, on every fire, with
+    # no operator choice involved. "The guard must not write into the
+    # repo it is bumping you away from" binds THIS call site (still
+    # `cwd=anchor`, still anchor-homed, still never the foreign one) --
+    # it does not bind the marker's own siting, so narrowing where the
+    # marker lives is not a contradiction of that principle, it is
+    # orthogonal to it.
     record_applicability_event(
         session_id,
         repo=session_repo_label,
@@ -1560,6 +1815,9 @@ def check_bump_foreign_repo_write(
         return None
 
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- decide from the parsed
+    # command alone, no subprocess, whether this command has a write sink at
+    # all. `echo hello`/`git status --short` never reach the git spawns
+    # below.
     candidates = list(_iter_write_sink_candidates(cmd, cwd))
     if not candidates:
         return None
@@ -1571,9 +1829,29 @@ def check_bump_foreign_repo_write(
     anchor_has_repo = anchor_gitdir is not None
     if not anchor_has_repo and path_has_git_ancestor(anchor):
         # UNRESOLVED, not repo-less -- `resolve_gitdir` returning `None`
+        # here is ambiguous between "the anchor genuinely sits in no git
+        # repo" (the branch `_evaluate_foreign_repo_candidate`'s own
         # `else` clause below still bumps a REGISTERED target for,
+        # unconditionally, per the 2026-08-10 PM ruling) and "the `git
+        # rev-parse --git-dir` spawn itself failed" -- an expected
+        # transient under this box's documented load norm (50-70
+        # concurrent LLMs, `docs/wiki/machine-load-norm.md`), not an
+        # anomaly. `path_has_git_ancestor` (`_write_bump_marker.py`, a
+        # pure filesystem walk, no subprocess) finding a `.git` entry
+        # at/above `anchor` is evidence for the SECOND fact, not the
         # first -- treated as UNRESOLVED and allowed, matching this
+        # guard's own fail-open contract ("never bump on a path this
+        # guard could not resolve"). A genuinely repo-less anchor (no
+        # `.git` entry either) falls through unchanged, preserving the
+        # 2026-08-10 ruling exactly.
         return None
+    # AC14 -- the COMMON-dir form (worktree-safe), not `anchor_gitdir`'s
+    # per-worktree private form, is what `_same_repo_root` compares on.
+    # `anchor_root` -- the SESSION's own resolved root, resolved ONCE here
+    # and threaded to every candidate's `_evaluate_foreign_repo_candidate`
+    # call (AC7 fix) -- MUST be the same `resolve_git_root(anchor)` call
+    # `anchor_common_cf` already performs, never re-derived per candidate
+    # from the TARGET's own root (see that function's own "TWO ROOTS, NEVER
     # CONFLATED" docstring section).
     anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
     anchor_common_cf = (
@@ -1603,9 +1881,21 @@ def check_bump_foreign_repo_write(
     return None
 
 
+# ---------------------------------------------------------------------------
+# PowerShell-dialect leg (C5e, 2026-08-07, guard-dialect-coverage.md row 16).
 # EXTRACTION ONLY differs from the Bash body above -- the PowerShell cmdlet
 # table (`PS_WRITE_SINK_CMDLETS`/`extract_write_sink_targets_powershell`)
+# replaces `_iter_write_sink_candidates`'s git-subcommand/plain-bash-sink
+# scan, but every resulting candidate is judged through the SAME
+# `_evaluate_foreign_repo_candidate` this guard's Bash body uses -- this is
+# the semantic difference from the sibling `bump_outside_repo_write.py`'s
+# own PowerShell leg (which fires on NO git root; this guard fires on a
 # DIFFERENT git root -- see this module's own docstring, "WHAT COUNTS AS
+# THE SESSION'S OWN REPO", and do not copy that sibling's resolution path).
+# Kept as a fully separate function (not interleaved into the bash body),
+# matching `block_subagent_destructive_action._check_powershell`'s own
+# "kept separate" reasoning for the identical structural reason.
+# ---------------------------------------------------------------------------
 
 
 def _check_bump_foreign_repo_write_powershell(
@@ -1683,6 +1973,8 @@ def _check_bump_foreign_repo_write_powershell(
     matched_any_cmdlet = False
     cwd_unresolved = False
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- collected here, from the
+    # parsed command alone (no subprocess), and checked for emptiness below
+    # BEFORE `resolve_gitdir`/`resolve_git_root` ever spawns.
     candidates: List[Tuple[str, str]] = []
 
     for tokens, _pipe_before in segments:
@@ -1758,6 +2050,11 @@ def _check_bump_foreign_repo_write_powershell(
     anchor_has_repo = anchor_gitdir is not None
     if not anchor_has_repo and path_has_git_ancestor(anchor):
         # UNRESOLVED, not repo-less -- see the Bash body's own identical
+        # guard above for the full reasoning (`resolve_gitdir(anchor)`
+        # returning `None` from a transient spawn failure must not be read
+        # as "no repo here"); mirrored here rather than factored out since
+        # the two legs' surrounding control flow already diverges (dialect
+        # gate, segment tokenization) before either reaches this point.
         return None
     anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
     anchor_common_cf = (

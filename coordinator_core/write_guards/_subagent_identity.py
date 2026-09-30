@@ -10,7 +10,11 @@ _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
 
 _SESSION_ID_FORMAT_RE = re.compile(r"^[a-zA-Z0-9_-]{3,}$")
 
+#: Already-canonical teammate shape as the HARNESS hands it back verbatim on
+#: dispatch (``tool_response.agentId`` / ``.agent_id``): ``<name>@session-<short>``.
 #: Distinct from ``_NAMED_TEAMMATE_RE`` above, which matches the SUBAGENT-side
+#: raw id (``a<name>-<16hex>``) seen from inside a dispatched teammate's own
+#: tool calls — the two shapes are NOT the same string for the same teammate.
 _TEAMMATE_CANONICAL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)@session-(?P<short>[a-z0-9-]+)$")
 
 

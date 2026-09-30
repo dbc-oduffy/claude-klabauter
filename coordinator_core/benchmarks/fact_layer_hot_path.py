@@ -86,7 +86,21 @@ FACT_NAMES = (
 
 FACT_WITH_NO_PRODUCTION_CONSUMER = "session_magnitude_attributed"
 
+#: The facade's one production call site (Problem section, substrate finding 0):
+#: `quick_wrap_assemble/__init__.py :: brief` calls five of the six facts in
+#: sequence (its own lines "Reads all five close-gate facts off
+#: `coordinator_core.session.session_facts`"). Stated here so a consumer of this
+#: module's figures does not have to re-derive "per-ceremony" means "per this one
+#: call site" from the timing corpus alone.
+#:
+#: The plan body and this stub's roadmap baton both name this site
 #: `_read_close_gate_facts`. NO SUCH FUNCTION EXISTS, in this repo or in git
+#: history — the name is a drafting error carried from the plan's Problem
+#: section into the first draft of this constant. `brief` is the real site,
+#: verified by grep: `_read_close_gate_facts` has zero definitions and zero
+#: callers. Corrected rather than preserved, because a constant naming a
+#: function that does not exist sends the next reader looking for a hot path
+#: that was never there.
 PRODUCTION_CALL_SITE = "coordinator_core/quick_wrap_assemble/__init__.py::brief"
 
 PRODUCTION_FACT_ROW_NAMES = frozenset(f"session_facts.{name}" for name in FACT_NAMES)

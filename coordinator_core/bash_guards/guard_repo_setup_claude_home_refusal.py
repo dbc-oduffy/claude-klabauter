@@ -133,8 +133,12 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
+#: Identifiers naming the engine-plane scaffold mechanism (see module
+#: docstring "SEAM CHOICE"). A bare substring test would deny a command that
 #: merely MENTIONS one of these strings (a `grep scaffold_structure ...`, a
+#: `git log --grep=...`) without invoking it -- `_names_scaffold_mechanism`
 #: below requires the marker to appear in an INVOKED-program-ish position,
+#: not merely anywhere in the text.
 _SCAFFOLD_MECHANISM_MARKERS = (
     "repo-setup-args-and-register",
     "coordinator_core.install.scaffold_structure",
@@ -143,10 +147,18 @@ _SCAFFOLD_MECHANISM_MARKERS = (
 
 _ROOT_FLAG_RE = re.compile(r"--(?:root|target)(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
 
+#: ``--dry-run`` is the scaffold CLI's own no-write mode: it prints the
+#: ``create``/``skip (exists)`` plan and touches nothing. This guard exists
+#: to keep a WRITE off Claude Home, so a dry run has nothing to refuse -- and
+#: the `coordinator-doctor` P-12 probe reads Claude Home's structure through
 #: exactly that flag. NEGATIVE-SPEC: this is a no-write exemption, never a
+#: bypass -- drop the flag and the write is denied again.
 _DRY_RUN_RE = re.compile(r"(?:^|\s)--dry-run(?:[=\s]|$)")
 
+#: A leading ``cd <path> &&``/``cd <path> ;`` or PowerShell
+#: ``Set-Location``/``sl`` (optionally ``-Path``) prefix -- see module
 #: docstring "LEADING cd/Set-Location HANDLING". Must anchor the START of
+#: the command (modulo leading whitespace); only ONE such prefix is
 #: recognized (see NEGATIVE-SPEC).
 _LEADING_CD_RE = re.compile(
     r"""^\s*(?:cd|Set-Location|sl)\s+(?:-Path\s+)?

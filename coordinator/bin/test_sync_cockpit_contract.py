@@ -58,7 +58,10 @@ def _resolve_canonical() -> str | None:
 _CANONICAL = _resolve_canonical()
 
 # Presence of the SPECIFIC required artifact, not merely of the clone root —
+# the same convention coordinator_core/contract/cockpit_schema/tests/conftest.py
 # uses (`SCHEMA_AVAILABLE`/`skip_no_schema`), and for the same reason: the DoE
+# clone resolving says nothing about whether `cockpit-contract/schema/` still
+# exists at that HEAD.
 _CANONICAL_AVAILABLE = _CANONICAL is not None and os.path.isfile(_CANONICAL)
 
 requires_canonical = unittest.skipUnless(

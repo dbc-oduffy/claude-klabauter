@@ -52,9 +52,21 @@ class TestSubcommandHelp(unittest.TestCase):
         self.assertEqual(rc, 0)
 
     def test_every_subcommand_has_a_usage_entry(self):
+        # The top-level synopsis and the per-subcommand table must not drift
+        # apart — a verb listed in one and missing from the other is exactly
+        # the discoverability hole this suite exists to close.
+        #
+        # Exception, by design (92c902051, "rename handoff transition verb
         # consume->claim, unconsume->unclaim"): `_cli._DEPRECATED_ALIASES`
+        # names the accepted-but-unadvertised deprecated verbs — deliberately
         # left OUT of the top-level `_SUBCOMMANDS` advertisement, yet still
         # carrying their own `_SUBCOMMAND_USAGE` entry so `<alias> --help`
+        # answers directly rather than falling through to the subcommand's
+        # own parser (the exact failure mode this suite's module docstring
+        # describes). A blanket set-equality assertion would force a false
+        # choice between advertising a deprecated verb and deleting its
+        # still-functioning help text — neither of which matches the
+        # alias-compat design intent.
         listed = {
             v.strip()
             for v in _cli._SUBCOMMANDS.split("\n")[0]
@@ -80,7 +92,11 @@ class TestSubcommandHelp(unittest.TestCase):
 
 
 class TestDeprecatedAliasDispatch(unittest.TestCase):
+    # Only `--help` exercised the alias table before;
     # nothing proved the rewired `_DEPRECATED_ALIASES.get(subcmd) == "..."`
+    # condition actually dispatches to the same engine call as the canonical
+    # verb. A typo in a map VALUE would silently fall through to bareword
+    # positional handling with every existing test still green.
     def test_consume_handoff_dispatches_like_claim_handoff(self):
         mock_mod = unittest.mock.Mock()
         with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
@@ -109,6 +125,29 @@ class TestDeprecatedAliasDispatch(unittest.TestCase):
         self.assertEqual(rc, mock_mod.cs_unclaim_handoff.return_value)
         mock_mod.cs_unclaim_handoff.assert_called_once_with(
             "state/handoffs/x.md", "a note", None
+        )
+
+
+class TestRepairShippedInClearAdvancementUsage(unittest.TestCase):
+    def test_usage_declares_the_flag(self):
+        self.assertIn(
+            "--clear-advancement", _cli._SUBCOMMAND_USAGE["repair-archived-shipped-in"]
+        )
+
+    def test_help_prints_the_flag(self):
+        with unittest.mock.patch.object(_cli, "_import_module", lambda: object()):
+            with unittest.mock.patch("sys.stdout") as out:
+                rc = _cli.main(["repair-archived-shipped-in", "--help"])
+        self.assertEqual(rc, 0)
+        printed = "".join(c.args[0] for c in out.write.call_args_list if c.args)
+        self.assertIn("--clear-advancement", printed)
+
+    def test_unknown_flag_guard_accepts_the_flag(self):
+        self.assertIsNone(
+            _cli._reject_unknown_flags(
+                "repair-archived-shipped-in",
+                ["--reason", "r", "--clear-advancement"],
+            )
         )
 
 

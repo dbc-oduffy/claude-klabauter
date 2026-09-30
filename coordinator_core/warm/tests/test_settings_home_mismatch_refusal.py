@@ -223,9 +223,15 @@ def test_mismatch_does_not_evict_the_shared_server():
     assert json.loads(io_obj.written[0])["error"]["code"] == server.SETTINGS_HOME_MISMATCH_ERROR
 
 
+# ---------------------------------------------------------------------------
 # THE BROKEN-POOL FALLBACK ORDERING (Finding 2). `_op_may_mutate`'s diversion
+# in `_pool_dispatch`'s own `except BrokenProcessPool` handler runs BEFORE
+# `_run_dispatch(..., isolated=False)` is ever reached on that leg -- so a
 # MUTATING op with a mismatched settings-home claim must come back as
 # `WARM_DISPATCH_INDETERMINATE` (-32004), never `SETTINGS_HOME_MISMATCH_ERROR`
+# (-32008): re-running a mutating op whose outcome is unknown is the hazard
+# that gate exists to prevent, and it fires strictly first.
+# ---------------------------------------------------------------------------
 
 
 def test_broken_pool_fallback_never_lets_a_mutating_op_reach_the_settings_home_gate(monkeypatch):
@@ -343,8 +349,12 @@ def test_client_stamps_nothing_when_no_home_was_named(monkeypatch):
     assert settings_home_claim.SETTINGS_HOME_FIELD not in _sent_request(monkeypatch)
 
 
+# ---------------------------------------------------------------------------
 # EXIT CRITERION 3 -- the no-claim hot path pays no resolution, asserted
 # STRUCTURALLY rather than by timing. A ~50-session box's timing noise cannot
+# discriminate one absent env read, so a stopwatch cannot falsify this
+# regression; a patched-and-asserted-uncalled `settings_home` can.
+# ---------------------------------------------------------------------------
 
 
 def _counting_settings_home(monkeypatch, calls: list):

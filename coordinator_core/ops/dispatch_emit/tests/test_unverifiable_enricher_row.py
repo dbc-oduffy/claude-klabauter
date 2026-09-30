@@ -157,7 +157,11 @@ def test_the_declaration_reaches_emit_from_spine_text(tmp_path):
     assert "agentType: 'coordinator:enricher'" in script
 
 
+# ---------------------------------------------------------------------------
 # `_VERIFICATION_CLAUSE_RE` is single-line by design -- a wrapped clause is
+# deliberately not seen; `verification_runs:` is the escape, not a bounded
+# multi-line capture (Review: coordinator:code-reviewer, Finding 1).
+# ---------------------------------------------------------------------------
 
 
 def test_a_soft_wrapped_verification_clause_is_not_seen_by_the_classifier():

@@ -90,7 +90,34 @@ __all__ = [
 ]
 
 
+# ---------------------------------------------------------------------------
 # Per-request DIAGNOSTIC axis (2026-08-19).
+#
+# WHY THIS EXISTS. A fleet setup error returns the FROZEN exit_code:1 envelope,
+# which carries no reason field by contract (§2.1), so `ops/fleet/_common.py
+# :: _setup_error`'s write to the op process's stderr is the ONLY diagnostic
+# channel such a refusal has — that helper's own docstring says as much, and
+# `ops/fleet/tests/test_setup_error_stderr_channel.py` pins both halves.
+#
+# That guarantee holds for a COLD spawn, where the op process IS the caller's
+# child and its stderr is the caller's pipe. Under the warm engine it does not:
+# the op runs inside the SERVER process, so the reason lands on the server's
+# stderr and the caller sees `refused (exit_code=1, failed=0)` with the reason
+# nowhere. Same op, same refusal, same caller code — served warm it is mute.
+# Reported by coordinator-content-repo-em (cross-repo/inbox/2026-08-19-coordinator-content-repo-em-warm-
+# engine-seam-async-declined.md), who diagnosed it as the CLI forwarder failing
+# to read stderr on the rc==0 path; the forwarder is correct and does read it
+# (`coordinator/bin/lib/cc_invoke.py :: route_mutation`'s `_stderr_sink`) —
+# there was simply nothing on that stream to read.
+#
+# The fix is an explicit per-request sink rather than capturing `sys.stderr`:
+# connections are served on their own OS threads, so redirecting the process-
+# global stream would interleave one caller's diagnostics into another's frame.
+# A ContextVar is bound per dispatch and is invisible to every other request.
+#
+# Cold path is untouched: nothing binds the sink, `emit_diagnostic` is a no-op,
+# and `_setup_error` keeps writing to stderr exactly as before.
+# ---------------------------------------------------------------------------
 _DIAGNOSTICS: contextvars.ContextVar[Optional[List[str]]] = contextvars.ContextVar(
     "coordinator_core_op_diagnostics", default=None
 )
@@ -120,8 +147,36 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
         _DIAGNOSTICS.reset(token)
 
 
+# ---------------------------------------------------------------------------
 # `os.environ` IDENTITY BORROW (C3, docs/plans/2026-08-30-every-op-runs-in-
+# the-callers-environment.md).
+#
+# WHY THIS EXISTS. `session_identity_override` binds a ContextVar only, so
+# only a resolver that reads it (`session.core.resolve_session_id`) sees the
+# caller's carried identity -- a raw `os.environ.get(...)` read steps
+# straight past it and gets whoever spawned the server
+# (`docs/research/warm-engine-premise/mechanism-2-globals-and-env.md`
+# § Disposition names `os.environ` as the outermost-boundary compatibility
+# mirror this closes). Mutating process-wide `os.environ` is a real
+# concurrency hazard in general (36 of 40 pool tasks observed a prior task's
+# unrestored value in the spike behind this chunk) -- safe here ONLY because
+# `isolated=True` is asserted by the caller to mean this dispatch owns a
+# process no concurrent request shares (C2's process-pool isolation), never
+# because this helper trusts its caller's word for free.
+#
 # `CLAUDE_PID` is borrowed whenever `isolated`, on the SAME terms as the two
+# lower-tier session vars, and is the axis that closes the three
+# `self_record()` defects `state/audits/2026-08-30-warm-identity-cohort-
+# sweep.md` names -- see `per_request_state`'s `caller_pid` parameter
+# docstring below for the full argument (why its own axis, not a field of
+# `session_id`).
+#
+# The carried pid is re-validated as a decimal digit string before it is
+# bound, for the same reason `session_id` is re-validated against
+# `_UUID_RE`: a caller-supplied value that fails its own shape gate must be
+# treated as "no carried identity" on this axis, never mirrored into
+# `os.environ` where every ambient reader downstream would trust it.
+# ---------------------------------------------------------------------------
 from coordinator_core.warm.env_forwarding import (
     BORROW,
     CALLER,
@@ -139,18 +194,32 @@ _ENV_SETTINGS_HOME_NAME = "COORDINATOR_SETTINGS_HOME"
 
 # THE THREE MODE GROUPS (C4, env_forwarding.FORWARDING_SET's own SSOT) --
 # named tuples, not re-hand-written lists, so a name added to `FORWARDING_SET`
+# (env_forwarding.py, C1) reaches this seam's mode dispatch with no second
 # edit here. Ordering within each group is `FORWARDING_SET`'s own declared
+# order (module docstring: refuse first, then the override triple in its
 # existing precedence order, then borrow entries) -- `OVERRIDE_NAMES`
+# therefore IS the session-id precedence order `_session_id_from_env` below
+# walks.
 REFUSE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == REFUSE)
 OVERRIDE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == OVERRIDE)
 BORROW_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == BORROW)
 CALLER_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == CALLER)
 
 # `_ENV_BORROWED_NAMES` -- THE RESTORE SET `_environ_identity_borrow`'s
+# `finally` un-mirrors, NOT a forwarding allowlist (those are the three
+# `*_NAMES` tuples above; see env_forwarding.py's own module docstring for
+# why mode is Python-side-only data). Derived from the declared set PLUS
 # exactly one hand-added name: `CLAUDE_PID` is RESTORE-scoped (this borrow
 # WRITES `os.environ["CLAUDE_PID"]` from `caller_pid` below, so the
+# `finally` must save/restore it like every other borrowed name) but never
 # FORWARD-scoped (it is not on the wire as a name in `FORWARDING_SET` --
 # `env_forwarding.py`'s own negative spec: "`CLAUDE_PID` is deliberately NOT
+# an entry here... stays derived from `GetCurrentProcessId()`/`getpid()`,
+# never read from the environment"; `_caller.pid` carries it instead). The
+# two sets coincide everywhere except this one name, and coinciding is not
+# the same claim as being the same set -- see `test_env_forwarding_set.py`'s
+# added assertion, which pins this directly rather than trusting they stay
+# in sync by accident.
 _ENV_BORROWED_NAMES = tuple(e.name for e in FORWARDING_SET) + (_ENV_CLAUDE_PID_NAME,)
 
 
@@ -248,7 +317,14 @@ def _environ_identity_borrow(
     }
     try:
 
+        # REFUSE branch (isolated-only mirror -- see docstring above for why
         # this is not the refusal itself). ABSENT FROM `env` ENTIRELY is
+        # inherit-on-absent -- untouched, not popped: the enclosing scope's
+        # (this worker's own pristine) value stands, since a request that
+        # carried no claim has no opinion. PRESENT (even an empty string, the
+        # one shape a real `_env` wire object never sends -- C2's own HARD AC
+        # -- but a legacy kwarg caller may still pass explicitly) is acted on:
+        # shape-gate-or-pop.
         for name in REFUSE_NAMES:
             if name not in env:
                 continue
@@ -263,6 +339,11 @@ def _environ_identity_borrow(
                 os.environ.pop(name, None)
 
         # OVERRIDE branch (session-id precedence triple, unchanged UUID gate).
+        # Unlike REFUSE/BORROW, absence is NOT inherit-on-absent here: a
+        # warm-served request that carried no session identity at all must
+        # still strip every ambient session name, matching the pre-C4
+        # behaviour byte-for-byte (`test_no_carried_identity_isolated_
+        # strips_every_name`).
         valid_sid = _session_id_from_env(env)
         if valid_sid and not _UUID_RE.fullmatch(valid_sid):
             valid_sid = None
@@ -274,7 +355,9 @@ def _environ_identity_borrow(
             for name in OVERRIDE_NAMES:
                 os.environ.pop(name, None)
 
+        # BORROW branch (every other declared entry, e.g.
         # `MACHINE_LOCAL_REGISTRY_DIR`) -- same inherit-on-absent contract as
+        # REFUSE: a name the caller's wire never mentioned is left alone.
         for name in BORROW_NAMES:
             if name not in env:
                 continue
@@ -292,6 +375,10 @@ def _environ_identity_borrow(
                 os.environ.pop(name, None)
 
         # PREFIX branch (`env_forwarding.CALLER_PREFIXES`, the per-session
+        # guard overrides) -- CALLER terms for a name set not known in
+        # advance: every server-side name under a prefix pops, then exactly
+        # the carried ones bind. An override this worker inherited from its
+        # spawner must never read as this caller's.
         for name in [n for n in os.environ if is_caller_prefixed(n)]:
             os.environ.pop(name, None)
         os.environ.update(carried_prefixed)
@@ -448,7 +535,16 @@ def per_request_state(
     else:
         warm_scope = warm_served_request(bool(warm_served))
 
+    # Legacy `session_id`/`settings_home` kwargs, when given, are folded
     # onto `env` as one more `FORWARDING_SET`-shaped mapping -- see this
+    # function's own `env` parameter docstring for why both are kept rather
+    # than removed at C4. `env`'s own values win a key collision.
+    # `is not None`, not truthiness: an explicitly-given empty string still
+    # means "given" for `_environ_identity_borrow`'s inherit-on-absent
+    # contract (REFUSE/BORROW leave a name TRULY UNGIVEN alone, but act on
+    # one that was given and turned out malformed) -- see
+    # `test_malformed_claim_pops_rather_than_binds` vs
+    # `test_absence_binds_nothing`.
     merged_env: Optional[Mapping[str, str]] = env
     if session_id is not None or settings_home is not None:
         merged_env = dict(env) if env else {}
@@ -470,18 +566,52 @@ def per_request_state(
                     yield declared
 
 
+# ---------------------------------------------------------------------------
 # Warm-first CLIENT PRIMITIVE (C14a, no live caller yet).
+#
+# WHY THIS EXISTS. C14 (docs/plans/2026-08-22-a-bash-call-stops-costing-a-
+# second-and-a-half.md) came back BLOCKED on a trap in the existing
+# `warm.client.try_warm_dispatch` contract: that function's own docstring
 # says ANY well-formed JSON-RPC response counts as a served warm hit,
 # INCLUDING AN ERROR ENVELOPE (the anti-storm table's `well-formed JSON-RPC
+# response, including an error envelope -- server up; USE the response`
+# row). A guard-shaped caller (e.g. a Bash PreToolUse hook) that dispatches
+# an op name the warm server has never registered gets back exactly that
+# shape -- a real, well-formed `error` envelope with `code ==
 # ipc.METHOD_NOT_FOUND` (-32601) -- and `try_warm_dispatch` alone cannot
+# tell that apart from a genuine guard verdict the op computed on purpose.
+# Mistaking the former for the latter corrupts the result of every Bash
+# call routed through it.
+#
+# `try_warm_guard_dispatch` below is the seam that makes that distinction
 # explicit: it treats a `METHOD_NOT_FOUND` error envelope as "the warm
+# server does not know this op" -- a cold fall-through, not a hit -- and
+# everything else `try_warm_dispatch` would return (a real result, or any
+# OTHER error envelope, which is a legitimate answer the op computed) as a
+# genuine warm hit.
+#
 # `METHOD_NOT_FOUND` is redefined locally rather than imported from
 # `coordinator_core.ipc` (`ipc.METHOD_NOT_FOUND == -32601`): `ipc` is
+# neither small nor free to import (`warm.client`'s own module docstring
+# measures pulling the op-registry chain at ~330ms over a 40ms interpreter
+# floor), and this module already sits on hot per-call paths. The value is
 # a JSON-RPC 2.0 §5.1 reserved code, not project-specific, so duplicating
+# the constant does not risk drifting out of sync with a project decision
 # -- only with the JSON-RPC spec itself.
+#
+# Negative-spec (RAG-bait):
+#     This module does NOT decide which op to dispatch, does NOT retry, and
+#     does NOT add a live caller anywhere in the guard/hook path -- that is
+#     C14b's job, gated on a warm-side op plus a change to the hook
+#     invocation site in the coordinator-content-repo repo (PM-gated, out of scope here).
+#     It also makes NO measurement claim: AC13's <50ms number belongs to
+#     C14b, not to this inert primitive.
+# ---------------------------------------------------------------------------
 
 #: JSON-RPC 2.0 §5.1 reserved code for "the method does not exist / is not
 #: available" -- mirrors `coordinator_core.ipc.METHOD_NOT_FOUND` (-32601)
+#: without importing `ipc`. See this section's module-docstring note above
+#: for why the duplication is deliberate rather than an oversight.
 METHOD_NOT_FOUND = -32601
 
 

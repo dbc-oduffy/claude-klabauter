@@ -93,9 +93,21 @@ _PRIORITIES = ("urgent", "high", "medium", "low", "none")
 # TRUST BOUNDARY — target_id becomes a FILENAME (ledger_dir / f"{target_id}.yaml"
 # below), and priority.set is directly callable over JSON-RPC. Hardcoded rather
 # than schema-loaded, mirroring priority_drain._TARGET_ID_PATTERN's discipline
+# EXACTLY (same rationale, same non-skippable posture): schema validation
+# (_apply_priority_set, below) is best-effort and only runs AFTER this module
+# has already committed to a target_file path, so it must never be this path's
+# sole defense against a traversal-shaped target_id — a pattern that only
+# fires post-hoc, inside a callback that a corrupted/missing vendored schema
 # file could skip, is not a trust boundary. This guard runs UNCONDITIONALLY,
+# before any path interpolation, regardless of whether schema resolution
+# succeeds, and must never become skippable. Mirrors the vendored
+# priority-ledger.schema.json's target_id `pattern` exactly (see that
+# schema's own description for the traversal shapes it rejects: '..', '/',
+# '\\', leading '.', trailing '.').
 _TARGET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9_-]$|^[A-Za-z0-9]$")
 
+# Vendored schema this op validates writes against. See module docstring
+# "Schema location" — pin-tracked in test_schema_validate.py's
 # _QUEUE_SCHEMA_PINS, re-vendored only via bin/claude-klabauter-revendor-schema.py.
 _VENDORED_SCHEMA_PATH = (
     Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "priority-ledger.schema.json"
@@ -297,7 +309,9 @@ def set_priority(
     }
 
 
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
+# ---------------------------------------------------------------------------
 
 
 @register_op("priority.set")

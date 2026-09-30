@@ -157,7 +157,17 @@ def _load_guard_module():
 
 class TestStaticFailureMarkerDrift(unittest.TestCase):
     def test_guard_marker_matches_verify_op_static_failure_line(self):
+        # Finding 1 (code-reviewer, this slice): the guard's
         # `_STATIC_FAILURE_MARKER` is a hand-duplicated copy of the verify
+        # op's own terminal line for a failing static check, with no shared
+        # source of truth. An importable-constant or distinct-exit-code fix
+        # was weighed and rejected (see dispatch report — engine-import cost
+        # on a deliberately thin bin wrapper, and the verify CLI's exit code
+        # is documented parity-critical against the retired bash oracle).
+        # This test is the substitute: it fails loudly, at the contract
+        # layer, the moment the two strings drift, instead of surfacing as a
+        # silently-crossed refusal message the way the bug this commit fixed
+        # did.
         guard = _load_guard_module()
 
         with tempfile.TemporaryDirectory() as tmp:

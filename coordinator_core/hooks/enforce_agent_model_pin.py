@@ -145,10 +145,16 @@ MATCHERS = ("Agent",)
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_AGENT_MODEL_PIN"
 
+#: `fork` is a harness dispatch shape, not an agent definition -- the Agent
+#: tool's own schema states a fork always runs on the parent's model and a
+#: `model` override is ignored, so there is never a pin to defend and
+#: denying would be a false positive. Mirrors
 #: `block_unenumerated_agent_type._HARNESS_BUILTIN_TYPES`'s own `fork` note.
 _FORK_TYPE = "fork"
 
+#: Model cost ordering (see module docstring "MODEL ORDER"). `fable` is
 #: deliberately absent -- see "NEGATIVE SPEC" above. Do not add it here by
+#: guessing a rank.
 _MODEL_ORDER: Dict[str, int] = {"haiku": 0, "sonnet": 1, "opus": 2}
 
 _EFFORT_ORDER: Dict[str, int] = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}

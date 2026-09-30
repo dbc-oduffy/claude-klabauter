@@ -219,7 +219,13 @@ def _add_bare_remote(client_root: Path, tmp_path: Path) -> None:
     bare = tmp_path / "origin.git"
     _run(["git", "init", "-q", "--bare", str(bare)])
     _git(["remote", "add", "origin", str(bare)], client_root)
+    # Establish tracking with an upfront publish of the seed commit --
+    # `push_outstanding`'s own no-upstream-ref auto-publish
     # (`ops/ceremony/push.py::publish_day_branch`) is scoped to CANONICAL
+    # day branches only, never an arbitrary `work/*` branch, so a fixture
+    # branch outside that naming scheme needs its upstream set explicitly
+    # once, the same way a genuine first push on a brand-new feature branch
+    # would.
     _git(["push", "-u", "origin", _current_branch(client_root)], client_root)
 
 
@@ -405,10 +411,18 @@ class TestClosedCLReMintsRatherThanFailing:
         assert len(changes_before) == 1
         session_cl = changes_before[0]["change"]
 
+        # A human/cockpit submits the session's shelved CL out from under
+        # it (D4's re-mint trigger is a classified refusal against the
         # RECORDED base sha becoming unreachable, not a live CL probe --
+        # so this test drives the actual git-side condition that trips it:
+        # the recorded base sha is rewritten out of history, exactly what a
+        # submit-then-reset workflow produces).
         _p4(p4d, user, client, ["unshelve", "-s", session_cl, "-c", session_cl]).check_returncode()
         _p4(p4d, user, client, ["shelve", "-d", "-c", session_cl]).check_returncode()
         # `-c <cl>` and `-d <description>` are MUTUALLY EXCLUSIVE submit
+        # grammars (`p4 help submit`: `submit [...] -c changelist#` is its
+        # own form). The CL already carries the description session_change
+        # minted it with, so submitting it by number needs no `-d`.
         _p4(p4d, user, client, ["submit", "-c", session_cl]).check_returncode()
 
         from coordinator_core.session.core import session_dir, update_meta_fields

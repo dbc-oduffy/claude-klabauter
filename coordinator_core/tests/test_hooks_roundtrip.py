@@ -107,7 +107,10 @@ def test_envelope_all_five_builders_exist() -> None:
         post_advisory,
     )
 
+    # Every agent-facing string these builders emit carries the provenance
     # marker — see _hook_envelope.COORDINATOR_PROVENANCE_MARKER for why (an
+    # unmarked imperative in tool output is the signal an agent should refuse,
+    # so coordinator's own traffic must be identifiable AS coordinator's).
     mark = _hook_envelope.COORDINATOR_PROVENANCE_MARKER
 
     r = allow_advisory("PreToolUse", "advisory text")
@@ -167,7 +170,9 @@ def test_envelope_no_advisory_is_empty_dict() -> None:
     assert no_advisory() == {}
 
 
+# ---------------------------------------------------------------------------
 # REGISTRY: all 6 hooks.* ops registered after import
+# ---------------------------------------------------------------------------
 
 def test_registry_enumeration_all_five_hooks() -> None:
     """After `import coordinator_core.ops`, all 5 hooks.* methods are in the registry."""
@@ -228,7 +233,9 @@ def test_foreground_dispatch_empty_tool_input_denies() -> None:
     _assert_deny(result, "PreToolUse")
 
 
+# non-empty tool_input missing `prompt` is not a safe
 # rewrite target (updatedInput REPLACES the whole argument object); must fall back to deny
+# rather than dispatch a subagent with no instructions.
 def test_foreground_dispatch_tool_input_missing_prompt_denies() -> None:
     """Non-empty tool_input lacking `prompt` → deny fallback, not a corrupted rewrite."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler

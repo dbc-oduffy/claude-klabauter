@@ -54,7 +54,10 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post
 from coordinator_core.ipc import register_op
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 
+# The commit/date C1's terminal-stamp contract lands at — see the source
 # script's own CONTRACT_EPOCH section. Delete this constant and
+# `_kira_postdates_epoch` once no session predating 2026-08-30 can still
+# close.
 _KIRA_CONTRACT_EPOCH_ISO = "2026-08-30T00:00:00Z"
 
 _KIRA_AGENT_TYPE = "overengineering-reviewer"
