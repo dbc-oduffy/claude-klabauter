@@ -50,7 +50,7 @@ LEVEL_VERB = "machine-local set coordinator.guard_level warn"
 
 _ENV_PREFIX = "MACHINE_LOCAL_COORDINATOR_"
 
-_cache: Dict[Tuple[Any, ...], Dict[str, str]] = {}
+_cache: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
 
 def reset_cache() -> None:
@@ -78,7 +78,7 @@ def _cache_key() -> Tuple[Any, ...]:
     )
 
 
-def _slot() -> Dict[str, str]:
+def _slot() -> Dict[str, Any]:
     key = _cache_key()
     slot = _cache.get(key)
     if slot is None:
@@ -87,20 +87,21 @@ def _slot() -> Dict[str, str]:
     return slot
 
 
-def _registered_repo_has_sentinel() -> bool:
+def _sentinel_repo() -> Optional[str]:
+    """First registered ``repos.*`` path carrying the dev-repo sentinel, else ``None``."""
     try:
         flat = machine_resolver.merged_flat_registry()
     except Exception:  # noqa: BLE001 -- unreadable registry degrades to consumer
-        return False
+        return None
     for key, value in flat.items():
         if not key.startswith("repos.") or not isinstance(value, str) or not value:
             continue
         try:
             if (Path(value) / DEV_REPO_SENTINEL).exists():
-                return True
+                return value
         except OSError:
             continue
-    return False
+    return None
 
 
 def _explicit(key: str, allowed: Tuple[str, ...]) -> Optional[str]:
@@ -112,15 +113,34 @@ def _explicit(key: str, allowed: Tuple[str, ...]) -> Optional[str]:
     return value if value in allowed else None
 
 
+def machine_profile_source() -> Tuple[str, str, str | None]:
+    """``(profile, rung, evidence)``: which rung decided the profile.
+
+    ``rung`` is ``explicit-key`` (evidence: the key), ``sentinel`` (evidence:
+    the registered repo path carrying ``.coordinator-dev-repo``) or
+    ``default`` (no evidence; consumer). Cached like ``machine_profile``.
+    """
+    slot = _slot()
+    cached = slot.get("profile-source")
+    if cached is not None:
+        return cached
+    explicit = _explicit(PROFILE_KEY, PROFILES)
+    if explicit is not None:
+        result: Tuple[str, str, str | None] = (explicit, "explicit-key", PROFILE_KEY)
+    else:
+        repo = _sentinel_repo()
+        result = ("author", "sentinel", repo) if repo else ("consumer", "default", None)
+    slot["profile-source"] = result
+    return result
+
+
 def machine_profile() -> str:
     """``consumer`` or ``author``; explicit registry key, else sentinel-derived."""
     slot = _slot()
     cached = slot.get("profile")
     if cached is not None:
         return cached
-    value = _explicit(PROFILE_KEY, PROFILES) or (
-        "author" if _registered_repo_has_sentinel() else "consumer"
-    )
+    value = machine_profile_source()[0]
     slot["profile"] = value
     return value
 

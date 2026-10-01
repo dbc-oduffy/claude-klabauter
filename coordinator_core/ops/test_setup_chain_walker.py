@@ -90,6 +90,12 @@ def test_phase_chain_preinstall_sets_flag_and_does_not_exit():
 # both env vars, leaving this branch entirely uncovered.
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _isolate_consumer_rungs(tmp_path_factory, monkeypatch):
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path_factory.mktemp("empty-claude-home")))
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+
+
 def _add_coordinator_claude_source_evidence(tree: Path) -> None:
     (tree / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (tree / ".claude-plugin" / "plugin.json").write_text("{}")
@@ -802,3 +808,77 @@ def test_sibling_search_root_never_returns_a_path_inside_the_walked_tree(tmp_pat
         repo_root.relative_to(anchor)
         with pytest.raises(ValueError):
             anchor.relative_to(repo_root)
+
+
+# ---------------------------------------------------------------------------
+# Consumer-install final rung: $CLAUDE_PLUGIN_ROOT, breadcrumb, plugin cache.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def consumer_env(tmp_path, monkeypatch):
+    home = tmp_path / "claude-home"
+    home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(scw, "registry_get", lambda key: None)
+    return home
+
+
+def test_ladder_final_rung_plugin_root_env(tmp_path, consumer_env, monkeypatch):
+    root = tmp_path / "plugin"
+    _add_coordinator_claude_source_evidence(root)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
+    assert scw._resolve_coordinator_root_ladder([]) == (root, "$CLAUDE_PLUGIN_ROOT env")
+
+
+def test_ladder_final_rung_breadcrumb(tmp_path, consumer_env):
+    root = tmp_path / "plugin"
+    _add_coordinator_claude_source_evidence(root)
+    (consumer_env / ".coordinator-plugin-root").write_text(str(root) + "\n")
+    assert scw._resolve_coordinator_root_ladder([]) == (root, ".coordinator-plugin-root breadcrumb")
+
+
+def test_ladder_final_rung_plugin_cache(consumer_env):
+    root = consumer_env / "plugins" / "cache" / "mkt" / "coordinator" / "1.0.0"
+    _add_coordinator_claude_source_evidence(root)
+    assert scw._resolve_coordinator_root_ladder([]) == (root, "installed plugin cache")
+
+
+def test_ladder_final_rung_skips_non_source_candidates(tmp_path, consumer_env, monkeypatch):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(bare))
+    assert scw._resolve_coordinator_root_ladder([]) is None
+
+
+def test_consumer_check_resolves_without_error(tmp_path, consumer_env, monkeypatch, capsys):
+    root = tmp_path / "plugin"
+    _add_coordinator_claude_source_evidence(root)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
+    monkeypatch.delenv("COORDINATOR_SETUP_REPO_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_SETUP_LIB_DIR", raising=False)
+    assert scw.main(["--phase", "chain-preinstall"]) == 0
+    assert "cannot resolve the chain-walker roots" not in capsys.readouterr().err
+
+
+def test_remediation_names_final_rungs():
+    for needle in ("$CLAUDE_PLUGIN_ROOT", ".coordinator-plugin-root", "plugin cache"):
+        assert needle in scw._COORDINATOR_ROOT_LADDER_REMEDIATION
+
+
+def test_setup_skill_hint_suppressed_under_trampoline_env(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "tree"
+    root.mkdir()
+    monkeypatch.setenv("COORDINATOR_RUN_MODE", "human")
+    monkeypatch.setattr(scw, "run_prereq_gate", lambda *a, **k: 0)
+    monkeypatch.setattr(scw, "resolve_manifest_path", lambda *a, **k: None)
+    monkeypatch.setenv("COORDINATOR_SETUP_REPO_ROOT", str(root))
+    monkeypatch.setenv("COORDINATOR_SETUP_LIB_DIR", str(root / "lib"))
+    assert scw.main([]) == 0
+    assert "/coordinator:setup" not in capsys.readouterr().out
+    monkeypatch.delenv("COORDINATOR_SETUP_REPO_ROOT")
+    monkeypatch.delenv("COORDINATOR_SETUP_LIB_DIR")
+    monkeypatch.setattr(scw, "_self_resolve_walker_roots", lambda argv, err=None: (root, root / "lib", "test"))
+    assert scw.main([]) == 0
+    assert "/coordinator:setup" in capsys.readouterr().out

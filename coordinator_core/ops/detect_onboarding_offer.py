@@ -68,6 +68,7 @@ from typing import List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.engine_root import coordinator_engine_root
+from coordinator_core.repo_standing import is_onboarded
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.ops.probe_onboarding_currency import (
     _strip_one_trailing_slash,
@@ -102,19 +103,7 @@ def _is_distribution_repo(repo_root: str) -> bool:
     return _count_ignored_session_dirs(repo_root) >= 2
 
 
-def _is_onboarded(repo_root: str) -> bool:
-    # `state/workstreams/` alone is
-    # empirically unsound: it is created lazily by queue_append.py on first
-    # workstream event and no install/scaffold path provisions it, so 11 of
-    # 12 currently-onboarded sibling repos in the fleet have no
-    # state/workstreams/ dir and would flip to UNONBOARDED. `archive/` is
-    # present on all of them (verified against the fleet) and is already the
-    # pre-existing arm of completion_archive_predicate below, so matching it
-    # here makes the two predicates genuinely identical instead of merely
-    # claimed-equivalent -- also closes the P2 drift gap.
-    return os.path.isdir(os.path.join(repo_root, "archive")) or os.path.isdir(
-        os.path.join(repo_root, "state", "workstreams")
-    )
+_is_onboarded = is_onboarded
 
 
 def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:

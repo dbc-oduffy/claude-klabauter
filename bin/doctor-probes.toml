@@ -65,6 +65,19 @@ severity_if_fail = "degraded"
 remediation = "Run python3 -m coordinator_core.root_channel_reconcile to list every channel and the path it names, then correct the one that is wrong"
 
 [[probe]]
+id = "claude-klabauter.registry.machine_profile"
+cluster = "registry"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (read-only diagnostic -- to change the profile: machine-local set coordinator.machine_profile consumer)"
+symptom_keywords = ["machine_profile author on consumer box", "author profile unexpected", "dev-repo sentinel", "which rung decided machine profile"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_machine_profile"
+required = false
+severity_if_fail = "degraded"
+remediation = "Read the detail line: rung=explicit-key names the key, rung=sentinel names the registered repo carrying .coordinator-dev-repo, rung=default is consumer."
+
+[[probe]]
 id = "claude-klabauter.publish.provenance"
 cluster = "registry"
 weight = "cheap"

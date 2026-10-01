@@ -23,6 +23,7 @@ from coordinator_core.install.live_plugin_registration import (
     STATUS_REPOINTED,
     STATUS_UNREADABLE,
     assert_live_plugin_registration,
+    format_report,
     read_plugin_name,
 )
 
@@ -136,6 +137,27 @@ def test_displaced_cache_copy_is_reported_not_removed(tmp_path):
 
     assert report["entries"][0]["displaced_copy"] == str(copy_dir)
     assert (copy_dir / "marker").is_file()
+    assert any("now inert" in line for line in format_report(report))
+
+
+def test_a_live_cache_root_is_not_repointed_or_called_inert(tmp_path):
+    home = _claude_home(tmp_path, None)
+    record = _cached_record(home)
+    cache_dir = Path(record["plugins"]["coordinator@coordinator-claude"][0]["installPath"])
+    (cache_dir / ".claude-plugin").mkdir(parents=True)
+    (cache_dir / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "coordinator"}), encoding="utf-8"
+    )
+    record_file = home / "plugins" / "installed_plugins.json"
+    record_file.write_text(json.dumps(record), encoding="utf-8")
+    before = record_file.read_bytes()
+
+    report = assert_live_plugin_registration(home, cache_dir)
+
+    assert report["status"] == STATUS_ALREADY_LIVE
+    assert report["entries"] == []
+    assert record_file.read_bytes() == before
+    assert not any("inert" in line for line in format_report(report))
 
 
 def test_an_install_path_outside_the_cache_is_not_called_cache_residue(tmp_path):

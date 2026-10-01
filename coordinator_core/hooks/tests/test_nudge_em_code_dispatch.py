@@ -245,3 +245,47 @@ def test_op_is_registered() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("hooks.nudge_em_code_dispatch") is not None
+
+
+def _sizing_payload() -> dict:
+    return {
+        "tool_name": "Edit",
+        "session_id": "sess-sizing-1",
+        "tool_input": {
+            "file_path": "/repo/pkg/module.py",
+            "old_string": "def f(): pass",
+            "new_string": "def f(): return compute(a, b, c)",
+        },
+    }
+
+
+def _stub_sizing(monkeypatch, sizing_obj) -> None:
+    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+
+    monkeypatch.setattr(sizing, "_repo_root", lambda payload: "/repo")
+    monkeypatch.setattr(
+        sizing,
+        "_session_touched_sizing_files",
+        lambda sid, root: ["state/sizings/s.yaml"] if sizing_obj is not None else [],
+    )
+    monkeypatch.setattr(sizing, "_load_sizing_object", lambda root, rel: sizing_obj)
+
+
+def test_xs_dispatch_sizing_silences_nudge(monkeypatch) -> None:
+    _stub_sizing(monkeypatch, {"route": "dispatch", "estimate": {"tshirt": "XS"}})
+    assert op(_sizing_payload()) is None
+
+
+def test_s_dispatch_sizing_still_nudges(monkeypatch) -> None:
+    _stub_sizing(monkeypatch, {"route": "dispatch", "estimate": {"tshirt": "S"}})
+    assert op(_sizing_payload()) is not None
+
+
+def test_xs_other_route_still_nudges(monkeypatch) -> None:
+    _stub_sizing(monkeypatch, {"route": "plan", "estimate": {"tshirt": "XS"}})
+    assert op(_sizing_payload()) is not None
+
+
+def test_no_sizing_still_nudges(monkeypatch) -> None:
+    _stub_sizing(monkeypatch, None)
+    assert op(_sizing_payload()) is not None

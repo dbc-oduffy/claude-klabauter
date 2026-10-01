@@ -744,6 +744,12 @@ class ScopingVerdict:
     contiguous: bool
     candidate_range: str
     warnings: list[str] = field(default_factory=list)
+    finding: str | None = None
+
+
+#: The one finding a session rooted in an install clone surfaces in place of
+#: scoping noise: that root has no session history to scope.
+INSTALL_CLONE_FINDING = "session rooted outside the repo (install clone)"
 
 
 def _trailer_reliable(
@@ -967,6 +973,17 @@ def analyze_session_scoping(
     """
     if known_scope_paths is None:
         known_scope_paths = frozenset()
+
+    from coordinator_core.repo_standing import is_install_clone
+
+    if is_install_clone(worktree_root):
+        return ScopingVerdict(
+            method=SCOPING_METHOD_AMBIGUOUS,
+            foreign_count=0,
+            contiguous=False,
+            candidate_range="",
+            finding=INSTALL_CLONE_FINDING,
+        )
 
     warnings: list[str] = []
     started_at = _read_started_at(common_dir, sid)

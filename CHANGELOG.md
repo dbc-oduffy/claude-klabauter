@@ -10,6 +10,47 @@ history before that point, inside a private working tree; that history is not re
 here, and nothing before 0.1.0 was ever published under this name. Entries below describe
 what the published artifact contains, not the order in which it was built.
 
+## [0.3.0] — 2026-10-01
+
+Consumer-install fixes: a fresh install on a machine that only consumes the engine now runs
+the documented commands cleanly, without author-side assumptions.
+
+### Fixed
+
+- **The install and setup docs name the right step.** Install step 3 now points at
+  `/coordinator:install`, the setup closing line names the literal `/coordinator:setup`, and
+  the docs state that installing the package is installing the engine.
+- **The doctor reports which machine profile it resolved.** A box whose profile was resolved
+  from the author's layout is now named as such instead of passing silently.
+- **Promotion refuses a work-in-progress head.** A candidate whose source-head commit is
+  marked WIP is no longer promoted.
+- **`coordinator-safe-commit --blanket` accepts `--invoking-command <ceremony>`.** The flag
+  grants exactly what `CLAUDE_INVOKING_COMMAND` grants and reaches the command when the
+  environment variable does not.
+- **No false "displaced copy is now inert" message** when the displaced path is the live,
+  enabled plugin root.
+- **Re-rendering a seeded file reports the refresh** instead of a silent exit 0; the identity
+  writer counts a field only when its decoded value changed; the marketplace seeding step
+  reports `already-covered` when it seeded nothing.
+- **The setup chain walker no longer errors on a consumer install.** Its final rung is the
+  plugin root, and it stops emitting self-referential hints. The prerequisite probe resolves
+  skill paths against the walker's root in both layouts and probes for Unreal only when an
+  Unreal addon is present.
+- **Repo registration, git configuration and posture overlay skip the install clone quietly**
+  (one line, exit 0, no write); stale `repos.*` keys are pruned and the posture text is
+  composed at machine level.
+- **The health reaper asks before repairing hooks on a consumer box**, words check-only runs
+  as check-only, and stays quiet about off-registry workday entries.
+- **Engine provenance counts are written only in registered or onboarded repos.**
+- **A session rooted in the install clone says so once**, and a root mismatch is a warning
+  on a consumer box rather than an error.
+- **The code-dispatch nudge is silent** when the session's sizing routes dispatch at XS.
+
+### Changed
+
+- **A new test runs every documented install, setup and doctor command** on a healthy
+  consumer fixture and requires exit 0 with empty stderr.
+
 ## [0.2.0] — 2026-08-08
 
 Engine sync covering the work that landed after the first public release. No operation was

@@ -470,3 +470,69 @@ def test_run_returns_tuple_of_exit_code_and_message(tmp_path):
     assert rc == 0
     assert "insert" in msg
     assert "precision" in msg
+
+
+# ---------------------------------------------------------------------------
+# install-clone skip + machine posture_text composition
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolated_claude_home(tmp_path, monkeypatch):
+    home = tmp_path / "claude-home"
+    home.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    return home
+
+
+def test_install_clone_target_is_skipped(tmp_path, _isolated_claude_home):
+    root = _make_coordinator_root(tmp_path)
+    clone = _isolated_claude_home / "plugins" / "cache" / "mk" / "coordinator" / ".claude"
+    target = clone / "em-context.md"
+
+    rc, msg = run("precision", str(target), False, str(root))
+
+    assert rc == 0
+    assert "skip" in msg
+    assert "\n" not in msg
+    assert not target.exists()
+    assert not clone.exists()
+
+
+def test_posture_text_composed_after_template(tmp_path, _isolated_claude_home):
+    root = _make_coordinator_root(tmp_path)
+    (_isolated_claude_home / "coordinator-identity.yaml").write_text(
+        "version: 1\nposture_text: |\n  hand edited posture\n", encoding="utf-8"
+    )
+    target = _make_target(tmp_path, "# top\n")
+
+    assert main(["precision", str(target)], coordinator_root=str(root)) == 0
+
+    out = target.read_text(encoding="utf-8")
+    block = out[out.index(MARKER_START):out.index(MARKER_END)]
+    assert block.index("precision body") < block.index("hand edited posture")
+
+
+def test_posture_text_absent_leaves_template_only(tmp_path):
+    root = _make_coordinator_root(tmp_path)
+    target = _make_target(tmp_path, "# top\n")
+
+    assert main(["precision", str(target)], coordinator_root=str(root)) == 0
+
+    out = target.read_text(encoding="utf-8")
+    assert out.endswith(f"precision body\n{MARKER_END}\n")
+
+
+def test_rerender_with_posture_text_is_idempotent(tmp_path, _isolated_claude_home):
+    root = _make_coordinator_root(tmp_path)
+    (_isolated_claude_home / "coordinator-identity.yaml").write_text(
+        "posture_text: |\n  hand edited posture\n", encoding="utf-8"
+    )
+    target = _make_target(tmp_path, "# top\n")
+
+    main(["precision", str(target)], coordinator_root=str(root))
+    first = target.read_bytes()
+    main(["precision", str(target)], coordinator_root=str(root))
+
+    assert target.read_bytes() == first
+    assert first.count(b"hand edited posture") == 1

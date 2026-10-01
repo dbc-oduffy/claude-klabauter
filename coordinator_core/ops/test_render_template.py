@@ -174,6 +174,22 @@ def test_guard_sentinel_existing_file_with_sentinel(tmp_path, capsys):
     assert out_path.read_text() == "x"
 
 
+def test_guard_sentinel_rewrite_reports_refreshed_sections(tmp_path, capsys):
+    tpl = tmp_path / "t.tpl"
+    tpl.write_text("<!-- S -->\nA\n\nB-{{NAME}}\n\nC\n")
+    out_path = tmp_path / "CLAUDE.md"
+    out_path.write_text("<!-- S -->\nA\n\nB-old\n\nC-old\n")
+    argv = [str(tpl), "-o", str(out_path), "--guard-sentinel", "<!-- S -->", "NAME=new"]
+    rc, out, err = _run(capsys, argv)
+    assert rc == 0
+    assert err == ""
+    assert out == "refreshed seeded CLAUDE.md (2 sections changed)\n"
+    rc, out, err = _run(capsys, argv)
+    assert rc == 0
+    assert out == ""
+    assert err == ""
+
+
 def test_guard_sentinel_existing_file_without_sentinel_refused(tmp_path, capsys):
     tpl = tmp_path / "t11.tpl"
     tpl.write_text("{{NAME}}")

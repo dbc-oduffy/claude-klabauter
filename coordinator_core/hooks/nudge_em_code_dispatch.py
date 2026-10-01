@@ -508,6 +508,34 @@ def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
     return False
 
 
+def _session_sizing_is_xs_dispatch(payload: dict, session_id: str) -> bool:
+    """True iff a sizing this session touched has route `dispatch` and tshirt XS.
+
+    Reuses nudge_unrouted_sizing's session-to-sizing join. Any failure or a
+    missing sizing is False, keeping the nudge.
+    """
+    try:
+        from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+
+        cwd = payload.get("cwd") or os.getcwd()
+        if not isinstance(cwd, str):
+            return False
+        repo_root = sizing._repo_root({"cwd": cwd})
+        if not repo_root:
+            return False
+        for rel_path in sizing._session_touched_sizing_files(session_id, repo_root):
+            obj = sizing._load_sizing_object(repo_root, rel_path)
+            if not obj or obj.get("route") != "dispatch":
+                continue
+            estimate = obj.get("estimate")
+            tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
+            if isinstance(tshirt, str) and tshirt.strip().upper() == "XS":
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def op(payload: dict) -> dict | None:
     if "agent_id" in payload:
         return None
@@ -552,6 +580,9 @@ def op(payload: dict) -> dict | None:
         return None
 
     if resolve_mode("autonomous", session_id):
+        return None
+
+    if _session_sizing_is_xs_dispatch(payload, session_id):
         return None
 
     executor_type, ambiguous = _derive_executor_info(file_path)

@@ -218,6 +218,28 @@ def _read_hook_currency() -> ReaderResult:
     if exit_code == 0:
         return ReaderResult()
     detail = buf.getvalue().strip() or "fleet git-hook currency check failed"
+    from coordinator_core.machine_profile import machine_profile
+
+    if machine_profile() == "consumer":
+        repair = "workday-start-health-probes hook-currency"
+        return ReaderResult(
+            judgment_points=[
+                build_judgment_point(
+                    None,
+                    id="j-hook-currency-repair",
+                    question=f"{detail} -- run `{repair}` to repair now or defer?",
+                    dispositions=[
+                        build_disposition("repair_hooks_now"),
+                        build_disposition("defer"),
+                    ],
+                    evidence=(
+                        f"{detail} | reason: repairing rewrites .git/hooks in "
+                        "repos the operator owns, so it needs consent"
+                    ),
+                    reason="recommendation-forbidden",
+                )
+            ]
+        )
     return ReaderResult(
         directives=[
             {
@@ -390,6 +412,14 @@ def _read_reaper_dry_run(repo_root: str | None = None) -> ReaderResult:
     )
 
 
+def _cwd_has_workday_standing() -> bool:
+    """False when the cwd repo is unregistered or not onboarded: /workday-start has no home there."""
+    from coordinator_core.repo_standing import repo_standing
+
+    standing = repo_standing(os.getcwd())
+    return bool(standing.registered_key) and standing.onboarded
+
+
 def _read_marker_freshness(cadence: str) -> ReaderResult:
     """AC-7 dedup target: ONE cadence-parameterized marker-freshness gate
     replacing the three duplicated checks named in the Approach § "Marker
@@ -458,7 +488,7 @@ def _read_marker_freshness(cadence: str) -> ReaderResult:
                     ),
                 }
             )
-        elif cadence == "session" and not marker_fresh:
+        elif cadence == "session" and not marker_fresh and _cwd_has_workday_standing():
             judgment_points.append(
                 build_judgment_point(
                     None,

@@ -858,25 +858,38 @@ def shell_login_env_reconstruction_source() -> str:
 # EXAMPLE_GAME_REPO_UE_ROOT read.
 # ---------------------------------------------------------------------------
 _SKILL_FRONTMATTER_CHECK_REL_PATH = ("coordinator", "skills", "setup", "SKILL.md")
+# Plugin-cache layout: the coordinator root IS the `coordinator/` directory.
+_SKILL_FRONTMATTER_CHECK_PLUGIN_REL_PATH = ("skills", "setup", "SKILL.md")
 
 
-def _check_skill_frontmatter_valid() -> dict:
+def _check_skill_frontmatter_valid(coordinator_root: Optional[str] = None) -> dict:
     """Core check: {"ok": bool, "error": str|None}.
+
+    `coordinator_root` (the setup walker's resolved root) wins over
+    `coordinator_content_root()`. Both the checkout layout
+    (`<root>/coordinator/skills/setup/SKILL.md`) and the plugin-cache layout
+    (`<root>/skills/setup/SKILL.md`) are tried.
 
     ok=False cases (error explains which): coordinator-claude root
     unresolvable, the representative skill file is missing, its frontmatter
     block does not parse, or its "description" field is empty/absent. Never
     raises — read failures fold into an ok=False/error result.
     """
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    content_root = coordinator_root
+    if not content_root:
+        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 
-    content_root = coordinator_content_root()
+        content_root = coordinator_content_root()
     if not content_root:
         return {"ok": False, "error": "coordinator-claude root unresolvable (coordinator_content_root() returned None)"}
 
-    skill_path = Path(content_root).joinpath(*_SKILL_FRONTMATTER_CHECK_REL_PATH)
-    if not skill_path.is_file():
-        return {"ok": False, "error": f"representative skill file not found: {skill_path}"}
+    candidates = (
+        Path(content_root).joinpath(*_SKILL_FRONTMATTER_CHECK_REL_PATH),
+        Path(content_root).joinpath(*_SKILL_FRONTMATTER_CHECK_PLUGIN_REL_PATH),
+    )
+    skill_path = next((c for c in candidates if c.is_file()), None)
+    if skill_path is None:
+        return {"ok": False, "error": f"representative skill file not found: {candidates[0]} or {candidates[1]}"}
 
     try:
         content = skill_path.read_text(encoding="utf-8")
@@ -897,8 +910,8 @@ def _check_skill_frontmatter_valid() -> dict:
     return {"ok": True, "error": None}
 
 
-def probe_skill_frontmatter_valid() -> str:
-    check = _check_skill_frontmatter_valid()
+def probe_skill_frontmatter_valid(coordinator_root: Optional[str] = None) -> str:
+    check = _check_skill_frontmatter_valid(coordinator_root)
     if check["ok"]:
         return emit_line(
             "skill_frontmatter_valid", "pass", "advisory",
@@ -1032,12 +1045,24 @@ _PROBE_ORDER = (
 )
 
 
-def probe_all() -> List[str]:
-    """Run all thirteen probes (the bash oracle's original eleven plus
-    probe_skill_frontmatter_valid and probe_windows_terminal_presence) in
-    `_PROBE_ORDER` and return the NDJSON lines (each already
-    newline-terminated)."""
-    return [probe() for probe in _PROBE_ORDER]
+def _ue_addon_registered() -> bool:
+    """True when probe_ue's own registration key (EXAMPLE_GAME_REPO_UE_ROOT) is set."""
+    return bool(os.environ.get("EXAMPLE_GAME_REPO_UE_ROOT"))
+
+
+def probe_all(coordinator_root: Optional[str] = None) -> List[str]:
+    """Run the probes in `_PROBE_ORDER` and return the NDJSON lines (each
+    already newline-terminated). `probe_ue` is omitted unless a UE addon is
+    registered; `coordinator_root` is forwarded to the skill-frontmatter probe."""
+    lines: List[str] = []
+    for probe in _PROBE_ORDER:
+        if probe is probe_ue and not _ue_addon_registered():
+            continue
+        if probe is probe_skill_frontmatter_valid:
+            lines.append(probe(coordinator_root))
+        else:
+            lines.append(probe())
+    return lines
 
 
 def main(argv: Optional[List[str]] = None) -> int:

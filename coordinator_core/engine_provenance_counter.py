@@ -88,6 +88,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core import machine_profile, repo_standing
 from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
 
@@ -96,6 +97,14 @@ _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
 _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MUTATES = ["state/engine-provenance-counts.jsonl"]
+
+
+def _may_write(git_root: str) -> bool:
+    """Counts land only in a registered or onboarded repo, or on an author box."""
+    if machine_profile.machine_profile() == "author":
+        return True
+    standing = repo_standing.repo_standing(git_root)
+    return standing.registered_key is not None or standing.onboarded
 
 
 def record_engine_provenance(
@@ -158,6 +167,8 @@ def record_engine_provenance(
     if not git_root:
         return
     if os.environ.get("PYTEST_CURRENT_TEST") and Path(git_root).resolve() == _OWN_REPO_ROOT:
+        return
+    if not _may_write(git_root):
         return
     path = Path(git_root) / "state" / _COUNTS_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)

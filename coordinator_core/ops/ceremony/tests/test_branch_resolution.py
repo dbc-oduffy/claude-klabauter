@@ -1171,3 +1171,22 @@ def test_env_override_shared_helper_agrees_with_bin_script(monkeypatch, tmp_path
         if shared.escalate:
             assert shared.consumed_handoff_raw == handoff_val
             assert bin_consumed == handoff_val
+
+
+def test_install_clone_root_yields_one_finding_without_git_reads(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony import branch_resolution as br
+
+    monkeypatch.setattr("coordinator_core.repo_standing.is_install_clone", lambda _p: True)
+    monkeypatch.setattr(br, "_git_run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("git read")))
+    verdict = br.analyze_session_scoping(tmp_path, tmp_path, "sid-x")
+    assert verdict.finding == br.INSTALL_CLONE_FINDING
+    assert verdict.method == br.SCOPING_METHOD_AMBIGUOUS
+    assert verdict.warnings == []
+
+
+def test_ordinary_root_has_no_install_clone_finding(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony import branch_resolution as br
+
+    monkeypatch.setattr("coordinator_core.repo_standing.is_install_clone", lambda _p: False)
+    monkeypatch.setattr(br, "_trailer_reliable", lambda *a, **k: True)
+    assert br.analyze_session_scoping(tmp_path, tmp_path, "sid-x").finding is None

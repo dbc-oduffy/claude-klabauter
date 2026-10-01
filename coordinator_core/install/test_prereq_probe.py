@@ -466,6 +466,44 @@ def test_check_skill_frontmatter_valid_ok(tmp_path):
     assert result == {"ok": True, "error": None}
 
 
+def test_check_skill_frontmatter_valid_plugin_cache_layout(tmp_path):
+    skill = tmp_path / "skills" / "setup" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text('---\nname: setup\ndescription: "d"\n---\n', encoding="utf-8")
+    assert pp._check_skill_frontmatter_valid(str(tmp_path)) == {"ok": True, "error": None}
+
+
+def test_check_skill_frontmatter_valid_checkout_layout_explicit_root(tmp_path):
+    _write_skill_file(tmp_path)
+    assert pp._check_skill_frontmatter_valid(str(tmp_path)) == {"ok": True, "error": None}
+
+
+def test_check_skill_frontmatter_valid_explicit_root_beats_fallback(tmp_path):
+    good = tmp_path / "good"
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    _write_skill_file(good)
+    with mock.patch(
+        "coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=str(bad)
+    ):
+        assert pp._check_skill_frontmatter_valid(str(good))["ok"] is True
+
+
+def test_probe_all_omits_ue_without_addon(monkeypatch):
+    monkeypatch.delenv("EXAMPLE_GAME_REPO_UE_ROOT", raising=False)
+    ue = mock.Mock(return_value="L\n")
+    with mock.patch.object(pp, "probe_ue", ue), mock.patch.object(pp, "_PROBE_ORDER", (ue,)):
+        assert pp.probe_all() == []
+    ue.assert_not_called()
+
+
+def test_probe_all_includes_ue_with_addon(monkeypatch):
+    monkeypatch.setenv("EXAMPLE_GAME_REPO_UE_ROOT", "x")
+    ue = mock.Mock(return_value="L\n")
+    with mock.patch.object(pp, "probe_ue", ue), mock.patch.object(pp, "_PROBE_ORDER", (ue,)):
+        assert pp.probe_all() == ["L\n"]
+
+
 def test_check_skill_frontmatter_valid_content_root_unresolvable():
     with mock.patch("coordinator_core.ops.coordinator_content_root.coordinator_content_root", return_value=None):
         result = pp._check_skill_frontmatter_valid()

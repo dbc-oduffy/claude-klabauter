@@ -497,3 +497,46 @@ def test_read_hook_currency_clean_fleet_yields_no_directive(monkeypatch, tmp_pat
     _hook_currency_fleet(monkeypatch, tmp_path, stale=False)
     result = rhr._read_hook_currency()
     assert result.directives == []
+
+
+def test_read_hook_currency_consumer_gets_a_judgment_point_not_a_directive(monkeypatch, tmp_path):
+    from coordinator_core import machine_profile as mp
+
+    _hook_currency_fleet(monkeypatch, tmp_path, stale=True)
+    monkeypatch.setattr(mp, "machine_profile", lambda: "consumer")
+    result = rhr._read_hook_currency()
+    assert result.directives == []
+    assert [j["id"] for j in result.judgment_points] == ["j-hook-currency-repair"]
+    assert "workday-start-health-probes hook-currency" in result.judgment_points[0]["question"]
+
+
+def test_read_hook_currency_author_keeps_the_directive(monkeypatch, tmp_path):
+    from coordinator_core import machine_profile as mp
+
+    _hook_currency_fleet(monkeypatch, tmp_path, stale=True)
+    monkeypatch.setattr(mp, "machine_profile", lambda: "author")
+    result = rhr._read_hook_currency()
+    assert [d["id"] for d in result.directives] == ["d-hook-currency"]
+    assert result.judgment_points == []
+
+
+@pytest.mark.parametrize(
+    "registered_key,onboarded,expect_jp",
+    [(None, True, False), ("repos.x", False, False), ("repos.x", True, True)],
+)
+def test_session_workday_jp_needs_registered_and_onboarded_cwd(
+    monkeypatch, tmp_path, registered_key, onboarded, expect_jp
+):
+    from coordinator_core import repo_standing as rs
+    from coordinator_core.ops import check_weekly_staleness as cws
+
+    (tmp_path / ".workday-start-marker").write_text("1999-01-01", encoding="utf-8")
+    monkeypatch.setattr(cws, "_resolve_state_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        rs,
+        "repo_standing",
+        lambda p: rs.RepoStanding(str(p), registered_key, onboarded, False),
+    )
+    ids = [j["id"] for j in rhr._read_marker_freshness("session").judgment_points]
+    assert (ids == ["j-session-day-review-due"]) is expect_jp
+    assert (not ids) is (not expect_jp)

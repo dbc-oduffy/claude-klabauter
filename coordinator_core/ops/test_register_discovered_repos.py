@@ -74,6 +74,10 @@ def _make_fake_machine_local(bin_dir: Path, registry: dict) -> Path:
         "    kv[key] = val\n"
         "    reg.write_text('\\n'.join(f'{k}={v}' for k, v in kv.items()) + '\\n')\n"
         "    sys.exit(0)\n"
+        "elif cmd == 'unset':\n"
+        "    kv.pop(key, None)\n"
+        "    reg.write_text('\\n'.join(f'{k}={v}' for k, v in kv.items()) + '\\n')\n"
+        "    sys.exit(0)\n"
         "elif cmd == 'dump':\n"
         "    args = sys.argv[1:]\n"
         "    prefix = args[args.index('--prefix') + 1] if '--prefix' in args else None\n"
@@ -300,7 +304,9 @@ def test_resolve_machine_local_fallback_uses_userprofile_when_home_absent(tmp_pa
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     userprofile_home = tmp_path / "winhome"
-    fallback = userprofile_home / ".claude" / "bin" / "machine-local"
+    fallback = userprofile_home / ".claude" / "bin" / (
+        "machine-local.cmd" if os.name == "nt" else "machine-local"
+    )
     fallback.parent.mkdir(parents=True)
     fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fallback.chmod(0o755)
@@ -521,3 +527,77 @@ def test_dump_call_count_does_not_grow_with_candidate_count(env, tmp_path, monke
         f"dump call count grew with candidate count: {len(dump_four)} for 4 vs "
         f"{len(dump_one)} for 1"
     )
+
+
+def _seed(bin_dir: Path, entries: dict) -> None:
+    (bin_dir / "_fake_registry.txt").write_text(
+        "".join(f"{k}={v}\n" for k, v in entries.items())
+    )
+
+
+@pytest.fixture
+def standing(tmp_path, monkeypatch):
+    cache = tmp_path / "claude" / "plugins" / "cache"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(rdr.repo_standing, "plugin_cache_root", lambda: cache)
+    monkeypatch.setattr(rdr.repo_standing, "_registered_key", lambda p: None)
+
+    def _profile(name):
+        monkeypatch.setattr(rdr.machine_profile, "machine_profile", lambda: name)
+
+    _profile("author")
+    return cache, _profile
+
+
+def test_install_clone_candidate_skipped_quietly(env, tmp_path, monkeypatch, capsys, standing):
+    lib_dir, bin_dir = env
+    cache, _ = standing
+    clone = cache / "mkt" / "coordinator" / "1.0"
+    clone.mkdir(parents=True)
+    _stub_discover(monkeypatch, [str(clone)])
+
+    assert main(["--non-interactive"], self_dir=lib_dir) == 0
+
+    out = capsys.readouterr()
+    assert "install clone, not a working repo" in out.out
+    assert "install clone" not in out.err
+    assert _read_registry(bin_dir) == {}
+
+
+def test_cache_path_key_pruned_on_author(env, tmp_path, monkeypatch, capsys, standing):
+    lib_dir, bin_dir = env
+    cache, _ = standing
+    stale = cache / "mkt" / "coordinator" / "1.0"
+    stale.mkdir(parents=True)
+    keep = tmp_path / "dev" / "real"
+    keep.mkdir(parents=True)
+    _seed(bin_dir, {"repos.coordinator": str(stale), "repos.real": str(keep)})
+    _stub_discover(monkeypatch, [])
+
+    assert main(["--non-interactive"], self_dir=lib_dir) == 0
+
+    assert _read_registry(bin_dir) == {"repos.real": str(keep)}
+    assert "pruned repos.coordinator" in capsys.readouterr().out
+
+
+def test_missing_path_pruned_on_consumer(env, tmp_path, monkeypatch, capsys, standing):
+    lib_dir, bin_dir = env
+    _, profile = standing
+    profile("consumer")
+    _seed(bin_dir, {"repos.gone": str(tmp_path / "nowhere")})
+    _stub_discover(monkeypatch, [])
+
+    assert main(["--non-interactive"], self_dir=lib_dir) == 0
+
+    assert _read_registry(bin_dir) == {}
+    assert "pruned repos.gone" in capsys.readouterr().out
+
+
+def test_missing_path_kept_on_author(env, tmp_path, monkeypatch, standing):
+    lib_dir, bin_dir = env
+    _seed(bin_dir, {"repos.gone": str(tmp_path / "nowhere")})
+    _stub_discover(monkeypatch, [])
+
+    assert main(["--non-interactive"], self_dir=lib_dir) == 0
+
+    assert _read_registry(bin_dir) == {"repos.gone": str(tmp_path / "nowhere")}

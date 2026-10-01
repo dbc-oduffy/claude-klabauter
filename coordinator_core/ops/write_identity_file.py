@@ -224,15 +224,23 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     _written = [False]
+    _changed = [0]
 
     def _mutate(old_text: str) -> str:
         existing = _parse_existing(old_text)
+        changed = sum(
+            1 for key, value in fields.items()
+            if key not in existing or existing[key] != value
+        )
+        if changed == 0 and old_text.strip():
+            return old_text
         merged = dict(existing)
         merged.update(fields)
         new_text = _serialize(merged)
         if new_text == old_text:
             return old_text
         _written[0] = True
+        _changed[0] = changed
         return new_text
 
     try:
@@ -247,13 +255,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if _written[0]:
         _LOG.debug(
             "install.write_identity_file: wrote %d field(s) to %s",
-            len(fields), target,
+            _changed[0], target,
         )
         return {
             "exit_code": 0,
             "written": True,
             "path": path_str,
-            "message": f"wrote {len(fields)} field(s) to {path_str}",
+            "message": f"wrote {_changed[0]} field(s) to {path_str}",
         }
     _LOG.debug(
         "install.write_identity_file: %s already holds byte-identical merged "

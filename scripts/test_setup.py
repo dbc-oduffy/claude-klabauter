@@ -107,6 +107,18 @@ def test_parse_args_break_system_packages_is_an_unknown_flag(setup_mod):
         setup_mod.parse_args(["--break-system-packages"])
 
 
+def test_closing_line_names_literal_setup_command_and_no_doc_pointer(setup_mod):
+    line = setup_mod.CLOSING_CHAIN_WALK_LINE
+    assert "/coordinator:setup" in line
+    assert "docs/" not in line
+    assert "see " not in line
+
+
+def test_main_prints_the_closing_line_constant(setup_mod):
+    src = Path(setup_mod.__file__).read_text(encoding="utf-8")
+    assert "print(CLOSING_CHAIN_WALK_LINE)" in src
+
+
 def test_parse_args_unknown_flag_raises(setup_mod):
     with pytest.raises(setup_mod.ArgError, match="unknown flag"):
         setup_mod.parse_args(["--not-a-real-flag"])

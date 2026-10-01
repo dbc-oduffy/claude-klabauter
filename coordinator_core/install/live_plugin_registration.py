@@ -152,6 +152,10 @@ def _same_path(a: str, b: str) -> bool:
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
+def _is_live_root(path: str, live: str) -> bool:
+    return _same_path(path, live) or _same_path(os.path.realpath(path), os.path.realpath(live))
+
+
 def _is_within(candidate: str, root: str) -> bool:
     try:
         return _same_path(os.path.commonpath([candidate, root]), root)
@@ -191,6 +195,7 @@ def assert_live_plugin_registration(
 
     live_str = str(live_plugin_root)
     cache_root = str(claude_home.joinpath(*_PLUGIN_CACHE_REL))
+    live_in_cache = _is_within(os.path.realpath(live_str), os.path.realpath(cache_root))
     changed = False
 
     for key, records in plugins.items():
@@ -201,12 +206,13 @@ def assert_live_plugin_registration(
                 continue
             previous = record.get("installPath")
             has_sha = "gitCommitSha" in record
-            if isinstance(previous, str) and _same_path(previous, live_str) and not has_sha:
-                continue
+            if isinstance(previous, str) and _is_live_root(previous, live_str):
+                if live_in_cache or not has_sha:
+                    continue
             displaced = (
                 previous
                 if isinstance(previous, str)
-                and not _same_path(previous, live_str)
+                and not _is_live_root(previous, live_str)
                 and _is_within(previous, cache_root)
                 else None
             )

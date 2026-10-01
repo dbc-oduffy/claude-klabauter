@@ -174,6 +174,9 @@ branch.
 
 ## Install
 
+This repository is the engine coordinator-claude's installer requires, so installing it is
+installing the engine.
+
 **Prerequisite:** Python 3.11+. **The install command lives in
 [`INSTALL.md`](INSTALL.md)** — read it rather than substituting a plain `pip install`,
 which skips the dependency check and registration step the real installer performs and

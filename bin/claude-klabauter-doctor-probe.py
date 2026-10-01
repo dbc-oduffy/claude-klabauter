@@ -4813,6 +4813,35 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
 
 
 _WARM_ROUTE_SHARE_PROBE = "claude-klabauter.warm.route_share"
+_MACHINE_PROFILE_PROBE = "claude-klabauter.registry.machine_profile"
+
+
+def _run_probe_machine_profile(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.registry.machine_profile -- prints which rung decided the profile.
+
+    Read-only; a consumer reporting an unexpected ``author`` sends this line.
+    """
+    try:
+        from coordinator_core import machine_profile as _mp
+
+        profile, rung, evidence = _mp.machine_profile_source()
+        return _ProbeResult(
+            probe=_MACHINE_PROFILE_PROBE,
+            status=_INFO,
+            detail=f"machine_profile={profile} rung={rung} evidence={evidence}",
+            remediation="none (diagnostic)",
+            data={"profile": profile, "rung": rung, "evidence": evidence},
+            required=False,
+        )
+    except Exception as exc:  # noqa: BLE001 -- probe-authoring invariant
+        return _ProbeResult(
+            probe=_MACHINE_PROFILE_PROBE,
+            status=_DEGRADED,
+            detail=f"machine_profile_source unavailable: {exc}",
+            remediation="Verify coordinator_core is importable (see claude-klabauter.core.import probe).",
+            required=False,
+            skipped=True,
+        )
 
 #: Expanding coverage window (seconds): 1h -> 6h -> 24h, widening only while
 #: the window holds fewer than `_ROUTE_MIN_COMPLETE_ROWS` complete rows
@@ -5585,6 +5614,7 @@ def run_probes(
     _add(_COMMITMENTS_RECHECK_PROBE, _run_probe_commitments_recheck, claude_klabauter_root)
     _add(_STABLE_PID_MISS_PROBE, _run_probe_stable_pid_miss, claude_klabauter_root)
     _add(_ROOT_POINTER_PROBE, _run_probe_root_pointer, claude_klabauter_root)
+    _add(_MACHINE_PROFILE_PROBE, _run_probe_machine_profile, claude_klabauter_root)
     _add(_ROOT_CHANNELS_PROBE, _run_probe_root_channels_reconciled, claude_klabauter_root)
     _add(_PUBLISH_PROVENANCE_PROBE, _run_probe_publish_provenance, claude_klabauter_root)
     _add(_ENGINE_TARGET_ROLLOUT_PROBE, _run_probe_engine_target_rollout)

@@ -228,3 +228,29 @@ def test_features_are_independent(reg):
     _write(reg, '"coordinator.feature.publishing" = "on"\n')
     assert mp.feature_enabled("publishing") is True
     assert mp.feature_enabled("cross_repo_memos") is False
+
+
+def test_source_default_rung(reg):
+    assert mp.machine_profile_source() == ("consumer", "default", None)
+
+
+def test_source_sentinel_rung_names_the_repo(reg, tmp_path):
+    repo = tmp_path / "clone"
+    repo.mkdir()
+    (repo / ".coordinator-dev-repo").write_text("")
+    _write(reg, '"repos.coordinator_claude" = "%s"\n' % repo.as_posix())
+    assert mp.machine_profile_source() == ("author", "sentinel", repo.as_posix())
+    assert mp.machine_profile() == "author"
+
+
+def test_source_explicit_rung_beats_sentinel(reg, tmp_path):
+    repo = tmp_path / "clone"
+    repo.mkdir()
+    (repo / ".coordinator-dev-repo").write_text("")
+    _write(
+        reg,
+        '"repos.c" = "%s"\n"coordinator.machine_profile" = "consumer"\n' % repo.as_posix(),
+    )
+    assert mp.machine_profile_source() == ("consumer", "explicit-key", mp.PROFILE_KEY)
+    _write(reg, '"coordinator.machine_profile" = "author"\n')
+    assert mp.machine_profile_source() == ("author", "explicit-key", mp.PROFILE_KEY)

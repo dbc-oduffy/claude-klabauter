@@ -216,6 +216,10 @@ def test_ac2_idempotent_and_preserve_existing() -> None:
             raise AssertionError(f"{name}: " + (f"second run exited {r2.returncode}, stderr={r2.stderr!r}"))
         if "nothing to seed" not in r2.stdout:
             raise AssertionError(f"{name}: " + (f"expected 'nothing to seed' on idempotent re-run, got stdout={r2.stdout!r}"))
+        if "marketplace_enabledplugins_seed: already-covered" not in r2.stdout:
+            raise AssertionError(f"{name}: " + (f"expected status row 'already-covered' on covered re-run, got stdout={r2.stdout!r}"))
+        if "marketplace_enabledplugins_seed: seeded" in r2.stdout:
+            raise AssertionError(f"{name}: " + (f"covered re-run must not report 'seeded', got stdout={r2.stdout!r}"))
         raw_after_second = open(settings_path, encoding="utf-8").read()
         if raw_after_first != raw_after_second:
             raise AssertionError(f"{name}: " + ("re-run mutated settings.local.json content — not idempotent"))

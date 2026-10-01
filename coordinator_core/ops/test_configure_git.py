@@ -48,6 +48,19 @@ def test_not_a_git_repo_fails(tmp_path, monkeypatch):
     assert rc == 1
 
 
+def test_install_clone_skipped_without_config_write(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "is_install_clone", lambda p: True)
+
+    def _boom(*a, **k):
+        raise AssertionError("config write on install clone")
+
+    monkeypatch.setattr(cg, "_git_config_set", _boom)
+    assert cg.main([]) == 0
+    assert "install clone" in capsys.readouterr().out
+
+
 def test_configures_fresh_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)

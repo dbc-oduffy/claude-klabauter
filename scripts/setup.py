@@ -5019,13 +5019,15 @@ def main(argv: list[str]) -> int:
     else:
         print("=== claude-klabauter setup: complete ===")
     if not args.register_only:
-        print(
-            "  For the full agentic chain-walk: start a Claude Code session and run the "
-            "coordinator setup skill (see docs/reference/interactive-launch-chain.md)."
-        )
+        print(CLOSING_CHAIN_WALK_LINE)
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     return 0
+
+
+CLOSING_CHAIN_WALK_LINE = (
+    "  For the full agentic chain-walk: start a Claude Code session and run /coordinator:setup"
+)
 
 
 if __name__ == "__main__":

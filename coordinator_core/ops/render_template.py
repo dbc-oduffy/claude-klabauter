@@ -159,6 +159,14 @@ def _find_unsubstituted(rendered: str) -> List[str]:
     return sorted(stripped)
 
 
+def _count_changed_sections(old: str, new: str) -> int:
+    """Count blank-line-separated sections that differ positionally (added/removed count as changed)."""
+    old_s = re.split(r"\n\s*\n", old)
+    new_s = re.split(r"\n\s*\n", new)
+    changed = sum(1 for a, b in zip(old_s, new_s) if a != b)
+    return changed + abs(len(old_s) - len(new_s))
+
+
 def render(template_path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[Optional[str], int, Optional[str]]:
     if not os.access(template_path, os.R_OK) or not os.path.isfile(template_path):
         return None, 1, f"cannot read template: {template_path}"
@@ -250,8 +258,9 @@ def main(argv: List[str]) -> int:
 
     assert rendered is not None
 
+    refreshed_sections = 0
     if output_path:
-        output_dir = os.path.dirname(output_path) or "."
+        output_dir =os.path.dirname(output_path) or "."
         if not os.path.isdir(output_dir):
             print(f"{_PROG}: output directory does not exist: {output_dir}", file=sys.stderr)
             return 1
@@ -274,6 +283,8 @@ def main(argv: List[str]) -> int:
                     file=sys.stderr,
                 )
                 return 3
+            if existing != rendered:
+                refreshed_sections = _count_changed_sections(existing, rendered)
 
         tmp_path = f"{output_path}.render-template.tmp.{os.getpid()}"
         try:
@@ -292,6 +303,8 @@ def main(argv: List[str]) -> int:
                 pass
             print(f"{_PROG}: failed to write output: {exc}", file=sys.stderr)
             return 1
+        if refreshed_sections:
+            print(f"refreshed seeded {os.path.basename(output_path)} ({refreshed_sections} sections changed)")
     else:
         sys.stdout.write(rendered)
 

@@ -44,12 +44,15 @@ decision is needed. Either path installs the same engine.
 
 ## Install
 
+**This repository is the engine coordinator-claude's installer requires; installing it is
+installing the engine.** There is no second engine package to fetch.
+
 **Prerequisite:** Python 3.11+.
 
 ```
 python3 scripts/setup.py --i-am-agent      # agent path, non-interactive
 python3 scripts/setup.py                   # human path, interactive prompts where needed
-python3 scripts/setup.py --check           # liveness only: confirms the script runs, checks nothing else
+python3 scripts/setup.py --check           # verifies the install, one PASS/FAIL line per item; exit 1 on any FAIL
 ```
 
 Windows: `python scripts\setup.py` with the same flags.
@@ -71,7 +74,7 @@ degraded path is the explicit override pair `--skip-dep-check --accept-missing-d
 
 **Cloning coordinator-claude is not the same as installing it, and the order matters.** Its
 repository ships `bin/machine-local` as a forwarder; the real resolver is only deposited once
-coordinator-claude's own `/coordinator:setup` has run, which includes a restart. Until then the
+coordinator-claude's own `/coordinator:install` has run, which includes a restart. Until then the
 forwarder exits 127, reporting `resolver not installed` and directing you to
 `run /coordinator:setup (Phase 3)`.
 
@@ -88,8 +91,9 @@ already answered. The one true sequence on a fresh machine:
 2. **Register `repos.claude_klabauter`** at the clone from step 1 —
    `machine-local set repos.claude_klabauter <path>`. Hard, never auto-discovered;
    coordinator-claude's `commands/install.md` § Requirements states the exact invocation.
-3. **Run coordinator-claude's `/coordinator:setup`**, restart, and confirm `machine-local`
-   resolves. Operator identity and engagement posture are captured **here, once**.
+3. **Run coordinator-claude's `/coordinator:install`** (the depositor), restart, and confirm `machine-local`
+   resolves. `/coordinator:setup` is the verifier that runs after the engine install, not the
+   step-3 command. Operator identity and engagement posture are captured **here, once**.
 4. **Run this repo's installer.**
 
 Running step 4 before step 3 produces that 127 and a remediation instruction that cannot succeed
@@ -108,7 +112,7 @@ Windows note, accurate as of 2026-08-05 and expected to lapse: coordinator-claud
 snapshot predates their Windows de-bash work, so the forwarder a fresh clone gets today is a bash
 script with no `.cmd` counterpart and will not resolve at all on a bash-less host rather than
 failing with the message above. Their current source resolves this — the forwarder is Python and
-probes the `.cmd` sibling first on Windows — and a completed `/coordinator:setup` installs a
+probes the `.cmd` sibling first on Windows — and a completed `/coordinator:install` installs a
 working Windows path regardless. If you are testing on Windows before their next release, expect
 the prerequisite leg rather than this installer to be where you get stuck, and report it as such.
 

@@ -63,6 +63,7 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -70,6 +71,7 @@ from dataclasses import dataclass
 
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.git.repo_root import git_dir
+from coordinator_core.repo_standing import is_install_clone
 from coordinator_core.install.write_surface import (
     StaticClause,
     WriteSurfaceDeclaration,
@@ -276,6 +278,9 @@ def main(argv: list[str]) -> int:
         if not _is_git_repo():
             print("coordinator-configure-git: not a git repository", file=sys.stderr)
             return 1
+        if is_install_clone(os.getcwd()):
+            print("coordinator-configure-git: install clone, skipping (no write)")
+            return 0
 
     group_verdicts: dict[str, bool] = {}
     changed = False

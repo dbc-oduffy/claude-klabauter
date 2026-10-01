@@ -1,4 +1,4 @@
-"""test_klabauter_promote — binds `klabauter-promote.py`'s four-predicate
+"""test_klabauter_promote — binds `klabauter-promote.py`'s five-predicate
 promotion evidence bar to real assertions.
 
 Every sibling CLI `klabauter-promote.py` shells out to is stubbed at the
@@ -52,13 +52,14 @@ _STATUS_CLEAN_CANDIDATE = (
     "# branch.oid deadbeef\n# branch.head candidate\n"
     "# branch.upstream origin/candidate\n# branch.ab +1 -0\n"
 )
-_STATUS_DIRTY_CANDIDATE = _STATUS_CLEAN_CANDIDATE + "1 .M N... 100644 100644 100644 deadbeef deadbeef a.txt\n"
+_STATUS_NO_UPSTREAM_CANDIDATE = "# branch.oid deadbeef\n# branch.head candidate\n"
 _STATUS_CLEAN_NON_CANDIDATE = (
     "# branch.oid deadbeef\n# branch.head feature-x\n"
     "# branch.upstream origin/feature-x\n# branch.ab +1 -0\n"
 )
 
 _SYMREF_MAIN = "refs/remotes/origin/main\n"
+_TIP_SUBJECT_OK = "percolate round [source-head abcdef012345]\n"
 
 
 def _recent_committer_date(*, minutes_ago: int = 30) -> str:
@@ -91,7 +92,13 @@ class _SubprocessSpy:
         log_returncode: int = 0,
         log_stdout: str = "2020-01-01T00:00:00+00:00",
         log_stderr: str = "",
+        tip_subject: str = _TIP_SUBJECT_OK,
+        source_subject: str = "ship the thing",
+        source_returncode: int = 0,
     ):
+        self._tip_subject = tip_subject
+        self._source_subject = source_subject
+        self._source_returncode = source_returncode
         self.calls: List[List[str]] = []
         self._dest = dest
         self._status_stdout = status_stdout
@@ -123,6 +130,10 @@ class _SubprocessSpy:
             return _completed(self._merge_base_returncode, "", self._merge_base_stderr)
         if cmd[:1] == ["git"] and "push" in cmd:
             return _completed(self._push_returncode, "", self._push_stderr)
+        if cmd[:1] == ["git"] and "log" in cmd and "--format=%s" in cmd:
+            if cmd[-1].endswith("^{commit}"):
+                return _completed(self._source_returncode, self._source_subject, "")
+            return _completed(0, self._tip_subject, "")
         if cmd[:1] == ["git"] and "log" in cmd:
             return _completed(self._log_returncode, self._log_stdout, self._log_stderr)
         raise AssertionError(f"unhandled subprocess call in test stub: {cmd!r}")
@@ -147,6 +158,9 @@ def _run_promote(
     log_stdout: str = "2020-01-01T00:00:00+00:00",
     log_stderr: str = "",
     percolate_root: Optional[Path] = None,
+    tip_subject: str = _TIP_SUBJECT_OK,
+    source_subject: str = "ship the thing",
+    source_returncode: int = 0,
 ):
     dest = str(tmp_path / "dest")
     spy = _SubprocessSpy(
@@ -164,6 +178,9 @@ def _run_promote(
         log_returncode=log_returncode,
         log_stdout=log_stdout,
         log_stderr=log_stderr,
+        tip_subject=tip_subject,
+        source_subject=source_subject,
+        source_returncode=source_returncode,
     )
     monkeypatch.setattr(_mod._percolate_push.subprocess, "run", spy)
 
@@ -209,11 +226,11 @@ def test_bare_invocation_never_passes_confirm_flag_to_git(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# Predicate 1 — clean mirror dest.
+# Predicate 1 — mirror dest readable with an upstream; uncommitted files never refuse (DR-390).
 # ---------------------------------------------------------------------------
 
-def test_dirty_dest_refuses_naming_predicate_1(tmp_path, monkeypatch, capsys):
-    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, status_stdout=_STATUS_DIRTY_CANDIDATE)
+def test_dest_without_upstream_refuses_naming_predicate_1(tmp_path, monkeypatch, capsys):
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, status_stdout=_STATUS_NO_UPSTREAM_CANDIDATE)
     assert rc == _mod._EXIT_USAGE
     err = capsys.readouterr().err
     assert "predicate 1 (clean dest) FAILED" in err
@@ -336,7 +353,7 @@ def test_all_four_predicate_failures_reported_together_not_just_first(tmp_path, 
         tmp_path,
         monkeypatch,
         confirm=True,
-        status_stdout=_STATUS_DIRTY_CANDIDATE,
+        status_stdout=_STATUS_NO_UPSTREAM_CANDIDATE,
         log_stdout=_recent_committer_date(),
         percolate_root=root,
     )
@@ -345,7 +362,58 @@ def test_all_four_predicate_failures_reported_together_not_just_first(tmp_path, 
     assert "predicate 1 (clean dest) FAILED" in err
     assert "predicate 2 (no round-failure marker) FAILED" in err
     assert "predicate 4 (cross-machine observation) FAILED" in err
-    assert "3 of 4 evidence-bar predicate(s) failed" in err
+    assert "3 of 5 evidence-bar predicate(s) failed" in err
+
+
+# ---------------------------------------------------------------------------
+# Predicate 5 — the candidate's source-head commit is not WIP-marked.
+# ---------------------------------------------------------------------------
+
+def test_non_wip_source_head_passes_predicate_5(tmp_path, monkeypatch):
+    _pass_cross_machine(monkeypatch)
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
+    assert rc == _mod._EXIT_OK
+    assert any(c[-1] == "abcdef012345^{commit}" for c in spy.calls)
+
+
+def test_wip_source_head_refuses_naming_predicate_5(tmp_path, monkeypatch, capsys):
+    _pass_cross_machine(monkeypatch)
+    rc, spy, dest = _run_promote(
+        tmp_path, monkeypatch, confirm=True, source_subject="WIP: half-done refactor"
+    )
+    assert rc == _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "predicate 5 (source-head not WIP) FAILED" in err
+    assert "1 of 5" in err
+    assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
+
+
+def test_lowercase_wip_prefix_is_not_a_wip_marker(tmp_path, monkeypatch):
+    _pass_cross_machine(monkeypatch)
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, source_subject="wipe the cache")
+    assert rc == _mod._EXIT_OK
+
+
+def test_unparseable_stamp_fails_closed_predicate_5(tmp_path, monkeypatch, capsys):
+    _pass_cross_machine(monkeypatch)
+    rc, spy, dest = _run_promote(
+        tmp_path, monkeypatch, confirm=True, tip_subject="hand-authored commit, no stamp\n"
+    )
+    assert rc == _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "predicate 5 (source-head not WIP)" in err
+    assert "no parseable" in err
+    assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
+
+
+def test_unresolvable_source_sha_fails_closed_predicate_5(tmp_path, monkeypatch, capsys):
+    _pass_cross_machine(monkeypatch)
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, source_returncode=128)
+    assert rc == _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "predicate 5 (source-head not WIP)" in err
+    assert "does not resolve" in err
+    assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +477,7 @@ def test_confirm_forwards_nonzero_push_exit_code(tmp_path, monkeypatch):
 
 def test_confirm_still_refuses_when_a_predicate_fails_and_never_pushes(tmp_path, monkeypatch, capsys):
     _pass_cross_machine(monkeypatch)
-    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, status_stdout=_STATUS_DIRTY_CANDIDATE)
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, status_stdout=_STATUS_NO_UPSTREAM_CANDIDATE)
     assert rc == _mod._EXIT_USAGE
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert push_calls == []

@@ -1208,8 +1208,44 @@ _COORDINATOR_ROOT_LADDER_REMEDIATION = (
     "  Every rung additionally requires the candidate to (a) NOT be a\n"
     "  registered publish.mirrors.*.path entry, and (b) show positive\n"
     "  evidence of a real coordinator-claude plugin source checkout\n"
-    "  (.claude-plugin/plugin.json plus commands/ or hooks/)."
+    "  (.claude-plugin/plugin.json plus commands/ or hooks/).\n"
+    "  Final rungs, for a consumer install with no working checkout:\n"
+    "  4. $CLAUDE_PLUGIN_ROOT\n"
+    "  5. <claude home>/.coordinator-plugin-root breadcrumb\n"
+    "  6. the installed plugin cache (<claude home>/plugins/cache/*/coordinator/*)."
 )
+
+
+def _claude_home() -> Path:
+    """The resolved claude home: $CLAUDE_HOME, else ``~/.claude``."""
+    env = os.environ.get("CLAUDE_HOME", "")
+    return Path(env) if env else Path.home() / ".claude"
+
+
+def _plugin_root_rung_candidates() -> list[tuple[Path, str]]:
+    """Consumer-install candidates, in order: $CLAUDE_PLUGIN_ROOT, the
+    session-start breadcrumb, then the newest installed plugin-cache entry."""
+    from coordinator_core.install.live_plugin_registration import _PLUGIN_CACHE_REL
+
+    found: list[tuple[Path, str]] = []
+    env_val = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if env_val:
+        found.append((Path(env_val), "$CLAUDE_PLUGIN_ROOT env"))
+    home = _claude_home()
+    try:
+        crumb = (home / ".coordinator-plugin-root").read_text(encoding="utf-8").strip()
+    except OSError:
+        crumb = ""
+    if crumb:
+        found.append((Path(crumb), ".coordinator-plugin-root breadcrumb"))
+    cache = home.joinpath(*_PLUGIN_CACHE_REL)
+    try:
+        entries = sorted(cache.glob("*/coordinator/*"), reverse=True)
+    except OSError:
+        entries = []
+    for entry in entries:
+        found.append((entry, "installed plugin cache"))
+    return found
 
 
 def _is_publish_mirror(path: Path) -> bool:
@@ -1262,6 +1298,9 @@ def _resolve_coordinator_root_ladder(
 
         1. --coordinator-root <path> / --coordinator-root=<path> (this argv)
         2. $COORDINATOR_CLAUDE_ROOT
+        (3 below; then the final consumer rung: $CLAUDE_PLUGIN_ROOT, the
+        ``<claude home>/.coordinator-plugin-root`` breadcrumb, the installed
+        plugin cache -- each offered only when it already looks like a source)
         3. `engine.working_repos.content_root` registry key (via
            `coordinator_core.machine_resolver.registry_get` — never a
            `machine-local` subprocess), passed through C1a's shape
@@ -1333,6 +1372,10 @@ def _resolve_coordinator_root_ladder(
         derived = _resolve_plugin_root_for_machine_local(Path(registry_val))
         if derived is not None:
             candidates.append((derived, "engine.working_repos.content_root registry key"))
+
+    for plugin_candidate in _plugin_root_rung_candidates():
+        if _looks_like_coordinator_claude_source(plugin_candidate[0]):
+            candidates.append(plugin_candidate)
 
     for candidate, rung in candidates:
         if _is_publish_mirror(candidate):
@@ -1618,7 +1661,8 @@ def main(argv: list[str], out=None, err=None) -> int:
         else:
             print(f"[setup] {_CHAIN_BANNER}: complete.", file=out)
         print("  coordinator-claude has no Python/binary install phases.", file=out)
-        print("  Use /coordinator:setup to run the full chain-walker via the skill.", file=out)
+        if not (repo_root_env and lib_dir_env):
+            print("  Use /coordinator:setup to run the full chain-walker via the skill.", file=out)
         print("==========================================================", file=out)
         raise _SetupError(0)
 

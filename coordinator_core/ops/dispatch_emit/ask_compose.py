@@ -72,7 +72,7 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 _STR = {"type": "string"}
 _SIZE_SCHEMA = _obj(
-    ["sizing_rel"], {"sizing_rel": _STR, "writes": {"type": "array", "items": _STR}}
+    ["sizing_rel", "writes"], {"sizing_rel": _STR, "writes": {"type": "array", "items": _STR}}
 )
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
@@ -243,8 +243,9 @@ def compose_ask_script(
             "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
             "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "
             "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "
-            "sizing_rel. When the estimate is XS, also return the file footprint the ask will "
-            "write as repo-relative `writes`.\n\nAsk:\n"
+            "sizing_rel, and as `writes` the repo-relative files the ask will create, edit or "
+            "delete -- every file the ask names, plus any you find it must touch. An XS with "
+            "empty `writes` is refused at the gate.\n\nAsk:\n"
             + (prompt or "")
         )
         b.append(

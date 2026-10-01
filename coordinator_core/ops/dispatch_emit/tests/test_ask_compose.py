@@ -138,3 +138,11 @@ def test_size_prompt_walks_the_agent_to_a_gate_passing_sizing():
         "`writes`",
     ):
         assert needle in size_line, needle
+
+
+def test_size_agent_must_return_a_footprint():
+    # The C9 live run's size agent returned writes [] for an ask naming its
+    # one file, and the XS gate refused; the schema now requires it.
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    assert "writes" in ask_compose._SIZE_SCHEMA["required"]

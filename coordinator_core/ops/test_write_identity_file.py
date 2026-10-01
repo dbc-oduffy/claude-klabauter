@@ -23,6 +23,8 @@ Coverage:
   (h) non-string field value     → exit_code 1
   (i) not inside a git repo      → exit_code 1 (no .git ancestor found)
   (j) LockTimeout                → exit_code 1 with lock-timeout message
+  (l) escaped-vs-literal value   → zero fields counted, no rewrite
+  (m) one real change            → "wrote 1 field(s)"
 
 Spec backlink: coordinator_core/ops/write_identity_file.py
 Port source:   commands/install.md (coordinator-claude) Phase 2, Steps 3 / 3b-4
@@ -279,3 +281,33 @@ def test_non_ascii_value_is_written_verbatim_and_round_trips(tmp_path):
     assert "Dónal".encode("utf-8") in raw
     assert b"\\x" not in raw
     assert yaml.safe_load(raw.decode("utf-8"))["operator_name"] == "Dónal"
+
+
+# ---------------------------------------------------------------------------
+# (l)-(m) a field counts only when its decoded value changed
+# ---------------------------------------------------------------------------
+
+
+def test_escaped_vs_literal_value_counts_zero_fields(tmp_path):
+    claude_home = _make_git_repo(tmp_path / "home")
+    identity_path = claude_home / ".claude" / "coordinator-identity.yaml"
+    identity_path.parent.mkdir(parents=True)
+    escaped = 'version: 1\noperator_name: "Don' + chr(92) + 'u0061l"\n'
+    identity_path.write_text(escaped, encoding="utf-8")
+    assert yaml.safe_load(escaped)["operator_name"] == "Donal"
+
+    result = _call({"claude_home": str(claude_home), "fields": {"operator_name": "Donal"}})
+    assert result["exit_code"] == 0
+    assert result["written"] is False
+    assert identity_path.read_text(encoding="utf-8") == escaped
+
+
+def test_one_real_change_counts_one_field(tmp_path):
+    claude_home = _make_git_repo(tmp_path / "home")
+    _call({"claude_home": str(claude_home), "fields": {"operator_name": "Kira"}})
+    result = _call({
+        "claude_home": str(claude_home),
+        "fields": {"operator_name": "Kira", "engagement_posture": "default"},
+    })
+    assert result["written"] is True
+    assert result["message"].startswith("wrote 1 field(s)")

@@ -28,6 +28,10 @@ Modes:
   --non-interactive   silent absent-only seed, no prompt.
   --check-only        report what WOULD register; writes nothing.
 
+Prune: `repos.*` keys under the plugin cache are unset on every run; keys whose path
+is missing are unset on a consumer-profile box only. Install-clone candidates are
+skipped with one stdout line.
+
 Negative-spec: this module does not read or write ~/.claude/working-repos.yaml (that
 manifest is a separate concern — see install.md Step 4). It only reads
 coordinator_core.ops.discover_working_repos's discovery output and the machine-local
@@ -68,7 +72,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core import launchable
+from coordinator_core import launchable, machine_profile, repo_standing
 from coordinator_core._settings_home import home_dir, resolve_machine_local_cli
 from coordinator_core.install.resolution_journal import record_resolution
 from coordinator_core.install.write_surface import (
@@ -267,6 +271,28 @@ def _machine_local_launch_argv(ml_bin: str) -> List[str]:
     return [sys.executable, ml_bin]
 
 
+def _stale_keys(snapshot: Dict[str, str]) -> List[str]:
+    """`repos.*` keys under the plugin cache (always) or, on a consumer box, whose
+    path no longer exists. An author box keeps a missing path: the repo may be on
+    an unmounted drive."""
+    try:
+        consumer = machine_profile.machine_profile() == "consumer"
+        cache = str(repo_standing.plugin_cache_root())
+    except Exception:  # noqa: BLE001 -- never-block contract
+        return []
+    stale: List[str] = []
+    for full_key, path in snapshot.items():
+        if not full_key.startswith("repos."):
+            continue
+        try:
+            in_cache = repo_standing._is_within(path, cache)
+        except Exception:  # noqa: BLE001
+            in_cache = False
+        if in_cache or (consumer and not os.path.isdir(path)):
+            stale.append(full_key)
+    return stale
+
+
 def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     non_interactive = False
     check_only = False
@@ -301,12 +327,27 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         print(f"{_PROG}: working-repo discovery failed: {exc}", file=sys.stderr)
         return 0
 
+    snapshot = _registry_snapshot(ml_argv)
+
+    if snapshot is not None:
+        for full_key in _stale_keys(snapshot):
+            if check_only:
+                print(f"{_PROG}: would prune {full_key} = {snapshot[full_key]}")
+                continue
+            rc = subprocess.run(
+                [*ml_argv, "unset", full_key],
+                capture_output=True,
+                check=False,
+                **no_console_creationflags(),
+            ).returncode
+            if rc == 0:
+                print(f"{_PROG}: pruned {full_key} = {snapshot[full_key]}")
+                del snapshot[full_key]
+
     candidates = [line for line in buf.getvalue().splitlines() if line.strip()]
     if not candidates:
         _journal_registered([])
         return 0
-
-    snapshot = _registry_snapshot(ml_argv)
 
     to_register: List[Tuple[str, str]] = []
     claimed_by: Dict[str, str] = {}
@@ -317,6 +358,9 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
                 f"{_PROG}: skipping {repo_path!r} — basename yields an empty key",
                 file=sys.stderr,
             )
+            continue
+        if repo_standing.is_install_clone(repo_path):
+            print(f"{_PROG}: {repo_path} — install clone, not a working repo")
             continue
         if key in _RETIRED_KEYS:
             print(

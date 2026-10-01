@@ -968,7 +968,31 @@ _CLOSE_LEDGER_NARRATION = (
 )
 
 
-def _close_ledger(close_gate: dict[str, Any]) -> list[dict[str, Any]]:
+def _close_ledger(
+    close_gate: dict[str, Any], *, install_clone: bool = False
+) -> list[dict[str, Any]]:
+    """Ledger entries for the session; see `_close_ledger_entries`.
+
+    A session rooted in an install clone has no history to establish, so its
+    could-not-establish rows collapse into one install-clone finding.
+    """
+    entries = _close_ledger_entries(close_gate)
+    if not install_clone:
+        return entries
+    from coordinator_core.ops.ceremony.branch_resolution import INSTALL_CLONE_FINDING
+
+    kept = [e for e in entries if e["status"] != _LEDGER_COULD_NOT_ESTABLISH]
+    kept.append(
+        {
+            "item": "session root",
+            "status": _LEDGER_COULD_NOT_ESTABLISH,
+            "evidence": INSTALL_CLONE_FINDING,
+        }
+    )
+    return kept
+
+
+def _close_ledger_entries(close_gate: dict[str, Any]) -> list[dict[str, Any]]:
     """What this session DISCHARGED, named against its landing artifact —
     never a composed "still open" list (see module docstring's Negative-spec
     additions and the sizing object this module was built against,
@@ -1450,7 +1474,9 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
         if diverged_point is not None:
             judgment_points.append(diverged_point)
 
-    close_ledger = _close_ledger(close_gate)
+    from coordinator_core.repo_standing import is_install_clone
+
+    close_ledger = _close_ledger(close_gate, install_clone=is_install_clone(root))
 
     failures = entry_test["computed_failures"]
     if not failures:

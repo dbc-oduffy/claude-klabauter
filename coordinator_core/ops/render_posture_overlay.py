@@ -22,6 +22,9 @@ Behavior:
       are treated uniformly.
     - check_only computes the intended action, prints it, and leaves the
       target file byte-unchanged (no write of any kind).
+    - A target inside an install clone is skipped: one line, exit 0, no write.
+    - A `posture_text` in the claude home's coordinator-identity.yaml is
+      composed into the managed block after the anchor template.
 
 Size guard: THIS MODULE ENFORCES NO BYTE BUDGET FOR THIS TARGET. It
 originally self-gated post-merge byte size against the same HARD threshold
@@ -109,11 +112,16 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import yaml
+
+from coordinator_core import _settings_home
 from coordinator_core.install.write_surface import (
     StaticClause,
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+from coordinator_core.ops.write_identity_file import _parse_existing
+from coordinator_core.repo_standing import is_install_clone
 from coordinator_core.session.declared_writes import declare_write
 
 MARKER_START = "<!-- coordinator:posture:start -->"
@@ -198,6 +206,18 @@ def _swap(original_lines: List[str], managed_block: str) -> str:
     return "\n".join(out)
 
 
+def _machine_posture_text() -> str:
+    """`posture_text` from the resolved claude home's identity file, or "" when absent/unreadable."""
+    try:
+        path = _settings_home.claude_config_dir() / "coordinator-identity.yaml"
+        if not path.is_file():
+            return ""
+        value = _parse_existing(path.read_text(encoding="utf-8")).get("posture_text")
+    except (OSError, ValueError, yaml.YAMLError):
+        return ""
+    return value.strip("\n") if isinstance(value, str) else ""
+
+
 def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tuple[int, str]:
     """Compute (and, unless check_only, perform) the insert/swap merge.
 
@@ -215,12 +235,18 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
     template_path = coord_root / "templates" / "postures" / f"{anchor}.md"
     target_path = Path(target)
 
+    if is_install_clone(target_path):
+        return 0, f"render-posture-overlay.sh: skip: {target_path} is inside an install clone"
+
     try:
         if not template_path.is_file():
             _die(f"Template not found: {template_path}")
 
         template_content = template_path.read_text(encoding="utf-8")
         template_content = template_content.rstrip("\n")
+        posture_text = _machine_posture_text()
+        if posture_text:
+            template_content = f"{template_content}\n\n{posture_text}"
 
         for marker, label in ((MARKER_START, "start"), (MARKER_END, "end")):
             if any(line.rstrip("\n") == marker for line in template_content.splitlines()):

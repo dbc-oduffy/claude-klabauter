@@ -509,7 +509,7 @@ def _disposition_fleet(tmp_path, monkeypatch, kind):
     root = tmp_path / "clone"
     (root / ".git" / "hooks").mkdir(parents=True)
     hook = root / ".git" / "hooks" / "post-commit"
-    hook.write_text(_RETIRED_BODY, encoding="utf-8")
+    hook.write_bytes(_RETIRED_BODY.encode("utf-8"))
     entry = hd.HookDisposition(
         id="synthetic-retired",
         hook_name="post-commit",
@@ -897,7 +897,7 @@ def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tm
     )
     probe = re.search(r"_native\(\) \{.*?\}\n", body, re.S).group(0)
 
-    script = tmp_path / "not-a-real-native-image"
+    script = tmp_path / "not-a-real-native-image.exe"
     script.write_text("just some text with no shebang line\n", encoding="utf-8")
     script.chmod(0o755)
     checks = f'{probe}_native "{script.as_posix()}" && printf native || printf script\n'
@@ -958,8 +958,8 @@ def _install_native_image_as_this_platform_does(tmp_path, script_name):
     bin_dir.mkdir(parents=True)
     name = script_name + (".exe" if os.name == "nt" else "")
     image = bin_dir / name
-    donor = Path("/usr/bin/true")
-    if os.name != "nt" and donor.exists():
+    donor = Path(shutil.which("true") or "/usr/bin/true")
+    if donor.exists():
         shutil.copy(donor, image)
         assert image.open("rb").read(8).startswith(magic), (
             "the donor binary does not match door_install.NATIVE_IMAGE_MAGIC — "
@@ -1265,3 +1265,19 @@ def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tm
     ghi.ensure_hooks_fleet(str(tmp_path))
     healed = (other / ".git" / "hooks" / "prepare-commit-msg").read_text()
     assert ghi._hook_gen_stamp_line() in healed
+
+
+def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ghi, "_registry_repo_roots", lambda bin_dir: [("repos.clone", str(tmp_path))])
+    monkeypatch.setattr(ghi, "_classify_target", lambda r: "mirror")
+    monkeypatch.setattr(ghi, "_unregistered_hooked_repos", lambda registered: [])
+    monkeypatch.setattr(ghi, "_hook_points_at_coordinator", lambda r, n: False)
+    monkeypatch.setattr(
+        ghi,
+        "_apply_dispositions",
+        lambda key, root, check_only, stale, healed, errored: healed.append("repos.clone post-commit: stale"),
+    )
+    ghi.ensure_hooks_fleet(str(tmp_path), check_only=True)
+    err = capsys.readouterr().err
+    assert "found 1 stale hook(s)" in err
+    assert "repaired or flagged" not in err
