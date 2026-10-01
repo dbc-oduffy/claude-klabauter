@@ -1,7 +1,8 @@
 """coordinator_core.bash_guards.guard_headless_claude_plugin_dir --
 ``check_headless_claude_plugin_dir``: a headless ``claude -p`` / ``--print``
 launch that carries no ``--plugin-dir`` is rewritten to carry the resolved
-coordinator plugin root; an unresolvable root denies.
+coordinator plugin root; an unresolvable root allows with an advisory. Dev
+install only: without the sentinel the guard is a no-op.
 
 Command words are located by a quote-aware scan of the raw text (segments split
 on unquoted ``;``, ``&``, ``|``, newline), so ``claude`` inside a quoted string
@@ -16,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import token_matches_binary
 from coordinator_core.bash_guards._rewrite_support import (
+    _advisory,
     _allow_rewrite,
     _bt_peel_wrapper_prefix,
 )
@@ -98,6 +100,16 @@ def _launch_index(words: List[_Word]) -> Optional[int]:
     return None
 
 
+def _is_dev_install() -> bool:
+    """True only where a registered repo carries the `.coordinator-dev-repo` sentinel."""
+    try:
+        from coordinator_core._fleet_names import doctrine_repo_name
+
+        return doctrine_repo_name() is not None
+    except Exception:
+        return False
+
+
 def _plugin_root() -> Optional[str]:
     try:
         from coordinator_core.ops.workflow_fire.fire import _native_plugin_dir
@@ -125,18 +137,14 @@ def check_headless_claude_plugin_dir(
         inserts.append(words[idx][1])
     if not inserts:
         return None
+    if not _is_dev_install():
+        return None
     root = _plugin_root()
     if not root:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "Headless `claude -p` needs --plugin-dir; the coordinator "
-                    "plugin root did not resolve. Launch via `claude-author`."
-                ),
-            }
-        }
+        return _advisory(
+            "Coordinator plugin not found; this headless `claude -p` runs with "
+            "no coordinator skills or agents. Launch via `claude-author`."
+        )
     flag = " --plugin-dir " + shlex.quote(root.replace("\\", "/"))
     new_cmd = cmd
     for pos in reversed(inserts):

@@ -10,6 +10,7 @@ ROOT = "/native/coordinator"
 @pytest.fixture(autouse=True)
 def _root(monkeypatch):
     monkeypatch.setattr(g, "_plugin_root", lambda: ROOT)
+    monkeypatch.setattr(g, "_is_dev_install", lambda: True)
 
 
 def _rewritten(cmd):
@@ -56,9 +57,31 @@ def test_pass_through(cmd):
     assert g.check_headless_claude_plugin_dir(cmd) is None
 
 
-def test_unresolvable_root_denies(monkeypatch):
+def test_unresolvable_root_allows_with_advisory(monkeypatch):
     monkeypatch.setattr(g, "_plugin_root", lambda: None)
     out = g.check_headless_claude_plugin_dir("claude -p x")
     spec = out["hookSpecificOutput"]
-    assert spec["permissionDecision"] == "deny"
-    assert "plugin root" in spec["permissionDecisionReason"]
+    assert spec.get("permissionDecision", "allow") == "allow"
+    assert "updatedInput" not in spec
+    assert "no coordinator skills or agents" in spec["additionalContext"]
+    assert "coordinator plugin" in spec["additionalContext"].lower()
+
+
+def test_no_sentinel_is_noop(monkeypatch):
+    monkeypatch.setattr(g, "_is_dev_install", lambda: False)
+    assert g.check_headless_claude_plugin_dir("claude -p x") is None
+    monkeypatch.setattr(g, "_plugin_root", lambda: None)
+    assert g.check_headless_claude_plugin_dir("claude -p x") is None
+
+
+def test_is_dev_install_follows_sentinel(monkeypatch, tmp_path):
+    import coordinator_core._fleet_names as fn
+
+    monkeypatch.undo()
+    monkeypatch.setattr(fn, "_registry_paths", lambda: [str(tmp_path)])
+    import coordinator_core._settings_home as sh
+
+    monkeypatch.setattr(sh, "claude_config_dir", lambda: tmp_path / "nohome")
+    assert g._is_dev_install() is False
+    (tmp_path / ".coordinator-dev-repo").write_text("1")
+    assert g._is_dev_install() is True
