@@ -59,8 +59,22 @@ REQUIRED = {
 }
 
 
-def test_contract_version_is_4_10_0():
-    assert CONTRACT_VERSION == "4.10.0"
+def test_contract_version_is_4_11_0():
+    assert CONTRACT_VERSION == "4.11.0"
+
+
+def test_envelope_declares_optional_completion_receipts(tmp_path):
+    from coordinator_core.contract.cockpit_schema.entities.snapshot_envelope import (
+        SnapshotEnvelope,
+    )
+
+    emit_schemas({"snapshot-envelope": SnapshotEnvelope}, out_dir=tmp_path)
+    doc = json.loads((tmp_path / "snapshot-envelope.schema.json").read_text(encoding="utf-8"))
+    prop = doc["properties"]["completion_receipts"]
+    assert prop["type"] == "array"
+    assert prop["items"]["properties"]["schema"]["const"] == "completion-receipt"
+    assert "completion_receipts" not in doc["required"]
+    assert "completion_rollups" in doc["required"]
 
 
 def test_registered_before_snapshot_envelope():

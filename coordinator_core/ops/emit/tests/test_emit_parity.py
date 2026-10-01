@@ -546,7 +546,7 @@ def assert_full_parity(emission: dict) -> None:
 # "belongs in this frozenset" are related-but-distinct predicates, not a 1:1 grep-checkable
 # convention. Keep this set manually in sync with `commit_closures`-shaped net-new sections
 # (no bash-golden equivalent AND no bespoke-oracle coverage of their own) when adding new ones.
-_NO_GOLDEN_ORACLE_SECTIONS = frozenset({"commit_closures"})
+_NO_GOLDEN_ORACLE_SECTIONS = frozenset({"commit_closures", "completion_receipts"})
 
 # Non-porter helper modules colocated under sections/ for import ergonomics — no `collect()`,
 # never wired into resolvers.py, and not a "section" under any of the predicates above (unlike

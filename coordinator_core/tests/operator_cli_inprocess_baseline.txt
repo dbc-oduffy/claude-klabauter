@@ -151,6 +151,7 @@ coordinator/bin/query-commit-closures.py
 # deliberately reuse `op_trampoline.resolve_repo_root_or_exit()` /
 # `resolve_claude_klabauter_root_or_exit()` only, per their own module docstrings,
 # which cite this exact reasoning and this exact sibling file.
+coordinator/bin/query-completion-receipts.py
 coordinator/bin/query-completion-rollups.py
 coordinator/bin/query-goals.py
 # `query-record-history.py` (added 2026-08-25): its ONE in-process op reach

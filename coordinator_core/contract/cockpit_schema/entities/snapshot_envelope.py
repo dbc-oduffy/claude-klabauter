@@ -40,6 +40,9 @@ from coordinator_core.contract.cockpit_schema.common import IsoDateTime
 from coordinator_core.contract.cockpit_schema.entities.backlog_history import BacklogHistory
 from coordinator_core.contract.cockpit_schema.entities.branch import Branch
 from coordinator_core.contract.cockpit_schema.entities.competitor_summary import CompetitorSummary
+from coordinator_core.contract.cockpit_schema.entities.completion_receipt import (
+    CompletionReceipt,
+)
 from coordinator_core.contract.cockpit_schema.entities.coordinator_root import CoordinatorRoot
 from coordinator_core.contract.cockpit_schema.entities.cross_repo_memo_summary import (
     CrossRepoMemoSummary,
@@ -130,6 +133,8 @@ class SnapshotEnvelope(BaseModel):
     branches: list[Branch]
     handoffs: list[HandoffSummary]
     completion_rollups: CompletionRollups
+    # Optional: absent on envelopes emitted before 4.11.0.
+    completion_receipts: list[CompletionReceipt] = Field(default_factory=list)
     backlogs: BacklogsEnvelope
     review_trail: list[ReviewTrail]
     routine_signals: list[RoutineSignal]

@@ -26,7 +26,10 @@ DR-208 five-question affirmation (MUTATING):
 
 from __future__ import annotations
 
+import argparse
+import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -153,3 +156,42 @@ def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] =
     except SupersedeRefused as exc:
         return {"status": "refused", "reason": str(exc)}
     return {"status": "recorded", **result}
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(prog="record-superseding-review")
+    parser.add_argument("--plan", required=True)
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--head", required=True)
+    parser.add_argument("--wave-sidecar", action="append", default=[])
+    parser.add_argument("--prep-sidecar", default=None)
+    parser.add_argument("--stage-returns-json", default=None)
+    parser.add_argument("--supersedes", default=None)
+    parser.add_argument("--repo-root", default=None)
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    try:
+        stage_returns = json.loads(args.stage_returns_json) if args.stage_returns_json else None
+    except json.JSONDecodeError as exc:
+        print(f"record-superseding-review: --stage-returns-json is not JSON: {exc}", file=sys.stderr)
+        return 2
+
+    repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
+    try:
+        result = record_superseding_review(
+            repo_root=repo_root,
+            plan=args.plan,
+            commit_range={"base": args.base, "head": args.head},
+            wave_sidecar_paths=[Path(p) for p in args.wave_sidecar],
+            prep_sidecar=args.prep_sidecar,
+            stage_returns=stage_returns,
+            session_id=args.session_id,
+            supersedes=args.supersedes,
+        )
+    except SupersedeRefused as exc:
+        print(f"record-superseding-review: refused: {exc}", file=sys.stderr)
+        return 1
+    print(result["record_path"])
+    return 0
+

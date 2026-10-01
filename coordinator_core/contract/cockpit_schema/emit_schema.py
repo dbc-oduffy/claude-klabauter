@@ -504,7 +504,14 @@ GENERATES: list = []
 # changed — MINOR under D46 and DoE D55. Expected red window:
 # `ops/emit/tests/test_vendor_pin_version_consistency.py` stays red until
 # the DoE bundle is regenerated and re-vendored (plan step C12).
-CONTRACT_VERSION = "4.10.0"
+#
+# MINOR bump 4.10.0 -> 4.11.0 (2026-10-01, DoE-ratified bilaterally): SnapshotEnvelope
+# gains optional `completion_receipts` (array of `completion-receipt`), the wire
+# key cockpit's CompletionReceipt reader (cockpit 2eed6f241) is keyed on. Additive:
+# not in `required[]`, no existing entity or field changed. Expected red window:
+# `ops/emit/tests/test_vendor_pin_version_consistency.py` until DoE regenerates
+# the bundle and claude-klabauter re-vendors.
+CONTRACT_VERSION = "4.11.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from
