@@ -9,7 +9,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
-from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
+from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, _handler, stage
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
@@ -119,3 +119,20 @@ def test_both_or_neither_input_refused(repo):
         stage(repo, run_id="r1")
     with pytest.raises(AskStageError):
         stage(repo, run_id="r1", plan_rel=PLAN_REL, sizing_rel=SIZING_REL)
+
+
+def test_handler_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
+    """The dispatcher hands common_dir-scoped ops `<repo>/.git`, not the worktree root."""
+    (repo / ".git").mkdir()
+    doc = {
+        "intent": "Fix the thing",
+        "exit_criterion": {"statement": "it works"},
+        "deliverable_id": "dlv-xs-abc123",
+    }
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    reply = _handler(
+        {"run_id": "gitrun", "sizing_path": SIZING_REL, "writes": ["pkg/a.py"]},
+        repo_root=repo / ".git",
+    )
+    assert "error" not in reply, reply
+    assert [r["id"] for r in reply["rows"]] == ["X1"]

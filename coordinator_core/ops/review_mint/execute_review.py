@@ -265,6 +265,13 @@ def compose_execute_review(
             f"sidecar_path: (_reviewPrep.whole_diff_sidecars?.personas ?? [])[0] ?? "
             f"String(_reviewPrep.whole_diff_path).replace(/\\.diff$/, '') + '.whole-slice.md', "
             f"contract_blocks: 0 }}]; }}\n"
+            # A clean prep over a run whose rows changed nothing froze an empty
+            # diff: there is nothing to review or commit, which is an outcome,
+            # not a failed prep.
+            f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length) {{ "
+            f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
+            f"prep: _reviewPrep, wave: null, integration: null }}; }}\n"
             # A failed or refused prep yields no slices -- a refusal reports
             # product_files 0, so the guard keys on the slices alone. The wave's
             # `?? []` would otherwise expand to no sliced reviewer and land the

@@ -442,8 +442,9 @@ def _run_prep_block(prep_result: dict) -> dict:
         for ln in body
     ]
     script = (
-        "(async () => { try {\n" + "\n".join(body) +
-        "\n console.log(JSON.stringify({slices: _reviewPrep.slices}));"
+        "(async () => { try { const _out = await (async () => {\n" + "\n".join(body) +
+        "\n return {slices: _reviewPrep.slices}; })();"
+        "\n console.log(JSON.stringify(_out));"
         "\n} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
     out = subprocess.run(
@@ -473,7 +474,8 @@ def test_single_reviewer_ok_with_product_files_yields_exactly_one_whole_diff_sli
     "prep",
     [
         {**_PREP, "verdict": "PARTITION-MANDATORY"},
-        {**_PREP, "product_files": 0},
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 0},
+        {**_PREP, "product_files": 0, "foreign_claims": ["peer.py"]},
         None,
     ],
 )
@@ -485,3 +487,11 @@ def test_empty_slices_without_single_reviewer_ok_over_product_files_still_refuse
 def test_prep_prompt_says_single_reviewer_ok_returns_one_whole_diff_slice():
     _, phases = _compose()
     assert "single-reviewer-ok, slices is exactly ONE slice" in phases[0][1]
+
+
+def test_single_reviewer_ok_over_no_product_file_is_a_no_op_not_a_refusal():
+    # The C9 live --ask run's one row found its edit already made: prep froze
+    # an empty diff cleanly, and the run threw instead of finishing.
+    result = _run_prep_block({**_PREP, "product_files": 0})
+    assert result["halted"] == "no-op"
+    assert "error" not in result
