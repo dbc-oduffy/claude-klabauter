@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_TOUCHPOINT,
     GateVerdict,
 )
+from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     SizingFireRefused,
@@ -29,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
 
 _ACCEPT_TOUCHPOINTS = frozenset({"accept_sizing", "accept_exit_criterion"})
 _ACCEPTED_NULL_PREFIX = "`exit_criterion.accepted`"
+_PARAMS = (Field("sizing_path", "nonempty_str", required=True), Field("writes", "str_list"))
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
@@ -107,10 +109,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "dispatch.ask_gate requires repo_root"}
-    sizing_rel = params.get("sizing_path")
-    if not isinstance(sizing_rel, str) or not sizing_rel:
-        return {"error": "params.sizing_path is required and must be a non-empty string"}
+    refusal = validate_params("dispatch.ask_gate", params, _PARAMS)
+    if refusal is not None:
+        return refusal
+    sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
-    if not isinstance(writes, list) or not all(isinstance(w, str) for w in writes):
-        return {"error": "params.writes must be a list of strings"}
     return gate(main_worktree_root(Path(repo_root)), sizing_rel, writes=writes).to_json()

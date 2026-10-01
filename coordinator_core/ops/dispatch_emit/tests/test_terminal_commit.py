@@ -900,3 +900,24 @@ def test_deleting_a_file_added_one_commit_ago_is_not_a_rollback(repo):
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
     assert out["committed"] is True, out
     assert out["deleted_paths"] == ["added.py"]
+
+
+@pytest.mark.parametrize(
+    "params, field",
+    [
+        ("not-a-dict", "must be an object"),
+        ({"incomplete_chunks": []}, "script_path is required"),
+        ({"script_path": 7, "incomplete_chunks": []}, "script_path must be"),
+        ({"script_path": "run.mjs", "incomplete_chunks": "C1"}, "incomplete_chunks must be"),
+        ({"script_path": "run.mjs", "incomplete_chunks": [1]}, "incomplete_chunks must be"),
+        (
+            {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": "x"},
+            "inline_review must be",
+        ),
+    ],
+)
+def test_malformed_request_is_refused_not_raised(repo, params, field):
+    out = terminal_commit._handler(params, repo_root=repo / ".git")
+    assert out["committed"] is False
+    assert out["sha"] is None
+    assert field in out["error"], out

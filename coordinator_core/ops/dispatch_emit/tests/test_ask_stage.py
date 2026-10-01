@@ -136,3 +136,36 @@ def test_handler_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo)
     )
     assert "error" not in reply, reply
     assert [r["id"] for r in reply["rows"]] == ["X1"]
+
+
+def test_xs_spine_and_manifest_carry_a_real_form_plan_id(repo):
+    import re
+
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+    doc = {"intent": "Fix the thing", "exit_criterion": {"statement": "it works"}}
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    spine = repo / RUN_DIR_ROOT / "x1run" / "2026-10-01-xs-fixture.spine.md"
+    plan_id = read_fm_field_unquoted(split_frontmatter(spine.read_text(encoding="utf-8")).fm_text, "plan_id")
+    assert re.fullmatch(r"pln-[a-z0-9-]+-[0-9a-f]{6}", plan_id)
+    assert m.plan_id == plan_id
+    assert StageManifest.from_json(json.loads((repo / m.run_dir / "manifest.json").read_text())).plan_id == plan_id
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        None,
+        [],
+        {},
+        {"run_id": 5},
+        {"run_id": "r", "plan_path": 3},
+        {"run_id": "r", "sizing_path": ["x"]},
+        {"run_id": "r", "writes": "a.py"},
+        {"run_id": "r", "writes": [1]},
+    ],
+)
+def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
+    reply = _handler(params, repo_root=repo)
+    assert set(reply) == {"error"} and "dispatch.ask_stage" in reply["error"]

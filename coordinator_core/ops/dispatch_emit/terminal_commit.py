@@ -102,8 +102,16 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _resolve_spec_plan_path,
     parse_chunk_table,
 )
+from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
+
+
+_PARAM_FIELDS = (
+    Field("script_path", "nonempty_str", required=True),
+    Field("incomplete_chunks", "str_list", required=True),
+    Field("inline_review", "dict"),
+)
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -522,22 +530,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "repo_root (git common dir) was not supplied"
         )
 
-    script_path_raw = params.get("script_path")
-    if not isinstance(script_path_raw, str) or not script_path_raw:
-        return _error("params.script_path is required and must be a non-empty string")
+    refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
+    if refusal is not None:
+        return _error(refusal["error"])
 
-    raw_incomplete = params.get("incomplete_chunks")
-    if raw_incomplete is None:
-        return _error("params.incomplete_chunks is required (may be an empty list)")
-    if not isinstance(raw_incomplete, list) or not all(
-        isinstance(c, str) for c in raw_incomplete
-    ):
-        return _error("params.incomplete_chunks must be a list of strings")
-    incomplete_chunks = set(raw_incomplete)
-
+    script_path_raw = params["script_path"]
+    incomplete_chunks = set(params["incomplete_chunks"])
     inline_review = params.get("inline_review")
-    if inline_review is not None and not isinstance(inline_review, dict):
-        return _error("params.inline_review must be an object or omitted")
 
     session_id = params.get("session_id")
     if session_id is not None and (

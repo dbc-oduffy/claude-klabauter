@@ -74,9 +74,11 @@ class StageManifest:
     rows: tuple[ManifestRow, ...]
     review_declared_paths: tuple[str, ...]
     marker_path: str
+    plan_id: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "plan_id": self.plan_id,
             "run_dir": self.run_dir,
             "rows": [r.to_json() for r in self.rows],
             "review_declared_paths": list(self.review_declared_paths),
@@ -90,4 +92,5 @@ class StageManifest:
             rows=tuple(ManifestRow.from_json(r) for r in data["rows"]),
             review_declared_paths=tuple(data["review_declared_paths"]),
             marker_path=data["marker_path"],
+            plan_id=data.get("plan_id"),
         )

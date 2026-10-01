@@ -33,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     _plan_deliverable_id,
     _dedupe_preserve_order,
     _model_opt,
+    _plan_id,
     _row_agent_type,
     _row_prompt,
     _widen_with_test_candidates,
@@ -40,11 +41,19 @@ from coordinator_core.ops.dispatch_emit.emit import (
     derive_plan_context,
 )
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec_or_none
+from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
+
+_PARAMS = (
+    Field("run_id", "str", required=True),
+    Field("plan_path", "str"),
+    Field("sizing_path", "str"),
+    Field("writes", "str_list"),
+)
 
 __all__ = ["AskStageError", "stage"]
 
@@ -161,6 +170,7 @@ def stage(
         rows=tuple(manifest_rows),
         review_declared_paths=tuple(_dedupe_preserve_order(declared)),
         marker_path=_rel(root, marker_path),
+        plan_id=_plan_id(plan_text),
     )
     _write(run_dir / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
     return manifest
@@ -174,12 +184,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
+    refusal = validate_params("dispatch.ask_stage", params, _PARAMS)
+    if refusal is not None:
+        return refusal
     writes = params.get("writes") or []
-    if not isinstance(writes, list) or not all(isinstance(w, str) for w in writes):
-        return {"error": "params.writes must be a list of strings"}
-    run_id = params.get("run_id")
-    if not isinstance(run_id, str):
-        return {"error": "params.run_id is required and must be a string"}
+    run_id = params["run_id"]
     try:
         manifest = stage(
             main_worktree_root(Path(repo_root)),

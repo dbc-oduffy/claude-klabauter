@@ -31,9 +31,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing,
     resolve_arm,
 )
+from coordinator_core.ops.dispatch_emit.wake_digest import next_action_parts
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
 from coordinator_core.ops.review_mint.roster import parse_execute_review
+from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 _BLITZ_TRAIL = "blitz"
@@ -89,6 +91,8 @@ _MANIFEST_SCHEMA = _obj(
     ["run_dir", "rows", "review_declared_paths", "marker_path"],
     {
         "run_dir": _STR,
+        "plan_id": {"type": ["string", "null"]},
+        "error": {"type": ["string", "null"]},
         "rows": {
             "type": "array",
             "items": _obj(
@@ -170,12 +174,14 @@ def compose_ask_script(
     review_stage_schemas: Optional[dict] = None,
     wrap_stage: Optional[Callable[[str], tuple[str, list[str]]]] = None,
     plan_blitz_text: Optional[str] = None,
+    script_path: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
     The review roster and stage schemas load from DoE when not injected; `wrap_stage` and
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
-    is embedded only when the arm can be M+.
+    is embedded only when the arm can be M+. `script_path` is the repo-relative path the script
+    is written to, carried into `next_action.params` for `dispatch.terminal_commit`.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -274,8 +280,13 @@ def compose_ask_script(
     stage_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-        "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, sizing_path: _sizingRel, writes: _writes })",
-        "'` and return its JSON reply verbatim.",
+        # ask_stage takes exactly one of plan_path / sizing_path: the plan
+        # when a plan phase authored one, else the XS sizing.
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes } "
+        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes })",
+        "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
+        "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
+        "empty -- never an empty manifest without the error.",
     )
     plan_author = _cat(
         f"{head}\n\n{anchor}\n\n",
@@ -318,6 +329,11 @@ def compose_ask_script(
     b.append(
         f"  const _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA)};"
     )
+    b.append(
+        "  if (_manifest.error || !(_manifest.rows ?? []).length) { return { halted: "
+        f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
+        "'stage staged no rows', sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
+    )
 
     b.append("  phase('execute');")
     b.append("  const _rows = {};")
@@ -347,13 +363,29 @@ def compose_ask_script(
     review_text = "\n\n".join(_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks)
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
+    review_vars = _emit.review_stage_vars(
+        review,
+        bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
+        plan_id_literal="(_manifest.plan_id ?? null)",
+    )
+    na_kind, na_op, na_params = next_action_parts(
+        has_commit_request=True,
+        review_vars=review_vars,
+        test_var=None,
+        falsifier_var=None,
+        verification_var="_verifications",
+        test_absent_status="not_run",
+        script_path=script_path,
+        session_id=session_id,
+    )
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: _manifest.rows.map((r) => r.id), "
         "incomplete: _incompleteChunks, blocked: _blockedChunks, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
-        "integration: _reviewIntegration } };"
+        "integration: _reviewIntegration }, "
+        f"next_action: {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} }};"
     )
 
     meta = _emit._meta_block(

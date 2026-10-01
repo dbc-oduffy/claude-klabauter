@@ -7,6 +7,8 @@ Writes come from the operator because a sizing carries no footprint.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
@@ -20,6 +22,13 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
 )
 
 XS_ROW_ID = "X1"
+
+
+def xs_spine_plan_id(stem: str) -> str:
+    """`pln-<slug>-<6hex>`, the real-plan form, derived from the sizing stem so a re-mint of the
+    same sizing keeps its id."""
+    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")[:30].rstrip("-") or "xs"
+    return f"pln-{slug}-{hashlib.sha1(stem.encode('utf-8')).hexdigest()[:6]}"
 
 
 def mint_xs_spine(
@@ -46,6 +55,7 @@ def mint_xs_spine(
     title = next((ln.strip() for ln in intent.splitlines() if ln.strip()), stem)
 
     frontmatter: dict = {
+        "plan_id": xs_spine_plan_id(stem),
         "run_id": stem,
         "derived_from": "sizing object",
         "sizing_object": sizing_rel,

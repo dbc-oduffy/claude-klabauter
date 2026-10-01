@@ -95,10 +95,23 @@ def _composed_params(op: str, **values) -> dict:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
     script = _compose()
-    line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify({" in ln)
-    body = re.search(r"JSON\.stringify\(\{ (.*?) \}\)", line).group(1)
-    keys = [pair.split(":")[0].strip() for pair in body.split(",")]
+    keys = [k for obj in _composed_objects(op) for k in obj]
     return json.loads(json.dumps({k: values.get(k) for k in keys}))
+
+
+def _composed_objects(op: str) -> list:
+    """Each params object literal the composed script can send to `op`, as key lists."""
+    import re
+
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+
+    line = next(ln for ln in _compose().splitlines() if op in ln and "JSON.stringify(" in ln)
+    expr = line[line.index("JSON.stringify(") :]
+    return [
+        [pair.split(":")[0].strip() for pair in body.split(",")]
+        for body in re.findall(r"\{ ([^{}]*?) \}", expr)
+        if "run_id" in body or "sizing_path" in body
+    ]
 
 
 def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo):
@@ -129,3 +142,31 @@ def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
     _put(repo, tshirt="S", route="spec-dispatch")
     reply = _handler({"sizing_path": REL, "writes": []}, repo_root=repo / ".git")
     assert reply["halt"] is None and reply["arm"] == "s", reply
+
+
+def test_stage_is_sent_exactly_one_of_plan_path_and_sizing_path():
+    # C9's S run sent both; ask_stage refused, and the stage agent returned
+    # an empty manifest, so nothing executed.
+    objs = _composed_objects("dispatch.ask_stage")
+    assert objs
+    for keys in objs:
+        assert ("plan_path" in keys) != ("sizing_path" in keys), keys
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        None,
+        [],
+        {},
+        {"sizing_path": ""},
+        {"sizing_path": 3},
+        {"sizing_path": "s.yaml", "writes": "a.py"},
+        {"sizing_path": "s.yaml", "writes": [1]},
+    ],
+)
+def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
+    from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+
+    reply = _handler(params, repo_root=repo)
+    assert set(reply) == {"error"} and "dispatch.ask_gate" in reply["error"]

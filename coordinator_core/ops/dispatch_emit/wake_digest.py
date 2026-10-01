@@ -168,36 +168,46 @@ def _js_lit(value) -> str:
     raise TypeError(f"no JS literal rendering for {value!r}")
 
 
-def completion_return_js(
+def _tests_status_expr(test_var: Optional[str], verification_var: str, test_absent_status: str) -> str:
+    """JS expression for the run's tests status: any failed row verification wins."""
+    return (
+        f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
+        f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)}))"
+        if test_var is not None
+        else f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : {_js_lit(test_absent_status)})"
+    )
+
+
+def _criterion_status_expr(falsifier_var: Optional[str]) -> str:
+    """JS expression for the criterion status. `met` is COMPUTED from the agent's required
+    boolean `differs_from_baseline` (it stamps a plan implemented), never trusted from its
+    self-reported `status`; a result without the boolean falls back to that status, demoted
+    when its own observation contradicts it."""
+    if falsifier_var is None:
+        return "'not_run'"
+    return (
+        f"({falsifier_var} ? ({falsifier_var}.differs_from_baseline === true ? 'met' : "
+        f"({falsifier_var}.differs_from_baseline === false ? 'not_met' : "
+        f"(({falsifier_var}.status === 'met' && "
+        + _CRITERION_CONTRADICTION_RE_JS
+        + f".test({falsifier_var}.observation ?? '')) ? 'not_met' : {falsifier_var}.status))) : 'not_run')"
+    )
+
+
+def next_action_parts(
     *,
-    chunks,
-    width: dict,
-    plan_path,
-    deliverable_id,
-    run_base_sha,
-    test_var: Optional[str],
-    test_absent_status: str,
-    test_absent_note,
-    verification_var: str,
-    skipped_rows,
-    falsifier_var: Optional[str],
-    review_vars: Optional[dict],
     has_commit_request: bool,
+    review_vars: Optional[dict],
+    test_var: Optional[str],
+    falsifier_var: Optional[str],
+    verification_var: str,
+    test_absent_status: str,
     script_path: Optional[str] = None,
     session_id: Optional[str] = None,
-) -> str:
-    """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
-
-    Built from one declarative field table (`_TABLE` below) mapping every schema-required
-    path to a JS source expression. `_TABLE`'s key set is asserted equal to
-    `_required_paths(load_schema())` on every call (AC13) — the table cannot silently
-    drift from the contract it renders. Expressions reference only `RUNTIME_VARS`,
-    stage-result bindings the caller passes in (`test_var`, `verification_var`,
-    `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
-    `plan_path`, ...) — never an executor's own free-text reply.
-    """
-    schema = load_schema()
-
+) -> tuple:
+    """`(kind, op, params)` JS source for a script's `next_action`; the one composer both the
+    plan route's wake-digest and the ask script's return render, so the params are
+    `dispatch.terminal_commit` verbatim on either."""
     def review_field(name: str, default: str = "null") -> str:
         if not review_vars:
             return default
@@ -207,36 +217,10 @@ def completion_return_js(
     wave_var = review_field("wave")
     delivery_var = review_field("delivery")
     integration_var = review_field("integration")
-    review_status_expr = (
-        f"({integration_var} ? 'integrated' : (({prep_var} || {wave_var} || {delivery_var}) ? 'unstructured' : 'not_run'))"
-        if review_vars
-        else "'not_run'"
-    )
-
     test_present = test_var is not None
-    tests_status_expr = (
-        f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
-        f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)}))"
-        if test_present
-        else f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : {_js_lit(test_absent_status)})"
-    )
-
     falsifier_present = falsifier_var is not None
-    # `met` is the value that stamps a plan implemented (terminal_commit.
-    # _stamp_plan_implemented), so it is COMPUTED from the agent's required
-    # boolean `differs_from_baseline`, never trusted from its self-reported
-    # `status` (which has said `met` for "the observation matches the BASELINE").
-    # A result without the boolean (a script emitted before it existed) falls
-    # back to the agent's status, demoted when its own observation contradicts it.
-    criterion_status_expr = (
-        f"({falsifier_var} ? ({falsifier_var}.differs_from_baseline === true ? 'met' : "
-        f"({falsifier_var}.differs_from_baseline === false ? 'not_met' : "
-        f"(({falsifier_var}.status === 'met' && "
-        + _CRITERION_CONTRADICTION_RE_JS
-        + f".test({falsifier_var}.observation ?? '')) ? 'not_met' : {falsifier_var}.status))) : 'not_run')"
-        if falsifier_present
-        else "'not_run'"
-    )
+    tests_status_expr = _tests_status_expr(test_var, verification_var, test_absent_status)
+    criterion_status_expr = _criterion_status_expr(falsifier_var)
 
     next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
     next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
@@ -353,6 +337,70 @@ def completion_return_js(
         )
     else:
         params_expr = "null"
+    return next_action_kind, next_action_op, params_expr
+
+
+def completion_return_js(
+    *,
+    chunks,
+    width: dict,
+    plan_path,
+    deliverable_id,
+    run_base_sha,
+    test_var: Optional[str],
+    test_absent_status: str,
+    test_absent_note,
+    verification_var: str,
+    skipped_rows,
+    falsifier_var: Optional[str],
+    review_vars: Optional[dict],
+    has_commit_request: bool,
+    script_path: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> str:
+    """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
+
+    Built from one declarative field table (`_TABLE` below) mapping every schema-required
+    path to a JS source expression. `_TABLE`'s key set is asserted equal to
+    `_required_paths(load_schema())` on every call (AC13) — the table cannot silently
+    drift from the contract it renders. Expressions reference only `RUNTIME_VARS`,
+    stage-result bindings the caller passes in (`test_var`, `verification_var`,
+    `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
+    `plan_path`, ...) — never an executor's own free-text reply.
+    """
+    schema = load_schema()
+
+    def review_field(name: str, default: str = "null") -> str:
+        if not review_vars:
+            return default
+        return review_vars.get(name, default)
+
+    prep_var = review_field("prep")
+    wave_var = review_field("wave")
+    delivery_var = review_field("delivery")
+    integration_var = review_field("integration")
+    review_status_expr = (
+        f"({integration_var} ? 'integrated' : (({prep_var} || {wave_var} || {delivery_var}) ? 'unstructured' : 'not_run'))"
+        if review_vars
+        else "'not_run'"
+    )
+
+    test_present = test_var is not None
+    tests_status_expr = _tests_status_expr(test_var, verification_var, test_absent_status)
+
+    falsifier_present = falsifier_var is not None
+    criterion_status_expr = _criterion_status_expr(falsifier_var)
+
+    next_action_kind, next_action_op, params_expr = next_action_parts(
+        has_commit_request=has_commit_request,
+        review_vars=review_vars,
+        test_var=test_var,
+        falsifier_var=falsifier_var,
+        verification_var=verification_var,
+        test_absent_status=test_absent_status,
+        script_path=script_path,
+        session_id=session_id,
+    )
 
     outcome_expr = (
         f"({RUNTIME_VARS[4]} ? 'halted' : "

@@ -1674,6 +1674,28 @@ def _prime_exit_criterion_falsifier(plan_text: str) -> Optional[dict]:
     }
 
 
+def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal: str) -> dict:
+    """The review-result bindings `wake_digest.next_action_parts` reads, for the plan route and
+    the ask script alike. With no integration stage the reviewers apply in place and
+    `prep_label_stem_literal` stands in for the prep sidecar path: `review-prep-result` carries
+    no `sidecar_path`, so it is derived from the prep agent's `review:` label (a disclosed
+    assumption; prefer a real field if DoE adds one)."""
+    out = {
+        "prep": "_reviewPrep",
+        "wave": "_reviewWave",
+        "delivery": "_deliveryVerdict",
+        "bookkeeping_stem": bookkeeping_stem_literal,
+        "plan_id_literal": plan_id_literal,
+    }
+    if review.integration is not None:
+        out["integration"] = "_reviewIntegration"
+    else:
+        out["prep_label_stem_literal"] = _js_string_literal(
+            re.sub(r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}")
+        )
+    return out
+
+
 def _plan_id(plan_text: str) -> Optional[str]:
     """The plan's top-level frontmatter ``plan_id``, or ``None`` (fail-soft
     like ``_plan_deliverable_id``). ``review_stamp._resolve_terminal_commit``
@@ -3310,46 +3332,11 @@ def compose_script(
     )
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
-    if review.integration is not None:
-        review_vars = {
-            "prep": "_reviewPrep",
-            "wave": "_reviewWave",
-            "delivery": "_deliveryVerdict",
-            "integration": "_reviewIntegration",
-            "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
-            "plan_id_literal": _js_string_literal(plan_id or ""),
-        }
-    else:
-        # Zero-integration-stage path (2026-09-28 PM order, step b'):
-        # each review-wave reviewer applies its own findings in place --
-        # no `_reviewIntegration` binding exists. `bookkeeping_stem` is
-        # the deterministic (compose-time-known) name of the mechanical
-        # bookkeeping record `review_mint.wave_bookkeeping.bookkeep_wave`
-        # writes post-run; wake_digest's `inline_review` points at it by
-        # this same stem (wake_digest.py's zero-stage `inline_review_expr`
-        # branch). Never derived from a runtime `sidecar_path` -- there is
-        # no agent call left to choose one.
-        # `prep_sidecar` -- DoE's `review-prep-result` $def carries no
-        # `sidecar_path` field of its own (every OTHER wave/integration
-        # $def does), so unlike `wave`'s `sidecar_path` (self-reported,
-        # trusted) this is a DERIVED, DISCLOSED ASSUMPTION: the prep
-        # agent's own sidecar sits at `<its share_dir>/<slug(its own
-        # review: label)>.md`, mirroring the deterministic-naming
-        # convention `_agent_call_literal`'s `label:` already gives every
-        # non-slice review-wave call. If DoE's step (a)/(c) add a real
-        # `sidecar_path` to `review-prep-result`, prefer that field
-        # instead of this derivation.
-        prep_label_stem = re.sub(
-            r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}"
-        )
-        review_vars = {
-            "prep": "_reviewPrep",
-            "wave": "_reviewWave",
-            "delivery": "_deliveryVerdict",
-            "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
-            "plan_id_literal": _js_string_literal(plan_id or ""),
-            "prep_label_stem_literal": _js_string_literal(prep_label_stem),
-        }
+    review_vars = review_stage_vars(
+        review,
+        bookkeeping_stem_literal=_js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
+        plan_id_literal=_js_string_literal(plan_id or ""),
+    )
 
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None

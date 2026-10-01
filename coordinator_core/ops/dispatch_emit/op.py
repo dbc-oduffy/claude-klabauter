@@ -208,6 +208,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
+from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.review_mint import op as review_mint_op
 from coordinator_core.ops.review_mint.roster import (
     EMIT_ROUTE_INVENTORY,
@@ -712,6 +713,19 @@ def restamp(script_path: Path, session_id: str) -> dict:
     return receipt
 
 
+_PARAM_FIELDS = (
+    *(
+        Field(name, "str")
+        for name in (
+            "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
+            "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
+        )
+    ),
+    Field("queue", "list"),
+    Field("overrides", "dict"),
+)
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.emit" handler.
@@ -800,6 +814,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         ForeignEmissionError — if ``output_path`` already holds a different
         emission and ``force`` is not set.
     """
+    refusal = validate_params("dispatch.emit", params, _PARAM_FIELDS)
+    if refusal is not None:
+        return refusal
     plan_path = aliased_param(params, "plan_path", "plan")
     inventory_path = params.get("inventory_path")
     queue = params.get("queue")
@@ -996,6 +1013,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             sizing_rel=ask_ctx["sizing_rel"],
             run_id=ask_ctx["run_id"],
             session_id=emitting_session_id,
+            script_path=_script_path_under(guarded_path, ask_ctx["root"]),
         )
         receipt_plan_path = None
     else:

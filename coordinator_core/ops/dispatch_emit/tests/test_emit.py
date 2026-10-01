@@ -610,7 +610,13 @@ def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
 def test_completion_return_is_last_so_no_phase_follows_it():
     """An early completion return would silently skip the phases after it."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
-    completion = script.index("return {")
+    # The one sanctioned early return: a clean prep over no product file
+    # ends the run as a no-op (execute_review), since nothing follows it
+    # that has anything to act on.
+    noop = "return { halted: 'no-op'"
+    assert script.count(noop) <= 1
+    completion = script.replace(noop, "", 1).index("return {")
+    script = script.replace(noop, "", 1)
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
 
@@ -2055,3 +2061,21 @@ def test_unparseable_importer_is_skipped_and_the_warn_never_refuses(tmp_path):
 
 def test_import_window_warn_is_a_no_op_without_a_repo_root(tmp_path):
     assert emit.find_import_window_rows([], None) == []
+
+
+@pytest.mark.parametrize(
+    "params, needle",
+    [
+        ("not-a-dict", "must be an object"),
+        ({"plan_path": 7}, "plan_path must be a string"),
+        ({"plan_path": "p.md", "target_root": ["x"]}, "target_root must be a string"),
+        ({"queue": "dir", "profile": "p"}, "queue must be a list"),
+        ({"plan_path": "p.md", "overrides": []}, "overrides must be an object"),
+    ],
+)
+def test_dispatch_emit_refuses_malformed_request_without_raising(params, needle):
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    out = _dispatch_emit(params)
+    assert isinstance(out, dict)
+    assert needle in out["error"], out
