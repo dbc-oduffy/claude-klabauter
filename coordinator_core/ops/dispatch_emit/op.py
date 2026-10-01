@@ -1036,6 +1036,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not params.get("force"):
         _refuse_foreign_emission(guarded_path, script, emitting_session_id)
 
+    guarded_path.parent.mkdir(parents=True, exist_ok=True)
     guarded_path.write_text(script, encoding="utf-8", newline="")
 
     # Digested once, reused for both the reply and the receipt -- never a

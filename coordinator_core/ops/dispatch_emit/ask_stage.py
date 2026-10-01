@@ -15,6 +15,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
@@ -181,7 +182,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": "params.run_id is required and must be a string"}
     try:
         manifest = stage(
-            Path(repo_root),
+            main_worktree_root(Path(repo_root)),
             run_id=run_id,
             plan_rel=params.get("plan_path") or None,
             sizing_rel=params.get("sizing_path") or None,

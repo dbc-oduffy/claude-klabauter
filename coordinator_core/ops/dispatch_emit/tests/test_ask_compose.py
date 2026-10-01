@@ -123,3 +123,18 @@ def test_prompt_text_is_escaped_into_the_script():
     script = _compose(prompt="back`tick ${x} \\ 'q'")
     assert "\\\\ \\'q\\'" in script
     assert not any(f.severity is Severity.ERROR for f in run_checks(script))
+
+
+def test_size_prompt_walks_the_agent_to_a_gate_passing_sizing():
+    script = _compose()
+    size_line = next(ln for ln in script.splitlines() if "const _sized" in ln)
+    for needle in (
+        "sizing-assemble",
+        "coordinator-doc-new --type sizing-object",
+        "--exit-criterion",
+        "--interaction-mode",
+        "from `draft` to `sized`",
+        "`exit_criterion.accepted` null",
+        "`writes`",
+    ):
+        assert needle in size_line, needle

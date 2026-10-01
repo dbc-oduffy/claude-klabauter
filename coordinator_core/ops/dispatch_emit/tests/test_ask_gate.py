@@ -85,3 +85,47 @@ def test_accepted_m_returns_arm_and_baton(repo):
     assert v.halt is None and v.arm == "m_plus"
     assert v.baton["path"].startswith("state/handoffs/") and (repo / v.baton["path"]).is_file()
     assert v.to_json()["baton"]["id"] == v.baton["id"]
+
+
+def _composed_params(op: str, **values) -> dict:
+    """The params object the composed script's agent is told to send to `op`, values filled in."""
+    import json
+    import re
+
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+
+    script = _compose()
+    line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify({" in ln)
+    body = re.search(r"JSON\.stringify\(\{ (.*?) \}\)", line).group(1)
+    keys = [pair.split(":")[0].strip() for pair in body.split(",")]
+    return json.loads(json.dumps({k: values.get(k) for k in keys}))
+
+
+def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo):
+    from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+
+    (repo / ".git").mkdir()
+    _put(repo, tshirt="S", route="spec-dispatch")
+    params = _composed_params("dispatch.ask_gate", sizing_path=REL, writes=[])
+    assert "error" not in (reply := _handler(params, repo_root=repo / ".git")), reply
+    assert reply["arm"] == "s" and reply["halt"] is None
+
+
+def test_stage_keys_the_composed_script_sends_are_the_keys_the_handler_reads(repo):
+    import inspect
+
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    sent = set(_composed_params("dispatch.ask_stage"))
+    src = inspect.getsource(ask_stage._handler)
+    assert all(f'"{k}"' in src for k in sent), sent
+
+
+def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
+    """The dispatcher hands common_dir-scoped ops `<repo>/.git`, not the worktree root."""
+    from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+
+    (repo / ".git").mkdir()
+    _put(repo, tshirt="S", route="spec-dispatch")
+    reply = _handler({"sizing_path": REL, "writes": []}, repo_root=repo / ".git")
+    assert reply["halt"] is None and reply["arm"] == "s", reply

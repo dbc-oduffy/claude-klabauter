@@ -235,9 +235,16 @@ def compose_ask_script(
     if not sizing_rel:
         b.append("  phase('size');")
         size_prompt = prompt_of(
-            "Size this ask by following the sizing skill (`coordinator:sizing`): scaffold the sizing "
-            "object and return its repo-relative path as sizing_rel. When the estimate is XS, also "
-            "return the file footprint the ask will write as repo-relative `writes`.\n\nAsk:\n"
+            "Size this ask by following the sizing skill (`coordinator:sizing`) to a sizing the "
+            "gate can read, in this order: (1) run `sizing-assemble` for the estimate and route; "
+            "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
+            "--route, --name, --premise with --premise-evidence, --exit-criterion (one sentence "
+            "stating what done means) and --interaction-mode (the mode this session runs under); "
+            "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
+            "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "
+            "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "
+            "sizing_rel. When the estimate is XS, also return the file footprint the ask will "
+            "write as repo-relative `writes`.\n\nAsk:\n"
             + (prompt or "")
         )
         b.append(
@@ -250,7 +257,7 @@ def compose_ask_script(
     gate_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_GATE} '",
-        "js:JSON.stringify({ sizing_rel: _sizingRel, writes: _writes })",
+        "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes })",
         "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
@@ -266,7 +273,7 @@ def compose_ask_script(
     stage_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-        "js:JSON.stringify({ run_id: _runId, plan_rel: _planRel, sizing_rel: _sizingRel, writes: _writes })",
+        "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, sizing_path: _sizingRel, writes: _writes })",
         "'` and return its JSON reply verbatim.",
     )
     plan_author = _cat(

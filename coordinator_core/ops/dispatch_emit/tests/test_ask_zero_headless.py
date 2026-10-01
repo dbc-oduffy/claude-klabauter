@@ -106,3 +106,10 @@ def test_fire_with_an_ask_verb_is_refused_before_any_emit(repo, capsys, argv, mo
     rc, out = _emit(repo, capsys, *argv)
     assert rc == cli.EXIT_USAGE
     assert out == ""
+
+
+def test_raw_ask_creates_a_missing_out_directory(repo, capsys):
+    out = repo / "state" / "scratch" / "warp" / "fresh" / "ask.workflow.mjs"
+    rc, _ = _emit(repo, capsys, "--ask", "add a thing", "--out", str(out))
+    assert rc == 0
+    assert out.is_file()

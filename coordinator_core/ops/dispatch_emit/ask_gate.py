@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
     HALT_ROOM,
@@ -112,4 +113,4 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes = params.get("writes") or []
     if not isinstance(writes, list) or not all(isinstance(w, str) for w in writes):
         return {"error": "params.writes must be a list of strings"}
-    return gate(Path(repo_root), sizing_rel, writes=writes).to_json()
+    return gate(main_worktree_root(Path(repo_root)), sizing_rel, writes=writes).to_json()
