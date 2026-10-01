@@ -158,6 +158,7 @@ def compose_execute_review(
     declared_paths: Optional[List[str]] = None,
     declared_paths_js: Optional[str] = None,
     prompt_head: str = "",
+    prep_suffix_js: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -182,6 +183,9 @@ def compose_execute_review(
     :: _prompt_head`` -- importing ``emit`` here would cycle, since
     ``emit`` imports ``compose``/this module; the caller passes the
     rendered text in), spliced ahead of every composed prompt.
+
+    ``prep_suffix_js`` (only with ``declared_paths_js``) is a JS string
+    expression concatenated onto the prep prompt after the declared paths.
 
     1. **prep** -- one call bound to ``_reviewPrep``; prompt carries
        ``plan_path``, ``run_base_sha`` and ``declared_paths``.
@@ -240,7 +244,10 @@ def compose_execute_review(
             raise ValueError("prep agent call does not open with its prompt literal")
         prep_call = (
             f"agent({_prompt_literal(prep_prompt)} + ' ' + "
-            f"JSON.stringify({declared_paths_js}), " + prep_call[len(prep_prefix):]
+            f"JSON.stringify({declared_paths_js})"
+            + (f" + {prep_suffix_js}" if prep_suffix_js else "")
+            + ", "
+            + prep_call[len(prep_prefix):]
         )
     phases.append(
         (

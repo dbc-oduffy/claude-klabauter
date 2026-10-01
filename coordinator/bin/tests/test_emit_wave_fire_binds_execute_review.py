@@ -41,7 +41,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-install"))
 
     async def echo(msg, caller=None):
-        return {"result": {"script": "const args = " + json.dumps(msg["params"]["args"]) + ";\n"}}
+        return {"result": {"script": "export const meta = {};\nconst args = " + json.dumps(msg["params"]["args"]) + ";\n"}}
 
     import coordinator_core.ipc as ipc
 
@@ -59,7 +59,7 @@ def _patch_review(monkeypatch, fragment=None, load_error=None):
         return fragment
 
     monkeypatch.setattr(op, "load_fragment", load_fragment)
-    monkeypatch.setattr(op, "load_stage_schemas", lambda repo_root=None: {"slice-review-result": {}})
+    monkeypatch.setattr(op, "load_stage_schemas", lambda repo_root=None: {"slice-review-result": {"type": "object"}, "review-prep-result": {"type": "object"}})
 
 
 def _fire(tmp_path):
@@ -86,15 +86,50 @@ def _fire(tmp_path):
     ])
 
 
-def test_wave_fire_binds_execute_review(tmp_path, monkeypatch):
+SIGNATURE = "async function executeReview({ batonId, declaredPaths }) {"
+
+
+def _fire_text(tmp_path, monkeypatch):
     _patch_review(monkeypatch, _fragment())
     assert _fire(tmp_path) == ewf.EXIT_OK
     fires = list((tmp_path / "trail").glob("fire-*.mjs"))
     assert fires
-    text = fires[0].read_text(encoding="utf-8")
-    args = json.loads(text[len("const args = "):].rstrip().rstrip(";"))
-    assert "execute_review" in args["executeReview"]["fragment"]
-    assert "slice-review-result" in args["executeReview"]["stageSchemas"]
+    return fires[0], fires[0].read_text(encoding="utf-8")
+
+
+def test_wave_fire_defines_execute_review_function(tmp_path, monkeypatch):
+    _path, text = _fire_text(tmp_path, monkeypatch)
+    assert text.index("export const meta") < text.index(SIGNATURE) < text.index("const args = ")
+    args = json.loads(text[text.index("const args = ") + len("const args = "):].rstrip().rstrip(";"))
+    assert "executeReview" not in args
+
+
+def test_execute_review_scopes_to_its_own_declared_paths(tmp_path, monkeypatch):
+    _path, text = _fire_text(tmp_path, monkeypatch)
+    fn = text[text.index(SIGNATURE): text.index("const args = ")]
+    assert "JSON.stringify(declaredPaths)" in fn
+    assert "'\\nbaton_id: ' + String(batonId)" in fn
+    assert "ONLY declared paths" in fn
+    assert "return { prep: _reviewPrep, wave: _reviewWave, integration: null };" in fn
+    assert fn.count("JSON.stringify(declaredPaths)") == 1
+
+
+@pytest.mark.spawns_process
+def test_emitted_function_parses(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not on PATH")
+    path, _text = _fire_text(tmp_path, monkeypatch)
+    check = path.with_suffix(".check.mjs")
+    check.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    done = subprocess.run(
+        [node, "--check", str(check)], capture_output=True, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert done.returncode == 0, done.stderr
 
 
 @pytest.mark.parametrize("case", ["unloadable", "route-missing"])
