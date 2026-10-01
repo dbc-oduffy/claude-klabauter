@@ -220,6 +220,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'of the primary success / exit criterion at the sizing touchpoint)',
     ),
     (
+        "coordinator_core.ops.sizing_resize",
+        'registers "sizing.resize" (2026-10-01, writes `estimate.tshirt` and the '
+        'engine-resolved `route` back to a sizing)',
+    ),
+    (
         "coordinator_core.ops.sizing_spike_verdict",
         'registers "sizing.record_spike_verdict" (2026-08-14, single-target applier for '
         'the sizing-object `premise.spike_verdict` pointer — the missing producer for the '

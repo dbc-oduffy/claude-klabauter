@@ -391,6 +391,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.ship":                               "common_dir",
     "sizing.discharge_surfaced":                 "common_dir",
     "sizing.accept_exit_criterion":               "common_dir",
+    "sizing.resize":                             "common_dir",
     "sizing.record_spike_verdict":               "common_dir",
     "sizing.read_object_fields":                 "common_dir",
     "plan.tasks.spine_drift_check":              "common_dir",

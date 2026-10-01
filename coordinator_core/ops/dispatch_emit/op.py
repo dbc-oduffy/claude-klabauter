@@ -88,6 +88,14 @@ Wire params:
                                      of those, the empty string. NEVER
                                      minted — see ``_receipt_session_id``.
 
+    sizing_path (str, optional)   — the SIZING route: an accepted sizing under
+                                     ``state/sizings/``. Exclusive of
+                                     plan/inventory/queue
+                                     (``SizingPathConflictError``). With
+                                     ``writes`` (list[str], XS footprint) and
+                                     ``trail_dir`` (m_plus). The reply adds
+                                     ``arm``.
+
 Reply fields:
     {"path": "<written path>", "ok": bool,
      "findings": [{"severity","code","message","line"?}, ...],
@@ -185,6 +193,8 @@ from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
+from coordinator_core.ops.dispatch_emit import sizing_fire
+from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.emit import (
     check_agent_types_resolve,
@@ -264,6 +274,11 @@ class QueuePlanConflictError(ValueError):
     ``InventoryPathConflictError`` -- queue input never falls back to the
     wave path (§ Design § Entrypoint).
     """
+
+
+class SizingPathConflictError(ValueError):
+    """Raised when ``sizing_path`` is passed with ``plan_path``/``inventory_path``/
+    ``queue``/``profile``; the sizing route selects its own arm."""
 
 
 class ForeignEmissionError(ValueError):
@@ -785,6 +800,58 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     inventory_path = params.get("inventory_path")
     queue = params.get("queue")
     profile_name = params.get("profile")
+    sizing_path = params.get("sizing_path")
+    sizing_arm: Optional[str] = None
+    sizing_script: Optional[str] = None
+    sizing_root: Optional[Path] = None
+
+    if sizing_path:
+        if plan_path or inventory_path or queue or profile_name:
+            raise SizingPathConflictError(
+                "dispatch.emit accepts sizing_path alone, not with plan_path/"
+                f"inventory_path/queue/profile (got sizing_path={sizing_path!r})"
+            )
+        sizing_root = _sizing_root(params, repo_root, str(sizing_path))
+        sizing_rel = _sizing_rel(sizing_root, str(sizing_path))
+        sizing = sizing_fire.load_sizing(sizing_root, sizing_rel)
+        sizing_arm = sizing_fire.resolve_arm(sizing)
+        writes = list(params.get("writes") or [])
+        refusals = sizing_fire.collect_fire_refusals(
+            sizing, sizing_rel=sizing_rel, arm=sizing_arm, writes=writes, repo_root=sizing_root
+        )
+        if refusals:
+            raise SizingFireRefused(refusals)
+        if sizing_arm == sizing_fire.ARM_M_PLUS:
+            return _delegate_m_plus(params, sizing_rel, sizing_root)
+        if not (aliased_param(params, "output_path", "out_path")):
+            raise ValueError(
+                f"dispatch.emit requires param: {spellings('output_path', 'out_path')} "
+                f"at sizing arm {sizing_arm!r}"
+            )
+        if sizing_arm == sizing_fire.ARM_XS:
+            from coordinator_core.ops.dispatch_emit import sizing_xs_mint
+
+            out_dir = Path(aliased_param(params, "output_path", "out_path")).resolve().parent
+            spine_text, spine_path = sizing_xs_mint.mint_xs_spine(
+                sizing, sizing_rel=sizing_rel, writes=writes, out_dir=out_dir
+            )
+            guarded_spine = contained_path(Path(spine_path), [out_dir])
+            if guarded_spine is None:
+                raise PathEscapeError(
+                    f"minted spine path escapes its output directory: {spine_path!r} not under {out_dir!r}"
+                )
+            guarded_spine.write_text(spine_text, encoding="utf-8", newline="\n")
+            plan_path = str(guarded_spine)
+            params = {**params, "plan_path": plan_path}
+            repo_root = repo_root or sizing_root
+        else:
+            from coordinator_core.ops.dispatch_emit import sizing_s_compose
+
+            sizing_script = sizing_s_compose.compose_s_stage(
+                sizing,
+                sizing_rel=sizing_rel,
+                repo_root=Path(sizing_root).as_posix(),
+            )
 
     cloud_spawn = params.get("cloud_spawn")
     if cloud_spawn is not None:
@@ -821,7 +888,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"(got plan_path={plan_path!r}, inventory_path={inventory_path!r})"
         )
 
-    if not is_queue_route:
+    if not is_queue_route and sizing_script is None:
         if inventory_path:
             spine_text, spine_path = mint_spine(
                 inventory_path, max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS
@@ -936,6 +1003,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
+    elif sizing_script is not None:
+        script = sizing_script
+        receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
         # schemas itself, through the existing content-root pointer resolution
@@ -1033,9 +1103,81 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         "warn_count": warn_count,
     }
 
+    if sizing_arm is not None:
+        reply["arm"] = sizing_arm
+
     if not is_queue_route:
-        anchor_root = repo_root or _repo_root_for_plan(plan_path)
+        anchor_root = repo_root or (
+            sizing_root if plan_path is None else _repo_root_for_plan(plan_path)
+        )
         if anchor_root is not None:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
 
     return reply
+
+
+def _sizing_root(params: dict, repo_root: Optional[Path], sizing_path: str) -> Path:
+    """Repo root a ``sizing_path`` resolves against: the request root, an explicit
+    ``target_root``, or the ``.git`` ancestor of the sizing file."""
+    if repo_root is not None:
+        return Path(repo_root)
+    if params.get("target_root"):
+        return Path(params["target_root"])
+    found = _repo_root_for_plan(sizing_path)
+    if found is None:
+        raise ValueError(
+            f"dispatch.emit sizing_path {sizing_path!r} has no .git ancestor; "
+            "pass target_root"
+        )
+    return found
+
+
+def _sizing_rel(root: Path, sizing_path: str) -> str:
+    """``sizing_path`` as a root-relative forward-slash path; a path outside
+    ``root`` is returned as given and refused by ``load_sizing`` containment."""
+    p = Path(sizing_path)
+    if p.is_absolute():
+        try:
+            return p.resolve().relative_to(Path(root).resolve()).as_posix()
+        except ValueError:
+            return sizing_path
+    return p.as_posix()
+
+
+def _delegate_m_plus(params: dict, sizing_rel: str, root: Path) -> dict:
+    """Arm m_plus: ``emit-wave-fire --from-sizing`` writes its own script and
+    receipt; this passes the script path through."""
+    from coordinator_core.ops.dispatch_emit import sizing_m_delegate
+
+    trail_dir = params.get("trail_dir")
+    out = sizing_m_delegate.delegate_m_plus(
+        sizing_rel=sizing_rel, repo_root=root, trail_dir=trail_dir
+    )
+    if out.get("exit_code"):
+        raise SizingFireRefused(
+            [f"emit-wave-fire --from-sizing exited {out['exit_code']}: {out.get('refusal') or ''}".rstrip(": ")]
+        )
+    script_path = out["scriptPath"]
+    try:
+        digest: Optional[str] = _script_sha256(Path(script_path))
+    except OSError:
+        digest = None
+    uncommitted = [sizing_rel]
+    try:
+        baton = (sizing_fire.load_sizing(root, sizing_rel) or {}).get("baton")
+    except SizingFireRefused:
+        baton = None
+    if isinstance(baton, str) and baton:
+        uncommitted.insert(0, baton)
+    return {
+        "batons": list(out.get("batons") or []),
+        "uncommitted": uncommitted,
+        "path": script_path,
+        "receipt": None,
+        "sha256": digest,
+        "ok": True,
+        "findings": [],
+        "error_count": 0,
+        "warn_count": 0,
+        "arm": sizing_fire.ARM_M_PLUS,
+    }

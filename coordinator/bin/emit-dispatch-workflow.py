@@ -17,6 +17,7 @@ door.
 Usage:
   python emit-dispatch-workflow.py --plan PLAN --out OUT [--force] [--fire] [--repo-root PATH]
   python emit-dispatch-workflow.py --inventory RECORD --out OUT [--force] [--fire] [--repo-root PATH]
+  python emit-dispatch-workflow.py --sizing STATE/SIZINGS/X.yaml [--writes PATH ...] [--out OUT] [--trail-dir DIR] [--fire]
   python emit-dispatch-workflow.py --restamp SCRIPT
 
 Exit codes (`coordinator_core.ops.dispatch_emit.cli`):

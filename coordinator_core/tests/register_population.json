@@ -4305,6 +4305,10 @@
       "_GIT_ENV"
     ],
     [
+      "coordinator_core/ops/tests/test_sizing_resize.py",
+      "_GIT_ENV"
+    ],
+    [
       "coordinator_core/ops/tests/test_sizing_ship.py",
       "_GIT_ENV"
     ],

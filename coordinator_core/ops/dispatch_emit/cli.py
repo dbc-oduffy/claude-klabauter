@@ -36,6 +36,8 @@ printed JSON (docs/plans/2026-09-27-load-aware-workflow-admission.md, C4).
 It does NOT derive waves, pathspecs, script text, or receipt shape itself.
 
 Negative-spec:
+  - Does NOT pick a sizing's arm: `--sizing` forwards to `_dispatch_emit`,
+    which requires `--out` at arms xs and s and ignores it at m_plus.
   - Does NOT re-implement `_dispatch_emit`'s InventoryPathConflictError,
     ForeignEmissionError, or PathEscapeError refusals — those raise from
     the op function unchanged; this module only maps the exception class
@@ -80,9 +82,11 @@ from coordinator_core.ops.dispatch_emit.op import (
     NoReceiptToRestampError,
     PathEscapeError,
     QueuePlanConflictError,
+    SizingPathConflictError,
     _dispatch_emit,
     restamp,
 )
+from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
     PhaseNotFoundError,
@@ -109,6 +113,8 @@ EXIT_USAGE = 2
 _DATA_ERRORS = (
     InventoryPathConflictError,
     QueuePlanConflictError,
+    SizingPathConflictError,
+    SizingFireRefused,
     PathEscapeError,
     QueuePathEscapeError,
     ForeignEmissionError,
@@ -157,6 +163,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--inventory",
         default=None,
         help="mise-inventory record to mint a spine FROM first, then emit",
+    )
+    parser.add_argument(
+        "--sizing",
+        default=None,
+        help="accepted sizing under state/sizings/; XS/S emit here, M+ delegates to emit-wave-fire",
+    )
+    parser.add_argument(
+        "--writes",
+        action="append",
+        default=None,
+        help="a path the XS row writes (repeatable; --sizing at XS only)",
+    )
+    parser.add_argument(
+        "--trail-dir",
+        dest="trail_dir",
+        default=None,
+        help="trail directory handed to emit-wave-fire (--sizing at M+ only)",
     )
     parser.add_argument(
         "--restamp",
@@ -384,6 +407,21 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     is_queue_route = bool(args.queue) or bool(args.profile)
 
+    if args.sizing and (is_queue_route or args.plan or args.inventory):
+        print(
+            "emit-dispatch-workflow: ERROR — --sizing is exclusive of "
+            "--plan/--inventory/--queue/--profile",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if (args.writes or args.trail_dir) and not args.sizing:
+        print(
+            "emit-dispatch-workflow: ERROR — --writes/--trail-dir require --sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if is_queue_route and (args.plan or args.inventory):
         print(
             "emit-dispatch-workflow: ERROR — --queue/--profile is exclusive of "
@@ -392,9 +430,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if not is_queue_route and not args.plan and not args.inventory:
+    if not is_queue_route and not args.plan and not args.inventory and not args.sizing:
         print(
-            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, or "
+            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --sizing, or "
             "--restamp is required",
             file=sys.stderr,
         )
@@ -465,12 +503,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         # keep requiring --out explicitly.
         args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
-    if not args.out_path:
+    if not args.out_path and not args.sizing:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
-    out_path = Path(args.out_path)
-    if not out_path.name.endswith(_REQUIRED_OUT_SUFFIX):
+    out_path = Path(args.out_path) if args.out_path else None
+    if out_path is not None and not out_path.name.endswith(_REQUIRED_OUT_SUFFIX):
         print(
             f"emit-dispatch-workflow: ERROR — --out {args.out_path!r} does not end "
             f"{_REQUIRED_OUT_SUFFIX!r} -- refusing to write an emitted script over a "
@@ -500,7 +538,17 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if repo_root is None and is_queue_route:
         repo_root = _default_repo_root_from_cwd()
 
-    params: dict = {"force": args.force, "output_path": args.out_path}
+    params: dict = {"force": args.force}
+    if args.out_path:
+        params["output_path"] = args.out_path
+    if args.sizing:
+        params["sizing_path"] = args.sizing
+        if args.writes:
+            params["writes"] = args.writes
+        if args.trail_dir:
+            params["trail_dir"] = args.trail_dir
+        if repo_root is None:
+            repo_root = _default_repo_root_from_cwd()
     if args.plan:
         params["plan_path"] = args.plan
     if args.inventory:

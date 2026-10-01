@@ -1,0 +1,82 @@
+"""XS arm of `emit-dispatch-workflow --sizing`: an XS sizing -> one-row plan-tasks spine text.
+
+Pure: returns the spine markdown and the path it belongs at; the caller (`op.py`) writes it. The
+frontmatter cites `sizing_object:`, which is what `emit.derive_review_tier` keys the review wave on.
+Writes come from the operator because a sizing carries no footprint.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path, PurePosixPath
+from typing import Mapping, Sequence
+
+import yaml
+
+from coordinator_core.ops.dispatch_emit.inventory_mint import (
+    _dump_rows,
+    _infer_change_kind,
+    _refuse_if_directory_shaped,
+    _refuse_if_glob,
+)
+
+XS_ROW_ID = "X1"
+
+
+def mint_xs_spine(
+    sizing: Mapping,
+    *,
+    sizing_rel: str,
+    writes: Sequence[str],
+    out_dir: Path,
+) -> tuple[str, Path]:
+    """Return `(spine_text, out_dir / "<sizing-stem>.spine.md")`; raises the inventory_mint
+    footprint errors for a glob or directory-shaped `writes` entry, `ValueError` for empty writes."""
+    sizing_rel = str(sizing_rel).replace("\\", "/")
+    stem = PurePosixPath(sizing_rel).stem
+    paths = [str(w).replace("\\", "/") for w in writes]
+    if not paths:
+        raise ValueError("XS arm needs at least one --writes path")
+    for path in paths:
+        _refuse_if_glob(XS_ROW_ID, path, path)
+        _refuse_if_directory_shaped(XS_ROW_ID, path, path)
+
+    criterion = sizing.get("exit_criterion")
+    statement = str(criterion.get("statement") or "").strip() if isinstance(criterion, Mapping) else ""
+    intent = str(sizing.get("intent") or "").strip()
+    title = next((ln.strip() for ln in intent.splitlines() if ln.strip()), stem)
+
+    frontmatter: dict = {
+        "run_id": stem,
+        "derived_from": "sizing object",
+        "sizing_object": sizing_rel,
+    }
+    if sizing.get("deliverable_id"):
+        frontmatter["deliverable_id"] = str(sizing["deliverable_id"])
+    frontmatter["prime_exit_criterion"] = {"statement": statement}
+
+    row = {
+        "id": XS_ROW_ID,
+        "title": title,
+        "change_kind": _infer_change_kind(paths),
+        "surface": paths[0],
+        "body": (
+            f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
+            f"Intent:\n{intent}\n"
+            f"Verification (this row is DONE only when this holds): {statement}\n"
+        ),
+        "writes": paths,
+    }
+
+    text = (
+        "---\n"
+        + yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True, default_flow_style=False)
+        + "---\n\n"
+        + f"# Minted dispatch spine — {stem}\n\n"
+        + f"Derived from `{sizing_rel}` by `dispatch.emit --sizing`.\n"
+        + "**Do not hand-edit** — the next mint overwrites this file in place.\n\n"
+        + "## Tasks\n\n"
+        + "```yaml plan-tasks\n"
+        + _dump_rows([row])
+        + "```\n"
+    )
+    return text, Path(out_dir) / f"{stem}.spine.md"

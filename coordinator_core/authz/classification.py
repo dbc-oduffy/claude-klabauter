@@ -3351,6 +3351,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # optionally, `exit_criterion.statement`) under locked_rmw (2026-09-27; see
     # coordinator_core/ops/sizing_accept_exit_criterion.py docstring).
     "sizing.accept_exit_criterion": OpClass.MUTATING,
+    # sizing.resize — MUTATING: writes `estimate.tshirt` and the engine-resolved `route`
+    # under locked_rmw (see coordinator_core/ops/sizing_resize.py docstring).
+    "sizing.resize": OpClass.MUTATING,
     # sizing.record_spike_verdict — MUTATING: writes `premise.spike_verdict` under
     # locked_rmw (2026-08-14; see coordinator_core/ops/sizing_spike_verdict.py docstring).
     "sizing.record_spike_verdict": OpClass.MUTATING,
