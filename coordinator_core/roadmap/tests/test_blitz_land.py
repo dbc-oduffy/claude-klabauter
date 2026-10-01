@@ -21,6 +21,13 @@ from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap import plan_gate as pg
 
 
+@pytest.fixture(autouse=True)
+def _fake_repo_has_no_history(monkeypatch):
+    """These tests build a bare `.git` dir with invented SHAs; reachability is
+    covered against a real repo in test_blitz_land_shipped_in_reachability.py."""
+    monkeypatch.setattr(bl, "shipped_in_refusals", lambda root, shas: {})
+
+
 def _repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir(exist_ok=True)
     return tmp_path

@@ -62,6 +62,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.session.claimed_write import create_exclusive
+from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, remove_fm_field
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
@@ -527,10 +528,62 @@ def approve_ready(
     }
 
 
+def _landing_ref_name(worktree_root: Path) -> str:
+    """Branch name HEAD points at, read in process (no spawn); `HEAD` when detached."""
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    try:
+        head = (resolve_git_dir(worktree_root) / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "HEAD"
+    prefix = "ref: refs/heads/"
+    return head[len(prefix):] if head.startswith(prefix) else "HEAD"
+
+
+def shipped_in_refusals(worktree_root: Path, shas: List[str]) -> Dict[str, str]:
+    """`{sha: refusal}` for every SHA in `shas` that is not a commit reachable from HEAD.
+
+    One `git rev-list <shas> --not HEAD` for the whole set: it prints exactly the
+    commits reachable from a cited SHA but not from HEAD, so a cited SHA is
+    unreachable iff some output line starts with it. A SHA git cannot resolve
+    fails the whole call; only then does it fall back to one
+    `git_ancestry.is_ancestor` probe per SHA to name which one.
+    """
+    wanted = sorted({s.lower() for s in shas})
+    if not wanted:
+        return {}
+    from coordinator_core.git.run import run_git
+
+    ref = _landing_ref_name(worktree_root)
+    root = str(worktree_root)
+    unreachable: Set[str] = set()
+    unresolved: Set[str] = set()
+    result = run_git(["-C", root, "rev-list", *wanted, "--not", "HEAD"])
+    if result.returncode == 0:
+        out = result.stdout.split()
+        unreachable = {s for s in wanted if any(line.startswith(s) for line in out)}
+    else:
+        from coordinator_core.git_ancestry import is_ancestor
+
+        for sha in wanted:
+            read_ok, observed = is_ancestor(sha, "HEAD", cwd=root)
+            if not read_ok:
+                unresolved.add(sha)
+            elif not observed:
+                unreachable.add(sha)
+    reason = (
+        "shipped_in {sha} is not a commit reachable from {ref} — a squashed "
+        "pre-landing commit is not a ship commit; pass the landed commit, or "
+        "substantively-shipped-no-commit:<YYYY-MM-DD>"
+    )
+    return {s: reason.format(sha=s, ref=ref) for s in sorted(unreachable | unresolved)}
+
+
 def close_dispatched(
     worktree_root: Path,
     baton_path: str,
     shipped_in: str,
+    refusals: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Close an XS baton whose work the wave's Dispatch phase already did.
 
@@ -564,12 +617,19 @@ def close_dispatched(
     `shipped_in`). A confirm-and-close's prior SHA is a ship commit too — it names
     where the work landed.
     """
-    if not shipped_in or not re.fullmatch(r"[0-9a-fA-F]{7,64}", shipped_in):
+    no_commit = bool(shipped_in) and _NO_COMMIT_TOKEN_RE.fullmatch(shipped_in) is not None
+    if not shipped_in or not (no_commit or _SHA_HEX_RE.fullmatch(shipped_in)):
         raise LandingRefused(
             "closing a dispatched baton needs a resolvable `shipped_in` SHA — commit "
             "the wave's work first, then land with shipped_in=<sha>. This module does "
             "not commit, so a stamp written before the commit would cite nothing."
         )
+    if not no_commit:
+        if refusals is None:
+            refusals = shipped_in_refusals(worktree_root, [shipped_in])
+        refused_reason = refusals.get(shipped_in.lower())
+        if refused_reason:
+            raise LandingRefused(refused_reason)
     baton_abs = worktree_root / baton_path
     if not baton_abs.is_file():
         raise LandingRefused(f"baton does not exist on disk: {baton_path}")
@@ -593,7 +653,7 @@ def close_dispatched(
             )
         text = _set_field(old, "deployment_state", "shipped")
         text = _set_field(text, "shipped_in", shipped_in)
-        return _set_field(text, "shipped_in_kind", "ship-commit")
+        return _set_field(text, "shipped_in_kind", "no-commit" if no_commit else "ship-commit")
 
     stamped = True
     detail = None
@@ -1041,6 +1101,16 @@ def land_wave(
     closed: List[Dict[str, Any]] = []
     execution_ready: List[Dict[str, Any]] = []
     refused: List[Dict[str, Any]] = []
+    cited = {
+        sha
+        for entry in wave_result.get("ready") or []
+        if isinstance(entry, dict) and entry.get("route") == "dispatch"
+        for sha in (
+            _verified_prior_sha(worktree_root, entry.get("priorShippedIn"))[0] or shipped_in,
+        )
+        if sha and _SHA_HEX_RE.fullmatch(sha)
+    }
+    ship_refusals = shipped_in_refusals(worktree_root, sorted(cited))
     for entry in wave_result.get("ready") or []:
         try:
             pivoted = pivoting_reviewers(entry)
@@ -1106,7 +1176,9 @@ def land_wave(
                         f"priorShippedIn rejected ({rejected}) and the landing carries no "
                         "shipped_in to fall back to — land again with shipped_in=<sha>"
                     )
-                row = close_dispatched(worktree_root, baton_path, prior or shipped_in or "")
+                row = close_dispatched(
+                    worktree_root, baton_path, prior or shipped_in or "", ship_refusals
+                )
                 if rejected:
                     row["prior_shipped_in_rejected"] = rejected
                 closed.append(row)
