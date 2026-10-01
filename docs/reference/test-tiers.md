@@ -134,8 +134,13 @@ treat that gap as open if you're relying on the wrapped form, not just the bare 
 Only the EM. A dispatched subagent never does, nor any subagent of a cloud EM: a dispatch or a
 plan step is not assent, whatever it says. A session the PM addresses directly as EM is the EM,
 whatever brief started it. On a local box the EM runs it under a live `tier-u-grant-cli` grant,
-because peers share the box. In a cloud session the box is the session's own, so the run is the
-EM's call and needs no grant. The guard does not yet see the cloud case; see
+because peers share the box. On a cloud box no one runs it: `check_test_suite_invocation` denies a
+Tier-U or Tier-F run for every caller there (`_is_cloud_box`, the harness rung read off the
+caller's env), and `docs/claude-md/environment.cloud.md` states the same. This supersedes the
+2026-09-30 carve-out that let a cloud EM run it with no grant (a 4-core cloud suite run hit the
+7200s cap at 88%). The venue is visible only where the caller's env reaches the guard: the cold
+path and the warm door carry `CLAUDE_CODE_REMOTE`; the http hook leg does not, so there the grant
+leg still decides. See
 `state/improvement-queue/2026-09-30-tier-u-guard-has-no-cloud-em-carve-out.yaml`.
 
 ## A green suite re-run is not new evidence

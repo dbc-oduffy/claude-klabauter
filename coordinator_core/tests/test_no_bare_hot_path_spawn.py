@@ -1071,7 +1071,9 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
     # prepare-commit-msg hook spawning git from the console-less Bash-tool
     # parent, is the highest-value site in this population and is now fully
     # suppressed at all three of its spawns.
-    "coordinator/bin": 93,
+    # 110 -> 93 -> 0, 2026-10-01: every coordinator/bin spawn now carries the
+    # no-console flags; census measured 0.
+    "coordinator/bin": 0,
     # 10 -> 8, 2026-09-06: `coordinator/lib/percolate/dest_refresh.py`'s
     # private `_git` runner was migrated onto `coordinator_core.git.run.
     # run_git` (shared-runner register is shrink-only), which suppresses the
