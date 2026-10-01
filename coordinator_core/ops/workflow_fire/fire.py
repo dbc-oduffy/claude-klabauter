@@ -965,6 +965,21 @@ _LIVENESS_POLL_INTERVAL_S = 0.05
 _LIVENESS_POLL_ATTEMPTS = 6
 
 
+_STARTUP_LOG_TAIL_BYTES = 2000
+
+
+def _startup_log_tail(log_path) -> str:
+    """Last ``_STARTUP_LOG_TAIL_BYTES`` of a child's log, for a refusal message."""
+    try:
+        with open(log_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - _STARTUP_LOG_TAIL_BYTES))
+            text = handle.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return "(log unreadable)"
+    return text or "(log empty)"
+
+
 def fire_workflow(
     script_path: str,
     cwd: Optional[str] = None,
@@ -1117,14 +1132,16 @@ def fire_workflow(
         time.sleep(_LIVENESS_POLL_INTERVAL_S)
 
     started_at = time.time()
-    if exit_code is not None and exit_code != 0:
+    if exit_code is not None:
         _discard_reservation(record_path)
         raise ChildSpawnFailedError(
-            f"workflow.fire: child exited immediately with code {exit_code} "
-            f"(bad plugin dir, missing binary, or a refused flag) -- see {log_path}"
+            f"workflow.fire: child pid {process.pid} exited within the startup "
+            f"window with code {exit_code} (bad plugin dir, missing binary, or a "
+            f"refused flag); log: {log_path}\n--- log tail ---\n"
+            f"{_startup_log_tail(log_path)}"
         )
 
-    state = "running" if exit_code is None else "exited"
+    state = "running"
     publish_lag_message = _publish_lag_message(resolved_cwd)
     record = {
         "fire_id": fire_id,

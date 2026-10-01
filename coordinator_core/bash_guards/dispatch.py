@@ -2196,6 +2196,10 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_reap_stale_git_lock import (
         check_reap_stale_git_lock as _check_reap_stale_git_lock,
     )
+    from coordinator_core.bash_guards.guard_headless_claude_plugin_dir import (
+        check_headless_claude_plugin_dir as _check_headless_claude_plugin_dir,
+        MATCHERS as _matchers_headless_claude_plugin_dir,
+    )
     from coordinator_core.bash_guards.guard_head_tail_rewrite import (
         check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
     )
@@ -3092,6 +3096,9 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_raw_pid_liveness),
         ),
+        # Rewrite/deny on headless `claude -p` without --plugin-dir; tail of the
+        # advisory band, after every hard block.
+        GuardEntry("headless-claude-plugin-dir", lambda: _check_headless_claude_plugin_dir(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_headless_claude_plugin_dir)),
         # BX-7/BX-8's own platform-conditioned advisory policy
         # (`guard_multiprobe_banner.py` / `guard_plumbing_and_loops.py`) --
         # deliberately registered at the very TAIL, AFTER every rewrite/

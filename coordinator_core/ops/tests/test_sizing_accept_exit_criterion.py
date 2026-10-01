@@ -288,3 +288,74 @@ def test_an_identical_acceptance_is_a_byte_identical_no_op(tmp_path):
     assert result["exit_code"] == 0
     assert result["applied"] is False
     assert sizing.read_text(encoding="utf-8") == after_first
+
+
+# ---------------------------------------------------------------------------
+# Refusals always carry a reason
+# ---------------------------------------------------------------------------
+
+
+def test_amend_appends_keeps_prior_quote_and_validates(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    assert _run(_base(), repo)["exit_code"] == 0
+
+    result = _run(_base(pm_quote="Amend it.", statement="A sharper bar.", mode="pm"), repo)
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    ec = yaml.safe_load(sizing.read_text(encoding="utf-8"))["exit_criterion"]
+    assert ec["statement"] == "A sharper bar."
+    assert ec["accepted"]["pm_quote"] == "Yes, that's the right bar."
+    assert len(ec["amendments"]) == 1
+    am = ec["amendments"][0]
+    assert (am["pm_quote"], am["statement"], am["mode"]) == ("Amend it.", "A sharper bar.", "pm")
+    assert am["on"]
+    assert accept_mod._validate_sizing_fm(yaml.safe_load(sizing.read_text(encoding="utf-8"))) == []
+
+
+def test_a_second_amend_appends_again(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    assert _run(_base(), repo)["exit_code"] == 0
+    assert _run(_base(pm_quote="One.", statement="Bar one."), repo)["exit_code"] == 0
+
+    assert _run(_base(pm_quote="Two.", statement="Bar two."), repo)["exit_code"] == 0
+
+    ec = yaml.safe_load(sizing.read_text(encoding="utf-8"))["exit_criterion"]
+    assert ec["statement"] == "Bar two."
+    assert [a["pm_quote"] for a in ec["amendments"]] == ["One.", "Two."]
+    assert ec["accepted"]["pm_quote"] == "Yes, that's the right bar."
+
+
+def test_post_mutation_schema_failure_propagates_its_message(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_sizing(repo, exit_criterion=_PROPOSED)
+    monkeypatch.setattr(
+        accept_mod, "_validate_sizing_fm", lambda doc: [{"field": "exit_criterion", "error": "boom"}]
+    )
+
+    result = _run(_base(), repo)
+
+    assert result["exit_code"] == 1
+    assert "schema validation failed" in result["error"]
+    assert "boom" in result["error"]
+
+
+def test_an_unexpected_exception_still_yields_a_reason(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_sizing(repo, exit_criterion=_PROPOSED)
+
+    def explode(*a, **k):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(accept_mod, "locked_rmw", explode)
+
+    result = _run(_base(), repo)
+
+    assert result["exit_code"] == 1
+    assert "disk on fire" in result["error"]

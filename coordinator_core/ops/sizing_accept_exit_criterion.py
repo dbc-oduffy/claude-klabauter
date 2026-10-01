@@ -14,6 +14,10 @@ Modelled directly on `sizing_discharge_surfaced.py`'s shape (single-target appli
 `locked_rmw`, schema-validate-before-write, `contained_path`, `main_worktree_root`) — a
 single addressable applier over a different sub-field of the same sizing-object schema.
 
+An amendment (a new `statement`) on an already-accepted sizing without `supersede` sets
+`exit_criterion.statement` and appends {pm_quote, on, mode, statement} to
+`exit_criterion.amendments`, leaving `accepted` untouched.
+
 What it writes: `exit_criterion.accepted = {pm_quote, on, mode}`, and `exit_criterion.
 statement` when `statement` is given (the PM's amended criterion replacing the proposed
 one). When `mode` is passed and the document records no top-level `interaction_mode`, that
@@ -29,7 +33,7 @@ Negative-spec:
     `decision_record` and `sizing.discharge_surfaced`'s `resolved_by` both put on their
     own required params, applied here to the PM's own words instead of a file pointer.
   - Does NOT accept an empty `pm_quote`, a `statement` write with no statement already on
-    record and none given, or a second acceptance without `supersede` — a silent
+    record and none given, or a second acceptance with neither a new `statement` nor `supersede` — a silent
     overwrite of an already-accepted criterion would let a later caller displace the
     PM's own recorded acceptance without saying so.
   - Does NOT cascade, does NOT fan out to any other artifact, does NOT git-commit. Pure
@@ -85,7 +89,8 @@ def _render_exit_criterion(mapping: dict) -> str:
 
 
 def _err(msg: str) -> dict:
-    return {"exit_code": 1, "applied": False, "error": msg}
+    msg = msg or "accept_exit_criterion: refused with no detail"
+    return {"exit_code": 1, "applied": False, "error": msg, "message": msg}
 
 
 @register_op("sizing.accept_exit_criterion")
@@ -160,6 +165,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     _state: dict = {"applied": False}
 
+    def _finish(new_text: str) -> str:
+        try:
+            new_doc = yaml.safe_load(new_text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(
+                f"accept_exit_criterion: post-mutation YAML parse error: {exc}"
+            ) from exc
+        errors = _validate_sizing_fm(new_doc)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(
+                f"accept_exit_criterion: post-mutation schema validation failed: {details}"
+            )
+
+        _state["applied"] = True
+        return new_text
+
     def mutate(old_text: str) -> str:
         try:
             doc = yaml.safe_load(old_text) or {}
@@ -196,12 +218,27 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if identical and not record_mode:
                 return old_text
             if not supersede:
-                raise MutateAbort(
-                    f"refusing to accept on {p}: exit_criterion.accepted already carries "
-                    f"a PM acceptance ({str(existing_accepted.get('pm_quote'))[:120]!r}) — "
-                    "pass supersede to replace it, so a second acceptance cannot "
-                    "silently displace the first"
+                if not statement_param:
+                    raise MutateAbort(
+                        f"refusing to accept on {p}: exit_criterion.accepted already carries "
+                        f"a PM acceptance ({str(existing_accepted.get('pm_quote'))[:120]!r}) — "
+                        "pass a new statement to amend it, or supersede to replace the "
+                        "acceptance"
+                    )
+                amendments = list(existing.get("amendments") or [])
+                amendments.append({**new_accepted, "statement": new_statement})
+                new_text = write_fm_nested_field(
+                    old_text,
+                    "exit_criterion",
+                    _render_exit_criterion(
+                        {
+                            "statement": new_statement,
+                            "accepted": existing_accepted,
+                            "amendments": amendments,
+                        }
+                    ),
                 )
+                return _finish(new_text)
 
         rendered = _render_exit_criterion(
             {"statement": new_statement, "accepted": new_accepted}
@@ -209,22 +246,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         new_text = write_fm_nested_field(old_text, "exit_criterion", rendered)
         if record_mode:
             new_text = insert_fm_field(new_text, "interaction_mode", mode)
-
-        try:
-            new_doc = yaml.safe_load(new_text) or {}
-        except Exception as exc:  # noqa: BLE001
-            raise MutateAbort(
-                f"accept_exit_criterion: post-mutation YAML parse error: {exc}"
-            ) from exc
-        errors = _validate_sizing_fm(new_doc)
-        if errors:
-            details = format_validation_errors(errors)
-            raise MutateAbort(
-                f"accept_exit_criterion: post-mutation schema validation failed: {details}"
-            )
-
-        _state["applied"] = True
-        return new_text
+        return _finish(new_text)
 
     try:
         locked_rmw(p, mutate, repo_root=repo_root)
@@ -234,6 +256,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"timed out waiting for file lock on {p}: {exc}")
     except MutateAbort as exc:
         return _err(str(exc.args[0]) if exc.args else "accept_exit_criterion: mutation aborted")
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"accept_exit_criterion: {type(exc).__name__}: {exc}")
 
     if _state["applied"]:
         return {

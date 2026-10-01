@@ -855,3 +855,51 @@ def test_native_plugin_dir_still_rejects_a_bare_directory(tmp_path, monkeypatch)
     root.mkdir()
     _patch_content_root(monkeypatch, root)
     assert fire._native_plugin_dir() is None
+
+
+# ---------------------------------------------------------------------------
+# Startup liveness -- an early exit refuses with code, pid, log path, log tail
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("code", [0, 7])
+def test_child_that_exits_inside_the_startup_window_is_refused_with_code_and_log(
+    repo, script, monkeypatch, code
+):
+    _patch_plugin_dir(monkeypatch)
+
+    def make_popen(*a, **k):
+        k["stdout"].write(b"boom: refused flag\n")
+        k["stdout"].flush()
+        return _FakePopen(*a, poll_sequence=[code], pid=999, **k)
+
+    monkeypatch.setattr(fire.subprocess, "Popen", make_popen)
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    with pytest.raises(fire.ChildSpawnFailedError) as excinfo:
+        fire.fire_workflow(str(script), cwd=str(repo))
+
+    message = str(excinfo.value)
+    assert f"code {code}" in message
+    assert "pid 999" in message
+    assert ".log" in message
+    assert "boom: refused flag" in message
+
+
+def test_child_that_stays_alive_reports_pid_and_log_path(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(
+        fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, pid=31337, **k)
+    )
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert record["state"] == "running"
+    assert record["pid"] == 31337
+    assert record["log_path"].endswith(".log")
+    assert Path(record["log_path"]).exists()
+
+
+def test_startup_liveness_window_stays_inside_the_brightline():
+    assert fire._LIVENESS_POLL_INTERVAL_S * fire._LIVENESS_POLL_ATTEMPTS <= 0.3 + 1e-9

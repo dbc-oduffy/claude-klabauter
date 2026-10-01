@@ -1671,6 +1671,14 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "headless-claude-plugin-dir",
+        "headless-claude-plugin-dir-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
         "offer-invoke-params-stdin",
         "offer-invoke-params-stdin-fire",
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
