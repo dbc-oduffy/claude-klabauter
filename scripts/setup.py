@@ -4276,6 +4276,17 @@ def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude
             "A session started on this box may look like vanilla Claude Code with no error.",
             file=sys.stderr,
         )
+        return
+    # Only once every step landed: a failed launcher render must not leave the
+    # box with neither name.
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install._shared import require_home
+        from coordinator_core.install.maximalist import retire_legacy_doe_launchers
+
+        retire_legacy_doe_launchers(require_home("setup"), str(settings_home() / "bin"), check_only=False)
+    except Exception as exc:  # noqa: BLE001 -- cleanup of a superseded name never fails setup
+        print(f"[ADVISORY] legacy claude-author launchers not retired: {exc}", file=sys.stderr)
 
 
 def _derive_identity_hints(repo_root: Path) -> dict[str, str]:
