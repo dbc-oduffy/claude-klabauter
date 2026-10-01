@@ -198,3 +198,35 @@ def test_swap_all_rows_into_dest_commits_the_shared_root_once(tmp_path):
     assert outcomes == {"row-a": None}
     assert (dest / "added.txt").read_text(encoding="utf-8") == "brand new\n"
     assert _git(dest, "rev-list", "--count", "HEAD").stdout.strip() == "2"
+
+
+def test_apply_throwaway_delta_renames_a_mapped_image_aside(tmp_path, monkeypatch):
+    dest, throwaway = _build_dest_and_throwaway(tmp_path)
+    (dest / "door.exe").write_bytes(b"old image")
+    _git(dest, "add", "door.exe")
+    _git(dest, "commit", "-m", "chore: seed door")
+    (throwaway / "door.exe").write_bytes(b"new image")
+
+    real_replace = publish.os.replace
+    real_copy2 = publish.shutil.copy2
+    locked = {"copy_denied": False}
+
+    def _replace(src, dst, *a, **kw):
+        if Path(src).name.startswith(".claude-klabauter-swap-") and Path(dst).name == "door.exe":
+            raise PermissionError(13, "mapped image", str(dst))
+        return real_replace(src, dst, *a, **kw)
+
+    def _copy2(src, dst, *a, **kw):
+        if Path(dst).name == "door.exe" and not locked["copy_denied"]:
+            locked["copy_denied"] = True
+            raise PermissionError(13, "mapped image", str(dst))
+        return real_copy2(src, dst, *a, **kw)
+
+    monkeypatch.setattr(publish.os, "replace", _replace)
+    monkeypatch.setattr(publish.shutil, "copy2", _copy2)
+
+    present, deleted = publish._throwaway_delta_paths(throwaway)
+    publish._apply_throwaway_delta_to_dest(dest, throwaway, present, deleted)
+
+    assert (dest / "door.exe").read_bytes() == b"new image"
+    assert not list(dest.glob(".claude-klabauter-swap-*"))

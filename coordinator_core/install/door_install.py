@@ -158,6 +158,8 @@ __all__ = [
     "audit_installed_image_currency",
     "rebuild_and_verify_prebuilt",
     "committed_prebuilt_source_drift",
+    "rebuild_door_for_mirror",
+    "MirrorDoorRebuildError",
     "named_forwarder_path",
     "install_named_forwarder",
     "remove_shadowing_ps1_sibling",
@@ -311,9 +313,16 @@ def _source_matches_recorded(path: Path, recorded_hash: "Optional[str]") -> bool
     return door_build.source_sha256(path) == recorded_hash
 
 
-def committed_prebuilt_source_drift() -> "list[str]":
+def committed_prebuilt_source_drift(
+    *,
+    provenance_path: Optional[Path] = None,
+    sources: "Optional[Iterable[Path]]" = None,
+) -> "list[str]":
     """Names of the door sources that differ from those the committed
     `door.exe` was built from -- empty when the prebuilt is current.
+
+    `provenance_path`/`sources` default to THIS tree's; a publish mirror
+    passes its own pair so the same comparison judges the mirror.
 
     Every other currency check compares an INSTALLED image against the
     committed prebuilt, so a prebuilt itself behind `door.c` passes all of
@@ -328,22 +337,87 @@ def committed_prebuilt_source_drift() -> "list[str]":
 
     Raises `DoorInstallError` when the sidecar is unreadable or records no
     sources -- same convention as `_prebuilt_image_bytes`."""
+    provenance_path = Path(provenance_path) if provenance_path is not None else _WINDOWS_PREBUILT_PROVENANCE
+    source_paths = tuple(sources) if sources is not None else door_build.SOURCES
     try:
-        record = json.loads(_WINDOWS_PREBUILT_PROVENANCE.read_text(encoding="utf-8"))
+        record = json.loads(provenance_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise DoorInstallError(
-            f"door_install: no readable prebuilt provenance at {_WINDOWS_PREBUILT_PROVENANCE}: {exc}"
+            f"door_install: no readable prebuilt provenance at {provenance_path}: {exc}"
         ) from exc
     recorded = record.get("sources") if isinstance(record, dict) else None
     if not isinstance(recorded, dict) or not recorded:
         raise DoorInstallError(
-            f"door_install: {_WINDOWS_PREBUILT_PROVENANCE} records no source fingerprint"
+            f"door_install: {provenance_path} records no source fingerprint"
         )
     return sorted(
         path.name
-        for path in door_build.SOURCES
+        for path in source_paths
         if not _source_matches_recorded(path, recorded.get(path.name))
     )
+
+
+class MirrorDoorRebuildError(DoorInstallError):
+    """The publish mirror's door could not be rebuilt from its own sources."""
+
+
+def rebuild_door_for_mirror(
+    mirror_root: Path,
+    engine_root: Path,
+    *,
+    python_bin: Optional[Path] = None,
+    compiler: Optional[str] = None,
+) -> bool:
+    """Rebuilds `door.exe` and its provenance from the MIRROR's transformed
+    door sources, so the shipped image carries the published token names.
+
+    Loads the mirror's own `build.py` and calls its `build(engine_root, ...)`,
+    so the sources compiled and fingerprinted are the mirror's, never this
+    tree's. `engine_root` is the published root to bake (the destination repo
+    root), not the mirror path. The build runs in a scratch directory and only
+    `door.exe` + its provenance are copied into the mirror: `build()` also
+    writes `door.engine-root.txt`, which the destination does not ignore.
+
+    Returns False when the mirror carries no door sources or the platform
+    cannot build the Windows image. Raises `MirrorDoorRebuildError` on a
+    missing compiler, a failed build, or residual source drift."""
+    import importlib.util
+    import tempfile
+
+    door_dir = Path(mirror_root) / "coordinator_core" / "warm" / "door"
+    build_py = door_dir / "build.py"
+    if not (door_dir / "door.c").exists() or not build_py.exists():
+        return False
+    if sys.platform != "win32":
+        return False
+
+    spec = importlib.util.spec_from_file_location("_mirror_door_build", build_py)
+    if spec is None or spec.loader is None:
+        raise MirrorDoorRebuildError(f"door rebuild: cannot load {build_py}")
+    mirror_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mirror_build)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        built = Path(scratch) / "door.exe"
+        try:
+            mirror_build.build(engine_root, python_bin=python_bin, compiler=compiler, output=built)
+        except SystemExit as exc:
+            raise MirrorDoorRebuildError(f"door rebuild failed: {exc.code}") from exc
+        shutil.copyfile(built, door_dir / "door.exe")
+        shutil.copyfile(
+            built.parent / (built.name + mirror_build._PROVENANCE_SUFFIX),
+            door_dir / "door.exe.provenance.json",
+        )
+
+    drift = committed_prebuilt_source_drift(
+        provenance_path=door_dir / "door.exe.provenance.json",
+        sources=mirror_build.SOURCES,
+    )
+    if drift:
+        raise MirrorDoorRebuildError(
+            f"door rebuild: mirror door.exe still drifts from its sources: {', '.join(drift)}"
+        )
+    return True
 
 
 def _reference_image_bytes(bin_dst: Path) -> bytes:
