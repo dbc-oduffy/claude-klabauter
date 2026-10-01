@@ -1934,3 +1934,80 @@ class TestCheckDeliveriesPresenceAndAnchor:
         result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
         candidate = result["candidates"][0]
         assert candidate["status"] == _VERDICT_NOT_CHECKABLE
+
+
+# ---------------------------------------------------------------------------
+# Body `discharges:` line without a frontmatter block
+# ---------------------------------------------------------------------------
+
+_DISCHARGES_BODY = "discharges:\n  closure_key: x\n"
+
+
+class TestBodyDischargesWithoutBlock:
+    def test_body_line_without_frontmatter_block_is_refused(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {})))
+        _write_draft(sender_repo, "body-discharges", body=_DISCHARGES_BODY)
+        result = _memo_send({"dry_run": False, "topic": "body-discharges"}, repo_root=sender_repo)
+        assert result["exit_code"] == 1
+        assert result["acted"] == []
+        assert "gate_liveness.emit_discharge" in capsys.readouterr().err
+
+    def test_indented_body_line_is_refused(self):
+        from coordinator_core.ops.fleet.memo_send import _body_discharges_without_block
+        assert _body_discharges_without_block({}, "prose\n  discharges: yes\n")
+
+    def test_frontmatter_block_passes(self):
+        from coordinator_core.ops.fleet.memo_send import _body_discharges_without_block
+        assert not _body_discharges_without_block(
+            {"discharges": {"closure_key": {}}}, _DISCHARGES_BODY,
+        )
+
+    def test_no_discharges_anywhere_passes(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv(
+            "CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})),
+        )
+        _write_draft(sender_repo, "plain-body", body="It discharges: nothing.\n")
+        result = _memo_send({"dry_run": True, "topic": "plain-body"}, repo_root=sender_repo)
+        assert result["exit_code"] == 0
+
+
+class TestDischargesBlockSurvivesDelivery:
+    def test_full_send_delivers_frontmatter_discharges_block(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv(
+            "CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})),
+        )
+        draft = _write_draft(sender_repo, "carries-discharge", body="Landed.\n\ndischarges: see frontmatter\n")
+        text = draft.read_text(encoding="utf-8")
+        block = (
+            "discharges:\n"
+            "  closure_key:\n"
+            "    kind: deliverable\n"
+            "    id: some-deliverable\n"
+            "  evidence: inline\n"
+            "  landed_at: 2026-10-01\n"
+        )
+        draft.write_text(text.replace('kind: "fyi"\n', 'kind: "fyi"\n' + block, 1),
+                         encoding="utf-8", newline="\n")
+        _git(sender_repo, "add", "--", "state/memo-outbox/carries-discharge.md")
+        _git(sender_repo, "commit", "-m", "stage discharge draft")
+
+        result = _memo_send({"dry_run": False, "topic": "carries-discharge"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        delivered = next(
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md") if p.name != ".gitkeep"
+        )
+        from coordinator_core.ops.fleet.memo_send import parse_frontmatter
+        dfm = parse_frontmatter(delivered.read_text(encoding="utf-8"))["frontmatter"]
+        assert dfm["discharges"] == {
+            "closure_key": {"kind": "deliverable", "id": "some-deliverable"},
+            "evidence": "inline",
+            "landed_at": "2026-10-01",
+        }

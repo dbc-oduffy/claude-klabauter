@@ -176,6 +176,7 @@ from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _compose_memo,
     _memo_filename,
+    _render_extra_field,
     _normalize_in_reply_to,
     body_opens_frontmatter,
 )
@@ -628,6 +629,25 @@ def _stamp_distill_fate(content: str, fm: dict) -> str:
     return _rebuild_frontmatter(split, fm_text)
 
 
+def _stamp_passthrough_fields(content: str, fm: dict) -> str:
+    """Carry every draft frontmatter key `_compose_memo` did not emit
+    (`discharges:` first among them) into the composed content, rendered with
+    the composer's own `_render_extra_field`. Keys the composer already wrote
+    keep the composed value."""
+    split = split_frontmatter(content)
+    if split is None:
+        return content
+    composed = parse_frontmatter(content).get("frontmatter") or {}
+    blocks = [
+        _render_extra_field(key, value)
+        for key, value in fm.items()
+        if key not in composed and value is not None
+    ]
+    if not blocks:
+        return content
+    return _rebuild_frontmatter(split, split.fm_text.rstrip("\n") + "\n" + "\n".join(blocks))
+
+
 def _compose_delivered_content(
     *, fm: dict, body: str, today: str, sent_by: str,
 ) -> tuple[Optional[str], Optional[str]]:
@@ -702,6 +722,7 @@ def _compose_delivered_content(
         content = _stamp_cc(content, cc)
 
     content = _stamp_distill_fate(content, fm)
+    content = _stamp_passthrough_fields(content, fm)
 
     return content, None
 
@@ -1554,6 +1575,15 @@ def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
     return build_dry_run_result("check_deliveries", candidates)
 
 
+_BODY_DISCHARGES_LINE_RE = re.compile(r"^\s*discharges:", re.MULTILINE)
+
+
+def _body_discharges_without_block(fm: dict, body: str) -> bool:
+    """True when a body line starts `discharges:` and the frontmatter has no
+    `discharges` key — `gate_liveness.resolve` reads only the frontmatter."""
+    return "discharges" not in fm and bool(_BODY_DISCHARGES_LINE_RE.search(body or ""))
+
+
 @register_op("memo.send")
 def _memo_send(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.send' MUTATING op handler.
@@ -1618,6 +1648,15 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             _MODE, dry_run,
             "memo.send: the staged body opens a second frontmatter block — "
             "re-run memo.compose with only the body text.",
+        )
+
+    if _body_discharges_without_block(fm, body):
+        return build_setup_error_result(
+            _MODE, dry_run,
+            "memo.send: body has a `discharges:` line but the frontmatter has "
+            "no `discharges` block, so the receiver's gate stays "
+            "awaiting-discharge. Compose the block with "
+            "`gate_liveness.emit_discharge`.",
         )
 
     # Duplicate-body detector — a byte-identical body under a DIFFERENT
