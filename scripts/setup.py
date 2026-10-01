@@ -2232,6 +2232,13 @@ _KLABAUTER_AGENTS_MD_MARKER = "# claude-klabauter"
 #: stay claude-klabauter-only until that gap closes.
 _CLAUDE_KLABAUTER_MANIFEST_REPO_ID = "claude-klabauter"
 
+#: `resolve_repo_identity`'s return vocabulary. Trap: never spell these with a
+#: repo name -- the publish rewrite maps the private name onto the public one,
+#: so `== "<private>"` reads `== "<public>"` in the mirror and every
+#: "am I the authoring tree?" test flips to true on a consumer install.
+IDENTITY_AUTHORING = "engine-authoring"
+IDENTITY_MIRROR = "engine-mirror"
+
 
 def resolve_repo_identity(repo_root: Path) -> str | None:
     """Determine whether `repo_root` is a claude-klabauter working tree or a
@@ -2239,7 +2246,7 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
     installer for BOTH repos (see module docstring), and the two need
     DIFFERENT machine-local registrations (see `register_claude_klabauter_root`).
 
-    Returns "claude-klabauter", "claude-klabauter", or None when neither
+    Returns IDENTITY_AUTHORING, IDENTITY_MIRROR, or None when neither
     tree's positive marker is present.
 
     Deliberately asserts identity from a marker each payload SHIPS, never
@@ -2262,7 +2269,7 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
         except (OSError, IndexError):
             first_line = ""
         if first_line.strip().startswith(_KLABAUTER_AGENTS_MD_MARKER):
-            return "claude-klabauter"
+            return IDENTITY_MIRROR
 
     manifest = repo_root / "docs" / "install" / "agent-install-manifest.json"
     if manifest.is_file():
@@ -2271,7 +2278,7 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
         except (OSError, json.JSONDecodeError):
             data = {}
         if data.get("repo_id") == _CLAUDE_KLABAUTER_MANIFEST_REPO_ID:
-            return "claude-klabauter"
+            return IDENTITY_AUTHORING
 
     return None
 
@@ -2735,7 +2742,7 @@ def register_claude_klabauter_root(
     # install; the first arm is the one that runs, and it is the right one.
     discovered_klabauter: str | None = None
     identity = resolve_repo_identity(repo_root)
-    if identity == "claude-klabauter":
+    if identity == IDENTITY_MIRROR:
         # "installing
         # klabauter targets main" rests on an
         # UNSTATED assumption -- that a fresh clone is checked out on the
@@ -2769,7 +2776,7 @@ def register_claude_klabauter_root(
                 print(f"    git -C {claude_klabauter_root_resolved} switch {channel}")
 
         pending_advisories.append(_klabauter_identity_advisory)
-    elif identity == "claude-klabauter":
+    elif identity == IDENTITY_AUTHORING:
         key_values = {
             "repos.claude_klabauter": str(claude_klabauter_root_resolved),
             "engine.working_repos.claude_klabauter": str(claude_klabauter_root_resolved),
@@ -2905,7 +2912,7 @@ def register_claude_klabauter_root(
     # a failure here prints a WARNING and does not fail the install (Hard
     # constraint 1/2 — no new escape hatch, deliberate invocation stays
     # working; this is neither).
-    if identity == "claude-klabauter" and not discovered_klabauter:
+    if identity == IDENTITY_AUTHORING and not discovered_klabauter:
         if str(claude_klabauter_root_resolved) not in sys.path:
             sys.path.insert(0, str(claude_klabauter_root_resolved))
         from coordinator_core.install.first_run import provision_stamped_engine
@@ -4798,7 +4805,7 @@ def run_check(claude_klabauter_root: Path) -> int:
     from coordinator_core.machine_resolver import registry_get
 
     identity = resolve_repo_identity(claude_klabauter_root)
-    if identity == "claude-klabauter":
+    if identity == IDENTITY_AUTHORING:
         keys = ["repos.claude_klabauter", "engine.working_repos.claude_klabauter"]
     else:
         keys = ["repos.claude_klabauter"]
@@ -4948,7 +4955,7 @@ def main(argv: list[str]) -> int:
             py,
             args.allow_venv_fallback,
             container_optin=args.container_optin,
-            installs_engine=resolve_repo_identity(claude_klabauter_root_resolved) == "claude-klabauter",
+            installs_engine=resolve_repo_identity(claude_klabauter_root_resolved) == IDENTITY_MIRROR,
         )
 
     if not args.register_only:

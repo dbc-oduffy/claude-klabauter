@@ -203,8 +203,9 @@ def compose_execute_review(
     prep_prompt = (
         f"{prompt_head}\n\n"
         f"Freeze and characterise this run's diff for review. Freeze it with the "
-        f"`freeze-review-diff` CLI (coordinator/bin/freeze-review-diff.py, the "
-        f"`review.freeze_diff` op's entrypoint): `--worktree --range "
+        f"`freeze-review-diff` launcher on PATH (the settings-home bin; the "
+        f"`review.freeze_diff` op's entrypoint -- this repo need not carry "
+        f"coordinator/bin, so never look for it here): `freeze-review-diff --worktree --range "
         f"{run_base_sha or 'run_base_sha'} --slice-id <a name unique to this run> "
         f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "

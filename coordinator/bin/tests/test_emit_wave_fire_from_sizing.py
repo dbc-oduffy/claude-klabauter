@@ -170,17 +170,16 @@ def test_hold_write_failure_never_fails_the_emit(tmp_path, monkeypatch, capsys):
     assert "lock exploded" in capsys.readouterr().err
 
 
-def test_s_sizing_binds_as_before_with_no_mint_and_no_hold(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tshirt", ["XS", "S", None])
+def test_a_sub_m_sizing_is_refused_and_never_mints(tmp_path, monkeypatch, capsys, tshirt):
     def no_mint():
-        raise AssertionError("S must not mint")
+        raise AssertionError("a sub-M sizing must not mint")
 
     monkeypatch.setattr(ewf, "_load_mint", no_mint)
-    _setup(tmp_path, _sizing("S"), baton=BATON)
-    assert _fire(tmp_path) == ewf.EXIT_OK
-    b = _bound(tmp_path)
-    assert b["id"] == "s1" and b["path"] == SIZING_REL
-    assert b["exitCriterion"]["statement"] == "it works"
-    assert "plan_blitz_hold_reason" not in (tmp_path / BATON_REL).read_text(encoding="utf-8")
+    _setup(tmp_path, _sizing(tshirt), baton=BATON)
+    assert _fire(tmp_path) == ewf.EXIT_REFUSED
+    assert "only an M+ sizing mints a baton" in capsys.readouterr().err
+    assert not (tmp_path / "trail" / "fire-0-1.mjs").exists()
 
 
 def test_real_mint_binds_and_holds(tmp_path, monkeypatch):

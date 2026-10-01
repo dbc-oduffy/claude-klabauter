@@ -1090,7 +1090,12 @@ def _collect_sizing_refusals(sizing: dict) -> list[str]:
     if route != "plan":
         out.append(f"`route` is {route!r}, not 'plan' — --from-sizing only fires the single-plan Workflow")
     tshirt = (sizing.get("estimate") or {}).get("tshirt") if isinstance(sizing.get("estimate"), dict) else None
-    if tshirt in _MINT_TSHIRTS:
+    if tshirt not in _MINT_TSHIRTS:
+        out.append(
+            f"`estimate.tshirt` is {tshirt!r} — only an M+ sizing mints a baton to plan; "
+            "an XS or S routes to dispatch or spec-dispatch, never this Workflow"
+        )
+    else:
         intent = sizing.get("intent")
         if not (isinstance(intent, str) and intent.strip()):
             out.append("`intent` is absent — the minted baton has nothing to cover")
@@ -1214,46 +1219,32 @@ def _emit_single_from_sizing(
     route = sizing["route"]
     tshirt = (sizing.get("estimate") or {}).get("tshirt")
 
-    if tshirt in _MINT_TSHIRTS:
-        try:
-            minted = _load_mint()(sizing_rel, str(repo_root))
-        except Exception as exc:  # noqa: BLE001 -- SizingMintRefused lives in the sibling module
-            fields = getattr(exc, "fields", None)
-            if fields is None:
-                raise
-            return _refuse_from_sizing(f"{exc} (fields: {', '.join(fields)})")
-        baton_path = repo_root / minted["path"]
-        held = _foreign_hold_reason(baton_path)
-        if held:
-            return _refuse_from_sizing(
-                f"baton {minted['path']} carries `plan_blitz_hold_reason: {held}` — a held baton "
-                "must not fire. Clear the hold first."
-            )
-        baton = {
-            "id": minted["id"],
-            "path": minted["path"],
-            "title": str(minted["title"]),
-            "sized": True,
-            "sizingObject": sizing_rel,
-            "tshirt": tshirt,
-            "route": route,
-            "exitCriterion": str(exit_criterion["statement"]),
-            "interactionMode": interaction_mode,
-            "executionOpen": False,
-        }
-    else:
-        baton_path = None
-        baton = {
-            "id": sizing_path.stem,
-            "path": sizing_rel,
-            "sized": True,
-            "sizingObject": sizing_rel,
-            "tshirt": tshirt,
-            "route": route,
-            "exitCriterion": exit_criterion,
-            "interactionMode": interaction_mode,
-            "executionOpen": False,
-        }
+    try:
+        minted = _load_mint()(sizing_rel, str(repo_root))
+    except Exception as exc:  # noqa: BLE001 -- SizingMintRefused lives in the sibling module
+        fields = getattr(exc, "fields", None)
+        if fields is None:
+            raise
+        return _refuse_from_sizing(f"{exc} (fields: {', '.join(fields)})")
+    baton_path = repo_root / minted["path"]
+    held = _foreign_hold_reason(baton_path)
+    if held:
+        return _refuse_from_sizing(
+            f"baton {minted['path']} carries `plan_blitz_hold_reason: {held}` — a held baton "
+            "must not fire. Clear the hold first."
+        )
+    baton = {
+        "id": minted["id"],
+        "path": minted["path"],
+        "title": str(minted["title"]),
+        "sized": True,
+        "sizingObject": sizing_rel,
+        "tshirt": tshirt,
+        "route": route,
+        "exitCriterion": str(exit_criterion["statement"]),
+        "interactionMode": interaction_mode,
+        "executionOpen": False,
+    }
 
     plugin_agents, plugin_agents_why = _plugin_agents_available(
         plugin_root, args.plugin_agents_available
@@ -1292,16 +1283,14 @@ def _emit_single_from_sizing(
     out = trail_dir / f"fire-{wave_number}-1.mjs"
     out.write_text(text, encoding="utf-8", newline="\n")
     _write_fire_receipt(out)
-    if baton_path is not None:
-        _stamp_fire_hold(baton_path, repo_root, out)
+    _stamp_fire_hold(baton_path, repo_root, out)
     if args.json:
         print(json.dumps({"waveIndex": wave_number, "fires": [
             {"fire": 1, "scriptPath": str(out), "batons": [baton["id"]]}
         ]}, indent=2))
         return EXIT_OK
     print(f"emit-wave-fire: single-plan fire for {baton['id']} (mode=single).")
-    if baton_path is not None:
-        print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}")
+    print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}")
     print(f'\n  Workflow({{ scriptPath: "{out}" }})   # no args — they are bound')
     return EXIT_OK
 

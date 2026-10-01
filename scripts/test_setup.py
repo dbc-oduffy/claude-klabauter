@@ -1004,7 +1004,7 @@ def test_main_without_register_only_still_provisions(setup_mod, monkeypatch, tmp
 
 @pytest.mark.parametrize(
     ("identity", "expected"),
-    [("claude-klabauter", False), ("claude-klabauter", True), (None, False)],
+    [("engine-authoring", False), ("engine-mirror", True), (None, False)],
 )
 def test_main_only_the_published_checkout_installs_the_engine(setup_mod, monkeypatch, identity, expected, tmp_path):
     """PM ruling, regressed repeatedly: a dev-tree run must never editable-
@@ -2118,14 +2118,14 @@ def _write_manifest(root: Path, repo_id: str) -> None:
 
 def test_resolve_repo_identity_claude_klabauter_manifest(setup_mod, tmp_path):
     _write_manifest(tmp_path, "claude-klabauter")
-    assert setup_mod.resolve_repo_identity(tmp_path) == "claude-klabauter"
+    assert setup_mod.resolve_repo_identity(tmp_path) == setup_mod.IDENTITY_AUTHORING
 
 
 def test_resolve_repo_identity_klabauter_agents_md(setup_mod, tmp_path):
     (tmp_path / "AGENTS.md").write_text(
         "# claude-klabauter — Agent Entry Point\n\nSome body text.\n"
     )
-    assert setup_mod.resolve_repo_identity(tmp_path) == "claude-klabauter"
+    assert setup_mod.resolve_repo_identity(tmp_path) == setup_mod.IDENTITY_MIRROR
 
 
 def test_resolve_repo_identity_klabauter_wins_over_claude_klabauter_manifest(setup_mod, tmp_path):
@@ -2134,7 +2134,7 @@ def test_resolve_repo_identity_klabauter_wins_over_claude_klabauter_manifest(set
     # claude-klabauter manifest).
     (tmp_path / "AGENTS.md").write_text("# claude-klabauter — Agent Entry Point\n")
     _write_manifest(tmp_path, "claude-klabauter")
-    assert setup_mod.resolve_repo_identity(tmp_path) == "claude-klabauter"
+    assert setup_mod.resolve_repo_identity(tmp_path) == setup_mod.IDENTITY_MIRROR
 
 
 def test_resolve_repo_identity_unrelated_agents_md_falls_through(setup_mod, tmp_path):
@@ -2142,7 +2142,7 @@ def test_resolve_repo_identity_unrelated_agents_md_falls_through(setup_mod, tmp_
     # through to the claude-klabauter manifest check.
     (tmp_path / "AGENTS.md").write_text("# some other project\n")
     _write_manifest(tmp_path, "claude-klabauter")
-    assert setup_mod.resolve_repo_identity(tmp_path) == "claude-klabauter"
+    assert setup_mod.resolve_repo_identity(tmp_path) == setup_mod.IDENTITY_AUTHORING
 
 
 def test_resolve_repo_identity_wrong_repo_id_is_not_claude_klabauter(setup_mod, tmp_path):
@@ -2157,7 +2157,7 @@ def test_resolve_repo_identity_neither_marker_present(setup_mod, tmp_path):
 def test_resolve_repo_identity_empty_agents_md_falls_through(setup_mod, tmp_path):
     (tmp_path / "AGENTS.md").write_text("")
     _write_manifest(tmp_path, "claude-klabauter")
-    assert setup_mod.resolve_repo_identity(tmp_path) == "claude-klabauter"
+    assert setup_mod.resolve_repo_identity(tmp_path) == setup_mod.IDENTITY_AUTHORING
 
 
 def test_resolve_repo_identity_malformed_manifest_json_is_unresolved(setup_mod, tmp_path):
@@ -2360,7 +2360,7 @@ def test_register_claude_klabauter_root_klabauter_identity_never_calls_discover(
     # `repos.claude_klabauter` so a mid-loop failure leaves the safe
     # target-without-mirror residue, not the false-positive
     # mirror-without-target one.
-    assert "--- Registration (claude-klabauter): engine.target + repos.claude_klabauter ---" in out
+    assert "--- Registration (engine-mirror): engine.target + repos.claude_klabauter ---" in out
     assert "repos.claude_klabauter" not in out
     assert "engine.working_repos.claude_klabauter" not in out
 
@@ -2447,7 +2447,7 @@ def test_register_claude_klabauter_root_appends_unset_content_root_anchor_last(
 
     out = capsys.readouterr().out
     assert (
-        "--- Registration (claude-klabauter): "
+        "--- Registration (engine-mirror): "
         "engine.target + repos.claude_klabauter + repos.content_root ---"
     ) in out
     assert f"machine-local set repos.content_root {clone}" in out
