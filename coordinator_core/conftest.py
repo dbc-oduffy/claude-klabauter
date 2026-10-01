@@ -640,6 +640,28 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fence_real_registry_writes(monkeypatch):
+    """No test reaches the operator's real registry.
+
+    Trap: a fake install path and a cleared kill switch are not a sandbox —
+    `_win_user_path_prepend` once replaced a real HKCU PATH with a fixture path
+    and `claude` stopped launching. A test that needs the write path installs
+    its own fake `winreg` (or monkeypatches these names after this fixture).
+    """
+    try:
+        import winreg
+    except ImportError:
+        return
+
+    def _refuse(*_a, **_k):
+        raise AssertionError("test reached a real winreg write; inject a fake winreg")
+
+    for name in ("SetValue", "SetValueEx", "DeleteValue", "DeleteKey", "DeleteKeyEx", "CreateKey", "CreateKeyEx"):
+        if hasattr(winreg, name):
+            monkeypatch.setattr(winreg, name, _refuse)
+
+
+@pytest.fixture(autouse=True)
 def _reset_foreign_repo_probe_memo():
     from coordinator_core.git_scope import reset_foreign_repo_probe_memo
 

@@ -373,13 +373,14 @@ def test_windows_health_steps_refuses_temp_rooted_bin_dst(monkeypatch, tmp_path,
     calls: list = []
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
     monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps())
-    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda *a, **k: calls.append("PREPEND") or True)
+    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda entry, *a, **k: calls.append(entry) or True)
     monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert not calls, (
+    # The interpreter-dir leg prepends the real py_dir; only bin_dst is under test.
+    assert str(bin_dst) not in calls, (
         "a temp-rooted bin_dst must never reach the real PATH-mutation call"
     )
     assert "REFUSED" in capsys.readouterr().err
@@ -744,6 +745,7 @@ def test_windows_health_steps_appx_stub_enabled_prompt_still_deletes(monkeypatch
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
     monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps(already_present=True))
     monkeypatch.setattr(substrate, "_orphan_appx_stub", _fake_orphan_appx_stub(calls, orphan_path))
+    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda *a, **k: True)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setattr(os, "remove", lambda p: removed.append(p))
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)

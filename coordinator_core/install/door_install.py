@@ -1016,6 +1016,11 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     if swept:
         print(f"[door-install] swept {len(swept)} stale displaced image(s) from {bin_dst}")
 
+    dead = _sweep_unresolvable_named_images(bin_dst, engine_root)
+    if dead:
+        names = ", ".join(sorted(p.name for p in dead))
+        print(f"[door-install] removed {len(dead)} named image(s) {engine_root} cannot dispatch: {names}")
+
     return dest_exe
 
 
@@ -1375,6 +1380,41 @@ def _sweep_displaced_images(bin_dst: Path) -> "list[Path]":
     return removed
 
 
+def _sweep_unresolvable_named_images(bin_dst: Path, engine_root: Path) -> "list[Path]":
+    """Removes every manifest-recorded named image in `bin_dst` whose name
+    `engine_root` no longer carries a script for.
+
+    A rename or exclusion at publish time leaves the old name's image behind
+    with no working leg: it fails warm and cold alike, and on Windows it
+    outranks a working `.cmd` in PATHEXT. Only names the native-forwarder
+    manifest records are candidates -- a file this installer never wrote is
+    never touched -- and an unreadable manifest sweeps nothing. An engine root
+    with no `coordinator/bin/` sweeps nothing either, so a wrong root cannot
+    empty the bin. Non-raising per entry, like `_sweep_displaced_images`.
+    """
+    from coordinator_core.install import substrate
+
+    bin_dst = Path(bin_dst)
+    if not (Path(engine_root) / "coordinator" / "bin").is_dir():
+        return []
+    manifest = substrate._read_native_forwarder_manifest_state(bin_dst)
+    if not manifest.measured:
+        return []
+    removed: "list[Path]" = []
+    for name in sorted(manifest.names):
+        if engine_carries_entrypoint_script(engine_root, name):
+            continue
+        image = named_forwarder_path(bin_dst, name)
+        if image.name in (DOOR_INSTALLED_NAME, BARE_FORWARDER_NAME) or not image.is_file():
+            continue
+        try:
+            image.unlink()
+            removed.append(image)
+        except OSError:
+            continue
+    return removed
+
+
 def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
     """True when `engine_root` carries the `coordinator/bin/<name>.py` this
     name's door image would dial.
@@ -1383,7 +1423,8 @@ def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
     point of this function. A door image resolves its own basename and sends
     it as the request's `entrypoint`; the server resolves that name through
     `ops/invoke_from_argv.py :: _resolve_entrypoint_script`, which looks for
-    `<engine_root>/coordinator/bin/<name>.py` and nothing else. The
+    `<engine_root>/coordinator/bin/<name>.py`, then the extensionless
+    `<engine_root>/coordinator/bin/<name>`. The
     door-eligible roster, by contrast, is derived from the GENERATOR's own
     `coordinator/bin/` -- and the two namespaces are not the same one:
 
@@ -1419,7 +1460,8 @@ def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
     in the generator is a second source of truth that goes stale silently.
     The engine on disk cannot.
     """
-    return (Path(engine_root) / "coordinator" / "bin" / f"{name}.py").is_file()
+    bin_dir = Path(engine_root) / "coordinator" / "bin"
+    return (bin_dir / f"{name}.py").is_file() or (bin_dir / name).is_file()
 
 
 #: The generator's own `coordinator/bin/`, resolved the same way

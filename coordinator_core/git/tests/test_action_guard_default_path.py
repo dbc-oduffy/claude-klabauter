@@ -222,19 +222,14 @@ def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo):
     `prefer_deliberate_stage: bool = False` (DR-379): when True, the
     settle-against-HEAD loop infers a deliberate stage from index-differs-
     from-HEAD and substitutes the staged blob with no per-path declaration.
-    Its two named opt-in callers (`ops/session/safe_commit_offer.py`,
-    `coordinator/bin/coordinator-safe-commit.py`) are the exact route this
-    plan's Problem section cites as its own live observation: if a peer
+    Opt-in callers include `ops/session/safe_commit_offer.py`: if a peer
     session stages bytes on a path that also appears in this caller's
     `paths`, the peer's staged blob is committed under this session's
-    commit, by inference -- a peer's content entering a commit at commit
-    time, `validate-commit`'s failure mode, live on the opt-in path.
+    commit, by inference.
 
-    NAMED RESIDUAL, not fixed by this row -- narrowing `prefer_deliberate_
-    stage`'s behaviour is out of this plan's proportionality and belongs to
-    whichever plan owns `safe_commit_offer`'s contract. This leg only
-    characterizes existing behaviour so the residual's boundary is
-    checkable rather than assumed; it does not force a code change here.
+    ACCEPTED BEHAVIOUR: this test pins the residual ruled in DR-379
+    "Accepted residual: safe_commit_offer's opt-in". It characterizes
+    existing behaviour so the residual's boundary is checkable.
 
     Fixture: a tracked path (`shared.txt`) whose index holds a foreign
     staged blob (`v2-staged`) differing from BOTH HEAD (`v1`) and the

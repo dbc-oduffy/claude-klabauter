@@ -1654,6 +1654,8 @@ async def _commit_group(
     deliberately staged (a partial hunk, a curated subset) should land its
     staged bytes rather than being passed over for its worktree content. That
     is exactly the substitution `prefer_deliberate_stage` performs.
+    Trap: a peer's staged blob on a claimed path lands by inference, accepted per
+    DR-379 Accepted residual.
 
     No push leg at all any more: this module's auto-commit path never owned a
     synchronous push (`push_state` was already always reported `None` on
