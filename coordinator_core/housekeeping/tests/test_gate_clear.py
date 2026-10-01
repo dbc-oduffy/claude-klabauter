@@ -293,3 +293,45 @@ def test_record_after_clear_updates_in_memory_without_reading_disk(monkeypatch):
     # Original left untouched.
     assert record["deployment_state"] == "awaiting_gate"
     assert record["blocked_by"] == ["hnd-b"]
+
+
+# ---------------------------------------------------------------------------
+# dead_blocker_reason — verdicts come from evaluate_gate_clear, never hand-built
+# ---------------------------------------------------------------------------
+
+
+def _verdict(blocked_by, state):
+    from coordinator_core.housekeeping.gate_clear import evaluate_gate_clear as ev
+
+    record = {"deployment_state": "awaiting_gate", "blocked_by": blocked_by}
+    return ev(record, lambda _id: state)
+
+
+def test_dead_blocker_reason_no_blocked_by():
+    from coordinator_core.housekeeping.gate_clear import dead_blocker_reason
+
+    assert dead_blocker_reason(_verdict([], None)) == "no-blocked-by"
+
+
+def test_dead_blocker_reason_unresolved():
+    from coordinator_core.housekeeping.gate_clear import dead_blocker_reason
+    from coordinator_core.housekeeping.resolve import UNRESOLVED_BLOCKER_STATE
+
+    assert dead_blocker_reason(_verdict(["x"], UNRESOLVED_BLOCKER_STATE)) == "unresolved"
+
+
+def test_dead_blocker_reason_ambiguous():
+    from coordinator_core.housekeeping.gate_clear import dead_blocker_reason
+    from coordinator_core.housekeeping.resolve import AMBIGUOUS_BLOCKER_STATE
+
+    assert dead_blocker_reason(_verdict(["x"], AMBIGUOUS_BLOCKER_STATE)) == "ambiguous"
+
+
+def test_dead_blocker_reason_live_blocker_and_clearing_are_none():
+    from coordinator_core.housekeeping.gate_clear import dead_blocker_reason
+
+    live = BlockerState(deployment_state="in_flight", closed_reason=None, continued_into=None)
+    assert dead_blocker_reason(_verdict(["x"], live)) is None
+    done = BlockerState(deployment_state="shipped", closed_reason=None, continued_into=None)
+    v = _verdict(["x"], done)
+    assert v.clears and dead_blocker_reason(v) is None

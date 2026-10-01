@@ -123,5 +123,73 @@ class EmitTestRedRecordTest(unittest.TestCase):
         self.assertEqual(rc_ok, 3)
 
 
+class FastRedDeltaTest(unittest.TestCase):
+    _REG = {
+        "clusters": {"c1": {"platforms": []}},
+        "entries": {"a/t.py::known": "c1", "a/t.py::gone": "c1"},
+    }
+    _OUT = "FAILED a/t.py::known - E\nFAILED a/t.py::fresh - E\n"
+
+    def _run_main(self, mod, scope_paths, report_side_effect=None):
+        fake_resolve = type("R", (), {"returncode": 0, "stdout": "pytest -m x\n"})()
+        gate = type("G", (), {"proceed": True, "refusal_message": ""})()
+        patches = [
+            mock.patch.object(mod.rvc, "resolve_fast_test_cmd", return_value=fake_resolve),
+            mock.patch.object(mod, "compute_diff_scoped_paths", return_value=(scope_paths, True)),
+            mock.patch.object(mod, "enforce_tier_u_gate", return_value=gate),
+            mock.patch.object(mod, "_run_fast_test_cmd", return_value=(3, self._OUT)),
+            mock.patch.object(mod, "write_test_red_record", side_effect=lambda **kw: kw),
+            mock.patch.object(mod, "_git_head_sha", return_value="deadbeef"),
+            mock.patch.object(mod.fast_red_registry, "load_registry", return_value=self._REG),
+        ]
+        if report_side_effect is not None:
+            patches.append(
+                mock.patch.object(
+                    mod.fast_red_registry, "compute_delta", side_effect=report_side_effect
+                )
+            )
+        import contextlib
+        import io
+
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(contextlib.redirect_stderr(err))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            rc = mod.main()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_whole_tier_names_unregistered_id(self) -> None:
+        mod = _load_cli_module()
+        rc, _out, err = self._run_main(mod, [])
+        self.assertEqual(rc, 3)
+        self.assertIn("fast-red delta: new=1 standing=1 fixed=1", err)
+        self.assertIn("a/t.py::fresh", err)
+
+    def test_scoped_run_reports_fixed_na(self) -> None:
+        mod = _load_cli_module()
+        _rc, _out, err = self._run_main(mod, ["a/t.py"])
+        self.assertIn("fixed=n/a", err)
+
+    def test_delta_failure_leaves_exit_code_and_stdout(self) -> None:
+        mod = _load_cli_module()
+        rc_ok, out_ok, _ = self._run_main(mod, [])
+        rc_bad, out_bad, err = self._run_main(mod, [], report_side_effect=RuntimeError("boom"))
+        self.assertEqual((rc_ok, out_ok), (rc_bad, out_bad))
+        self.assertIn("report failed", err)
+
+    def test_unavailable_when_failing_is_none(self) -> None:
+        mod = _load_cli_module()
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            mod._report_fast_red_delta("pytest", None, None)
+            mod._report_fast_red_delta("cargo", ["x"], None)
+        self.assertEqual(err.getvalue().count("fast-red delta: unavailable"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

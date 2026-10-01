@@ -91,6 +91,8 @@ Negative-spec:
       every other mutating finding still belongs in a `directives[]` entry. Quick-wrap's own
       anti-scope forbids deletes, force-pushes, and history rewrites; this producer must not
       be the seam that reintroduces one.
+    - The run-report divergence scan (`divergence.py`) is read-only, and its prose is
+      untrusted evidence: never move it into `narration` or a directive.
     - Do NOT decide entry-test condition 4 ("work is finished"). It is genuine EM
       discretion — the carve-out the doctrine page explicitly preserves — and is emitted
       as a `judgment_points[]` entry, never as a computed verdict. Conditions 1-3 are
@@ -146,6 +148,10 @@ from coordinator_core.ops.session.safe_commit_offer import commit_session_offer_
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import session_facts
+from coordinator_core.quick_wrap_assemble.divergence import (
+    collect_diverged_sidecars,
+    diverged_sidecars_judgment_point,
+)
 from coordinator_core.sibling_fact import _resolve_archive_handoffs_fallback_reasoned
 from coordinator_core.workstream_complete.directives_session_hygiene import (
     build_terminal_handoff_sweep_directive,
@@ -762,8 +768,8 @@ def _entry_test(
 # ---------------------------------------------------------------------------
 
 
-def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[dict[str, Any]]:
-    """The ceremony's unconditional CLI step(s), plus sidecar disposal when present.
+def _directives() -> list[dict[str, Any]]:
+    """The ceremony's unconditional CLI steps: d3, d4, d5.
 
     C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
     § C5): the former `safe-commit-offer` directive (step 1) is GONE from this list —
@@ -773,29 +779,10 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
     itself, before this function is invoked; see `_run_close_commit`. This function no
     longer emits any commit-shaped directive at all — do not re-add one.
 
-    `fold_degraded` exists because `present: False` is NOT self-describing here. The
-    caller's degraded fallback for Fact 5 carries that same literal, so gating `d2` on
-    `fold["present"]` alone reads "the scan ran and found nothing" and "the scan could
-    not run" identically — the absent-vs-clean conflation this package's lift exists to
-    retire, surviving at one call site the record shape never reached. `d2` is withheld
-    on a degraded read rather than emitted blind: `coordinator-fold-execution-record`
-    takes `--plan`, so a path-less invocation synthesised from an empty fallback is not
-    a runnable directive. The degradation surfaces instead as `j-fold-sidecars-degraded`
-    (see `_degraded_probe_judgment_point`), which is the EM's signal to reconcile
-    sidecars by hand. Negative-spec: do not "simplify" this parameter away by trusting
-    `present` — the two states are only distinguishable here because it is passed.
+    There is no `d2`: ids d3/d4/d5 are pinned by tests and skill text, so do not
+    renumber. Sidecar reconciliation is a judgment point, not a directive.
     """
     directives: list[dict[str, Any]] = []
-    if fold.get("present") and not fold_degraded:
-        directives.append(
-            {
-                "id": "d2",
-                "cli": "coordinator-fold-execution-record",
-                "args": ["--read-divergence", *fold.get("paths", [])],
-                "already_satisfied": False,
-                "depends_on": None,
-            }
-        )
     directives.append(
         {
             "id": "d3",
@@ -1405,12 +1392,6 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
         if not sizings_record["degraded"]
         else {"scanned": 0, "terminal": [], "non_terminal_count": 0}
     )
-    fold = (
-        fold_record["value"]
-        if not fold_record["degraded"]
-        else {"present": False, "paths": [], "count": 0}
-    )
-
     entry_test = _entry_test(pickup_kind, governing_plan, diff, root)
 
     # `terminal_write_owed` rides INSIDE the `governing_plan` record's own `value`,
@@ -1454,6 +1435,20 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
                 fold_record["evidence"],
             )
         )
+
+    divergence = collect_diverged_sidecars(root, sid)
+    if divergence["degraded"]:
+        judgment_points.append(
+            _degraded_probe_judgment_point(
+                "j-diverged-sidecars-degraded",
+                "The run-report divergence scan",
+                divergence["evidence"],
+            )
+        )
+    else:
+        diverged_point = diverged_sidecars_judgment_point(divergence["entries"])
+        if diverged_point is not None:
+            judgment_points.append(diverged_point)
 
     close_ledger = _close_ledger(close_gate)
 
@@ -1519,7 +1514,7 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
             "entry_test": entry_test,
             "commit_outcome": commit_outcome,
         },
-        directives=_directives(fold, fold_degraded=fold_record["degraded"]),
+        directives=_directives(),
         judgment_points=judgment_points,
         decisions={"close_ledger": close_ledger},
         narration=narration,

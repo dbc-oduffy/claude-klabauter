@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from coordinator_core.ops.dispatch_emit.emit import (
     PlanContext,
     _plan_context_preamble,
@@ -54,7 +56,7 @@ def test_derive_plan_context_carries_the_root_through():
 def test_an_off_path_claude_is_named_in_the_brief(monkeypatch, tmp_path):
     from coordinator_core.ops.dispatch_emit import emit
 
-    binary = tmp_path / "claude"
+    binary = tmp_path / ("claude.exe" if sys.platform == "win32" else "claude")
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))

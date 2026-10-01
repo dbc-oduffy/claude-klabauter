@@ -303,3 +303,62 @@ def test_built_record_never_carries_a_pid_field(repo_root, record_dir):
 def test_claim_response_never_carries_a_pid_field(repo_root, record_dir):
     result = nomination.claim(repo_root, "sid-a", directory=record_dir)
     assert "pid" not in json.dumps(result)
+
+
+def _stub_live(monkeypatch, live, reason):
+    monkeypatch.setattr(
+        nomination, "is_live", lambda record: nomination.LivenessResult(live, reason)
+    )
+
+
+def test_who_returns_none_without_record(repo_root, record_dir):
+    assert nomination.who(repo_root, record_dir) is None
+
+
+def test_who_annotates_from_is_live_only(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    _stub_live(monkeypatch, False, "pid_not_running")
+    out = nomination.who(repo_root, record_dir)
+    assert out["session_id"] == "sid-h"
+    assert out["live"] is False
+    assert out["live_reason"] == "pid_not_running"
+
+
+def test_standing_no_match_for_non_holder(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    _stub_live(monkeypatch, True, "live")
+    monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: [])
+    assert nomination.standing(repo_root, "sid-other", record_dir)["standing"] == "no_match"
+    assert nomination.standing(repo_root, "", record_dir)["standing"] == "no_match"
+
+
+def test_standing_live_by_id_and_by_unique_name(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    _stub_live(monkeypatch, True, "live")
+    row = type("Row", (), {"session_id": "sid-h", "name": "alice"})()
+    monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: [row])
+    assert nomination.standing(repo_root, "sid-h", record_dir)["standing"] == "live"
+    assert nomination.standing(repo_root, "alice", record_dir)["standing"] == "live"
+
+
+def test_standing_ambiguous_name_is_no_match(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    _stub_live(monkeypatch, True, "live")
+    rows = [
+        type("Row", (), {"session_id": "sid-h", "name": "dup"})(),
+        type("Row", (), {"session_id": "sid-x", "name": "dup"})(),
+    ]
+    monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: rows)
+    assert nomination.standing(repo_root, "dup", record_dir)["standing"] == "no_match"
+
+
+def test_standing_not_live_when_is_live_says_pid_not_running(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    _stub_live(monkeypatch, False, "pid_not_running")
+    out = nomination.standing(repo_root, "sid-h", record_dir)
+    assert out["standing"] == "not_live"
+    assert out["live_reason"] == "pid_not_running"
+
+
+def test_standing_none_without_record(repo_root, record_dir):
+    assert nomination.standing(repo_root, "sid-h", record_dir) is None

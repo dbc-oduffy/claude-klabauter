@@ -11,7 +11,7 @@ Shape change from the DoE source: DoE's script shells out to
 ALREADY a warm, in-process JSON-RPC op in this checkout
 (`coordinator_core.ops.group_em_enter`, `register_op("groupem.enter", ...)`
 — ported ahead of this chunk). This port therefore calls it in-process via
-`coordinator_core.ipc.get_op_handler("groupem.enter")` instead of spawning
+`coordinator_core.warm.entry_seam.reentrant_dispatch("groupem.enter", ...)` instead of spawning
 `sys.executable` — a strict improvement (one fewer process spawn per fire,
 no `--repo`/`--session-id`/`--json` argv marshalling), not a re-architecture:
 the CLI's own `--json` output IS this op's return dict, so
@@ -62,8 +62,8 @@ from typing import Optional
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks.support.skill_invocation import normalize_command_name
-from coordinator_core.ipc import get_op_handler
 from coordinator_core.ipc import register_op
+from coordinator_core.warm.entry_seam import reentrant_dispatch
 
 _GROUP_EM_COMMAND_NAMES = {"group-em"}
 _CONTEXT_BUDGET_CHARS = 10_000
@@ -191,16 +191,13 @@ def compute_context(payload: dict) -> Optional[str]:
     cwd = payload.get("cwd")
     repo_root = cwd if isinstance(cwd, str) and cwd else os.getcwd()
 
-    handler = get_op_handler("groupem.enter")
-    if handler is None:
-        return None
-
     try:
-        entered = handler(
+        entered = reentrant_dispatch(
+            "groupem.enter",
             {"repo_root": repo_root, "caller_session_id": session_id},
             repo_root=Path(repo_root),
         )
-    except Exception:
+    except Exception:  # includes OpUnavailableError
         return None
 
     if not isinstance(entered, dict) or not entered:

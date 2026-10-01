@@ -24,16 +24,10 @@ Four engine entry paths, verified at HEAD (2026-08-15/16):
      mechanism `_dispatch_message_impl` uses, rather than calling
      `session.declared_writes.collecting()` directly.
   3. `get_op_handler` re-entry — production call sites across `coordinator_
-     core.ops.*` (and `baton_assemble.apply`) that resolve a handler by key
-     and invoke it directly, bypassing dispatch entirely: no per-request
-     declared-writes scope, no timeout, no repo-key resolution. This is the
-     largest un-instrumented surface and the reason this module exists as a
-     standalone convergence point rather than as a private helper inside
-     `cli_entry.py` — a call site in any of those modules can adopt
-     `reentrant_dispatch()` below without importing `cli_entry` (which is a
-     CLI-trampoline concern, not theirs) or hand-rolling `collecting()`
-     itself. Migration is per-site and tracked as a residual of this chunk;
-     this module only authors the primitive.
+     core.ops.*` that need another op in-process. They go through this seam
+     (`reentrant_dispatch` / `reentrant_dispatch_async`) rather than invoking a
+     resolved handler themselves, so each call gets its own declared-writes
+     scope without importing `cli_entry` or hand-rolling `collecting()`.
   4. `ipc.dispatch_from_hook` and `ipc.dispatch_ops_from_hook` — both wrap
      `asyncio.run(dispatch_message(...))` (the multi-op sibling awaits each op
      sequentially under one loop), so they inherit path 1's convergence
@@ -54,17 +48,13 @@ Negative-spec (RAG-bait):
     the per-request IDENTITY-BINDING half — never identity RESOLUTION,
     which stays `session.core`'s job alone.
 
-    `reentrant_dispatch` deliberately does not add `asyncio.wait_for` timeout
-    wrapping or a JSON-RPC envelope. Every audited path-3 call site invokes
-    its resolved handler synchronously without awaiting it (e.g.
-    `ops/ceremony/wsc_tail.py::_derive_trailers`'s
-    `handler({"session_id": sid, "nature": nature}, common_dir)`), so
-    handlers reached this way are sync in practice today; adding async
-    dispatch machinery here would be inventing a capability no live call
-    site uses. A caller needing the full JSON-RPC contract (timeout, error
-    envelope, lazy-import fallback) should call `ipc.dispatch_message`
-    instead — this seam is for the narrower, already-in-process re-entry
-    shape path 3 uses.
+    Re-entry sites go through this seam. An async handler is awaited
+    (`reentrant_dispatch_async`) or driven to completion
+    (`reentrant_dispatch`). There is still no timeout and no JSON-RPC
+    envelope: a caller needing either should call `ipc.dispatch_message`.
+    Writes an inner handler declares merge into the enclosing collection.
+    `OpUnavailableError` is the one refusal type for an unregistered or
+    suspended op; a handler's own KeyError is not that refusal and propagates.
 
 Spec backlink: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-
 cold-start.md task C13.
@@ -83,6 +73,8 @@ from coordinator_core.session.declared_writes import collecting
 __all__ = [
     "per_request_state",
     "reentrant_dispatch",
+    "reentrant_dispatch_async",
+    "OpUnavailableError",
     "emit_diagnostic",
     "collecting_diagnostics",
     "WarmGuardOutcome",
@@ -768,26 +760,104 @@ def try_warm_guard_dispatch(
     return WarmGuardOutcome(hit=True, response=response)
 
 
+class OpUnavailableError(LookupError):
+    """The op is not registered, or is suspended/killed (OpSuspendedError chained as __cause__)."""
+
+
+def _resolve_handler(op_name: str) -> Any:
+    from coordinator_core import ipc
+    from coordinator_core.op_budget_suspension import OpSuspendedError
+
+    try:
+        handler = ipc.get_op_handler(op_name)
+    except OpSuspendedError as exc:
+        raise OpUnavailableError(f"reentrant_dispatch: op {op_name!r} is suspended") from exc
+    if handler is None:
+        raise OpUnavailableError(f"reentrant_dispatch: no registered handler for {op_name!r}")
+    return handler
+
+
+def _drive_awaitable_sync(awaitable: Any) -> Any:
+    """Run `awaitable` to completion from synchronous code, loop running or not.
+
+    Under a running loop the awaitable runs on a worker thread with a copy of
+    the caller's context, so declared writes, identity and the warm-served flag
+    survive the thread hop.
+    """
+    import asyncio
+    import threading
+
+    async def _await() -> Any:
+        return await awaitable
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_await())
+
+    ctx = contextvars.copy_context()
+    box: dict = {}
+
+    def _runner() -> None:
+        try:
+            box["result"] = ctx.run(asyncio.run, _await())
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
+            box["error"] = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
+
+
+@contextlib.contextmanager
+def _reentry_scope() -> Iterator[None]:
+    """One re-entry's scope; its declared writes merge into the enclosing collection."""
+    from coordinator_core.session.declared_writes import active_declarations
+
+    outer = active_declarations()
+    with per_request_state(isolated=False) as inner:
+        try:
+            yield
+        finally:
+            if outer is not None:
+                outer.extend(inner)
+
+
 def reentrant_dispatch(
     op_name: str,
     params: dict,
     *,
     repo_root: Optional[Any] = None,
 ) -> Any:
-    import asyncio
+    """Invoke a registered op in-process, scoped to this call; drives an async handler to completion.
 
-    from coordinator_core.ipc import get_op_handler
+    Raises OpUnavailableError for an unregistered or suspended op; a handler's own errors propagate.
+    """
+    import inspect
 
-    handler = get_op_handler(op_name)
-    if handler is None:
-        raise LookupError(f"reentrant_dispatch: no registered handler for {op_name!r}")
-    if asyncio.iscoroutinefunction(handler):
-        raise TypeError(
-            f"reentrant_dispatch: handler for {op_name!r} is async "
-            "(asyncio.iscoroutinefunction) — this seam invokes handlers "
-            "synchronously and does not await; a caller needing an async "
-            "handler must use ipc.dispatch_message instead"
-        )
+    handler = _resolve_handler(op_name)
+    with _reentry_scope():
+        result = handler(params, repo_root=repo_root)
+        if inspect.isawaitable(result):
+            result = _drive_awaitable_sync(result)
+        return result
 
-    with per_request_state(isolated=False):
-        return handler(params, repo_root=repo_root)
+
+async def reentrant_dispatch_async(
+    op_name: str,
+    params: dict,
+    *,
+    repo_root: Optional[Any] = None,
+) -> Any:
+    """Async twin of reentrant_dispatch: awaits an awaitable result inside the scope."""
+    import inspect
+
+    handler = _resolve_handler(op_name)
+    with _reentry_scope():
+        result = handler(params, repo_root=repo_root)
+        if inspect.isawaitable(result):
+            result = await result
+        return result

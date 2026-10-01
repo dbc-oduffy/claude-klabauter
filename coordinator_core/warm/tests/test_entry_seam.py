@@ -1,15 +1,19 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import active_declarations, declare_write
 from coordinator_core.warm.entry_seam import (
     METHOD_NOT_FOUND,
+    OpUnavailableError,
     WarmGuardOutcome,
     per_request_state,
     reentrant_dispatch,
+    reentrant_dispatch_async,
     try_warm_guard_dispatch,
 )
 
@@ -54,16 +58,148 @@ def test_reentrant_dispatch_unknown_op_raises_lookup_error():
         reentrant_dispatch("this.op.does.not.exist", {})
 
 
-def test_reentrant_dispatch_async_handler_raises_type_error_instead_of_silently_dropping(monkeypatch):
+def _patch_handlers(monkeypatch, table):
     from coordinator_core import ipc
 
-    async def _fake_async_handler(params, repo_root=None):
-        return {"ok": True}
+    def _lookup(name, msg=None):
+        if name in table:
+            return table[name]
+        raise AssertionError(f"unexpected lookup {name!r}")
 
-    monkeypatch.setattr(ipc, "get_op_handler", lambda name: _fake_async_handler)
+    monkeypatch.setattr(ipc, "get_op_handler", _lookup)
 
-    with pytest.raises(TypeError):
-        reentrant_dispatch("fake.async.op", {})
+
+def test_reentrant_dispatch_async_handler_return_value_comes_back(monkeypatch):
+    async def _h(params, repo_root=None):
+        return {"ok": True, "p": params}
+
+    _patch_handlers(monkeypatch, {"fake.async.op": _h})
+    assert reentrant_dispatch("fake.async.op", {"a": 1}) == {"ok": True, "p": {"a": 1}}
+
+
+def test_inner_declare_write_reaches_enclosing_list_sync(monkeypatch):
+    def _h(params, repo_root=None):
+        declare_write("inner.txt")
+        return {}
+
+    _patch_handlers(monkeypatch, {"s": _h})
+    with per_request_state(isolated=False) as outer:
+        declare_write("outer.txt")
+        reentrant_dispatch("s", {})
+        assert outer == ["outer.txt", "inner.txt"]
+        assert active_declarations() is outer
+
+
+def test_inner_declare_write_reaches_enclosing_list_async(monkeypatch):
+    async def _h(params, repo_root=None):
+        declare_write("inner.txt")
+        return {}
+
+    _patch_handlers(monkeypatch, {"a": _h})
+    with per_request_state(isolated=False) as outer:
+        reentrant_dispatch("a", {})
+        assert outer == ["inner.txt"]
+    with per_request_state(isolated=False) as outer2:
+        asyncio.run(reentrant_dispatch_async("a", {}))
+        assert outer2 == ["inner.txt"]
+
+
+def test_write_declared_before_a_raise_still_merges(monkeypatch):
+    def _h(params, repo_root=None):
+        declare_write("before.txt")
+        raise ValueError("boom")
+
+    _patch_handlers(monkeypatch, {"r": _h})
+    with per_request_state(isolated=False) as outer:
+        with pytest.raises(ValueError):
+            reentrant_dispatch("r", {})
+        assert outer == ["before.txt"]
+
+
+def test_no_enclosing_collection_leaves_none(monkeypatch):
+    def _h(params, repo_root=None):
+        declare_write("x.txt")
+        return {}
+
+    _patch_handlers(monkeypatch, {"n": _h})
+    assert active_declarations() is None
+    reentrant_dispatch("n", {})
+    assert active_declarations() is None
+
+
+def test_async_handler_driven_inside_a_running_loop_sees_callers_collection(monkeypatch):
+    seen = {}
+
+    async def _h(params, repo_root=None):
+        seen["active"] = active_declarations()
+        declare_write("loop.txt")
+        return {}
+
+    _patch_handlers(monkeypatch, {"l": _h})
+
+    async def _main():
+        with per_request_state(isolated=False) as outer:
+            reentrant_dispatch("l", {})
+            return outer
+
+    outer = asyncio.run(_main())
+    assert seen["active"] is not None
+    assert outer == ["loop.txt"]
+
+
+def test_handler_key_error_propagates_as_key_error(monkeypatch):
+    def _h(params, repo_root=None):
+        raise KeyError("k")
+
+    _patch_handlers(monkeypatch, {"k": _h})
+    with pytest.raises(KeyError) as info:
+        reentrant_dispatch("k", {})
+    assert not isinstance(info.value, OpUnavailableError)
+
+
+def test_none_lookup_raises_op_unavailable(monkeypatch):
+    from coordinator_core import ipc
+
+    monkeypatch.setattr(ipc, "get_op_handler", lambda name, msg=None: None)
+    with pytest.raises(OpUnavailableError):
+        reentrant_dispatch("gone", {})
+    with pytest.raises(OpUnavailableError):
+        asyncio.run(reentrant_dispatch_async("gone", {}))
+
+
+def test_suspended_lookup_raises_op_unavailable_with_cause(monkeypatch):
+    from coordinator_core import ipc
+    from coordinator_core.op_budget_suspension import OpSuspendedError
+
+    def _lookup(name, msg=None):
+        raise OpSuspendedError("suspended")
+
+    monkeypatch.setattr(ipc, "get_op_handler", _lookup)
+    with pytest.raises(OpUnavailableError) as info:
+        reentrant_dispatch("susp", {})
+    assert isinstance(info.value.__cause__, OpSuspendedError)
+
+
+def test_gathered_async_reentries_do_not_cross_contaminate(monkeypatch):
+    async def _h(params, repo_root=None):
+        declare_write(params["w"])
+        await asyncio.sleep(0)
+        declare_write(params["w"] + ".2")
+        return params["w"]
+
+    _patch_handlers(monkeypatch, {"g": _h})
+
+    async def _one(tag):
+        with per_request_state(isolated=False) as outer:
+            result = await reentrant_dispatch_async("g", {"w": tag})
+            return result, list(outer)
+
+    async def _main():
+        return await asyncio.gather(_one("a"), _one("b"))
+
+    ra, rb = asyncio.run(_main())
+    assert ra == ("a", ["a", "a.2"])
+    assert rb == ("b", ["b", "b.2"])
 
 
 def test_reentrant_dispatch_scopes_declared_writes_per_call():

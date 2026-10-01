@@ -37,7 +37,8 @@ registry itself so this script cannot drift from the gate:
   * PIN-TRACKED — the schema's name is a key in `_QUEUE_SCHEMA_PINS`. Its gate
     compares against that pinned SHA. Re-vendoring it REQUIRES moving the pin.
   * HEAD-TRACKED — everything else (handoff, handoff-archived, plan-tasks,
-    percolate-store, ...). Its gate compares against DoE HEAD, so there is no pin
+    percolate-store, ...). Where a drift oracle backs it (`_GATED`) that gate compares
+    against DoE HEAD; the rest are only drift-watched, non-gating. Either way there is no pin
     to move and `--ref` other than HEAD is refused (vendoring such a schema at a
     non-HEAD ref would land a tree that is red by construction).
 
@@ -1080,6 +1081,31 @@ def _drifted_names() -> list[str]:
     )
 
 
+# Schemas with a gating drift oracle in test_schema_validate.py; held equal to the AST-derived
+# set by test_replay_vendored_drift_advertisement.py.
+_GATED: frozenset[str] = frozenset({
+    "bug-backlog",
+    "cross-repo-commitment",
+    "debt-backlog",
+    "handoff",
+    "handoff-archived",
+    "improvement-queue",
+    "initiative",
+    "lesson-entry",
+    "lessons-outbox",
+    "orientation-cache",
+    "priority-intent",
+    "priority-ledger",
+    "review-findings",
+    "review-trail",
+    "roadmap",
+    "run-report",
+    "sizing-object",
+    "workstream",
+    "workstream-event",
+})
+
+
 def _print_list() -> int:
     """Print every vendored schema with its governance class and current pin."""
     pins = _load_pin_registry(_PIN_REGISTRY_FILE)
@@ -1087,7 +1113,10 @@ def _print_list() -> int:
     for name in _vendored_names():
         pin = pins.get(name)
         if pin is None:
-            _info(f"  {name:<28} HEAD-tracked  (gate compares against DoE HEAD)")
+            if name in _GATED:
+                _info(f"  {name:<28} HEAD-tracked  (gate compares against DoE HEAD)")
+            else:
+                _info(f"  {name:<28} HEAD-tracked  (drift-watched by schema_drift_watch, non-gating)")
         else:
             alias = f" via {pin.via_alias}" if pin.via_alias else ""
             _info(f"  {name:<28} pin-tracked   {pin.sha}{alias}")
@@ -1152,7 +1181,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="GITREF",
         help=(
             "DoE ref to vendor from (default: HEAD). Refused for HEAD-tracked schemas, "
-            "whose gate compares against HEAD by construction."
+            "which compare against HEAD."
         ),
     )
     p.add_argument(

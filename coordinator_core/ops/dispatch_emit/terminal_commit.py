@@ -79,9 +79,10 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.git.commit import partition_declared_deletions
 from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.git.git_state import head_branch
-from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
+from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit.commit_request import (
     PREFIX_CLAIM_LABEL,
     CommitRequest,
@@ -746,9 +747,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         message_lines
     ) > 1 else message_lines[0]
 
-    commit_v2 = get_op_handler("ceremony.commit_v2")
-    if commit_v2 is None:
-        return _error("ceremony.commit_v2 is not registered")
+    def commit_v2(params: dict, root: Path):
+        return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
     commit_params: dict = {"paths": all_paths, "message": message}
     if deleted_paths:
@@ -756,7 +756,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if session_id is not None:
         commit_params["session_id"] = session_id
 
-    reply = commit_v2(commit_params, repo_root)
+    try:
+        reply = commit_v2(commit_params, repo_root)
+    except OpUnavailableError:
+        return _error("ceremony.commit_v2 is not registered")
     if not isinstance(reply, dict):
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 

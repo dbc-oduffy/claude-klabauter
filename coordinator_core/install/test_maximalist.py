@@ -115,7 +115,18 @@ _fake_register_coordinator_mirror = _make_fake_op_main("register-coordinator-mir
 _fake_check_install_singularity = _make_fake_op_main("check-install-singularity")
 _fake_capture_fan_out_threshold = _make_fake_op_main("capture-fan-out-threshold")
 _fake_platform_localize = _make_fake_op_main("platform-localize")
-_fake_coordinator_setup_state = _make_fake_op_main("coordinator-setup-state")
+_real_record_setup_concluded = _setup_state_module.record_setup_concluded
+
+
+def _make_recording_record_setup_concluded(receipts):
+    """Stands in for `record_setup_concluded`: logs the call-log line and keeps the receipt it was handed."""
+
+    def _record(receipt, env=None):
+        _log_call("coordinator-setup-state", [])
+        receipts.append(receipt)
+        return int(os.environ.get(_rc_env("coordinator-setup-state"), "0"))
+
+    return _record
 
 
 def _fake_ensure_venv(plugin_root, settings_home_path, *, claude_home=None, check_only=False, **kwargs):
@@ -278,7 +289,10 @@ def stub_env(tmp_path, monkeypatch):
     monkeypatch.setattr(_singularity_module, "main", _fake_check_install_singularity)
     monkeypatch.setattr(_threshold_module, "main", _fake_capture_fan_out_threshold)
     monkeypatch.setattr(_platform_localize_module, "main", _fake_platform_localize)
-    monkeypatch.setattr(_setup_state_module, "main", _fake_coordinator_setup_state)
+    receipts = []
+    monkeypatch.setattr(
+        _setup_state_module, "record_setup_concluded", _make_recording_record_setup_concluded(receipts)
+    )
     # register-coordinator-mirror's own DoE-local "coordinator live path"
     # resolution (native resolve_content_root() / claude-home plugins
     # fallback, out of C13's scope) is stubbed to a fixed value so the phase
@@ -299,7 +313,7 @@ def stub_env(tmp_path, monkeypatch):
     # was already created above, ahead of the substrate stub install, since
     # `_make_stub_substrate_run` needs `settings_bin_dir` to exist under it.)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-    return {**paths, "call_log": call_log, "settings_bin": settings_bin_dir}
+    return {**paths, "call_log": call_log, "settings_bin": settings_bin_dir, "receipts": receipts}
 
 
 def _log_lines(call_log: Path):
@@ -453,10 +467,10 @@ def test_advisory_failure_continues_chain_to_completion(stub_env, monkeypatch):
     assert rc == 1
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "ensure-coordinator-venv" in names
-    # Every later phase, including the final receipt, still ran.
+    # Every later phase still ran; the advisory failure withholds the receipt.
     assert "scaffold-canonical-structure" in names
     assert "check-install-singularity" in names
-    assert "coordinator-setup-state" in names
+    assert "coordinator-setup-state" not in names
 
 
 def test_ensure_venv_skipped_by_default_without_allow_venv_fallback(stub_env):
@@ -502,7 +516,7 @@ def test_step7_scaffold_raw_oserror_is_advisory_not_fatal(stub_env, monkeypatch)
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "check-install-singularity" in names
     assert "capture-fan-out-threshold" in names
-    assert "coordinator-setup-state" in names
+    assert "coordinator-setup-state" not in names
 
 
 def test_check_only_skips_mutating_not_singularity(stub_env):
@@ -578,7 +592,7 @@ def test_compileall_failure_is_advisory_not_fatal(stub_env, monkeypatch):
     assert rc == 1
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "scaffold-canonical-structure" in names
-    assert "coordinator-setup-state" in names
+    assert "coordinator-setup-state" not in names
 
 
 def test_compileall_skipped_under_check_only(stub_env, monkeypatch):
@@ -1144,20 +1158,88 @@ def test_c13_register_coordinator_mirror_unresolvable_live_path_is_fatal(stub_en
     assert "coordinator-setup-state" not in names
 
 
-def test_c13_coordinator_setup_state_record_argv(stub_env):
-    """Phase 7 Step 0 must call coordinator_setup_state with the exact
-    `["record", "setup_concluded"]` argv the retired subprocess form used."""
-    rc = maximalist.run(
-        check_only=False,
+def _run_live(stub_env, **kw):
+    return maximalist.run(
+        check_only=kw.pop("check_only", False),
         non_interactive=True,
         coord_root=str(stub_env["coord_root"]),
         claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
         doe_clone=str(stub_env["doe_clone"]),
         claude_home_dir=str(stub_env["claude_home"]),
+        **kw,
     )
+
+
+def test_completed_run_writes_stamp_and_receipt_after_skipped_summary(stub_env, monkeypatch, capsys):
+    """AC7 + AC9: the real writer runs against the stub CLAUDE_HOME, after SKIPPED PHASES, spawning nothing."""
+    import yaml
+
+    monkeypatch.setenv("CLAUDE_HOME", str(stub_env["claude_home"]))
+    plugin_dir = stub_env["coord_root"] / ".claude-plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin.json").write_text('{"version": "9.8.7"}', encoding="utf-8")
+
+    def _no_spawn(*_a, **_k):
+        raise AssertionError("receipt assembly/write must not spawn a process")
+
+    calls = []
+
+    def _guarded_record(receipt, env=None):
+        calls.append(receipt)
+        monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+        return _real_record_setup_concluded(receipt, env)
+
+    monkeypatch.setattr(_setup_state_module, "record_setup_concluded", _guarded_record)
+    rc = _run_live(stub_env)
+    out = capsys.readouterr().out
     assert rc == 0
-    log_text = stub_env["call_log"].read_text()
-    assert "coordinator-setup-state record setup_concluded" in log_text
+    assert len(calls) == 1
+    state_file = stub_env["claude_home"] / ".claude" / "coordinator-setup-state.yaml"
+    data = yaml.safe_load(state_file.read_text(encoding="utf-8"))
+    assert data["setup_concluded_at"]
+    receipt = data["setup_receipt"]
+    assert set(receipt) == {"phases_ran", "phases_skipped", "coordinator_version", "engine_ref"}
+    assert receipt["coordinator_version"] == "9.8.7"
+    assert receipt["phases_ran"] and all(isinstance(d, str) for d in receipt["phases_ran"])
+    assert "Phase 4 (~/.claude git-tracking offer)" in {e["id"] for e in receipt["phases_skipped"]}
+    assert out.index("SKIPPED PHASES") < out.index("Recorded setup_concluded_at")
+
+
+def test_plugin_version_is_none_on_missing_or_malformed_plugin_json(stub_env):
+    root = str(stub_env["coord_root"])
+    assert maximalist._plugin_version(root) is None
+    plugin_dir = stub_env["coord_root"] / ".claude-plugin"
+    plugin_dir.mkdir()
+    for body in ("{not json", "{}", '{"version": 3}'):
+        (plugin_dir / "plugin.json").write_text(body, encoding="utf-8")
+        assert maximalist._plugin_version(root) is None
+
+
+def test_check_only_run_writes_no_stamp(stub_env):
+    assert _run_live(stub_env, check_only=True) == 0
+    assert stub_env["receipts"] == []
+
+
+def test_advisory_failure_writes_no_stamp(stub_env, monkeypatch, capsys):
+    monkeypatch.setenv("RC_ENSURE_COORDINATOR_VENV", "1")
+    assert _run_live(stub_env, allow_venv_fallback=True) == 1
+    assert stub_env["receipts"] == []
+    assert "receipt not written: an advisory phase failed" in capsys.readouterr().out
+
+
+def test_gen_settings_hooks_clone_absent_skip_writes_no_stamp(stub_env, monkeypatch, capsys):
+    monkeypatch.setattr(_gen_hooks_module, "generate", lambda **_k: "skipped (clone absent)")
+    _run_live(stub_env)
+    assert stub_env["receipts"] == []
+    assert "mandatory phase skipped" in capsys.readouterr().out
+
+
+def test_skip_note_mandatory_is_keyword_only_without_default():
+    import inspect
+
+    param = inspect.signature(maximalist._Orchestrator.skip_note).parameters["mandatory"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
 
 
 def test_c13_platform_localize_failure_is_fatal_not_advisory(stub_env, monkeypatch):

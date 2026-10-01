@@ -103,10 +103,11 @@ only as a convenience default id-shape (pid + monotonic-ns, same construction as
 hot-path reason), not a ruling on the channel.
 
 THIRD SEAM BYPASS -- DECLARED KNOWN HOLE, NOT COVERED (census §9.1; chunk C9 brief names
-it explicitly): in-process op-to-op re-entry via `coordinator_core.ipc.get_op_handler(name)`
-followed by a direct `await` (site: `promote_shipped_in_flight_stubs.py`'s
-`get_op_handler("handoff.stamp")` call; recurs in `post_commit_tail.py::
-_run_deliverable_cascade` and `handoff_reconcile.py::_reconcile_ancestor_chain`) never
+it explicitly): in-process op-to-op re-entry goes through the entry seam,
+`coordinator_core.warm.entry_seam.reentrant_dispatch` / `reentrant_dispatch_async` (live
+caller: `baton_assemble/apply.py`); a production module must not invoke a
+`coordinator_core.ipc.get_op_handler(name)` result itself (pinned by
+`warm/tests/test_reentry_goes_through_the_seam.py`). Re-entry never
 passes through `ipc.dispatch_message`, the seam any counter wired at dispatch time would
 sit on. This primitive is a plain object with `check()`/`record_invocation()` methods a
 caller invokes explicitly -- it has no seam of its own to hook, by the dependency-free-leaf

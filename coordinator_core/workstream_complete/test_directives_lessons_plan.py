@@ -300,12 +300,12 @@ def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
     directives = build_plan_claim_and_stamp_directives(resolved) + build_deferral_harvest_directives([resolved])
     by_id = {d["id"]: d for d in directives}
 
-    assert by_id["d-stamp-plan-implemented"]["args"][1] == rel
+    assert resolved.archived is True
     assert by_id["d-harvest-deferrals-1"]["args"] == ["--plan", rel]
 
-    # The claim lock still keys on the SLUG -- it names the plan, it does not
-    # locate it -- so the fix must not have widened that arg to a path.
-    assert by_id["d-claim-plan-execution-lock"]["args"] == ["claim-plan", slug]
+    # An archived plan is closed: no claim, no stamp.
+    assert "d-claim-plan-execution-lock" not in by_id
+    assert "d-stamp-plan-implemented" not in by_id
 
     # Nothing anywhere in the emitted argv reconstructs the docs/plans guess.
     assert not any(
@@ -517,3 +517,95 @@ def test_build_directives_forwards_repo_root_to_lesson_capture():
         "build_directives must forward repo_root to the lesson-capture builder; "
         "omitting it turns every multi-paragraph lesson body into an uncaught crash"
     )
+
+
+# ---------------------------------------------------------------------------
+# An archived plan is followed; claim+stamp are not emitted for it.
+# ---------------------------------------------------------------------------
+
+_ARCH_SLUG = "2026-09-01-moved-plan"
+
+
+def _archive_plan(tmp_path: Path, slug: str = _ARCH_SLUG) -> Path:
+    d = tmp_path / "archive" / "specs" / slug[:7]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.md").write_text("# moved\n", encoding="utf-8")
+    return d / f"{slug}.md"
+
+
+def test_handoff_pointer_to_moved_plan_resolves_archived(tmp_path):
+    arch = _archive_plan(tmp_path)
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{_ARCH_SLUG}.md"
+    )
+    assert source == "handoff_frontmatter_archived"
+    assert resolved is not None and resolved.archived is True
+    assert resolved.path == arch
+    assert resolved.rel == f"archive/specs/2026-09/{_ARCH_SLUG}.md"
+
+
+def test_literal_hit_is_unchanged_and_not_archived(tmp_path):
+    _write_plan(tmp_path, _ARCH_SLUG)
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{_ARCH_SLUG}.md"
+    )
+    assert source == "handoff_frontmatter"
+    assert resolved is not None and resolved.archived is False
+
+
+def test_slug_and_path_arms_follow_the_archive(tmp_path):
+    _archive_plan(tmp_path)
+    r1, s1 = resolve_governing_plan_with_source(tmp_path, decisions={"governing_plan_slug": _ARCH_SLUG})
+    r2, s2 = resolve_governing_plan_with_source(
+        tmp_path, decisions={"governing_plan_path": f"docs/plans/{_ARCH_SLUG}.md"}
+    )
+    assert s1 == "decisions_slug_archived" and r1 is not None and r1.archived
+    assert s2 == "decisions_path_archived" and r2 is not None and r2.archived
+
+
+def test_pointer_naming_archive_directly_is_archived(tmp_path):
+    _archive_plan(tmp_path)
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={"governing_plan_path": f"archive/specs/2026-09/{_ARCH_SLUG}.md"}
+    )
+    assert source == "decisions_path"
+    assert resolved is not None and resolved.archived is True
+
+
+def test_pointer_resolving_nowhere_is_still_not_found(tmp_path):
+    for kwargs, expected in (
+        ({"decisions": {"governing_plan_slug": _ARCH_SLUG}}, "decisions_slug_not_found"),
+        ({"decisions": {"governing_plan_path": f"docs/plans/{_ARCH_SLUG}.md"}}, "decisions_path_not_found"),
+        (
+            {"decisions": {}, "handoff_governing_plan_field": f"docs/plans/{_ARCH_SLUG}.md"},
+            "handoff_frontmatter_not_found",
+        ),
+    ):
+        resolved, source = resolve_governing_plan_with_source(tmp_path, **kwargs)
+        assert resolved is None and source == expected
+
+
+def test_claim_and_stamp_skipped_for_archived_but_emitted_for_live():
+    live = GoverningPlan(slug="p", path=Path("docs/plans/p.md"), rel="docs/plans/p.md")
+    moved = GoverningPlan(slug="p", path=Path("archive/specs/2026-09/p.md"), rel="archive/specs/2026-09/p.md", archived=True)
+    assert [d["id"] for d in build_plan_claim_and_stamp_directives(live)] == [
+        "d-claim-plan-execution-lock",
+        "d-stamp-plan-implemented",
+    ]
+    assert build_plan_claim_and_stamp_directives(moved) == []
+    assert build_deferral_harvest_directives([moved])
+
+
+def test_resolution_spawns_no_subprocess(tmp_path, monkeypatch):
+    import subprocess
+
+    _archive_plan(tmp_path)
+
+    def _boom(*a, **k):
+        raise AssertionError("resolution must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    resolved, _ = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{_ARCH_SLUG}.md"
+    )
+    assert resolved is not None

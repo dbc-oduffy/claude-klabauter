@@ -482,3 +482,68 @@ def test_a_clean_close_pass_reports_no_close_error(repo, monkeypatch):
     result = cycle.run(repo, cap=10)
 
     assert result["close_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# The `invariant` block -- present every run, close or not.
+# ---------------------------------------------------------------------------
+
+
+def _commit_all(root: Path, msg: str) -> None:
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", msg)
+
+
+def test_a_clean_repo_returns_both_invariant_lists_empty(tmp_path):
+    root = _init_repo(tmp_path / "repo")
+    _write_frontmatter(
+        root / "state" / "handoffs" / "2026-06-01_00001_x.md",
+        {"handoff_id": "hnd-x", "deployment_state": "in_flight"},
+    )
+    _commit_all(root, "fixture")
+
+    result = cycle.run(root, cap=10)
+
+    assert result["invariant"] == {"archive_nonterminal": [], "gate_dead_blockers": []}
+
+
+def test_an_archived_in_flight_record_is_reported_nonterminal(tmp_path):
+    root = _init_repo(tmp_path / "repo")
+    _write_frontmatter(
+        root / "archive" / "handoffs" / "2026-06-01_00002_stuck.md",
+        {"handoff_id": "hnd-stuck", "deployment_state": "in_flight"},
+    )
+    _commit_all(root, "fixture")
+
+    result = cycle.run(root, cap=10)
+
+    assert result["invariant"]["archive_nonterminal"] == [
+        {"id": "archive/handoffs/2026-06-01_00002_stuck.md", "deployment_state": "in_flight"}
+    ]
+
+
+def test_a_gate_naming_no_record_is_a_dead_blocker_even_when_close_is_false(tmp_path):
+    root = _init_repo(tmp_path / "repo")
+    gated = root / "state" / "handoffs" / "2026-06-01_00004_gated.md"
+    _write_frontmatter(
+        gated,
+        {
+            "handoff_id": "hnd-g",
+            "deployment_state": "awaiting_gate",
+            "blocked_by": "[no-such-stub]",
+        },
+    )
+    _commit_all(root, "fixture")
+    before = gated.read_text(encoding="utf-8")
+
+    result = cycle.run(root, cap=10, close=False)
+
+    assert result["closed"] == 0
+    assert gated.read_text(encoding="utf-8") == before
+    assert result["invariant"]["gate_dead_blockers"] == [
+        {
+            "id": "state/handoffs/2026-06-01_00004_gated.md",
+            "blocker_id": "no-such-stub",
+            "reason": "unresolved",
+        }
+    ]

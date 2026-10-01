@@ -659,14 +659,6 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/quick_wrap_assemble/__init__.py",
-      "directive_id": "d2",
-      "cli": "coordinator-fold-execution-record",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
       "module": "coordinator_core/roadmap_planning_assemble/__init__.py",
       "directive_id": "",
       "cli": "",

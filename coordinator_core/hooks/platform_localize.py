@@ -37,7 +37,7 @@ ends in `.claude` is rejected outright rather than localizing settings into
                                  location, silently missing the real registry
                                  (the same claude-home-vs-settings-home trap
                                  documented as a fixed defect in
-                                 `ops/coordinator_setup_state._machine_local_dir`
+                                 `_settings_home.machine_local_dir`
                                  and `install/check_install_singularity.
                                  _registry_live_path`). Precedence is per-key:
                                  registry.local.toml wins, registry.toml fills

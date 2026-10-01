@@ -449,68 +449,25 @@ def _coalesce_batch_key(
 def _call_source_op(
     op_name: str, args: Mapping[str, Any], repo_root: Path
 ) -> Any:
-    """Resolve and call `op_name` in-process through the op registry.
+    """Call `op_name` in-process through the entry seam (`reentrant_dispatch`).
 
-    Refuses any op outside `grind_vocab.SOURCE_OPS`. Runs the handler
-    directly — no subprocess, ever — and awaits it via `asyncio.run` if it
-    returns a coroutine (handlers may be sync or async per
-    `coordinator_core.ipc.register_op`'s contract).
+    Refuses any op outside `grind_vocab.SOURCE_OPS`; an unregistered or
+    suspended op raises `UnknownSourceOpError`. No subprocess, ever; an async
+    handler is driven to completion by the seam.
     """
     if op_name not in grind_vocab.SOURCE_OPS:
         raise UnknownSourceOpError(
             f"queue_select: source op {op_name!r} is not a member of "
             f"SOURCE_OPS {sorted(grind_vocab.SOURCE_OPS)}"
         )
-    from coordinator_core.ipc import get_op_handler
-
-    handler = get_op_handler(op_name)
-    if handler is None:
-        raise UnknownSourceOpError(
-            f"queue_select: source op {op_name!r} is not registered"
-        )
-    result = handler(dict(args), repo_root=repo_root)
-    import inspect
-
-    if inspect.isawaitable(result):
-        result = _run_awaitable_sync(result)
-    return result
-
-
-def _run_awaitable_sync(awaitable: Any) -> Any:
-    """Await `awaitable` to completion from SYNCHRONOUS code, whether or not
-    a loop is already running in this thread.
-
-    `asyncio.run` raises `RuntimeError: asyncio.run() cannot be called from
-    a running event loop` the moment `select_rows` is reached from inside
-    the IPC daemon's own loop (S1) — a bare `asyncio.run` call here is a
-    dead path over the daemon's real call shape, not a hypothetical. When no
-    loop is running in this thread, `asyncio.run` is used directly (the
-    common, loop-free test/CLI path); when one IS running, the coroutine is
-    driven to completion on a SEPARATE thread with its own fresh loop, so
-    this thread's running loop is never re-entered.
-    """
-    import asyncio
-    import threading
+    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(awaitable)
-
-    box: dict[str, Any] = {}
-
-    def _runner() -> None:
-        try:
-            box["result"] = asyncio.run(awaitable)
-        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
-            box["error"] = exc
-
-    thread = threading.Thread(target=_runner)
-    thread.start()
-    thread.join()
-    if "error" in box:
-        raise box["error"]
-    return box["result"]
+        return reentrant_dispatch(op_name, dict(args), repo_root=repo_root)
+    except OpUnavailableError as exc:
+        raise UnknownSourceOpError(
+            f"queue_select: source op {op_name!r} is not registered"
+        ) from exc
 
 
 def _file_row_id(row_path: Path, parsed: Mapping[str, Any], row_id_key: str) -> str:

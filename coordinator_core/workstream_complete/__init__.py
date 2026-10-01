@@ -3621,6 +3621,7 @@ def _build_preserved_judgment_points(
     decisions: dict[str, Any],
     repo_root: Path,
     governing_plan_present: bool,
+    governing_plan_source: str,
 ) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
     completion_applies = directives_completion.completion_archive_predicate(repo_root)
@@ -3649,6 +3650,8 @@ def _build_preserved_judgment_points(
         points.append(_judgments.build_plan_doc_content_update_judgment_point())
         points.append(_judgments.build_plan_vs_reality_reconcile_judgment_point())
         points.append(_judgments.build_enablement_vs_opportunistic_deferral_judgment_point())
+    if governing_plan_source == "none":
+        points.append(_judgments.build_no_governing_plan_judgment_point())
 
     # Step 2.6/2.6.8/2.6b — completion-entry cluster (untrusted-gate: nature
     # classification reads another surface's already-authored prose).
@@ -5896,7 +5899,13 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     if review_scale_jp:
         judgment_points.append(review_scale_jp)
     judgment_points.extend(
-        _build_preserved_judgment_points(gate, decisions, root, governing_plan_present=governing_plan is not None)
+        _build_preserved_judgment_points(
+            gate,
+            decisions,
+            root,
+            governing_plan_present=governing_plan is not None,
+            governing_plan_source=governing_plan_source,
+        )
     )
 
     # AC3/AC3b/AC4/AC5/AC6 — the plural, per-element consumed-handoff

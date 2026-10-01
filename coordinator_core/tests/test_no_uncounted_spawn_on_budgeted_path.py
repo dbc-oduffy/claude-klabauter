@@ -301,6 +301,24 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
 #: (verified: 0 newly-undeclared site keys), so `test_unenrolled_spawn_bearing_ops_are_declared_
 #: in_the_frozen_inventory` needed no new entries for them. 185 -> 145 enrolled rows.
 _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Enrolled 2026-10-01, EM-adjudication step 2: each measured an EMPTY
+    # function-granular reachable spawn set, so none needs legitimization.
+    "engine.registration_completeness": (
+        "coordinator_core/ops/engine_registration_completeness.py",
+        ("_engine_registration_completeness",),
+    ),
+    "hooks.postuse_subagent_compaction_warning": (
+        "coordinator_core/hooks/postuse_subagent_compaction_warning.py",
+        ("_handler",),
+    ),
+    "hooks.sessionstart_async_dispatch": (
+        "coordinator_core/hooks/sessionstart_async_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.sessionstart_dispatch": (
+        "coordinator_core/hooks/sessionstart_dispatch.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-09-03, same EM-adjudication step 2 as the 2026-08-30 four
     # below: each resolves to a function-granular reachable spawn set that is
     # EMPTY, so it needs no legitimization and no static pin. Three of them
@@ -317,6 +335,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "groupem.resolve_addressee": (
         "coordinator_core/ops/group_em_resolve_addressee.py",
         ("_groupem_resolve_addressee",),
+    ),
+    "groupem.standing": (
+        "coordinator_core/ops/group_em_standing.py",
+        ("_groupem_standing",),
     ),
     "groupem.stamp": (
         "coordinator_core/ops/group_em_stamp.py",

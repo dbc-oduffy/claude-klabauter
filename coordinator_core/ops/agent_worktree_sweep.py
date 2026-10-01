@@ -35,35 +35,27 @@ liveness check at all. A freshly-spawned agent worktree that has not yet
 written a file classifies `empty-clean` and is indistinguishable from an
 abandoned one — a misfire deletes a *running* agent's entire isolated tree.
 
-KNOWN STRUCTURAL GAP (deliberate, not an oversight — do not "fix" by
-inventing a mapping): there is no per-worktree owner-session mapping anywhere
-in this codebase. `.claude/worktrees/agent-<hash>/` is created by Claude
-Code's own platform for backgrounded Agent dispatches; it is NOT tracked
-under this repo's `.git/coordinator-sessions/` session-liveness substrate,
-and nothing written into or alongside such a worktree names a session id.
-(The one place a real mapping could eventually live — the `locked <reason>`
-string `git worktree list --porcelain` reports — is captured on the
-``Worktree`` record and surfaced in the JSON output below, but is NOT parsed
-for meaning: there is no evidence Claude Code puts a session id there, and
-building a safety gate on an unverified external string is worse than not
-gating at all. A worktree-creation-time sidecar would close this properly;
-that is a platform/dispatch-path change, out of this baton's scope, and
-tracked as separate debt.)
-
-Because no per-worktree attribution is possible, the gate answers the
-coarser, honestly-answerable question instead: is any OTHER coordinator
-session live in this repo right now? A live peer might have an in-flight
-background dispatch, so reaping ANYTHING this pass is refused wholesale —
-not just the worktree that "looks" risky. Implemented via
-``coordinator_core.session.worktree_safety.history_rewrite_verdict`` (the
-same ok/refused/unknown predicate the sibling F4 fix uses), subtracting this
-session's own id from the live set. FAIL CLOSED: a live peer (``refused``)
-or an unresolvable liveness/self-identity (``unknown``) both block the
-*entire* reap pass; only ``ok`` (no live peers) lets today's per-worktree
-classification run unchanged. Every worktree still gets a line in that case
-— action ``reap-skipped``, state left at its classification, detail naming
-the peer sessions/reason — so a caller can tell "reap was blocked" apart
-from "nothing was eligible" or "reap wasn't requested" (scan-only).
+Per-worktree owner gate: Claude Code locks every agent worktree it creates
+with the reason `claude agent <slug> (pid N[ start S])`, and
+``coordinator_core.session.worktree_owner.worktree_owner`` reads that reason
+into one verdict per worktree. Under --reap each worktree is decided on its own
+owner:
+  - live         : never reaped (``reap-skipped``), whoever the sweeping session is.
+  - foreign      : locked by a non-platform reason; never reaped.
+  - dead         : the owning process is provably gone; reaped even while peer
+                   sessions are live, removal passes ``--force --force`` (git
+                   refuses a locked worktree on one ``--force``).
+  - unattributed : not locked, no owner evidence; falls back to the whole-pass
+                   peer-liveness gate, ``history_rewrite_verdict`` with this
+                   session's own id subtracted (ok/refused/unknown, FAIL CLOSED).
+                   That verdict is computed lazily, at most once, and only when
+                   an unattributed worktree exists; the "reap refused" stderr
+                   line prints once, only when it is computed and not ``ok``.
+Every worktree still gets a line when skipped — action ``reap-skipped``, state
+left at its classification, detail naming the owner or peer sessions — so a
+caller can tell "reap was blocked" apart from "nothing was eligible" or "reap
+wasn't requested" (scan-only). The owner rides in ``detail``; the line shape is
+unchanged.
 
 Exit codes (parity-critical, unchanged from the bash oracle):
   0 — completed (with or without findings)
@@ -95,9 +87,9 @@ Negative-spec (unchanged from the bash oracle — faithful port, not a rewrite):
       cleanup) — it destroys no content and no live agent's tree, so it is
       not a peer-liveness hazard the way `worktree remove --force` is; the
       REAP gate is a mutation-on-read-path fix, not a liveness-safety fix.
-    - Do NOT parse the `locked <reason>` string for a session id or any other
-      meaning — see the module docstring's KNOWN STRUCTURAL GAP note. It is
-      captured and surfaced, never interpreted.
+    - The `locked <reason>` string is interpreted only by
+      ``worktree_owner`` (the one reader); never parse it here, and never let
+      the registry session id it may attribute decide whether to reap.
 
 Submodule-context note (unchanged from the bash oracle): when $PWD/cwd is
 inside a submodule, `git rev-parse --show-toplevel` resolves to the
@@ -117,6 +109,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.session.worktree_owner import worktree_owner
 from coordinator_core.session.worktree_safety import history_rewrite_verdict
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -226,8 +219,7 @@ class Worktree:
     locked: bool = False
     #: Raw text after "locked" in `git worktree list --porcelain` (empty
     #: string when locked with no reason, or not locked at all). Captured
-    #: and surfaced as-is — see module docstring's KNOWN STRUCTURAL GAP note
-    #: for why this is never parsed for meaning.
+    #: and surfaced as-is; ``worktree_owner`` is its only interpreter.
     lock_reason: str = ""
 
 
@@ -399,9 +391,10 @@ def _emit(
     return emit_json(path, branch, state, action, detail, lock_reason)
 
 
-def _remove_worktree(repo_root: Path, wt_path: str) -> bool:
+def _remove_worktree(repo_root: Path, wt_path: str, double_force: bool = False) -> bool:
+    force = ["--force", "--force"] if double_force else ["--force"]
     try:
-        proc = _run(["git", "-C", str(repo_root), "worktree", "remove", "--force", wt_path])
+        proc = _run(["git", "-C", str(repo_root), "worktree", "remove", *force, wt_path])
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _remove_worktree: proc = _run([\"git\", \"-C\", str(repo_root), \"worktree\", \"remove\", \"--for failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
@@ -526,6 +519,7 @@ def _sweep_one(
     fmt: str,
     wt: Worktree,
     reap_block_detail: Optional[str] = None,
+    double_force: bool = False,
 ) -> Tuple[str, int]:
     """Classify + (optionally) reap one agent worktree.
 
@@ -538,10 +532,11 @@ def _sweep_one(
     misclassifies every ahead-of-HEAD worktree as empty-clean (compare_ref
     would silently fall back to '' instead of the detached SHA).
 
-    `reap_block_detail`: when not None, `--reap` was requested but the
-    whole-pass peer-liveness gate (see main()) refused it — every worktree
-    this pass gets action `reap-skipped` with this string folded into detail,
-    regardless of its own classification. This is deliberately a SEPARATE
+    `reap_block_detail`: when not None, `--reap` was requested but this
+    worktree's owner gate (see main()) refused it — the worktree gets action
+    `reap-skipped` with this string folded into detail, regardless of its own
+    classification. `double_force` is set only for a `dead`-owner locked
+    worktree and makes every removal pass `--force` twice. This is deliberately a SEPARATE
     action from `scan-only` (reap never requested) and from any per-worktree
     outcome (removed/warned-skip/etc, reap requested and ran) — a caller must
     be able to tell "reap was blocked" apart from "nothing was eligible" or
@@ -578,7 +573,7 @@ def _sweep_one(
         return _emit(fmt, wt.path, wt.branch, state, "scan-only", detail, wt.lock_reason), 0
 
     if state == "empty-clean":
-        if _remove_worktree(repo_root, wt.path):
+        if _remove_worktree(repo_root, wt.path, double_force):
             branch_err = _delete_branch_best_effort(repo_root, wt.branch)
             detail = "ahead=0 dirty=0"
             if branch_err:
@@ -593,7 +588,7 @@ def _sweep_one(
         )
 
     if state == "dirty-benign":
-        if _remove_worktree(repo_root, wt.path):
+        if _remove_worktree(repo_root, wt.path, double_force):
             branch_err = _delete_branch_best_effort(repo_root, wt.branch)
             detail = f"ahead=0 dirty={classification.dirty_count} (benign-allowlist only)"
             if branch_err:
@@ -631,7 +626,7 @@ def _sweep_one(
         if pick_failed:
             detail = f"picked={picked}/{len(commits)} stopped_at={pick_failed} — worktree retained for PM"
             return _emit(fmt, wt.path, wt.branch, state, "salvage-conflict", detail, wt.lock_reason), 3
-        if _remove_worktree(repo_root, wt.path):
+        if _remove_worktree(repo_root, wt.path, double_force):
             branch_err = _delete_branch_best_effort(repo_root, wt.branch)
             detail = f"cherry-picked={picked} onto={active_branch}"
             if branch_err:
@@ -704,29 +699,42 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     compare_ref = active_branch or _head_sha(repo_root)
 
-    # Whole-pass peer-liveness gate (S1b): a live PEER coordinator session
-    # (this session's own id subtracted) might have an in-flight background
-    # Agent dispatch, so a refused/unknown verdict blocks reaping EVERY
-    # worktree this pass — see module docstring's KNOWN STRUCTURAL GAP note
-    # for why this is whole-pass rather than per-worktree. Only computed when
-    # reap is still requested post detached-HEAD clamp above; a plain scan
-    # never touches anything, so it never needs a gate.
-    reap_block_detail: Optional[str] = None
-    if reap:
-        verdict = history_rewrite_verdict(cwd=str(repo_root))
-        if verdict.outcome != "ok":
-            reap_block_detail = f"reap requested but skipped ({verdict.outcome}): {verdict.reason}"
-            print(
-                f"reap refused: {verdict.reason} — scanning without destructive action",
-                file=sys.stderr,
-            )
-
     worktrees = [w for w in _list_worktrees(repo_root) if _is_agent_worktree(w.path)]
+
+    # Only unattributed worktrees consult the whole-pass peer-liveness verdict,
+    # computed at most once per pass.
+    peer_verdict = None
+
+    def _unattributed_block() -> Optional[str]:
+        nonlocal peer_verdict
+        if peer_verdict is None:
+            peer_verdict = history_rewrite_verdict(cwd=str(repo_root))
+            if peer_verdict.outcome != "ok":
+                print(
+                    f"reap refused: {peer_verdict.reason} — scanning without destructive action",
+                    file=sys.stderr,
+                )
+        if peer_verdict.outcome == "ok":
+            return None
+        return f"reap requested but skipped ({peer_verdict.outcome}): {peer_verdict.reason}"
 
     exit_code = 0
     for wt in worktrees:
+        block_detail: Optional[str] = None
+        double_force = False
+        if reap:
+            owner = worktree_owner(wt.locked, wt.lock_reason)
+            if owner.verdict == "live":
+                sid = f", session {owner.session_id}" if owner.session_id else ""
+                block_detail = f"owner live: pid {owner.pid}{sid}"
+            elif owner.verdict == "foreign":
+                block_detail = f"locked by a non-platform reason: {wt.lock_reason}"
+            elif owner.verdict == "dead":
+                double_force = True
+            else:
+                block_detail = _unattributed_block()
         line, contribution = _sweep_one(
-            repo_root, active_branch, compare_ref, reap, fmt, wt, reap_block_detail
+            repo_root, active_branch, compare_ref, reap, fmt, wt, block_detail, double_force
         )
         print(line)
         if contribution:

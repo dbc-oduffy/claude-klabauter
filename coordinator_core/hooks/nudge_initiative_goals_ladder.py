@@ -34,8 +34,8 @@ change (mirrors `nudge_plan_test_surface_tier.py`'s own W4-C7 arrival note):
       envelope dict directly — this hook fires on PostToolUse, and
       `post_advisory` IS this package's PostToolUse advisory shape (see
       `postuse_advisory_dispatch.py` for the sibling convention).
-  (e) `goal.match_candidates` is called via `coordinator_core.ipc.
-      get_op_handler` directly (already imported/registered in-process by
+  (e) `goal.match_candidates` is called via `coordinator_core.warm.
+      entry_seam.reentrant_dispatch_async` (already imported/registered in-process by
       this engine) rather than a fresh `import coordinator_core.ops.
       goals_match` + `asyncio.run(asyncio.wait_for(...))` dance reached
       from a foreign interpreter — the op is already warm here; no event
@@ -58,7 +58,7 @@ from typing import List, Optional
 
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
-from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.ipc import register_op
 
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
@@ -74,14 +74,12 @@ async def _resolve_goal_candidates(repo_root: str, text: str) -> list:
         import coordinator_core.ops.goals_match  # noqa: F401 -- registers the op
         from coordinator_core.lifecycle import git_common_dir
 
-        handler = get_op_handler("goal.match_candidates")
-        if handler is None:
-            return []
+        from coordinator_core.warm.entry_seam import reentrant_dispatch_async
 
         common_dir = git_common_dir(Path(repo_root))
-        result = handler({"text": text}, repo_root=common_dir)
-        if hasattr(result, "__await__"):
-            result = await result
+        result = await reentrant_dispatch_async(
+            "goal.match_candidates", {"text": text}, repo_root=common_dir
+        )
     except Exception:
         return []
 

@@ -32,10 +32,10 @@ def test_entries_derived_from_milestones_not_restated():
     clause = target.WRITE_SURFACE.clauses[0]
     assert isinstance(clause, StaticClause)
 
-    expected_keys = {f"{milestone}_at" for milestone in target._MILESTONES}
+    expected_keys = {f"{milestone}_at" for milestone in target._MILESTONES} | {"setup_receipt"}
     declared_keys = {entry.key for entry in clause.entries}
     assert declared_keys == expected_keys
-    assert len(clause.entries) == len(target._MILESTONES)
+    assert len(clause.entries) == len(target._MILESTONES) + 1
 
     for entry in clause.entries:
         assert entry.kind == "structured-file-key"

@@ -15,10 +15,16 @@ import os
 
 import pytest
 
+import re
+
+import yaml
+
+from coordinator_core.ops import coordinator_setup_state as css
 from coordinator_core.ops.coordinator_setup_state import (
-    _machine_local_dir,
+    SetupReceipt,
     _state_file,
     main,
+    record_setup_concluded,
 )
 
 
@@ -62,12 +68,9 @@ def test_paths_absolute_when_home_unset_userprofile_set(tmp_path):
     env = {"USERPROFILE": str(tmp_path)}
 
     state_file = _state_file(env)
-    ml_dir = _machine_local_dir(env)
 
     assert os.path.isabs(state_file)
-    assert os.path.isabs(ml_dir)
     assert state_file == os.path.join(str(tmp_path), ".claude", "coordinator-setup-state.yaml")
-    assert ml_dir == os.path.join(str(tmp_path), ".coordinator-claude-settings", "machine-local")
 
 
 def test_claude_home_still_wins_over_both_home_vars(tmp_path):
@@ -100,41 +103,41 @@ def test_status_before_record_nonzero(tmp_path, monkeypatch, capsys):
 
 def test_record_seeds_and_writes(tmp_path, monkeypatch, capsys):
     env, state_file = _env(tmp_path)
-    rc = _run(monkeypatch, env, "record", "setup_concluded")
+    rc = _run(monkeypatch, env, "record", "orientation_started")
     assert rc == 0
     assert state_file.is_file()
     content = state_file.read_text()
     assert "version: 1" in content
-    assert "setup_concluded_at:" in content
+    assert "orientation_started_at:" in content
 
 
 def test_check_after_record_passes(tmp_path, monkeypatch):
     env, _ = _env(tmp_path)
-    _run(monkeypatch, env, "record", "setup_concluded")
-    rc = _run(monkeypatch, env, "check", "setup_concluded")
+    _run(monkeypatch, env, "record", "orientation_started")
+    rc = _run(monkeypatch, env, "check", "orientation_started")
     assert rc == 0
 
 
 def test_record_idempotent_first_occurrence_wins(tmp_path, monkeypatch, capsys):
     env, state_file = _env(tmp_path)
-    _run(monkeypatch, env, "record", "setup_concluded")
-    first = [l for l in state_file.read_text().splitlines() if l.startswith("setup_concluded_at:")][0]
-    rc = _run(monkeypatch, env, "record", "setup_concluded")
+    _run(monkeypatch, env, "record", "orientation_started")
+    first = [l for l in state_file.read_text().splitlines() if l.startswith("orientation_started_at:")][0]
+    rc = _run(monkeypatch, env, "record", "orientation_started")
     assert rc == 0
     out = capsys.readouterr().out
     assert "already recorded; leaving unchanged." in out
-    second = [l for l in state_file.read_text().splitlines() if l.startswith("setup_concluded_at:")][0]
+    second = [l for l in state_file.read_text().splitlines() if l.startswith("orientation_started_at:")][0]
     assert first == second
 
 
 def test_independent_milestones_coexist(tmp_path, monkeypatch):
     env, state_file = _env(tmp_path)
-    _run(monkeypatch, env, "record", "setup_concluded")
+    _run(monkeypatch, env, "record", "orientation_completed")
     _run(monkeypatch, env, "record", "orientation_started")
     assert _run(monkeypatch, env, "check", "orientation_started") == 0
-    assert _run(monkeypatch, env, "check", "orientation_completed") == 1
+    assert _run(monkeypatch, env, "check", "setup_concluded") == 1
     content = state_file.read_text()
-    assert "setup_concluded_at:" in content
+    assert "orientation_completed_at:" in content
     assert "orientation_started_at:" in content
 
 
@@ -175,99 +178,92 @@ def test_status_header_only_file_nonzero(tmp_path, monkeypatch):
 def test_record_fails_when_claude_home_missing(tmp_path, monkeypatch, capsys):
     """Bash-oracle-faithful quirk: record does NOT create a missing parent dir."""
     env, state_file = _env(tmp_path, claude_home_exists=False)
-    rc = _run(monkeypatch, env, "record", "setup_concluded")
+    rc = _run(monkeypatch, env, "record", "orientation_started")
     assert rc == 1
     assert not state_file.is_file()
     err = capsys.readouterr().err
     assert "mktemp failed (seed)" in err
 
 
-def test_auto_record_no_registry_noop(tmp_path, monkeypatch):
+def test_auto_record_is_a_noop_even_when_source_is_live(tmp_path, monkeypatch, capsys):
     env, state_file = _env(tmp_path)
+    ml_dir = os.path.join(env["HOME"], ".coordinator-claude-settings", "machine-local")
+    os.makedirs(ml_dir, exist_ok=True)
+    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
+        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
     rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
     assert rc == 0
+    assert capsys.readouterr() == ("", "")
     assert not state_file.is_file()
 
 
-def _ml_dir(home: str) -> str:
-    """Mirrors the module's ``_machine_local_dir`` resolution: settings-home
-    (``<CLAUDE_HOME>/.coordinator-claude-settings``), NOT ``<CLAUDE_HOME>/.claude``
-    -- the two live under different roots, which is exactly the bug this
-    module's fix closed (it previously read the registry from the legacy
-    ``<claude_home>/machine-local`` location instead of settings-home)."""
-    return os.path.join(home, ".coordinator-claude-settings", "machine-local")
+def _receipt(**over):
+    base = dict(
+        phases_ran=("Phase 1", "Phase 3"),
+        phases_skipped=(("defender", 'declined: # "x"'),),
+        coordinator_version="1.2.3",
+        engine_ref="abc123",
+    )
+    base.update(over)
+    return SetupReceipt(**base)
 
 
-def test_auto_record_copy_install_noop(tmp_path, monkeypatch):
+def test_record_setup_concluded_is_noop_via_cli(tmp_path, monkeypatch, capsys):
     env, state_file = _env(tmp_path)
-    ml_dir = _ml_dir(env["HOME"])
-    os.makedirs(ml_dir, exist_ok=True)
-    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "copy_install"\n')
-    rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
-    assert rc == 0
+    assert _run(monkeypatch, env, "record", "setup_concluded") == 0
+    assert "nothing recorded" in capsys.readouterr().out
     assert not state_file.is_file()
 
 
-def test_auto_record_source_is_live_records_silently(tmp_path, monkeypatch, capsys):
+def test_record_setup_concluded_single_atomic_write(tmp_path, monkeypatch):
     env, state_file = _env(tmp_path)
-    ml_dir = _ml_dir(env["HOME"])
-    os.makedirs(ml_dir, exist_ok=True)
-    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
-    rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
-    assert rc == 0
-    out, err = capsys.readouterr()
-    assert out == ""
-    assert err == ""
-    assert state_file.is_file()
-    assert "setup_concluded_at:" in state_file.read_text()
+    calls = []
+    real = css._atomic_write
+    monkeypatch.setattr(css, "_atomic_write", lambda t, c: (calls.append(t), real(t, c))[1])
+    assert record_setup_concluded(_receipt(), env) == 0
+    assert len(calls) == 1
+    data = yaml.safe_load(state_file.read_text())
+    assert "setup_concluded_at" in data
+    assert set(data["setup_receipt"]) == {
+        "phases_ran",
+        "phases_skipped",
+        "coordinator_version",
+        "engine_ref",
+    }
+    assert data["setup_receipt"]["phases_ran"] == ["Phase 1", "Phase 3"]
+    assert data["setup_receipt"]["engine_ref"] == "abc123"
 
 
-def test_auto_record_idempotent_second_call(tmp_path, monkeypatch):
+def test_record_setup_concluded_existing_stamp_is_byte_identical(tmp_path):
     env, state_file = _env(tmp_path)
-    ml_dir = _ml_dir(env["HOME"])
-    os.makedirs(ml_dir, exist_ok=True)
-    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
-    _run(monkeypatch, env, "auto-record-if-source-is-live")
-    first = [l for l in state_file.read_text().splitlines() if l.startswith("setup_concluded_at:")][0]
-    _run(monkeypatch, env, "auto-record-if-source-is-live")
-    second = [l for l in state_file.read_text().splitlines() if l.startswith("setup_concluded_at:")][0]
-    assert first == second
+    state_file.write_bytes(b"version: 1\nsetup_concluded_at: 2026-01-01T00:00:00Z\n")
+    before = state_file.read_bytes()
+    assert record_setup_concluded(_receipt(), env) == 0
+    assert state_file.read_bytes() == before
 
 
-def test_auto_record_source_is_live_only_in_tracked_registry(tmp_path, monkeypatch):
-    """Per-key fallthrough: a propagation_mode declared only in the tracked
-    registry.toml is honored when registry.local.toml exists but is silent on
-    the key (previously .local-only -- the tracked declaration was invisible)."""
+def test_record_setup_concluded_reader_idiom_and_roundtrip(tmp_path, monkeypatch):
     env, state_file = _env(tmp_path)
-    ml_dir = _ml_dir(env["HOME"])
-    os.makedirs(ml_dir, exist_ok=True)
-    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
-        fh.write("schema = 1\n")
-    with open(os.path.join(ml_dir, "registry.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
-    rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
-    assert rc == 0
-    assert state_file.is_file()
-    assert "setup_concluded_at:" in state_file.read_text()
+    assert record_setup_concluded(_receipt(coordinator_version=None, engine_ref=None), env) == 0
+    text = state_file.read_text()
+    assert re.search(r"^setup_concluded_at:[ \t]+[^ \t#]", text, re.MULTILINE)
+    assert not re.search(r"^setup_receipt:[ \t]+\S", text, re.MULTILINE)
+    assert _run(monkeypatch, env, "check", "setup_concluded") == 0
+    data = yaml.safe_load(text)
+    assert data["setup_receipt"]["phases_skipped"] == [
+        {"id": "defender", "reason": 'declined: # "x"'}
+    ]
+    assert data["setup_receipt"]["coordinator_version"] is None
+    assert [l for l in text.splitlines() if re.match(r"^[a-z_]+_at:", l)] == [
+        l for l in text.splitlines() if l.startswith("setup_concluded_at:")
+    ]
 
 
-def test_auto_record_local_mode_wins_over_tracked(tmp_path, monkeypatch):
-    """Per-key precedence: a mode declared in registry.local.toml wins over the
-    tracked registry.toml -- local copy_install suppresses tracked
-    source_is_live."""
-    env, state_file = _env(tmp_path)
-    ml_dir = _ml_dir(env["HOME"])
-    os.makedirs(ml_dir, exist_ok=True)
-    with open(os.path.join(ml_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "copy_install"\n')
-    with open(os.path.join(ml_dir, "registry.toml"), "w", encoding="utf-8") as fh:
-        fh.write('[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
-    rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
-    assert rc == 0
+def test_record_setup_concluded_missing_claude_dir_returns_1(tmp_path, capsys):
+    env, state_file = _env(tmp_path, claude_home_exists=False)
+    assert record_setup_concluded(_receipt(), env) == 1
     assert not state_file.is_file()
+    assert "mktemp failed" in capsys.readouterr().err
 
 
 def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path, monkeypatch):
@@ -283,10 +279,9 @@ def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path, monkeypat
     env = {"CLAUDE_HOME": str(home / ".claude"), "HOME": str(home)}
 
     for args in (
-        ("record", "setup_concluded"),
+        ("record", "orientation_started"),
         ("check", "setup_concluded"),
         ("status",),
-        ("auto-record-if-source-is-live",),
     ):
         assert _run(monkeypatch, env, *args) == 2, args
 

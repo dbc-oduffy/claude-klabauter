@@ -334,9 +334,14 @@ def test_advance_aborts_on_phase_changed_since_gate_pass(git_repo_root: Path, mo
 def test_unregistered_gate_op_is_setup_error(tmp_path: Path, monkeypatch) -> None:
     """No ungated advance path exists (D4): if cutover.gate cannot be resolved,
     the advance is refused (setup error), never silently performed."""
-    import coordinator_core.ops.cutover_advance as advance_mod
+    import coordinator_core.ipc as ipc_mod
 
-    monkeypatch.setattr(advance_mod, "get_op_handler", lambda name: None)
+    real_lookup = ipc_mod.get_op_handler
+    monkeypatch.setattr(
+        ipc_mod,
+        "get_op_handler",
+        lambda name: None if name == "cutover.gate" else real_lookup(name),
+    )
     _write_consumer_writer(tmp_path)
     record_path = _write_record(
         tmp_path,

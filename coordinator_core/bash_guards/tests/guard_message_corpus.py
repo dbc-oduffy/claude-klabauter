@@ -4163,7 +4163,14 @@ def _fire_group_em_autofire() -> Optional[Dict[str, Any]]:
         def _fake_handler(params, repo_root=None):
             return {"nomination": {"claimed": True, "message": "ok"}, "roster": [], "digest": {}}
 
-        mp.setattr(_hook_group_em_autofire, "get_op_handler", lambda name: _fake_handler)
+        from coordinator_core import ipc as _ipc
+
+        _real_lookup = _ipc.get_op_handler  # dispatch reads this name too
+        mp.setattr(
+            _ipc,
+            "get_op_handler",
+            lambda name: _fake_handler if name == "groupem.enter" else _real_lookup(name),
+        )
         payload = {"command_name": "group-em", "session_id": "sess-1", "cwd": "/tmp"}
         return _to_envelope_or_none(_hook_group_em_autofire._handler(payload))
 

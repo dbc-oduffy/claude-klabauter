@@ -11,8 +11,10 @@ different entry points, one naming ``p05-edges.json`` "close to useless" for
 its chunk as a result. This module builds the ONE edge class that gap names:
 walk ``@register_op`` decorator/call sites (the producer — an op module
 registering a handler under a string op-name key), ``get_op_handler("…")``
-call sites, and ``dispatch_message({"method": …})`` literal-dict call sites
-(the two consumer shapes — a caller resolving or invoking a handler by that
+/ ``reentrant_dispatch("…")`` / ``reentrant_dispatch_async("…")`` call sites
+(all recorded as ``get_op_handler`` lookups), and
+``dispatch_message({"method": …})`` literal-dict call sites
+(the consumer shapes — a caller resolving or invoking a handler by that
 same string key) over a caller-supplied file list, and emits the
 producer(registering file) -> consumer(calling file) edges that
 ``coordinator_core.cartography.edges`` cannot see because none of the three
@@ -86,6 +88,9 @@ UNMODELLED_EDGE_CLASSES: List[str] = [
     "guard_sink_policy_edge",
     "consumes_manifest_bin_resolution",
 ]
+
+
+_LOOKUP_TARGETS = frozenset({"get_op_handler", "reentrant_dispatch", "reentrant_dispatch_async"})
 
 
 def _call_target_name(node: ast.Call) -> str | None:
@@ -196,7 +201,7 @@ class _CallSiteWalker(ast.NodeVisitor):
             self.register_op_names.extend(
                 _resolve_expr_candidates(node.args[0], self._module_str_consts, active)
             )
-        elif target == "get_op_handler" and node.args:
+        elif target in _LOOKUP_TARGETS and node.args:
             self.get_op_handler_names.extend(
                 _resolve_expr_candidates(node.args[0], self._module_str_consts, active)
             )

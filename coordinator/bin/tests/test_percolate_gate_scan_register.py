@@ -143,7 +143,7 @@ def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tm
     gate count is 1.
 
     The expected per-run count is derived
-    independently of ``_count_medium_hits`` (by counting the peer-repo-name
+    independently of ``_parse_scan_secrets_json`` (by counting the peer-repo-name
     occurrence directly in the source fixture), not by parsing both CLI
     outputs with the same function under test elsewhere — a systematic bug
     in the shared parser must still be able to fail this test."""
@@ -173,6 +173,7 @@ def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tm
             "alpha",
             "--percolate-root",
             str(percolate_root),
+            "--json",
         ]
     )
     assert rc_split == 0
@@ -186,16 +187,20 @@ def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tm
             str(registry),
             "--target",
             "alpha",
+            "--json",
         ]
     )
     assert rc_unsplit == 0
 
     # Guard fires: the hit is informational-only (Panel A) — it must not
     # inflate the blocking gate count.
-    assert _round_mod._count_medium_hits(out_split) == 0
+    assert _round_mod._parse_scan_secrets_json(out_split).medium_gating == 0
     # No guard declared: the same hit renders under the always-present
     # gating panel (Panel B) — it must still count.
-    assert _round_mod._count_medium_hits(out_unsplit) == expected_raw_hits
+    assert (
+        _round_mod._parse_scan_secrets_json(out_unsplit).medium_gating
+        == expected_raw_hits
+    )
 
 
 # ---------------------------------------------------------------------------

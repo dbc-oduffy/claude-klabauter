@@ -2361,6 +2361,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # only re-reads the live peer registry (peer_roster.build_roster) and
     # writes nothing.
     "groupem.resolve_addressee": OpClass.COMPUTE_ONLY,
+    # groupem.standing -- COMPUTE_ONLY: reads the nomination record, the
+    # session registry and the watch heartbeat; writes nothing.
+    "groupem.standing": OpClass.COMPUTE_ONLY,
     # groupem.idle_report -- COMPUTE_ONLY: idle_report.build_report only
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.
@@ -2524,6 +2527,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (resolve_engine_sha) and runs `git merge-base --is-ancestor` against MIN_KNOWN_GOOD_SHA
     # in the engine's own checkout; no state write, no rag store write (dual-write ban).
     "engine.drift": OpClass.COMPUTE_ONLY,
+    # engine.registration_completeness — COMPUTE_ONLY, DR-208 five questions: (1) reads the
+    # in-process op tables and two engine-stamp files; (2) writes no state, no rag store;
+    # (3) spawns no process; (4) touches no caller repo; (5) idempotent, same shape as
+    # engine.drift's read-only probe.
+    "engine.registration_completeness": OpClass.COMPUTE_ONLY,
     # cruft_sweep.run — MUTATING: with apply=True this op deletes coordinator substrate
     # (stale harness/scratch/orphan dirs and files via rm -rf/unlink) and appends
     # per-class rows to the cruft-sweep log — fail-closed default applies regardless,

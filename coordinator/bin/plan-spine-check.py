@@ -1,4 +1,4 @@
-"""plan-spine-check — validate a plan's `## Tasks` spine against plan-tasks.schema.json.
+r"""plan-spine-check — validate a plan's `## Tasks` spine against plan-tasks.schema.json.
 
 WHY THIS EXISTS. The schema has been the authoring contract for the task spine since 1.4.0, and
 until now nothing ran it. Every consumer validates late and from inside its own job: the dispatch

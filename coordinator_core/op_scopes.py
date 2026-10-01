@@ -147,6 +147,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "percolate.validate_store":              "none",
     "cruft_sweep.run":                       "none",
     "engine.drift":                          "none",
+    "engine.registration_completeness":      "none",
     # plugin_health.drift — no repo state accessed: read-only drift probe that inspects
     # the OPERATOR's OWN machine-local plugin registry (settings-home resolved via
     # coordinator_core._settings_home), not the caller's repo; _origin_worktree not
@@ -511,7 +512,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session.whoami_live":                    "none",
     "session.peer_roster":                    "none",
     "groupem.enter":                          "none",
-    # groupem.stamp / groupem.resolve_addressee / groupem.idle_report --
+    # groupem.stamp / groupem.resolve_addressee / groupem.idle_report / groupem.standing --
     # same resolution story as groupem.enter immediately above: each
     # composes over the machine-global harness peer registry and/or a
     # repo-scoped path passed VERBATIM as the wire-level repo_root param,
@@ -520,6 +521,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.stamp":                          "none",
     "groupem.resolve_addressee":              "none",
     "groupem.idle_report":                    "none",
+    "groupem.standing":                       "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
     # the case this table's own header comment names for "common_dir"

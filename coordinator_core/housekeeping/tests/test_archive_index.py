@@ -24,6 +24,46 @@ def _write_record(path: Path, blocker_id: str, body: str = "body\n") -> None:
     )
 
 
+def _write_stateful(path: Path, blocker_id: str, state: str | None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = "" if state is None else f"deployment_state: {state}\n"
+    path.write_text(
+        f"---\nstub_id: {blocker_id}\n{line}---\nbody\n", encoding="utf-8", newline=""
+    )
+
+
+def test_nonterminal_by_path_holds_only_the_in_flight_record(tmp_path):
+    root = tmp_path / "archive"
+    live = root / "a.md"
+    _write_stateful(live, "x-1", "in_flight")
+    _write_stateful(root / "b.md", "x-2", "shipped")
+    _write_stateful(root / "c.md", "x-3", None)
+    index = build_index(root)
+    assert index.nonterminal_by_path == {str(live): "in_flight", str(root / "c.md"): "<absent>"}
+
+
+def test_revalidate_drops_a_flipped_to_terminal_record(tmp_path):
+    root = tmp_path / "archive"
+    live = root / "a.md"
+    _write_stateful(live, "x-1", "in_flight")
+    index = build_index(root)
+    assert str(live) in index.nonterminal_by_path
+    _write_stateful(live, "x-1", "shipped")
+    os.utime(live, ns=(1, 1))
+    revalidate(index)
+    assert index.nonterminal_by_path == {}
+
+
+def test_revalidate_drops_a_deleted_violator(tmp_path):
+    root = tmp_path / "archive"
+    live = root / "a.md"
+    _write_stateful(live, "x-1", "in_flight")
+    index = build_index(root)
+    live.unlink()
+    revalidate(index)
+    assert index.nonterminal_by_path == {}
+
+
 def test_build_index_maps_id_to_path(tmp_path):
     archive_dir = tmp_path / "archive" / "handoffs"
     p = archive_dir / "2026-01" / "rec-0001.md"

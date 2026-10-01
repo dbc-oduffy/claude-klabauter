@@ -93,6 +93,7 @@ from coordinator_core.housekeeping.corpus import read_live_corpus
 from coordinator_core.housekeeping.gate_clear import (
     CONFLICT,
     apply_gate_clear,
+    dead_blocker_reason,
     evaluate_gate_clear,
     record_after_clear,
 )
@@ -165,7 +166,10 @@ def run(
     `archive_and_commit` could not land), `live_read_count` (C3's own
     read-count, asserted read-once by C7), and `scan_gaps` (C3's own
     directory-listing gaps, preserved rather than folded into an empty
-    result).
+    result), and `invariant` (every run, close or not): `archive_nonterminal`
+    (`{id, deployment_state}` for archived records not in a terminal state,
+    read after this cycle's own moves) and `gate_dead_blockers` (`{id,
+    blocker_id, reason}` for gated records whose gate can never clear).
 
     `memos_archived` / `memos_failed` / `memos_skipped` (2026-08-30, the
     actioned-memo class gets an occasion, C2) — the MEMO family's own
@@ -216,10 +220,18 @@ def run(
     closed = 0
     conflicts: List[str] = []
     close_error: Optional[str] = None
+    gate_dead_blockers: List[Dict[str, Any]] = []
     try:
-        for path, record in (gated if close else []):
+        for path, record in gated:
             verdict = evaluate_gate_clear(record, resolver)
-            if not verdict.clears:
+            reason = dead_blocker_reason(verdict)
+            if reason is not None:
+                gate_dead_blockers.append({
+                    "id": rel_id(path, worktree_root),
+                    "blocker_id": verdict.blocker_id,
+                    "reason": reason,
+                })
+            if not close or not verdict.clears:
                 continue
             result = apply_gate_clear(path, worktree_root)
             if result.status == CONFLICT:
@@ -326,6 +338,21 @@ def run(
         bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
     )
 
+    archive_nonterminal = sorted(
+        (
+            {"id": rel_id(Path(p), worktree_root), "deployment_state": state}
+            for p, state in archive_idx.nonterminal_by_path.items()
+        ),
+        key=lambda item: item["id"],
+    )
+    gate_dead_blockers.sort(key=lambda item: item["id"])
+    if archive_nonterminal or gate_dead_blockers:
+        _LOG.warning(
+            "cycle.run invariant: %d non-terminal archived record(s), "
+            "%d gated record(s) with a dead blocker",
+            len(archive_nonterminal), len(gate_dead_blockers),
+        )
+
     # Persist for the next cycle, ONLY when the on-disk cache would differ.
     # Best-effort by construction: a cache that cannot be written costs the
     # next cycle a rebuild, nothing else.
@@ -363,6 +390,10 @@ def run(
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,
         "index_cache_written": index_cache_written,
+        "invariant": {
+            "archive_nonterminal": archive_nonterminal,
+            "gate_dead_blockers": gate_dead_blockers,
+        },
     }
 
 

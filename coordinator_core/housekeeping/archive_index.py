@@ -26,6 +26,10 @@ unchanged file. Only paths whose signature differs (added, in-place
 modified, or removed) pay a `head_scan` re-read, and the index's `by_id`
 mapping is patched in place for exactly those paths.
 
+`nonterminal_by_path` (path -> `deployment_state`, "<absent>" when missing)
+holds only records whose state is outside `HANDOFF_TERMINAL_DEPLOYMENT`; it is
+maintained from the same `scan_keys` read, so it adds no file opens.
+
 Negative-spec: this module does NOT use `Path.glob`/`Path.rglob` anywhere —
 measured 16x slower than `os.scandir` + `DirEntry.stat()` and silently
 swallows `PermissionError` (spike verdict, "Do NOT use pathlib rglob +
@@ -44,12 +48,19 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.housekeeping.head_scan import scan_keys
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
 StatSignature = Tuple[int, int]
 
 _BLOCKER_ID_KEY = "stub_id"
 
 _HANDOFF_ID_KEY = "handoff_id"
+
+_DEPLOYMENT_STATE_KEY = "deployment_state"
+
+_ABSENT_STATE = "<absent>"
+
+_SCAN_KEYS = {_BLOCKER_ID_KEY, _DEPLOYMENT_STATE_KEY}
 
 
 def _default_onerror(err: OSError) -> None:
@@ -75,6 +86,7 @@ class ArchiveIndex:
     archive_dir: Path
     by_id: Dict[str, List[str]] = field(default_factory=dict)
     stat_by_path: Dict[str, StatSignature] = field(default_factory=dict)
+    nonterminal_by_path: Dict[str, str] = field(default_factory=dict)
 
     def lookup(self, handoff_id: str) -> List[Path]:
         return [Path(p) for p in self.by_id.get(handoff_id, ())]
@@ -107,6 +119,15 @@ def _signature_from_entry(entry: "os.DirEntry") -> StatSignature:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _record_nonterminal(index: ArchiveIndex, path: str, fields: Dict) -> None:
+    state = fields.get(_DEPLOYMENT_STATE_KEY)
+    state = _ABSENT_STATE if state is None else str(state)
+    if state in HANDOFF_TERMINAL_DEPLOYMENT:
+        index.nonterminal_by_path.pop(path, None)
+    else:
+        index.nonterminal_by_path[path] = state
+
+
 def _remove_path_from_by_id(index: ArchiveIndex, path: str) -> None:
     empty_ids = []
     for hid, paths in index.by_id.items():
@@ -126,7 +147,8 @@ def build_index(
 
     for path, entry in _iter_archive_entries(index.archive_dir, onerror):
         index.stat_by_path[path] = _signature_from_entry(entry)
-        fields = scan_keys(path, {_BLOCKER_ID_KEY})
+        fields = scan_keys(path, _SCAN_KEYS)
+        _record_nonterminal(index, path, fields)
         hid = fields.get(_BLOCKER_ID_KEY)
         if hid:
             index.by_id.setdefault(hid, []).append(path)
@@ -149,6 +171,7 @@ def revalidate(
     for path in removed_paths:
         changed.add(path)
         del index.stat_by_path[path]
+        index.nonterminal_by_path.pop(path, None)
         _remove_path_from_by_id(index, path)
 
     for path, sig in seen.items():
@@ -158,7 +181,8 @@ def revalidate(
         changed.add(path)
         index.stat_by_path[path] = sig
         _remove_path_from_by_id(index, path)
-        fields = scan_keys(path, {_BLOCKER_ID_KEY})
+        fields = scan_keys(path, _SCAN_KEYS)
+        _record_nonterminal(index, path, fields)
         hid = fields.get(_BLOCKER_ID_KEY)
         if hid:
             index.by_id.setdefault(hid, []).append(path)
@@ -204,7 +228,7 @@ def revalidate(
 import json
 import tempfile
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 _CACHE_DIRNAME = "coordinator-housekeeping"
 _CACHE_FILENAME = "archive-index.json"
@@ -223,6 +247,7 @@ def save_index(index: ArchiveIndex, cache_path: Path) -> bool:
         "archive_dir": str(index.archive_dir),
         "by_id": index.by_id,
         "stat_by_path": {p: list(sig) for p, sig in index.stat_by_path.items()},
+        "nonterminal_by_path": index.nonterminal_by_path,
     }
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,7 +286,12 @@ def load_index(archive_dir: Path, cache_path: Path) -> Optional[ArchiveIndex]:
 
     by_id = payload.get("by_id")
     stat_by_path = payload.get("stat_by_path")
+    nonterminal = payload.get("nonterminal_by_path")
     if not isinstance(by_id, dict) or not isinstance(stat_by_path, dict):
+        return None
+    if not isinstance(nonterminal, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in nonterminal.items()
+    ):
         return None
 
     try:
@@ -275,7 +305,10 @@ def load_index(archive_dir: Path, cache_path: Path) -> Optional[ArchiveIndex]:
         return None
 
     return ArchiveIndex(
-        archive_dir=archive_dir, by_id=rebuilt_by_id, stat_by_path=rebuilt_stats
+        archive_dir=archive_dir,
+        by_id=rebuilt_by_id,
+        stat_by_path=rebuilt_stats,
+        nonterminal_by_path=dict(nonterminal),
     )
 
 

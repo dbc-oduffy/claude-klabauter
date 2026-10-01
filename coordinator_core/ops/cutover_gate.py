@@ -164,7 +164,7 @@ alone; it does NOT describe this module once the op handler is added.
 ``_cutover_gate`` DOES invoke read-only subprocess calls (a re-run pytest
 node id, a `git cat-file -e` reachability check) for signal-2
 re-verification, and DOES call other registered ops in-process (via
-``coordinator_core.ipc.get_op_handler``) for `probe-op-key` re-verification.
+``coordinator_core.warm.entry_seam.reentrant_dispatch_async``) for `probe-op-key` re-verification.
 It still writes nothing to disk, into rag, or to any shared mutable state —
 see the DR-208 five-question affirmation below.
 
@@ -187,10 +187,8 @@ DR-208 five-question affirmation (COMPUTE_ONLY; citing ``_cutover_gate``):
      (C5, MUTATING) job, not this read-only gate's.
   4. Mutates shared mutable state outside its own module?                  No.
      No module-global or cross-module mutable state is written; the
-     in-process `probe-op-key` call invokes another op's handler exactly as
-     ``coordinator_core/ops/ceremony/tail_ops.py::run_coverage_gate`` does
-     (same ``get_op_handler`` + await pattern) — that precedent is itself
-     COMPUTE_ONLY-compatible (`coverage.gate`).
+     in-process `probe-op-key` call invokes another op's handler through
+     ``coordinator_core.warm.entry_seam.reentrant_dispatch_async``.
   5. Persistent state changes observable across process boundaries?       No.
      Nothing this handler does is written to disk or any external store;
      the pytest/git subprocess calls it makes are themselves read-only
@@ -213,7 +211,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import datetime
-import inspect
 import json
 import re
 import subprocess
@@ -229,7 +226,8 @@ import yaml
 from coordinator_core.cartography.edges import build_edges
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_drift_watch import resolve_doe_repo_path
-from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.ipc import register_op
+from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch_async
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -1524,19 +1522,15 @@ def _reverify_sibling_commitment_ref(ref: str, content_root: Optional[Path]) -> 
 async def _reverify_probe_op_key(ref: str, repo_root: Optional[Path]) -> tuple[bool, str]:
     """Invoke a registered op by key in-process and check its result.
 
-    Mirrors `coordinator_core/ops/ceremony/tail_ops.py::run_coverage_gate`'s
-    own in-process op-invocation shape (`get_op_handler` + await), itself a
-    COMPUTE_ONLY-compatible precedent (`coverage.gate`). An unregistered op
-    key, an invocation that raises, or a result carrying a non-zero
-    `exit_code` is a REFUSE — this handler never assumes success from silence.
+    Goes through `coordinator_core.warm.entry_seam.reentrant_dispatch_async`.
+    An unregistered op key, an invocation that raises, or a result carrying
+    a non-zero `exit_code` is a REFUSE — this handler never assumes success
+    from silence.
     """
-    handler = get_op_handler(ref)
-    if handler is None:
-        return False, f"probe-op-key {ref!r}: op not registered"
     try:
-        result = handler({}, repo_root=repo_root)
-        if inspect.isawaitable(result):
-            result = await result
+        result = await reentrant_dispatch_async(ref, {}, repo_root=repo_root)
+    except OpUnavailableError:
+        return False, f"probe-op-key {ref!r}: op not registered"
     except Exception as exc:  # noqa: BLE001 — any probe failure is a REFUSE, not a crash
         return False, f"probe-op-key {ref!r}: invocation raised {exc!r}"
     if isinstance(result, Mapping) and "exit_code" in result:

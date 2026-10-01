@@ -74,6 +74,15 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subpr
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _scan_payload(medium_gating=0, render="Content-leakage scan:\n  (none)\n"):
+    return json.dumps({
+        "schema": "scan-secrets.v1",
+        "counts": {"high": 0, "medium_informational": 0,
+                   "medium_gating": medium_gating, "low": 0},
+        "render": render,
+    }) + "\n"
+
+
 class _SubprocessSpy:
     """Stands in for the module-level `subprocess.run` boundary. Dispatches
     a canned CompletedProcess by matching argv shape — never actually spawns
@@ -82,7 +91,7 @@ class _SubprocessSpy:
     doing nothing."""
 
     def __init__(self, *, dryrun_stdout, real_stdout, parse2_stdout,
-                 scan_stdout="Content-leakage scan:\n  HIGH (credential/secret shapes -- BLOCKS publish):\n    (none)\n  MEDIUM (identity / internal paths / peer-repo names -- surfaces to gate):\n    (none)\n  LOW (informational -- commit SHAs, doctrine language):\n    (none)\n",
+                 scan_stdout=None,
                  scan_returncode=0,
                  drift_stdout="anchor_mode: 30day-fallback\n",
                  commit_stdout='{"status": "ok"}',
@@ -112,7 +121,7 @@ class _SubprocessSpy:
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
         self._parse2_stdout = parse2_stdout
-        self._scan_stdout = scan_stdout
+        self._scan_stdout = _scan_payload() if scan_stdout is None else scan_stdout
         self._scan_returncode = scan_returncode
         self._drift_stdout = drift_stdout
         self._commit_stdout = commit_stdout
@@ -453,7 +462,7 @@ def _commit_call_summary(call: tuple) -> "Tuple[List[str], List[str], str]":
 
 
 def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_fires=False, yes=True,
-                scan_returncode=0, commit_stdout='{"status": "ok"}', dest_status_stdout="",
+                scan_returncode=0, scan_stdout=None, commit_stdout='{"status": "ok"}', dest_status_stdout="",
                 dest_status_returncode=0, no_publish=False, push_returncode=0,
                 dest_ahead_stdout="", dest_ahead_returncode=0, percolate_root=None,
                 reset_returncode=0, clean_returncode=0,
@@ -482,6 +491,7 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         parse2_stdout=_parse2_stdout(gate_fires),
         ci_returncode=ci_returncode,
         scan_returncode=scan_returncode,
+        scan_stdout=scan_stdout,
         commit_stdout=commit_stdout,
         dest_status_stdout=dest_status_stdout,
         dest_status_returncode=dest_status_returncode,
@@ -1029,6 +1039,25 @@ def test_resolve_dest_failure_returns_usage_error(tmp_path, monkeypatch):
 def test_scan_secrets_non2_nonzero_failure_returns_fail(tmp_path, monkeypatch):
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, scan_returncode=1)
     assert rc == _mod._EXIT_FAIL
+
+
+def test_scan_secrets_non_json_stdout_fails_closed(tmp_path, monkeypatch, capsys):
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, scan_returncode=0, scan_stdout="not json at all\n"
+    )
+    assert rc == _mod._EXIT_FAIL
+    assert "Step 2 (scan-secrets)" in capsys.readouterr().err
+    assert "Step 2b" not in out
+
+
+def test_parse_scan_secrets_json_rejects_contract_breaks():
+    ok = _mod._parse_scan_secrets_json(_scan_payload(3, "R"))
+    assert (ok.render, ok.medium_gating) == ("R", 3)
+    for bad in ("", "{}", json.dumps({"schema": "x", "counts": {"medium_gating": 0}, "render": ""}),
+                json.dumps({"schema": "scan-secrets.v1", "counts": {}, "render": ""}),
+                json.dumps({"schema": "scan-secrets.v1", "counts": {"medium_gating": "1"}, "render": ""})):
+        with pytest.raises(ValueError):
+            _mod._parse_scan_secrets_json(bad)
 
 
 def test_inverse_drift_failure_returns_fail(tmp_path, monkeypatch):

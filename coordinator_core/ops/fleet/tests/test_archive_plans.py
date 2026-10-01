@@ -168,6 +168,17 @@ def test_cannot_derive_date_is_named_not_silently_dropped(tmp_path: Path) -> Non
     assert reasons["docs/plans/no-date-prefix.md"].startswith(m._SCAN_REASON_CANNOT_DERIVE_DATE)
 
 
+def test_plan_archive_dest_is_the_shared_wire_paths_derivation(tmp_path: Path) -> None:
+    from coordinator_core.wire_paths import archived_plan_path
+
+    dated = tmp_path / "docs" / "plans" / "2026-08-05-foo.md"
+    assert m.plan_archive_dest(tmp_path, dated) == archived_plan_path(tmp_path, dated)
+    assert m.plan_archive_dest(tmp_path, dated) == (
+        tmp_path / "archive" / "specs" / "2026-08" / "2026-08-05-foo.md"
+    )
+    assert m.plan_archive_dest(tmp_path, tmp_path / "docs" / "plans" / "undated.md") is None
+
+
 def test_dest_collision_vs_idempotent_replay(tmp_path: Path) -> None:
     worktree = tmp_path
     common_dir = tmp_path

@@ -55,10 +55,8 @@ Negative-spec:
     (``exit_code != 0``) — INDETERMINATE and REFUSE both leave the record
     byte-for-byte unchanged.
   - Does NOT call ``cutover.gate``'s handler function directly by import.
-    It resolves the op through ``coordinator_core.ipc.get_op_handler``
-    (the same in-process op-invocation shape as
-    ``ops/ceremony/tail_ops.py::run_coverage_gate`` and this module's own
-    sibling ``_reverify_probe_op_key`` in ``cutover_gate.py``) so the call
+    It resolves the op through the async entry seam
+    (``coordinator_core.warm.entry_seam.reentrant_dispatch_async``) so the call
     goes through the SAME path any other caller of ``cutover.gate`` would
     use — there is no private back door into the gate's logic.
 
@@ -93,10 +91,11 @@ from typing import Any, Mapping, Optional
 import yaml
 
 from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
-from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch_async
 
 #: Phase sequence — same order as coordinator/schemas/cutover.schema.json's
 #: `phase` enum. The schema is the authority; this is a same-order restatement
@@ -254,8 +253,11 @@ async def _cutover_advance(params: dict, repo_root: Optional[Path] = None) -> di
         )
     next_phase = PHASE_SEQUENCE[idx + 1]
 
-    gate_handler = get_op_handler("cutover.gate")
-    if gate_handler is None:
+    try:
+        gate_result = await reentrant_dispatch_async(
+            "cutover.gate", {"record": str(resolved)}, repo_root=repo_root
+        )
+    except OpUnavailableError:
         return _reply(
             "",
             [
@@ -265,7 +267,6 @@ async def _cutover_advance(params: dict, repo_root: Optional[Path] = None) -> di
             ],
             1,
         )
-    gate_result = await gate_handler({"record": str(resolved)}, repo_root=repo_root)
 
     gate_notes = list(gate_result.get("notes") or [])
     gate_exit_code = gate_result.get("exit_code", 1)

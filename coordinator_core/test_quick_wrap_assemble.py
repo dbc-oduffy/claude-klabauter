@@ -1204,43 +1204,27 @@ def _d2_ids(directives: list[dict]) -> list[str]:
     return [d["id"] for d in directives]
 
 
-def test_d2_is_emitted_when_the_fold_scan_ran_and_found_sidecars():
-    """The ordinary case: a clean scan with sidecars present emits the disposal
-    directive, so the EM's reconcile is mechanical rather than remembered."""
-    fold = {"present": True, "paths": ["state/execution-records/a.md"], "count": 1}
-    directives = qwa._directives(fold, fold_degraded=False)
-    assert "d2" in _d2_ids(directives)
-
-
-def test_d2_is_withheld_when_the_fold_scan_ran_and_found_nothing():
-    """A genuinely empty scan withholds `d2` — there is nothing to dispose."""
-    fold = {"present": False, "paths": [], "count": 0}
-    directives = qwa._directives(fold, fold_degraded=False)
+def test_no_d2_and_no_fold_execution_record_directive_whatever_the_fold_fact_holds(
+    repo: Path, monkeypatch
+):
+    """d2 is retired: neither a present nor a degraded fold scan emits it."""
+    directives = qwa._directives()
     assert "d2" not in _d2_ids(directives)
+    assert all(d["cli"] != "coordinator-fold-execution-record" for d in directives)
 
-
-def test_d2_is_withheld_on_a_degraded_scan_but_not_because_present_is_false():
-    """The finding this pins.
-
-    Fact 5's degraded fallback carries the SAME literal `present: False` as a
-    genuinely-empty scan, so `_directives` gating on `present` alone read "could
-    not run" as "ran and found nothing" — the absent-vs-clean conflation the lift
-    exists to retire, surviving at the one call site the DR-319 record never
-    reached.
-
-    `d2` is still withheld on a degraded read (a path-less
-    `coordinator-fold-execution-record` invocation is not runnable), so the
-    OBSERVABLE directive list matches the empty-scan case. What must not regress is
-    that the two are decided by different inputs: pass a fold payload that WOULD
-    emit `d2` on a clean read, and assert the degraded flag alone suppresses it.
-    A future edit that drops the flag and trusts `present` passes the two tests
-    above and fails this one.
-    """
-    fold_that_would_emit = {"present": True, "paths": ["state/execution-records/a.md"], "count": 1}
-    directives = qwa._directives(fold_that_would_emit, fold_degraded=True)
-    assert "d2" not in _d2_ids(directives), (
-        "a degraded fold scan must not emit d2 off a payload it could not have computed"
+    _stub_facts_all_computed(monkeypatch, repo)
+    monkeypatch.setattr(
+        qwa.session_facts,
+        "session_fold_sidecars",
+        lambda *a, **k: {
+            "value": {"present": True, "paths": ["state/execution-records/a.md"], "count": 1},
+            "degraded": False,
+            "evidence": "",
+        },
     )
+    envelope = qwa.brief()
+    assert "d2" not in _d2_ids(envelope["directives"])
+    assert all(d["cli"] != "coordinator-fold-execution-record" for d in envelope["directives"])
 
 
 def test_d3_carries_the_invoker_the_cli_declares_required():
@@ -1263,8 +1247,7 @@ def test_d3_carries_the_invoker_the_cli_declares_required():
     `_tier_for_invoker`'s allowlist parses and then raises ValueError, which is the
     same broken directive one layer further in.
     """
-    fold = {"present": False, "paths": [], "count": 0}
-    directives = qwa._directives(fold, fold_degraded=False)
+    directives = qwa._directives()
 
     d3 = next(d for d in directives if d["id"] == "d3")
     assert d3["cli"] == "regenerate-orientation-cache"
@@ -1286,8 +1269,7 @@ def test_terminal_sweep_directives_are_last_handoffs_then_sizings():
     handoffs sweep) was never order-pinned either, so this test closes both
     at once.
     """
-    fold = {"present": False, "paths": [], "count": 0}
-    directives = qwa._directives(fold, fold_degraded=False)
+    directives = qwa._directives()
 
     ids = _d2_ids(directives)
     assert ids[-2:] == ["d4", "d5"], (

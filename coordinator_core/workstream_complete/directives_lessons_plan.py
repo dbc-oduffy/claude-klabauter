@@ -86,6 +86,8 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core import wire_paths
+
 
 _GOVERNING_PLAN_GLOB_DIRS = ("docs/plans", "tasks/plans")
 
@@ -116,11 +118,14 @@ class GoverningPlan(NamedTuple):
           returned and which need not exist. `rel` is the field a directive's
           argv takes; it is populated at every construction site precisely so
           the wrong path is not expressible downstream.
+        - `archived` is True when `path` lies under `archive/` (the plan moved
+          after the pointer was written). Claim+stamp are not emitted for it.
     """
 
     slug: str
     path: Path
     rel: str
+    archived: bool = False
 
 
 def _rel_to_repo(candidate: Path, repo_root: Path) -> str:
@@ -128,6 +133,25 @@ def _rel_to_repo(candidate: Path, repo_root: Path) -> str:
         return candidate.relative_to(repo_root).as_posix()
     except ValueError:
         return candidate.as_posix()
+
+
+def _follow_pointer(
+    repo_root: Path, pointer: str, slug: str
+) -> tuple[Optional[GoverningPlan], bool]:
+    """Resolve `pointer` (literal, then archive fallback); the bool is True
+    when the hit was found only at the archive location."""
+    found = wire_paths.resolve_plan_pointer(repo_root, pointer)
+    if found is None:
+        return None, False
+    return (
+        GoverningPlan(
+            slug=slug,
+            path=found,
+            rel=_rel_to_repo(found, repo_root),
+            archived=wire_paths.is_archived_plan_path(repo_root, found),
+        ),
+        found != repo_root / pointer,
+    )
 
 
 def _normalize_handoff_governing_plan_field(raw: Optional[Any]) -> Optional[str]:
@@ -163,6 +187,11 @@ def resolve_governing_plan_with_source(
     fallback (`tasks/todo.md` / `tasks/plan.md`) — a guess with no
     explicit signal behind it.
 
+    Each leg resolves through `wire_paths.resolve_plan_pointer`: a literal hit
+    keeps its source string; a hit only at the archive location returns
+    `<source>_archived` and `GoverningPlan.archived=True`. The archive fallback
+    is a derivation (two stats), not a scan; the "no scan" posture is unchanged.
+
     Precedence, highest first, no join, no scan, at any price:
       1. Caller-supplied `decisions["governing_plan_slug"]` (checked
          against `docs/plans/<slug>.md` then `tasks/plans/<slug>.md`) — an
@@ -189,7 +218,9 @@ def resolve_governing_plan_with_source(
     Absent this leg's stamp with no explicit override either: return
     `(None, "none")` — the plan did not travel to this continuation. The
     caller surfaces that as a WARN (via `preflight[
-    "governing_plan_resolution"]["source"]`, already legible there) and
+    "governing_plan_resolution"]["source"]`, already legible there) plus the
+    `no-governing-plan` judgment point (recommendation None; discharged by
+    re-running brief with `decisions.governing_plan_slug` / `_path`) and
     STOPS: no ladder, no join, no scan is attempted at any price, exactly
     like every leg above.
 
@@ -221,27 +252,23 @@ def resolve_governing_plan_with_source(
     slug = decisions.get(_KEY_GOVERNING_PLAN_SLUG)
     if slug:
         for dirname in _GOVERNING_PLAN_GLOB_DIRS:
-            candidate = repo_root / dirname / f"{slug}.md"
-            if candidate.is_file():
-                return GoverningPlan(slug=slug, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "decisions_slug"
+            plan, via_archive = _follow_pointer(repo_root, f"{dirname}/{slug}.md", slug)
+            if plan is not None:
+                return plan, "decisions_slug_archived" if via_archive else "decisions_slug"
         return None, "decisions_slug_not_found"
 
     path_override = decisions.get(_KEY_GOVERNING_PLAN_PATH)
     if path_override:
-        candidate = Path(path_override)
-        if not candidate.is_absolute():
-            candidate = repo_root / candidate
-        if candidate.is_file():
-            return GoverningPlan(slug=candidate.stem, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "decisions_path"
+        plan, via_archive = _follow_pointer(repo_root, str(path_override), Path(path_override).stem)
+        if plan is not None:
+            return plan, "decisions_path_archived" if via_archive else "decisions_path"
         return None, "decisions_path_not_found"
 
     handoff_value = _normalize_handoff_governing_plan_field(handoff_governing_plan_field)
     if handoff_value:
-        candidate = Path(handoff_value)
-        if not candidate.is_absolute():
-            candidate = repo_root / candidate
-        if candidate.is_file():
-            return GoverningPlan(slug=candidate.stem, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "handoff_frontmatter"
+        plan, via_archive = _follow_pointer(repo_root, handoff_value, Path(handoff_value).stem)
+        if plan is not None:
+            return plan, "handoff_frontmatter_archived" if via_archive else "handoff_frontmatter"
         return None, "handoff_frontmatter_not_found"
 
     return None, "none"
@@ -306,6 +333,8 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     if not governing_plan_predicate(governing_plan):
         return []
     assert governing_plan is not None
+    if governing_plan.archived:
+        return []
     slug = governing_plan.slug
     plan_rel = governing_plan.rel
     return [

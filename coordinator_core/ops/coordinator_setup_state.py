@@ -19,21 +19,20 @@ Port of: coordinator-setup-state.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Commands:
-    record <milestone>   set <milestone>_at if unset (atomic, first-write-wins)
+    record <milestone>   set <milestone>_at if unset (atomic, first-write-wins);
+                          orientation_* only -- setup_concluded is a no-op
     check  <milestone>   exit 0 if recorded, 1 if not
     status                print the receipt (or note absence)
     auto-record-if-source-is-live
-                          silent self-heal: on machines where coordinator-claude
-                          is registered as propagation_mode="source_is_live"
-                          (the install IS the source — the operator is the
-                          author, never ran /coordinator:install), record
-                          setup_concluded implicitly. No-op otherwise and on
-                          every subsequent call (record is first-write-wins).
-                          Always exits 0 and emits nothing -- except on a
+                          retired no-op: exits 0, writes nothing -- except on a
                           doubled CLAUDE_HOME (see Environment below), which
                           is reported and exits 2 on every subcommand.
 
     milestone in { setup_concluded, orientation_started, orientation_completed }
+
+`record setup_concluded` is a retired no-op too. `setup_concluded_at` and the
+`setup_receipt` block are written only by `record_setup_concluded(SetupReceipt)`,
+called by the installer at the end of a completed run.
 
 Environment: CLAUDE_HOME (defaults to $HOME) selects the install root. It names
 the PARENT of `.claude`, never `.claude` itself — every resolver below appends
@@ -75,19 +74,14 @@ from __future__ import annotations
 # operator's home directory, outside claude-klabauter's own tracked tree entirely.
 GENERATES = []
 
-import contextlib
-import io
+import json
 import os
 import re
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
-
-try:
-    import tomllib
-except ImportError:  # pragma: no cover - only on <3.11
-    tomllib = None  # type: ignore[assignment]
+from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import reject_doubled_claude_home
 from coordinator_core.install.write_surface import (
@@ -118,6 +112,17 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     ),
                 )
                 for milestone in _MILESTONES
+            )
+            + (
+                WriteSurfaceEntry(
+                    kind="structured-file-key",
+                    key="setup_receipt",
+                    path="<CLAUDE_HOME>/.claude/coordinator-setup-state.yaml",
+                    reason=(
+                        "record_setup_concluded() appends this block with "
+                        "`setup_concluded_at` in the same _atomic_write()."
+                    ),
+                ),
             ),
         ),
     ),
@@ -199,34 +204,6 @@ def _state_file(env: Optional[dict] = None) -> str:
     return os.path.join(_claude_home(env), "coordinator-setup-state.yaml")
 
 
-def _machine_local_dir(env: Optional[dict] = None) -> str:
-    """Resolve ``<settings-home>/machine-local`` from an injected ``env`` dict.
-
-    Mirrors ``coordinator_core._settings_home.machine_local_dir()``'s
-    precedence — COORDINATOR_SETTINGS_HOME when set, else
-    ``.coordinator-claude-settings`` under CLAUDE_HOME or the home directory —
-    rather than calling that helper directly; the helper reads
-    ``os.environ`` internally, which would ignore this module's env-injection
-    contract (every other resolver in this file takes ``env`` for test
-    isolation) and silently read the real machine's settings-home instead of
-    the caller-supplied one. Distinct on purpose from ``_claude_home`` above:
-    the setup-state receipt lives at ``~/.claude`` (correct, unrelated to this
-    function), but the machine-local registry TOML lives under settings-home
-    -- conflating the two was the bug (previously this module resolved the
-    registry at ``<claude_home>/machine-local``, the pre-migration legacy
-    location, silently missing the real settings-home registry.local.toml).
-    """
-    env = env if env is not None else os.environ
-    override = env.get("COORDINATOR_SETTINGS_HOME")
-    if override:
-        settings_home = override
-    else:
-        settings_home = os.path.join(
-            _claude_home_base(env), ".coordinator-claude-settings"
-        )
-    return os.path.join(settings_home, "machine-local")
-
-
 def _key_recorded(key: str, state_file: str) -> bool:
     if not re.match(r"^[a-z_]+$", key):
         return False
@@ -269,10 +246,66 @@ def _seed_file_if_absent(state_file: str) -> None:
     _atomic_write(state_file, _SEED_HEADER)
 
 
+@dataclass(frozen=True)
+class SetupReceipt:
+    """What a completed install run did; `phases_skipped` holds elective skips only."""
+
+    phases_ran: Tuple[str, ...]
+    phases_skipped: Tuple[Tuple[str, str], ...]
+    coordinator_version: Optional[str]
+    engine_ref: Optional[str]
+
+
+def _receipt_block(receipt: SetupReceipt) -> str:
+    skipped = [{"id": p, "reason": r} for p, r in receipt.phases_skipped]
+    return (
+        "setup_receipt:\n"
+        f"  phases_ran: {json.dumps(list(receipt.phases_ran))}\n"
+        f"  phases_skipped: {json.dumps(skipped)}\n"
+        f"  coordinator_version: {json.dumps(receipt.coordinator_version)}\n"
+        f"  engine_ref: {json.dumps(receipt.engine_ref)}\n"
+    )
+
+
+def record_setup_concluded(receipt: SetupReceipt, env: Optional[dict] = None) -> int:
+    """Stamp `setup_concluded_at` plus the `setup_receipt` block in ONE atomic write.
+
+    An existing stamp is left byte-identical. Returns 1 on OSError, never raises it.
+    """
+    state_file = _state_file(env)
+    if _key_recorded("setup_concluded_at", state_file):
+        print("setup_concluded_at already recorded; leaving unchanged.")
+        return 0
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        if os.path.isfile(state_file):
+            with open(state_file, encoding="utf-8") as fh:
+                content = fh.read()
+        else:
+            content = _SEED_HEADER
+        if content and not content.endswith("\n"):
+            content += "\n"
+        _atomic_write(
+            state_file,
+            content + f"setup_concluded_at: {now}\n" + _receipt_block(receipt),
+        )
+    except OSError as exc:
+        sys.stderr.write(f"coordinator-setup-state: mktemp failed (record): {exc}\n")
+        return 1
+    print(f"Recorded setup_concluded_at: {now} in {state_file}")
+    return 0
+
+
 def cmd_record(milestone: str, env: Optional[dict] = None) -> int:
     if not _is_milestone(milestone):
         sys.stderr.write(_USAGE)
         return 2
+    if milestone == "setup_concluded":
+        print(
+            "setup_concluded_at is written by the installer at the end of a "
+            "completed run; nothing recorded."
+        )
+        return 0
     state_file = _state_file(env)
     key = f"{milestone}_at"
 
@@ -333,61 +366,8 @@ def cmd_status(env: Optional[dict] = None) -> int:
     return 1
 
 
-def _propagation_mode(registry_path: str) -> Optional[str]:
-    if tomllib is not None:
-        try:
-            with open(registry_path, "rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, ValueError):
-            print(f"skip: _propagation_mode: with open(registry_path, \"rb\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
-            return None
-        mirrors = data.get("plugin", {}).get("mirrors", {})
-        entry = mirrors.get("coordinator-claude", {})
-        mode = entry.get("propagation_mode")
-        return str(mode) if mode else None
-
-    try:
-        with open(registry_path, encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        print(f"skip: _propagation_mode: with open(registry_path, encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    in_block = False
-    for line in lines:
-        if line.startswith("[plugin.mirrors.coordinator-claude]"):
-            in_block = True
-            continue
-        if line.startswith("["):
-            in_block = False
-            continue
-        if in_block:
-            m = re.match(r'^propagation_mode\s*=\s*"([^"]*)"', line)
-            if m:
-                return m.group(1) or None
-    return None
-
-
 def cmd_auto_record_if_source_is_live(env: Optional[dict] = None) -> int:
-    env = env if env is not None else os.environ
-    ml_dir = _machine_local_dir(env)
-    mode: Optional[str] = None
-    for fname in ("registry.local.toml", "registry.toml"):
-        registry = os.path.join(ml_dir, fname)
-        if not os.path.isfile(registry):
-            continue
-        mode = _propagation_mode(registry)
-        if mode is not None:
-            break
-    if mode != "source_is_live":
-        return 0
-    try:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            cmd_record("setup_concluded", env)
-    except ValueError:
-        raise
-    except Exception:
-        print(f"skip: cmd_auto_record_if_source_is_live: with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_st failed: {sys.exc_info()[1]}", file=sys.stderr)
-        pass
+    """Retired no-op: kept dispatchable while DoE's workstream-start still calls it."""
     return 0
 
 
@@ -401,10 +381,8 @@ def main(argv: List[str]) -> int:
         return _dispatch(cmd, argv)
     except ValueError as exc:
         # A doubled CLAUDE_HOME reaches here from _claude_home_base. It is
-        # reported on every subcommand INCLUDING auto-record-if-source-is-live,
-        # whose "always exits 0, emits nothing" contract covers the no-op case,
-        # not a CLAUDE_HOME the resolver cannot honour: swallowing it is how the
-        # receipt silently splits in the first place.
+        # reported on every subcommand that resolves a path: swallowing it is
+        # how the receipt silently splits in the first place.
         sys.stderr.write(f"coordinator-setup-state: {exc}\n")
         return 2
 

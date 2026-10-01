@@ -76,8 +76,8 @@ from typing import Any, Optional
 from functools import lru_cache
 
 from coordinator_core import session_attribution
-from coordinator_core.ipc import CEREMONY_BUDGET_SECS, get_op_handler
-from coordinator_core.op_budget_suspension import OpSuspendedError
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS
+from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch_async
 from coordinator_core.ops.session_commits import (
     resolve_session_commits as _resolve_session_commits_primitive,
 )
@@ -1029,20 +1029,12 @@ async def _call_memo_resolve(
     Patched in tests (same seam pattern as wsc_commit.py's ``_tail_archive_memos``).
     """
     import coordinator_core.ops.memo_transition  # noqa: F401 — trigger op registration
-    # `memo.transition` is not on the suspension roster today, but
-    # `get_op_handler` raises `OpSuspendedError` rather than returning None
-    # for any op that IS suspended (ipc.py's own docstring) -- fold that
-    # raise into this existing not-registered branch so a future kill of
-    # this op degrades to the same reported failure instead of crashing.
-    try:
-        handler = get_op_handler("memo.transition")
-    except OpSuspendedError:
-        handler = None
-    if handler is None:
-        return {"exit_code": 1, "applied": False, "error": "memo.transition op not registered"}
     params = {"verb": "resolve", "memo": memo_path, "session_id": session_id, "at": at}
     params.update(disposition_params)
-    return await handler(params, repo_root=None)
+    try:
+        return await reentrant_dispatch_async("memo.transition", params, repo_root=None)
+    except OpUnavailableError:
+        return {"exit_code": 1, "applied": False, "error": "memo.transition op not registered"}
 
 
 async def resolve_named_memo_dispositions(

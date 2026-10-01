@@ -1,9 +1,20 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Optional
 
-__all__ = ["rel_id", "plans_dir"]
+__all__ = [
+    "rel_id",
+    "plans_dir",
+    "archived_plan_path",
+    "resolve_plan_pointer",
+    "is_archived_plan_path",
+]
+
+_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
+_PLAN_DIR_PREFIXES = ("docs/plans/", "tasks/plans/")
 
 
 def rel_id(path: Path, root: Path) -> str:
@@ -33,3 +44,45 @@ def rel_id(path: Path, root: Path) -> str:
 
 def plans_dir(root: Path) -> Path:
     return root / "docs" / "plans"
+
+
+def archived_plan_path(root: Path, plan: Path | str) -> Optional[Path]:
+    """Archive destination of ``plan``: ``root/archive/specs/<YYYY-MM>/<basename>``.
+
+    The one derivation shared by the archive mover and every reader that follows
+    an archived plan. None when the basename has no ``YYYY-MM-DD-`` prefix. Pure.
+    """
+    name = Path(plan).name
+    m = _DATE_PREFIX_RE.match(name)
+    if m is None:
+        return None
+    return root / "archive" / "specs" / m.group(1) / name
+
+
+def resolve_plan_pointer(root: Path, pointer: str) -> Optional[Path]:
+    """Resolve a plan pointer to an existing file, falling back to the archive.
+
+    The archive fallback applies only to pointers under ``docs/plans/`` or
+    ``tasks/plans/``. At most two stats; no spawn, no glob.
+    """
+    literal = root / pointer
+    if literal.is_file():
+        return literal
+    try:
+        rel = rel_id(literal, root)
+    except ValueError:
+        return None
+    if not rel.startswith(_PLAN_DIR_PREFIXES):
+        return None
+    archived = archived_plan_path(root, rel)
+    if archived is not None and archived.is_file():
+        return archived
+    return None
+
+
+def is_archived_plan_path(root: Path, path: Path) -> bool:
+    """True iff ``path`` lies under the repo's ``archive/`` tree."""
+    try:
+        return rel_id(path, root).startswith("archive/")
+    except ValueError:
+        return False

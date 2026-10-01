@@ -806,14 +806,15 @@ def build_plan_index(worktree_root: Path) -> PlanIndex:
 
 # The order plan links are tried, and the `plan_link_basis` each reports. Fixed,
 # strongest-provenance first: an explicit path beats an id, an id beats a shared
-# sizing object. `governing_plan` is stamped at mint against THIS baton, so it
-# is the only link that cannot be a coincidence of two records citing a third.
+# sizing object. `deliverable_id` leads: `governing_plan` can name an executed
+# PARENT plan of a different deliverable, so it is a fallback accepted only when
+# that plan's deliverable does not contradict the baton's.
 _PLAN_LINK_ORDER: Tuple[Tuple[str, str], ...] = (
+    ("deliverable_id", "deliverable_id"),
+    ("deliverable_ids", "deliverable_ids"),
     ("governing_plan", "governing_plan"),
     ("origin_plan_id", "origin_plan_id"),
     ("plan_ids", "plan_ids"),
-    ("deliverable_id", "deliverable_id"),
-    ("deliverable_ids", "deliverable_ids"),
     ("sizing_object", "sizing_object"),
     ("sizing_objects", "sizing_objects"),
 )
@@ -827,6 +828,7 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
     reduces them — `_best_plan` takes the most advanced, because a baton with
     one approved plan and one draft has published its decisions.
     """
+    baton_dids = set(_as_list(fm.get("deliverable_id"))) | set(_as_list(fm.get("deliverable_ids")))
     for field, basis in _PLAN_LINK_ORDER:
         raw = _as_list(fm.get(field))
         if not raw:
@@ -844,9 +846,14 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
                 candidates = plans.by_sizing_object.get(_sizing_key(value), [])
             for rel in candidates:
                 record = plans.get(rel)
-                if record is not None and rel not in seen:
-                    seen.add(rel)
-                    hits.append(record)
+                if record is None or rel in seen:
+                    continue
+                if field == "governing_plan" and baton_dids:
+                    plan_dids = set(record.get("deliverable_id") or [])
+                    if plan_dids and not (plan_dids & baton_dids):
+                        continue
+                seen.add(rel)
+                hits.append(record)
         if hits:
             return hits, basis
     return [], None

@@ -1314,3 +1314,23 @@ def test_shared_wave_slot_is_empty_when_every_candidate_id_is_unique(tmp_path):
     assert report["shared_wave_slot"] == []
     assert report["counts"]["shared_wave_slot"] == 0
     assert report["counts"]["candidates"] == 2
+
+
+def test_governing_plan_of_another_deliverable_is_not_a_link(tmp_path):
+    parent = _plan(tmp_path, "parent-plan", "draft", deliverable_id="dlv-parent")
+    _baton(tmp_path, "child-01", governing_plan=parent, deliverable_id="dlv-child")
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "child-01")
+
+    assert row["plan"] is None or row["plan"].get("path") != parent
+
+
+def test_deliverable_id_outranks_governing_plan(tmp_path):
+    parent = _plan(tmp_path, "parent-plan", "draft", deliverable_id="dlv-parent")
+    own = _plan(tmp_path, "own-plan", "approved", deliverable_id="dlv-child")
+    _baton(tmp_path, "child-01", governing_plan=parent, deliverable_id="dlv-child")
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "child-01")
+
+    assert row["plan"]["path"] == own
+    assert row["plan"]["link_basis"] == "deliverable_id"

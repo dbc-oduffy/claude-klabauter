@@ -112,6 +112,15 @@ _ROW_FILES = {
 scanned: dict = {}
 
 
+def _scan_payload(medium_gating=0):
+    return json.dumps({
+        "schema": "scan-secrets.v1",
+        "counts": {"high": 0, "medium_informational": 0,
+                   "medium_gating": medium_gating, "low": 0},
+        "render": "Content-leakage scan:\n  (none)\n",
+    }) + "\n"
+
+
 def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", drift_real=False):
     targets = [
         "claude-klabauter-publish-repo-toplevel",
@@ -163,7 +172,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
             order.append("scan")
             files_arg = Path(cmd[cmd.index("--files") + 1])
             scanned[cmd[cmd.index("--target") + 1]] = files_arg.read_text(encoding="utf-8").split()
-            return subprocess.CompletedProcess(cmd, scan_rc, "", "")
+            return subprocess.CompletedProcess(cmd, scan_rc, _scan_payload(), "")
         if "inverse-drift" in joined:
             order.append("drift")
             return subprocess.CompletedProcess(

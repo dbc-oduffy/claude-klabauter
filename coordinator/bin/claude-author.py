@@ -123,6 +123,14 @@ import sys
 from pathlib import Path, PureWindowsPath
 
 
+def _no_console_kw() -> dict:
+    """Spawn kwargs suppressing the Windows console popup; `{}` elsewhere.
+    Only for helper spawns that capture their own output; never `_launch`."""
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 def _is_console_python_basename(path: str) -> bool:
     """True if `path`'s basename names a console CPython interpreter.
 
@@ -599,6 +607,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            **_no_console_kw(),
         )
         if result.returncode != 0:
             ml_get_failed = True
@@ -620,6 +629,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            **_no_console_kw(),
         )
         if result_fb.returncode == 0:
             resolved_fallback = result_fb.stdout.strip()
@@ -670,6 +680,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                **_no_console_kw(),
             )
             if result_r3.returncode == 0:
                 fallback = result_r3.stdout.strip()
@@ -781,7 +792,7 @@ def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
         # its directory components (a stock Git-for-Windows install path is
         # one common example) gets split mid-path and the launch fails ("No
         # such file or directory" from the misparsed remainder).
-        result = subprocess.run(full_argv)
+        result = subprocess.run(full_argv)  # popup-intentional-last-resort — interactive claude TUI owns the console
         return result.returncode
 
     # POSIX, direct binary: exec(2) is a genuine process replacement — the

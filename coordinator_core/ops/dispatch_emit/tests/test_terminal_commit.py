@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import coordinator_core.ipc
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -622,7 +623,8 @@ def test_stamp_failure_is_reported_and_product_commit_stands(repo, monkeypatch):
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
     (repo / "a.py").write_text("a\n", encoding="utf-8")
-    real = get_op_handler("ceremony.commit_v2")
+    real_lookup = get_op_handler
+    real = real_lookup("ceremony.commit_v2")
     calls = []
 
     def flaky(params, repo_root):
@@ -631,7 +633,10 @@ def test_stamp_failure_is_reported_and_product_commit_stands(repo, monkeypatch):
             return {"committed": False, "sha": None, "error": "refused"}
         return real(params, repo_root)
 
-    monkeypatch.setattr(terminal_commit, "get_op_handler", lambda key: flaky)
+    def fake_lookup(key, msg=None):
+        return flaky if key == "ceremony.commit_v2" else real_lookup(key, msg)
+
+    monkeypatch.setattr(coordinator_core.ipc, "get_op_handler", fake_lookup)
     request = CommitRequest(
         chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
         plan_path="docs/plan.md",

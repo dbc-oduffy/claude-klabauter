@@ -1459,6 +1459,7 @@ def _current_branch() -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True,
+            **_no_console_creationflags(),
         )
         if result.returncode == 0 and result.stdout.strip() not in ("", "HEAD"):
             return result.stdout.strip()

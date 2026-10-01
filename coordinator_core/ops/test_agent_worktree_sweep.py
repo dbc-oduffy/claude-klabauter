@@ -583,3 +583,137 @@ def test_scan_only_output_includes_lock_reason_field(tmp_path, capsys, monkeypat
     assert rc == 0
     states = _states(_lines(capsys))
     assert "lock_reason" in states[wt.as_posix()]
+
+
+_DEAD_REASON = "claude agent agent-x (pid 999999999)"
+
+
+def _lock(root: Path, wt: Path, reason: str) -> None:
+    _git("worktree", "lock", "--reason", reason, str(wt), cwd=root)
+
+
+def _peers(monkeypatch, outcome: str):
+    import coordinator_core.ops.agent_worktree_sweep as aws
+
+    calls: list = []
+
+    class _V:
+        reason = "peer-sid live"
+
+    _V.outcome = outcome
+
+    def _verdict(cwd=None):
+        calls.append(cwd)
+        return _V
+
+    monkeypatch.setattr(aws, "history_rewrite_verdict", _verdict)
+    return calls
+
+
+def test_live_owner_skipped_even_when_peer_gate_ok(tmp_path, capsys, monkeypatch):
+    import os
+
+    _init_repo(tmp_path)
+    wt = _add_agent_worktree(tmp_path, "liveowner")
+    _lock(tmp_path, wt, f"claude agent agent-x (pid {os.getpid()})")
+    monkeypatch.chdir(tmp_path)
+    calls = _peers(monkeypatch, "ok")
+    recorded = _track_run_argv(monkeypatch)
+
+    assert main(["--reap"]) == 0
+    row = _states(_lines(capsys))[wt.as_posix()]
+    assert row["action"] == "reap-skipped"
+    assert "owner live" in row["detail"]
+    assert wt.exists()
+    assert calls == []
+    assert not any(a[3:5] == ["worktree", "remove"] for a in recorded if len(a) >= 5)
+
+
+def test_foreign_lock_skipped_in_both_gate_outcomes(tmp_path, capsys, monkeypatch):
+    _init_repo(tmp_path)
+    wt = _add_agent_worktree(tmp_path, "foreignlock")
+    _lock(tmp_path, wt, "someone else")
+    monkeypatch.chdir(tmp_path)
+    for outcome in ("ok", "refused"):
+        _peers(monkeypatch, outcome)
+        assert main(["--reap"]) == 0
+        row = _states(_lines(capsys))[wt.as_posix()]
+        assert row["action"] == "reap-skipped"
+        assert "non-platform" in row["detail"]
+        assert wt.exists()
+
+
+def test_dead_owner_reaped_when_peer_gate_refused_double_force(tmp_path, capsys, monkeypatch):
+    _init_repo(tmp_path)
+    empty = _add_agent_worktree(tmp_path, "dead-empty")
+    benign = _add_agent_worktree(tmp_path, "dead-benign")
+    (benign / ".last-cleanup").write_text("x\n")
+    ahead = _add_agent_worktree(tmp_path, "dead-ahead")
+    (ahead / "f.txt").write_text("f\n")
+    _git("add", "f.txt", cwd=ahead)
+    _git("commit", "-q", "-m", "work", cwd=ahead)
+    for wt in (empty, benign, ahead):
+        _lock(tmp_path, wt, _DEAD_REASON)
+    monkeypatch.chdir(tmp_path)
+    calls = _peers(monkeypatch, "refused")
+    recorded = _track_run_argv(monkeypatch)
+
+    assert main(["--reap"]) == 0
+    states = _states(_lines(capsys))
+    assert states[empty.as_posix()]["action"] == "removed"
+    assert states[benign.as_posix()]["action"] == "removed"
+    assert states[ahead.as_posix()]["action"] == "salvaged-removed"
+    assert not (empty.exists() or benign.exists() or ahead.exists())
+    assert calls == []
+    removes = [a for a in recorded if len(a) >= 5 and a[3:5] == ["worktree", "remove"]]
+    assert len(removes) == 3
+    assert all(a.count("--force") == 2 for a in removes)
+
+
+def test_unattributed_uses_peer_gate_once_with_single_force(tmp_path, capsys, monkeypatch, ):
+    _init_repo(tmp_path)
+    a = _add_agent_worktree(tmp_path, "un-a")
+    b = _add_agent_worktree(tmp_path, "un-b")
+    monkeypatch.chdir(tmp_path)
+    calls = _peers(monkeypatch, "refused")
+    assert main(["--reap"]) == 0
+    err = capsys.readouterr().err
+    assert err.count("reap refused") == 1
+    assert len(calls) == 1
+    assert a.exists() and b.exists()
+
+    calls = _peers(monkeypatch, "ok")
+    recorded = _track_run_argv(monkeypatch)
+    assert main(["--reap"]) == 0
+    assert not a.exists() and not b.exists()
+    removes = [x for x in recorded if len(x) >= 5 and x[3:5] == ["worktree", "remove"]]
+    assert removes and all(x.count("--force") == 1 for x in removes)
+
+
+def test_no_unattributed_worktree_never_computes_peer_verdict(tmp_path, capsys, monkeypatch):
+    _init_repo(tmp_path)
+    _add_agent_worktree(tmp_path, "none")
+    monkeypatch.chdir(tmp_path)
+    calls = _peers(monkeypatch, "ok")
+    assert main([]) == 0
+    assert calls == []
+
+
+def test_owner_resolution_for_50_locked_worktrees_under_5ms():
+    import statistics
+    import time
+
+    from coordinator_core.ops.agent_worktree_sweep import Worktree
+    from coordinator_core.session.worktree_owner import worktree_owner
+
+    wts = [
+        Worktree(f"/r/.claude/worktrees/agent-{i}", f"b{i}", True, f"claude agent a{i} (pid {999999000 + i})")
+        for i in range(50)
+    ]
+    samples = []
+    for _ in range(25):
+        t0 = time.process_time()
+        verdicts = [worktree_owner(w.locked, w.lock_reason).verdict for w in wts]
+        samples.append(time.process_time() - t0)
+    assert set(verdicts) == {"dead"}
+    assert statistics.median(samples) < 0.005

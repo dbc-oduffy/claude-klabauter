@@ -348,6 +348,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_stamp", 'registers "groupem.stamp"'),
     ("coordinator_core.ops.group_em_resolve_addressee", 'registers "groupem.resolve_addressee"'),
     ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
+    ("coordinator_core.ops.group_em_standing", 'registers "groupem.standing"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),
     ("coordinator_core.ops.session_incident_claim", 'registers "session.incident_claim", "session.incident_peers"'),
@@ -361,6 +362,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "check, reusing close_out_and_stamp's commit-coverage oracle)",
     ),
     ("coordinator_core.ops.engine_drift", 'registers "engine.drift"'),
+    (
+        "coordinator_core.ops.engine_registration_completeness",
+        'registers "engine.registration_completeness"',
+    ),
     ("coordinator_core.plugin_health.drift", 'registers "plugin_health.drift"'),
     ("coordinator_core.plugin_health.scan", 'registers "plugin_health.scan"'),
     ("coordinator_core.plugin_health.sentinel", 'registers "plugin_health.sentinel"'),

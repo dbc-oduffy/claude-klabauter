@@ -67,6 +67,7 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.housekeeping.resolve import AMBIGUOUS_BLOCKER_SENTINEL
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, MutateAbort, locked_rmw
 
@@ -151,6 +152,24 @@ def evaluate_gate_clear(
         blocker_id=blocker_ids[-1],
         resolved_deployment_state=resolved_states[-1],
     )
+
+
+def dead_blocker_reason(verdict: GateVerdict) -> Optional[str]:
+    """Why a held gate can never clear, or None when waiting is legitimate.
+
+    Pure. "no-blocked-by": the record names no blocker. "unresolved": a
+    blocker id matches no record. "ambiguous": a blocker id matches more than
+    one distinct record. A clearing verdict or a live non-terminal blocker
+    returns None."""
+    if verdict.blocker_id is None:
+        return "no-blocked-by"
+    if verdict.clears:
+        return None
+    if verdict.resolved_deployment_state is None:
+        return "unresolved"
+    if verdict.resolved_deployment_state == AMBIGUOUS_BLOCKER_SENTINEL:
+        return "ambiguous"
+    return None
 
 
 def _blocker_ids(record: Dict[str, Any]) -> List[str]:

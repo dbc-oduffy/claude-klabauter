@@ -50,8 +50,10 @@ recommendation-forbidden class exists to close. `memo-resolution-
 attribution` moved from tier 3 to tier 2 on 2026-07-30 (see that builder's
 own docstring) once its evidence became this engine's own computation over
 fields it itself writes, rather than another session's memo prose — it is
-no longer counted among the untrusted-gate four. Every other 26 carry a
-recommendation.
+no longer counted among the untrusted-gate four. Of the 29 roster entries,
+3 are untrusted-gate (no recommendation by construction) and 1,
+`no-governing-plan`, deliberately carries none (a recommended "no plan" is
+the silent default it exists to remove); the other 25 carry a recommendation.
 
 Round-trip classification (`§ Round-trip classification`, same wiki):
 independently re-derived here, NOT assumed from `pickup_assemble`'s
@@ -894,6 +896,36 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
     )
 
 
+def build_no_governing_plan_judgment_point() -> dict[str, Any]:
+    """Tier-2 point carrying NO recommendation, deliberately: a recommended
+    "no plan" is the silent default the none-arm close removes, and the
+    engine cannot compute the answer without guessing the resolver refuses.
+    Outside the gate-nothing census (recommendation is None)."""
+    return build_judgment_point(
+        None,
+        id="no-governing-plan",
+        question=(
+            "Did a governing plan (e.g. a scope_mode: spec-dispatch plan) drive "
+            "this session's work even though none resolved?"
+        ),
+        dispositions=[
+            build_disposition("no-plan-governed", resolves=[]),
+            build_disposition("plan-governed-rerun-with-plan", resolves=[]),
+        ],
+        evidence=(
+            "preflight.governing_plan_resolution.source == \"none\": no "
+            "caller-supplied or handoff-stamped plan reached this close; "
+            "re-run brief with decisions.governing_plan_slug or "
+            "decisions.governing_plan_path to name it"
+        ),
+        reason=(
+            "whether a plan governed the session is known only to the EM; the "
+            "resolver deliberately never guesses"
+        ),
+        revalidate_at_dispatch=False,
+    )
+
+
 # `JUDGMENT_POINT_BUILDERS` deliberately -- see that tuple's own docstring
 
 
@@ -1043,10 +1075,10 @@ JUDGMENT_POINT_BUILDERS: tuple[Callable[[], dict[str, Any]], ...] = (
     build_unattributable_file_disposition_judgment_point,
     build_session_work_summary_judgment_point,
     build_flag_severity_classification_judgment_point,
+    build_no_governing_plan_judgment_point,
 )
 
-assert len(JUDGMENT_POINT_BUILDERS) == 28, (
-    f"JUDGMENT_POINT_BUILDERS must carry exactly 28 entries (29 minus "
-    f"commit-message-authoring, removed with ceremony.wsc_tail), got "
+assert len(JUDGMENT_POINT_BUILDERS) == 29, (
+    f"JUDGMENT_POINT_BUILDERS must carry exactly 29 entries, got "
     f"{len(JUDGMENT_POINT_BUILDERS)}"
 )

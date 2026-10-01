@@ -47,6 +47,11 @@ def _run_cli(args: list[str]):
     return rc, buf.getvalue()
 
 
+def _run_json(args: list[str]):
+    rc, out = _run_cli(["scan-secrets", "--json", *args])
+    return rc, json.loads(out)
+
+
 def _make_percolate_root(tmp_path: Path, target: str, with_hooks: bool = True) -> tuple[Path, Path]:
     percolate_root = tmp_path / "percolate-root"
     setup_dir = percolate_root / "setup"
@@ -425,9 +430,10 @@ def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    assert _gating_panel(out).strip() == "(none)"
+    assert payload["counts"]["medium_gating"] == 0
+    assert _gating_panel(payload["render"]).strip() == "(none)"
 
 
 def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
@@ -445,12 +451,12 @@ def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    panel = _gating_panel(out)
+    panel = _gating_panel(payload["render"])
     for line in lines:
         assert line in panel
-    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
+    assert payload["counts"]["medium_gating"] == len(lines)
 
 
 def test_tier_medium_interior_root_and_forge_service_addresses_do_not_gate(tmp_path):
@@ -464,9 +470,10 @@ def test_tier_medium_interior_root_and_forge_service_addresses_do_not_gate(tmp_p
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    assert _gating_panel(out).strip() == "(none)"
+    assert payload["counts"]["medium_gating"] == 0
+    assert _gating_panel(payload["render"]).strip() == "(none)"
 
 
 def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
@@ -482,12 +489,12 @@ def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    panel = _gating_panel(out)
+    panel = _gating_panel(payload["render"])
     for line in lines:
         assert line in panel
-    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
+    assert payload["counts"]["medium_gating"] == len(lines)
 
 
 def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
@@ -504,9 +511,10 @@ def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    assert _gating_panel(out).strip() == "(none)"
+    assert payload["counts"]["medium_gating"] == 0
+    assert _gating_panel(payload["render"]).strip() == "(none)"
 
 
 def test_tier_medium_real_stem_under_an_extension_still_gates(tmp_path):
@@ -522,12 +530,12 @@ def test_tier_medium_real_stem_under_an_extension_still_gates(tmp_path):
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
-    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    rc, payload = _run_json(["--files", str(file_list)])
     assert rc == 0
-    panel = _gating_panel(out)
+    panel = _gating_panel(payload["render"])
     for line in lines:
         assert line in panel
-    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
+    assert payload["counts"]["medium_gating"] == len(lines)
 
 
 def test_scan_secrets_clean(tmp_path):
@@ -554,9 +562,8 @@ def test_scan_secrets_peer_repo_extension(tmp_path):
         encoding="utf-8",
     )
 
-    rc, out = _run_cli(
+    rc, payload = _run_json(
         [
-            "scan-secrets",
             "--files",
             str(file_list),
             "--peer-repos-file",
@@ -566,7 +573,45 @@ def test_scan_secrets_peer_repo_extension(tmp_path):
         ]
     )
     assert rc == 0
-    assert "project-rag" in out.split("MEDIUM")[1]
+    assert payload["counts"]["medium_gating"] == 1
+    assert "project-rag" in payload["render"].split("MEDIUM")[1]
+
+
+def test_scan_secrets_json_render_equals_default_and_counts(tmp_path):
+    token = "sk" + "-" + "abcdefghijklmnopqrstuvwx"
+    target_file = tmp_path / "mixed.md"
+    target_file.write_text(
+        f"token {token}\n"
+        "See ~/.claude/tasks/3f9c2a7e-task-list for details.\n"
+        "commit " + "a" * 40 + "\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+    registry = tmp_path / "repo-registry.md"
+    registry.write_text("- shortname: example-retrieval-repo\n  path: /x/example-retrieval-repo\n", encoding="utf-8")
+    argv = ["--files", str(file_list), "--peer-repos-file", str(registry), "--target", "t"]
+
+    rc_plain, plain = _run_cli(["scan-secrets", *argv])
+    rc_json, payload = _run_json(argv)
+    assert rc_plain == rc_json == 2
+    assert payload["schema"] == "scan-secrets.v1"
+    assert payload["render"] == plain
+    assert payload["counts"] == {
+        "high": 1,
+        "medium_informational": 0,
+        "medium_gating": 1,
+        "low": 1,
+    }
+    assert token not in json.dumps(payload)
+
+
+def test_scan_secrets_json_missing_files_emits_no_payload(tmp_path, capsys):
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(tmp_path / "nope.md") + "\n", encoding="utf-8")
+    rc, out = _run_cli(["scan-secrets", "--json", "--files", str(file_list)])
+    assert rc == 1
+    assert out == ""
 
 
 def _init_dest_repo(tmp_path: Path) -> Path:

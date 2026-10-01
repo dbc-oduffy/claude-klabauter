@@ -202,7 +202,7 @@ def _sha256(text: str) -> str:
 
 def test_guard_against_fired_drift_passes_on_matching_sha256(tmp_path):
     script_path = tmp_path / "plan.workflow.mjs"
-    script_path.write_text("console.log(1);\n", encoding="utf-8")
+    script_path.write_bytes(b"console.log(1);\n")
     dispatch_op.guard_against_fired_drift(script_path, _sha256("console.log(1);\n"))
 
 

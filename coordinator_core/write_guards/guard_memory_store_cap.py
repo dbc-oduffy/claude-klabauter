@@ -20,9 +20,9 @@ never a deeper nesting, matching AC14's two-file-shape universe (the index
 file and its sibling body files).
 
 Four limits (AC14 owns the numbers; restated here because this module
-implements against them): ``MEMORY.md`` <= 2,000 B; <= 20 index rows (lines
+implements against them): ``MEMORY.md`` <= 1,000 B; <= 5 index rows (lines
 starting ``"- "``); <= 100 chars per index row; each sibling ``<slug>.md``
-body file <= 1,500 B. Row-count and byte-count are both needed — a byte cap
+body file <= 800 B. Row-count and byte-count are both needed — a byte cap
 alone admits 20 bloated rows, a row cap alone admits 51 terse ones.
 
 Home resolution: copied from
@@ -84,7 +84,7 @@ auto-loads into every session's boot context). The deny envelope
 verbatim in shape from ``block_home_dir_memo_delivery.py`` — no new envelope
 shape invented.
 
-Fifth limit, added with the hard-deny flip: ``MAX_MEMORY_FILES = 20`` body
+Fifth limit, added with the hard-deny flip: ``MAX_MEMORY_FILES = 5`` body
 files (excluding ``MEMORY.md`` itself) per project ``memory/`` dir, 1:1 with
 ``MAX_MEMORY_MD_ROWS`` so the index and the store cannot disagree about how
 many memories exist. It fires ONLY on creation of a NEW body file (the
@@ -165,14 +165,14 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 136
 
-MAX_MEMORY_MD_BYTES = 2000
-MAX_MEMORY_MD_ROWS = 20
+MAX_MEMORY_MD_BYTES = 1000
+MAX_MEMORY_MD_ROWS = 5
 MAX_ROW_CHARS = 100
-MAX_BODY_FILE_BYTES = 1500
+MAX_BODY_FILE_BYTES = 800
 
 #: DR-345 — 1:1 with MAX_MEMORY_MD_ROWS so index and store cannot disagree
 #: about how many memories exist. Fires only on NEW body-file creation.
-MAX_MEMORY_FILES = 20
+MAX_MEMORY_FILES = 5
 
 _CLAUDE_DIRNAME = ".claude"
 _PROJECTS_DIRNAME = "projects"

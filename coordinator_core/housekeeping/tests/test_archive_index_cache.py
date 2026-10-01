@@ -105,6 +105,30 @@ def test_every_broken_cache_rebuilds_rather_than_misleads(tmp_path, corpus, muta
     assert index.by_id == build_index(corpus.archive_dir).by_id, label
 
 
+def test_round_trip_preserves_nonterminal_by_path(tmp_path):
+    root = tmp_path / "archive"
+    root.mkdir()
+    (root / "a.md").write_text("---\nstub_id: x\ndeployment_state: in_flight\n---\n", encoding="utf-8")
+    index = build_index(root)
+    assert index.nonterminal_by_path
+    cache = tmp_path / "c.json"
+    assert save_index(index, cache)
+    assert load_index(root, cache).nonterminal_by_path == index.nonterminal_by_path
+
+
+def test_v1_payload_and_malformed_nonterminal_are_refused(tmp_path, corpus):
+    cache = tmp_path / "c.json"
+    save_index(build_index(corpus.archive_dir), cache)
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    for mutated in (
+        {**payload, "version": 1},
+        {k: v for k, v in payload.items() if k != "nonterminal_by_path"},
+        {**payload, "nonterminal_by_path": {"p": 3}},
+    ):
+        cache.write_text(json.dumps(mutated), encoding="utf-8")
+        assert load_index(corpus.archive_dir, cache) is None
+
+
 def test_cache_built_against_a_different_archive_dir_is_refused(tmp_path, corpus):
     """Its paths describe another tree entirely. Revalidating it would report
     every entry deleted and then rebuild anyway -- refusing up front is the

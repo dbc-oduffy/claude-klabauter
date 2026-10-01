@@ -1,0 +1,87 @@
+"""Hand-typed gate-verdict population: every ASSEMBLER_DISPATCHABLE verb plus four named gates.
+
+Entry shape: (kind, detail). kind is one of replay / covered_by / not_a_gate / pending_replay.
+Literal on purpose: never build this by a loop or registry walk.
+"""
+
+from typing import Mapping
+
+POPULATION: Mapping[str, tuple] = {
+    # Named gates.
+    "workstream-complete-apply": ("replay", "exit code vs ladder label (C3)"),
+    "vendored-schema-drift": ("replay", "--list advertisement vs gating oracle (C4)"),
+    "percolate-round": (
+        "covered_by",
+        "coordinator/bin/tests/test_percolate_round.py::test_real_run_partial_row_failure_exits_nonzero_with_verdict",
+    ),
+    "baton-assemble-apply": (
+        "covered_by",
+        "coordinator_core/baton_assemble/tests/test_apply_verdict_leads_the_report.py::TestVerdictLeadsTheJsonReport",
+    ),
+    # Dispatchable verbs.
+    "review-brightline-gate": ("replay", "brightline verdict vs exit code (C2)"),
+    "age-sweep-lessons": ("not_a_gate", "mutates lesson files, prints no verdict"),
+    "archive-stamp-cli": ("not_a_gate", "stamps an archive record, prints no verdict"),
+    "backfill-week-changelog-gaps": ("not_a_gate", "writes changelog entries, prints no verdict"),
+    "baton-chain-closure": ("pending_replay", "reports chain closure; exit vs verdict unreplayed"),
+    "check-arch-audit-staleness": ("pending_replay", "staleness check with verdict output"),
+    "check-atlas-watch-drift": ("pending_replay", "drift check with verdict output"),
+    "check-competitor-positioning-nudge": ("pending_replay", "nudge check with verdict output"),
+    "check-machine-local-regeneratability": ("pending_replay", "regeneratability check with verdict output"),
+    "check-no-illegal-paths": ("pending_replay", "illegal-path check with verdict output"),
+    "check-version-consistency": ("pending_replay", "version consistency check with verdict output"),
+    "check-weekly-staleness": ("pending_replay", "staleness check with verdict output"),
+    "check-workstream-complete-deletion-blocks": ("pending_replay", "deletion-block check with verdict output"),
+    "check-wsc-inline-budget": ("pending_replay", "inline budget check with verdict output"),
+    "classify-dispatch-shape": ("not_a_gate", "emits a classification, no pass/fail verdict"),
+    "coordinator-ceremony-hook": ("not_a_gate", "runs a ceremony hook, prints no verdict"),
+    "coordinator-complete-entry": ("not_a_gate", "mutates a queue entry"),
+    "coordinator-fold-execution-record": ("not_a_gate", "folds a record, prints no verdict"),
+    "coordinator-harvest-deferrals": ("not_a_gate", "harvests and emits deferrals"),
+    "coordinator-initiative": ("not_a_gate", "mutates initiative state"),
+    "coordinator-lesson-add": ("not_a_gate", "appends a lesson"),
+    "coordinator-queue-append": ("not_a_gate", "appends a queue row"),
+    "cruft-sweep": ("not_a_gate", "sweeps and reports files, no gate verdict"),
+    "detect-initiative-candidates": ("not_a_gate", "emits candidates, no verdict"),
+    "extract-lessons": ("not_a_gate", "emits lessons"),
+    "freeze-review-diff": ("not_a_gate", "writes a diff snapshot"),
+    "goal-close-day": ("not_a_gate", "mutates goal state"),
+    "handoff-housekeeping": ("not_a_gate", "mutates handoff files"),
+    "handoff.author_fork": ("not_a_gate", "authors a handoff"),
+    "handoff.stamp_phase": ("not_a_gate", "stamps a handoff phase"),
+    "lessons-outbox-drain": ("not_a_gate", "drains an outbox"),
+    "lint-frontmatter": ("pending_replay", "lint verdict vs exit code unreplayed"),
+    "list-week-changelog": ("not_a_gate", "lists entries"),
+    "plan-reversibility-eligibility": ("pending_replay", "eligibility verdict vs exit code unreplayed"),
+    "prune-closed-bugs": ("not_a_gate", "prunes records"),
+    "query-completions": ("not_a_gate", "read-only query"),
+    "query-records": ("not_a_gate", "read-only query"),
+    "reap-claims-for-repos": ("not_a_gate", "reaps claims"),
+    "reap-orphaned-in-flight-handoffs": ("not_a_gate", "reaps handoffs"),
+    "reassess-goal-krs": ("not_a_gate", "reassesses and writes KRs"),
+    "regenerate-orientation-cache": ("not_a_gate", "regenerates a cache"),
+    "stamp-run-complete": ("not_a_gate", "stamps a run record"),
+    "standup": ("not_a_gate", "emits a standup report"),
+    "sweep-terminal-handoffs": ("not_a_gate", "sweeps handoffs"),
+    "sweep-terminal-sizings": ("not_a_gate", "sweeps sizings"),
+    "tier-u-grant-cli": ("not_a_gate", "mints a grant"),
+    "validate-fast-and-packageability": ("pending_replay", "validation verdict vs exit code unreplayed"),
+    "workday-complete-args-and-validate": ("pending_replay", "validates args; verdict vs exit unreplayed"),
+    "workday-complete-backfill-anchor": ("not_a_gate", "writes a backfill anchor"),
+    "workday-complete-backfill-scan": ("not_a_gate", "scans and emits gaps"),
+    "workday-complete-close": ("not_a_gate", "closes the day"),
+    "workday-complete-reconcile": ("not_a_gate", "reconciles state"),
+    "workday-complete-step2_5-dirty-tree": ("pending_replay", "dirty-tree gate; exit vs verdict unreplayed"),
+    "workday-complete-step3-consolidate": ("not_a_gate", "consolidates records"),
+    "workday-start-advisory-counters": ("not_a_gate", "emits advisory counters"),
+    "workweek-complete-advisories": ("not_a_gate", "emits advisories"),
+    "workweek-complete-close": ("not_a_gate", "closes the week"),
+    "workweek-complete-doc-staleness": ("pending_replay", "staleness verdict vs exit unreplayed"),
+    "workweek-complete-doc-verify": ("pending_replay", "doc verify verdict vs exit unreplayed"),
+    "workweek-complete-drift-guards": ("pending_replay", "drift guard verdict vs exit unreplayed"),
+    "workweek-complete-reverse-drift-gate": ("pending_replay", "reverse drift gate verdict vs exit unreplayed"),
+    "workweek-trail-scope": ("not_a_gate", "emits trail scope"),
+    "wsc-coverage-gate-runner": ("pending_replay", "coverage gate verdict vs exit unreplayed"),
+}
+
+PENDING_REPLAY_CEILING = 20

@@ -71,8 +71,9 @@ moves a plan from docs/plans/ to archive/specs/<YYYY-MM>/ the moment its
 status flips terminal") and the live tree
 (archive/specs/2026-07/, archive/specs/2026-08/ already populated by hand/
 other tooling). YYYY-MM is read from the plan's OWN FILENAME prefix
-(YYYY-MM-DD-slug.md), never today's date — mirrors archive_sizings.
-_derive_yyyy_mm and archive_terminal_handoffs.handoff_archive_dest.
+(YYYY-MM-DD-slug.md), never today's date. The derivation is
+`wire_paths.archived_plan_path`, shared with the readers that follow an
+archived plan.
 
 Single-flight rail: a dedicated O_EXCL lock file
 (<common_dir>/coordinator-sessions/archive-completed-plans.lock), same
@@ -152,7 +153,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,6 +181,7 @@ from coordinator_core.ops.fleet._common import (
     validate_params,
 )
 from coordinator_core.ops.fleet.archive_terminal_handoffs import apply_sweep
+from coordinator_core.wire_paths import archived_plan_path
 from coordinator_core.ops.fleet._sweep_receipt import record_sweep_outcome
 
 _LOG = logging.getLogger(__name__)
@@ -199,8 +200,6 @@ _SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY = "sidecar-follows-primary: primary is not 
 _REASON_SIDECAR_DEST_EXISTS = "sidecar-dest-exists: refusing to overwrite an existing archived sidecar"
 
 _FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json")
-
-_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
 # Single-flight lock — same stale-lock tolerance rationale as
 # archive_terminal_handoffs._SWEEP_LOCK_STALE_S: sized generously above this
@@ -299,28 +298,16 @@ def collect_live_plan_paths(worktree_root: Path) -> List[Path]:
     )
 
 
-def _derive_yyyy_mm(fname: str) -> Optional[str]:
-    """Derive YYYY-MM from a plan filename prefix (e.g. "2026-08-13-foo.md" ->
-    "2026-08"). Returns None when the filename carries no YYYY-MM-DD prefix.
-    """
-    m = _DATE_PREFIX_RE.match(fname)
-    return m.group(1) if m else None
-
-
 def plan_archive_dest(worktree_root: Path, plan_path: Path) -> Optional[Path]:
-    """Derive archive/specs/YYYY-MM/<filename>, or None when the filename
-    carries no derivable YYYY-MM-DD prefix (ungated skip — mirrors
-    archive_sizings._derive_yyyy_mm's own cannot-derive-date guard; unlike
-    archive_terminal_handoffs.handoff_archive_dest this family does NOT fall
-    back to a flat, month-less directory, since every plan doc on this
-    corpus's naming convention carries the date prefix and a flat fallback
-    would silently paper over a naming-convention violation instead of
-    surfacing it as a named skip reason).
+    """Return ``wire_paths.archived_plan_path(worktree_root, plan_path)``, or
+    None when the filename carries no YYYY-MM-DD prefix (named skip, no flat
+    month-less fallback).
+
+    Invariant: the readers' archive fallback (directives_lessons_plan, the
+    dangling-backlink guard) derives the same path, so changing the
+    destination here changes it everywhere.
     """
-    yyyy_mm = _derive_yyyy_mm(plan_path.name)
-    if yyyy_mm is None:
-        return None
-    return worktree_root / "archive" / "specs" / yyyy_mm / plan_path.name
+    return archived_plan_path(worktree_root, plan_path)
 
 
 def _terminal_since(meta_updated: Optional[str], meta_created: Optional[str], plan_path: Path) -> Optional[str]:

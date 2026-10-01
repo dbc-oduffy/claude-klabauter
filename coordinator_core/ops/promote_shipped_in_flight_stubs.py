@@ -28,7 +28,7 @@ not) — that indirection existed ONLY because the DoE-side caller was bash
 and needed an IPC/subprocess bridge to reach Python. This module runs AS
 Python (the DoE-side trampoline direct-imports it), so it calls the already-
 registered "handoff.stamp" / "handoff.transition" op handlers in-process via
-`coordinator_core.ipc.get_op_handler` — the exact native code path the
+`coordinator_core.warm.entry_seam.reentrant_dispatch_async` — the exact native code path the
 facade's State 2 would have spawned a subprocess to reach, minus the spawn.
 There is no legacy Node.js fallback in this module: once the caller is
 Python, direct import is strictly cheaper and the transport-fallback
@@ -137,13 +137,12 @@ from typing import List, Optional, Tuple
 from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-from coordinator_core.ipc import get_op_handler
 from coordinator_core.lifecycle import git_common_dir as _git_common_dir
+from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch_async
 
 # Import side-effects: register "handoff.stamp" / "handoff.transition" in the
-# ipc op-registry so get_op_handler() below resolves via a direct registry hit
-# rather than its lazy-import fallback (get_op_handler() self-resolves a MISS
-# since 2026-07-25, so this pre-import is belt-and-braces, not strictly
+# ipc op-registry so the entry-seam lookup in _stamp/_ship resolves via a direct
+# registry hit rather than a lazy-import fallback (belt-and-braces, not strictly
 # required for correctness). Mirrors
 # coordinator_core.ops.handoff_ship_archive's own reuse pattern
 # (public op-registry contract, not a private cross-module reach).
@@ -342,19 +341,25 @@ async def _stamp(stub_abs: str, sha8: str, git_common_dir: Path) -> dict:
     # _run_promotions ("Do NOT reuse the stamp path's own SHA derivation
     # here -- it would derive from the STUB's OWN scope, wrong for a forked
     # spinoff-roadmap stub").
-    handler = get_op_handler("handoff.stamp")
-    if handler is None:
+    try:
+        return await reentrant_dispatch_async(
+            "handoff.stamp",
+            {"handoff_path": stub_abs, "sha": sha8, "kind": "successor"},
+            repo_root=git_common_dir,
+        )
+    except OpUnavailableError:
         return {"exit_code": 1, "error": "handoff.stamp not registered"}
-    return await handler(
-        {"handoff_path": stub_abs, "sha": sha8, "kind": "successor"}, git_common_dir
-    )
 
 
 async def _ship(stub_abs: str, git_common_dir: Path) -> dict:
-    handler = get_op_handler("handoff.transition")
-    if handler is None:
+    try:
+        return await reentrant_dispatch_async(
+            "handoff.transition",
+            {"verb": "ship", "handoff_path": stub_abs},
+            repo_root=git_common_dir,
+        )
+    except OpUnavailableError:
         return {"exit_code": 1, "error": "handoff.transition not registered"}
-    return await handler({"verb": "ship", "handoff_path": stub_abs}, git_common_dir)
 
 
 class _PromotionResult:
@@ -504,8 +509,7 @@ async def _run_promotions(handoffs_dir: Path, repo_root_path: Path) -> _Promotio
             continue
 
         # DR-276: the stamp handler mutated stub_abs directly (via
-        # get_op_handler("handoff.stamp"), bypassing ipc.dispatch_message and
-        # its scope-touch recording) — declare it here at the real write
+        # the entry seam, which scopes but does not record) — declare it here at the real write
         # site so it is not an unclaimed orphan at the scoped_git_commit
         # sink. Declared unconditionally on success, even though the
         # landed-check below may still abort ship: the stamp write already

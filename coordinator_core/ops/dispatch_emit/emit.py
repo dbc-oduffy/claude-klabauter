@@ -3716,7 +3716,12 @@ def _imported_modules(importer_rel: str, source: str) -> set:
         return set()
     package = importer_rel.replace("\\", "/").strip("/").split("/")[:-1]
     found: set = set()
-    for node in ast.walk(tree):
+    # Explicit stack, not the stdlib AST walker: test_no_tree_survey bans
+    # every `.walk` attribute in this module, by design, without carve-outs.
+    stack: list = [tree]
+    while stack:
+        node = stack.pop()
+        stack.extend(ast.iter_child_nodes(node))
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):

@@ -71,6 +71,13 @@ side-effect-free) — the token is consumed entirely by the commit-tripwire call
 named here only so this module's docstring is the one place both consumers' contracts
 are recorded together, per AC13.
 
+§ Suspended ops. An op in `op_budget_suspension.SUSPENDED_OPS` is switched off by
+design, so an incomplete registration for it is an end state, not a defect.
+`partition_suspended` splits violations into `(live, by_design)` rather than
+suppressing the second half; `filter_known_violations` returns only `live`, and a
+reader who needs the `by_design` half (the live op) calls `partition_suspended`
+itself. `check_registration_quad` still reports everything.
+
 `_KNOWN_UNCLASSIFIED_OPS_DEBT` freezes the op-keys registered but missing an
 `OP_CLASSIFICATION` entry as measured at integration time (2026-07-25, full-walk
 discovery). It is generated once as a literal, not regenerated on demand — a
@@ -97,7 +104,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import pkgutil
-from typing import Mapping
+from typing import Collection, Mapping
 
 _CLASSIFICATION_FILE = "coordinator_core/authz/classification.py"
 _OP_KEY_SCOPE_FILE = "coordinator_core/op_scopes.py"
@@ -367,11 +374,24 @@ def prune_known_incomplete(
     )
 
 
+def partition_suspended(
+    violations: list[QuadViolation], suspended: Collection[str]
+) -> tuple[list[QuadViolation], list[QuadViolation]]:
+    """Pure split into `(live, by_design)`, order preserved. A violation is
+    `by_design` iff its `op_key` is in `suspended`."""
+    live: list[QuadViolation] = []
+    by_design: list[QuadViolation] = []
+    for v in violations:
+        (by_design if v.op_key in suspended else live).append(v)
+    return live, by_design
+
+
 def filter_known_violations(
     violations: list[QuadViolation],
     *,
     classification_baseline: "frozenset[str] | None" = None,
     incomplete_baseline: Mapping[str, tuple[str, ...]] | None = None,
+    suspended: Collection[str] | None = None,
 ) -> list[QuadViolation]:
     """Combined gate-consumer filter: apply both known-debt allowlists
     (`_KNOWN_UNCLASSIFIED_OPS_DEBT` for the classification-only ledger,
@@ -385,7 +405,14 @@ def filter_known_violations(
     Both pytest guard (`test_registration_quad.py`) and the commit-time
     tripwire (`commit_tripwires.py`) should route through this rather than
     re-deriving the two-prune sequence locally.
+
+    `suspended=None` resolves to `frozenset(SUSPENDED_OPS)`; `frozenset()` turns the
+    suspended-op exemption off. Returns only the `live` half of `partition_suspended`.
     """
+    if suspended is None:
+        from coordinator_core.op_budget_suspension import SUSPENDED_OPS
+
+        suspended = frozenset(SUSPENDED_OPS)
     if classification_baseline is None:
         classification_baseline = _KNOWN_UNCLASSIFIED_OPS_DEBT
     if incomplete_baseline is None:
@@ -408,7 +435,7 @@ def filter_known_violations(
         result.append(
             dataclasses.replace(v, surfaces_missing=kept_missing, missing_surface_files=kept_files)
         )
-    return result
+    return partition_suspended(result, suspended)[0]
 
 
 # Known-debt baseline — empty: every registered op carries an OP_CLASSIFICATION entry.

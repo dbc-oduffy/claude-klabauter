@@ -114,8 +114,8 @@ from coordinator_core.telemetry.composition_record import (
 )
 
 # Import side-effect only: triggers each op module's register_op(...) so
-# _invoke_op_in_process's get_op_handler() lookups below resolve via a direct
-# registry hit rather than its lazy-import fallback -- mirrors the established
+# _invoke_op_in_process's entry-seam dispatch below resolves via a direct
+# registry hit rather than a lazy-import fallback -- mirrors the established
 # pattern in ops/handoff_ship_archive.py, ops/ceremony/wsc_tail.py,
 # ops/cutover_advance.py, et al. Originally added
 # to fix a live break (get_op_handler() alone, with no import trigger, returned
@@ -295,25 +295,17 @@ def _invoke_op_in_process(op_name: str, params: dict[str, Any], repo_root: Path)
     worktree root unconverted; a `"none"`-scoped op gets `None`, matching
     `resolve_op_repo_key`'s own "no repo state accessed" contract.
 
-    SYNC AND ASYNC HANDLERS BOTH, decided by `inspect.iscoroutinefunction` -- the
-    same predicate `ipc.py`'s own dispatch loop uses, reused here for the same
-    reason the scope table above is: this in-process shortcut must not diverge
-    from the transport path. An unconditional `asyncio.run(handler(...))` works
-    only for coroutine ops and raises `ValueError: a coroutine was expected` on a
-    sync one, which is not a hypothetical shape -- `fleet.archive_terminal_
-    handoffs`, `session.sweep_consumed_handoffs` and `handoff.housekeeping` are
-    all sync at their op boundary, because only their commit leg is a coroutine
-    and making the whole op async for that would push `asyncio.run` onto every
-    caller.
+    SYNC AND ASYNC HANDLERS BOTH: the call goes through
+    `coordinator_core.warm.entry_seam.reentrant_dispatch`, which drives a
+    coroutine op to completion and calls a sync op directly -- `fleet.archive_
+    terminal_handoffs`, `session.sweep_consumed_handoffs` and
+    `handoff.housekeeping` are sync at their op boundary, only their commit leg
+    is a coroutine. An unregistered or suspended op surfaces as
+    `UnrecognizedDirective`.
     """
-    import inspect
-
-    from coordinator_core.ipc import get_op_handler, OP_KEY_SCOPE
+    from coordinator_core.ipc import OP_KEY_SCOPE
     from coordinator_core.lifecycle import git_common_dir
-
-    handler = get_op_handler(op_name)
-    if handler is None:
-        raise UnrecognizedDirective(f"unrecognized op {op_name!r}")
+    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
     scope = OP_KEY_SCOPE.get(op_name, "none")
     if scope == "common_dir":
@@ -323,9 +315,10 @@ def _invoke_op_in_process(op_name: str, params: dict[str, Any], repo_root: Path)
     else:
         op_repo_root = None
 
-    if inspect.iscoroutinefunction(handler):
-        return asyncio.run(handler(params, op_repo_root))
-    return handler(params, op_repo_root)
+    try:
+        return reentrant_dispatch(op_name, params, repo_root=op_repo_root)
+    except OpUnavailableError as exc:
+        raise UnrecognizedDirective(f"unrecognized op {op_name!r}") from exc
 
 
 def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str, Any]:

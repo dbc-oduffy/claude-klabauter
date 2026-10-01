@@ -4,6 +4,11 @@ record, mirroring (never importing, never shelling out to)
 `coordinator-content-repo:coordinator/bin/group-em-nomination.py`.
 
 Spec backlink: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C3
+Read side: docs/plans/2026-10-01-groupem-standing-op.md (M06.C0)
+
+READER AND CLAIMER (2026-10-01): this module is also the reader. `who()` and `standing()` answer
+"who holds it, and are they live" off the SAME `is_live` join `claim()` decides on, so the read
+and the claim cannot disagree about a holder. They never write, lock or claim.
 
 Purpose: exactly one Group EM per repo is a filesystem invariant expressed by ONE JSON file per
 repo under ``<settings-home>/state/group-em/<repo-key>.json`` -- machine-global, in NEITHER
@@ -67,6 +72,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.group_em import session_registry
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.liveness import session_live
 
@@ -330,3 +336,48 @@ def claim(
         },
         "replaced_holder": None,
     }
+
+
+def who(repo_root: str, directory: Optional[Path] = None) -> Optional[dict]:
+    """Return the nomination record plus ``live``/``live_reason`` from `is_live`, or None when no
+    record is on file. Read-only; `repo_root` is normalised exactly as `claim()` does."""
+    repo_root = str(Path(repo_root).resolve())
+    record = read_record(repo_root, directory)
+    if record is None:
+        return None
+    liveness = is_live(record)
+    annotated = dict(record)
+    annotated["live"] = liveness.live
+    annotated["live_reason"] = liveness.live_reason
+    return annotated
+
+
+def _session_id_for_name(name: str) -> Optional[str]:
+    """Resolve a registry name to a session id; None unless exactly one session carries it. A
+    name join, not a liveness join."""
+    if not name:
+        return None
+    matches = {row.session_id for row in session_registry.read_rows() if row.name == name}
+    if len(matches) != 1:
+        return None
+    return matches.pop()
+
+
+def standing(
+    repo_root: str, peer: str, directory: Optional[Path] = None
+) -> Optional[dict]:
+    """`who()` plus ``standing``: ``"live"`` / ``"not_live"`` when `peer` (a session id, or a
+    registry name resolving to exactly one session id) is the recorded holder, else
+    ``"no_match"``. None when no record is on file."""
+    record = who(repo_root, directory)
+    if record is None:
+        return None
+    holder = str(record.get("session_id") or "")
+    matches = bool(peer) and (peer == holder or _session_id_for_name(peer) == holder)
+    if not matches:
+        record["standing"] = "no_match"
+    elif record["live"]:
+        record["standing"] = "live"
+    else:
+        record["standing"] = "not_live"
+    return record

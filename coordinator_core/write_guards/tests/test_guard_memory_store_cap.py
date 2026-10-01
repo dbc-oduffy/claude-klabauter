@@ -57,14 +57,14 @@ class TestUnrelatedPathPassesUntouched:
 
 
 class TestBytesLimit:
-    def test_over_2000_bytes_denied(self, memory_dir):
+    def test_over_1000_bytes_denied(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert "cap" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_at_or_under_2000_bytes_passes(self, memory_dir):
+    def test_at_or_under_1000_bytes_passes(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(5)
         assert len(content.encode("utf-8")) <= guard.MAX_MEMORY_MD_BYTES
@@ -73,16 +73,16 @@ class TestBytesLimit:
 
 
 class TestRowCountLimit:
-    def test_21_rows_denied(self, memory_dir):
+    def test_6_rows_denied(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
-        content = "# Memory Index\n\n" + _rows(21)
+        content = "# Memory Index\n\n" + _rows(6)
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert "rows" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_20_rows_passes(self, memory_dir):
+    def test_5_rows_passes(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
-        content = "# Memory Index\n\n" + _rows(20)
+        content = "# Memory Index\n\n" + _rows(5)
         result = guard.check(_write_payload(target, content))
         assert result is None
 
@@ -107,16 +107,16 @@ class TestRowLengthLimit:
 
 
 class TestBodyFileLimit:
-    def test_body_file_over_1500_bytes_denied(self, memory_dir):
+    def test_body_file_over_800_bytes_denied(self, memory_dir):
         target = str(memory_dir / "some-lesson.md")
-        content = "x" * 1600
+        content = "x" * 900
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "1500" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "800" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_body_file_at_1500_bytes_passes(self, memory_dir):
+    def test_body_file_at_800_bytes_passes(self, memory_dir):
         target = str(memory_dir / "some-lesson.md")
-        content = "x" * 1500
+        content = "x" * 800
         result = guard.check(_write_payload(target, content))
         assert result is None
 
@@ -173,7 +173,7 @@ class TestCaseVariedTargetDenied:
         target = str(
             home / ".Claude" / "Projects" / "-Some-project" / "Memory" / "some-lesson.md"
         )
-        content = "x" * 1600
+        content = "x" * 900
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -192,7 +192,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
 
     def test_body_file_deny_names_project_slug(self, memory_dir):
         target = str(memory_dir / "some-lesson.md")
-        content = "x" * 1600
+        content = "x" * 900
         result = guard.check(_write_payload(target, content))
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -208,7 +208,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
         monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
 
-        content = "x" * 1600
+        content = "x" * 900
         result_a = guard.check(_write_payload(str(mem_a / "some-lesson.md"), content))
         result_b = guard.check(_write_payload(str(mem_b / "some-lesson.md"), content))
 
@@ -247,7 +247,7 @@ class TestExtendedLengthPrefixAsymmetry:
 class TestDenyMessageShape:
     def test_row_count_deny_names_eviction_and_routing_test(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
-        content = "# Memory Index\n\n" + _rows(21)
+        content = "# Memory Index\n\n" + _rows(6)
         result = guard.check(_write_payload(target, content))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "evict" in reason
@@ -425,3 +425,17 @@ class TestClaudeHomeConventionA:
         roots = guard._guarded_project_roots()
         assert home / ".claude" / "projects" in roots
         assert self._big(home / ".claude") is not None
+
+
+class TestOverCapStoreCanShrink:
+    def test_deleting_down_to_a_smaller_index_passes_while_over_cap(self, memory_dir):
+        target = memory_dir / "MEMORY.md"
+        target.write_text("# Memory Index\n\n" + _rows(9), encoding="utf-8")
+        smaller = "# Memory Index\n\n" + _rows(8)
+        assert guard.check(_write_payload(str(target), smaller)) is None
+
+    def test_growing_an_over_cap_index_is_still_denied(self, memory_dir):
+        target = memory_dir / "MEMORY.md"
+        target.write_text("# Memory Index\n\n" + _rows(8), encoding="utf-8")
+        result = guard.check(_write_payload(str(target), "# Memory Index\n\n" + _rows(9)))
+        assert result is not None

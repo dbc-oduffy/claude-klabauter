@@ -6155,6 +6155,7 @@ def test_completion_verdict_ac6_no_new_judgment_point_and_ids_unchanged(monkeypa
         "governing-spec-identification",
         "jp-review-scale",
         "lesson-worth-capturing",
+        "no-governing-plan",
         "quota-retry-vs-escalate",
         "review-dispatch-vehicle-choice",
         "review-partition-strategy",

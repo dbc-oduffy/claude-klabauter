@@ -151,6 +151,14 @@ GENERATES = []  # writes ONE dirty memo into the RECEIVER's (sibling) repo tree 
 # every Windows invocation while never recovering the caret. Wired in here
 # to match the intent recorded in both generators' docstrings rather than
 # dropped from the sets, which would silently reverse that intent.
+def _no_console_kw() -> dict:
+    """Spawn kwargs suppressing the Windows console popup; `{}` elsewhere.
+    Only for calls that capture their own output."""
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 _LAUNCHER_CMD_NAME = "cross-repo-memo.cmd"
 
 # C2b (docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-
@@ -548,7 +556,7 @@ def _machine_local_dump() -> "dict | None":
 
     payload = None
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, **_no_console_kw())
         if result.returncode == 0:
             parsed = json.loads(result.stdout or "{}")
             if isinstance(parsed, dict):
@@ -602,6 +610,7 @@ def _resolve_python() -> str:
                 [candidate, "--version"],
                 capture_output=True,
                 text=True,
+                **_no_console_kw(),
             )
             if result.returncode == 0:
                 _RESOLVED_PYTHON_CACHE[_RESOLVED_PYTHON_SENTINEL] = candidate
@@ -687,6 +696,7 @@ def _machine_local_get_detail_uncached(key: str) -> "tuple[str | None, bool, str
             cmd,
             capture_output=True,
             text=True,
+            **_no_console_kw(),
         )
     except OSError:
         return None, False, ""
@@ -798,7 +808,7 @@ def _machine_local_repos_keys() -> "list[str] | None":
     else:
         cmd = [impl, "keys"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, **_no_console_kw())
     except OSError:
         return None
     if result.returncode != 0:
@@ -1868,6 +1878,7 @@ def _receiver_repo_unusable_reason(abs_receiver_path: str) -> str | None:
             capture_output=True,
             text=True,
             env=_receiver_git_env(),
+            **_no_console_kw(),
         )
     except OSError as exc:
         return f"could not run git: {exc}"
@@ -1909,6 +1920,7 @@ def _git_premise_probe(abs_receiver_path: str, args: list) -> "tuple[str, str]":
             capture_output=True,
             text=True,
             env=_receiver_git_env(),
+            **_no_console_kw(),
         )
     except OSError as exc:
         return _PREMISE_UNKNOWN, f"could not run git: {exc}"
@@ -3444,7 +3456,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
             # BLOCKING subprocess.call so control returns here once the
             # editor exits — needed so the frontmatter/summary rewrite below
             # can run against the human's finished edit.
-            subprocess.call([editor, abs_path])
+            subprocess.call([editor, abs_path])  # popup-intentional-last-resort — $EDITOR owns the operator's console
 
             # Read the edited body back and hand it to claude-klabauter's `memo.compose`
             # op for the frontmatter rewrite + prose-first summary

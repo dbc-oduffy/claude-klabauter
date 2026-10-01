@@ -116,12 +116,13 @@ Prior bash implementation: coordinator/scripts/install-maximalist.sh (622 lines,
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # C1 (docs/plans/2026-08-26-the-installers-two-halves-come-from-two-repos.md):
 # make this entry point load ITS OWN repo's plane by construction, not by
@@ -165,6 +166,7 @@ if not sys.path or sys.path[0] != _EXPECTED_REPO_ROOT:
 from coordinator_core._settings_home import native_path_form, settings_home
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
+from coordinator_core.git import git_state
 
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
 # one-shot install phases can be slow (pip installs in ensure-coordinator-venv)
@@ -228,7 +230,8 @@ What this does:
     11. check-install-singularity.sh   (Step 7.5 -- canonical-locus integrity gate)
     12. capture-fan-out-threshold.sh   (Step 8 -- fan-out large-wave threshold)
     13. platform-localize.sh           (Step 9 -- settings.local.json / marketplaces)
-    14. coordinator-setup-state.sh record setup_concluded (Phase 7 Step 0 -- receipt)
+    14. record_setup_concluded         (end of a completed run -- receipt; not written under --check-only,
+                                        an advisory failure, or a mandatory skip)
 
 What this deliberately skips (run /coordinator:install for these -- the
 guided/interactive superset):
@@ -877,6 +880,16 @@ def _is_windows_host() -> bool:
     return uname.startswith(("MINGW", "MSYS", "CYGWIN", "Windows"))
 
 
+def _plugin_version(coord_root: str) -> Optional[str]:
+    """`version` from `<coord_root>/.claude-plugin/plugin.json`; None when unreadable or absent."""
+    try:
+        with open(os.path.join(coord_root, ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            version = json.load(fh)["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return version if isinstance(version, str) else None
+
+
 class _Orchestrator:
     """Owns PHASE_NUM/FAILED mutable state -- mirrors the bash oracle's globals."""
 
@@ -888,8 +901,11 @@ class _Orchestrator:
         # scrolled off-screen or was interleaved with a noisy stdout/stderr
         # child process elsewhere in the run.
         self.skipped: List[str] = []
+        self.skip_records: List[Tuple[str, str, bool]] = []
+        self.ran: List[str] = []
 
     def phase_header(self, desc: str) -> None:
+        self.ran.append(desc)
         self.phase_num += 1
         print()
         print(f"=== [{self.phase_num}] {desc} ===")
@@ -997,10 +1013,13 @@ class _Orchestrator:
             )
             self.failed = True
 
-    def skip_note(self, msg: str) -> None:
+    def skip_note(self, phase: str, reason: str, *, mandatory: bool) -> None:
+        """Record a phase that did nothing; `mandatory` marks a skip that leaves the install incomplete."""
+        msg = f"{phase} -- {reason}"
         print()
         print(f"--- SKIPPED: {msg} ---")
         self.skipped.append(msg)
+        self.skip_records.append((phase, reason, mandatory))
 
 
 def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator) -> None:
@@ -1012,12 +1031,12 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
     orch.phase_header("Windows Defender process-exclusion offer (Phase 3 Step 1c -- declinable)")
 
     if not _is_windows_host():
-        orch.skip_note("Defender process-exclusion offer -- non-Windows host")
+        orch.skip_note("Defender process-exclusion offer", "non-Windows host", mandatory=False)
         return
 
     ps = shutil.which("powershell.exe") or shutil.which("pwsh")
     if not ps:
-        orch.skip_note("Defender process-exclusion offer -- no powershell.exe/pwsh on PATH")
+        orch.skip_note("Defender process-exclusion offer", "no powershell.exe/pwsh on PATH", mandatory=False)
         return
 
     def _powershell(command: str) -> str:
@@ -1042,8 +1061,10 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
     )
     if is_admin != "True":
         orch.skip_note(
-            "Defender process-exclusion offer -- not running elevated "
-            "(re-run from an elevated/Run-as-Administrator shell to see this offer)"
+            "Defender process-exclusion offer",
+            "not running elevated "
+            "(re-run from an elevated/Run-as-Administrator shell to see this offer)",
+            mandatory=False,
         )
         return
 
@@ -1083,7 +1104,7 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
         print(f"[setup]     - {t}")
 
     if check_only:
-        orch.skip_note("Defender exclusion apply -- check-only (would prompt for consent above)")
+        orch.skip_note("Defender exclusion apply", "check-only (would prompt for consent above)", mandatory=False)
         return
     if non_interactive or not sys.stdin.isatty():
         print("[setup]   Non-interactive/unattended context -- default is DECLINED, no exclusions applied.")
@@ -1542,8 +1563,10 @@ def _run_body(
         print("operator_identity: missing")
         orch.skip_note(
             "Operator identity capture, working-repos discovery, and CLAUDE.local.md "
-            "render (Phase 2) -- these need an interactive AskUserQuestion prompt. "
-            "Run /coordinator:install (or 'walk me through the coordinator') to complete this step."
+            "render (Phase 2)",
+            "these need an interactive AskUserQuestion prompt. "
+            "Run /coordinator:install (or 'walk me through the coordinator') to complete this step.",
+            mandatory=False,
         )
 
     # -- Phase 3 Step 1 -- install-substrate (in-process; see module docstring) --
@@ -1591,9 +1614,9 @@ def _run_body(
     if check_only:
         current = _registry_get_for_check("repos.content_root")
         if current == doe_clone:
-            orch.skip_note(f"repos.content_root registry key already seeded and verified ({doe_clone})")
+            orch.skip_note("repos.content_root registry key", f"already seeded and verified ({doe_clone})", mandatory=False)
         else:
-            orch.skip_note(f"Seed repos.content_root registry key -- check-only (would seed: {doe_clone})")
+            orch.skip_note("Seed repos.content_root registry key", f"check-only (would seed: {doe_clone})", mandatory=False)
     else:
         orch.phase_header("Seed repos.content_root registry key (best-effort)")
         # Resolve to a concrete argv rather than passing the bare name through to
@@ -1642,9 +1665,9 @@ def _run_body(
     if check_only:
         current = _registry_get_for_check("repos.claude_klabauter")
         if current == str(claude_klabauter_clone):
-            orch.skip_note(f"repos.claude_klabauter registry key already seeded and verified ({claude_klabauter_clone})")
+            orch.skip_note("repos.claude_klabauter registry key", f"already seeded and verified ({claude_klabauter_clone})", mandatory=False)
         else:
-            orch.skip_note(f"Seed repos.claude_klabauter registry key -- check-only (would seed: {claude_klabauter_clone})")
+            orch.skip_note("Seed repos.claude_klabauter registry key", f"check-only (would seed: {claude_klabauter_clone})", mandatory=False)
     elif not (claude_klabauter_clone / "coordinator_core").is_dir():
         # A bare directory-existence check on the wrong marker cannot distinguish
         # "the claude-klabauter clone" from "some directory" (an unrelated 18-entry
@@ -1718,7 +1741,11 @@ def _run_body(
     # holds only those two repos, so sweeping two is the correct outcome
     # here, not a partial-coverage bug.
     if check_only:
-        orch.skip_note("git-perf-config fleet sweep (Step 3.5a.1c) -- check-only (advisory, no dry-run mode wired here)")
+        orch.skip_note(
+            "git-perf-config fleet sweep (Step 3.5a.1c)",
+            "check-only (advisory, no dry-run mode wired here)",
+            mandatory=False,
+        )
     else:
         orch.phase_header("git-perf-config fleet sweep (Step 3.5a.1c -- per-repo git performance settings)")
         try:
@@ -1732,8 +1759,10 @@ def _run_body(
     if _is_standalone_plugin_clone(doe_clone):
         orch.skip_note(
             "DoE launch chain (Steps 3.5a.1-3.5b.2 -- .coordinator-content-root pointer, claude-author shim, "
-            f"wrapper, launcher) -- {doe_clone} is the standalone plugin, not a coordinator-content-repo "
-            "working repo; the plugin loads through the marketplace"
+            "wrapper, launcher)",
+            f"{doe_clone} is the standalone plugin, not a coordinator-content-repo "
+            "working repo; the plugin loads through the marketplace",
+            mandatory=False,
         )
     else:
         # -- Step 3.5a.1 -- gen-content-root-pointer --
@@ -1865,8 +1894,10 @@ def _run_body(
     # exactly as it did under the trampoline.
     if check_only:
         orch.skip_note(
-            "gen-settings-hooks (Step 3.5c) -- check-only (generator has no dry-run mode; "
-            "install.md skips this call under --check-only too)"
+            "gen-settings-hooks (Step 3.5c)",
+            "check-only (generator has no dry-run mode; "
+            "install.md skips this call under --check-only too)",
+            mandatory=False,
         )
     else:
         _hooks_desc = "gen-settings-hooks (Step 3.5c -- settings.json hook block)"
@@ -1912,13 +1943,17 @@ def _run_body(
             with _environ_patched(env):
                 marker = kill_switch_marker_path()
             orch.skip_note(
-                f"{_hooks_desc} -- DISABLED by operator marker ({marker}). "
-                "Delete that file to re-enable coordinator hook generation, then re-run this installer."
+                _hooks_desc,
+                f"DISABLED by operator marker ({marker}). "
+                "Delete that file to re-enable coordinator hook generation, then re-run this installer.",
+                mandatory=False,
             )
         elif hooks_status == "skipped (clone absent)":
             orch.skip_note(
-                f"{_hooks_desc} -- DoE clone not resolved yet; complete Step 3.5a "
-                "(gen-content-root-pointer / repos.content_root seed) first, then re-run."
+                _hooks_desc,
+                "DoE clone not resolved yet; complete Step 3.5a "
+                "(gen-content-root-pointer / repos.content_root seed) first, then re-run.",
+                mandatory=True,
             )
         else:
             print("  NOTE: SessionStart hooks take effect at next Claude Code boot (settings.json")
@@ -2032,11 +2067,13 @@ def _run_body(
         _scaffold_root = os.path.join(claude_home_dir, ".claude")
         if _scaffold_root_is_claude_home(_scaffold_root, dict(os.environ)):
             orch.skip_note(
-                f"{_scaffold_desc} -- refusing: target root ({_scaffold_root}) "
+                _scaffold_desc,
+                f"refusing: target root ({_scaffold_root}) "
                 "resolves to Claude Home (~/.claude), which carries no "
                 "coordinator working data (docs/wiki/doe-altitude-and-shared-"
                 "infra.md). Point repo-setup at the project clone you mean to "
-                "set up instead."
+                "set up instead.",
+                mandatory=False,
             )
         else:
             _scaffold_result = scaffold_canonical_structure(
@@ -2110,7 +2147,7 @@ def _run_body(
     # WARN+FAILED-without-halting asymmetry is retired, not reproduced: this
     # is a plain run_required phase like its siblings.
     if check_only:
-        orch.skip_note("platform-localize (Step 9) -- check-only mode")
+        orch.skip_note("platform-localize (Step 9)", "check-only mode", mandatory=False)
     else:
         from coordinator_core.hooks.platform_localize import (  # local import: avoid import cost on --help
             main as _platform_localize_main,
@@ -2123,25 +2160,11 @@ def _run_body(
             env=env,
         )
 
-    # -- Phase 7 Step 0 -- record setup_concluded receipt (idempotent) --
-    # Retired the ["bash", coordinator-setup-state.sh] spawn (C13): that
-    # DoE-side script was only a thin polyglot trampoline back into THIS
-    # repo's coordinator_core.ops.coordinator_setup_state -- called
-    # in-process now.
     if check_only:
         orch.skip_note(
-            "coordinator-setup-state record setup_concluded (Phase 7 Step 0) -- check-only (would record)"
-        )
-    else:
-        from coordinator_core.ops.coordinator_setup_state import (  # local import: avoid import cost on --help
-            main as _coordinator_setup_state_main,
-        )
-
-        orch.run_required_py(
-            "coordinator-setup-state record setup_concluded (Phase 7 Step 0 -- receipt)",
-            _coordinator_setup_state_main,
-            ["record", "setup_concluded"],
-            env=env,
+            "setup_concluded receipt (Phase 7)",
+            "check-only (would record on a completed run)",
+            mandatory=False,
         )
 
     # -- Install receipt: build + persist from the resolution journal now
@@ -2156,12 +2179,18 @@ def _run_body(
         print(f"WARN: install-receipt build/persist failed (non-fatal): {exc}", file=sys.stderr)
 
     # -- Phases explicitly out of scope for this mechanical orchestrator --
-    orch.skip_note("Phase 4 (~/.claude git-tracking offer) -- operator's call; run /coordinator:install")
-    orch.skip_note("Phase 5 (coordinator.local.md project_type) -- project-local; run /coordinator:repo-setup")
-    orch.skip_note("Phase 6 (persona customization / 1Password GitHub auth) -- opt-in; run /coordinator:install")
+    orch.skip_note("Phase 4 (~/.claude git-tracking offer)", "operator's call; run /coordinator:install", mandatory=False)
     orch.skip_note(
-        "Phase 7 guided orientation -- REQUIRED next step, not merely optional: restart Claude Code, "
-        "then say 'walk me through the coordinator' to co-write CLAUDE.md and complete orientation."
+        "Phase 5 (coordinator.local.md project_type)", "project-local; run /coordinator:repo-setup", mandatory=False
+    )
+    orch.skip_note(
+        "Phase 6 (persona customization / 1Password GitHub auth)", "opt-in; run /coordinator:install", mandatory=False
+    )
+    orch.skip_note(
+        "Phase 7 guided orientation",
+        "REQUIRED next step, not merely optional: restart Claude Code, "
+        "then say 'walk me through the coordinator' to co-write CLAUDE.md and complete orientation.",
+        mandatory=False,
     )
 
     print()
@@ -2185,13 +2214,39 @@ def _run_body(
         print("Completed with one or more ADVISORY failures above (non-fatal) -- review the WARN lines.")
     else:
         print("All mechanical wiring phases completed successfully.")
+
+    receipt_rc = 0
+    if not check_only:
+        blocking = next((p for p, _r, m in orch.skip_records if m), None)
+        if orch.failed:
+            print("setup_concluded receipt not written: an advisory phase failed.")
+        elif blocking is not None:
+            print(f"setup_concluded receipt not written: mandatory phase skipped ({blocking}).")
+        else:
+            from coordinator_core.ops.coordinator_setup_state import (  # local import: avoid import cost on --help
+                SetupReceipt,
+                record_setup_concluded,
+            )
+
+            receipt_rc = record_setup_concluded(
+                SetupReceipt(
+                    phases_ran=tuple(orch.ran),
+                    phases_skipped=tuple((p, r) for p, r, _m in orch.skip_records),
+                    coordinator_version=_plugin_version(coord_root),
+                    engine_ref=git_state.head_sha(claude_klabauter_root),
+                ),
+                env,
+            )
+            if receipt_rc != 0:
+                print(f"WARN: setup_concluded receipt write failed (exit {receipt_rc}).", file=sys.stderr)
+
     print()
     print("NEXT STEP (required, not optional): restart Claude Code, then say")
     print('  "walk me through the coordinator"')
     print("to complete operator identity capture and guided orientation -- see")
     print("coordinator/commands/install.md Phase 2 and Phase 7.")
 
-    return 1 if orch.failed else 0
+    return 1 if orch.failed or receipt_rc != 0 else 0
 
 
 def main(argv: List[str]) -> int:

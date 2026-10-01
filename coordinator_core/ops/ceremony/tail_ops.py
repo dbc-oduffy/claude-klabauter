@@ -9,12 +9,6 @@ sibling render (native ``refresh_roadmap_callout.main`` port). The orchestrator
 (``wsc_tail.py``) composes all of these helpers into the single-pass pipeline; this module
 registers no top-level JSON-RPC op of its own.
 
-Fleet-op wiring follows the confirm-then-act contract (T1 preview ``dry_run:true`` -> T3 act
-``dry_run:false``), resolved by public op-key string via ``coordinator_core.ipc.get_op_handler``
-rather than importing each op module's private handler function -- a future op-module refactor
-that drops the public registration surfaces cleanly as a ``None`` return, not an
-``AttributeError`` at a private import site.
-
 The terminal-handoff sweep's live call site is
 ``commit_pipeline.run_commit_pipeline``'s ``_run_in_plane_archive_sweep`` -- in-process,
 zero additional git spawns, zero additional commits. This module wires no call site for it;
@@ -104,9 +98,8 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ROADMAP_CALLOUT as _HL_ROADMAP_CALLOUT,
@@ -115,12 +108,7 @@ from coordinator_core.ops.ceremony.housekeeping_liveness import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 
-# Import side-effect only: trigger each reused op module's @register_op(...) decorator so
-# get_op_handler(...) below resolves via a direct registry hit rather than its lazy-import
-# fallback (get_op_handler() self-resolves a MISS since 2026-07-25, so this pre-import is
-# belt-and-braces, not strictly required for correctness) -- mirrors the
-# "# noqa: F401 -- trigger registration" idiom used at every call site
-# in the OLD wsc_commit.py). The three fleet archive ops (archive_plans/archive_handoffs/
+# No op-registry lookup remains in this module. The three fleet archive ops (archive_plans/archive_handoffs/
 # archive_actioned_memos) are NOT imported here for registration any more (C2) -- nothing in
 # this module calls them in-process. The terminal-handoff sweep's live call site
 # (`commit_pipeline.py`'s `_run_in_plane_archive_sweep`, C4) imports
@@ -180,45 +168,6 @@ def fleet_result_to_tail(result: dict, op_label: str) -> TailResult:
         failed.append(f"{op_label}: exit_code={ec}")
 
     return {"acted": acted, "skipped": skipped, "failed": failed, "unknown": unknown}
-
-
-async def run_fleet_op_two_phase(
-    handler_fn: Callable[..., Awaitable[dict]],
-    op_label: str,
-    common_dir: Path,
-) -> TailResult:
-    try:
-        preview = await handler_fn(
-            {"mode": "already-terminal", "dry_run": True},
-            repo_root=common_dir,
-        )
-        if preview.get("exit_code", 0) != 0:
-            return _fail(op_label, f"preview exit_code={preview.get('exit_code')}")
-
-        candidates = _ids(preview.get("candidates", []))
-        if not candidates:
-            return _empty_result()
-
-        act = await handler_fn(
-            {
-                "mode": "already-terminal",
-                "dry_run": False,
-                "candidate_ids": candidates,
-            },
-            repo_root=common_dir,
-        )
-        return fleet_result_to_tail(act, op_label)
-
-    except Exception as exc:  # noqa: BLE001 -- best-effort tail op, never raises
-        _LOG.warning("tail_ops: %s raised %s: %s", op_label, type(exc).__name__, exc)
-        return _fail(op_label, f"{type(exc).__name__} -- {str(exc)[:160]}")
-
-
-async def _run_fleet_op_by_key(op_key: str, op_label: str, common_dir: Path) -> TailResult:
-    handler = get_op_handler(op_key)
-    if handler is None:
-        return _fail(op_label, f"{op_key} not registered")
-    return await run_fleet_op_two_phase(handler, op_label, common_dir)
 
 
 # fire_archive_sweeps_detached and _ARCHIVE_SWEEP_SCRIPTS were DELETED here (C4,

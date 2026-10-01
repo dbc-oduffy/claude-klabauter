@@ -470,3 +470,60 @@ def test_archive_round_trip_id_citation_survives_and_gate_stays_clean(tmp_path):
 # requirement (a post-move dangling-plan-backlink audit for archive_plans)
 # survives as an open bug row, to be met by a first-principles plan — not by
 # restoring this inline call.
+
+
+def _baton(root: str, rel: str, pointer: str) -> None:
+    _write(root, rel, f"---\ntitle: baton\ngoverning_plan: {pointer}\n---\n# baton\n")
+
+
+def test_unresolvable_governing_plan_fails(tmp_path, capsys):
+    root = str(tmp_path)
+    _baton(root, "state/handoffs/a.md", "docs/plans/2026-01-01-gone.md")
+    rc = main(["--root", root])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "UNRESOLVABLE-GOVERNING-PLAN in: state/handoffs/a.md" in err
+    assert "docs/plans/2026-01-01-gone.md" in err
+    assert "FAIL: 1 live baton governing_plan pointer(s)" in err
+
+
+def test_archive_resolvable_governing_plan_passes(tmp_path):
+    root = str(tmp_path)
+    _write(root, "archive/specs/2026-01/2026-01-01-moved.md", _fm("M", plan_id="pln-moved-999003"))
+    _baton(root, "state/handoffs/a.md", "docs/plans/2026-01-01-moved.md")
+    assert main(["--root", root]) == 0
+
+
+def test_literal_governing_plan_passes(tmp_path):
+    root = str(tmp_path)
+    _write(root, "docs/plans/2026-01-02-live.md", _fm("L", plan_id="pln-live-999004"))
+    _baton(root, "state/handoffs/a.md", "docs/plans/2026-01-02-live.md")
+    assert main(["--root", root]) == 0
+
+
+@pytest.mark.parametrize("value", ["null", "none", "''"])
+def test_null_governing_plan_passes(tmp_path, value):
+    root = str(tmp_path)
+    _baton(root, "state/handoffs/a.md", value)
+    assert main(["--root", root]) == 0
+
+
+def test_governing_plan_axis_fires_without_archive_specs(tmp_path, capsys):
+    root = str(tmp_path)
+    assert not os.path.isdir(os.path.join(root, "archive", "specs"))
+    _baton(root, "state/handoffs/a.md", "docs/plans/2026-01-01-gone.md")
+    assert main(["--root", root]) == 1
+    assert "UNRESOLVABLE-GOVERNING-PLAN" in capsys.readouterr().err
+
+
+def test_archived_handoff_dir_ignored(tmp_path):
+    root = str(tmp_path)
+    _baton(root, "state/handoffs/.archive/a.md", "docs/plans/2026-01-01-gone.md")
+    _baton(root, "archive/handoffs/b.md", "docs/plans/2026-01-01-gone.md")
+    assert main(["--root", root]) == 0
+
+
+def test_run_gate_surfaces_governing_plan_axis(tmp_path):
+    root = str(tmp_path)
+    _baton(root, "state/handoffs/a.md", "docs/plans/2026-01-01-gone.md")
+    assert run_gate(root) == 1

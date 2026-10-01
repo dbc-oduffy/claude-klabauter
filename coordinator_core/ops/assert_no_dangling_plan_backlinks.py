@@ -64,6 +64,13 @@ Scope (both detect and --fix):
     git-tracked despite living under one of these trees (e.g. committed
     before a .gitignore rule existed) is still excluded.
 
+Governing-plan axis: `state/handoffs/*.md` (live batons, top level only) whose
+`governing_plan` frontmatter pointer resolves to no plan, live or archived
+(`wire_paths.resolve_plan_pointer`), is a gate failure. This is the one
+deliberate exception to the `state/` exclusion, which the spec_backlink axes
+keep. A pointer resolving only through the archive passes. `--fix` does not act
+on this axis: a dead pointer has no derivable target.
+
 Exit codes (parity-critical):
   0 -- no dangling backlinks, no unresolved/ambiguous id-form citations, and
        no ungrandfathered path-form citations (or nothing to check / --fix
@@ -161,7 +168,12 @@ from coordinator_core.ops.spec_backlink_resolve import (
     resolve_id as _resolve_id,
     resolve_path_with_index as _resolve_path_with_index,
 )
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field_unquoted,
+    split_frontmatter,
+)
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.wire_paths import rel_id, resolve_plan_pointer
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
 # Generator-provenance declaration (generator_provenance.py). The --fix path
@@ -466,6 +478,60 @@ def scan_missing_ids(root: str) -> List[str]:
     return missing
 
 
+def scan_handoff_governing_plan_pointers(
+    root, unreadable: Optional[List[str]] = None
+) -> List[Tuple[str, str]]:
+    """Return [(rel_file, pointer), ...] for every live baton under
+    `<root>/state/handoffs/*.md` (top level only) whose `governing_plan`
+    resolves to no plan, live or archived. An unreadable baton is appended to
+    `unreadable` (fail-closed), never skipped silently."""
+    base = Path(root)
+    handoffs = base / "state" / "handoffs"
+    results: List[Tuple[str, str]] = []
+    if not handoffs.is_dir():
+        return results
+    for path in sorted(handoffs.glob("*.md")):
+        if not path.is_file():
+            continue
+        rel_file = rel_id(path, base)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(
+                f"WARNING: unreadable file excluded from governing-plan scan: {path}: {exc}",
+                file=sys.stderr,
+            )
+            if unreadable is not None:
+                unreadable.append(rel_file)
+            continue
+        split = split_frontmatter(text)
+        if split is None:
+            continue
+        pointer = read_fm_field_unquoted(split.fm_text, "governing_plan")
+        if pointer is None:
+            continue
+        pointer = pointer.strip()
+        if not pointer or pointer.lower() in ("null", "none", "~"):
+            continue
+        if resolve_plan_pointer(base, pointer) is None:
+            results.append((rel_file, pointer))
+    return results
+
+
+def _report_governing_plan_failures(pointers: List[Tuple[str, str]]) -> bool:
+    if not pointers:
+        return False
+    for rel_file, pointer in pointers:
+        print(f"UNRESOLVABLE-GOVERNING-PLAN in: {rel_file}", file=sys.stderr)
+        print(f"  {pointer}", file=sys.stderr)
+    print(
+        f"FAIL: {len(pointers)} live baton governing_plan pointer(s) resolve to no plan, "
+        "live or archived",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _fix_file(full_path: str, src: str, dst: str) -> bool:
     try:
         with open(full_path, "r", encoding="utf-8", errors="replace", newline="") as fh:
@@ -533,32 +599,31 @@ def main(argv: List[str]) -> int:
     local_index = _build_backlink_index(worktree_root)
     id_failures = scan_id_form_citations(root, worktree_root, local_index)
     path_ungrandfathered = scan_path_form_ungrandfathered(root, worktree_root, local_index)
+    baton_unreadable: List[str] = []
+    bad_batons = scan_handoff_governing_plan_pointers(root, baton_unreadable)
 
     if not os.path.isdir(os.path.join(root, "archive", "specs")):
         id_and_path_failed = _report_id_and_path_failures(id_failures, path_ungrandfathered)
         if missing_ids:
             _report_missing_ids(missing_ids)
-        if id_and_path_failed or missing_ids:
+        baton_failed = _report_governing_plan_failures(bad_batons)
+        if baton_unreadable:
+            _report_unscannable(baton_unreadable)
+        if id_and_path_failed or missing_ids or baton_failed or baton_unreadable:
             return 1
         print("OK: no archive/specs/ — nothing to heal (moved-plan axis only; id-form/path-form-ungrandfathered checked)")
         return 0
 
     mvpath = _build_moved_plan_map(root)
 
-    unreadable: List[str] = []
+    unreadable: List[str] = list(baton_unreadable)
     hits = _scan_dangling(root, mvpath, unreadable)
 
     # BEHAVIOUR CHANGE (2026-07-22, break-class fix): restores this AC9 gate's
     # intended assertion — an incomplete scan can never be reported as "no
     # dangling backlinks" (see _scan_dangling docstring).
     if unreadable:
-        for rel_file in unreadable:
-            print(f"UNSCANNABLE: {rel_file}", file=sys.stderr)
-        print(
-            f"FAIL: {len(unreadable)} file(s) could not be scanned for dangling plan "
-            "backlinks — assertion cannot be made (fail-closed)",
-            file=sys.stderr,
-        )
+        _report_unscannable(unreadable)
         return 1
 
     # Dedup (review-integration P2): a citation still at docs/plans/<base> for
@@ -573,7 +638,8 @@ def main(argv: List[str]) -> int:
         if (entry[0], entry[1]) not in dangling_pairs
     ]
 
-    if not mvpath and not hits and not id_failures and not path_ungrandfathered and not missing_ids:
+    if (not mvpath and not hits and not id_failures and not path_ungrandfathered
+            and not missing_ids and not bad_batons):
         print("OK: no moved plans")
         return 0
 
@@ -595,10 +661,13 @@ def main(argv: List[str]) -> int:
         post_fix_id_failures = scan_id_form_citations(root, worktree_root, post_fix_index)
         post_fix_path_ungrandfathered = scan_path_form_ungrandfathered(root, worktree_root, post_fix_index)
         post_fix_missing_ids = scan_missing_ids(root)
-        if post_fix_id_failures or post_fix_path_ungrandfathered or post_fix_missing_ids:
+        post_fix_batons = scan_handoff_governing_plan_pointers(root)
+        if (post_fix_id_failures or post_fix_path_ungrandfathered
+                or post_fix_missing_ids or post_fix_batons):
             _report_id_and_path_failures(post_fix_id_failures, post_fix_path_ungrandfathered)
             if post_fix_missing_ids:
                 _report_missing_ids(post_fix_missing_ids)
+            _report_governing_plan_failures(post_fix_batons)
             return 1
         return 0
 
@@ -619,12 +688,23 @@ def main(argv: List[str]) -> int:
     id_and_path_failed = _report_id_and_path_failures(id_failures, path_ungrandfathered)
     if missing_ids:
         _report_missing_ids(missing_ids)
+    baton_failed = _report_governing_plan_failures(bad_batons)
 
-    if dangling > 0 or id_and_path_failed or missing_ids:
+    if dangling > 0 or id_and_path_failed or missing_ids or baton_failed:
         return 1
 
     print("OK: no dangling plan backlinks to moved docs/plans/ paths")
     return 0
+
+
+def _report_unscannable(unreadable: List[str]) -> None:
+    for rel_file in unreadable:
+        print(f"UNSCANNABLE: {rel_file}", file=sys.stderr)
+    print(
+        f"FAIL: {len(unreadable)} file(s) could not be scanned for dangling plan "
+        "backlinks — assertion cannot be made (fail-closed)",
+        file=sys.stderr,
+    )
 
 
 def _report_missing_ids(missing: List[str]) -> None:

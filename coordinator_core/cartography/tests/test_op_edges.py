@@ -135,6 +135,26 @@ def test_producer_consumer_edge_join_across_and_within_files(tmp_path):
     assert len(edges) == 2
 
 
+@pytest.mark.parametrize("seam_name", ["reentrant_dispatch", "reentrant_dispatch_async"])
+def test_reentrant_dispatch_literal_recorded_as_get_op_handler_edge(tmp_path, seam_name):
+    _write(
+        tmp_path,
+        "producer.py",
+        "from coordinator_core.ipc import register_op\n\n"
+        "@register_op('demo.seam')\n"
+        "async def _h(params, repo_root=None):\n    return {}\n",
+    )
+    _write(
+        tmp_path,
+        "consumer.py",
+        "from coordinator_core.warm.entry_seam import " + seam_name + "\n\n"
+        "def f():\n    " + seam_name + "('demo.seam', {}, repo_root=None)\n",
+    )
+    result = build_op_edges(tmp_path, ["producer.py", "consumer.py"])
+    edges = {(e["op"], e["from"], e["to"], e["kind"]) for e in result["edges"]}
+    assert edges == {("demo.seam", "producer.py", "consumer.py", "get_op_handler")}
+
+
 def test_op_with_no_registration_site_produces_no_edge(tmp_path):
     _write(
         tmp_path,

@@ -24,8 +24,35 @@ from coordinator_core.authz.registration_quad import (
     QuadViolation,
     check_registration_quad,
     filter_known_violations,
+    partition_suspended,
     prune_known_incomplete,
 )
+
+
+def _qv(op_key: str) -> QuadViolation:
+    return QuadViolation(
+        op_key=op_key,
+        surfaces_present=(),
+        surfaces_missing=("OP_CLASSIFICATION",),
+        missing_surface_files=(("OP_CLASSIFICATION", "coordinator_core/authz/classification.py"),),
+    )
+
+
+class TestSuspendedPartition:
+
+    def test_partition_splits_by_op_key_preserving_order(self) -> None:
+        a, b, c, d = _qv("a.op"), _qv("b.op"), _qv("c.op"), _qv("d.op")
+        live, by_design = partition_suspended([a, b, c, d], {"b.op", "d.op"})
+        assert live == [a, c]
+        assert by_design == [b, d]
+
+    def test_filter_default_resolves_live_suspended_ops(self, monkeypatch) -> None:
+        from coordinator_core import op_budget_suspension
+
+        monkeypatch.setattr(op_budget_suspension, "SUSPENDED_OPS", {"susp.op": {}})
+        raw = [_qv("susp.op"), _qv("other.op")]
+        assert filter_known_violations(raw) == [raw[1]]
+        assert filter_known_violations(raw, suspended=frozenset()) == raw
 
 
 class TestGateDetectsPlantedViolation:
