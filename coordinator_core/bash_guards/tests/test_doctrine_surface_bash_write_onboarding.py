@@ -14,7 +14,7 @@ def _check(cmd, cwd):
 
 @pytest.fixture(autouse=True)
 def _strict(monkeypatch):
-    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: "strict")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
 
 
 @pytest.mark.parametrize(
@@ -55,11 +55,11 @@ def test_local_config_write_with_command_key_denies(tmp_path):
 
 @pytest.mark.parametrize("level", ["warn", "off"])
 def test_guard_level_relaxes(tmp_path, monkeypatch, level):
-    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: level)
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     (tmp_path / "CLAUDE.md").write_text("x")
     out = _check("echo hi >> CLAUDE.md", tmp_path)
     if level == "off":
         assert out is None
     else:
-        assert "permissionDecision" not in out["hookSpecificOutput"]
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "blast radius" in out["hookSpecificOutput"]["additionalContext"]

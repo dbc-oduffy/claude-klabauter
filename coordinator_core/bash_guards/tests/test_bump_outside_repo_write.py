@@ -1831,7 +1831,7 @@ def test_consumer_level_warns_instead_of_denying_outside_repo_write(env, monkeyp
     from coordinator_core import machine_profile
 
     _set_anchor(monkeypatch, env, "sess-warn-outside")
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     machine_profile.reset_cache()
     src = env["anchor"] / "src.txt"
     src.write_text("x\n", encoding="utf-8")

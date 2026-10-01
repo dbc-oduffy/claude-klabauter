@@ -60,7 +60,7 @@ def test_all_missing_fields_yield_one_refusal_list():
 
 def test_xs_without_writes_refuses():
     out = sf.collect_fire_refusals(_sizing("XS", "dispatch"), sizing_rel="state/sizings/a.yaml", arm="xs", writes=[])
-    assert len(out) == 1 and "--writes" in out[0]
+    assert len(out) == 1 and "`writes`" in out[0] and "--writes" not in out[0]
 
 
 def test_shipped_status_refuses():

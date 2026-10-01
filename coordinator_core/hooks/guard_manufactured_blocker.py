@@ -69,6 +69,9 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post
 from coordinator_core.hooks.support.posture import resolve_posture
 from coordinator_core.hooks.support.touch_record import _touch_lines
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "guard-manufactured-blocker"
 
 
 _HANDOFF_PATTERNS = [
@@ -627,6 +630,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     _auto_discharge_fire(payload)
 
     if posture in ("default", "substrate-free"):
-        return deny("Stop", _CORRECTION_TEXT)
+        return apply_guard_level(GUARD_NAME, deny("Stop", _CORRECTION_TEXT)) or no_advisory()
 
     return post_advisory(_CORRECTION_TEXT)

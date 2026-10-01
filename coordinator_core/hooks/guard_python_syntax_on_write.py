@@ -69,7 +69,10 @@ from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.write_guards._sentinel_write_guard import reconstruct_after
+
+GUARD_NAME = "guard-python-syntax-on-write"
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
@@ -145,7 +148,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         compile(after, str(target), "exec")
     except SyntaxError as exc:
         reason = render(compose(_deny_reason(target_raw, exc, after)))
-        return deny("PreToolUse", reason)
+        return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()
     except Exception:
         return no_advisory()
 

@@ -57,6 +57,7 @@ Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -84,9 +85,13 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import (
+    MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
     CommitRequest,
+    MalformedCommitRequestError,
+    parse_manifest_marker,
     parse_marker,
     plan_deliverable_id,
     valid_deliverable_id,
@@ -554,7 +559,46 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except OSError as exc:
         return _error(f"cannot read params.script_path {script_path_raw!r}: {exc}")
 
-    request: Optional[CommitRequest] = parse_marker(script_text)
+    manifest_rel: Optional[str] = None
+    request: Optional[CommitRequest] = None
+    try:
+        manifest_rel = parse_manifest_marker(script_text)
+        if manifest_rel is not None:
+            if any(ln.startswith(MARKER_PREFIX) for ln in script_text.splitlines()):
+                return _error(
+                    "script carries both an inline terminal-commit-request marker "
+                    "and an ask-run-manifest marker; emit one",
+                    refused="both-markers",
+                )
+            run_root = worktree_root / RUN_DIR_ROOT
+            manifest_abs = contained_path(worktree_root / manifest_rel, [run_root])
+            if manifest_abs is None:
+                return _error(
+                    f"ask-run-manifest path {manifest_rel!r} does not resolve under "
+                    f"{RUN_DIR_ROOT}",
+                    refused="manifest-escapes-run-root",
+                )
+            try:
+                manifest = StageManifest.from_json(
+                    json.loads(manifest_abs.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return _error(f"cannot read ask-run manifest {manifest_rel!r}: {exc!r}")
+            request_abs = contained_path(worktree_root / manifest.marker_path, [run_root])
+            if request_abs is None:
+                return _error(
+                    f"manifest marker_path {manifest.marker_path!r} does not resolve "
+                    f"under {RUN_DIR_ROOT}",
+                    refused="manifest-escapes-run-root",
+                )
+            try:
+                request = parse_marker(request_abs.read_text(encoding="utf-8"))
+            except OSError as exc:
+                return _error(f"cannot read manifest marker_path {manifest.marker_path!r}: {exc}")
+    except MalformedCommitRequestError as exc:
+        return _error(f"malformed commit request: {exc}", refused="malformed-request")
+    if manifest_rel is None:
+        request = parse_marker(script_text)
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
 
@@ -792,6 +836,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     commit_params: dict = {"paths": all_paths, "message": message}
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
+        # A DONE chunk's own declared write that is now absent is a planned
+        # deletion; when it removes a file added since the rollback window
+        # opened, commit_v2's staged-rollback check reads it as restoring the
+        # older absence and refuses the run.
+        commit_params["declared_reverts"] = deleted_paths
     if session_id is not None:
         commit_params["session_id"] = session_id
 

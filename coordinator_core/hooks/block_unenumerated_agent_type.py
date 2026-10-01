@@ -149,7 +149,9 @@ import yaml
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 
+GUARD_NAME = "block-unenumerated-agent-type"
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
@@ -932,7 +934,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     roster, error_reason = resolve_roster()
     if roster is None:
-        return deny("PreToolUse", error_reason or "roster unresolved")
+        return apply_guard_level(
+            GUARD_NAME, deny("PreToolUse", error_reason or "roster unresolved")
+        )
 
     if subagent_type in roster:
         from coordinator_core.hooks.enforce_agent_model_pin import (
@@ -952,9 +956,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return pin_result
 
-    return deny(
-        "PreToolUse",
-        _unenumerated_deny_reason(subagent_type, tool_input.get("name")),
+    return apply_guard_level(
+        GUARD_NAME,
+        deny(
+            "PreToolUse",
+            _unenumerated_deny_reason(subagent_type, tool_input.get("name")),
+        ),
     )
 
 

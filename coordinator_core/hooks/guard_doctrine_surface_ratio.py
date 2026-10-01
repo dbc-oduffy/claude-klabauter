@@ -123,7 +123,10 @@ from coordinator_core.hooks.doctrine_changelog_prose import surface_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.write_guards._sentinel_write_guard import reconstruct_after
+
+GUARD_NAME = "guard-doctrine-surface-ratio"
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
@@ -288,5 +291,5 @@ def _handler(params: dict, repo_root=None) -> dict:
     message, channel = result
     env = params.get("env")
     if channel == _CHANNEL_DENY:
-        return deny("PreToolUse", render(message, env=env))
+        return apply_guard_level(GUARD_NAME, deny("PreToolUse", render(message, env=env))) or no_advisory()
     return allow_advisory("PreToolUse", render(message, env=env))

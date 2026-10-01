@@ -97,9 +97,12 @@ from coordinator_core.coverage import _is_bookkeeping_path
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.review_trail.receipt_credit import receipt_credited_shas
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 from coordinator_core.win_portability import no_console_creationflags
+
+GUARD_NAME = "guard-terminal-review"
 
 #: How far back one `git log` spawn walks looking for this session's own
 #: commits. A session whose own commits sit further back than this is a
@@ -513,7 +516,7 @@ def _guard_terminal_review_handler(params: dict, repo_root=None) -> dict:
     except Exception:
         return no_advisory()
     if state == "block":
-        return deny("Stop", text)
+        return apply_guard_level(GUARD_NAME, deny("Stop", text)) or no_advisory()
     if state == "advisory":
         return post_advisory(text)
     return no_advisory()

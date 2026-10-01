@@ -1,143 +1,60 @@
-"""Each sizing arm through `_dispatch_emit(sizing_path=...)`, real arms, over tmp_path fixture repos."""
+"""The ask seam end to end through `_dispatch_emit` with the real composer over a tmp_path repo."""
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit import op, sizing_fire, sizing_m_delegate
-from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
-from coordinator_core.ops.dispatch_emit.sizing_fire import (
-    ARM_M_PLUS,
-    ARM_S,
-    ARM_XS,
-    S_STAGE1_PHASES,
-    XS_PHASES,
-    s_plan_path,
-)
+from coordinator_core.ops.dispatch_emit import op
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_PHASES, OP_ASK_GATE, OP_ASK_STAGE
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
-WRITES = ["src/widget.py"]
+_BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _sizing(tshirt: str, route: str) -> dict:
-    return {
-        "schema": "sizing-object",
-        "status": "sized",
-        "estimate": {"tshirt": tshirt},
-        "route": route,
-        "interaction_mode": "fire-and-forget",
-        "intent": "Add the widget",
-        "exit_criterion": {
-            "statement": "Widgets work end to end",
-            "accepted": {"pm_quote": "yes", "on": "2026-10-01", "mode": "fire-and-forget"},
-        },
-    }
+def _stub_wrap(text):
+    return _BLITZ_FN, ["Size", "Plan"]
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
-    (tmp_path / "docs").mkdir()
+    monkeypatch.setattr(op, "_load_review_inputs", lambda route: tuple(REVIEW_KW.values()))
+    monkeypatch.setattr(op, "check_agent_types_resolve", lambda *a, **k: None)
+    from coordinator_core.ops.dispatch_emit import ask_plan_blitz
+
+    monkeypatch.setattr(ask_plan_blitz, "wrap_stage", _stub_wrap)
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.ask_compose._read_plan_blitz", lambda: "stub"
+    )
     return tmp_path
 
 
-def _write(repo: Path, name: str, doc: dict) -> str:
-    (repo / "state" / "sizings" / name).write_text(yaml.safe_dump(doc), encoding="utf-8")
-    return f"state/sizings/{name}"
+def _titles(script: str) -> list[str]:
+    block = script.split("phases: [", 1)[1].split("]", 1)[0]
+    return re.findall(r"'([^']*)'", block)
 
 
-def _phases(text: str) -> list[str]:
-    return re.findall(r"phase\('([^']+)'\)", text)
+def test_raw_ask_emits_the_full_phase_chain_with_both_verbs(repo):
+    reply = op._dispatch_emit({"ask": "add the widget"}, repo_root=repo)
+    text = Path(reply["path"]).read_text(encoding="utf-8")
+    titles = _titles(text)
+    positions = [titles.index(p) for p in ASK_PHASES]
+    assert positions == sorted(positions)
+    assert OP_ASK_GATE in text and OP_ASK_STAGE in text
+    assert reply["ok"], reply["findings"]
 
 
-def _first_phase_index(text: str, constant: str) -> int:
-    for i, p in enumerate(_phases(text)):
-        if p.lower().replace(" ", "-").startswith(constant):
-            return i
-    raise AssertionError(f"no phase for {constant!r} in {_phases(text)}")
-
-
-def test_xs_emits_executor_review_and_terminal_marker(repo):
-    rel = _write(repo, "xs-job.yaml", _sizing("XS", "dispatch"))
-    out = repo / "docs" / "xs-job.workflow.mjs"
-    reply = op._dispatch_emit(
-        {"sizing_path": rel, "output_path": str(out), "writes": WRITES}, repo_root=repo
+def test_sizing_entry_omits_the_size_phase(repo):
+    rel = "state/sizings/s-job.yaml"
+    (repo / rel).write_text(
+        yaml.safe_dump({"estimate": {"tshirt": "S"}, "route": "spec-dispatch"}), encoding="utf-8"
     )
-    assert reply["arm"] == ARM_XS
-    text = out.read_text(encoding="utf-8")
-
-    assert "Execute X1:" in text and "work:X1" in text
-    execute, review = (_first_phase_index(text, c) for c in XS_PHASES[:2])
-    assert execute < review
-    assert "coordinator:code-reviewer" in text
-
-    req = parse_marker(text)
-    assert req is not None
-    assert [c.id for c in req.chunks] == ["X1"]
-    assert set(WRITES) <= {p for c in req.chunks for p in c.paths}
-
-
-def test_s_emits_plan_author_then_fire_execute_over_the_plan_doc(repo):
-    rel = _write(repo, "s-job.yaml", _sizing("S", "spec-dispatch"))
-    out = repo / "docs" / "s-job.workflow.mjs"
-    reply = op._dispatch_emit({"sizing_path": rel, "output_path": str(out)}, repo_root=repo)
-    assert reply["arm"] == ARM_S
-    text = out.read_text(encoding="utf-8")
-
-    plan = s_plan_path(rel)
-    assert _phases(text)[:2] == list(S_STAGE1_PHASES[:2])
-    assert plan in text
-    assert text.index("coordinator:plan-author") < text.index("emit-dispatch-workflow --plan")
-
-    req = parse_marker(text)
-    assert req is not None
-    assert [p for c in req.chunks for p in c.paths] == [plan]
-
-
-def test_m_plus_reaches_emit_wave_fire_with_from_sizing(repo, monkeypatch):
-    rel = _write(repo, "m-job.yaml", _sizing("M", "plan"))
-    plugin = repo / "doctrine" / "coordinator"
-    (plugin / "workflows").mkdir(parents=True)
-    (plugin / "workflows" / "plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
-    (plugin / "agents").mkdir()
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(repo / "no-install"))
-
-    seen: dict = {}
-    real_load = sizing_m_delegate._load_emit_wave_fire
-
-    def load(path):
-        mod = real_load(path)
-        mod._bind = lambda script_path, args, live=False: "const args = " + json.dumps(args) + ";\n"
-        mod._load_mint = lambda: lambda sizing_rel, root: {
-            "id": "hnd-1", "path": "state/handoffs/b1.md", "title": "Minted baton", "created": True,
-        }
-        real_main = mod.main
-
-        def main(argv):
-            seen["argv"] = list(argv)
-            return real_main(
-                [*argv, "--plugin-root", str(plugin), "--live-engine-tree"]
-            )
-
-        mod.main = main
-        return mod
-
-    monkeypatch.setattr(sizing_m_delegate, "_load_emit_wave_fire", load)
-    (repo / "state" / "handoffs").mkdir()
-    (repo / "state" / "handoffs" / "b1.md").write_text(
-        "---\nhandoff_id: hnd-1\ntitle: Minted baton\nstatus: open\n---\n\n# body\n", encoding="utf-8"
-    )
-    trail = repo / "trail"
-
-    reply = op._dispatch_emit({"sizing_path": rel, "trail_dir": str(trail)}, repo_root=repo)
-
-    assert reply["arm"] == ARM_M_PLUS
-    assert seen["argv"][seen["argv"].index("--from-sizing") + 1] == rel
-    assert Path(reply["path"]).name == "fire-0-1.mjs"
-    assert Path(reply["path"]).is_file()
-    assert sizing_fire.ARM_ROUTE[ARM_M_PLUS] == "plan"
+    reply = op._dispatch_emit({"ask": True, "sizing_path": rel}, repo_root=repo)
+    text = Path(reply["path"]).read_text(encoding="utf-8")
+    assert "phase('size')" not in text
+    assert rel in text

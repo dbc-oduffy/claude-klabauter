@@ -88,7 +88,10 @@ from coordinator_core.hooks.doctrine_changelog_prose import new_violations, scop
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.write_guards._sentinel_write_guard import reconstruct_after
+
+GUARD_NAME = "guard-doctrine-changelog-prose"
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
@@ -185,7 +188,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     env = params.get("env")
     if is_config:
         reason = render(_deny_message(target_raw, new), env=env)
-        return deny("PreToolUse", reason)
+        return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()
 
     context = render(_advisory_message(target_raw, new), env=env)
     return allow_advisory("PreToolUse", context)

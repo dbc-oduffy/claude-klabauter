@@ -177,6 +177,25 @@ def render_marker(req: CommitRequest) -> Optional[str]:
     return f"{MARKER_PREFIX}{body}"
 
 
+def parse_manifest_marker(script_text: str) -> Optional[str]:
+    """The repo-relative manifest path an ask-run script names, or ``None``
+    when it carries no ``ASK_MANIFEST_MARKER`` line. More than one such line,
+    or an empty path, raises ``MalformedCommitRequestError``."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+
+    lines = [ln for ln in script_text.splitlines() if ln.startswith(ASK_MANIFEST_MARKER)]
+    if not lines:
+        return None
+    if len(lines) > 1:
+        raise MalformedCommitRequestError(
+            f"expected at most one {ASK_MANIFEST_MARKER!r} marker, found {len(lines)}"
+        )
+    path = lines[0][len(ASK_MANIFEST_MARKER) :].strip()
+    if not path:
+        raise MalformedCommitRequestError("ask-run-manifest marker names no path")
+    return path
+
+
 def parse_marker(script_text: str) -> Optional[CommitRequest]:
     """Parse the single terminal-commit-request marker out of an emitted
     script's text.

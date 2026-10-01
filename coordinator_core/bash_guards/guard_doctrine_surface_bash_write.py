@@ -201,11 +201,10 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core.machine_profile import feature_enabled
+from coordinator_core.machine_profile import apply_guard_level, feature_enabled, guard_level
 from coordinator_core.write_guards._guard_level import (
-    apply_level,
     doctrine_surface_advisory,
-    level_for,
+    doctrine_surface_risk,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_interpreter_payload_write_sink_targets,
@@ -1611,7 +1610,7 @@ def _check_advisory(
     identifiers = _advisory_identifiers(governed_surfaces)
     if not is_denied_bash_write(cmd, identifiers):
         return None
-    if level_for(_GUARD_NAME) == "off":
+    if guard_level(_GUARD_NAME) == "off":
         return None
     if _is_onboarding_write(cmd, identifiers, cwd):
         return None
@@ -1659,4 +1658,8 @@ def check(
             "permissionDecisionReason": message,
         }
     }
-    return apply_level(_GUARD_NAME, denial, "this command writes a governed doctrine surface.")
+    return apply_guard_level(
+        _GUARD_NAME,
+        denial,
+        risk=doctrine_surface_risk("this command writes a governed doctrine surface."),
+    )

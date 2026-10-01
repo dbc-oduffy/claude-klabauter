@@ -1,6 +1,6 @@
-"""Pure contract for `emit-dispatch-workflow --sizing`: arm selection, fire refusals, stage-1 plan path.
+"""Pure contract for the `--ask` gate: sizing load, arm selection, fire refusals, stage-1 plan path.
 
-Arm modules (xs mint, s compose, m_plus delegate) build against these names. Nothing here
+`ask_gate` and `ask_compose` build against these names. Nothing here
 writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refused by field.
 """
 
@@ -16,7 +16,6 @@ from coordinator_core.ops._path_guard import contained_path
 ARM_XS, ARM_S, ARM_M_PLUS = "xs", "s", "m_plus"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan"}
 XS_PHASES = ("execute", "review", "terminal-commit")
-S_STAGE1_PHASES = ("plan-author", "fire-execute", "terminal-commit")
 
 _TSHIRT_ARM = {
     "XS": ARM_XS,
@@ -107,7 +106,7 @@ def collect_fire_refusals(
     if route != expected:
         out.append(f"`route` is {route!r}, but arm {arm!r} fires only route {expected!r}")
     if arm == ARM_XS and not list(writes):
-        out.append("XS needs `--writes` (repeatable): a sizing carries no footprint")
+        out.append("XS needs `writes` (the ask's file footprint): a sizing carries no footprint")
     if arm == ARM_S and repo_root is not None:
         plan_rel = s_plan_path(sizing_rel)
         if (Path(repo_root) / plan_rel).exists():

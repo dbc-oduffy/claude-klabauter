@@ -154,8 +154,10 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
     resolve_subagent_type,
 )
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.transcript_tail import resolve_last_assistant_model
 
+GUARD_NAME = "block-ungranted-opus-subagent"
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
@@ -253,7 +255,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"agent work. For Opus-grade judgment, dispatch a named persona.",
         )
 
-    return deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note))
+    return apply_guard_level(
+        GUARD_NAME,
+        deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note)),
+    )
 
 
 def main() -> int:

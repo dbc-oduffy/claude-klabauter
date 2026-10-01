@@ -168,10 +168,10 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
 from coordinator_core.content_root_pointer import read_content_root_pointer
-from coordinator_core.machine_profile import feature_enabled
+from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
-from coordinator_core.write_guards._guard_level import apply_level
+from coordinator_core.write_guards._guard_level import doctrine_surface_risk
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
@@ -745,4 +745,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ),
         }
     }
-    return apply_level(_GUARD_NAME, denial, f"{target_raw} is a protected doctrine surface.")
+    return apply_guard_level(
+        _GUARD_NAME,
+        denial,
+        risk=doctrine_surface_risk(f"{target_raw} is a protected doctrine surface."),
+    )

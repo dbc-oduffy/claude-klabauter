@@ -307,6 +307,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "compute_layer.scaffold":                 "coordinator_core.ops.compute_layer_scaffold.op",
     "dispatch.emit":                          "coordinator_core.ops.dispatch_emit.op",
     "dispatch.terminal_commit":                "coordinator_core.ops.dispatch_emit.terminal_commit",
+    "dispatch.ask_gate":                       "coordinator_core.ops.dispatch_emit.ask_gate",
+    "dispatch.ask_stage":                      "coordinator_core.ops.dispatch_emit.ask_stage",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",

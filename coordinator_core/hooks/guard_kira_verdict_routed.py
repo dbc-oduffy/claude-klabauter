@@ -52,7 +52,10 @@ from typing import Optional
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
+
+GUARD_NAME = "guard-kira-verdict-routed"
 
 # The commit/date C1's terminal-stamp contract lands at — see the source
 # script's own CONTRACT_EPOCH section. Delete this constant and
@@ -408,7 +411,9 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
     if not reasons:
         return no_advisory()
 
-    return deny("Stop", _KIRA_BLOCK_HEADER + "\n".join(reasons))
+    return apply_guard_level(
+        GUARD_NAME, deny("Stop", _KIRA_BLOCK_HEADER + "\n".join(reasons))
+    ) or no_advisory()
 
 
 @register_op("hooks.guard_kira_verdict_routed")

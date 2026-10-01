@@ -349,6 +349,30 @@ def _run_check(guard: _Guard, payload: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
 
+def _apply_level(
+    name: str, out: Dict[str, Any], session_id: str, cwd: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Resolve a hard-deny at the policy point (``apply_guard_level``).
+
+    Warn delivery is once per session when a gitdir and session id resolve;
+    otherwise every occurrence warns.
+    """
+    from coordinator_core.machine_profile import apply_guard_level
+
+    once = None
+    if session_id:
+        try:
+            from coordinator_core.write_guards._repo_root import resolve_repo_root
+
+            root = resolve_repo_root(cwd)
+            gitdir = Path(root) / ".git" if root else None
+            if gitdir is not None and gitdir.is_dir():
+                once = (gitdir, session_id)
+        except Exception:
+            once = None
+    return apply_guard_level(name, out, once=once)
+
+
 def evaluate(
     payload: Dict[str, Any],
     *,
@@ -434,10 +458,24 @@ def evaluate(
         (g for g in applicable if g.cls == "hard-deny"),
         key=lambda g: g.priority,
     )
+    held: Optional[Dict[str, Any]] = None
     for g in hard:
         out = _run_check(g, payload)
         if out is not None:
             session_id = payload.get("session_id") or ""
+            out = _apply_level(g.name, out, session_id, payload.get("cwd"))
+            if out is None:
+                continue
+            from coordinator_core.machine_profile import is_deny_envelope
+
+            if not is_deny_envelope(out):
+                try:
+                    _record_advisory_fire(g.name, session_id, payload.get("cwd"))
+                except Exception:
+                    pass
+                if held is None:
+                    held = out
+                continue
             if session_id and _consume_unlock(session_id, g.name):
                 try:
                     _record_deny_fire(g.name, session_id, True, payload.get("cwd"))
@@ -465,8 +503,10 @@ def evaluate(
         (g for g in applicable if g.cls == "advisory"),
         key=lambda g: g.priority,
     )
+    if held is not None and not aggregate:
+        return held
     if aggregate:
-        fired: List[Dict[str, Any]] = []
+        fired: List[Dict[str, Any]] = [held] if held is not None else []
         for g in advisories:
             out = _run_check(g, payload)
             if out is not None:

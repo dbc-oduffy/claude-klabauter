@@ -50,6 +50,9 @@ from coordinator_core.hooks.support.worktree_isolation_strip import (
     sentinel_override_active,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "block-worktree-tool"
 
 _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#worktree-ban-rationale"
 
@@ -80,4 +83,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         pass
 
-    return deny("PreToolUse", _deny_message(params.get("env")))
+    return apply_guard_level(
+        GUARD_NAME, deny("PreToolUse", _deny_message(params.get("env")))
+    ) or no_advisory()

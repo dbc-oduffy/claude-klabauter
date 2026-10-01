@@ -91,6 +91,9 @@ from coordinator_core._hook_envelope import context_only, deny, no_advisory, pay
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "block-workflow-unmodeled-agent"
 
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
@@ -619,9 +622,15 @@ def _handler(params: dict, repo_root=None) -> dict:
                 ],
                 env,
             )
-            return deny("PreToolUse", reason)
+            return (
+                apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
+                or no_advisory()
+            )
         reason = _compose_zero_modeled_deny_reason(agent_n, env)
-        return deny("PreToolUse", reason)
+        return (
+            apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
+            or no_advisory()
+        )
 
     if modeled_n < agent_n:
         msg = _compose_partial_modeled_context(agent_n, modeled_n, env)

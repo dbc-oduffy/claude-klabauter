@@ -173,6 +173,9 @@ from pathlib import Path
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "nudge-foreground-agent-dispatch"
 
 logger = logging.getLogger(__name__)
 
@@ -328,4 +331,4 @@ def _handler(params: dict, repo_root=None) -> dict:
     deny_message = _DENY_MSG_TEMPLATE
     if override_note:
         deny_message = deny_message + " " + override_note
-    return deny("PreToolUse", deny_message)
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", deny_message)) or no_advisory()

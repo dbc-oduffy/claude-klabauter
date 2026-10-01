@@ -1977,6 +1977,7 @@ def _consumer(monkeypatch):
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     machine_profile.reset_cache()
 
 

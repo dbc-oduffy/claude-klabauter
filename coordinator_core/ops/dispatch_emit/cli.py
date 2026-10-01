@@ -18,8 +18,8 @@ Every real computation lives one layer down:
     shape, same serialisation — see that function's own docstring).
   - firing (`--fire`) is `coordinator_core.ops.workflow_fire.fire ::
     fire_workflow` — the ONE spawn this CLI ever makes, and only on the
-    `--fire` path; `--plan`, `--inventory`, and `--restamp` alone spawn
-    nothing (S1-C7 AC). Guarded immediately before that spawn by
+    `--fire` path; `--plan`, `--inventory`, `--ask`, `--sizing`, and
+    `--restamp` alone spawn nothing (S1-C7 AC). Guarded immediately before that spawn by
     `dispatch_emit.op.guard_against_fired_drift`, called with
     `result["sha256"]` (`_dispatch_emit`'s own reply digest, never a
     re-read or re-hashed copy) — refuses a fire whose on-disk script
@@ -36,8 +36,9 @@ printed JSON (docs/plans/2026-09-27-load-aware-workflow-admission.md, C4).
 It does NOT derive waves, pathspecs, script text, or receipt shape itself.
 
 Negative-spec:
-  - Does NOT pick a sizing's arm: `--sizing` forwards to `_dispatch_emit`,
-    which requires `--out` at arms xs and s and ignores it at m_plus.
+  - Does NOT pick a sizing's arm: `--ask`/`--sizing` forward to `_dispatch_emit`,
+    which composes the one script that sizes, gates and routes in-session;
+    `--fire` is refused with either.
   - Does NOT re-implement `_dispatch_emit`'s InventoryPathConflictError,
     ForeignEmissionError, or PathEscapeError refusals — those raise from
     the op function unchanged; this module only maps the exception class
@@ -165,21 +166,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="mise-inventory record to mint a spine FROM first, then emit",
     )
     parser.add_argument(
+        "--ask",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="PROMPT",
+        help="emit one in-session Workflow from a raw ask (PROMPT), or from an "
+        "existing sizing with --sizing",
+    )
+    parser.add_argument(
         "--sizing",
         default=None,
-        help="accepted sizing under state/sizings/; XS/S emit here, M+ delegates to emit-wave-fire",
-    )
-    parser.add_argument(
-        "--writes",
-        action="append",
-        default=None,
-        help="a path the XS row writes (repeatable; --sizing at XS only)",
-    )
-    parser.add_argument(
-        "--trail-dir",
-        dest="trail_dir",
-        default=None,
-        help="trail directory handed to emit-wave-fire (--sizing at M+ only)",
+        help="existing sizing under state/sizings/; the same entry as --ask --sizing",
     )
     parser.add_argument(
         "--restamp",
@@ -407,17 +405,34 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     is_queue_route = bool(args.queue) or bool(args.profile)
 
-    if args.sizing and (is_queue_route or args.plan or args.inventory):
+    is_ask_route = args.ask is not None or bool(args.sizing)
+
+    if is_ask_route and args.fire:
         print(
-            "emit-dispatch-workflow: ERROR — --sizing is exclusive of "
+            "emit-dispatch-workflow: ERROR — --fire is not accepted with --ask/--sizing; "
+            "fire the printed Workflow({...}) line in-session.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if is_ask_route and (is_queue_route or args.plan or args.inventory):
+        print(
+            "emit-dispatch-workflow: ERROR — --ask/--sizing is exclusive of "
             "--plan/--inventory/--queue/--profile",
             file=sys.stderr,
         )
         return EXIT_USAGE
 
-    if (args.writes or args.trail_dir) and not args.sizing:
+    if args.ask is True and not args.sizing:
         print(
-            "emit-dispatch-workflow: ERROR — --writes/--trail-dir require --sizing",
+            "emit-dispatch-workflow: ERROR — --ask needs a PROMPT or --sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if isinstance(args.ask, str) and args.sizing:
+        print(
+            "emit-dispatch-workflow: ERROR — --ask PROMPT is exclusive of --sizing",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -430,9 +445,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if not is_queue_route and not args.plan and not args.inventory and not args.sizing:
+    if not is_queue_route and not args.plan and not args.inventory and not is_ask_route:
         print(
-            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --sizing, or "
+            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --ask, --sizing, or "
             "--restamp is required",
             file=sys.stderr,
         )
@@ -503,7 +518,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         # keep requiring --out explicitly.
         args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
-    if not args.out_path and not args.sizing:
+    if not args.out_path and not is_ask_route:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
@@ -541,12 +556,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     params: dict = {"force": args.force}
     if args.out_path:
         params["output_path"] = args.out_path
-    if args.sizing:
-        params["sizing_path"] = args.sizing
-        if args.writes:
-            params["writes"] = args.writes
-        if args.trail_dir:
-            params["trail_dir"] = args.trail_dir
+    if is_ask_route:
+        params["ask"] = args.ask if args.ask is not None else True
+        if args.sizing:
+            params["sizing_path"] = args.sizing
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:

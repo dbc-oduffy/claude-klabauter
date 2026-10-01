@@ -247,6 +247,10 @@ from coordinator_core.bash_guards._dialect import (
     Dialect as _Dialect,
     dialect_from_tool_name as _dialect_from_tool_name,
 )
+from coordinator_core.machine_profile import (
+    apply_guard_level as _apply_guard_level,
+    is_deny_envelope as _is_deny_envelope,
+)
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.guard_unlock_sentinel import (
     annotate_deny as _annotate_unlock,
@@ -1761,6 +1765,7 @@ def _evaluate_payload_json_budgeted(
     _effective_host_is_windows = _resolve_host_is_windows_public(host_is_windows)
 
     _collected: List[Dict[str, Any]] = []
+    _held_demoted: Optional[Dict[str, Any]] = None
 
     for entry in guard_chain:
         name, fn, fail_closed, _band = entry.name, entry.fn, entry.fail_closed, entry.band
@@ -1789,6 +1794,7 @@ def _evaluate_payload_json_budgeted(
                 file=sys.stderr,
             )
             continue
+        _demoted = False
         try:
             out = fn()
         except Exception as exc:  # noqa: BLE001 -- F1: isolate, do not propagate
@@ -1803,14 +1809,23 @@ def _evaluate_payload_json_budgeted(
                         file=sys.stderr,
                     )
                     continue
-                return _crash_deny(name, exc, resolution_class=resolution_class)
-            print(
-                "bash_guards.dispatch: %s guard crashed (%s: %s); "
-                "treating as no-context (advisory, fail-open)."
-                % (name, type(exc).__name__, exc),
-                file=sys.stderr,
-            )
-            out = None
+                _crash = _crash_deny(name, exc, resolution_class=resolution_class)
+                out = _apply_guard_level(name, _crash)
+                if _is_deny_envelope(out):
+                    return out
+                _demoted = True
+            else:
+                print(
+                    "bash_guards.dispatch: %s guard crashed (%s: %s); "
+                    "treating as no-context (advisory, fail-open)."
+                    % (name, type(exc).__name__, exc),
+                    file=sys.stderr,
+                )
+                out = None
+        if out is not None and _is_deny_envelope(out):
+            _leveled = _apply_guard_level(name, out)
+            _demoted = not _is_deny_envelope(_leveled)
+            out = _leveled
         if out is not None:
             # In-session operator unlock (docs/plans/2026-08-03-in-session-
             # operator-unlock-for-the-hard-.md § C3): mirrors write_guards/
@@ -1991,7 +2006,7 @@ def _evaluate_payload_json_budgeted(
                     _collected.append(emitted)
                     continue
                 return emitted
-            if not fail_closed:
+            if not fail_closed or _demoted:
                 try:
                     _record_advisory_fire(name, session_id, cwd)
                 except Exception:
@@ -2018,9 +2033,17 @@ def _evaluate_payload_json_budgeted(
                 if out:
                     _collected.append(out)
                 continue
-            return out
+            if _demoted:
+                if _held_demoted is None:
+                    _held_demoted = out
+                continue
+            if _is_hard_deny_envelope or _held_demoted is None:
+                return out
+            return _held_demoted
 
-    return (_collected or None) if collect_advisories else None
+    if collect_advisories:
+        return _collected or None
+    return _held_demoted
 
 
 def _build_guard_chain(

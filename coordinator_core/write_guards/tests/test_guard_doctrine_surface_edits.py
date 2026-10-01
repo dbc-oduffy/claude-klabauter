@@ -29,6 +29,7 @@ import time
 
 import pytest
 
+from coordinator_core import machine_profile
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 from coordinator_core.win_portability import no_console_creationflags
@@ -747,12 +748,13 @@ def test_write_dropping_existing_privileged_key_still_denies(two_roots):
 def test_guard_level_governs_the_deny(two_roots, monkeypatch, level, denies):
     _doe, repo = two_roots
     (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
-    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: level)
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+    machine_profile.reset_cache()
     out = _write(repo / "CLAUDE.md", "# y\n")
     if denies:
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     elif level == "off":
         assert out is None
     else:
-        assert "permissionDecision" not in out["hookSpecificOutput"]
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "blast radius" in out["hookSpecificOutput"]["additionalContext"]

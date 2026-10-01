@@ -60,6 +60,9 @@ from coordinator_core.hooks.support.named_dispatch_strip import (
     compute_named_dispatch_result,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "guard-named-dispatch-tool-restriction"
 
 
 @register_op("hooks.guard_named_dispatch_tool_restriction")
@@ -84,5 +87,5 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     action, merged, message = result
     if action == "deny":
-        return deny("PreToolUse", message)
+        return apply_guard_level(GUARD_NAME, deny("PreToolUse", message)) or no_advisory()
     return rewrite_input("PreToolUse", merged, message)

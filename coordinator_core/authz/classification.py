@@ -2139,6 +2139,37 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
     "dispatch.terminal_commit": OpClass.MUTATING,
+    # dispatch.ask_gate — MUTATING: decides an arm for a sizing; at an M+ arm with no halt it
+    # mints the baton record in-process (ops/dispatch_emit/ask_gate.py). Every other verdict
+    # is a read.
+    # DR-208 five-question affirmation (citing dispatch.ask_gate handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Only the M+ no-halt path: mint_baton_from_sizing writes one baton doc.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The baton doc, at M+ only; halts and XS/S arms open nothing for write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The baton is a state record other sessions read.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The baton persists on disk.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: docs/plans/2026-10-01-warp-ask.md § C2, C10
+    "dispatch.ask_gate": OpClass.MUTATING,
+    # dispatch.ask_stage — MUTATING: writes briefs, commit-request.txt and manifest.json under
+    # the run dir state/scratch/warp/<run_id>/ (ops/dispatch_emit/ask_stage.py); nothing else.
+    # DR-208 five-question affirmation (citing dispatch.ask_stage handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Files under the run dir only; no git object, no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Run-dir files, contained by _path_guard.contained_path before any write.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The run dir is minted per run_id and consumed only by that run.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The staged files persist and are read by the run's later stages.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
+    "dispatch.ask_stage": OpClass.MUTATING,
     # review_stamp.mint — MUTATING: writes `review_stamp:` into the plan's own
     # frontmatter, the record the implemented refusal and the close gate read.
     # DR-208 five-question affirmation:

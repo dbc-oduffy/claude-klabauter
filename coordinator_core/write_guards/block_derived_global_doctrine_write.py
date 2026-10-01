@@ -110,7 +110,8 @@ from typing import Any, Dict, List, Optional
 from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.machine_resolver import registry_get
-from coordinator_core.write_guards._guard_level import apply_level
+from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.write_guards._guard_level import doctrine_surface_risk
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -261,8 +262,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "permissionDecisionReason": _deny_reason(file_path, payload),
         }
     }
-    return apply_level(
+    return apply_guard_level(
         "block-derived-global-doctrine-write",
         denial,
-        f"{file_path} is re-derived from its authoring copy, so this edit may be overwritten.",
+        risk=doctrine_surface_risk(
+            f"{file_path} is re-derived from its authoring copy, so this edit may be overwritten."
+        ),
     )

@@ -194,7 +194,10 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
     _resolve_posture as _resolve_posture_for_cwd,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session import machinery_paths
+
+GUARD_NAME = "watchdog-undischarged-next-move"
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_write_records`
 #: rewrites `state/subagent-share/<session_id>/next-move-ledger.jsonl` and
@@ -730,7 +733,7 @@ def _handle_stop(payload: Mapping) -> dict:
         posture = "precision"
 
     if posture in ("default", "substrate-free"):
-        return deny("Stop", text)
+        return apply_guard_level(GUARD_NAME, deny("Stop", text)) or no_advisory()
 
     return allow_advisory("Stop", text)
 

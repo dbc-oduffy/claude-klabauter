@@ -69,7 +69,12 @@ import re
 from typing import Any, Optional
 
 from coordinator_core._hook_envelope import payload_of
-from coordinator_core.hooks._envelope import deny, no_advisory, rewrite_input
+from coordinator_core.hooks._envelope import (
+    allow_advisory,
+    deny,
+    no_advisory,
+    rewrite_input,
+)
 from coordinator_core.hooks.support.foreground_dispatch_strip import (
     compute_foreground_reroute,
 )
@@ -83,6 +88,9 @@ from coordinator_core.hooks.support.plan_path_bridge import (
 )
 from coordinator_core.hooks.support.worktree_isolation_strip import compute_strip
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "enforce-agent-dispatch-mode"
 
 _TEAMMATE_NAME_PATH_UNSAFE_RE = re.compile(r"[\\/]")
 
@@ -112,6 +120,25 @@ def _teammate_name_deny_message(name: str) -> Optional[str]:
         "`.`, `_`, `@`, `-` only."
     ).format(char=offending_char)
     return render(compose(prose))
+
+
+def _resolve_deny(message: str, warned: "list[str]") -> Optional[dict]:
+    """Deny envelope when the level is strict; None when the deny resolved to
+    a warning (its advisory text appended to ``warned``) or to off."""
+    envelope = apply_guard_level(GUARD_NAME, deny("PreToolUse", message))
+    hso = (envelope or {}).get("hookSpecificOutput") or {}
+    if hso.get("permissionDecision") == "deny":
+        return envelope
+    context = hso.get("additionalContext")
+    if context:
+        warned.append(context)
+    return None
+
+
+def _warned_or_none(warned: "list[str]") -> dict:
+    if warned:
+        return allow_advisory("PreToolUse", "\n\n".join(warned))
+    return no_advisory()
 
 
 @register_op("hooks.enforce_agent_dispatch_mode")
@@ -173,16 +200,26 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         pass
 
+    warned: list[str] = []
+
     if teammate_name_deny_message is not None:
-        return deny("PreToolUse", teammate_name_deny_message)
+        resolved = _resolve_deny(teammate_name_deny_message, warned)
+        if resolved is not None:
+            return resolved
 
     if named_dispatch_result is not None and named_dispatch_result[0] == "deny":
         _, _, deny_message = named_dispatch_result
-        return deny("PreToolUse", deny_message)
+        resolved = _resolve_deny(deny_message, warned)
+        if resolved is not None:
+            return resolved
+        named_dispatch_result = None
 
     if foreground_result is not None and foreground_result[0] == "deny":
         _, _, deny_message = foreground_result
-        return deny("PreToolUse", deny_message)
+        resolved = _resolve_deny(deny_message, warned)
+        if resolved is not None:
+            return resolved
+        foreground_result = None
 
     if not (
         need_mode_elevation
@@ -190,16 +227,16 @@ def _handler(params: dict, repo_root=None) -> dict:
         or named_dispatch_result is not None
         or foreground_result is not None
     ):
-        return no_advisory()
+        return _warned_or_none(warned)
 
     if not isinstance(tool_input, dict):
-        return no_advisory()
+        return _warned_or_none(warned)
 
     merged = dict(tool_input)
     if need_mode_elevation:
         merged["mode"] = parent_mode
 
-    additional_context_parts: list[str] = []
+    additional_context_parts: list[str] = list(warned)
     if worktree_strip_result is not None:
         _, worktree_note = worktree_strip_result
         merged.pop("isolation", None)

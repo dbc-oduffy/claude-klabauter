@@ -89,7 +89,9 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.claude_md_ledger import GOVERNED_AUTHORING_SURFACES
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
-from coordinator_core.machine_profile import feature_enabled
+from coordinator_core.machine_profile import apply_guard_level, feature_enabled
+
+GUARD_NAME = "guard-doctrine-surface-bash-write"
 
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
@@ -964,4 +966,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     message = evaluate(params)
     if message is None:
         return no_advisory()
-    return deny("PreToolUse", render(message, env=params.get("env")))
+    return apply_guard_level(
+        GUARD_NAME, deny("PreToolUse", render(message, env=params.get("env")))
+    ) or no_advisory()

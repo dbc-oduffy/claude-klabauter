@@ -134,12 +134,14 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
     resolve_model_pins,
     resolve_subagent_type,
 )
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import (
     ensure_session_dir,
     session_id_is_real,
 )
 
+GUARD_NAME = "enforce-agent-model-pin"
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
@@ -290,7 +292,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     pins, error_reason = resolve_model_pins()
     if pins is None:
-        return deny("PreToolUse", error_reason or "model-pin roster unresolved")
+        return apply_guard_level(
+            GUARD_NAME,
+            deny("PreToolUse", error_reason or "model-pin roster unresolved"),
+        )
 
     entry = pins.get(subagent_type)
     if not entry:
@@ -320,7 +325,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             advisories.append(("effort", pin_effort, passed_effort))
 
     if violations:
-        return deny("PreToolUse", _deny_reason(subagent_type, source_path, violations))
+        return apply_guard_level(
+            GUARD_NAME,
+            deny("PreToolUse", _deny_reason(subagent_type, source_path, violations)),
+        )
 
     if advisories:
         return allow_advisory("PreToolUse", _advisory_context(subagent_type, source_path, advisories))

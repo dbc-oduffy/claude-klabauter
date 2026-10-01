@@ -687,6 +687,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
     # itself (D3) -- the caller's own worktree, never a params override.
     "dispatch.terminal_commit":                 "common_dir",
+    # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
+    "dispatch.ask_gate":                        "common_dir",
+    "dispatch.ask_stage":                       "common_dir",
     # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
     # and mint writes only the caller's own worktree, keyed identically to
     # dispatch.terminal_commit (never a `params.repo_root` override).

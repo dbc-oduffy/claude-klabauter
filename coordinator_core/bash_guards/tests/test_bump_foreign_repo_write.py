@@ -2279,9 +2279,10 @@ def test_expansion_valued_write_or_cd_target_yields_no_candidate(command, tmp_pa
 
 
 def test_decoy_substitution_prefix_does_not_hide_a_literal_sink(tmp_path):
-    cmd = ": $(true)/etc/x; echo hi > /etc/x"
+    sink = (tmp_path / "x").as_posix()
+    cmd = ": $(true)/etc/x; echo hi > %s" % sink
     cands = list(guard._iter_write_sink_candidates(cmd, str(tmp_path)))
-    assert any(c[2] == "/etc/x" for c in cands)
+    assert any(c[2] == sink for c in cands)
 
 
 def test_nested_substitution_prefix_is_skipped(tmp_path):
@@ -2297,7 +2298,7 @@ def test_literal_redirect_after_cd_still_yields_a_candidate(tmp_path):
 def _consumer(monkeypatch):
     from coordinator_core import machine_profile
 
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     machine_profile.reset_cache()
 
 

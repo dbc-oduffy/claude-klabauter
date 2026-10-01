@@ -270,7 +270,7 @@ class TestReasonClassSpecificMessages:
         assert "`./path/to/script` needs an executable file with a shebang" in reason
         script = tmp_path / "clean.py"
         script.write_text("print('ok')\n")
-        runnable = recommended.replace("path/to/script.py", str(script))
+        runnable = recommended.replace("path/to/script.py", script.as_posix())
         assert guard.check(_payload(runnable)) is None
 
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
@@ -947,7 +947,7 @@ class TestArgv0ResolutionAndStdinRedirect:
         clean.write_text("print('ok')\n")
         bad = tmp_path / "bad.py"
         bad.write_text("open('%s', 'w')\n" % SENTINEL)
-        return clean, bad
+        return clean.as_posix(), bad.as_posix()
 
     def test_default_expansion_argv0_reads_the_script(self, tmp_path, monkeypatch):
         monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
@@ -995,7 +995,7 @@ class TestGuardLevel:
     def _consumer(self, monkeypatch):
         from coordinator_core import machine_profile
 
-        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "consumer")
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
         machine_profile.reset_cache()
 
     def test_consumer_default_warns_instead_of_denying(self, monkeypatch):
@@ -1054,7 +1054,7 @@ class TestNamedScriptFileIsReadNotRefused:
         sub.mkdir()
         (sub / "gen.py").write_text("print('ok')\n")
         (sub / "bad.py").write_text("open('%s', 'w')\n" % SENTINEL)
-        ok = "cd %s && python3 gen.py" % sub
+        ok = "cd %s && python3 gen.py" % sub.as_posix()
         assert guard.check(_payload(ok, cwd=str(tmp_path))) is None
         rel = "cd sub && python3 gen.py"
         assert guard.check(_payload(rel, cwd=str(tmp_path))) is None

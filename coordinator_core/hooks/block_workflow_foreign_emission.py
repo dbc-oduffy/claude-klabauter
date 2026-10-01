@@ -81,6 +81,13 @@ from typing import Mapping, Optional
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "block-workflow-foreign-emission"
+
+
+def _resolved_deny(reason: str) -> dict:
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()
 
 _READ_ONLY_AGENT_TYPE_ALLOWLIST = frozenset({"explore", "premise-checker"})
 
@@ -230,7 +237,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             return no_advisory()
         if _every_agent_call_is_read_only(inline_script):
             return no_advisory()
-        return deny("PreToolUse", _no_receipt_deny_reason("this inline script"))
+        return _resolved_deny(_no_receipt_deny_reason("this inline script"))
 
     script = Path(script_path)
     if not script.is_absolute():
@@ -246,7 +253,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             return no_advisory()
         if _every_agent_call_is_read_only(script_text):
             return no_advisory()
-        return deny("PreToolUse", _no_receipt_deny_reason(script.name))
+        return _resolved_deny(_no_receipt_deny_reason(script.name))
 
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -261,8 +268,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     if actual_sha != recorded_sha:
-        return deny(
-            "PreToolUse",
+        return _resolved_deny(
             _sha_mismatch_reason(script, receipt_path, recorded_sha, actual_sha),
         )
 
@@ -270,8 +276,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     if session is None or recorded_session is None:
         return no_advisory()
     if session != recorded_session:
-        return deny(
-            "PreToolUse",
+        return _resolved_deny(
             _session_mismatch_reason(script, session, recorded_session),
         )
 

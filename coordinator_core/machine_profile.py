@@ -7,8 +7,9 @@ else ``consumer``.
 
 ``coordinator.guard_level`` is ``strict``, ``warn`` or ``off``, with a
 per-guard override ``coordinator.guard_level.<guard-name>``. Absent, it is
-``strict`` for an author box and ``warn`` for a consumer box. It applies to
-non-destructive guards only; irreversible-harm guards never consult it.
+``warn`` on every box, author or consumer; strict is reached only by setting the key.
+``FLOOR_GUARDS`` (irreversible-harm guards and the consumed-handoff freeze)
+never consult it.
 
 Reads go through the in-process registry reader
 (``machine_resolver.registry_get``): no subprocess, no ``machine-local`` CLI.
@@ -64,7 +65,10 @@ def _mtime(path: Path) -> int:
 
 
 def _cache_key() -> Tuple[Any, ...]:
-    reg_dir = machine_resolver.registry_dir()
+    try:
+        reg_dir = machine_resolver.registry_dir()
+    except ValueError:  # an unresolvable CLAUDE_HOME must not raise out of a guard
+        reg_dir = Path("<unresolvable-registry-dir>")
     env = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith(_ENV_PREFIX)))
     return (
         str(reg_dir),
@@ -175,7 +179,7 @@ def feature_refusal(name: str) -> Optional[str]:
 def guard_level(guard_name: str) -> str:
     """``strict``, ``warn`` or ``off`` for ``guard_name``.
 
-    Per-guard key beats the global key; absent both, the profile default.
+    Per-guard key beats the global key; absent both, ``warn`` on every profile.
     """
     slot = _slot()
     memo = "level:" + guard_name
@@ -185,50 +189,92 @@ def guard_level(guard_name: str) -> str:
     level = (
         _explicit(LEVEL_KEY + "." + guard_name, LEVELS)
         or _explicit(LEVEL_KEY, LEVELS)
-        or ("strict" if machine_profile() == "author" else "warn")
+        or "warn"
     )
     slot[memo] = level
     return level
+
+
+#: Guards whose deny prevents irreversible harm; ``apply_guard_level`` returns
+#: their deny unchanged at every level.
+FLOOR_GUARDS = frozenset(
+    {
+        "destructive-git-orphan",  # orphans unreferenced commits and uncommitted work, unrecoverable
+        "destructive-rm",  # recursive delete has no undo
+        "destructive-git-clean",  # removes untracked files git never stored
+        "destructive-git-revert",  # discards working-tree changes git never committed
+        "block-subagent-destructive-action",  # a subagent's destructive act on a shared tree
+        "block-stash-destruction",  # drop/clear of a stash loses the only copy
+        # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
+        # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
+        "block-consumed-handoff-edit",
+    }
+)
+
+
+def _deny_body(envelope: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(envelope, dict):
+        return None
+    hso = envelope.get("hookSpecificOutput")
+    if isinstance(hso, dict) and hso.get("permissionDecision") == "deny":
+        return hso
+    return None
+
+
+def is_deny_envelope(envelope: Any) -> bool:
+    """True for a ``permissionDecision: "deny"`` envelope; total over any input."""
+    return _deny_body(envelope) is not None
 
 
 def apply_guard_level(
     guard_name: str,
     deny_envelope: Optional[Dict[str, Any]],
     *,
-    risk: str,
+    risk: Optional[str] = None,
     once: Optional[Tuple[Any, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Map a guard's deny envelope through its configured level.
 
-    strict returns the deny unchanged; warn returns an allow envelope whose
-    ``additionalContext`` is a one-line advisory naming ``risk`` and the verb
-    that changes the level; off returns ``None`` (silent allow). The advisory
-    text is constant per guard so the dispatcher's per-session advisory dedupe
-    delivers it once per session; a caller outside that dispatcher passes
-    ``once=(gitdir, session_id)`` to get the same once-per-session delivery
-    from a marker under ``gitdir`` (a repeat warn returns ``None``).
+    Input that is not a ``permissionDecision: "deny"`` envelope is returned
+    unchanged, so a seam may re-apply to an already-resolved envelope.
+    ``guard_name`` is kebab-normalised. A ``FLOOR_GUARDS`` member's deny is
+    returned unchanged at every level. strict returns the deny; off returns
+    ``None``; warn returns a one-line advisory shaped by the envelope's
+    ``hookEventName``: PreToolUse becomes ``allow`` plus ``additionalContext``,
+    any other event ``additionalContext`` alone. ``risk=None`` derives the text
+    from the deny's first reason paragraph. ``once=(gitdir, session_id)`` gives
+    once-per-session delivery from a marker under ``gitdir`` (a repeat warn
+    returns ``None``).
     """
-    if deny_envelope is None:
-        return None
-    level = guard_level(guard_name)
+    hso = _deny_body(deny_envelope)
+    if hso is None:
+        return deny_envelope
+    name = guard_name.replace("_", "-")
+    if name in FLOOR_GUARDS:
+        return deny_envelope
+    level = guard_level(name)
     if level == "strict":
         return deny_envelope
     if level == "off":
         return None
-    if once is not None and _already_warned(guard_name, once):
+    if once is not None and _already_warned(name, once):
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": (
-                "Advisory (%s, level warn): %s "
-                "Stricter: `machine-local set coordinator.guard_level strict`; "
-                "silence: `machine-local set coordinator.guard_level.%s off`."
-                % (guard_name, risk.strip(), guard_name)
-            ),
-        }
+    if risk is None:
+        reason = str(hso.get("permissionDecisionReason") or "").strip()
+        risk = " ".join(reason.split("\n\n", 1)[0].split())
+    event = hso.get("hookEventName") or "PreToolUse"
+    out: Dict[str, Any] = {
+        "hookEventName": event,
+        "additionalContext": (
+            "Advisory (%s, level warn): %s "
+            "Stricter: `machine-local set coordinator.guard_level strict`; "
+            "silence: `machine-local set coordinator.guard_level.%s off`."
+            % (name, risk.strip(), name)
+        ),
     }
+    if event == "PreToolUse":
+        out["permissionDecision"] = "allow"
+    return {"hookSpecificOutput": out}
 
 
 def _already_warned(guard_name: str, once: Tuple[Any, str]) -> bool:

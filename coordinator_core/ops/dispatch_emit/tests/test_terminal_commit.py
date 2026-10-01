@@ -881,3 +881,22 @@ def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
     assert out["review_stamp"] == "refused"
     assert "delivery verdict is 'FAIL'" in out["review_stamp_refusal"]
     assert "review_stamp:" not in _show(repo, "HEAD:docs/plan.md")
+
+
+def test_deleting_a_file_added_one_commit_ago_is_not_a_rollback(repo):
+    # Deleting a declared write that the previous commit added restores that
+    # commit's parent (absence); commit_v2's staged-rollback check refused
+    # it until terminal_commit declared its own planned deletions.
+    (repo / "added.py").write_text("x\n", encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _git(["add", "added.py"], repo)
+    _git(["commit", "-q", "-m", "add added"], repo)
+    (repo / "added.py").unlink()
+
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("added.py", "a.py")),),
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True, out
+    assert out["deleted_paths"] == ["added.py"]

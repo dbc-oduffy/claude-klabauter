@@ -70,6 +70,9 @@ from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
 )
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "guard-repo-setup-claude-home-refusal"
 
 _COMMAND_TOOL_NAMES = ("Bash", "PowerShell")
 
@@ -227,4 +230,4 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     reason = render(compose(_deny_reason()))
-    return deny("PreToolUse", reason)
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()

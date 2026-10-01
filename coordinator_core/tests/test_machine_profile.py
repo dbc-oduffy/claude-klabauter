@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
 
 from coordinator_core import machine_profile as mp
+
+# The registry reader caches on mtime; each rewrite must advance it by a full
+# second or a coarse-resolution filesystem serves the previous contents.
+_last_mtime: dict = {}
 
 
 @pytest.fixture()
@@ -24,6 +29,68 @@ def reg(tmp_path, monkeypatch):
 
 def _write(reg, text):
     (reg / "registry.local.toml").write_text(text, encoding="utf-8")
+    path = reg / "registry.local.toml"
+    prev = _last_mtime.get(path, 0)
+    stamp = max(path.stat().st_mtime_ns, prev + 1_000_000_000)
+    os.utime(path, ns=(stamp, stamp))
+    _last_mtime[path] = stamp
+
+
+def _deny(event="PreToolUse", reason="Bad thing.\n\nSecond paragraph."):
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def test_non_deny_input_passes_through_unchanged(reg):
+    _write(reg, '"coordinator.guard_level" = "off"\n')
+    allow = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
+    for env in (allow, {}, {"x": 1}):
+        assert mp.apply_guard_level("g", env) is env
+
+
+def test_warn_shapes_follow_event(reg):
+    _write(reg, '"coordinator.guard_level" = "warn"\n')
+    pre = mp.apply_guard_level("g", _deny())["hookSpecificOutput"]
+    assert pre["hookEventName"] == "PreToolUse"
+    assert pre["permissionDecision"] == "allow"
+    stop = mp.apply_guard_level("g", _deny("Stop"))["hookSpecificOutput"]
+    assert stop["hookEventName"] == "Stop"
+    assert "permissionDecision" not in stop
+    assert "additionalContext" in stop
+
+
+def test_risk_none_derives_first_paragraph(reg):
+    _write(reg, '"coordinator.guard_level" = "warn"\n')
+    text = mp.apply_guard_level("g", _deny())["hookSpecificOutput"]["additionalContext"]
+    assert "Bad thing." in text
+    assert "Second paragraph" not in text
+
+
+def test_underscore_name_resolves_kebab_key(reg):
+    _write(reg, '"coordinator.guard_level.a-b" = "off"\n')
+    assert mp.apply_guard_level("a_b", _deny()) is None
+    _write(reg, '"coordinator.guard_level" = "warn"\n')
+    text = mp.apply_guard_level("a_c", _deny())["hookSpecificOutput"]["additionalContext"]
+    assert "a-c" in text and "a_c" not in text
+
+
+def test_floor_guards_has_the_seven_names():
+    assert len(mp.FLOOR_GUARDS) == 7
+    assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
+
+
+@pytest.mark.parametrize("name", sorted(mp.FLOOR_GUARDS))
+@pytest.mark.parametrize("level", ["warn", "off"])
+def test_floor_guard_denies_at_every_level(reg, name, level):
+    _write(reg, '"coordinator.guard_level" = "%s"\n' % level)
+    deny = _deny()
+    assert mp.apply_guard_level(name, deny) is deny
+    assert mp.apply_guard_level(name.replace("-", "_"), deny) is deny
 
 
 def test_empty_registry_is_consumer_warn(reg):
@@ -31,13 +98,13 @@ def test_empty_registry_is_consumer_warn(reg):
     assert mp.guard_level("any-guard") == "warn"
 
 
-def test_registered_dev_repo_sentinel_is_author_strict(reg, tmp_path):
+def test_registered_dev_repo_sentinel_is_author_warn(reg, tmp_path):
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
     _write(reg, '"repos.content" = "%s"\n' % repo.as_posix())
     assert mp.machine_profile() == "author"
-    assert mp.guard_level("g") == "strict"
+    assert mp.guard_level("g") == "warn"
 
 
 def test_registered_repo_without_sentinel_stays_consumer(reg, tmp_path):
@@ -124,7 +191,7 @@ def test_warn_advisory_verbs_are_well_formed(reg):
     import shlex
 
     _write(reg, '"coordinator.guard_level" = "warn"\n')
-    out = mp.apply_guard_level("some-guard", {"x": 1}, risk="Risk.")
+    out = mp.apply_guard_level("some-guard", _deny(), risk="Risk.")
     text = out["hookSpecificOutput"]["additionalContext"]
     verbs = re.findall(r"`(machine-local set [^`]+)`", text)
     assert len(verbs) == 2

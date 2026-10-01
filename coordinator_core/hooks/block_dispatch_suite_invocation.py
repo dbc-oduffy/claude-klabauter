@@ -76,7 +76,9 @@ from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 
+GUARD_NAME = "block-dispatch-suite-invocation"
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_DISPATCH_SUITE_GUARD"
 _OVERRIDE_SENTINEL_NAME = ".coordinator-override-dispatch-suite-guard"
 
@@ -249,7 +251,9 @@ def _handler(params: dict, repo_root=None) -> dict:
         else []
     )
     if not imperative:
-        envelope = _precision_deny_envelope(text, cwd, env)
+        envelope = apply_guard_level(
+            GUARD_NAME, _precision_deny_envelope(text, cwd, env)
+        )
         if envelope is None:
             return no_advisory()
         return envelope
@@ -259,4 +263,4 @@ def _handler(params: dict, repo_root=None) -> dict:
     tier = getattr(hit, "tier", "U")
 
     reason = _compose_precision_deny_reason(tool_name, detected, tier, env)
-    return deny("PreToolUse", reason)
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core import machine_profile
 from coordinator_core.write_guards import block_derived_global_doctrine_write as guard
 
 
@@ -33,7 +34,8 @@ def _fixed_home(monkeypatch):
 @pytest.fixture(autouse=True)
 def _authoring_registered(monkeypatch):
     monkeypatch.setattr(guard, "registry_get", lambda key: "/opt/authoring" if key == "repos.content_root" else None)
-    monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: "strict")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
+    machine_profile.reset_cache()
 
 
 def _deny(file_path, **kw):
@@ -185,12 +187,13 @@ class TestDenyTextNamesAlternativeAndConsequence:
 
     @pytest.mark.parametrize("level,expect", [("warn", "additionalContext"), ("off", None)])
     def test_guard_level_relaxes_the_deny(self, monkeypatch, level, expect):
-        monkeypatch.setattr("coordinator_core.write_guards._guard_level.level_for", lambda name: level)
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        machine_profile.reset_cache()
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         if expect is None:
             assert result is None
         else:
             out = result["hookSpecificOutput"]
-            assert "permissionDecision" not in out
+            assert out["permissionDecision"] == "allow"
             assert "blast radius" in out[expect]
             assert "machine-local set coordinator.guard_level" in out[expect]
