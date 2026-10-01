@@ -2387,19 +2387,52 @@ _TEST_RESULT_VAR = "_testResult"
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 
 
-def _never_stranding_criterion(call_expr: str) -> str:
+#: Names WHY a criterion leg threw, so an unresolvable agentType, an API
+#: status and a schema refusal never read alike in the digest.
+_UNJUDGED_CAUSE_JS = (
+    "((m) => { const s = (m.match(/\\b([45]\\d\\d)\\b/) || [])[1]; "
+    "return /agent ?type|unknown agent|no such agent|not (found|registered)/i.test(m) "
+    "? 'unresolved-agent-type' : /schema/i.test(m) ? 'schema-reject' + (s ? ' ' + s : '') "
+    ": s ? 'api-error ' + s : 'error'; })(String(e && e.message || e))"
+)
+
+#: DoE's `terminal-judge-verdict-rules` ($def beside `terminal-judge-result`,
+#: which may not carry the allOf itself), applied post hoc to the judge's
+#: return: a `met` with nothing observed, a failing falsifier or a non-met
+#: clause demotes to indeterminate; a non-met with no `reason` gets one.
+#: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
+#: of `status`.
+_JUDGE_VERDICT_RULES_JS = (
+    "((r) => { if (!r || typeof r !== 'object') return r; "
+    "if (r.status === 'met') { const why = []; "
+    "if (!Array.isArray(r.observed) || r.observed.length === 0) why.push('nothing observed'); "
+    "const v = r.falsifier && r.falsifier.verdict; "
+    "if (v && v !== 'pass' && v !== 'not_present') why.push('falsifier ' + v); "
+    "if (Array.isArray(r.clauses) && r.clauses.some(c => c && c.status !== 'met')) why.push('a clause is not met'); "
+    "if (why.length) { const reason = 'met demoted: ' + why.join(', '); log(reason); "
+    "return { ...r, status: 'indeterminate', differs_from_baseline: null, reason }; } return r; } "
+    "if (!r.reason) return { ...r, reason: 'judge returned ' + r.status + ' with no reason' }; "
+    "return r; })"
+)
+
+
+def _never_stranding_criterion(call_expr: str, *, judge: bool = False) -> str:
     """Wrap the criterion leg so a throw (an agentType the firing session
     cannot resolve, a schema refusal) yields ``indeterminate`` instead of
     killing the run after every executor has written: the run must still
     reach its terminal_commit next_action. ``differs_from_baseline: null``
-    routes wake_digest's computed status to this ``status`` verbatim."""
+    routes wake_digest's computed status to this ``status`` verbatim.
+    ``judge`` applies DoE's verdict rules to a returned judge result."""
+    returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr})" if judge else f"await {call_expr}"
     return (
-        "(async () => { try { return await "
-        + call_expr
-        + "; } catch (e) { log('criterion leg threw; criterion is indeterminate (unjudged): ' + "
+        "(async () => { try { return "
+        + returned
+        + "; } catch (e) { const _cause = "
+        + _UNJUDGED_CAUSE_JS
+        + "; log('criterion leg threw (' + _cause + '); criterion is indeterminate: ' + "
         "String(e && e.message || e)); return { status: 'indeterminate', "
-        "differs_from_baseline: null, observation: 'unjudged: ' + "
-        "String(e && e.message || e), sidecar_path: null }; } })()"
+        "differs_from_baseline: null, observation: 'unjudged: ' + _cause, "
+        "reason: String(e && e.message || e).slice(0, 200), sidecar_path: null }; } })()"
     )
 
 
@@ -3343,7 +3376,7 @@ def compose_script(
         else None
     )
     if criterion_expr is not None:
-        criterion_expr = _never_stranding_criterion(criterion_expr)
+        criterion_expr = _never_stranding_criterion(criterion_expr, judge=bool(judge_expr))
     criterion_block = (
         f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
         f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"

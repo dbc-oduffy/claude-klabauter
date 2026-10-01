@@ -523,7 +523,7 @@ def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_te
         waves, name="wf", description="judge", plan_path="docs/plans/p.md",
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    assert "_falsifierResult = await (async () => { try { return await agent(" in script
+    assert "_falsifierResult = await (async () => { try { return ((r) => {" in script
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "test:terminal-falsifier'" not in script
     assert "criterion: (_falsifierResult ?" in script
@@ -540,6 +540,24 @@ def test_a_throwing_judge_leaves_the_criterion_indeterminate_and_the_run_reachin
     leg = script[script.index("_falsifierResult = await (async () => {") :].split("})();", 1)[0]
     assert "catch (e)" in leg
     assert "status: 'indeterminate', differs_from_baseline: null" in leg
+    # The degrade names its cause; a 400 and a missing agentType never read alike.
+    assert "observation: 'unjudged: ' + _cause" in leg
+    assert "'unresolved-agent-type'" in leg and "'schema-reject'" in leg and "'api-error '" in leg
+
+
+def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
+    """terminal-judge-verdict-rules: a `met` with nothing observed, a failing
+    falsifier or an unmet clause demotes; only the judge leg is held to it."""
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    judged = compose_script(
+        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    assert "'met demoted: '" in judged and "differs_from_baseline: null, reason" in judged
+    assert "with no reason" in judged
+    falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
+    plain = compose_script(waves, name="wf", description="f", falsifier=falsifier)
+    assert "'met demoted: '" not in plain
 
 
 def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
