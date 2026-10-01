@@ -1214,7 +1214,11 @@ def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: b
 
 #: Launcher names the install wrote before the command took the claude-author
 #: name. The .bak-* siblings are operator backups and stay.
-LEGACY_DOE_LAUNCHERS = ("claude-author", "claude-author.cmd", "claude-author.ps1")
+#: Trap: the stem is assembled, never spelled whole. The publish de-naming maps
+#: the old stem onto the new one, which turned this list into the CURRENT
+#: launchers and made every mirror install delete what it had just rendered.
+_LEGACY_STEM = "claude-" + "doe"
+LEGACY_DOE_LAUNCHERS = (_LEGACY_STEM, f"{_LEGACY_STEM}.cmd", f"{_LEGACY_STEM}.ps1")
 
 
 def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_only: bool) -> List[str]:

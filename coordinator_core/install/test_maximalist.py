@@ -2444,3 +2444,17 @@ def test_install_global_doctrine_check_only_writes_nothing(tmp_path):
     assert rules_created == ["context7.md"]
     assert not (home / ".claude" / "CLAUDE.md").exists()
     assert not (home / ".claude" / "rules" / "context7.md").exists()
+
+
+def test_legacy_launcher_list_never_names_the_current_launcher(tmp_path):
+    """The publish de-naming once rewrote this list into the current names, so
+    every install deleted the launcher it had just rendered."""
+    from coordinator_core.install.maximalist import LEGACY_DOE_LAUNCHERS, retire_legacy_doe_launchers
+
+    assert not any(n.startswith("claude-author") for n in LEGACY_DOE_LAUNCHERS)
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    for name in ("claude-author", "claude-author.cmd", "claude-author.ps1", *LEGACY_DOE_LAUNCHERS):
+        (local_bin / name).write_text("x")
+    retire_legacy_doe_launchers(str(tmp_path), str(tmp_path / "settings-bin"), check_only=False)
+    assert sorted(p.name for p in local_bin.iterdir()) == ["claude-author", "claude-author.cmd", "claude-author.ps1"]
