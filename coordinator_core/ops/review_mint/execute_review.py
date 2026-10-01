@@ -185,7 +185,7 @@ def compose_execute_review(
         f"paths=declared_paths, slice_id=a name unique to this run. The run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
         f"`git diff base..HEAD` is never the run's diff. Return the op's diff_path "
-        f"as whole_diff_path. List every file "
+        f"as whole_diff_path, verbatim; never write or edit a diff yourself. List every file "
         f"changed in {run_base_sha or 'run_base_sha'}..HEAD or in the working tree "
         f"that is NOT in declared_paths under foreign_claims: no reviewer may "
         f"edit it, so it is named here, not discovered at the delivery verdict.\n"
